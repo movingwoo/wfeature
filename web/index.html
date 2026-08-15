@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>wfeature</title>
+    <link rel="icon" href="icon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="style.css" />
+    <script src="app.js" type="module"></script>
+  </head>
+  <body>
+    <!-- Three columns on a wide screen, one on a narrow one. The rails hold the
+         panels in both cases: on a narrow screen they carry no layout of their
+         own (display: contents) and their panels become centred modals, so the
+         same markup serves a phone and a desktop without moving any node. -->
+    <div class="stage">
+      <aside class="rail rail-left">
+        <section class="rail-card log-card">
+          <header class="rail-card-head">
+            <span>📜 로그</span>
+            <button id="log-clear" class="rail-card-action">지우기</button>
+          </header>
+          <div id="log-view" class="log-view"></div>
+        </section>
+      </aside>
+
+      <main class="stage-main">
+        <div class="canvas-wrapper">
+          <canvas id="canvas" width="240" height="320"></canvas>
+          <div class="prestart" id="prestart">
+            <div class="prestart-row">
+              <select id="game-select" class="game-select" disabled>
+                <option value="">게임 목록 불러오는 중...</option>
+              </select>
+              <button id="game-start" class="game-start" disabled>실행</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- A popup rather than a line in the column: it used to sit here and
+             push the keypad down whenever there was anything to say. It stays
+             in the markup where it is read from, and the stylesheet takes it
+             out of the flow. -->
+        <div id="status-message" class="status-message">
+          <!-- The live region is the text, not the popup: the dismiss button
+               never changes and would be read out with every message. -->
+          <span id="status-text" class="status-text" role="status" aria-live="polite"></span>
+          <button id="status-close" class="status-close">확인</button>
+        </div>
+
+        <div class="button-container" data-layout="type1">
+          <!-- One of the keypad's own buttons, in the same place from the first
+               paint rather than starting over the canvas and dropping down when
+               a game is picked. -->
+          <button id="settings-toggle" class="settings-toggle" aria-label="설정">Opts</button>
+          <button class="clear-button" data-key="CLR">CLR</button>
+          <!-- The handset's send key. Games used it for things the keypad has
+               no other way to reach — a quick save, most often. -->
+          <button class="call-button" data-key="CALL" aria-label="통화">Call</button>
+          <button id="keypad-layout-toggle" class="keypad-layout-toggle" aria-label="키패드 배치 전환">
+            Type1
+          </button>
+          <div class="keypad-main">
+            <div class="direction-pad type1-direction-pad">
+              <button class="key-up" data-key="2">2</button>
+              <button class="key-left" data-key="4">4</button>
+              <button class="key-right" data-key="6">6</button>
+              <button class="key-down" data-key="8">8</button>
+            </div>
+            <div class="direction-pad type2-direction-pad">
+              <button class="key-up" data-key="UP">↑</button>
+              <button class="key-left" data-key="LEFT">←</button>
+              <button class="key-center" data-key="OK">OK</button>
+              <button class="key-right" data-key="RIGHT">→</button>
+              <button class="key-down" data-key="DOWN">↓</button>
+            </div>
+            <div class="number-pad">
+              <button class="key-top-left" data-key="1">1</button>
+              <button class="key-up type2-only" data-key="2">2</button>
+              <button class="key-top-right" data-key="3">3</button>
+              <button class="key-left type2-only" data-key="4">4</button>
+              <button class="key-center" data-key="5">5</button>
+              <button class="key-right type2-only" data-key="6">6</button>
+              <button class="key-bottom-left" data-key="7">7</button>
+              <button class="key-down type2-only" data-key="8">8</button>
+              <button class="key-bottom-right" data-key="9">9</button>
+            </div>
+          </div>
+          <p class="keypad-footer">
+            <button data-key="*">*</button>
+            <button data-key="0">0</button>
+            <button data-key="#">#</button>
+          </p>
+        </div>
+      </main>
+
+      <aside class="rail rail-right">
+        <div id="settings-panel" class="settings-panel">
+          <div class="panel-header">
+            <span>⚙️ 설정</span>
+            <button id="settings-close" class="panel-close">닫기</button>
+          </div>
+          <!-- The two sliders are the guest's two sound sources: its MIDI
+               sequences, which on these games are the music, and its sampled
+               PCM, which is the effects. The labels say what they are for
+               rather than what they are made of. -->
+          <label>🎵 배경음 <input type="range" id="volume-midi" min="0" max="100" value="50" /></label>
+          <label>🔊 효과음 <input type="range" id="volume-pcm" min="0" max="100" value="50" /></label>
+          <label>🔍 화질
+            <!-- The filters run on the same thread as the emulator and cost more
+                 per frame than emulating one does, so the menu says which are
+                 affordable rather than leaving that to be discovered. -->
+            <select id="frame-scale" class="game-speed">
+              <option value="1" selected>원본 (빠름)</option>
+              <option value="2">hq2x (느림)</option>
+              <option value="3">hq3x (느림)</option>
+              <option value="4">hq4x (매우 느림)</option>
+            </select>
+          </label>
+          <label>⏩ 속도
+            <select id="game-speed" class="game-speed">
+              <option value="0.25">0.25배</option>
+              <option value="0.5">0.5배</option>
+              <option value="0.75">0.75배</option>
+              <option value="1" selected>1배 (원래 속도)</option>
+              <option value="1.5">1.5배</option>
+              <option value="2">2배</option>
+              <option value="4">4배</option>
+            </select>
+          </label>
+          <!-- Only where there is a keyboard to press: on a phone this is a
+               list of keys nobody can reach, in a panel that has to stay short
+               enough for a thumb. It starts hidden everywhere and app.js
+               reveals it, since only a key actually arriving proves there is
+               one. Folded shut because nineteen rows would otherwise be most
+               of the panel. -->
+          <details id="key-bindings" class="key-bindings hidden">
+            <summary>⌨️ 키 설정</summary>
+            <div id="key-bindings-list" class="key-bindings-list"></div>
+            <p class="key-bindings-hint">
+              키 이름을 누른 다음 새 키를 누르세요. Esc는 취소, ✕는 비우기입니다. 이미 쓰고 있는 키를
+              고르면 그 키를 쓰던 자리가 빕니다.
+            </p>
+            <button id="key-bindings-reset" class="panel-button">기본값으로</button>
+          </details>
+
+          <button id="cheat-toggle" class="panel-button hidden">🎯 치트</button>
+          <button id="debug-log" class="panel-button hidden">🐞 디버그 로그 저장</button>
+          <button id="restart" class="panel-button hidden">🔄 재시작</button>
+        </div>
+
+        <div id="cheat-panel" class="cheat-panel">
+          <div class="cheat-header">
+            <span>🎯 치트</span>
+            <button id="cheat-close" class="cheat-close">닫기</button>
+          </div>
+
+          <div class="cheat-row">
+            <select id="cheat-type">
+              <option value="u32">u32</option>
+              <option value="u16">u16</option>
+              <option value="u8">u8</option>
+              <option value="i32">i32</option>
+              <option value="i16">i16</option>
+              <option value="i8">i8</option>
+            </select>
+            <label class="cheat-check"><input type="checkbox" id="cheat-be" /> BE</label>
+            <input id="cheat-value" placeholder="값 (예: 1200, 0x4b0)" />
+            <button data-filter="eq">이 값으로 찾기</button>
+          </div>
+
+          <div class="cheat-row">
+            <button data-filter="unknown">값 모름</button>
+            <button data-filter="changed">변함</button>
+            <button data-filter="unchanged">안 변함</button>
+            <button data-filter="inc">증가</button>
+            <button data-filter="dec">감소</button>
+            <button data-filter="gt">&gt; 값</button>
+            <button data-filter="lt">&lt; 값</button>
+          </div>
+
+          <div class="cheat-row">
+            <button id="cheat-undo">되돌리기</button>
+            <button id="cheat-reset">초기화</button>
+            <span id="cheat-count" class="cheat-count">—</span>
+          </div>
+
+          <div id="cheat-results" class="cheat-list"></div>
+
+          <div class="cheat-section">고정된 값</div>
+          <div id="cheat-frozen" class="cheat-list"></div>
+
+          <div class="cheat-section" id="cheat-watch-section">쓰기 감시</div>
+          <div class="cheat-row" id="cheat-watch-row">
+            <input id="cheat-watch-address" placeholder="0x40183a2c" />
+            <button id="cheat-watch-add">감시 추가</button>
+            <button id="cheat-watch-clear">전체 해제</button>
+          </div>
+          <div id="cheat-hits" class="cheat-list"></div>
+          <div class="cheat-section">치트 표</div>
+          <div class="cheat-row">
+            <button id="cheat-save">저장</button>
+            <button id="cheat-load">불러오기</button>
+            <input id="cheat-load-file" type="file" accept=".json,application/json" hidden />
+          </div>
+          <div id="cheat-status" class="cheat-more"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Only ever drawn behind a modal, which is only ever a narrow screen. -->
+    <div id="modal-backdrop" class="modal-backdrop"></div>
+  </body>
+</html>

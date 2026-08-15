@@ -1,0 +1,857 @@
+/* A game screen is the only lit thing on the page and the page is looked at in
+   the dark as often as not, so the paper around it is the same near-black the
+   panels already use rather than the browser's white. */
+:root {
+  --page-bg: #181a1b;
+  --page-fg: #e8e6e3;
+  /* The sliders, checkboxes, dropdown lists and scrollbars are the browser's
+     own, and it draws them light unless told which way round the page is. */
+  color-scheme: dark;
+}
+
+body, p {
+  margin: 0px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body {
+  background: var(--page-bg);
+  color: var(--page-fg);
+}
+
+/* The stage is one column by default. The rails carry no layout of their own
+   here — their panels are modals, which take no space — so a phone lays out
+   exactly as it did before the rails existed. */
+.stage {
+  display: block;
+}
+
+.rail {
+  display: contents;
+}
+
+.log-card {
+  display: none;
+}
+
+.prestart {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #22262a;
+  box-sizing: border-box;
+  transition: opacity 0.3s ease;
+}
+
+.prestart.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.prestart-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 100%;
+}
+
+.game-select,
+.game-start {
+  font: inherit;
+  border-radius: 4px;
+}
+
+.game-select {
+  width: min(100%, 300px);
+  padding: 13px 12px;
+  border: 1px solid #555;
+  background: #2b2f33;
+  color: #e8e6e3;
+}
+
+.game-start {
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  padding: 14px 28px;
+  cursor: pointer;
+}
+
+.game-start:hover:not(:disabled) {
+  background: #5c5c5c;
+}
+
+.game-start:disabled,
+.game-select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+/* Opts keeps this spot for the whole run and wears the browser's own button,
+   like CLR and the layout toggle opposite it: it is one of the keypad's
+   buttons rather than an icon floating over the page. */
+.settings-toggle {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+}
+
+.canvas-wrapper {
+  position: relative;
+  margin: 0 auto;
+  width: min(100vw, 480px);
+  aspect-ratio: 3 / 4;
+  z-index: 1;
+}
+
+#canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The frame is 240x320 shown several times that size, and the browser's
+     default smoothing turns a pixel-art frame into a blurred one. Letting the
+     compositor take the nearest pixel costs nothing and is what makes the
+     unmagnified setting worth choosing: the alternative is hq2x and up, which
+     cost more per frame on this hardware than emulating the frame did. */
+  image-rendering: pixelated;
+}
+
+/* Settings and cheats are centred modals on anything narrower than the
+   three-column layout. A phone cannot scroll the page (touch-action: none) and
+   the keypad already fills its viewport, so a panel anchored to the flow would
+   hang below the fold with no way to reach it. */
+.settings-panel {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 360px);
+  max-height: 82dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 210;
+  box-sizing: border-box;
+  background: #333;
+  color: #fff;
+  border-radius: 8px;
+  padding: 12px 14px 14px;
+  font-size: 0.9em;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  touch-action: auto;
+}
+
+.settings-panel.visible {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-panel label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.settings-panel input[type="range"] {
+  width: 120px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.panel-header,
+.cheat-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-header {
+  margin: -12px -14px 4px;
+  padding: 10px 14px;
+  background: #333;
+  border-bottom: 1px solid #4a4a4a;
+}
+
+.panel-close,
+.cheat-close {
+  font: inherit;
+  background: #4a4a4a;
+  color: #eee;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.panel-close:hover,
+.cheat-close:hover {
+  background: #5c5c5c;
+}
+
+.game-speed {
+  width: 120px;
+  margin-left: auto;
+  padding: 2px 4px;
+  font: inherit;
+  color: inherit;
+  background: #444;
+  border: 1px solid #666;
+  border-radius: 4px;
+}
+
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.button-container {
+  position: relative;
+  display: grid;
+  width: min(100vw, 480px);
+  margin: 0 auto;
+  padding: 44px 16px 12px;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+/* Every button on the keypad, the three in its top row included, wears the same
+   face. It has to be drawn rather than the browser's own: a native button on a
+   dark page comes up light, and a phone has no hover with which to say that a
+   press landed, so the only feedback a finger gets is the one put here. */
+.button-container button {
+  font: inherit;
+  color: #e8e6e3;
+  background: #303539;
+  border: 1px solid #4a5055;
+  border-radius: 6px;
+  padding: 4px 10px;
+  box-sizing: border-box;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.button-container button:hover:not(.pressed) {
+  background: #3b4146;
+}
+
+/* .pressed, not :active: the keypad captures the pointer on the button it
+   started on, and a captured pointer leaves the browser's own active state
+   behind as soon as the finger slides. The class is held for exactly as long
+   as the key is down, so what is lit is what the game is being sent — for the
+   physical keyboard too. */
+.button-container button.pressed {
+  background: #3d6fa5;
+  border-color: #6ba4e0;
+  color: #fff;
+}
+
+.clear-button {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}
+
+/* The top row runs Opts, the layout toggle, Call, CLR. The toggle sits left of
+   centre rather than on it so the send key has the space between the two,
+   which keeps both ends of the row where a thumb already looks for them. */
+.keypad-layout-toggle {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(calc(-50% - 34px));
+}
+
+.call-button {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(calc(-50% + 42px));
+}
+
+.keypad-main {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(20px, 8vw, 56px);
+}
+
+.direction-pad,
+.number-pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  align-items: center;
+  justify-items: center;
+  gap: 8px 4px;
+}
+
+.type2-direction-pad,
+.type2-only {
+  display: none;
+}
+
+.button-container[data-layout="type2"] .type1-direction-pad {
+  display: none;
+}
+
+.button-container[data-layout="type2"] .type2-direction-pad {
+  display: grid;
+}
+
+.button-container[data-layout="type2"] .type2-only {
+  display: block;
+}
+
+.key-up,
+.key-top-left,
+.key-top-right {
+  grid-row: 1;
+}
+
+.key-left,
+.key-right,
+.key-center {
+  grid-row: 2;
+}
+
+.key-down,
+.key-bottom-left,
+.key-bottom-right {
+  grid-row: 3;
+}
+
+.key-up,
+.key-down,
+.key-center {
+  grid-column: 2;
+}
+
+.key-left,
+.key-top-left,
+.key-bottom-left {
+  grid-column: 1;
+}
+
+.key-right,
+.key-top-right,
+.key-bottom-right {
+  grid-column: 3;
+}
+
+.keypad-footer {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.keypad-main button,
+.keypad-footer button {
+  width: min(100%, 64px);
+  min-width: 0;
+  height: clamp(36px, 6vh, 48px);
+  margin: 0;
+  font-size: 1em;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The status line used to sit in the column between the screen and the keypad,
+   which meant a message arriving pushed the keypad down — under the fold on a
+   phone, and out from under a thumb already resting on it. It is a popup now:
+   fixed, over the screen, taking no layout at all, so nothing below it moves
+   whether there is a message or not. */
+.status-message {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 340px);
+  max-height: 70dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Above the panels: an error is worth reading even when one is open, and it
+     is the thing that was just asked for. */
+  z-index: 220;
+  box-sizing: border-box;
+  padding: 16px;
+  background: #2b2b2b;
+  color: #ff9b9b;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  font-size: 0.9em;
+  text-align: center;
+  /* An error is often something to copy into a bug report. */
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: auto;
+}
+
+.status-message.visible {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-text {
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.status-close {
+  font: inherit;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 20px;
+  cursor: pointer;
+}
+
+.status-close:hover {
+  background: #5c5c5c;
+}
+
+/* A message dims the page at every width, unlike the panels below: it is a
+   modal everywhere, because it is never something the page is read alongside. */
+body:has(.status-message.visible) .modal-backdrop {
+  display: block;
+}
+
+/* Only a modal gets a backdrop; the docked panels of the wide layout are part
+   of the page rather than on top of it. */
+@media (max-width: 899px) {
+  body:has(.settings-panel.visible) .modal-backdrop,
+  body:has(.cheat-panel.visible) .modal-backdrop {
+    display: block;
+  }
+}
+
+@media (max-width: 480px) {
+  .button-container {
+    padding-top: 36px;
+    gap: 8px;
+  }
+
+  .settings-toggle,
+  .clear-button,
+  .keypad-layout-toggle,
+  .call-button {
+    top: 0;
+  }
+
+  .cheat-list {
+    max-height: 120px;
+  }
+}
+
+@media (max-width: 480px) and (max-height: 760px) and (orientation: portrait) {
+  .canvas-wrapper {
+    width: min(100vw, calc(75dvh - 172px));
+  }
+}
+
+/* These live inside the settings panel; the top bar has no free corner. */
+.settings-panel .panel-button {
+  font: inherit;
+  margin-top: 2px;
+  padding: 8px 10px;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.settings-panel .panel-button:hover {
+  background: #5c5c5c;
+}
+
+.panel-button.hidden {
+  display: none;
+}
+
+/* The key list. Hidden until app.js has reason to think there is a keyboard,
+   which on a phone is never. */
+.key-bindings.hidden {
+  display: none;
+}
+
+.key-bindings summary {
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+/* The rows are three columns that have to line up down the list rather than
+   nineteen independent rows, so the list is the grid and each row disappears
+   into it. */
+.key-bindings-list {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+  max-height: 38dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 6px 0;
+}
+
+.key-binding {
+  display: contents;
+}
+
+.key-binding-key {
+  color: #bbb;
+  min-width: 2.5em;
+}
+
+.key-binding-code {
+  font: inherit;
+  padding: 5px 8px;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.key-binding-code:hover {
+  background: #5c5c5c;
+}
+
+/* A row waiting for a press is the one thing on screen that is listening, so
+   it says so in colour as well as in words. */
+.key-binding-code.capturing {
+  background: #6d5a24;
+  color: #ffe9a8;
+}
+
+.key-binding-code.unbound {
+  color: #8d8d8d;
+}
+
+.key-binding-clear {
+  font: inherit;
+  padding: 4px 6px;
+  background: none;
+  color: #bbb;
+  border: none;
+  cursor: pointer;
+}
+
+.key-binding-clear:disabled {
+  color: #5a5a5a;
+  cursor: default;
+}
+
+.key-bindings-hint {
+  margin: 6px 0;
+  color: #aaa;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.key-bindings .panel-button {
+  width: 100%;
+}
+
+.cheat-panel {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(96vw, 460px);
+  max-height: 82dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 200;
+  padding: 0 12px 12px;
+  box-sizing: border-box;
+  background: #2b2b2b;
+  color: #eee;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 0.85em;
+  user-select: text;
+  touch-action: auto;
+}
+
+.cheat-panel.visible {
+  display: block;
+}
+
+.cheat-header {
+  margin: 0 -12px 8px;
+  padding: 10px 12px;
+  background: #2b2b2b;
+  border-bottom: 1px solid #444;
+}
+
+.cheat-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cheat-row button {
+  font: inherit;
+  background: #444;
+  color: #eee;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.cheat-row button:hover {
+  background: #565656;
+}
+
+.cheat-panel input,
+.cheat-panel select {
+  font: inherit;
+  background: #1e1e1e;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+.cheat-panel #cheat-value {
+  flex: 1;
+  min-width: 120px;
+}
+
+.cheat-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cheat-count {
+  margin-left: auto;
+  opacity: 0.8;
+}
+
+.cheat-section {
+  margin: 12px 0 6px;
+  padding-top: 8px;
+  border-top: 1px solid #444;
+  opacity: 0.8;
+}
+
+.cheat-list {
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.cheat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.cheat-item button {
+  font: inherit;
+  font-size: 0.9em;
+  background: #444;
+  color: #eee;
+  border: none;
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.cheat-item button:hover {
+  background: #565656;
+}
+
+.cheat-address {
+  font-family: monospace;
+  color: #8ab4f8;
+}
+
+.cheat-item .cheat-value {
+  flex: 1;
+  font-family: monospace;
+}
+
+.cheat-freeze-value {
+  flex: 1;
+  min-width: 80px;
+}
+
+.cheat-type-tag {
+  opacity: 0.6;
+}
+
+.cheat-hit {
+  font-family: monospace;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.cheat-more {
+  padding: 4px 0;
+  opacity: 0.6;
+}
+
+/* The docked layout. A desktop window is mostly empty either side of a 3:4
+   phone screen, so the margins are spent on the panels, which are then read
+   alongside the game rather than on top of it. One margin is enough for
+   settings and cheats; the log needs a second one and waits for it below. */
+@media (min-width: 900px) {
+  .stage {
+    display: grid;
+    grid-template-columns: 480px minmax(260px, 380px);
+    justify-content: center;
+    align-items: start;
+    gap: 16px;
+    padding: 16px 16px 0;
+    box-sizing: border-box;
+  }
+
+  .rail-left {
+    display: none;
+  }
+
+  .rail-right {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: sticky;
+    top: 16px;
+    min-width: 0;
+    max-height: calc(100dvh - 32px);
+  }
+
+  .rail-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: #2b2b2b;
+    color: #eee;
+    border-radius: 8px;
+    font-size: 0.85em;
+  }
+
+  .rail-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #444;
+  }
+
+  .rail-card-action {
+    font: inherit;
+    background: #444;
+    color: #eee;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+
+  .rail-card-action:hover {
+    background: #565656;
+  }
+
+  .log-card {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .log-view {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    user-select: text;
+    touch-action: auto;
+  }
+
+  .log-line {
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  /* Docked, not floating: the panels keep the same .visible switch the gear
+     and the cheat button already flip, they just occupy the rail when on. */
+  .settings-panel,
+  .cheat-panel {
+    position: static;
+    transform: none;
+    width: auto;
+    max-height: none;
+    box-shadow: none;
+  }
+
+  .cheat-panel {
+    max-height: calc(100dvh - 32px);
+  }
+
+  .rail .settings-panel,
+  .rail .cheat-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+}
+
+/* Wide enough for a second margin, which the run log takes — in a debug build.
+   A release has no run log to show, so it keeps the two-column layout at every
+   width and the page stays centred rather than leaving a gap where the log
+   would have been. */
+@media (min-width: 1180px) {
+  body.debug-build .stage {
+    grid-template-columns: minmax(240px, 340px) 480px minmax(280px, 380px);
+  }
+
+  /* The log takes the height it is given rather than the height it has: a
+     scrollback that grew the column would push the page around all run. */
+  body.debug-build .rail-left {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: sticky;
+    top: 16px;
+    min-width: 0;
+    height: calc(100dvh - 32px);
+  }
+}

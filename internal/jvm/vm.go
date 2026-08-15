@@ -1,0 +1,1017 @@
+package jvm
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/movingwoo/wfeature/internal/jvm/classfile"
+)
+
+var (
+	ErrStepLimit  = errors.New("JVM instruction limit exceeded")
+	ErrFrameLimit = errors.New("JVM frame limit exceeded")
+)
+
+type NativeMethod func(vm *VM, arguments []Value) (Value, error)
+
+// AOTInvoker executes a platform-owned AOT method when interpreted bytecode
+// dispatches into a class that exists only as registered AOT metadata. The
+// receiver is the first argument for instance methods.
+type AOTInvoker func(className, name, descriptor string, arguments []Value) (Value, error)
+
+// SetAOTInvoker installs the platform bridge used when interpreted code calls
+// into AOT-only classes.
+func (vm *VM) SetAOTInvoker(invoker AOTInvoker) {
+	vm.mu.Lock()
+	vm.aotInvoker = invoker
+	vm.mu.Unlock()
+}
+
+// invokeAOTFallback delegates a failed bytecode resolution to the platform
+// AOT bridge when the lookup class is registered AOT metadata.
+func (vm *VM) invokeAOTFallback(className, name, descriptor string, arguments []Value) (Value, bool, error) {
+	vm.mu.RLock()
+	invoker := vm.aotInvoker
+	vm.mu.RUnlock()
+	if invoker == nil {
+		return VoidValue(), false, nil
+	}
+	if _, ok := vm.AOTClass(className); !ok {
+		return VoidValue(), false, nil
+	}
+	result, err := invoker(className, name, descriptor, arguments)
+	return result, true, err
+}
+
+type Options struct {
+	MaxSteps       uint64
+	MaxFrames      int
+	MaxArrayLength int
+	Logger         *slog.Logger
+	Clock          func() int64
+	AsyncError     func(error)
+	ThreadYield    func() error
+	// ByteDecoder converts platform byte content to text for the String byte
+	// constructors and ByteEncoder is its String.getBytes inverse. Platforms
+	// with a non-UTF-8 default charset, such as KTF's EUC-KR, install both;
+	// the default keeps UTF-8 with replacement characters.
+	ByteDecoder func([]byte) string
+	ByteEncoder func(string) []byte
+	// GuestThreadStarter replaces the goroutine-backed Thread.start. Platforms
+	// whose guest threads share one cooperative execution core queue the
+	// thread object for their own service loop instead.
+	GuestThreadStarter func(thread *Object) error
+	// RenewSteps is asked whether an execution that has spent MaxSteps may have
+	// another window. Without it MaxSteps is a ceiling on one execution, which
+	// is the right answer for a Host call that should not run away and the
+	// wrong one for a game's own thread: that thread is the game, and it spends
+	// instructions for as long as the title is running. A platform that installs
+	// this makes MaxSteps a window and keeps the stop condition its own — its
+	// runtime being torn down — which is the only condition a spinning guest can
+	// be stopped by. Returning an error ends the execution with that error.
+	RenewSteps func() error
+}
+
+// decodePlatformBytes converts guest byte content to text using the
+// platform's default charset when one is installed.
+func (vm *VM) decodePlatformBytes(data []byte) string {
+	if vm != nil && vm.config.ByteDecoder != nil {
+		return vm.config.ByteDecoder(append([]byte(nil), data...))
+	}
+	return strings.ToValidUTF8(string(data), "�")
+}
+
+// encodePlatformString is the String.getBytes inverse of decodePlatformBytes.
+func (vm *VM) encodePlatformString(value string) []byte {
+	if vm != nil && vm.config.ByteEncoder != nil {
+		return vm.config.ByteEncoder(value)
+	}
+	return []byte(value)
+}
+
+type contextNativeMethod func(vm *VM, state *execution, arguments []Value) (Value, error)
+
+type methodKey struct {
+	class      string
+	name       string
+	descriptor string
+}
+
+type fieldKey struct {
+	class      string
+	name       string
+	descriptor string
+}
+
+type VM struct {
+	loader *Loader
+	config Options
+	aotMu  sync.RWMutex
+
+	mu             sync.RWMutex
+	natives        map[methodKey]NativeMethod
+	contextNatives map[methodKey]contextNativeMethod
+	// builtinNatives marks the entries of natives that came from the
+	// runtime's own implementations. A platform may replace one of those —
+	// KTF answers Class.getName from its guest class records — while two
+	// platform registrations of the same method stay an error, because that
+	// is a mistake rather than an override.
+	builtinNatives map[methodKey]bool
+	statics        map[fieldKey]Value
+	classMonitors  map[string]*monitor
+	nextExecution  atomic.Uint64
+	nextObject     atomic.Uint32
+	arraycopyMu    sync.Mutex
+	threadMu       sync.Mutex
+	threads        map[*Object]*guestThread
+	aotClasses     map[string]AOTClassMetadata
+	aotAddresses   map[uint32]string
+	aotObjects     map[uint32]aotBinding
+	aotInvoker     AOTInvoker
+
+	initMu       sync.Mutex
+	initCond     *sync.Cond
+	initializing map[string]bool
+	initialized  map[string]bool
+	initErrors   map[string]error
+}
+
+type execution struct {
+	steps        uint64
+	frames       int
+	id           uint64
+	initializing map[string]bool
+	thread       *Object
+}
+
+type ExecutionError struct {
+	Class      string
+	Method     string
+	Descriptor string
+	PC         int
+	Opcode     byte
+	Cause      error
+}
+
+func (e *ExecutionError) Error() string {
+	return fmt.Sprintf("execute %s.%s%s at pc %d (opcode 0x%02x): %v", e.Class, e.Method, e.Descriptor, e.PC, e.Opcode, e.Cause)
+}
+
+func (e *ExecutionError) Unwrap() error {
+	return e.Cause
+}
+
+func New(source ClassSource, options Options) *VM {
+	if options.MaxSteps == 0 {
+		options.MaxSteps = 1_000_000
+	}
+	if options.MaxFrames == 0 {
+		options.MaxFrames = 1024
+	}
+	if options.MaxArrayLength == 0 {
+		options.MaxArrayLength = 16 * 1024 * 1024
+	}
+	vm := &VM{
+		loader:         NewLoader(ClassSources{CoreLibrary{}, source}),
+		config:         options,
+		natives:        make(map[methodKey]NativeMethod),
+		contextNatives: make(map[methodKey]contextNativeMethod),
+		builtinNatives: make(map[methodKey]bool),
+		statics:        make(map[fieldKey]Value),
+		classMonitors:  make(map[string]*monitor),
+		threads:        make(map[*Object]*guestThread),
+		aotClasses:     make(map[string]AOTClassMetadata),
+		aotAddresses:   make(map[uint32]string),
+		aotObjects:     make(map[uint32]aotBinding),
+		initializing:   make(map[string]bool),
+		initialized:    make(map[string]bool),
+		initErrors:     make(map[string]error),
+	}
+	vm.initCond = sync.NewCond(&vm.initMu)
+	vm.initialized["java/lang/Object"] = true
+	// Core exception classes are currently runtime-owned native surfaces rather
+	// than class files. Mark Exception initialized so runtime API exceptions can
+	// extend it without requiring a java/lang/Exception class file.
+	vm.initialized["java/lang/Exception"] = true
+	vm.registerBuiltins()
+	return vm
+}
+
+// ClassCensus names every class this VM has loaded and every one it was asked
+// for and could not find. See Loader.Census.
+func (vm *VM) ClassCensus() (loaded []string, missing map[string]string) {
+	if vm == nil || vm.loader == nil {
+		return nil, nil
+	}
+	return vm.loader.Census()
+}
+
+func (vm *VM) RegisterNative(class, name, descriptor string, method NativeMethod) error {
+	if method == nil {
+		return fmt.Errorf("native method is nil")
+	}
+	if _, err := ParseMethodDescriptor(descriptor); err != nil {
+		return err
+	}
+	key := methodKey{class: class, name: name, descriptor: descriptor}
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+	if _, exists := vm.natives[key]; exists && !vm.builtinNatives[key] {
+		return fmt.Errorf("native method already registered: %s.%s%s", class, name, descriptor)
+	}
+	// A platform registration overrides the built-in implementation,
+	// including context builtins such as the real-time Thread.sleep.
+	delete(vm.contextNatives, key)
+	delete(vm.builtinNatives, key)
+	vm.natives[key] = method
+	return nil
+}
+
+// HasMethodBody reports whether this VM can answer one method call, either
+// from a registered native or from a class it can load. A platform that
+// publishes a class to guest code without carrying its own body is promising
+// the method exists; asking here lets that promise be checked once, rather
+// than by the game that eventually calls it.
+func (vm *VM) HasMethodBody(class, name, descriptor string) bool {
+	key := methodKey{class: class, name: name, descriptor: descriptor}
+	vm.mu.RLock()
+	_, native := vm.natives[key]
+	_, context := vm.contextNatives[key]
+	vm.mu.RUnlock()
+	if native || context {
+		return true
+	}
+	if _, method, err := vm.resolveStaticMethod(class, name, descriptor); err == nil {
+		return method.CodeAttribute() != nil
+	}
+	if _, method, err := vm.resolveInstanceMethod(class, name, descriptor); err == nil {
+		return method.CodeAttribute() != nil
+	}
+	return false
+}
+
+func (vm *VM) InvokeStatic(class, name, descriptor string, arguments ...Value) (Value, error) {
+	methodType, err := ParseMethodDescriptor(descriptor)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateArguments(arguments, methodType.Parameters); err != nil {
+		return VoidValue(), fmt.Errorf("invoke %s.%s%s: %w", class, name, descriptor, err)
+	}
+	state := vm.newExecution()
+	result, err := vm.invokeStatic(state, class, name, descriptor, arguments)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateValue(result, methodType.Return); err != nil {
+		return VoidValue(), fmt.Errorf("invoke %s.%s%s returned invalid value: %w", class, name, descriptor, err)
+	}
+	return result, nil
+}
+
+func (vm *VM) InvokeVirtual(receiver *Object, name, descriptor string, arguments ...Value) (Value, error) {
+	if receiver == nil {
+		return VoidValue(), fmt.Errorf("invoke %s%s on null reference", name, descriptor)
+	}
+	methodType, err := ParseMethodDescriptor(descriptor)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateArguments(arguments, methodType.Parameters); err != nil {
+		return VoidValue(), fmt.Errorf("invoke %s.%s%s: %w", receiver.ClassName, name, descriptor, err)
+	}
+	state := vm.newExecution()
+	result, err := vm.invokeInstance(state, receiver.ClassName, receiver, name, descriptor, arguments)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateValue(result, methodType.Return); err != nil {
+		return VoidValue(), fmt.Errorf("invoke %s.%s%s returned invalid value: %w", receiver.ClassName, name, descriptor, err)
+	}
+	return result, nil
+}
+
+// InvokeSpecial invokes an instance method using the explicitly named lookup
+// class instead of virtual dispatch. Platform AOT bridges use this for
+// invokespecial calls into runtime-owned superclass constructors.
+func (vm *VM) InvokeSpecial(receiver *Object, className, name, descriptor string, arguments ...Value) (Value, error) {
+	if receiver == nil {
+		return VoidValue(), fmt.Errorf("invoke special %s.%s%s on null reference", className, name, descriptor)
+	}
+	if className == "" {
+		return VoidValue(), fmt.Errorf("invoke special class name is empty")
+	}
+	methodType, err := ParseMethodDescriptor(descriptor)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateArguments(arguments, methodType.Parameters); err != nil {
+		return VoidValue(), fmt.Errorf("invoke special %s.%s%s: %w", className, name, descriptor, err)
+	}
+	state := vm.newExecution()
+	result, err := vm.invokeInstance(state, className, receiver, name, descriptor, arguments)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := validateValue(result, methodType.Return); err != nil {
+		return VoidValue(), fmt.Errorf("invoke special %s.%s%s returned invalid value: %w", className, name, descriptor, err)
+	}
+	return result, nil
+}
+
+// NewObject allocates a guest object and invokes the constructor declared by
+// that class. Class initialization and constructor execution share one set of
+// instruction and frame limits.
+func (vm *VM) NewObject(className, descriptor string, arguments ...Value) (*Object, error) {
+	methodType, err := ParseMethodDescriptor(descriptor)
+	if err != nil {
+		return nil, err
+	}
+	if methodType.Return.Kind != TypeVoid {
+		return nil, fmt.Errorf("constructor descriptor must return void: %s", descriptor)
+	}
+	if err := validateArguments(arguments, methodType.Parameters); err != nil {
+		return nil, fmt.Errorf("construct %s%s: %w", className, descriptor, err)
+	}
+
+	class, err := vm.loader.Load(className)
+	if err != nil {
+		return nil, err
+	}
+	constructor := class.FindMethod("<init>", descriptor)
+	if constructor == nil || constructor.AccessFlags&0x0008 != 0 {
+		return nil, fmt.Errorf("constructor not found: %s%s", className, descriptor)
+	}
+
+	state := vm.newExecution()
+	object, err := vm.newObject(state, className)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := vm.invokeInstance(state, className, object, "<init>", descriptor, arguments); err != nil {
+		return nil, fmt.Errorf("construct %s%s: %w", className, descriptor, err)
+	}
+	return object, nil
+}
+
+// IsSubclassOf reports whether className is superName itself or reaches it by
+// following the guest class hierarchy. The traversal is bounded because class
+// files are untrusted input.
+func (vm *VM) IsSubclassOf(className, superName string) (bool, error) {
+	if className == "" || superName == "" {
+		return false, fmt.Errorf("class names must not be empty")
+	}
+	visited := make(map[string]bool)
+	for depth, current := 0, className; current != ""; depth++ {
+		if current == superName {
+			return true, nil
+		}
+		if depth >= vm.config.MaxFrames {
+			return false, fmt.Errorf("class hierarchy from %s exceeds limit %d", className, vm.config.MaxFrames)
+		}
+		if visited[current] {
+			return false, fmt.Errorf("cyclic class hierarchy at %s", current)
+		}
+		visited[current] = true
+		// java/lang/Object is runtime-owned and has no class-file source. It is
+		// the terminal superclass when the requested type did not match above.
+		if current == "java/lang/Object" {
+			return false, nil
+		}
+		if parent := runtimeClassParent(current); parent != "" {
+			current = parent
+			continue
+		}
+		if class, ok := vm.AOTClass(current); ok {
+			current = class.SuperName
+			continue
+		}
+		class, err := vm.loader.Load(current)
+		if err != nil {
+			return false, err
+		}
+		current = class.SuperName
+	}
+	return false, nil
+}
+
+func (vm *VM) invokeStatic(state *execution, className, name, descriptor string, arguments []Value) (Value, error) {
+	key := methodKey{class: className, name: name, descriptor: descriptor}
+	vm.mu.RLock()
+	contextNative := vm.contextNatives[key]
+	native := vm.natives[key]
+	vm.mu.RUnlock()
+	if contextNative != nil {
+		result, err := contextNative(vm, state, append([]Value(nil), arguments...))
+		if err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
+		}
+		methodType, _ := ParseMethodDescriptor(descriptor)
+		if err := validateValue(result, methodType.Return); err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", className, name, descriptor, err)
+		}
+		return result, nil
+	}
+	if native != nil {
+		result, err := native(vm, append([]Value(nil), arguments...))
+		if err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
+		}
+		methodType, _ := ParseMethodDescriptor(descriptor)
+		if err := validateValue(result, methodType.Return); err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", className, name, descriptor, err)
+		}
+		return result, nil
+	}
+
+	class, method, err := vm.resolveStaticMethod(className, name, descriptor)
+	if err != nil {
+		if result, handled, aotErr := vm.invokeAOTFallback(className, name, descriptor, arguments); handled {
+			return result, aotErr
+		}
+		return VoidValue(), err
+	}
+	if name != "<clinit>" {
+		if err := vm.ensureInitialized(state, class.Name); err != nil {
+			return VoidValue(), err
+		}
+	}
+	code := method.CodeAttribute()
+	if code == nil {
+		return VoidValue(), fmt.Errorf("method has no code: %s.%s%s", class.Name, name, descriptor)
+	}
+	var classMonitor *monitor
+	if method.AccessFlags&0x0020 != 0 {
+		classMonitor = vm.classMonitor(class.Name)
+		classMonitor.enter(state.id)
+	}
+	result, executeErr := vm.execute(state, class, method, code, arguments)
+	if classMonitor != nil {
+		if exitErr := classMonitor.exit(state.id); executeErr == nil && exitErr != nil {
+			executeErr = exitErr
+		}
+	}
+	return result, executeErr
+}
+
+func (vm *VM) invokeInstance(
+	state *execution,
+	lookupClass string,
+	receiver *Object,
+	name string,
+	descriptor string,
+	arguments []Value,
+) (Value, error) {
+	if receiver == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "invoke "+name+descriptor)
+	}
+	combined := make([]Value, 0, len(arguments)+1)
+	combined = append(combined, ReferenceValue(receiver))
+	combined = append(combined, arguments...)
+
+	class, method, resolveErr := vm.resolveInstanceMethod(lookupClass, name, descriptor)
+	var contextNative contextNativeMethod
+	var native NativeMethod
+	if resolveErr == nil {
+		vm.mu.RLock()
+		contextNative = vm.contextNatives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
+		native = vm.natives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
+		vm.mu.RUnlock()
+	} else {
+		contextNative = vm.resolveContextNativeInstance(lookupClass, name, descriptor)
+		native = vm.resolveNativeInstance(lookupClass, name, descriptor)
+	}
+	if contextNative != nil {
+		result, err := contextNative(vm, state, combined)
+		if err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", lookupClass, name, descriptor, err)
+		}
+		methodType, _ := ParseMethodDescriptor(descriptor)
+		if err := validateValue(result, methodType.Return); err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", lookupClass, name, descriptor, err)
+		}
+		return result, nil
+	}
+	if native != nil {
+		result, err := native(vm, combined)
+		if err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", lookupClass, name, descriptor, err)
+		}
+		methodType, _ := ParseMethodDescriptor(descriptor)
+		if err := validateValue(result, methodType.Return); err != nil {
+			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", lookupClass, name, descriptor, err)
+		}
+		return result, nil
+	}
+	if resolveErr != nil {
+		// The receiver's dynamic class dispatches AOT virtual calls.
+		dispatchClass := lookupClass
+		if receiver.ClassName != "" {
+			dispatchClass = receiver.ClassName
+		}
+		if result, handled, aotErr := vm.invokeAOTFallback(dispatchClass, name, descriptor, combined); handled {
+			return result, aotErr
+		}
+		return VoidValue(), resolveErr
+	}
+	code := method.CodeAttribute()
+	if code == nil {
+		return VoidValue(), fmt.Errorf("method has no code: %s.%s%s", class.Name, name, descriptor)
+	}
+	if method.AccessFlags&0x0020 != 0 {
+		receiver.monitor.enter(state.id)
+	}
+	result, executeErr := vm.execute(state, class, method, code, combined)
+	if method.AccessFlags&0x0020 != 0 {
+		if exitErr := receiver.monitor.exit(state.id); executeErr == nil && exitErr != nil {
+			executeErr = exitErr
+		}
+	}
+	return result, executeErr
+}
+
+func (vm *VM) resolveStaticMethod(className, name, descriptor string) (*classfile.Class, *classfile.Member, error) {
+	referenced := className
+	for className != "" {
+		class, err := vm.loader.Load(className)
+		if err != nil {
+			return nil, nil, unresolvedMethod(referenced, className, name, descriptor, err)
+		}
+		if method := class.FindMethod(name, descriptor); method != nil {
+			if method.AccessFlags&0x0008 == 0 {
+				return nil, nil, fmt.Errorf("method is not static: %s.%s%s", class.Name, name, descriptor)
+			}
+			return class, method, nil
+		}
+		className = class.SuperName
+	}
+	return nil, nil, fmt.Errorf("static method not found: %s.%s%s", referenced, name, descriptor)
+}
+
+// unresolvedMethod reports a resolution that ran off the end of a class chain.
+//
+// Which class is worth naming depends on where the walk stopped. Failing on
+// the referenced class itself is a missing class, and its name is the answer.
+// Failing further up means the chain reached a class the runtime owns rather
+// than one the game ships — java/lang/Object, almost always — and reporting
+// that name describes the walk instead of the gap: the caller wanted a method
+// nothing in the chain declares, and the method is what has to be named.
+func unresolvedMethod(referenced, missing, name, descriptor string, err error) error {
+	if referenced == missing {
+		return err
+	}
+	return fmt.Errorf("method not found: %s.%s%s (chain reached %s, which is not in the archive)", referenced, name, descriptor, missing)
+}
+
+func (vm *VM) resolveInstanceMethod(className, name, descriptor string) (*classfile.Class, *classfile.Member, error) {
+	referenced := className
+	for className != "" {
+		class, err := vm.loader.Load(className)
+		if err != nil {
+			return nil, nil, unresolvedMethod(referenced, className, name, descriptor, err)
+		}
+		if method := class.FindMethod(name, descriptor); method != nil {
+			if method.AccessFlags&0x0008 != 0 {
+				return nil, nil, fmt.Errorf("method is static: %s.%s%s", class.Name, name, descriptor)
+			}
+			return class, method, nil
+		}
+		className = class.SuperName
+	}
+	return nil, nil, fmt.Errorf("instance method not found: %s%s", name, descriptor)
+}
+
+func validateArguments(arguments []Value, parameters []Type) error {
+	if len(arguments) != len(parameters) {
+		return fmt.Errorf("expected %d arguments, got %d", len(parameters), len(arguments))
+	}
+	for index, parameter := range parameters {
+		if err := validateValue(arguments[index], parameter); err != nil {
+			return fmt.Errorf("argument %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func (vm *VM) newExecution() *execution {
+	return &execution{
+		id:           vm.nextExecution.Add(1),
+		initializing: make(map[string]bool),
+	}
+}
+
+// renewSteps answers an exhausted step budget: without a platform hook the
+// limit stands, and with one a granted window starts the count again.
+func (vm *VM) renewSteps(state *execution) error {
+	if vm.config.RenewSteps == nil {
+		return ErrStepLimit
+	}
+	if err := vm.config.RenewSteps(); err != nil {
+		return err
+	}
+	state.steps = 0
+	return nil
+}
+
+func (vm *VM) classMonitor(className string) *monitor {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+	result := vm.classMonitors[className]
+	if result == nil {
+		result = &monitor{}
+		vm.classMonitors[className] = result
+	}
+	return result
+}
+
+func (vm *VM) resolveNativeInstance(className, name, descriptor string) NativeMethod {
+	for className != "" {
+		key := methodKey{class: className, name: name, descriptor: descriptor}
+		vm.mu.RLock()
+		native := vm.natives[key]
+		vm.mu.RUnlock()
+		if native != nil {
+			return native
+		}
+		class, err := vm.loader.Load(className)
+		if err != nil {
+			if parent := runtimeClassParent(className); parent != "" {
+				className = parent
+				continue
+			}
+			if className != "java/lang/Object" {
+				className = "java/lang/Object"
+				continue
+			}
+			return nil
+		}
+		className = class.SuperName
+	}
+	return nil
+}
+
+func (vm *VM) resolveContextNativeInstance(className, name, descriptor string) contextNativeMethod {
+	for className != "" {
+		key := methodKey{class: className, name: name, descriptor: descriptor}
+		vm.mu.RLock()
+		native := vm.contextNatives[key]
+		vm.mu.RUnlock()
+		if native != nil {
+			return native
+		}
+		class, err := vm.loader.Load(className)
+		if err != nil {
+			if parent := runtimeClassParent(className); parent != "" {
+				className = parent
+				continue
+			}
+			if className != "java/lang/Object" {
+				className = "java/lang/Object"
+				continue
+			}
+			return nil
+		}
+		className = class.SuperName
+	}
+	return nil
+}
+
+// StaticField reads a static field from outside the interpreter, running the
+// class initializer first if it has not run. A platform needs this to reach a
+// constant a runtime-owned class publishes — MIDP's List.SELECT_COMMAND is
+// created by <clinit>, so there is nowhere else to read it from.
+func (vm *VM) StaticField(class, name, descriptor string) (Value, error) {
+	return vm.staticValue(vm.newExecution(), classfile.Reference{
+		Kind:       classfile.FieldReference,
+		Class:      class,
+		Name:       name,
+		Descriptor: descriptor,
+	})
+}
+
+// SetStaticField writes a static field from outside the interpreter, running
+// the class initializer first for the reason StaticField does. It is how a
+// platform publishes a device fact a runtime-owned class exposes as a field
+// rather than as a method: the class file cannot know the screen it will run
+// on, and a game reads the field directly.
+func (vm *VM) SetStaticField(class, name, descriptor string, value Value) error {
+	return vm.setStaticValue(vm.newExecution(), classfile.Reference{
+		Kind:       classfile.FieldReference,
+		Class:      class,
+		Name:       name,
+		Descriptor: descriptor,
+	}, value)
+}
+
+func (vm *VM) staticValue(state *execution, reference classfile.Reference) (Value, error) {
+	if err := vm.ensureInitialized(state, reference.Class); err != nil {
+		return VoidValue(), err
+	}
+	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
+	if err != nil {
+		return VoidValue(), err
+	}
+	key := fieldKey{class: reference.Class, name: reference.Name, descriptor: reference.Descriptor}
+	vm.mu.RLock()
+	value, ok := vm.statics[key]
+	vm.mu.RUnlock()
+	if !ok {
+		value = zeroValue(typeInfo)
+	}
+	return value, nil
+}
+
+func (vm *VM) setStaticValue(state *execution, reference classfile.Reference, value Value) error {
+	if err := vm.ensureInitialized(state, reference.Class); err != nil {
+		return err
+	}
+	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
+	if err != nil {
+		return err
+	}
+	if err := validateValue(value, typeInfo); err != nil {
+		return err
+	}
+	key := fieldKey{class: reference.Class, name: reference.Name, descriptor: reference.Descriptor}
+	vm.mu.Lock()
+	vm.statics[key] = value
+	vm.mu.Unlock()
+	return nil
+}
+
+func (vm *VM) newObject(state *execution, className string) (*Object, error) {
+	if err := vm.ensureInitialized(state, className); err != nil {
+		return nil, err
+	}
+	// Object is provided by the runtime native boundary rather than a class
+	// file. Guest bytecode may still instantiate it directly. The runtime's own
+	// Throwable types are the same case: they have a parent and a pair of
+	// constructors and no class file, and bytecode throws them by name —
+	// runtime-owned library code that raises one is the caller here, not only
+	// the game.
+	if className != "java/lang/Object" {
+		if _, err := vm.loader.Load(className); err != nil {
+			if runtimeClassParent(className) == "" {
+				return nil, err
+			}
+		}
+	}
+	object := &Object{ClassName: className, Fields: make(map[string]Value)}
+	vm.objectIdentity(object)
+	return object, nil
+}
+
+func (vm *VM) instanceValue(object *Object, reference classfile.Reference) (Value, error) {
+	if object == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "get field "+reference.Class+"."+reference.Name)
+	}
+	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
+	if err != nil {
+		return VoidValue(), err
+	}
+	key := instanceFieldKey(reference)
+	object.fieldMu.RLock()
+	value, ok := object.Fields[key]
+	object.fieldMu.RUnlock()
+	if !ok {
+		value = zeroValue(typeInfo)
+	}
+	return value, nil
+}
+
+func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, value Value) error {
+	if object == nil {
+		return guestException("java/lang/NullPointerException", "put field "+reference.Class+"."+reference.Name)
+	}
+	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
+	if err != nil {
+		return err
+	}
+	if err := validateValue(value, typeInfo); err != nil {
+		return err
+	}
+	object.fieldMu.Lock()
+	if object.Fields == nil {
+		object.Fields = make(map[string]Value)
+	}
+	object.Fields[instanceFieldKey(reference)] = value
+	object.fieldMu.Unlock()
+	return nil
+}
+
+func instanceFieldKey(reference classfile.Reference) string {
+	return reference.Class + "." + reference.Name + ":" + reference.Descriptor
+}
+
+// NewArray creates a guest array of the given component type and length for a
+// native service that has to hand one back. It applies the same limits the
+// interpreter's own array creation does.
+func (vm *VM) NewArray(component Type, length int32) (*Object, error) {
+	return vm.newArray(component, length)
+}
+
+func (vm *VM) newArray(component Type, length int32) (*Object, error) {
+	if length < 0 {
+		return nil, guestException("java/lang/NegativeArraySizeException", fmt.Sprintf("length %d", length))
+	}
+	if int64(length) > int64(vm.config.MaxArrayLength) {
+		return nil, fmt.Errorf("array size %d exceeds limit %d", length, vm.config.MaxArrayLength)
+	}
+	values := make([]Value, int(length))
+	for index := range values {
+		values[index] = zeroValue(component)
+	}
+	object := &Object{
+		ClassName: "[" + component.Descriptor(),
+		Native:    &Array{Component: component, storage: valueStorage(values)},
+	}
+	vm.objectIdentity(object)
+	return object, nil
+}
+
+func (vm *VM) newMultiArray(arrayType Type, lengths []int32) (*Object, error) {
+	if arrayType.Kind != TypeArray || arrayType.Component == nil || len(lengths) == 0 {
+		return nil, fmt.Errorf("invalid multianewarray type or dimensions")
+	}
+	array, err := vm.newArray(*arrayType.Component, lengths[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(lengths) == 1 {
+		return array, nil
+	}
+	if arrayType.Component.Kind != TypeArray {
+		return nil, fmt.Errorf("multianewarray has more dimensions than its type")
+	}
+	storage := array.Native.(*Array)
+	for index := 0; index < storage.Length(); index++ {
+		child, err := vm.newMultiArray(*arrayType.Component, lengths[1:])
+		if err != nil {
+			return nil, err
+		}
+		if err := storage.Store(index, ReferenceValue(child)); err != nil {
+			return nil, err
+		}
+	}
+	return array, nil
+}
+
+// IsInstance answers `instanceof` for a native method holding a reference it
+// was handed. Unlike IsSubclassOf it reads the interfaces a class declares,
+// which is what a platform surface needs when the parameter's type is an
+// interface such as java/lang/Runnable.
+func (vm *VM) IsInstance(object *Object, target string) bool {
+	return vm.isInstance(object, target)
+}
+
+func (vm *VM) isInstance(object *Object, target string) bool {
+	if object == nil {
+		return false
+	}
+	if object.ClassName == target || target == "java/lang/Object" {
+		return true
+	}
+	if len(object.ClassName) > 0 && object.ClassName[0] == '[' {
+		return target == "java/lang/Cloneable" || target == "java/io/Serializable"
+	}
+	for current := object.ClassName; current != ""; {
+		class, err := vm.loader.Load(current)
+		if err != nil {
+			return false
+		}
+		for _, interfaceName := range class.Interfaces {
+			if interfaceName == target {
+				return true
+			}
+		}
+		if class.SuperName == target {
+			return true
+		}
+		current = class.SuperName
+	}
+	return false
+}
+
+func (vm *VM) objectIdentity(object *Object) uint32 {
+	if object == nil {
+		return 0
+	}
+	if identity := object.identity.Load(); identity != 0 {
+		return identity
+	}
+	candidate := vm.nextObject.Add(1)
+	if candidate == 0 {
+		candidate = vm.nextObject.Add(1)
+	}
+	if object.identity.CompareAndSwap(0, candidate) {
+		return candidate
+	}
+	return object.identity.Load()
+}
+
+func (vm *VM) ensureInitialized(state *execution, className string) error {
+	if state.initializing[className] {
+		return nil
+	}
+
+	vm.initMu.Lock()
+	for vm.initializing[className] {
+		vm.initCond.Wait()
+	}
+	if vm.initialized[className] {
+		vm.initMu.Unlock()
+		return nil
+	}
+	if err := vm.initErrors[className]; err != nil {
+		vm.initMu.Unlock()
+		return fmt.Errorf("class initialization previously failed for %s: %w", className, err)
+	}
+	vm.initializing[className] = true
+	vm.initMu.Unlock()
+
+	state.initializing[className] = true
+	err := vm.initializeClass(state, className)
+	delete(state.initializing, className)
+
+	vm.initMu.Lock()
+	delete(vm.initializing, className)
+	if err == nil {
+		vm.initialized[className] = true
+	} else {
+		vm.initErrors[className] = err
+	}
+	vm.initCond.Broadcast()
+	vm.initMu.Unlock()
+	return err
+}
+
+func (vm *VM) initializeClass(state *execution, className string) error {
+	class, err := vm.loader.Load(className)
+	if err != nil {
+		// A runtime-owned Throwable has no class file to initialize, and no
+		// statics behind it either.
+		if runtimeClassParent(className) != "" {
+			return nil
+		}
+		return err
+	}
+	if class.SuperName != "" {
+		if err := vm.ensureInitialized(state, class.SuperName); err != nil {
+			return err
+		}
+	}
+	if err := vm.initializeStaticFields(class); err != nil {
+		return err
+	}
+	initializer := class.FindMethod("<clinit>", "()V")
+	if initializer == nil {
+		return nil
+	}
+	code := initializer.CodeAttribute()
+	if code == nil {
+		return fmt.Errorf("class initializer has no code: %s", className)
+	}
+	_, err = vm.execute(state, class, initializer, code, nil)
+	if err != nil {
+		return fmt.Errorf("initialize class %s: %w", className, err)
+	}
+	return nil
+}
+
+func (vm *VM) initializeStaticFields(class *classfile.Class) error {
+	for _, field := range class.Fields {
+		if field.AccessFlags&0x0008 == 0 {
+			continue
+		}
+		typeInfo, err := ParseFieldDescriptor(field.Descriptor)
+		if err != nil {
+			return err
+		}
+		value := zeroValue(typeInfo)
+		for _, attribute := range field.Attributes {
+			if attribute.Name != "ConstantValue" {
+				continue
+			}
+			if len(attribute.Info) != 2 {
+				return fmt.Errorf("invalid ConstantValue on %s.%s", class.Name, field.Name)
+			}
+			index := uint16(attribute.Info[0])<<8 | uint16(attribute.Info[1])
+			value, err = constantValue(class.ConstantPool, index, typeInfo.Slots() == 2)
+			if err != nil {
+				return err
+			}
+			if err := validateValue(value, typeInfo); err != nil {
+				return err
+			}
+		}
+		key := fieldKey{class: class.Name, name: field.Name, descriptor: field.Descriptor}
+		vm.mu.Lock()
+		vm.statics[key] = value
+		vm.mu.Unlock()
+	}
+	return nil
+}

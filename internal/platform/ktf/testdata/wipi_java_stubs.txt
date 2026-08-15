@@ -1,0 +1,108 @@
+# Fixed-value stubs: methods that answer without consulting any runtime state.
+# Unlike an unimplemented method, a stub fails silently — the game believes the
+# answer — so the whole set is reviewed here as a list. TestFixedValueStubInventory
+# fails when a stub appears that is not recorded, and when a recorded line stops
+# being a stub. Format: <class> <method> <descriptor> <answer>.
+
+# Constant answers that are simply true of this Host. The screen is a
+# 16-bit color framebuffer the paint service composes into before presenting,
+# and the Host does deliver repeat key events.
+org/kwis/msp/lcdui/Display hasRepeatEvents ()Z true
+org/kwis/msp/lcdui/Display isColor ()Z true
+org/kwis/msp/lcdui/Display isDoubleBuffered ()Z true
+
+# Nothing to drive. There is no backlight, no priority scheduler behind the
+# cooperative guest threads, and guest console output already reaches the Host
+# through the logging boundary rather than a stream object.
+java/io/PrintStream flush ()V noop
+java/io/PrintStream print (C)V noop
+java/io/PrintStream print (I)V noop
+java/io/PrintStream print (Ljava/lang/String;)V noop
+java/io/PrintStream println ()V noop
+java/io/PrintStream println (C)V noop
+java/io/PrintStream println (I)V noop
+java/io/PrintStream println (Ljava/lang/String;)V noop
+java/io/PrintStream write (I)V noop
+java/lang/Thread setPriority (I)V noop
+org/kwis/msp/handset/BackLight alwaysOn ()V noop
+org/kwis/msp/handset/BackLight before ()V noop
+org/kwis/msp/handset/BackLight off ()V noop
+org/kwis/msp/handset/BackLight on (III)V noop
+
+# Sound. Clips decode and play for real; what is left here has nothing behind
+# it. Recording is refused outright because no microphone can be offered, the
+# play listener has no completion event to fire yet, and device volume is the
+# Host's setting rather than the game's.
+org/kwis/msp/media/BaseClip <init> ()V noop
+org/kwis/msp/media/Clip setListener (Lorg/kwis/msp/media/PlayListener;)V noop
+org/kwis/msp/media/Player record (Lorg/kwis/msp/media/BaseClip;)Z zero
+org/kwis/msp/media/Volume get ()I zero
+org/kwis/msp/media/Volume getDefaultVolume (I)I zero
+org/kwis/msp/media/Volume getMute (I)Z zero
+org/kwis/msp/media/Volume set (I)V noop
+org/kwis/msp/media/Volume setDefaultVolume (II)Z zero
+org/kwis/msp/media/Volume setMute (IZ)V noop
+
+# Pointer input reaches the card stack (Client.SendPointer), but only by
+# direct dispatch: the WIPI event queue identifies each event by a numeric kind
+# and nothing states what a pointer's is, so a game running its own event loop
+# would wait for pointer events that never arrive. Claiming the device has a
+# pointer is what would make such a game hang, so it still answers no. The Card
+# default is the base-class body a game overrides.
+org/kwis/msp/lcdui/Card pointerNotify (III)Z zero
+org/kwis/msp/lcdui/Display hasPointerEvents ()Z zero
+org/kwis/msp/lcdui/Display hasPointerMotionEvents ()Z zero
+
+# The guest filesystem is a flat name table composed from archive entries and
+# in-memory writes: nothing in it is a directory, directories cannot be made
+# or removed, and no entry carries a creation time. The original runtime stubs
+# the same directory calls.
+org/kwis/msp/io/FileSystem <init> ()V noop
+org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;)I zero
+org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;I)I zero
+org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;)Z zero
+org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;I)Z zero
+org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;)V noop
+org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;I)V noop
+org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;)V noop
+org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;I)V noop
+
+# Component geometry and the container lifecycle. The lwc classes exist so
+# guest hierarchies resolve; no widget toolkit lays them out. The original
+# runtime stubs these too.
+org/kwis/msp/lwc/Component <init> ()V noop
+org/kwis/msp/lwc/Component getHeight ()I zero
+org/kwis/msp/lwc/Component getWidth ()I zero
+org/kwis/msp/lwc/ContainerComponent <init> ()V noop
+org/kwis/msp/lwc/ShellComponent <init> ()V noop
+org/kwis/msp/lwc/ShellComponent <init> (IIII)V noop
+org/kwis/msp/lwc/ShellComponent hide ()V noop
+org/kwis/msp/lwc/ShellComponent show ()V noop
+
+# Same fixed answer the original runtime gives.
+org/kwis/msp/db/DataBase closeDataBase ()V noop
+org/kwis/msp/handset/HandsetProperty setSystemProperty (Ljava/lang/String;Ljava/lang/String;)Z zero
+org/kwis/msp/lcdui/Card keyNotify (II)Z zero
+org/kwis/msp/lcdui/Card showNotify (Z)V noop
+org/kwis/msp/lcdui/Display flush ()V noop
+
+# Remaining boundaries with no Host behind them: the network is absent so a
+# connection is refused rather than faked, animated images are never decoded,
+# there is one pixel face so a font selection changes nothing, and database
+# records are written through on every change so closing is a no-op.
+org/kwis/msf/io/Network connect ()I refuse
+org/kwis/msp/lcdui/Graphics setFont (Lorg/kwis/msp/lcdui/Font;)V noop
+org/kwis/msp/lcdui/Image isAnimated ()Z zero
+
+# A constructor with no state of its own, and the abstract body a subclass
+# always overrides. Timer keeps its tasks on the platform's timer service
+# rather than in the object, and a TimerTask carries nothing until it is
+# scheduled.
+java/util/Timer <init> ()V noop
+java/util/TimerTask <init> ()V noop
+java/util/TimerTask run ()V noop
+
+# Every write through a File's output stream is already through to the file,
+# so there is nothing held back for a flush or a close to release.
+org/kwis/msp/io/FileOutputStream close ()V noop
+org/kwis/msp/io/FileOutputStream flush ()V noop

@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Arithmetic Fixture
+MIDlet-1: Arithmetic Fixture, , Arithmetic

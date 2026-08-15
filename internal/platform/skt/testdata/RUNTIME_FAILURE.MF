@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-Name: Runtime Failure Fixture
+MIDlet-1: Runtime Failure Fixture, , LifecycleMIDlet
+Fixture-Property: from-manifest
+Fixture-Fail-Start: true

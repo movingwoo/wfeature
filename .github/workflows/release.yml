@@ -1,0 +1,116 @@
+# A pushed tag is what makes a release. The archives are the same five
+# `make dist` writes on a developer's machine — the workflow adds nothing to
+# them, so a release can still be built and published by hand if this is
+# unavailable. See docs/running.md, "The release archives".
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A dry run builds the archives and keeps them as artifacts without
+  # publishing anything, which is how the packaging is checked before a tag
+  # exists.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version to stamp, without the leading v"
+        required: true
+        default: "0.0.0-dev"
+
+# Writing the release is the release job's alone; the checks it depends on read.
+permissions:
+  contents: read
+
+jobs:
+  # The gate, and the same one every push runs: the tests on both profiles and
+  # the race detector, plus a real run of the server on Ubuntu, Windows and
+  # macOS. The per-OS run is why this is a dependency rather than a copy of the
+  # test steps — four of the five archives are cross-compiled, and a build that
+  # succeeds is not a binary that starts.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The version is the tag without its v, so the archive names and the
+      # binary's -version agree with what the release is called.
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            version='${{ inputs.version }}'
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "building $version"
+
+      # Cross-compiling five targets from one machine is why the core stays
+      # free of cgo; setting it explicitly keeps a runner with a C toolchain
+      # from quietly building a host-only binary.
+      - name: Build the archives
+        env:
+          CGO_ENABLED: "0"
+        run: make dist VERSION=${{ steps.version.outputs.version }}
+
+      - name: Check the archives
+        run: |
+          cd build/dist
+          test -f SHA256SUMS
+          sha256sum -c SHA256SUMS
+          count=$(ls -1 *.tar.gz *.zip | wc -l)
+          if [ "$count" -ne 5 ]; then
+            echo "expected five archives, found $count"; ls -l; exit 1
+          fi
+
+      # A dry run stops here: the archives are downloadable from the run.
+      - name: Keep the archives
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfeature-${{ steps.version.outputs.version }}
+          path: |
+            build/dist/*.tar.gz
+            build/dist/*.zip
+            build/dist/SHA256SUMS
+
+      # The notes are this version's CHANGELOG section rather than a generated
+      # list of commits: what changed for someone downloading an archive is not
+      # the same list as what changed in the tree, and the file is written by
+      # hand for that reason. A missing section fails the release instead of
+      # publishing an empty one, which is the only way the file stays current.
+      - name: Take the notes from the changelog
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v version="$version" '
+            $0 ~ "^## " version " " || $0 == "## " version { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no section for $version"; exit 1
+          fi
+          cat release-notes.md
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            build/dist/*.tar.gz build/dist/*.zip build/dist/SHA256SUMS

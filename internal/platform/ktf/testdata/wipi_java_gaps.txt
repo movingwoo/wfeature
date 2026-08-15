@@ -1,0 +1,46 @@
+# WIPI Java surface entries this runtime deliberately does not register.
+# Every other line of testdata/wipi_java_surface.txt must be implemented;
+# TestRuntimeJavaSurfaceCoversReference fails on a gap that is not listed
+# here and on a line here that has since been implemented.
+
+# Bridge constructors that exist only because the original implementation
+# builds WIPI on top of its own MIDP classes. This runtime owns the WIPI
+# classes directly, so there is no javax.microedition object to wrap and no
+# guest can name these types.
+org/kwis/msp/db/DataBase <init> (Ljavax/microedition/rms/RecordStore;)V
+org/kwis/msp/lcdui/Card setCanvas (Ljavax/microedition/lcdui/Canvas;)V
+org/kwis/msp/lcdui/Display <init> (Lorg/kwis/msp/lcdui/Jlet;Lorg/kwis/msp/lcdui/DisplayProxy;)V
+org/kwis/msp/lcdui/Font <init> (Ljavax/microedition/lcdui/Font;)V
+org/kwis/msp/lcdui/Graphics <init> (Ljavax/microedition/lcdui/Graphics;)V
+org/kwis/msp/lcdui/Graphics <init> (Lorg/kwis/msp/lcdui/Display;)V
+org/kwis/msp/lcdui/Image <init> ()V
+org/kwis/msp/lcdui/Image <init> (Ljavax/microedition/lcdui/Image;)V
+
+# Font has no class initializer here: the runtime font is a single shared
+# object created on first request rather than a table of static instances.
+org/kwis/msp/lcdui/Font <clinit> ()V
+
+# Card.paint is abstract. Guest subclasses declare it in their own AOT
+# metadata and the paint service dispatches to that by name, so declaring it
+# on the runtime class would add a vtable slot no guest class inherits.
+org/kwis/msp/lcdui/Card paint (Lorg/kwis/msp/lcdui/Graphics;)V
+
+# File output streams. Guest writes go through File.write, which persists
+# through the Host save store; an output stream would need a runtime-owned
+# stream class that writes back into the file.
+
+# Raw device-format pixel transfers and image encoding. The byte layout and
+# the encoded format are device-specific and unconfirmed; the 0x00RRGGBB
+# transfers (getRGBPixels/setRGBPixels) are implemented instead.
+org/kwis/msp/lcdui/Graphics getPixels (IIII[BII)V
+org/kwis/msp/lcdui/Graphics setPixels (IIII[BII)V
+
+# Animated images. No animated format is decoded, so there is no frame clock
+# to drive, and the ImageObserver completion protocol (its status argument) is
+# unconfirmed — the original emulator stubs these for the same reason, so
+# there is nothing to compare an implementation against. Failing loudly beats
+# inventing a callback contract a game would then branch on.
+org/kwis/msp/lcdui/Image loadImage (Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image play (Lorg/kwis/msp/lcdui/ImageObserver;)V
+org/kwis/msp/lcdui/Image stop ()V
+org/kwis/msp/lcdui/Image stopImage (Lorg/kwis/msp/lcdui/ImageObserver;)V

@@ -1,0 +1,147 @@
+package detect_test
+
+import (
+	"archive/zip"
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/detect"
+)
+
+func TestArchiveNamesEachPlatformFromItsMarkerEntry(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		entries map[string][]byte
+		want    detect.Platform
+	}{
+		{
+			name:    "KTF carries the ADF",
+			entries: map[string][]byte{"__adf__": []byte("aid:AI0000\n"), "AI0000.jar": nil},
+			want:    detect.KTF,
+		},
+		{
+			name:    "LGT carries app_info",
+			entries: map[string][]byte{"app_info": []byte("aid=AI0000\n"), "AI0000.jar": nil},
+			want:    detect.LGT,
+		},
+		{
+			name:    "SKT carries a descriptor named after the title",
+			entries: map[string][]byte{"0056194389.msd": []byte("MIDlet-1: x,,rpg.Hero\n"), "0056194389.jar": nil},
+			want:    detect.SKT,
+		},
+		{
+			name:    "a JAR referencing the SKVM surface is SKT",
+			entries: map[string][]byte{"Main.class": []byte("\xca\xfe\xba\xbecom/skt/m/Device")},
+			want:    detect.SKT,
+		},
+		{
+			name:    "a JAR referencing com.xce is SKT",
+			entries: map[string][]byte{"Main.class": []byte("\xca\xfe\xba\xbecom/xce/io/XFile")},
+			want:    detect.SKT,
+		},
+		{
+			// No carrier claims a bare MIDlet. Naming one anyway is what used
+			// to hide a detection failure behind a platform that would then
+			// fail to load the archive.
+			name:    "a plain MIDlet JAR belongs to no vendor",
+			entries: map[string][]byte{"Main.class": []byte("\xca\xfe\xba\xbejavax/microedition/lcdui/Canvas")},
+			want:    detect.Unknown,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			platform, err := detect.Archive(buildZIP(t, testCase.entries))
+			if err != nil {
+				t.Fatalf("Archive() error = %v", err)
+			}
+			if platform != testCase.want {
+				t.Fatalf("Archive() = %q, want %q", platform, testCase.want)
+			}
+		})
+	}
+}
+
+// A KTF archive packages a JAR full of classes, so the marker has to win over
+// anything a class scan would find. It also has to win cheaply: reaching the
+// scan at all would mean decompressing tens of megabytes to answer a question
+// the central directory already answered.
+func TestArchiveMarkerWinsOverTheClassScan(t *testing.T) {
+	archive := buildZIP(t, map[string][]byte{
+		"__adf__":    []byte("aid:AI0000\n"),
+		"Main.class": []byte("com/skt/m/Device"),
+	})
+	platform, err := detect.Archive(archive)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if platform != detect.KTF {
+		t.Fatalf("Archive() = %q, want %q", platform, detect.KTF)
+	}
+}
+
+// The loaders normalize entry names before matching, so an archive written
+// with `./` or backslashes still names its platform here — detecting a
+// platform whose loader would reject the archive, or missing one it accepts,
+// are both wrong in the same way.
+func TestArchiveMatchesTheMarkerTheLoadersMatch(t *testing.T) {
+	for _, name := range []string{"__ADF__", "./__adf__"} {
+		platform, err := detect.Archive(buildZIP(t, map[string][]byte{name: []byte("aid:AI0000\n")}))
+		if err != nil {
+			t.Fatalf("Archive(%q) error = %v", name, err)
+		}
+		if platform != detect.KTF {
+			t.Fatalf("Archive(%q) = %q, want %q", name, platform, detect.KTF)
+		}
+	}
+}
+
+// The fixtures the platform packages test against are the closest thing to a
+// real archive this repository holds, and they are what the browser will hand
+// the detector.
+func TestArchiveNamesTheRealFixtureJARs(t *testing.T) {
+	for _, testCase := range []struct {
+		path string
+		want detect.Platform
+	}{
+		{path: filepath.Join("..", "skt", "testdata", "skvm.jar"), want: detect.SKT},
+		{path: filepath.Join("..", "skt", "testdata", "canvas.jar"), want: detect.Unknown},
+	} {
+		data, err := os.ReadFile(testCase.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", testCase.path, err)
+		}
+		platform, err := detect.Archive(data)
+		if err != nil {
+			t.Fatalf("Archive(%s) error = %v", testCase.path, err)
+		}
+		if platform != testCase.want {
+			t.Fatalf("Archive(%s) = %q, want %q", testCase.path, platform, testCase.want)
+		}
+	}
+}
+
+func TestArchiveRejectsWhatIsNotAnArchive(t *testing.T) {
+	if _, err := detect.Archive([]byte("this is not a zip")); err == nil {
+		t.Fatal("Archive() accepted a non-archive")
+	}
+}
+
+func buildZIP(t *testing.T, entries map[string][]byte) []byte {
+	t.Helper()
+	buffer := &bytes.Buffer{}
+	writer := zip.NewWriter(buffer)
+	for name, contents := range entries {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatalf("create %q: %v", name, err)
+		}
+		if _, err := entry.Write(contents); err != nil {
+			t.Fatalf("write %q: %v", name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	return buffer.Bytes()
+}

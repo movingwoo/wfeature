@@ -1,0 +1,949 @@
+package webhost
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"image"
+	"image/png"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/session"
+	"github.com/movingwoo/wfeature/internal/wsproto"
+)
+
+// A session runs the emulator here, on the server, and sends the phone
+// pictures. That is the whole point of this file: the page used to emulate for
+// itself, and measured fifteen times slower on a phone than on a desktop for
+// reasons that were Go's WebAssembly backend rather than the emulator, so the
+// only way a phone plays at full speed is for it to stop emulating. Natively a frame costs a few percent of
+// one core, and a finished frame is small enough that a home network carries
+// twenty a second.
+//
+// One connection is one session. The connection closing ends the game, which
+// is the same rule the page already had — a reload was always a fresh session
+// — and it means nothing can outlive the thing that was watching it.
+
+const (
+	// tickBudget is how much guest execution one pass covers. A service round
+	// cannot be cut short, so this bounds how many rounds are started rather
+	// than how long one takes.
+	//
+	// The browser uses eight milliseconds because its Host shares a thread
+	// with drawing the page, and a longer entry is a longer freeze. Nothing
+	// here shares anything: the emulator has its own goroutine and the frames
+	// are encoded on another. What the budget still buys is a bound on how
+	// long a key waits behind a busy game, which is why it is not simply
+	// removed.
+	//
+	// It matters that it is not too small. An entry that stops on its budget
+	// is read by the platform as saturation — the Host used more time than the
+	// guest's schedule left it — and that reading is what makes a session give
+	// up frames to keep the game's logic on time. In a browser it is true. On
+	// a server that re-enters immediately and for free, a budget-capped entry
+	// says nothing except that the budget is small, so a budget short enough
+	// to cut ordinary entries would have the session dropping frames on a
+	// machine with a core to spare. Thirty-two milliseconds is under one frame
+	// of input delay at the rate these games run, and long enough that an
+	// entry normally ends where it should: at the guest parking.
+	tickBudget = 32 * time.Millisecond
+
+	// commandBuffer is how many messages from the page may queue while the
+	// emulator is inside a tick. Input is the only thing that arrives in
+	// bursts, and a burst deeper than this is a stuck key rather than a
+	// player.
+	commandBuffer = 64
+
+	// statsInterval is how often the page is told what the session costs.
+	statsInterval = 2 * time.Second
+
+	// maxSessionMessage bounds a message from the page. Everything it sends is
+	// a handful of fields; a cheat table load is the largest and is still
+	// small.
+	maxSessionMessage = 1 << 20
+)
+
+// serveSession upgrades the connection and runs one game on it.
+func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request) {
+	upgrader := wsproto.Upgrader{MaxMessageSize: maxSessionMessage}
+	connection, err := upgrader.Accept(writer, request)
+	if err != nil {
+		// Accept has already answered the request; there is nothing to add.
+		s.logger.Debug("session upgrade refused", "error", err)
+		return
+	}
+	defer connection.Close()
+
+	runner := &sessionRunner{
+		server:     s,
+		connection: connection,
+		commands:   make(chan clientMessage, commandBuffer),
+		frames:     make(chan pendingFrame, 1),
+	}
+	runner.run(request.Context())
+}
+
+// pendingFrame is one finished picture on its way to the page. It carries its
+// own copy of the pixels: the session's buffer is overwritten by the next
+// tick, and the encoder runs on another goroutine.
+type pendingFrame struct {
+	rgba          []byte
+	width, height int
+}
+
+type sessionRunner struct {
+	server     *Server
+	connection *wsproto.Conn
+
+	commands chan clientMessage
+	frames   chan pendingFrame
+
+	game      *session.Session
+	label     string
+	platform  string
+	presented uint64
+
+	// started is what the page was told when the game came up, kept so a page
+	// that reconnects can be told the same thing without the game restarting.
+	started startedMessage
+	// token names this game while its page is away; see resume.go. It is
+	// issued when a game starts and spent when one is resumed.
+	token string
+
+	// gameCtx is the running game's own lifetime, and it is deliberately not
+	// this connection's. A guest thread parks inside a Go call that captured
+	// the context it was last granted a slice under, so a session ticked with
+	// the socket's context dies the moment the socket does — with
+	// `context canceled` surfacing from inside guest code on the next tick,
+	// which is exactly the tick a resumed game takes. The game's context ends
+	// when the game does: gameCancel runs when it is closed, and never when
+	// its page merely goes away.
+	gameCtx    context.Context
+	gameCancel context.CancelFunc
+
+	// postMortem is the report composed at the moment a game died, kept
+	// because the diagnostics go with the session when it is closed. A game
+	// that exits on its first tick is exactly the one worth a report, and
+	// asking for one afterwards used to answer "no game is running".
+	postMortem string
+
+	audio *audioCollector
+
+	// stats accumulate between the reports sent to the page. The page cannot
+	// measure any of this itself any more — the emulator is not in it.
+	//
+	// sent and frameBytes are counted by the encoder goroutine and read by the
+	// emulator's, so they are atomic; the rest never leave the emulator loop.
+	sent       atomic.Uint64
+	frameBytes atomic.Uint64
+	skipped    uint64
+	ticks      uint64
+	tickTotal  time.Duration
+	statsSince time.Time
+}
+
+func (r *sessionRunner) run(parent context.Context) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	var waiting sync.WaitGroup
+	waiting.Add(2)
+	go func() { defer waiting.Done(); r.readCommands(cancel) }()
+	go func() { defer waiting.Done(); r.writeFrames(ctx) }()
+
+	r.send(serverMessage{Kind: serverReady, Profile: r.server.profile})
+	r.loop(ctx)
+
+	// A game still running here is one whose page went away rather than one
+	// that ended: the loop only returns with a game in hand when the socket
+	// closed under it. That game is parked instead of closed, so a phone that
+	// backgrounded the page has something to come back to; see resume.go.
+	// Everything else — a game that exited, a game the page stopped — has
+	// already cleared this and is not parked.
+	if r.game != nil {
+		r.park()
+	}
+	close(r.frames)
+	_ = r.connection.Close()
+	waiting.Wait()
+}
+
+// readCommands turns the page's messages into commands. It runs on its own
+// goroutine because the emulator loop is usually inside guest code, and a key
+// that arrives then has to be waiting when the loop next looks.
+func (r *sessionRunner) readCommands(cancel context.CancelFunc) {
+	defer cancel()
+	defer close(r.commands)
+	for {
+		text, err := r.connection.ReadText()
+		if err != nil {
+			if !errors.Is(err, wsproto.ErrClosed) {
+				r.server.logger.Debug("session read ended", "error", err)
+			}
+			return
+		}
+		var message clientMessage
+		if err := decodeClientMessage(text, &message); err != nil {
+			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+			continue
+		}
+		select {
+		case r.commands <- message:
+		default:
+			// The queue is full, which means the emulator is not keeping up
+			// with input rather than that this message is special. Dropping
+			// the newest keeps the ones already accepted in order.
+			r.server.logger.Debug("session command dropped", "kind", message.Kind)
+		}
+	}
+}
+
+// pngBuffers holds the compressor a PNG encode needs, so that encoding a
+// stream of frames stops allocating one per frame.
+//
+// A game presents a picture twenty-odd times a second for as long as it is
+// played, and png.Encoder builds a fresh zlib writer for every Encode call
+// without this: 1.25 MB and thirty allocations a frame, measured on a 240x320
+// frame, against 8 KB and none with it. That garbage is collected on the
+// machine that is also running the emulator, so it is the guest's time it
+// costs. The pool is shared across sessions because the buffers are
+// interchangeable and a household server runs few sessions at once.
+//
+// It is the shape png.EncoderBufferPool asks for. Encoded bytes are identical
+// either way — the pool holds scratch space, not state.
+type pngBufferPool struct{ pool sync.Pool }
+
+func (p *pngBufferPool) Get() *png.EncoderBuffer {
+	buffer, _ := p.pool.Get().(*png.EncoderBuffer)
+	return buffer
+}
+
+func (p *pngBufferPool) Put(buffer *png.EncoderBuffer) { p.pool.Put(buffer) }
+
+var pngBuffers = &pngBufferPool{}
+
+// writeFrames encodes and sends pictures. Encoding is off the emulator's
+// goroutine so a slow compression pass costs frames rather than guest speed,
+// and a write that blocks on a slow phone blocks only this.
+func (r *sessionRunner) writeFrames(ctx context.Context) {
+	encoder := png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers}
+	buffer := &bytes.Buffer{}
+	for frame := range r.frames {
+		picture := &image.RGBA{
+			Pix:    frame.rgba,
+			Stride: frame.width * 4,
+			Rect:   image.Rect(0, 0, frame.width, frame.height),
+		}
+		buffer.Reset()
+		if err := encoder.Encode(buffer, picture); err != nil {
+			r.server.logger.Warn("frame could not be encoded", "error", err)
+			continue
+		}
+		if err := r.connection.WriteBinary(buffer.Bytes()); err != nil {
+			if !errors.Is(err, wsproto.ErrClosed) {
+				r.server.logger.Debug("frame write failed", "error", err)
+			}
+			return
+		}
+		r.frameBytes.Add(uint64(buffer.Len()))
+		r.sent.Add(1)
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// loop is the emulator. It owns the session: guest code is not re-entrant, so
+// every command that touches it is handled here rather than where it arrived.
+func (r *sessionRunner) loop(ctx context.Context) {
+	r.statsSince = time.Now()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if r.game == nil {
+			// Nothing is running: wait for a command rather than spin.
+			select {
+			case <-ctx.Done():
+				return
+			case message, ok := <-r.commands:
+				if !ok {
+					return
+				}
+				r.handle(ctx, message)
+			}
+			continue
+		}
+
+		entered := time.Now()
+		progress, err := r.game.Tick(r.gameCtx, tickBudget)
+		r.ticks++
+		r.tickTotal += time.Since(entered)
+
+		if progress.Flushes != r.presented {
+			r.presented = progress.Flushes
+			r.pushFrame()
+		}
+		r.flushAudio()
+		r.reportStats()
+
+		if err != nil {
+			r.endGame("the game failed: "+err.Error(), true)
+			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+			continue
+		}
+		if progress.Exited {
+			r.endGame("the game exited", true)
+			r.send(serverMessage{Kind: serverExited})
+			continue
+		}
+
+		// The guest's own next deadline is what paces the game. Waiting on the
+		// command channel rather than sleeping means a key does not have to
+		// wait out the guest's idle time to be delivered.
+		r.drainCommands(ctx, progress.Wait)
+	}
+}
+
+// drainCommands handles everything queued, then waits out the guest's idle
+// time if it asked for any.
+func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-r.commands:
+			if !ok {
+				return
+			}
+			r.handle(ctx, message)
+			continue
+		default:
+		}
+		break
+	}
+	if wait <= 0 {
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	case message, ok := <-r.commands:
+		if ok {
+			r.handle(ctx, message)
+		}
+	}
+}
+
+func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
+	switch message.Kind {
+	case clientStart:
+		r.startGame(ctx, message)
+	case clientResume:
+		r.resumeGame(message)
+	case clientKey:
+		if r.game == nil {
+			return
+		}
+		switch err := r.game.SendKey(r.gameCtx, message.Action, message.Code); {
+		case err == nil:
+		case errors.Is(err, session.ErrExited):
+			// A game that ends on a key press has ended, not failed.
+			r.endGame("the game exited", true)
+			r.send(serverMessage{Kind: serverExited})
+		default:
+			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+		}
+	case clientSpeed:
+		if r.game != nil {
+			r.game.SetSpeed(message.Value)
+		}
+	case clientScale:
+		if r.game != nil {
+			r.game.SetScale(int(message.Value))
+			// The next frame is the magnified one, and the game may not draw
+			// again for a while, so the current picture is resent at the new
+			// size rather than leaving the page on the old one.
+			r.pushFrame()
+		}
+	case clientCheat:
+		r.runCheat(message)
+	case clientReport:
+		r.storeReport(message)
+	case clientStop:
+		// The numbers are kept even on a deliberate stop, so a report can be
+		// asked for once the game is off the screen.
+		r.endGame("the page stopped the game", false)
+	default:
+		r.send(serverMessage{Kind: serverError, ID: message.ID,
+			Message: fmt.Sprintf("unknown message kind %q", message.Kind)})
+	}
+}
+
+func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
+	r.stopGame()
+
+	archive, label, err := r.server.readGameArchive(message.Game)
+	if err != nil {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		return
+	}
+	summary, err := session.Inspect(archive)
+	if err != nil {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		return
+	}
+
+	r.audio = &audioCollector{}
+	// The game's context keeps the request's values and drops its
+	// cancellation: what ends this game is closing it, not the page that
+	// happened to start it going away.
+	r.gameCtx, r.gameCancel = context.WithCancel(context.WithoutCancel(ctx))
+	scale := 1
+	if message.Value >= 1 && message.Value <= 4 {
+		scale = int(message.Value)
+	}
+	started, err := session.Start(r.gameCtx, archive, session.Options{
+		SaveStore: r.server.saveStore(summary.Platform, summary.SaveOwner),
+		AudioSink: r.audio,
+		Logger:    r.server.logger,
+		Scale:     scale,
+		// A debug build is the one that collects a report, and the ordered
+		// trace is what it collects.
+		TraceLimit: r.server.traceLimit,
+	})
+	if err != nil {
+		r.gameCancel()
+		r.gameCancel = nil
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		return
+	}
+	r.game = started
+	r.label = label
+	r.platform = summary.Platform
+	r.presented = 0
+	r.postMortem = ""
+	if r.server.traceLimit > 0 {
+		// The phase costs say which part of a round is expensive; only the
+		// guest profile says which guest code is. A build that already pays
+		// for the trace can afford a stack walk every thousand instructions.
+		started.KTF().EnableProfile(0)
+	}
+	// The token travels with the game's identity because that is the moment
+	// there is something to come back to. A page that never hears one — a
+	// server whose randomness failed — simply cannot resume, which is the
+	// behaviour this had before parking existed.
+	if token, tokenErr := newResumeToken(); tokenErr == nil {
+		r.token = token
+	} else {
+		r.token = ""
+		r.server.logger.Warn("session resume token unavailable", "error", tokenErr)
+	}
+	r.server.logger.Info("session started",
+		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner)
+	r.started = startedMessage{
+		Platform:  summary.Platform,
+		AID:       summary.AID,
+		PID:       summary.PID,
+		Name:      summary.Name,
+		SaveOwner: summary.SaveOwner,
+		MainClass: summary.MainClass,
+		Width:     session.DefaultWidth,
+		Height:    session.DefaultHeight,
+		Token:     r.token,
+	}
+	identity := r.started
+	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
+	// A game that painted while starting has a picture already.
+	r.presented = started.Flushes()
+	r.pushFrame()
+	r.flushAudio()
+}
+
+// endGameContext releases the game's own lifetime. It runs where a game really
+// ends and nowhere else — parking hands the context on with the game.
+func (r *sessionRunner) endGameContext() {
+	if r.gameCancel != nil {
+		r.gameCancel()
+		r.gameCancel = nil
+	}
+	r.gameCtx = nil
+}
+
+// park hands the running game to the server to hold under this runner's token,
+// and forgets it here. The runner is about to end; the game is not.
+func (r *sessionRunner) park() {
+	game := r.game
+	r.game = nil
+	if r.token == "" {
+		// No token was ever issued, so no page could ask for this game back.
+		game.Close()
+		r.endGameContext()
+		return
+	}
+	r.server.parkSession(r.token, &parkedSession{
+		game:       game,
+		context:    r.gameCtx,
+		cancel:     r.gameCancel,
+		label:      r.label,
+		platform:   r.platform,
+		audio:      r.audio,
+		started:    r.started,
+		postMortem: r.postMortem,
+		presented:  r.presented,
+	})
+	// The context went with the game; this runner is not the one that ends it.
+	r.gameCtx, r.gameCancel = nil, nil
+}
+
+// resumeGame adopts a game the server has been holding. The page that asks
+// already knows what it was playing, so the answer is the same `started` it
+// got the first time, followed by the picture the game had when its page left.
+func (r *sessionRunner) resumeGame(message clientMessage) {
+	parked, ok := r.server.resumeSession(message.Token)
+	if !ok {
+		// An expired or unknown token is not an error the page can act on
+		// beyond forgetting it, and it is the ordinary case after a long
+		// absence, so it answers rather than fails.
+		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Resumed: false,
+			Message: "이어서 진행할 게임이 없습니다."})
+		return
+	}
+	// Whatever this connection had is not what the page asked for.
+	r.stopGame()
+
+	r.game = parked.game
+	r.gameCtx = parked.context
+	r.gameCancel = parked.cancel
+	r.label = parked.label
+	r.platform = parked.platform
+	r.audio = parked.audio
+	r.started = parked.started
+	r.postMortem = parked.postMortem
+	r.presented = parked.presented
+	r.token = message.Token
+
+	r.server.logger.Info("session resumed", "game", r.label)
+	identity := r.started
+	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
+	// The game did not move while it was parked, so the picture it had is the
+	// picture to show — the page has nothing on its canvas after reconnecting.
+	r.pushFrame()
+	r.flushAudio()
+}
+
+func (r *sessionRunner) stopGame() {
+	if r.game == nil {
+		return
+	}
+	r.game.Close()
+	r.game = nil
+	r.endGameContext()
+	// The token named this game; a page that reconnects after stopping one is
+	// starting something new rather than resuming.
+	r.token = ""
+	if r.audio != nil {
+		// Whatever was sounding when the game ended has to be released, or the
+		// page holds the last note forever.
+		r.send(serverMessage{Kind: serverAudio, Audio: []audioEvent{{Kind: audioAllOff}}})
+	}
+}
+
+// pushFrame hands the current picture to the encoder, or drops it when the
+// previous one has not gone out yet. Dropping is the right answer: the game
+// has already moved on, and sending a backlog of stale pictures to a phone
+// that is behind makes it later still.
+func (r *sessionRunner) pushFrame() {
+	if r.game == nil {
+		return
+	}
+	rgba, width, height, ok := r.game.Frame()
+	if !ok {
+		return
+	}
+	// The frame is handed straight to the encoder's goroutine: session.Frame
+	// answers with bytes that are the caller's, so copying them here would be
+	// copying a copy — a third of a megabyte per frame, made only to be
+	// collected.
+	select {
+	case r.frames <- pendingFrame{rgba: rgba, width: width, height: height}:
+	default:
+		r.skipped++
+	}
+}
+
+func (r *sessionRunner) flushAudio() {
+	if r.audio == nil {
+		return
+	}
+	events := r.audio.take()
+	if len(events) == 0 {
+		return
+	}
+	r.send(serverMessage{Kind: serverAudio, Audio: events})
+}
+
+func (r *sessionRunner) reportStats() {
+	elapsed := time.Since(r.statsSince)
+	if elapsed < statsInterval {
+		return
+	}
+	sent := r.sent.Swap(0)
+	frameBytes := r.frameBytes.Swap(0)
+	stats := statsMessage{
+		Fps:     float64(sent) / elapsed.Seconds(),
+		Skipped: r.skipped,
+	}
+	if r.ticks > 0 {
+		stats.TickMillis = float64(r.tickTotal.Microseconds()) / float64(r.ticks) / 1000
+	}
+	if sent > 0 {
+		stats.FrameBytes = int(frameBytes / sent)
+	}
+	r.send(serverMessage{Kind: serverStats, Stats: &stats})
+	r.skipped, r.ticks, r.tickTotal = 0, 0, 0
+	r.statsSince = time.Now()
+}
+
+// runCheat drives the cheat engine on behalf of the panel. Every operation
+// runs here, on the emulator's own goroutine, because reading and freezing
+// guest memory is only safe between ticks.
+func (r *sessionRunner) runCheat(message clientMessage) {
+	if r.game == nil || r.game.Cheat() == nil {
+		// The engine needs a flat guest address space to sweep, and saying so
+		// beats a silent failure on a platform where the panel should not have
+		// appeared.
+		r.send(serverMessage{Kind: serverResult, ID: message.ID,
+			Message: "this game has no searchable guest memory",
+			Cheat:   &cheatResult{},
+		})
+		return
+	}
+	if message.Op == "console" || message.Op == "" {
+		console := r.game.CheatConsole()
+		if console == nil {
+			r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: "this session has no cheat engine"})
+			return
+		}
+		console.SetGame(r.label)
+		text := console.Execute(message.Command)
+		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: text,
+			Cheat: &cheatResult{Text: text, Searchable: true}})
+		return
+	}
+
+	result, err := runCheatOperation(r.game.Cheat(), r.label, message)
+	if err != nil {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		return
+	}
+	result.Searchable = true
+	r.send(serverMessage{Kind: serverResult, ID: message.ID, Cheat: result.normalize()})
+}
+
+// runCheatOperation is the panel's vocabulary. It is a switch over names
+// rather than a method per message so that adding one is a case, and so that
+// the shapes it answers stay the ones internal/cheat defines.
+func runCheatOperation(engine *cheat.Session, game string, message clientMessage) (*cheatResult, error) {
+	switch message.Op {
+	case "scan":
+		candidates, err := cheat.PanelScan(engine, message.Type, message.Filter, message.Operand)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Count: candidates.Count, Items: candidates.Items}, nil
+	case "refresh":
+		candidates, err := cheat.PanelRefresh(engine)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Count: candidates.Count, Items: candidates.Items}, nil
+	case "undo":
+		candidates, err := cheat.PanelUndo(engine)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Count: candidates.Count, Items: candidates.Items}, nil
+	case "reset":
+		candidates, err := cheat.PanelReset(engine)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Count: candidates.Count, Items: candidates.Items}, nil
+	case "freeze":
+		frozen, err := cheat.PanelFreezeValue(engine, message.Address, message.Operand, message.Type)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Frozen: frozen}, nil
+	case "unfreeze":
+		frozen, err := cheat.PanelUnfreeze(engine, message.Address)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Frozen: frozen}, nil
+	case "frozen":
+		return &cheatResult{Frozen: cheat.PanelFrozen(engine)}, nil
+	case "watch":
+		watches, err := cheat.PanelWatch(engine, message.Address)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Watches: watches}, nil
+	case "unwatch":
+		watches, err := cheat.PanelUnwatch(engine, message.Address, message.All)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Watches: watches}, nil
+	case "hits":
+		hits, err := cheat.PanelWatchHits(engine)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Hits: &hits}, nil
+	case "saveTable":
+		table, err := cheat.PanelSaveTable(engine, game)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Table: table}, nil
+	case "loadTable":
+		applied, _, err := cheat.PanelLoadTable(engine, message.Table)
+		if err != nil {
+			return nil, err
+		}
+		return &cheatResult{Applied: applied, Frozen: cheat.PanelFrozen(engine)}, nil
+	}
+	return nil, fmt.Errorf("unknown cheat operation %q", message.Op)
+}
+
+// storeReport writes the session's diagnostics where the debug-log API puts
+// the browser's. The report is written by the side that has the numbers, which
+// is now this one — a page that is only drawing pictures has nothing to say
+// about why a game is slow.
+func (r *sessionRunner) storeReport(message clientMessage) {
+	report := r.postMortem
+	if r.game != nil {
+		report = r.composeReport("")
+	}
+	if report == "" {
+		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: "no game is running"})
+		return
+	}
+	label := message.Label
+	if label == "" {
+		label = r.label
+	}
+	path, err := r.writeReport(label, report)
+	if err != nil {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		return
+	}
+	r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: path})
+}
+
+// endGame keeps a report of the running game and then closes it. cause says
+// how it ended. store asks for the report to be written unasked, which is what
+// an unexpected end deserves: a game that dies on its first tick never gives
+// anyone the chance to ask, and it is the one whose numbers matter most.
+func (r *sessionRunner) endGame(cause string, store bool) {
+	if r.game == nil {
+		return
+	}
+	r.postMortem = r.composeReport(cause)
+	// A release build keeps the snapshot for a later request but has no trace
+	// to put in a file, so it does not write one.
+	if store && r.server.traceLimit > 0 {
+		if _, err := r.writeReport(r.label, r.postMortem); err != nil {
+			r.server.logger.Warn("post-mortem report could not be stored", "game", r.label, "error", err)
+		}
+	}
+	r.stopGame()
+}
+
+// writeReport puts a report where the debug-log API serves them from.
+func (r *sessionRunner) writeReport(label, report string) (string, error) {
+	if err := os.MkdirAll(r.server.logRoot, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(r.server.logRoot, DebugLogName(label, time.Now()))
+	if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
+		return "", err
+	}
+	r.server.logger.Info("stored a session report", "path", path, "bytes", len(report))
+	return path, nil
+}
+
+// composeReport renders everything the session knows. cause is empty for a
+// report the page asked for, and says how the session ended for one written
+// because it did.
+func (r *sessionRunner) composeReport(cause string) string {
+	var report strings.Builder
+	fmt.Fprintf(&report, "wfeature session report\ngenerated: %s\nprofile: %s\ngame: %s\n",
+		time.Now().Format(time.RFC3339), backend.BuildProfile(), r.label)
+	fmt.Fprintf(&report, "platform: %s\n", r.game.Platform())
+	if cause != "" {
+		fmt.Fprintf(&report, "ended: %s\n", cause)
+	}
+	fmt.Fprintf(&report, "frames sent: %d, dropped: %d (since the last stats report)\n",
+		r.sent.Load(), r.skipped)
+	if r.ticks > 0 {
+		fmt.Fprintf(&report, "tick cost: entries=%d average=%s\n",
+			r.ticks, (r.tickTotal / time.Duration(r.ticks)).Round(time.Microsecond))
+	}
+	if ktfSession := r.game.KTF(); ktfSession != nil {
+		fmt.Fprintf(&report, "\n%s\n", ktfSession.HostCosts())
+		if profile := ktfSession.Profile(); profile.Samples > 0 {
+			fmt.Fprintf(&report, "\n===== guest profile =====\n%s\n", profile.Report(30))
+		}
+		diagnostics := ktfSession.Diagnostics()
+		fmt.Fprintf(&report, "\nruntime events traced: %d\n", diagnostics.Traced)
+		fmt.Fprintf(&report, "\n===== counted events =====\n%s\n", diagnostics.FormatCounts(0))
+		if len(diagnostics.Trace) > 0 {
+			fmt.Fprintf(&report, "\n===== recent boundary events =====\n")
+			for _, event := range diagnostics.Trace {
+				fmt.Fprintf(&report, "%d %s\n", event.Sequence, event.Event)
+			}
+		}
+	}
+	return report.String()
+}
+
+func (r *sessionRunner) send(message serverMessage) {
+	encoded, err := encodeMessage(message)
+	if err != nil {
+		r.server.logger.Warn("session message could not be encoded", "error", err)
+		return
+	}
+	if err := r.connection.WriteText(string(encoded)); err != nil && !errors.Is(err, wsproto.ErrClosed) {
+		r.server.logger.Debug("session message write failed", "kind", message.Kind, "error", err)
+	}
+}
+
+// readGameArchive resolves the archive path the picker offered and reads it.
+// The page sends back the same string games.json gave it, percent-encoding and
+// all, and it is checked here exactly as the HTTP route checks it: a session
+// is not a way around the game root.
+func (s *Server) readGameArchive(gamePath string) ([]byte, string, error) {
+	decoded, err := url.PathUnescape(gamePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("game path is not a valid URL path: %w", err)
+	}
+	components, err := pathComponents(strings.TrimPrefix(decoded, "games"))
+	if err != nil || len(components) == 0 {
+		return nil, "", errors.New("game path is not inside the game directory")
+	}
+	file := filepath.Join(append([]string{s.gameRoot}, components...)...)
+	archive, err := os.ReadFile(file)
+	if err != nil {
+		return nil, "", fmt.Errorf("read the game archive: %w", err)
+	}
+	name := components[len(components)-1]
+	return archive, strings.TrimSuffix(name, filepath.Ext(name)), nil
+}
+
+// saveStore roots a game's saves in the same tree the native CLI and the save
+// API use, so a session on the server and a session in the browser boot from
+// one set of saves. On this path they never cross the network at all: the
+// emulator and the files are on the same machine.
+func (s *Server) saveStore(platform, owner string) backend.SaveStore {
+	if owner == "" || ownerRejected(owner) {
+		return nil
+	}
+	root := s.saveRoot
+	if platform != "" && platform != "ktf" && platforms[platform] {
+		root = filepath.Join(filepath.Dir(root), platform)
+	}
+	return backend.NewDirectorySaveStore(filepath.Join(root, owner))
+}
+
+// audioCollector is the session's audio sink. The guest plays sound by calling
+// it, and the events are batched until the end of the tick and sent as one
+// message: the page's synthesiser takes the same calls it always did, so
+// moving emulation to the server changed nothing about how sound is made.
+type audioCollector struct {
+	mutex  sync.Mutex
+	events []audioEvent
+}
+
+// maxPendingAudio bounds what one tick may queue. A game that floods the sink
+// while the connection is stalled must not grow this without limit.
+const maxPendingAudio = 4096
+
+func (a *audioCollector) append(event audioEvent) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if len(a.events) >= maxPendingAudio {
+		return
+	}
+	a.events = append(a.events, event)
+}
+
+func (a *audioCollector) take() []audioEvent {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if len(a.events) == 0 {
+		return nil
+	}
+	events := a.events
+	a.events = nil
+	return events
+}
+
+func (a *audioCollector) PlayWave(channels uint8, samplingRate uint32, samples []int16) {
+	if len(samples) == 0 {
+		return
+	}
+	raw := make([]byte, len(samples)*2)
+	for index, sample := range samples {
+		binary.LittleEndian.PutUint16(raw[index*2:], uint16(sample))
+	}
+	a.append(audioEvent{
+		Kind:     audioPlayWave,
+		Channels: channels,
+		Rate:     samplingRate,
+		Samples:  base64.StdEncoding.EncodeToString(raw),
+	})
+}
+
+func (a *audioCollector) MIDINoteOn(channel, note, velocity uint8) {
+	a.append(audioEvent{Kind: audioNoteOn, Channel: channel, Note: note, Velocity: velocity})
+}
+
+func (a *audioCollector) MIDINoteOff(channel, note, velocity uint8) {
+	a.append(audioEvent{Kind: audioNoteOff, Channel: channel, Note: note, Velocity: velocity})
+}
+
+func (a *audioCollector) MIDIProgramChange(channel, program uint8) {
+	a.append(audioEvent{Kind: audioProgramChange, Channel: channel, Program: program})
+}
+
+func (a *audioCollector) MIDIControlChange(channel, control, value uint8) {
+	a.append(audioEvent{Kind: audioControlChange, Channel: channel, Control: control, Value: uint16(value)})
+}
+
+func (a *audioCollector) MIDIPitchBend(channel uint8, value uint16) {
+	a.append(audioEvent{Kind: audioPitchBend, Channel: channel, Value: value})
+}
+
+func (a *audioCollector) MIDISysEx(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	a.append(audioEvent{Kind: audioSysEx, Data: base64.StdEncoding.EncodeToString(data)})
+}

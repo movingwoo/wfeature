@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Connector Fixture
+MIDlet-1: Connector Fixture, , ConnectorMIDlet

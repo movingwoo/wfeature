@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Canvas Fixture
+MIDlet-1: Canvas Fixture, , CanvasMIDlet

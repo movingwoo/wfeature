@@ -1,0 +1,168 @@
+# JVM implementation status
+
+This is the bytecode half of the emulator: the JVM that runs an SKT title's
+classes, and the one KTF reaches for the Java objects its AOT-compiled guest
+hands back. (LGT does not use it — that platform's Java titles are AOT-compiled
+too, but their metadata never becomes a class file, so `internal/platform/lgt`
+carries its own object model.) It is not a complete JVM and is not meant to
+become one — what is here is what titles have actually called, grown fixture by
+fixture and then title by title. What that leaves out is at the end of this
+file.
+
+## Implemented
+
+- class-file versions 45–70 and modified UTF-8 constant pools
+- JAR-backed lazy class loading and class-name validation
+- field/method descriptors and category 1/2 local and operand stacks
+- class initialization, `ConstantValue`, static/instance field
+- static, virtual, special, and interface method dispatch
+- object creation and primitive, reference, and multidimensional arrays
+- integer/long/float/double arithmetic, conversions, comparisons, branches, and
+  both switch formats
+- legacy `jsr`/`ret` and wide local instructions
+- Java exception tables, `athrow`, and a basic runtime-exception hierarchy.
+  Those runtime-owned Throwable types have no class file, and bytecode may
+  still `new` one: the hierarchy table is what makes them instantiable and what
+  their constructors resolve through, because the code that raises one is
+  runtime-owned library code as often as it is the game — `Vector.elementAt`
+  raising `ArrayIndexOutOfBoundsException` was the case that found it
+- `checkcast`, `instanceof`, synchronized methods, and monitor instructions
+- instruction, frame, and array-size limits applied across nested calls
+- Go native-method registration boundary
+- direct construction of runtime-owned `Object`, UTF-16-aware `String` and
+  `StringBuffer` operations, and the game-used `Integer` conversions.
+  `String.compareTo` orders by UTF-16 unit, which is what the language defines
+  and what a title's own sort depends on; `Integer` boxes an int through its
+  constructor and reads it back at any width
+- runtime-owned `Thread`/`Runnable` metadata backed by Go goroutines, bounded
+  guest executions, sleep/yield/interrupt state, and monitor wait/notify
+- runtime-owned byte/data input streams, modified UTF-8 reads, and safe JAR
+  resource lookup through `Class.getResourceAsStream`
+- the game-used `Hashtable`, `Vector`, `Random`, and `Calendar` subset.
+  `Vector`'s capacity increment is honoured rather than treated as a hint: a
+  vector grows by exactly the increment it was given and doubles only when it
+  has none, because `capacity()` is observable and one title walks a vector
+  with it as the bound
+- `System.out` and `System.err` as real `PrintStream` fields, so the debug
+  printing left in a shipped title resolves; what it prints goes to the logging
+  boundary at debug level, one line per call rather than per newline
+- Host APIs for creating guest objects and invoking constructors
+- superclass traversal with depth limits and cycle detection
+- composite class sources that search the runtime class library before the JAR
+- bounded KTF AOT class, method, field, and vtable metadata registration with
+  guest addresses kept as opaque identifiers
+- pinned guest-address bindings for runtime-owned AOT String/Class objects and
+  bounded AOT member lookup across registered superclass metadata
+- uninitialized AOT object and primitive/reference-array construction from
+  registered class addresses, with JVM array limits and zero-value semantics
+- KTF `CallNative` normal-return execution through the shared ARM core, with a
+  validated guest argument container, shared nesting-depth bound, and preserved
+  outer register context
+- bounded KTF raw exception-handler traversal, AOT/runtime hierarchy matching,
+  and restore-PC unwind through the JavaJump/CallNative supervisor boundary
+- guest-layout KTF exception objects pinned to their Go JVM objects, typed
+  uncaught transport retaining the guest address, and per-logical-ARM-thread
+  handler heads inherited by nested guest calls
+- stable reverse lookup from pinned JVM objects to their KTF guest addresses,
+  with duplicate address/object pairings rejected
+- explicit `InvokeSpecial` for runtime-owned superclass methods invoked with an
+  AOT subclass receiver
+- a KTF AOT outer-call wrapper for constructors, instance methods, and static
+  methods, including 32/64-bit primitive and bound-reference argument/results
+- runtime-owned Java methods emitted as raw KTF metadata with bounded direct
+  register-argument and native argument-container SVC entry points
+- MIDlet active/pause/resume/destroy transitions through a bounded FIFO backend
+  event queue
+- `getAppProperty`, `notifyPaused`, `notifyDestroyed`, and `resumeRequest` native
+  services
+- error states for non-runtime lifecycle failures and host diagnostics for all
+  callback failures
+- runtime-owned `MIDletStateChangeException` and the minimal `Exception`
+  constructor boundary
+- state preservation and retry for conditional destroy refusal, plus
+  unconditional destroy handling
+- paused-state handling and retry on the next resume when `startApp()` reports a
+  transient state-change exception
+- forced `destroyApp(true)` cleanup after an uncaught `RuntimeException` from
+  `startApp()` or `pauseApp()`, with the original failure retained for host
+  diagnostics
+- ignored `RuntimeException` failures from `destroyApp()`, followed by the MIDP
+  Destroyed state
+- runtime-owned minimal LCDUI `Display` and `Displayable` classes
+- one stable `Display` per MIDlet, delayed and coalesced `setCurrent()` events,
+  current-screen queries, and active/paused `isShown()` state
+- runtime-owned minimal `Canvas` and `Graphics` classes, automatic initial
+  paint, clipped and coalesced repaint events, and synchronous `serviceRepaints`
+- Graphics color overloads, clip and translation state, solid rectangle fills,
+  lines, and rectangle outlines with coordinates clipped before rasterization
+- mutable and immutable MIDP images, white off-screen initialization,
+  PNG/JPEG/GIF decoding from JAR resources or byte arrays, ARGB construction
+  and retrieval, all eight MIDP region transforms, and source-over alpha drawing
+- `drawImage`, `drawRegion`, and `drawRGB`, including image anchors, translated
+  clips, negative scan lengths, and bounds validation before guest-array access
+- runtime-owned bitmap fonts with face/style/size metrics, font selection, text
+  anchors, and `drawChar`/`drawChars`/`drawString`/`drawSubstring` rasterization
+- Host-provided framebuffer dimensions and complete RGBA8888 frame presentation
+  through the same runtime path for both Hosts
+- bounded FIFO delivery of Host key press, release, and repeat events to the
+  current active Canvas, including repaint requests posted by key callbacks
+- Canvas game-action/key-code/key-name mapping, double-buffer/repeat/pointer
+  capabilities, full-screen state, and repaint on a visible mode change
+- bounded FIFO delivery of Host pointer press, release, and drag callbacks to
+  the current active Canvas
+
+The default native hooks provide an initial subset of `Object`,
+`System.currentTimeMillis`, `System.arraycopy`, `Math.abs/min/max`, and
+`String.length/charAt/equals/hashCode`.
+
+## Deliberately incomplete
+
+- the Java core class library and most MIDP/WIPI API classes. What is present
+  is what titles have actually called; the KTF WIPI Java surface — `Jlet`,
+  annunciator, display, cards — has grown from a constructor probe's minimum to
+  what a played game needs, and [`ktf.md`](ktf.md) is where it is described
+- the complete verifier and access control
+- complete assignability checks for interface inheritance and array covariance
+- complete guest thread lifecycle (`join`, priority, daemon, current-thread
+  identity) and full interruption semantics outside `Thread.sleep`
+- reflection, class loader object, weak reference
+- execution semantics for `invokedynamic`, method handles, and module constants
+- the LCDUI presentation for uncaught exceptions already retained in host
+  diagnostics
+- `Image.createImage(InputStream)`; the blank, copy, region, resource-name and
+  byte-array forms are implemented
+- MIDP `Graphics` arcs, rounded rectangles, triangles, area copies, and stroke
+  styles. The WIPI platforms implement several of these on their own
+  `org.kwis.msp.lcdui.Graphics`, because titles there call them; no MIDlet here
+  has
+
+Commands, the high-level LCDUI widgets, `GameCanvas` and RMS `RecordStore` were
+on this list and are not any more — they are what an SKT title turned out to be
+made of. [`lcdui.md`](lcdui.md) and [`rms.md`](rms.md) describe them. Text is no
+longer ASCII-only either: two pixel fonts are embedded and shared by every
+platform through `internal/glyph`, and [`ktf.md`](ktf.md) has how a face is
+chosen per screen size.
+
+Go's garbage collector also collects the guest object graph, so the project does
+not implement a separate tracing GC. A compatibility layer will be added if a
+game that depends on Java finalization or weak-reference semantics is found.
+
+## The step limit is a ceiling or a window
+
+`Options.MaxSteps` bounds the instructions one execution may spend, and an
+execution is one entry into the interpreter: a Host call, or a guest thread for
+its whole life. As a ceiling that is right for the first and wrong for the
+second — a game's own thread decodes its images, loads its world and runs its
+frames, so a fixed budget means every title dies partway through loading with an
+error that names whatever method was unlucky enough to be running.
+
+`Options.RenewSteps` makes the same number a window instead. When an execution
+exhausts it the platform is asked whether to grant another; granting resets the
+count, refusing ends the execution with the platform's error. Without the hook
+the ceiling stands, which is what an unattended `InvokeStatic` should get.
+
+`internal/platform/skt` installs it and grants windows while its MIDlet is
+running, so destroying the MIDlet is what stops a runaway guest thread. That is
+the same shape the WIPI platforms use for ARM guests, where one window's
+exhaustion is a renewal request and cancelling the context is the only stop
+(`docs/ktf.md`).

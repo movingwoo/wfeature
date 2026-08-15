@@ -1,0 +1,141 @@
+package lgt
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/movingwoo/wfeature/internal/armcore"
+)
+
+// `java/util/Vector`, which a title uses as a growable list of references.
+//
+// The module lists no virtual methods for it, so **every call but the
+// constructor arrives as a slot the compiler baked** and each one is named from
+// its call site the same way a String slot is. What a vector holds is kept on
+// this side, keyed by the object the module allocated, exactly as a String's
+// characters are: the module never reads a vector's own words.
+
+const javaVectorClass = "java/util/Vector"
+
+// javaVectorConstructor is `Vector()` and `Vector(int)`. The capacity is a hint
+// about allocation and nothing a caller can observe, so both build the same
+// empty list.
+func javaVectorConstructor(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	client.javaRuntimeState().vectors[arguments[0]] = []uint32{}
+	return 0, nil
+}
+
+// javaVectorOf answers the list behind a vector object.
+func (client *Client) javaVectorOf(object uint32) ([]uint32, error) {
+	runtime := client.javaRuntimeState()
+	held, ok := runtime.vectors[object]
+	if !ok {
+		return nil, fmt.Errorf("the object at %#x is not a vector this platform built", object)
+	}
+	return held, nil
+}
+
+// javaVectorAdd is `addElement(Object)`: one more reference on the end.
+func javaVectorAdd(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().vectors[arguments[0]] = append(held, arguments[1])
+	return 0, nil
+}
+
+// javaVectorIndexOf is `indexOf(Object)`: where the first reference equal to
+// the argument sits, or -1. Equality here is the reference itself, because a
+// vector holds handles and this platform has no `equals` to call on one — the
+// local caller passes back a String it put in the vector itself, so the two are
+// the same handle.
+func javaVectorIndexOf(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	for index, element := range held {
+		if element == arguments[1] {
+			return uint32(index), nil
+		}
+	}
+	return ^uint32(0), nil
+}
+
+// javaVectorSize is `size()`.
+func javaVectorSize(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(len(held)), nil
+}
+
+// javaVectorAt is `elementAt(int)`, bounds checked the way the language is:
+// past the end is a failure and not a null the caller would fault on later.
+func javaVectorAt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	index := int(int32(arguments[1]))
+	if index < 0 || index >= len(held) {
+		return 0, fmt.Errorf("element %d of a vector of %d", index, len(held))
+	}
+	return held[index], nil
+}
+
+// javaVectorFirst is `firstElement()`. The language throws on an empty vector
+// rather than answering null, so an empty one is reported here: a caller that
+// gets a null back would fault on it later, somewhere that says nothing about
+// where it came from.
+func javaVectorFirst(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(held) == 0 {
+		return 0, fmt.Errorf("the first element of an empty vector")
+	}
+	return held[0], nil
+}
+
+// javaVectorRemoveAt is `removeElementAt(int)`.
+func javaVectorRemoveAt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	index := int(int32(arguments[1]))
+	if index < 0 || index >= len(held) {
+		return 0, fmt.Errorf("element %d of a vector of %d", index, len(held))
+	}
+	client.javaRuntimeState().vectors[arguments[0]] = append(held[:index:index], held[index+1:]...)
+	return 0, nil
+}
+
+// javaVectorClear is `removeAllElements()`.
+func javaVectorClear(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := client.javaVectorOf(arguments[0]); err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().vectors[arguments[0]] = []uint32{}
+	return 0, nil
+}

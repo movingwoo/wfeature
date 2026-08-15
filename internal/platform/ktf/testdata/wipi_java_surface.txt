@@ -1,0 +1,320 @@
+org/kwis/msf/io/Network
+org/kwis/msf/io/Network connect ()I
+org/kwis/msf/io/Network disconnect ()V
+org/kwis/msf/io/SchemeNotFoundException
+org/kwis/msf/io/SchemeNotFoundException <init> ()V
+org/kwis/msf/io/SchemeNotFoundException <init> (Ljava/lang/String;)V
+org/kwis/msp/db/DataBase
+org/kwis/msp/db/DataBase <init> (Ljavax/microedition/rms/RecordStore;)V
+org/kwis/msp/db/DataBase closeDataBase ()V
+org/kwis/msp/db/DataBase deleteDataBase (Ljava/lang/String;)V
+org/kwis/msp/db/DataBase deleteDataBase (Ljava/lang/String;I)V
+org/kwis/msp/db/DataBase deleteRecord (I)V
+org/kwis/msp/db/DataBase getAccessMode (Ljava/lang/String;)I
+org/kwis/msp/db/DataBase getDataBaseName ()Ljava/lang/String;
+org/kwis/msp/db/DataBase getDataBaseSize ()I
+org/kwis/msp/db/DataBase getLastModified ()J
+org/kwis/msp/db/DataBase getNumberOfRecords ()I
+org/kwis/msp/db/DataBase getRecordSize ()I
+org/kwis/msp/db/DataBase getSizeAvailable ()I
+org/kwis/msp/db/DataBase insertRecord ([B)I
+org/kwis/msp/db/DataBase insertRecord ([BII)I
+org/kwis/msp/db/DataBase listDataBases ()[Ljava/lang/String;
+org/kwis/msp/db/DataBase openDataBase (Ljava/lang/String;IZ)Lorg/kwis/msp/db/DataBase;
+org/kwis/msp/db/DataBase openDataBase (Ljava/lang/String;IZI)Lorg/kwis/msp/db/DataBase;
+org/kwis/msp/db/DataBase selectRecord (I)[B
+org/kwis/msp/db/DataBase selectRecord (I[BI)V
+org/kwis/msp/db/DataBase sortRecord (Lorg/kwis/msp/db/DataFilter;Lorg/kwis/msp/db/DataComparator;)[I
+org/kwis/msp/db/DataBase updateRecord (I[B)V
+org/kwis/msp/db/DataBase updateRecord (I[BII)V
+org/kwis/msp/db/DataBaseException
+org/kwis/msp/db/DataBaseException <init> ()V
+org/kwis/msp/db/DataBaseException <init> (Ljava/lang/String;)V
+org/kwis/msp/db/DataBaseRecordException
+org/kwis/msp/db/DataBaseRecordException <init> ()V
+org/kwis/msp/db/DataBaseRecordException <init> (Ljava/lang/String;)V
+org/kwis/msp/db/DataComparator
+org/kwis/msp/db/DataComparator compare ([B[B)I
+org/kwis/msp/db/DataFilter
+org/kwis/msp/db/DataFilter filter ([B)Z
+org/kwis/msp/handset/BackLight
+org/kwis/msp/handset/BackLight alwaysOn ()V
+org/kwis/msp/handset/BackLight before ()V
+org/kwis/msp/handset/BackLight off ()V
+org/kwis/msp/handset/BackLight on (III)V
+org/kwis/msp/handset/HandsetProperty
+org/kwis/msp/handset/HandsetProperty getSystemProperty (Ljava/lang/String;)Ljava/lang/String;
+org/kwis/msp/handset/HandsetProperty setSystemProperty (Ljava/lang/String;Ljava/lang/String;)Z
+org/kwis/msp/io/File
+org/kwis/msp/io/File <init> (Ljava/lang/String;I)V
+org/kwis/msp/io/File <init> (Ljava/lang/String;II)V
+org/kwis/msp/io/File close ()V
+org/kwis/msp/io/File openDataInputStream ()Ljava/io/DataInputStream;
+org/kwis/msp/io/File openDataOutputStream ()Ljava/io/DataOutputStream;
+org/kwis/msp/io/File openInputStream ()Ljava/io/InputStream;
+org/kwis/msp/io/File openOutputStream ()Ljava/io/OutputStream;
+org/kwis/msp/io/File read ()I
+org/kwis/msp/io/File read ([B)I
+org/kwis/msp/io/File read ([BII)I
+org/kwis/msp/io/File seek (I)V
+org/kwis/msp/io/File sizeOf ()I
+org/kwis/msp/io/File tell ()I
+org/kwis/msp/io/File write (I)I
+org/kwis/msp/io/File write ([B)I
+org/kwis/msp/io/File write ([BII)I
+org/kwis/msp/io/FileSystem
+org/kwis/msp/io/FileSystem <init> ()V
+org/kwis/msp/io/FileSystem available ()I
+org/kwis/msp/io/FileSystem exists (Ljava/lang/String;)Z
+org/kwis/msp/io/FileSystem exists (Ljava/lang/String;I)Z
+org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;)I
+org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;I)I
+org/kwis/msp/io/FileSystem getMaxFilenameLength ()I
+org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;)Z
+org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;I)Z
+org/kwis/msp/io/FileSystem isFile (Ljava/lang/String;)Z
+org/kwis/msp/io/FileSystem isFile (Ljava/lang/String;I)Z
+org/kwis/msp/io/FileSystem list (Ljava/lang/String;)Ljava/util/Vector;
+org/kwis/msp/io/FileSystem list (Ljava/lang/String;I)Ljava/util/Vector;
+org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;)V
+org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;I)V
+org/kwis/msp/io/FileSystem remove (Ljava/lang/String;)V
+org/kwis/msp/io/FileSystem remove (Ljava/lang/String;I)V
+org/kwis/msp/io/FileSystem rename (Ljava/lang/String;Ljava/lang/String;)V
+org/kwis/msp/io/FileSystem rename (Ljava/lang/String;Ljava/lang/String;I)V
+org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;)V
+org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;I)V
+org/kwis/msp/io/FileSystem toCString (Ljava/lang/String;)[B
+org/kwis/msp/lcdui/Card
+org/kwis/msp/lcdui/Card <init> ()V
+org/kwis/msp/lcdui/Card <init> (I)V
+org/kwis/msp/lcdui/Card <init> (IIII)V
+org/kwis/msp/lcdui/Card <init> (Lorg/kwis/msp/lcdui/Display;)V
+org/kwis/msp/lcdui/Card <init> (Lorg/kwis/msp/lcdui/Display;IIII)V
+org/kwis/msp/lcdui/Card <init> (Lorg/kwis/msp/lcdui/Display;IIIIZ)V
+org/kwis/msp/lcdui/Card <init> (Z)V
+org/kwis/msp/lcdui/Card getDisplay ()Lorg/kwis/msp/lcdui/Display;
+org/kwis/msp/lcdui/Card getHeight ()I
+org/kwis/msp/lcdui/Card getWidth ()I
+org/kwis/msp/lcdui/Card getX ()I
+org/kwis/msp/lcdui/Card getY ()I
+org/kwis/msp/lcdui/Card isShown ()Z
+org/kwis/msp/lcdui/Card keyNotify (II)Z
+org/kwis/msp/lcdui/Card move (II)V
+org/kwis/msp/lcdui/Card paint (Lorg/kwis/msp/lcdui/Graphics;)V
+org/kwis/msp/lcdui/Card pointerNotify (III)Z
+org/kwis/msp/lcdui/Card repaint ()V
+org/kwis/msp/lcdui/Card repaint (IIII)V
+org/kwis/msp/lcdui/Card resize (II)V
+org/kwis/msp/lcdui/Card serviceRepaints ()V
+org/kwis/msp/lcdui/Card setCanvas (Ljavax/microedition/lcdui/Canvas;)V
+org/kwis/msp/lcdui/Card showNotify (Z)V
+org/kwis/msp/lcdui/Display
+org/kwis/msp/lcdui/Display <init> (Lorg/kwis/msp/lcdui/Jlet;Lorg/kwis/msp/lcdui/DisplayProxy;)V
+org/kwis/msp/lcdui/Display addJletEventListener (Lorg/kwis/msp/lcdui/JletEventListener;)V
+org/kwis/msp/lcdui/Display callSerially (Ljava/lang/Runnable;)V
+org/kwis/msp/lcdui/Display callSerially (Ljava/lang/Runnable;I)V
+org/kwis/msp/lcdui/Display countCard ()I
+org/kwis/msp/lcdui/Display flush ()V
+org/kwis/msp/lcdui/Display getBitsPerPixel ()I
+org/kwis/msp/lcdui/Display getDefaultDisplay ()Lorg/kwis/msp/lcdui/Display;
+org/kwis/msp/lcdui/Display getDisplay (Ljava/lang/String;)Lorg/kwis/msp/lcdui/Display;
+org/kwis/msp/lcdui/Display getDockedCard ()Lorg/kwis/msp/lcdui/Card;
+org/kwis/msp/lcdui/Display getGameAction (I)I
+org/kwis/msp/lcdui/Display getHeight ()I
+org/kwis/msp/lcdui/Display getKeyCode (I)I
+org/kwis/msp/lcdui/Display getKeyName (I)Ljava/lang/String;
+org/kwis/msp/lcdui/Display getWidth ()I
+org/kwis/msp/lcdui/Display grabKey (ILorg/kwis/msp/lcdui/JletEventListener;)V
+org/kwis/msp/lcdui/Display hasPointerEvents ()Z
+org/kwis/msp/lcdui/Display hasPointerMotionEvents ()Z
+org/kwis/msp/lcdui/Display hasRepeatEvents ()Z
+org/kwis/msp/lcdui/Display isColor ()Z
+org/kwis/msp/lcdui/Display isDoubleBuffered ()Z
+org/kwis/msp/lcdui/Display numColors ()I
+org/kwis/msp/lcdui/Display popCard ()Lorg/kwis/msp/lcdui/Card;
+org/kwis/msp/lcdui/Display pushCard (Lorg/kwis/msp/lcdui/Card;)V
+org/kwis/msp/lcdui/Display removeAllCards ()V
+org/kwis/msp/lcdui/Display removeCard (Lorg/kwis/msp/lcdui/Card;)Z
+org/kwis/msp/lcdui/Display removeJletEventListener (Lorg/kwis/msp/lcdui/JletEventListener;)V
+org/kwis/msp/lcdui/Display setDockedCard (Lorg/kwis/msp/lcdui/Card;I)V
+org/kwis/msp/lcdui/Display ungrabKey (I)V
+org/kwis/msp/lcdui/EventQueue
+org/kwis/msp/lcdui/EventQueue <init> (Lorg/kwis/msp/lcdui/Jlet;)V
+org/kwis/msp/lcdui/EventQueue dispatchEvent ([I)V
+org/kwis/msp/lcdui/EventQueue getNextEvent ([I)V
+org/kwis/msp/lcdui/EventQueue postEvent (I[I)V
+org/kwis/msp/lcdui/EventQueue postEvent ([I)Z
+org/kwis/msp/lcdui/Font
+org/kwis/msp/lcdui/Font <clinit> ()V
+org/kwis/msp/lcdui/Font <init> (Ljavax/microedition/lcdui/Font;)V
+org/kwis/msp/lcdui/Font charWidth (C)I
+org/kwis/msp/lcdui/Font charsWidth ([CII)I
+org/kwis/msp/lcdui/Font getBaselinePosition ()I
+org/kwis/msp/lcdui/Font getDefaultFont ()Lorg/kwis/msp/lcdui/Font;
+org/kwis/msp/lcdui/Font getFace ()I
+org/kwis/msp/lcdui/Font getFont (III)Lorg/kwis/msp/lcdui/Font;
+org/kwis/msp/lcdui/Font getHeight ()I
+org/kwis/msp/lcdui/Font getSize ()I
+org/kwis/msp/lcdui/Font getStyle ()I
+org/kwis/msp/lcdui/Font isBold ()Z
+org/kwis/msp/lcdui/Font isItalic ()Z
+org/kwis/msp/lcdui/Font isPlain ()Z
+org/kwis/msp/lcdui/Font isUnderlined ()Z
+org/kwis/msp/lcdui/Font stringWidth (Ljava/lang/String;)I
+org/kwis/msp/lcdui/Font substringWidth (Ljava/lang/String;II)I
+org/kwis/msp/lcdui/Graphics
+org/kwis/msp/lcdui/Graphics <init> (Ljavax/microedition/lcdui/Graphics;)V
+org/kwis/msp/lcdui/Graphics <init> (Lorg/kwis/msp/lcdui/Display;)V
+org/kwis/msp/lcdui/Graphics clipRect (IIII)V
+org/kwis/msp/lcdui/Graphics copyArea (IIIIII)V
+org/kwis/msp/lcdui/Graphics drawArc (IIIIII)V
+org/kwis/msp/lcdui/Graphics drawChar (CIII)V
+org/kwis/msp/lcdui/Graphics drawChars ([CIIIII)V
+org/kwis/msp/lcdui/Graphics drawImage (Lorg/kwis/msp/lcdui/Image;III)V
+org/kwis/msp/lcdui/Graphics drawLine (IIII)V
+org/kwis/msp/lcdui/Graphics drawPolygon ([I[I)V
+org/kwis/msp/lcdui/Graphics drawRect (IIII)V
+org/kwis/msp/lcdui/Graphics drawRoundRect (IIIIII)V
+org/kwis/msp/lcdui/Graphics drawString (Ljava/lang/String;III)V
+org/kwis/msp/lcdui/Graphics drawSubstring (Ljava/lang/String;IIIII)V
+org/kwis/msp/lcdui/Graphics encodeImage (IIII)[B
+org/kwis/msp/lcdui/Graphics fillArc (IIIIII)V
+org/kwis/msp/lcdui/Graphics fillPolygon ([I[I)V
+org/kwis/msp/lcdui/Graphics fillRect (IIII)V
+org/kwis/msp/lcdui/Graphics fillRoundRect (IIIIII)V
+org/kwis/msp/lcdui/Graphics getAlpha ()I
+org/kwis/msp/lcdui/Graphics getBlueComponent ()I
+org/kwis/msp/lcdui/Graphics getClipHeight ()I
+org/kwis/msp/lcdui/Graphics getClipWidth ()I
+org/kwis/msp/lcdui/Graphics getClipX ()I
+org/kwis/msp/lcdui/Graphics getClipY ()I
+org/kwis/msp/lcdui/Graphics getColor ()I
+org/kwis/msp/lcdui/Graphics getFont ()Lorg/kwis/msp/lcdui/Font;
+org/kwis/msp/lcdui/Graphics getGrayScale ()I
+org/kwis/msp/lcdui/Graphics getGreenComponent ()I
+org/kwis/msp/lcdui/Graphics getPixel (II)I
+org/kwis/msp/lcdui/Graphics getPixels (IIII[BII)V
+org/kwis/msp/lcdui/Graphics getRGBPixels (IIII[III)V
+org/kwis/msp/lcdui/Graphics getRedComponent ()I
+org/kwis/msp/lcdui/Graphics getStrokeStyle ()I
+org/kwis/msp/lcdui/Graphics getTranslateX ()I
+org/kwis/msp/lcdui/Graphics getTranslateY ()I
+org/kwis/msp/lcdui/Graphics isXORMode ()Z
+org/kwis/msp/lcdui/Graphics reset ()V
+org/kwis/msp/lcdui/Graphics setAlpha (I)V
+org/kwis/msp/lcdui/Graphics setClip (IIII)V
+org/kwis/msp/lcdui/Graphics setColor (I)V
+org/kwis/msp/lcdui/Graphics setColor (III)V
+org/kwis/msp/lcdui/Graphics setFont (Lorg/kwis/msp/lcdui/Font;)V
+org/kwis/msp/lcdui/Graphics setGrayScale (I)V
+org/kwis/msp/lcdui/Graphics setPixel (II)V
+org/kwis/msp/lcdui/Graphics setPixels (IIII[BII)V
+org/kwis/msp/lcdui/Graphics setRGBPixels (IIII[III)V
+org/kwis/msp/lcdui/Graphics setStrokeStyle (I)V
+org/kwis/msp/lcdui/Graphics setXORMode (Z)V
+org/kwis/msp/lcdui/Graphics translate (II)V
+org/kwis/msp/lcdui/Image
+org/kwis/msp/lcdui/Image <init> ()V
+org/kwis/msp/lcdui/Image <init> (Ljavax/microedition/lcdui/Image;)V
+org/kwis/msp/lcdui/Image createImage (II)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image createImage (Ljava/lang/String;)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image createImage (Lorg/kwis/msp/lcdui/Image;)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image createImage ([BII)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image createSubImage (IIIIZ)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image drawImage (Lorg/kwis/msp/lcdui/Image;IIIIIIII)V
+org/kwis/msp/lcdui/Image getGraphics ()Lorg/kwis/msp/lcdui/Graphics;
+org/kwis/msp/lcdui/Image getHeight ()I
+org/kwis/msp/lcdui/Image getWidth ()I
+org/kwis/msp/lcdui/Image isAnimated ()Z
+org/kwis/msp/lcdui/Image isMutable ()Z
+org/kwis/msp/lcdui/Image loadImage (Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;
+org/kwis/msp/lcdui/Image play (Lorg/kwis/msp/lcdui/ImageObserver;)V
+org/kwis/msp/lcdui/Image setTransparentColor (I)V
+org/kwis/msp/lcdui/Image stop ()V
+org/kwis/msp/lcdui/Image stopImage (Lorg/kwis/msp/lcdui/ImageObserver;)V
+org/kwis/msp/lcdui/ImageObserver
+org/kwis/msp/lcdui/ImageObserver notify (Lorg/kwis/msp/lcdui/Image;I)V
+org/kwis/msp/lcdui/InputMethodHandler
+org/kwis/msp/lcdui/InputMethodHandler <init> (I)V
+org/kwis/msp/lcdui/InputMethodHandler setCurrentMode (I)Z
+org/kwis/msp/lcdui/Jlet
+org/kwis/msp/lcdui/Jlet <init> ()V
+org/kwis/msp/lcdui/Jlet getActiveJlet ()Lorg/kwis/msp/lcdui/Jlet;
+org/kwis/msp/lcdui/Jlet getAppProperty (Ljava/lang/String;)Ljava/lang/String;
+org/kwis/msp/lcdui/Jlet getEventQueue ()Lorg/kwis/msp/lcdui/EventQueue;
+org/kwis/msp/lcdui/Jlet notifyDestroyed ()V
+org/kwis/msp/lcdui/JletEventListener
+org/kwis/msp/lcdui/JletEventListener notifyEvent (III)V
+org/kwis/msp/lcdui/Main
+org/kwis/msp/lcdui/Main main ([Ljava/lang/String;)V
+org/kwis/msp/lwc/AnnunciatorComponent
+org/kwis/msp/lwc/AnnunciatorComponent <init> (Z)V
+org/kwis/msp/lwc/AnnunciatorComponent show ()V
+org/kwis/msp/lwc/Component
+org/kwis/msp/lwc/Component <init> ()V
+org/kwis/msp/lwc/Component configure (IIIII)V
+org/kwis/msp/lwc/Component focusNotify (Z)V
+org/kwis/msp/lwc/Component getHeight ()I
+org/kwis/msp/lwc/Component keyNotify (II)Z
+org/kwis/msp/lwc/Component setFocus ()V
+org/kwis/msp/lwc/Component showNotify (Z)V
+org/kwis/msp/lwc/ContainerComponent
+org/kwis/msp/lwc/ContainerComponent <init> ()V
+org/kwis/msp/lwc/ContainerComponent addComponent (Lorg/kwis/msp/lwc/Component;)I
+org/kwis/msp/lwc/ContainerComponent removeComponent (I)V
+org/kwis/msp/lwc/ContainerComponent removeComponent (Lorg/kwis/msp/lwc/Component;)V
+org/kwis/msp/lwc/EventListener
+org/kwis/msp/lwc/EventListener eventNotify (IIIILjava/lang/Object;)Z
+org/kwis/msp/lwc/ShellComponent
+org/kwis/msp/lwc/ShellComponent <init> ()V
+org/kwis/msp/lwc/ShellComponent <init> (IIII)V
+org/kwis/msp/lwc/ShellComponent hide ()V
+org/kwis/msp/lwc/ShellComponent setWorkComponent (Lorg/kwis/msp/lwc/Component;)V
+org/kwis/msp/lwc/ShellComponent show ()V
+org/kwis/msp/lwc/TextBoxComponent
+org/kwis/msp/lwc/TextBoxComponent <init> (Ljava/lang/String;I)V
+org/kwis/msp/lwc/TextComponent
+org/kwis/msp/lwc/TextComponent <init> ()V
+org/kwis/msp/lwc/TextComponent getString ()Ljava/lang/String;
+org/kwis/msp/lwc/TextComponent setMaxLength (I)V
+org/kwis/msp/lwc/TextFieldComponent
+org/kwis/msp/lwc/TextFieldComponent <init> (Ljava/lang/String;I)V
+org/kwis/msp/media/BaseClip
+org/kwis/msp/media/BaseClip <init> ()V
+org/kwis/msp/media/BaseClip availableDataSize ()I
+org/kwis/msp/media/BaseClip clearData ()V
+org/kwis/msp/media/BaseClip putData ([BII)I
+org/kwis/msp/media/Clip
+org/kwis/msp/media/Clip <init> (Ljava/lang/String;)V
+org/kwis/msp/media/Clip <init> (Ljava/lang/String;I)V
+org/kwis/msp/media/Clip <init> (Ljava/lang/String;Ljava/lang/String;)V
+org/kwis/msp/media/Clip <init> (Ljava/lang/String;[B)V
+org/kwis/msp/media/Clip getPosition ()I
+org/kwis/msp/media/Clip getStopTime ()I
+org/kwis/msp/media/Clip getType ()Ljava/lang/String;
+org/kwis/msp/media/Clip getVolume ()I
+org/kwis/msp/media/Clip setBuffer ([BI)V
+org/kwis/msp/media/Clip setListener (Lorg/kwis/msp/media/PlayListener;)V
+org/kwis/msp/media/Clip setPosition (I)Z
+org/kwis/msp/media/Clip setStopTime (I)Z
+org/kwis/msp/media/Clip setVolume (I)Z
+org/kwis/msp/media/PlayListener
+org/kwis/msp/media/Player
+org/kwis/msp/media/Player pause (Lorg/kwis/msp/media/BaseClip;)Z
+org/kwis/msp/media/Player play (Lorg/kwis/msp/media/BaseClip;Z)Z
+org/kwis/msp/media/Player play (Lorg/kwis/msp/media/Clip;Z)Z
+org/kwis/msp/media/Player record (Lorg/kwis/msp/media/BaseClip;)Z
+org/kwis/msp/media/Player resume (Lorg/kwis/msp/media/BaseClip;)Z
+org/kwis/msp/media/Player stop (Lorg/kwis/msp/media/BaseClip;)Z
+org/kwis/msp/media/Player stop (Lorg/kwis/msp/media/Clip;)Z
+org/kwis/msp/media/Vibrator
+org/kwis/msp/media/Vibrator off ()V
+org/kwis/msp/media/Vibrator on (II)V
+org/kwis/msp/media/Volume
+org/kwis/msp/media/Volume get ()I
+org/kwis/msp/media/Volume getDefaultVolume (I)I
+org/kwis/msp/media/Volume getMute (I)Z
+org/kwis/msp/media/Volume set (I)V
+org/kwis/msp/media/Volume setDefaultVolume (II)Z
+org/kwis/msp/media/Volume setMute (IZ)V

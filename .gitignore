@@ -1,0 +1,57 @@
+# Build output. Every binary and every release archive `make` produces lands
+# under build/, including build/dist, so the one rule covers all of it.
+/build/
+
+# Compiled test binaries, from `go test -c`.
+*.test
+
+# The release notes the release workflow cuts out of CHANGELOG.md. It is a
+# derived copy of a section of a tracked file, and it lands here when the same
+# command is run by hand to check what a tag would publish.
+/release-notes.md
+
+# A WebAssembly module left at the root by a `GOOS=js` build. The page used to
+# run the emulator itself; that path and its cmd/wasm entry point are gone, so
+# a module here is a leftover rather than a build product.
+/wasm
+*.wasm
+
+# Coverage and profile output. The CLI's -profile, -profile-folded and -diag
+# take a path of the caller's choosing — write those under var/ — so these are
+# only the conventional names that land where they are run.
+coverage.out
+*.prof
+*.pprof
+
+# The runtime tree. Game archives are not ours to publish, saves belong to
+# whoever played, and a debug run's reports are that run's alone. var/README.md
+# explains the layout and is not ignored.
+/var/games/
+/var/savedata/
+/var/logs/
+# What ./start.sh wrote down about the server it started: its pid and its log.
+/var/run/
+# Scripted ways back to a scene. A route is written against one archive and is
+# usually named after it, so it belongs beside the archives rather than in Git.
+/var/routes/
+
+# Secrets, at any depth rather than only the root file that exists today.
+.env
+.env.*
+
+# Local-only state: a Go workspace points this module somewhere else on one
+# machine, and the rest is per-editor or per-tool.
+go.work
+go.work.sum
+.idea/
+.vscode/
+.claude/
+**/node_modules/
+
+# Working notes rather than documentation.
+TODO.md
+# Should be temporarily banned
+AGENTS.md
+docs/support.md
+
+.DS_Store

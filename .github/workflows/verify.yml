@@ -1,0 +1,14 @@
+# The checks a change has to pass, run on every push and pull request. What
+# they are lives in checks.yml, which `release` calls too so that a tag cannot
+# publish something this never saw.
+name: verify
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml

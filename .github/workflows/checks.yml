@@ -1,0 +1,110 @@
+# Everything a change has to pass, in one place because two workflows need it:
+# `verify` runs it on every push, and `release` runs it before it publishes. A
+# release that skipped the per-OS run would ship a Windows binary nobody had
+# ever started — cross-compiling proves a build, not a run.
+#
+# This is called rather than triggered: it has no `on:` of its own beyond
+# workflow_call. See docs/running.md, "What was verified, and where".
+name: checks
+
+on:
+  workflow_call:
+
+defaults:
+  run:
+    # One script per step across all three runners; the Windows runners have
+    # bash, and the Makefile is a POSIX shell script in disguise anyway.
+    shell: bash
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:"; echo "$unformatted"; exit 1
+          fi
+
+      - run: go vet ./...
+
+      # Both profiles, because the debug build tag changes real behaviour.
+      - run: make test
+      - run: make test-debug
+      - run: go test -race ./internal/...
+
+  # A release is "the server binary for an OS, a folder to drop games into, and
+  # a browser", so what has to be verified per OS is that the binary starts,
+  # binds, and serves the page it carries. No game archive is involved: none
+  # can be committed here, and the platforms are exercised by the test job.
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        # `go build -o <name>` writes exactly that name, so Windows has to ask
+        # for the extension itself or the file it produces cannot be run.
+        include:
+          - os: ubuntu-latest
+            binary: wfeature-server
+          - os: windows-latest
+            binary: wfeature-server.exe
+          - os: macos-latest
+            binary: wfeature-server
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the release server
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o build/smoke/${{ matrix.binary }} ./cmd/server
+
+      # The archive layout is what makes the binary choose the folder beside it
+      # as its data root rather than whatever directory it was started from.
+      - name: Stage it the way an archive does
+        run: mkdir -p build/smoke/games/ktf build/smoke/games/lgt build/smoke/games/skt
+
+      - name: It reports its version
+        run: |
+          cd build/smoke
+          ./${{ matrix.binary }} -version | tee version.txt
+          grep -q "wfeature-server ci (release)" version.txt
+
+      - name: It serves what it carries
+        run: |
+          cd build/smoke
+          ./${{ matrix.binary }} -addr 127.0.0.1:11541 > server.log 2>&1 &
+          server=$!
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:11541/api/status -o status.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat server.log
+          # The status endpoint answers JSON, and the root is the client page.
+          cat status.json; echo
+          grep -q "{" status.json
+          curl -fsS http://127.0.0.1:11541/ -o index.html
+          grep -qi "<html" index.html
+          # The data root is the folder beside the binary, which is what keeps
+          # a release from writing saves into the directory it was started in.
+          grep -q "beside the executable" server.log
+          kill "$server"

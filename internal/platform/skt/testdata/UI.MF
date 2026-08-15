@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: UI Fixture
+MIDlet-1: UI Fixture, , UIMIDlet

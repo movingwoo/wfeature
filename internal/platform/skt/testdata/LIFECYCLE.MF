@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+MIDlet-Name: Lifecycle Fixture
+MIDlet-1: Lifecycle Fixture, , LifecycleMIDlet
+Fixture-Property: from-manifest

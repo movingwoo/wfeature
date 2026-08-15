@@ -1,0 +1,69 @@
+package lgt
+
+import (
+	"context"
+	"testing"
+)
+
+// A monitor counts: the same runner may take a lock it already holds, and it is
+// only free again once it has given back as many levels as it took. A
+// `synchronized` method that calls another one on the same object depends on it.
+func TestJavaMonitorCountsRecursiveEntries(t *testing.T) {
+	client := fixtureClient(t)
+	ctx := context.Background()
+	const object = 0x1234
+	for level := 0; level < 3; level++ {
+		if err := client.javaMonitorEnter(ctx, object); err != nil {
+			t.Fatalf("entry %d: %v", level, err)
+		}
+	}
+	if held := client.javaRuntimeState().monitors[object]; held == nil || held.count != 3 {
+		t.Fatalf("the monitor is held %v, want three levels", held)
+	}
+	for level := 0; level < 3; level++ {
+		if err := client.javaMonitorExit(object); err != nil {
+			t.Fatalf("exit %d: %v", level, err)
+		}
+	}
+	if held := client.javaRuntimeState().monitors[object]; held != nil {
+		t.Errorf("the monitor is still held after as many exits as entries")
+	}
+	if err := client.javaMonitorExit(object); err == nil {
+		t.Error("leaving a monitor that was never taken was accepted")
+	}
+}
+
+// A thread that ends gives back whatever it still held. A thread that failed
+// inside a synchronized body would otherwise leave the lock shut for good.
+func TestJavaMonitorsAreReleasedWhenAThreadEnds(t *testing.T) {
+	client := fixtureClient(t)
+	worker := &javaWorker{}
+	client.activeJavaWorker = worker
+	if err := client.javaMonitorEnter(context.Background(), 0x2000); err != nil {
+		t.Fatal(err)
+	}
+	if worker.monitors != 1 {
+		t.Fatalf("the thread holds %d locks, want 1", worker.monitors)
+	}
+	client.activeJavaWorker = nil
+	client.releaseJavaMonitors(worker)
+	if held := client.javaRuntimeState().monitors[0x2000]; held != nil {
+		t.Error("the lock survived the thread that held it")
+	}
+	if worker.monitors != 0 {
+		t.Errorf("the thread still counts %d locks", worker.monitors)
+	}
+}
+
+// A sleep made where no guest thread is running has nothing to park, and moves
+// the guest's clock instead — the wait the caller asked for still passes.
+func TestJavaSleepOutsideAThreadAdvancesTheClock(t *testing.T) {
+	client := fixtureClient(t)
+	before := client.clock.now()
+	if _, err := javaThreadSleep(client, nil, nil, []uint32{50, 0}); err != nil {
+		t.Fatalf("javaThreadSleep() error = %v", err)
+	}
+	if moved := client.clock.now() - before; moved < 50*1e6 {
+		t.Errorf("the clock moved %v, want at least 50ms", moved)
+	}
+}

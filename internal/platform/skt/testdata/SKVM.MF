@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: SKVM Fixture
+MIDlet-1: SKVM Fixture, , SKVMMIDlet

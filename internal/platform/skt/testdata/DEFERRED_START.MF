@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-Name: Deferred Start Fixture
+MIDlet-1: Deferred Start Fixture, , LifecycleMIDlet
+Fixture-Property: from-manifest
+Fixture-Defer-Start: true

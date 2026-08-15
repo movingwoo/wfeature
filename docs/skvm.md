@@ -1,0 +1,578 @@
+# SKVM and the SKT platform
+
+An SKT handset game is a MIDlet JAR. There is no native code, no custom
+executable format, and no ARM: what makes it an SKT game is that its world
+contains `com.skt.m`, `com.skt.m3d` and `com.xce` on top of standard MIDP.
+
+So `internal/platform/skt` is the whole Java runtime: class loading through
+the shared JVM, the MIDP surface a title draws and saves through, and the SKVM
+classes on top. It used to be a thin layer over a vendor-neutral "j2me"
+package; that package had exactly one consumer, and keeping it neutral only
+hid where its contracts came from. The class surface
+lives in `internal/api/skvm` and the natives in
+`internal/platform/skt/skvm*.go`, next to the framebuffer, fonts and images
+they need.
+
+**The SKVM classes come from the platform, not from the title.** A machine
+built from a title's own JAR alone must not resolve `com.skt.m` — otherwise a
+title could ship its own `MathFP` and quietly replace the one every other title
+measures against. `TestSKVMClassesComeFromThePlatformNotTheTitle` holds that
+line.
+
+## MathFP
+
+`MathFP` is nine-decimal fixed point: **1.0 is 1_000_000_000**. Every value a
+game passes and receives is scaled that way, which is why `PI` is
+`3_141_592_654` and why every product has to be rescaled. `parseFP` scales a
+whole number in, `toLong` truncates toward zero on the way out.
+
+The scale is the observable contract, so it matches the reference
+implementation exactly. Overflow
+saturates rather than wrapping: a game that overflows an intermediate should
+see a huge number, not a sign flip.
+
+## Files
+
+`com.xce.io.XFile` reads and writes through the **same Host save boundary
+MIDP RMS uses**, under the `fs/` scope — the same one KTF's guest filesystem
+uses — so one owner directory holds everything a title persists whichever
+platform wrote it:
+
+```
+var/savedata/<profile>/skt/<owner>/fs/<path>
+```
+
+A path the game never wrote falls back to the JAR resource of the same name,
+which is how a game reads data it shipped. `unlink` empties a file rather than
+removing it, because the save boundary has no delete — the same reason RMS
+keeps a store index.
+
+`FileInputStream` and `FileOutputStream` are written in Java on top of
+`XFile`, so there is one implementation of the file semantics rather than two.
+
+## Graphics2D
+
+`Graphics2D` wraps a MIDP `Graphics` and adds what MIDP does not have:
+per-pixel read and write, rectangle inversion, a screen capture, and a blit
+with `SRC_COPY`/`AND`/`OR`/`XOR`. The pixel *mask* is the surface's alpha
+channel rather than a separate plane, because these surfaces carry real
+alpha.
+
+## The frame loop
+
+A MIDlet has no tick of its own. It runs on the callbacks the Host makes and on
+whatever those callbacks deferred, and an SKT title defers its whole game. Three
+contracts decide whether it runs at all, and each of them fails silently when it
+is missing: the title starts, shows a Canvas, reports no error, and never paints
+a second frame.
+
+**`Display.callSerially` runs one Runnable per Host pass.** MIDP says a serial
+Runnable follows the events already on the loop. The common frame loop here is a
+Runnable that repaints and hands *itself* straight back, so a Runnable posted
+directly onto the event queue re-queues itself inside the same drain: the loop
+never empties and the pass ends on the event loop's own limit rather than on a
+frame. So `callSerially` queues, and `RunPending` — the Host's per-frame pass —
+takes exactly one off. This is the same rule the WIPI path applies to a serial
+Runnable for the same reason (`docs/ktf.md`).
+
+**The screen `Graphics` outlives the paint it arrived in.** MIDP says a Graphics
+is valid only inside `paint`. On this vendor's handsets it was not, and titles
+are written against what the handset did: a Canvas whose `paint` does nothing
+but store the Graphics in a static field, and a game thread that draws through
+it whenever it likes and pushes the result with `XDisplay.refresh`. There is one
+screen Graphics for the life of the runtime; each paint resets it to that
+repaint's clip, no translation, and the default font. Two guest threads drawing
+at once still race — that is the game's business, as it was on the handset.
+
+**`XDisplay.width`, `height` and `height2` are fields, not methods.** A game
+reads the screen size straight out of them, typically caching it in a Canvas
+constructor and repainting that rectangle forever after, so the runtime fills
+them in from the framebuffer before any guest code runs. Left at zero the game
+asks to repaint a zero-sized rectangle and paints nothing at all. `height2` is
+the drawable height on a handset that reserved rows for a soft-key bar; a Canvas
+here gets the whole framebuffer, so both heights are the framebuffer's.
+
+**The handset properties are answered.** `System.getProperty` answers `MIN`,
+`m.MIN`, `m.VENDER`, `m.CARRIER`, `m.COLOR`, `m.SK_VM` and
+`com.xce.wipi.version` alongside the MIDP names. A missing one is not read as
+"unknown": a title compares the vendor string against the single device it
+carries a workaround for, and a null there throws inside the constructor that
+would have started its game thread. The subscriber number is the one the WIPI
+platforms answer with, since the question is about the handset rather than about
+which runtime is asking, and the vendor string deliberately names no real
+manufacturer.
+
+**The JVM step limit is a window, not a ceiling.** A title's own thread is the
+game — it decodes images and loads a world before it draws anything — so a fixed
+instruction budget kills every title partway through loading. This runtime grants
+another window while its MIDlet is running and refuses once it is destroyed,
+which makes destroying the MIDlet the way a runaway guest stops. See
+`docs/jvm.md`.
+
+**`System.out` and `System.err` exist.** Shipped titles are full of leftover
+debug printing. The streams are runtime-owned CLDC classes in `internal/jvm`,
+and what a game prints goes to the logging boundary at debug level, one line per
+call. What matters is that the field resolves: a game that cannot read
+`System.out` dies in whichever method happened to contain the print.
+
+## What the local titles still stop at
+
+Three SKT titles run here and each is further along than the last, so what is
+left is best read as a list of what has not been driven rather than of what is
+broken. The one that used to head this list — a title that would not leave its
+guardian-selection screen — is off it: the confirm key was fire all along, and
+what the script was missing has a section of its own below.
+
+- ~~**Progress saving and loading have not been driven** on any of the three.~~
+  **All three are closed end to end now**: the `RecordStore` one — see "A
+  progress save, taken in a title's own save menu" — the `XFile` one that writes
+  three numbered slots, which loads a save it was shipped with and now takes one
+  of its own ("The same title's save, found by reading upwards from the write"),
+  and the third, whose refusal turned out to be an `IOException` this platform
+  threw at it rather than a rule of its own — see "The third title's save, and
+  the message that named the wrong culprit".
+- ~~`runskt` has no diagnostic report.~~ It has one now — `runskt <zip> -diag
+  report.json` — and what it found is below.
+
+### The screen that would not confirm was waiting for a second choice
+
+The title whose guardian selection nothing would confirm now reaches its
+opening cutscene. Nothing was wrong with the key mapping, and the answer is
+worth writing down because the same shape appears twice in one flow and reads
+as a dead screen both times.
+
+The screen wants **two** guardians. `bl.a(action, keyCode)` treats fire — or
+`5`, which it accepts alongside it — as a **toggle** on whichever guardian the
+cursor is over, counts what is selected, and only when the count reaches
+exactly two does it raise its confirmation prompt. A script that presses fire
+once and expects to move on presses it into a screen that has silently marked
+one guardian and is waiting for the other. Nothing on the screen changes enough
+at a contact sheet's scale to show that it did anything.
+
+Then the prompt itself: **its cursor starts on NO**, and fire on NO clears the
+selection and puts the screen back where it started — which is exactly what a
+script that keeps pressing fire sees, forever. Left or right moves to YES.
+
+The character-selection screen one step earlier has the same prompt with the
+same starting cursor, so the flow needs the same three keys twice:
+
+```sh
+# a character, then YES; the guardian prompt dismissed; two guardians, then YES
+wfeature runskt <zip> -ticks 2000 \
+  -key 200:fire -key 400:fire \
+  -key 600:fire -key 700:left -key 800:fire \
+  -key 1000:fire \
+  -key 1100:fire -key 1200:right -key 1300:fire \
+  -key 1400:left -key 1500:fire
+```
+
+**What settled it was the class file, not the screen.** A contact sheet of
+every key this runtime can deliver, one per hundred ticks, showed the screen
+unchanged for all of them, which says only that no single key confirms. The
+title's own bytecode says why: `javap -c` over the Canvas names the state
+handler, the debug build's instruction log says which class is running while
+the screen is up (`bl`, by a wide margin), and that class's `a(int, int)` is
+forty lines of counting. Reaching for the archive earlier would have saved the
+sweep — the classes are obfuscated to one and two letters, but the control flow
+is not.
+
+### An SKT archive is a filesystem, not just a JAR
+
+An SKT container holds `<id>.jar` beside `<id>.msd`, and this read the JAR and
+threw the rest away. Two of the three local archives carry more than that:
+bare-named files sitting at the top level — one has `c`, `dnlist2`, `o` and two
+further JARs, another has `n1`, `g1`, `cf`. **They are the title's own
+filesystem.** A handset was sent one archive and unpacked it into the title's
+storage, and the game opens them by exactly the name they have there.
+
+Discarding them broke one title's settings entirely, silently, every run. Its
+`bs.j()` opens `"/c"` for reading, and `com.xce.io.XFile` for a file that is
+neither a save nor a JAR resource throws `IOException` — so the read failed, the
+title fell through to the branch that writes defaults, and **that** opens `"/c"`
+for writing with no create bit, which threw for the same reason. A settings file
+that could be neither read nor written, and nothing on screen to say so.
+
+`Open` now keeps the container's other entries as the archive's own, under
+their bare names, and `XFile` finds them through the resource fallback it
+already had. What is excluded is named rather than guessed at — the JAR, the
+`.msd`, the `.mod` and the `.wmr` are the platform's, not the title's — and a
+JAR entry of the same name still wins. The change is visible in the title's own
+control flow: the run that used to reach `bs.i` (write the defaults) now
+reaches `bs.j` (read the file) instead.
+
+**Settings then save and load for real.** Changing one in that title's Config
+screen writes `fs/c` into the save tree, and the byte that changes is exactly
+the nibble the game's own bytecode edits (`0x17` to `0x37` for the first
+setting). The next run prefers the save over the packaged copy, which is what
+`initXFileName` does for every path. What has still not been driven is a
+**progress** save: one title's route reaches its opening cutscene and no save
+point, one opens files without writing during the driven route, and the third
+reaches neither. That is play, not plumbing.
+
+### A record store, written and read back by a real title
+
+The other save boundary is `RecordStore`, and until now nothing but the unit
+tests had used it. A second title's settings go through it rather than through
+`XFile`, and driving that screen closes the round trip:
+
+```sh
+wfeature runskt <zip> -ticks 900 -save /tmp/probe \
+    -key 250:fire -key 300:down -key 330:down -key 380:fire \
+    -key 500:left -key 560:left -key 620:down -key 680:left -key 700:clear
+```
+
+That reaches the settings screen from the main menu, lowers the two settings on
+it, and leaves. The save tree then holds `rms/opdata`, three bytes long, and
+the bytes are the settings: the sound level moves with each `left` or `right`
+and the speed byte follows the other row. **The next run reads it back** — the
+screen opens on `SOUND [1]` and `SPEED SLOW` rather than on the defaults, which
+is the title's own `oploadData` running at startup.
+
+That is not the progress save the list above still wants, and it is the same
+store: the title's `saveData` writes its progress through
+`openRecordStore(name, true)` and `setRecord`/`addRecord`, which is what the
+settings path just exercised end to end. What is left is reaching a save point.
+
+**The route to one is in the title's bytecode rather than on the screen.** Its
+in-game menu — the one holding the save slots — is reached two ways, and both
+were read out of `javap -c` rather than found by pressing keys: during a battle
+the key handler's `lookupswitch` sends **`#`** to it, and on the world map it is
+**item 8 of a 3×3 picture menu**, whose cursor the code lays out as
+`index = row*3 + col`. Getting to either still needs the game played there.
+
+### The CLR key had no name, so no script could send it
+
+Every screen in that title draws `BACK:CLR` in its corner, and leaving the
+settings screen is what writes them. `KeyCodeByName` had no name for that key,
+so no scripted run could ever leave that screen — the settings above could be
+changed and never saved, and the run above could not have existed.
+
+`clear` (also `clr` and `back`) now resolves to the handset's `8`, which is the
+value the title's own key handler switches on and the one the original runtime
+carries. It is the same name the other WIPI platform's routes use, which is the
+point of that table: a script reads the same whichever vendor it drives.
+
+### A progress save, taken in a title's own save menu
+
+The round trip the list above was waiting on is closed on one title. It saves
+in its own in-game menu, the save lands in the save tree, and the next run
+reads it back and resumes where it was taken:
+
+```sh
+# skip the prologue (CLR skips, OK advances, and the story alternates between
+# the two), open the tactical menu, save into slot 1
+wfeature runskt <zip> -ticks 3200 -save /tmp/probe -hold 3 \
+    -key 60:fire -key 160:fire -key 240:down -key 300:fire \
+    $(for t in $(seq 420 60 2000); do echo -n "-key $t:clear -key $((t+30)):fire "; done) \
+    -key 2100:9 -key 2160:fire \
+    -key 2300:2 -key 2400:fire -key 2500:fire -key 2620:fire -key 2740:fire
+```
+
+The save tree then holds `rms/slot0a`, 1306 bytes, beside the `rms/opdata` the
+settings round trip already wrote. Starting again with the same `-save` and
+choosing *continue* opens the load screen on **`1. 전략 명성 0`** where both
+slots used to read `NO SAVE DATA`, and confirming it drops straight back onto
+the world map at the city the save was taken in. The diagnostic report for that
+route names the path it went through: `openRecordStore` nine times,
+`addRecord` twice, `setRecord` once, `closeRecordStore` once.
+
+**Two things made the route findable, and neither was pressing keys.**
+
+The first is that **the menu takes a digit key directly.** The tactical menu is
+a 3x3 picture grid whose cursor the code lays out as `row*3 + col`, and its key
+handler's `lookupswitch` has a case for each of `1`..`9` that assigns the row
+and column outright — `9` is `(2,2)`, which is index 8, which is the entry that
+calls `drawGameInMenu`. So the whole grid is one keypress from anywhere in it,
+and the arrow keys never need to be counted. The menu that opens is a numbered
+list and takes its digits the same way: `2` is 게임 저장.
+
+The second is that **a story-driven prologue needs both of its keys.** The
+intro art says `CLR:SKIP` and the dialogue over the map says `NEXT▶OK`, and the
+title alternates between the two for a few thousand ticks. A script that
+presses only `fire` loops in the intro forever; one that presses only `clear`
+stops at the first line of dialogue. Alternating them walks the whole prologue,
+and only after it does the tactical menu answer any key at all — which is why
+the key sweep over that screen, earlier, had found nothing but `fire`.
+
+The other two titles are obfuscated to one- and two-letter classes, where this
+one had three classes with their own names. What survives obfuscation is the
+part that mattered: the string constants name the files (`/g1`, `/g2`, `/g3`
+and `/n1`, `/n2`, `/n3` for one of them, three slots and their names), and the
+`lookupswitch` over key codes reads the same either way.
+
+### One of the two loads a save it was shipped with
+
+The XFile title above is `u.class` — `javap -p -c` over the inner JAR finds it
+by the two static `String[]` its `<clinit>` builds, `{/g1,/g2,/g3}` and
+`{/n1,/n2,/n3}`, and every `com/xce/io/XFile` construction in the class indexes
+one of them. The write side is a `new XFile(a[slot], 2)`, a `write`, and a
+`close`; the read side is the same shape with mode 1.
+
+**The archive ships `g1` and `n1` beside the JAR**, 525 and 599 bytes: a save
+the handset this container came off had taken. `addInstalledFiles` mounts a
+container's files into the archive entries, and `xFileContents` falls back from
+the save store to those entries, so the title sees them as `/g1` and `/n1`
+without anything being imported. It shows: the title screen offers **이어하기**
+rather than a new game, choosing it opens a slot screen with the save's own
+level and progress on `SLOT 1`, and confirming drops into the dungeon it was
+taken in. So the **load** half of that title's round trip is closed on a save
+the platform did not write.
+
+### The same title's save, found by reading upwards from the write
+
+A key sweep in the dungeon — both soft keys, `clear`, every digit, `*`, `#` and
+the send key — never found that title's save menu. Reading upwards from the
+write did, in one pass, and the chain is worth keeping because the next
+obfuscated title has the same shape:
+
+- `u.g(byte)` writes `/g<slot>` and `u.f(byte)` writes `/n<slot>`; the only
+  thing that calls both is `u.l()`, so `u.l()` **is** the save.
+- Three classes call `u.l()`, and only one is a screen with nothing else in it:
+  `ad`, a four-entry menu whose first entry raises a yes/no prompt and whose
+  prompt callback sets the two-frame flag that performs the write.
+- `ad` is constructed at exactly one place: case **7** of `ck.b()`, the eighth
+  entry of the in-game menu.
+- `ck` is opened by `u.g()`'s case 6, and the only key that requests it is
+  `keyCode 8` — `clear` — in the field handler, **and only while `bb.s == 1`**,
+  the walking state. A sweep run in any other state sees a key that does
+  nothing, which is what a sweep in a dungeon under attack was reading.
+
+The cursor is the base screen's and it **wraps**: `ck` is built with eight
+entries, so one `up` from the entry it opens on lands on the last one. The
+whole route is five keys once the world is up:
+
+```sh
+# 이어하기 → SLOT 1 → the dungeon, then clear/up/fire opens 시스템,
+# and fire/fire takes 게임 저장 and answers 예
+wfeature runskt <zip> -ticks 1800 -hold 5 -save /tmp/probe \
+    -key 950:fire -key 1100:fire -key 1300:fire \
+    -key 1380:clear -key 1440:up -key 1500:fire \
+    -key 1560:fire -key 1620:fire
+```
+
+The screen answers `저장 되었습니다.`, and the save tree holds `fs/g1` and
+`fs/n1` — 525 and 599 bytes, the shipped sizes, differing from the shipped
+bytes from the nineteenth on. Starting again against the same tree loads them:
+`이어하기`, `SLOT 1`, and the dungeon, with the diagnostic report counting 23
+`XFile.read`, 6 `initName` and 4 `close`. **Both halves of that title's round
+trip are closed, on a save this platform wrote.**
+
+Two things about the run are worth knowing before repeating it. The shipped
+save drops the party into a room with an enemy already on it, and an unattended
+run is dead in about two seconds — the menu keys have to be pressed
+immediately, not after a look around. And a run that presses `fire` a few
+hundred ticks later than this walks the *title* screen instead, because
+`GAME OVER` has returned it there and the same key means something else.
+
+### The Korean text was drawn on the wrong grid, and the Latin beside it was not
+
+Text outside the authored 5x7 table — Hangul first among them — reached for
+`glyph.Render`, the package-level entry point, which is the 16-dot face. The
+5x7 table kept answering for the characters it covers. So one line of a menu
+carried two sizes of text: a numeral seven pixels tall next to a syllable
+eleven above the baseline, in a line the platform had told the title was ten
+pixels tall.
+
+A game reads its own layout out of the metrics the font reports, so the ones
+that matter are the ones its handset answered, and those are the small ones —
+the same conclusion KTF reached from a save slot whose label ran into its
+number. The evidence here is a local title's main menu: seven entries, each a
+small `1.` against a syllable half again its height, the descenders of one line
+touching the line under it and the whole block overflowing where the title had
+put it. On the handset face the same menu is proportioned and its lines clear
+each other.
+
+`pixelFace` in `font.go` is the one place that chooses, and it answers
+`glyph.Handset()`. The 5x7 table is untouched, so the Latin shapes the
+platform tests pin down render exactly as they did.
+
+**Only one of the three local titles moved.** The other two draw their Korean
+with sprites of their own and never call `drawString` at all, which is worth
+knowing before reading a frame diff on them: those two differ run to run
+against *themselves*, in one animated corner of a splash screen, because that
+animation is on the wall clock. Diffing them across a build change says
+nothing until that is subtracted.
+
+### The third title's save, and the message that named the wrong culprit
+
+The remaining title is driven into play and saves now. The route is worth
+recording, and so is how nearly the failure was written off as the title's own
+rule.
+
+**The route.** Past the guardian selection (above), the opening cutscene skips
+on `*` — pressed every 150 ticks it walks the whole thing — and `fire` after it
+carries the party into the world. The in-game menu is the field's `clear` key,
+the same shape the other title has: `ar.keyPressed` dispatches on `m.e`, state
+2 is the field and state 5 is the menu `ag`, and the field handler asks for
+state 13 on `keyCode 8` while `n.h == 1`. The menu itself is a **row of icons**,
+so its cursor is left/right rather than up/down (`cb.d` takes `4`/`6` and the
+two game actions), it wraps, and the last icon is `c` — the system screen whose
+first entry is 세이브. One `left` from where the menu opens lands on it.
+
+**What the title answered was `실패하였습니다. 저장 공간이 부족합니다.`, and that
+was this platform's fault.** It was read here for a while as the title's own
+refusal — the save entry does sit behind a field, `m.a.a`, which `ac(byte)`
+computes from the scene it is in — and the message was attributed to that
+guard. Two readings of the archive take the attribution apart:
+
+- **The guard has its own message, and it is a different one.** `c`'s save
+  entry reads `if (m.a.a) { show strings 51 and 52 } else { proceed }`, and
+  those two strings in `sgui/gm.tdf` are `보스전에서는` / `저장할 수 없습니다.`
+  So `m.a.a` marks a **boss scene**, and it says so.
+- **The message that did appear is a catch block.** The screen that runs the
+  save is `try { m.h(); show 46 } catch (IOException) { show 47, 48 }`, with 46
+  `저장되었습니다.` and 47 and 48 the pair that was on screen. The title was not
+  refusing anything: it was reporting that the platform had thrown.
+
+**And the throw was ours.** `m.h()` writes the slot by name — the three slots
+are `/k`, `/s`, `/w` and the party file is `/o` — with `new XFile(name, 2)`,
+mode `WRITE`. `initXFileName` required a create bit before it would open a file
+that did not exist yet, and `/o` ships inside the container while `/k` does not,
+so the first write of a first save threw `no such file`. **There is no create
+bit in this API**: the original runtime opens a writable file the way
+`RandomAccessFile("rw")` does, which creates it, and the constant this platform
+had called `CREATE` is `READ_DIRECTORY` there. A save is what proves it — a
+shipped title whose only way to write a slot is this call must have had it
+create the slot. Opening for writing now creates; a read-only open of a missing
+file still fails, because that is a title asking for something that is not
+there. Driven to the same menu again, the title writes `fs/k` and `fs/o` and
+answers `저장되었습니다.` — and a second run reads it back: the title screen's
+second entry, which the game itself puts the cursor on once a slot exists,
+shows the character, the level and a completion percentage, and choosing it
+returns the party to the interior the save was made in. That is the last of the
+three local SKT titles to close its progress round trip.
+
+**Two things about the archive are worth keeping anyway**, because both were
+wrong in the earlier reading and both are reusable. The scene id **is** the map
+number: `ac`'s own loader asks `ce.a("/m/", m.f, 7)`, and that helper opens
+`prefix + (index / 7) + ".bd"` and takes record `index % 7` out of a five-byte
+offset table at the front — so twelve files hold **84 scenes**, and an id of 82
+is file 11, record 5. The header that "had nothing that varies like an
+identifier" was that offset table. And the scenes are named, in `m/name.tdf`: a
+count byte then length-prefixed EUC-KR strings, which reads straight through to
+82 = `게브의 체내` — inside a monster, with 11, 13 and 15 left blank. Four boss
+arenas, which is exactly what a save guard would be for.
+
+### The default charset is the handset's, and a title finds out through its own font
+
+`String.getBytes()` answered UTF-8 here, and the byte a title gets back is not
+text to it — it is an **index**. One title draws its own menu labels by handing
+that array to its own renderer, which walks the bytes and indexes a glyph table
+with each one, and UTF-8's three bytes per syllable index somewhere the table
+does not reach: `ArrayIndexOutOfBoundsException: index 11034 for length 4700`,
+thrown inside the title's text routine while painting its in-game system menu.
+The labels beside the failing one drew correctly, and that is the tell — those
+are byte arrays out of the title's own resource file, which were EUC-KR all
+along. Only the label that came from a Java string literal went through
+`getBytes`.
+
+So this platform installs the same pair KTF does: `ByteDecoder` and
+`ByteEncoder` are EUC-KR, which is what these handsets' default charset was.
+The menu paints its five entries — 세이브 / 네트워크 등록 / 도움말 / 옵션 /
+종료하기 — where before it killed the run.
+
+Worth knowing for the next platform surface that touches bytes: the crash was
+three thousand ticks into a scripted run and looked like a title bug. What
+named it was the stack — the exception is thrown by the *title's* code, in the
+one call that was given a `getBytes` result rather than a resource array.
+
+### The diagnostic report, and the three questions it answered
+
+`runskt <zip> -diag report.json` writes what a run used: the classes the VM
+loaded, the classes it was asked for and did not have, and a call count for
+every registered native. It was built the second time reading the debug build's
+instruction log by eye was the only way to find something — the first was the
+frame loop's five defects, the second a title's guardian screen, and folding
+millions of lines by class and method twice is once too many.
+
+The counting is an atomic add inside each registration, so it costs a native
+call one increment and is on in both build profiles. A report from a specially
+built binary would describe that binary rather than the one anyone runs.
+
+**The zeros are what the report is for.** A native that ran tells you the
+title reached it; a native that never ran is surface nothing here proves is
+needed, and that is the census the two remaining questions were waiting on.
+
+**MIDP surface: 404 registered natives, 45 called.** Driven as far as the three
+local titles currently go — one into its opening cutscene, one into early play,
+one to its main menu — 359 registrations were never reached, and 87 classes
+were loaded between them. The heaviest unused groups are the fixed-point maths
+class (23), `RecordStore` (20), the high-level `List`/`ChoiceGroup`/`Item`
+widgets (51 between them), the text fields (26), `Player` (14), and the 3D
+mesh and SIS image surfaces (27).
+
+**That is a floor, not a licence.** These runs stop early, and a title that
+saves at a save point reaches `RecordStore` on the first frame after it. What
+the number is good for is the opposite direction: it is a guard against
+growth. Adding to a surface where 89% of what is there has never been called
+by a real title needs a caller in hand, and the report is how to check.
+
+**GCF: no caller has appeared.** Every `javax.microedition.io.Connector` entry
+reports zero across all three titles, so the unimplemented part of the generic
+connection framework is still waiting for the first title that asks for it.
+Nothing was added on the strength of the framework existing.
+
+Taken again on the much longer route that reaches a save point — a whole
+prologue, a world map, an in-game menu and a written save, against the boot-
+and-menu runs the census above was taken on — it is still zero. That is the
+answer worth having: the earlier count could be read as "these runs stop too
+early to ask", and this one cannot.
+
+## Deliberately incomplete
+
+- **`SISImage` does not decode.** The container's frame and object tables are
+  not documented anywhere available here and there is no SKT archive in this
+  repository to reverse them from, so `getFrame` and `getObject` answer null
+  and the paint methods do nothing. Answering a blank image instead would let
+  a game draw nothing while believing it drew a sprite. The reference
+  implementation is stubs for the same reason.
+- **`Graphics3D` has no rasterizer.** It keeps and reports its render state
+  truthfully; `Object3D` keeps a real mesh and a real transform (the matrix a
+  game reads back after `translate`/`rotate`/`scale` is correct), but nothing
+  draws it. The reference implementation is in the same position.
+- **`SMS`, `Call`, `PhoneBook` have no radio.** Reads answer empty and sends
+  are refused. Reporting a delivered message a game can never receive a reply
+  to is worse than reporting none. `docs/network.md` carries the same decision
+  for the MIDP connection framework and for the other platforms.
+- **`XTextField` has no input method.** It keeps its text, bounds and focus
+  and paints the text; `inputChar` is the only way characters arrive. This is
+  the same gap the MIDP `TextBox` and KTF's lwc text components have.
+- `BackLight` and `Vibration` keep their state and report it back; there is no
+  hardware to drive.
+
+## Validation
+
+There is **no SKT game archive in this repository**, so nothing here is tested
+against a real title in CI — only against a newly authored fixture
+(`internal/platform/skt/testdata/skvm.jar`) that exercises each surface and
+checks the values that come back. The fixed-point scale, the file semantics
+and the pixel operations are the parts a real game would notice first if they
+were wrong, so those are what the tests pin.
+
+The frame-loop contracts above were found the other way round — by running local
+titles with `runskt` and reading the frames — and each is pinned by a fixture
+test afterwards: `TestCallSeriallyRunsOneRunnablePerPass` and
+`TestCallSeriallyLoopAdvancesOneStepPerPass` for the serial queue,
+`TestScreenGraphicsStaysUsableAfterPaint` for the Graphics that outlives its
+paint, and `TestXDisplayPublishesFramebufferSize` for the screen fields.
+
+Regenerate the fixture with:
+
+```sh
+fixture_dir="$(mktemp -d /tmp/wfeature-skvm-fixture.XXXXXX)"
+javac -source 1.8 -target 1.8 -g:none \
+  -cp internal/api/midp/classdata:internal/api/skvm/classdata:internal/jvm/classdata \
+  -d "$fixture_dir" internal/platform/skt/testdata/src/SKVMMIDlet.java
+mkdir -p "$fixture_dir/META-INF"
+cp internal/platform/skt/testdata/SKVM.MF "$fixture_dir/META-INF/MANIFEST.MF"
+(cd "$fixture_dir" && zip -X -q "$fixture_dir/skvm.jar" META-INF/MANIFEST.MF SKVMMIDlet*.class)
+cp "$fixture_dir/skvm.jar" internal/platform/skt/testdata/skvm.jar
+```
+
+Regenerate the class library with:
+
+```sh
+javac -source 1.8 -target 1.8 -g:none \
+  -cp internal/api/midp/classdata:internal/jvm/classdata \
+  -d internal/api/skvm/classdata $(find internal/api/skvm/java -name '*.java')
+```

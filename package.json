@@ -1,0 +1,12 @@
+{
+  "name": "wfeature",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "npm run serve:debug",
+    "serve:debug": "go run -tags debug ./cmd/server",
+    "serve:release": "go run ./cmd/server",
+    "test": "make test"
+  }
+}
