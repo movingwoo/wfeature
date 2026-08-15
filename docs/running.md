@@ -270,7 +270,10 @@ happened to start from. The sources for everything but the binary are in
 exists at all rather than a bare binary.
 
 `-version` prints what a user is running (`wfeature-server 0.1.0 (release)`),
-and the startup log carries it too. A checkout reports `dev`.
+and the startup log carries it too. A checkout reports `dev`. The version goes
+to stdout and the log to stderr, so `wfeature-server -version | …` reads the
+answer and nothing else — which is what the smoke job and anyone pasting a
+version into a report depend on.
 
 **A pushed tag publishes them.** `.github/workflows/release.yml` runs on a tag
 matching `v*`. It waits on `checks.yml` — the same gate every push runs, which

@@ -27,6 +27,44 @@ func socketPath(t *testing.T) string {
 	return filepath.Join(directory, "s.sock")
 }
 
+// `-version` is what a user is asked for when a report says "which build?", so
+// it has to survive a pipe: the CI smoke job greps it, and so does anyone with
+// a shell. The log keeps its own stream, or the answer arrives mixed into the
+// startup lines of a server that never started.
+func TestTheVersionIsPrintedWhereAPipeCanReadIt(t *testing.T) {
+	answerRead, answerWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputRead, outputWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"-version"}, answerWrite, outputWrite); err != nil {
+		t.Fatalf("-version: %v", err)
+	}
+	_ = answerWrite.Close()
+	_ = outputWrite.Close()
+
+	answer, err := io.ReadAll(answerRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noise, err := io.ReadAll(outputRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shape the smoke job greps for, whatever this build is stamped with.
+	if !strings.HasPrefix(string(answer), "wfeature-server ") || !strings.Contains(string(answer), "(") {
+		t.Errorf("the answer was %q, want a `wfeature-server <version> (<profile>)` line", answer)
+	}
+	if len(noise) != 0 {
+		t.Errorf("the log stream carried %q, want the version on its own stream", noise)
+	}
+}
+
 func TestListenOnAPortIsUnchanged(t *testing.T) {
 	listener, err := listen("127.0.0.1:0")
 	if err != nil {

@@ -36,7 +36,7 @@ import (
 var version = "dev"
 
 func main() {
-	if err := run(os.Args[1:], os.Stderr); err != nil {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -75,7 +75,11 @@ func dataRoot() (root string, layout string) {
 	return "var", "var/"
 }
 
-func run(arguments []string, output *os.File) error {
+// The two streams are the CLI's: `answer` carries what a user asked the
+// command to print and `output` carries the run itself — the log, and what the
+// flag package says about a mistyped flag. `-version` is an answer, so it has
+// to be readable through a pipe; the log is not, so it stays out of one.
+func run(arguments []string, answer, output *os.File) error {
 	flags := flag.NewFlagSet("server", flag.ContinueOnError)
 	flags.SetOutput(output)
 	root, layout := dataRoot()
@@ -99,7 +103,7 @@ func run(arguments []string, output *os.File) error {
 		return err
 	}
 	if *showVersion {
-		fmt.Fprintf(output, "wfeature-server %s (%s)\n", version, backend.BuildProfile())
+		fmt.Fprintf(answer, "wfeature-server %s (%s)\n", version, backend.BuildProfile())
 		return nil
 	}
 
