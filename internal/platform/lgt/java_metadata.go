@@ -274,5 +274,34 @@ func describeJavaSurface(surface *javaSurface) []string {
 		}
 		lines = append(lines, fmt.Sprintf("%s [%s]", class.Name, strings.Join(members, " ")))
 	}
+	// The instance-field table belongs to no class record — a record covers
+	// static fields and methods, never instance fields — so nothing above
+	// names it. **An out-array offset read out of a disassembly is an index
+	// into this table**: compiled code asks for a field's word as
+	// `ldrsh slot, [fieldsOut, #2*index]`, and only this line turns the
+	// `#0x44` in that instruction into the field it belongs to.
+	for index, field := range surface.Fields {
+		if field.Name == "" && field.Descriptor == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("field %d %s", index, field))
+	}
+	// The virtual table is listed for the same reason, and it needs it more:
+	// a class record names the platform's virtuals, so the entries left
+	// unnamed above are exactly the application's own — the ones a dispatch
+	// in a disassembly asks for by index.
+	claimed := map[uint32]bool{}
+	for _, class := range surface.Classes {
+		for index := class.VirtualMethods.Start; index < class.VirtualMethods.Start+
+			class.VirtualMethods.Count; index++ {
+			claimed[index] = true
+		}
+	}
+	for index, method := range surface.VirtualMethods {
+		if claimed[uint32(index)] || (method.Name == "" && method.Descriptor == "") {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("virtual %d %s", index, method))
+	}
 	return lines
 }
