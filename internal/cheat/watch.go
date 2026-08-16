@@ -9,10 +9,32 @@ import "sort"
 // The platform provides it — only an emulated address space has stores to
 // instrument — so a session watches only when its target can.
 
-// WatchHit is one instruction's writes to one watched address.
+// WriteOrigin says who wrote a watched address: the game, or the emulator
+// itself. Both are real writers of guest memory, and which one it was decides
+// what the PC beside it is worth — see WatchHit.
+type WriteOrigin uint8
+
+const (
+	// OriginGuest is a store by a game instruction, named exactly by its PC.
+	OriginGuest WriteOrigin = iota
+	// OriginHost is a store by the platform. Its PC is the last game
+	// instruction that ran, which names the caller when the write came out of
+	// a call the game made and names nothing when it did not.
+	OriginHost
+)
+
+func (origin WriteOrigin) String() string {
+	if origin == OriginHost {
+		return "host"
+	}
+	return "guest"
+}
+
+// WatchHit is one writer's writes to one watched address.
 type WatchHit struct {
 	Address uint32
 	PC      uint32
+	Origin  WriteOrigin
 	Value   uint32
 	Size    uint8
 	Count   uint64

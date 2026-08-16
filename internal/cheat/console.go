@@ -171,8 +171,14 @@ func (console *Console) hits(args []string) (string, error) {
 			fmt.Fprintf(&builder, "... %d more\n", len(hits)-limit)
 			break
 		}
-		fmt.Fprintf(&builder, "%#08x written by pc %#08x  %d time(s)  last %#x (%d bytes)\n",
-			hit.Address, hit.PC, hit.Count, hit.Value, hit.Size)
+		// A host write's PC is the last guest instruction rather than the
+		// writer, so it is labelled instead of being presented as one.
+		writer := fmt.Sprintf("pc %#08x", hit.PC)
+		if hit.Origin == OriginHost {
+			writer = fmt.Sprintf("host, last pc %#08x", hit.PC)
+		}
+		fmt.Fprintf(&builder, "%#08x written by %s  %d time(s)  last %#x (%d bytes)\n",
+			hit.Address, writer, hit.Count, hit.Value, hit.Size)
 	}
 	if overflowed {
 		builder.WriteString("(the distinct-writer limit was reached; sites are missing)\n")

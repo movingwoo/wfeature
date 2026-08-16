@@ -148,16 +148,92 @@ func TestWatchDoesNotRecordARefusedStore(t *testing.T) {
 	}
 }
 
-// Host writes are not guest stores: importing a save or patching an image must
-// not look like the game touching the address.
-func TestWatchIgnoresHostWrites(t *testing.T) {
+// A host write is a real write of guest memory, so it is recorded — but never
+// as a guest store. The whole value of the distinction is that an address this
+// platform rewrites itself used to report no writers at all, which reads as
+// "nothing touches this" and ends the investigation that should have started.
+func TestWatchRecordsHostWritesAsHostWrites(t *testing.T) {
 	core := watchCore(t)
 	core.Watch(watchDataBase)
 	if err := core.Memory().Write(watchDataBase, []byte{1, 2, 3, 4}); err != nil {
 		t.Fatal(err)
 	}
+
+	hits := core.WatchHits()
+	if len(hits) != 1 {
+		t.Fatalf("got %d watch hits, want the one host write: %+v", len(hits), hits)
+	}
+	if hits[0].Origin != OriginHost {
+		t.Fatalf("a host write was recorded as %v, want %v", hits[0].Origin, OriginHost)
+	}
+	// The value is the word the watcher would read once the write lands, which
+	// is what makes a hit on a synchronised field worth anything.
+	if hits[0].Value != 0x04030201 || hits[0].Size != 4 {
+		t.Fatalf("host write reported %#x (%d bytes), want %#x (4 bytes)", hits[0].Value, hits[0].Size, 0x04030201)
+	}
+}
+
+// A run of bytes far larger than the watch list still names only the addresses
+// being watched, and reports the value each of them ends up holding. This is a
+// frame published into guest memory passing over a watched word.
+func TestWatchNamesTheWatchedWordInsideALargeHostWrite(t *testing.T) {
+	core := watchCore(t)
+	const watched = watchDataBase + 0x40
+	core.Watch(watched)
+
+	block := make([]byte, 0x400)
+	binary.LittleEndian.PutUint32(block[0x40:], 0xdeadbeef)
+	if err := core.Memory().Write(watchDataBase, block); err != nil {
+		t.Fatal(err)
+	}
+
+	hits := core.WatchHits()
+	if len(hits) != 1 {
+		t.Fatalf("got %d watch hits, want the one watched word: %+v", len(hits), hits)
+	}
+	if hits[0].Address != watched || hits[0].Value != 0xdeadbeef {
+		t.Fatalf("got %#x = %#x, want %#x = %#x", hits[0].Address, hits[0].Value, watched, 0xdeadbeef)
+	}
+}
+
+// The guest and the platform writing the same address are two facts, not one:
+// folding them together would hide whichever came second behind the other's
+// count.
+func TestWatchKeepsGuestAndHostWritersApart(t *testing.T) {
+	core := watchCore(t)
+	core.Watch(watchDataBase)
+	runWatchProgram(t, core)
+	if err := core.Memory().Write(watchDataBase, []byte{1, 2, 3, 4}); err != nil {
+		t.Fatal(err)
+	}
+
+	var guest, host int
+	for _, hit := range core.WatchHits() {
+		switch hit.Origin {
+		case OriginGuest:
+			guest++
+		case OriginHost:
+			host++
+		}
+	}
+	if guest != 1 || host != 1 {
+		t.Fatalf("got %d guest and %d host writers, want one of each: %+v", guest, host, core.WatchHits())
+	}
+}
+
+// The cheat engine writes through WriteUntracked because it is asking the
+// question, not answering it: its freeze rewrites land every tick and would
+// otherwise become the loudest writer of every address it holds.
+func TestWatchIgnoresUntrackedWrites(t *testing.T) {
+	core := watchCore(t)
+	core.Watch(watchDataBase)
+	for range 10 {
+		if err := core.Memory().WriteUntracked(watchDataBase, []byte{1, 2, 3, 4}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if hits := core.WatchHits(); len(hits) != 0 {
-		t.Fatalf("a Host write was recorded as a guest store: %+v", hits)
+		t.Fatalf("an untracked write was recorded: %+v", hits)
 	}
 }
 

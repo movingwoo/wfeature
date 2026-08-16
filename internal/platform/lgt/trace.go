@@ -358,6 +358,8 @@ var wipicSlotNames = map[uint32]string{
 	slotCopyFramebuffer:             "copyFramebuffer",
 	slotDrawImage:                   "drawImage",
 	slotCopyArea:                    "copyArea",
+	slotDrawArc:                     "drawArc",
+	slotFillArc:                     "fillArc",
 	slotDrawString:                  "drawString",
 	slotGetRGBPixels:                "getRGBPixels",
 	slotSetRGBPixels:                "setRGBPixels",

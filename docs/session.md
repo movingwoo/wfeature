@@ -202,8 +202,11 @@ against a real title: `regions` labels the address space, `scan unknown` over
 669,696 candidates narrows to 190 and then to 2 under `scan changed`, `list`
 shows those two module globals counting up live, `set`/`read`/`dump` agree,
 a `freeze` survives seconds of the game writing over it, `save` and `load`
-round-trip the table, and `watch` plus `hits` names the guest instruction
-behind each write — `0x01403de0 written by pc 0x00001054, 110 time(s)`. The
+round-trip the table, and `watch` plus `hits` names what is behind each write —
+`0x01403de0 written by pc 0x00001054, 110 time(s)` for a guest instruction, and
+`written by host, last pc …` for a store this platform made itself, which is a
+distinction the reader needs rather than a detail (`docs/armcore.md`, "Not every
+store is a guest instruction"). The
 same flow through the socket is `TestLocalCheatProbe`, which passes for KTF and
 LGT and skips on a MIDlet, where the refusal is the designed answer.
 

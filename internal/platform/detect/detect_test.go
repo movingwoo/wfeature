@@ -145,3 +145,55 @@ func buildZIP(t *testing.T, entries map[string][]byte) []byte {
 	}
 	return buffer.Bytes()
 }
+
+// A copy that was unpacked and zipped up again often gains the game's name as
+// a containing folder. It is the same archive, and detection used to claim it
+// for nobody — which reads to a user as "this file is not a game" rather than
+// as "this file is packed differently".
+func TestArchiveNamesAPlatformThroughAWrappingFolder(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		entries map[string][]byte
+		want    detect.Platform
+	}{
+		{
+			name:    "KTF inside a folder",
+			entries: map[string][]byte{"My Game/__adf__": []byte("aid:AI0000\n"), "My Game/AI0000.jar": nil},
+			want:    detect.KTF,
+		},
+		{
+			name:    "LGT inside a folder",
+			entries: map[string][]byte{"My Game/app_info": []byte("aid=AI0000\n"), "My Game/AI0000.jar": nil},
+			want:    detect.LGT,
+		},
+		{
+			name:    "SKT inside a folder",
+			entries: map[string][]byte{"My Game/0056194389.msd": []byte("MIDlet-1: x,,rpg.Hero\n"), "My Game/0056194389.jar": nil},
+			want:    detect.SKT,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := detect.Archive(buildZIP(t, testCase.entries))
+			if err != nil {
+				t.Fatalf("Archive() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("Archive() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+// One folder comes off, not every folder. An archive whose marker is genuinely
+// two levels down is not one this build can read, and saying so is better than
+// digging until something matches.
+func TestArchiveDoesNotDigThroughTwoFolders(t *testing.T) {
+	entries := map[string][]byte{"outer/inner/__adf__": []byte("aid:AI0000\n"), "outer/inner/AI0000.jar": nil}
+	got, err := detect.Archive(buildZIP(t, entries))
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if got != detect.Unknown {
+		t.Fatalf("Archive() = %q, want %q", got, detect.Unknown)
+	}
+}

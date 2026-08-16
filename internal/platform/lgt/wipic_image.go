@@ -155,15 +155,19 @@ func (client *Client) framebufferFromImage(decoded stdimage.Image) (*framebuffer
 	return buffer, nil
 }
 
-// decodeImage decodes what a title packages. BMP is separate because the
-// standard library does not register it, and a handset's own encodings are not
-// here: an image this build cannot read is reported rather than replaced with
-// a blank, which a game would draw as a sprite that is simply invisible.
+// decodeImage decodes what a title packages. BMP and the handset's own bitmap
+// are separate because the standard library registers neither. An image this
+// build cannot read is reported rather than replaced with a blank, which a
+// game would draw as a sprite that is simply invisible.
 func decodeImage(encoded []byte) (stdimage.Image, error) {
 	if len(encoded) >= 2 && encoded[0] == 'B' && encoded[1] == 'M' {
 		// The header can name a transparent palette entry, which is the only
 		// transparency a BMP has. See wipic.DecodeBitmap.
 		return wipic.DecodeBitmap(encoded)
+	}
+	if wipic.IsLBMP(encoded) {
+		// LCD pixels behind a 24-byte header. See wipic.DecodeLBMP.
+		return wipic.DecodeLBMP(encoded)
 	}
 	decoded, _, err := stdimage.Decode(bytes.NewReader(encoded))
 	return decoded, err

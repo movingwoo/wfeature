@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -487,6 +488,13 @@ func (runtime *Runtime) registerMIDletNatives() error {
 		{midp.GraphicsClass, "fillRect", "(IIII)V", runtime.fillGraphicsRect},
 		{midp.GraphicsClass, "drawLine", "(IIII)V", runtime.drawGraphicsLine},
 		{midp.GraphicsClass, "drawRect", "(IIII)V", runtime.drawGraphicsRect},
+		// The curve pairs. A MIDlet reaching one of these used to fail to
+		// resolve the method at all, which ends the title rather than drawing
+		// the wrong shape.
+		{midp.GraphicsClass, "fillRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.FillRoundRect)},
+		{midp.GraphicsClass, "drawRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.DrawRoundRect)},
+		{midp.GraphicsClass, "fillArc", "(IIIIII)V", runtime.graphicsCurve(curve.FillArc)},
+		{midp.GraphicsClass, "drawArc", "(IIIIII)V", runtime.graphicsCurve(curve.DrawArc)},
 		{midp.GraphicsClass, "drawImage", "(Ljavax/microedition/lcdui/Image;III)V", runtime.drawGraphicsImage},
 		{midp.GraphicsClass, "drawRegion", "(Ljavax/microedition/lcdui/Image;IIIIIIII)V", runtime.drawGraphicsRegion},
 		{midp.GraphicsClass, "drawRGB", "([IIIIIIIZ)V", runtime.drawGraphicsRGB},

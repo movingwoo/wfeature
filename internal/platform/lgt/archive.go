@@ -11,6 +11,8 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+
+	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
 // maxArchiveEntry bounds one file read out of an archive so a crafted zip
@@ -114,6 +116,11 @@ func Open(data []byte) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A repacked copy can carry everything inside a folder named after the
+	// game, which puts app_info one level below where this looks. See
+	// internal/zipentry; the JAR read below deliberately does not ask, because
+	// a JAR never qualifies.
+	files = zipentry.Unwrap(files)
 	info, ok := files["app_info"]
 	if !ok {
 		return nil, fmt.Errorf("LGT archive has no app_info")

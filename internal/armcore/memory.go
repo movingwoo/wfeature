@@ -283,7 +283,7 @@ func (memory *Memory) Map(address uint32, size uint64, permission Permission) er
 // Load initializes mapped memory without applying guest write permission. It
 // is intended for platform loaders placing code and read-only data.
 func (memory *Memory) Load(address uint32, data []byte) error {
-	return memory.write(address, data, 0, "load")
+	return memory.write(address, data, 0, "load", true)
 }
 
 func (memory *Memory) Read(address uint32, destination []byte) error {
@@ -292,11 +292,24 @@ func (memory *Memory) Read(address uint32, destination []byte) error {
 	return memory.readLocked(address, destination, PermissionRead, "read")
 }
 
+// Write is how this platform stores into the guest's address space. It is
+// watched: see WriteOrigin in watch.go for why a store the guest did not make
+// is still an answer to "what writes this".
 func (memory *Memory) Write(address uint32, data []byte) error {
-	return memory.write(address, data, PermissionWrite, "write")
+	return memory.write(address, data, PermissionWrite, "write", true)
 }
 
-func (memory *Memory) write(address uint32, data []byte, required Permission, operation string) error {
+// WriteUntracked is Write for a caller that is *asking* the watch questions
+// rather than being investigated by them. A cheat session rewrites its frozen
+// values every tick and pokes addresses on command; recording those as writers
+// would bury the one the user is hunting under its own tooling, and would say a
+// value is being written by something in the game when nothing in the game is
+// writing it. Nothing else has any business using this.
+func (memory *Memory) WriteUntracked(address uint32, data []byte) error {
+	return memory.write(address, data, PermissionWrite, "write", false)
+}
+
+func (memory *Memory) write(address uint32, data []byte, required Permission, operation string, track bool) error {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	if err := memory.validateLocked(address, uint64(len(data)), required, operation); err != nil {
@@ -310,6 +323,9 @@ func (memory *Memory) write(address uint32, data []byte, required Permission, op
 		copy(page.data[pageOffset:pageOffset+length], data[offset:offset+length])
 		page.discardDecoded()
 		offset += length
+	}
+	if track {
+		memory.noteHostWrite(address, data)
 	}
 	return nil
 }

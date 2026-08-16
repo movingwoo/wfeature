@@ -1177,6 +1177,10 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		return runtime.wipicDrawImage(thread)
 	case table == wipicTableGraphics && function == 14:
 		return runtime.wipicCopyArea(thread)
+	case table == wipicTableGraphics && function == 15:
+		return runtime.wipicDrawArc(thread)
+	case table == wipicTableGraphics && function == 16:
+		return runtime.wipicFillArc(thread)
 	case table == wipicTableGraphics && function == 17:
 		return runtime.wipicDrawString(thread, false)
 	case table == wipicTableGraphics && function == 18:

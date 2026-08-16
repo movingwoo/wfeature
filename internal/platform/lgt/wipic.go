@@ -77,23 +77,32 @@ const (
 	slotCopyFramebuffer      uint32 = 0xd4
 	slotDrawImage            uint32 = 0xd5
 	slotCopyArea             uint32 = 0xd7
-	slotDrawString           uint32 = 0xda
-	slotGetRGBPixels         uint32 = 0xdc
-	slotSetRGBPixels         uint32 = 0xdd
-	slotFlushLcd             uint32 = 0xde
-	slotGetPixelFromRGB      uint32 = 0xdf
-	slotGetRGBFromPixel      uint32 = 0xe0
-	slotGetDisplayInfo       uint32 = 0xe1
-	slotRepaint              uint32 = 0xe2
-	slotGetFont              uint32 = 0xe3
-	slotGetFontHeight        uint32 = 0xe4
-	slotGetFontAscent        uint32 = 0xe5
-	slotGetFontDescent       uint32 = 0xe6
-	slotGetStringWidth       uint32 = 0xe7
-	slotCreateImage          uint32 = 0xe9
-	slotDestroyImage         uint32 = 0xea
-	slotDecodeNextImage      uint32 = 0xeb
-	slotPostEvent            uint32 = 0xee
+	// The two arc calls sit between `MC_grpCopyArea` and `MC_grpDrawString`,
+	// and both of those are confirmed slots. The specification's own function
+	// order puts exactly two entries in that gap — `MC_grpDrawArc` and
+	// `MC_grpFillArc`, in that order — and the gap here is exactly two slots
+	// wide, so nothing needs disassembling to place them. An unmapped slot in
+	// this block is fatal, so leaving them out was not a stub but a session
+	// that ends the first time a title draws a curve.
+	slotDrawArc         uint32 = 0xd8
+	slotFillArc         uint32 = 0xd9
+	slotDrawString      uint32 = 0xda
+	slotGetRGBPixels    uint32 = 0xdc
+	slotSetRGBPixels    uint32 = 0xdd
+	slotFlushLcd        uint32 = 0xde
+	slotGetPixelFromRGB uint32 = 0xdf
+	slotGetRGBFromPixel uint32 = 0xe0
+	slotGetDisplayInfo  uint32 = 0xe1
+	slotRepaint         uint32 = 0xe2
+	slotGetFont         uint32 = 0xe3
+	slotGetFontHeight   uint32 = 0xe4
+	slotGetFontAscent   uint32 = 0xe5
+	slotGetFontDescent  uint32 = 0xe6
+	slotGetStringWidth  uint32 = 0xe7
+	slotCreateImage     uint32 = 0xe9
+	slotDestroyImage    uint32 = 0xea
+	slotDecodeNextImage uint32 = 0xeb
+	slotPostEvent       uint32 = 0xee
 	// The graphics block ends with the two polygon calls, which is where the
 	// specification's function order puts them once the block's two unnamed
 	// slots are counted — one before `MC_grpCopyArea` and one before
@@ -186,6 +195,7 @@ func knownWIPICSlot(slot uint32) bool {
 		slotCreateOffscreen, slotInitContext, slotSetContext, slotGetContext,
 		slotPutPixel, slotDrawLine, slotDrawRect, slotFillRect,
 		slotCopyFramebuffer, slotDrawImage, slotCopyArea, slotDrawString,
+		slotDrawArc, slotFillArc,
 		slotGetRGBPixels, slotSetRGBPixels, slotFlushLcd, slotGetPixelFromRGB,
 		slotGetRGBFromPixel, slotGetDisplayInfo, slotRepaint, slotGetFont,
 		slotGetFontHeight, slotGetFontAscent, slotGetFontDescent,
@@ -464,7 +474,8 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotPutPixel, slotDrawLine, slotDrawRect, slotFillRect, slotDrawString,
 		slotCopyArea, slotCopyFramebuffer, slotDrawImage, slotGetRGBPixels,
-		slotSetRGBPixels, slotDrawPolygon, slotFillPolygon:
+		slotSetRGBPixels, slotDrawPolygon, slotFillPolygon,
+		slotDrawArc, slotFillArc:
 		return client.handleDraw(ctx, thread, slot)
 
 	case slotFlushLcd, slotRepaint:

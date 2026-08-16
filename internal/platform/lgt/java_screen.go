@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/curve"
 )
 
 // The screen, as an AOT Java title reaches it: `Card`, `Display`, `Graphics`
@@ -213,12 +214,15 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.fillRect(IIII)V": {Words: 5, Implementat: javaFillRect},
 	"org/kwis/msp/lcdui/Graphics.drawRect(IIII)V": {Words: 5, Implementat: javaDrawRect},
 	"org/kwis/msp/lcdui/Graphics.drawLine(IIII)V": {Words: 5, Implementat: javaDrawLine},
-	// The rounded pair take the corner diameters as their last two arguments.
-	// Nothing here rounds a corner, and a rectangle is what the difference
-	// costs: the alternative is a title's frames and panels not being drawn at
-	// all.
-	"org/kwis/msp/lcdui/Graphics.fillRoundRect(IIIIII)V": {Words: 7, Implementat: javaFillRect},
-	"org/kwis/msp/lcdui/Graphics.drawRoundRect(IIIIII)V": {Words: 7, Implementat: javaDrawRect},
+	// The rounded pair take the corner **diameters** as their last two
+	// arguments, and the arc pair take a start angle and an extent with zero
+	// degrees at three o'clock. Both used to be answered with the plain
+	// rectangle, which drew a title's panels with square corners and had no
+	// answer at all for a curve.
+	"org/kwis/msp/lcdui/Graphics.fillRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.FillRoundRect)},
+	"org/kwis/msp/lcdui/Graphics.drawRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.DrawRoundRect)},
+	"org/kwis/msp/lcdui/Graphics.fillArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.FillArc)},
+	"org/kwis/msp/lcdui/Graphics.drawArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.DrawArc)},
 
 	"org/kwis/msp/lcdui/Graphics.translate(II)V": {Words: 3, Implementat: javaTranslate},
 	"org/kwis/msp/lcdui/Graphics.setClip(IIII)V": {Words: 5, Implementat: javaSetClip},
@@ -418,6 +422,25 @@ func javaDrawRect(
 			int(int32(arguments[3])), int(int32(arguments[4])), state.color)
 		return nil
 	})
+}
+
+// javaCurve is the shape of the four curve calls: they differ only in which
+// geometry they walk and in the two trailing arguments it takes. Every span
+// goes through the same clipped fill the rectangle calls use, so the clip, the
+// translation, the alpha and the XOR mode apply to a curve as they do to a
+// rectangle.
+func javaCurve(walk func(x, y, width, height, a, b int32, emit curve.Emit) error) func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return func(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+		return 0, client.javaDraw(arguments[0], func(drawContext *graphicsContext, state *javaGraphics) error {
+			emit := func(span curve.Span) error {
+				drawContext.fill(int(span.X), int(span.Y), int(span.Width), 1, state.color)
+				return nil
+			}
+			return walk(
+				int32(arguments[1])+int32(state.translateX), int32(arguments[2])+int32(state.translateY),
+				int32(arguments[3]), int32(arguments[4]), int32(arguments[5]), int32(arguments[6]), emit)
+		})
+	}
 }
 
 func javaDrawLine(

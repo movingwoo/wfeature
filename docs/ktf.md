@@ -812,6 +812,43 @@ palette, and an image that names no palette entry stays whole.
 What this does not settle is what should be *behind* a transparent tile. That
 turned out to be a different question with a different answer, below.
 
+## LBMP: the handset's own bitmap
+
+One local title ships five images no standard decoder recognises. They begin
+`LBMP`, and behind a 24-byte header they are the pixels the LCD would hold —
+no compression, no palette, nothing to sniff. The image router handed them to
+the standard library, which reported an unknown format, and the Java side turns
+that into `IllegalArgumentException("undecodable image")` — so those five
+images are not drawn badly, they are not drawn at all.
+
+It is a vendor's format and it is **not in the WIPI specification**, so the
+files themselves had to settle it. `internal/wipic.DecodeLBMP` reads the header
+as magic, depth, width, height, payload length and a sixth word; the five files
+fix the first five fields in one arithmetic, because every one of them is
+exactly `24 + width * height * (depth / 8)` bytes long.
+
+The colour reading was the part worth checking rather than assuming. The
+darkest of the five uses **eleven distinct byte values across 30,720 pixels**,
+which looks like palette indices — except the values are `0x00, 0x20, 0x24,
+0x44, 0x48, 0x68, 0x8c, 0xb0, 0xb1, 0xd5, 0xf9`, scattered over the whole byte
+range instead of counting from zero, and there is no room in the file for a
+palette. Read as RGB332 they are one clean ramp: red a little above green with
+blue at zero throughout, which is a gold-on-black gradient. Decoded, the image
+is a gold dragon, and the file beside it is green foliage. A palette-indexed
+reading has to explain the scattered indices and cannot.
+
+The sixth header word is zero in all five and nothing reads it. If the format
+has a colour key, no local file exercises it, and guessing would put holes in
+an image on no evidence.
+
+**Where it is wired matters more than where it was found.** The format turned
+up in a KTF archive, not in the vendor whose name it carries; a sweep of every
+local archive found LBMP only there, hundreds of BMPs across KTF and one in
+LGT, and neither format in any SKT archive. So the decoder sits in
+`internal/wipic` beside `DecodeBitmap` and all three platforms route to it —
+the two with real callers because they have them, and the third because an
+image its neighbours can read should not be what ends a title.
+
 ## The graphics context's clip is how a tile gets drawn
 
 Every `MC_grp*` call that draws takes an `MC_GrpContext *`, and the context
@@ -1130,6 +1167,42 @@ down:
 
 Both fills go through the same clipped row fill every other operation uses, so
 the clip, the translation and XOR mode apply to them without a second path.
+
+### The same geometry, on five surfaces
+
+That fix was written against this platform's Java `Graphics` and stayed there,
+which turned out to be four fifths of the problem. Five drawing surfaces need
+these shapes and each had been answered separately:
+
+| surface | arcs | rounded rectangles |
+|---|---|---|
+| this platform's Java `Graphics` | drawn as curves | drawn as curves |
+| its WIPI-C graphics table, 15 and 16 | **unimplemented — fatal** | no such call |
+| the other ARM platform's WIPI-C, `0xd8`/`0xd9` | **unimplemented — fatal** | no such call |
+| its Java `Graphics` | **not implemented at all** | **drawn as a rectangle** |
+| the MIDP platform's `Graphics` | **not declared at all** | **not declared at all** |
+
+Three of those fail worse than the wrong shape does. An unimplemented WIPI-C
+function ends the session, so a title drawing a curve did not draw it badly —
+it stopped. A MIDP method that is never declared fails to resolve, which ends
+the title the same way. Only one row of the table was the "approximate outline
+beats nothing" trade the original note describes.
+
+The geometry now lives once in `internal/curve`, which walks a shape and hands
+out horizontal spans without drawing anything. Every surface binds those spans
+to the clipped fill it already had, so each keeps its own clip, colour, blend
+and transparency rules and none of them reimplements an ellipse. The
+specifications agree on the contract, which is what makes one implementation
+legitimate rather than merely convenient: WIPI's `MC_grpDrawArc` and MIDP's
+`Graphics.drawArc` both put zero degrees at three o'clock, count positive
+angles counter-clockwise, take the second angle as an extent rather than an
+end, and centre the arc in the bounding rectangle.
+
+Two things settled the slot numbers without a disassembly. This platform's
+table has `copyArea` at 14 and `drawString` at 17, and the specification puts
+exactly `MC_grpDrawArc` and `MC_grpFillArc` between them — a gap of two for two
+functions. The other ARM platform's block is the same argument at `0xd7` and
+`0xda`. See `lgt.md`, "The two arc slots come from their neighbours".
 
 ## Screen flush
 

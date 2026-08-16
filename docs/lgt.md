@@ -526,6 +526,42 @@ surface is **re-read from guest memory before every draw call and written back
 after**, and `MC_grpFlushLcd` re-reads before presenting. Without that a game
 that mixes direct writes with `MC_grp*` calls would see one of them lose.
 
+## The two arc slots come from their neighbours
+
+`0xd8` and `0xd9` were blank, and a blank slot in this block is not a stub —
+`handleWIPICSVC` ends the session on one, so a title reaching for a curve
+stopped there rather than drawing a poor one.
+
+Placing them needed no disassembly, which is the anchor rule stated in "The
+WIPI C slots" doing its job. `0xd7` is `MC_grpCopyArea` and `0xda` is
+`MC_grpDrawString`, both confirmed, and the specification's own function order
+puts exactly two entries between them: `MC_grpDrawArc` then `MC_grpFillArc`.
+Two names for a gap of two slots, in a known order, between two anchors. The
+same argument fixes the other ARM platform's 15 and 16, whose table has the
+same two neighbours at 14 and 17.
+
+The signature is the rectangle calls' with two more integers in the middle:
+
+```c
+void MC_grpDrawArc(MC_GrpFrameBuffer dst, M_Int32 x, M_Int32 y,
+                   M_Int32 w, M_Int32 h, M_Int32 s, M_Int32 e,
+                   MC_GrpContext *pgc)
+```
+
+Eight arguments, so **the context is the eighth and not the sixth** — reading
+it where the rectangle calls keep theirs would take an angle for a context
+pointer. `s` is a start angle and `e` is an *extent* rather than an end, zero
+degrees is three o'clock, positive angles run counter-clockwise, and the arc is
+centred in the rectangle `x, y, w, h` names. A width or height that is not
+positive draws nothing, which the specification says outright.
+
+The Java side had the matching hole and a worse one beside it:
+`Graphics.drawArc` and `fillArc` were not implemented, and `fillRoundRect` and
+`drawRoundRect` were both wired to the plain rectangle — so every panel a title
+rounded came out square. All four now walk `internal/curve` and fill through
+the same clipped, translated fill the rectangle calls use. See `ktf.md`, "The
+same geometry, on five surfaces", for why that geometry is in one place.
+
 ## Drawing: the context belongs to the game
 
 Every `MC_grp*` call that writes pixels has the same shape —
@@ -842,7 +878,11 @@ carries transparency of its own keeps it: a decoded image whose encoding
 declared which pixels are transparent — a PNG's alpha, or the palette entry a
 BMP names in its header (see `wipic.DecodeBitmap`) — is drawn by that
 declaration alone, because a picture allowed to say what it means is allowed to
-paint in the mask colour. The mask applies only where nothing was declared,
+paint in the mask colour. A handset bitmap decoded through `wipic.DecodeLBMP`
+declares nothing — the format has no transparency this build reads — so the
+mask is what one gets; see `ktf.md`, "LBMP: the handset's own bitmap", for what
+that format is and why every platform's image router now reaches it. The mask
+applies only where nothing was declared,
 which is the case that matters: the surfaces a title builds for itself have no
 encoding to declare anything.
 

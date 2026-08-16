@@ -13,6 +13,8 @@ import (
 	"io"
 	"path"
 	"strings"
+
+	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
 // Platform is the loader an archive belongs to. The values are the names the
@@ -77,11 +79,25 @@ func Archive(data []byte) (Platform, error) {
 	if err != nil {
 		return "", fmt.Errorf("read archive: %w", err)
 	}
+	// A repacked copy can carry the whole archive inside a folder named after
+	// the game, which leaves every marker one level down from where the
+	// loaders look. Removing that folder here keeps detection agreeing with
+	// the loaders, which remove it too; see internal/zipentry for why it cannot
+	// affect an archive that already works.
+	names := make([]string, 0, len(reader.File))
 	for _, file := range reader.File {
+		names = append(names, entryName(file.Name))
+	}
+	wrapper := zipentry.Directory(names)
+
+	for _, name := range names {
 		// Both loaders match their marker case-insensitively against the whole
 		// entry name, so the same rule decides here. Naming a platform whose
 		// loader would then reject the archive helps nobody.
-		switch name := entryName(file.Name); {
+		if wrapper != "" {
+			name = strings.TrimPrefix(name, wrapper+"/")
+		}
+		switch {
 		case strings.EqualFold(name, ktfEntry):
 			return KTF, nil
 		case strings.EqualFold(name, lgtEntry):
