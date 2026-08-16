@@ -72,7 +72,7 @@ W-Feature — 피처폰 게임 에뮬레이터 (macOS)
      - status.command 로 wfeature 서버인지 다른 프로그램인지 본다.
      - 예전 서버면 stop.command 로 멈추고, 다른 프로그램이면 ./wfeature-server -addr :11542 처럼 포트를 바꿔 띄운다.
    - 목록에 게임이 안 보이는 경우:
-     - 확장자가 .zip 또는 .jar 인지, games/ 아래 폴더에 들어 있는지 확인한다.
+     - 확장자가 .zip 또는 .jar 인지, games/ 또는 그 바로 아래 폴더에 들어 있는지 확인한다.
 
 
 라이선스: MIT (LICENSE.txt). 함께 담긴 구성 요소의 고지는
