@@ -65,6 +65,9 @@ type javaWorker struct {
 	// belongs to the Host, which decides how fast the guest clock runs.
 	wakeAt time.Duration
 	done   bool
+	// yields counts the yields this slice has made without parking. See
+	// javaYieldBurst.
+	yields int
 	// monitors is how many locks this thread holds, and renewals how many
 	// windows it has been granted while holding one. A thread inside a
 	// synchronized body is not parked, because nothing else may run there.
@@ -153,6 +156,7 @@ func javaThreadSleep(
 		return 0, nil
 	}
 	worker.wakeAt = client.clock.now() + wait
+	worker.yields = 0
 	client.noteJavaWait(worker, thread)
 	return 0, worker.park()
 }
@@ -192,8 +196,21 @@ func (client *Client) noteJavaWait(worker *javaWorker, thread *armcore.Thread) {
 		"sleeps", worker.waits, "stack", client.javaBacktraceLine(thread))
 }
 
-// javaThreadYield is `Thread.yield()`: the same park with no wait, so the
-// thread rejoins the queue and something else runs.
+// javaThreadYield is `Thread.yield()`: a hint that something else may run.
+//
+// **It only parks when there is something else to run.** Parking ends the
+// thread's slice, and a slice is granted once a tick — so a yield with nobody
+// to hand to costs a whole tick of guest time for a call that on a handset
+// returns immediately. One local title's frame loop is `work; repaint;
+// yield; sleep(100)`, one yield and one sleep per frame, and it was being
+// charged 150ms of guest time for the 100 it asked for: **a third of that
+// title's frame rate was going into a hint with no other thread to give the
+// turn to.** It reads as "the game is just slow", and it moves with the
+// session tick rather than with anything the game does.
+//
+// A title that really has two threads still hands over, which is what the
+// call is for. The step budget, not this, is what stops a runaway loop from
+// holding the frame.
 func javaThreadYield(
 	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
 ) (uint32, error) {
@@ -201,8 +218,41 @@ func javaThreadYield(
 	if worker == nil {
 		return 0, nil
 	}
+	if !client.otherJavaWorkerReady(worker) && worker.yields < javaYieldBurst {
+		worker.yields++
+		return 0, nil
+	}
+	worker.yields = 0
 	worker.wakeAt = 0
 	return 0, worker.park()
+}
+
+// javaYieldBurst is how many times a thread may yield inside one slice before
+// it is parked anyway. **A loop that yields is not always a frame loop.** One
+// local title spins on `yield` while it waits for something, and letting that
+// through unparked spends the whole slice budget every tick — measured, four
+// million instructions a tick against the twenty thousand the title was doing
+// before, and the run took minutes instead of seconds. The bound keeps the
+// frame loop's single yield free while a spin still parks almost at once, and
+// the counter is per slice: it is cleared wherever the thread parks.
+const javaYieldBurst = 8
+
+// otherJavaWorkerReady reports whether some other guest thread could run now,
+// which is what decides whether a yield has anywhere to go.
+func (client *Client) otherJavaWorkerReady(yielding *javaWorker) bool {
+	if client.javaRun == nil {
+		return false
+	}
+	now := client.clock.now()
+	for _, worker := range client.javaRun.workers {
+		if worker == yielding || worker.done {
+			continue
+		}
+		if worker.wakeAt == 0 || worker.wakeAt <= now {
+			return true
+		}
+	}
+	return false
 }
 
 // javaCurrentThread is `Thread.currentThread()`. It answers the object the
@@ -403,6 +453,55 @@ func (client *Client) ServiceJavaThreads(ctx context.Context) (int, error) {
 	return serviced, nil
 }
 
+// nextJavaThreadDue is the wait until the earliest sleeping guest thread is
+// eligible again, on the guest's own clock. It is what a Java title has
+// instead of a timer, and the tick span needs it for the same reason it needs
+// `nextTimerDue`: **a title's frame loop here is a thread that sleeps at the
+// end of every frame**, so the interval it sleeps for is the rate it wants,
+// and a tick that always stands for the session tick rounds that interval up
+// to a multiple of itself.
+//
+// The rounding is not the whole of the interval, which is what made it hard to
+// see. One local title sleeps 100ms against a 50ms tick, which divides
+// exactly — but it asks for the sleep *after* doing a frame's work, and the
+// work clock has already carried `now` a few milliseconds past the tick
+// boundary. The deadline lands at 103ms, the tick after next is only at 100,
+// and the frame waits a whole further tick: **150ms of guest time for a frame
+// it wanted at 103.** The heavier the frame, the further past the boundary it
+// starts, which is why the symptom is "it lags when I move" — moving is the
+// frame with the most work in it, and nothing in the host's own cost changes
+// at all.
+//
+// A thread that is already eligible is not a deadline and is skipped: zero
+// means "spent its budget", and letting that shorten the tick to nothing would
+// stop the guest clock for a thread that never sleeps.
+func (client *Client) nextJavaThreadDue() (time.Duration, bool) {
+	if client.javaRun == nil {
+		return 0, false
+	}
+	now := client.clock.now()
+	earliest, found := time.Duration(0), false
+	for _, worker := range client.javaRun.workers {
+		// Zero is "spent its budget", not a deadline. It is the case that has
+		// to be skipped rather than the one that has already come due: a
+		// thread whose deadline has passed **is** the reason to make this tick
+		// stand for no time — otherwise the tick advances the clock a whole
+		// session tick before handing over the slice, and every wait comes out
+		// one tick long. That is a 100ms sleep taking 150ms, every frame.
+		if worker.done || worker.wakeAt == 0 {
+			continue
+		}
+		wait := worker.wakeAt - now
+		if wait < 0 {
+			wait = 0
+		}
+		if !found || wait < earliest {
+			earliest, found = wait, true
+		}
+	}
+	return earliest, found
+}
+
 // grantJavaSlice hands one thread its slice and waits out the whole of it. The
 // session goroutine is blocked here for as long as the guest runs, which is
 // what keeps one guest at a time inside the runtime.
@@ -415,6 +514,12 @@ func (client *Client) grantJavaSlice(
 	previous := client.activeJavaWorker
 	client.activeJavaWorker = worker
 	defer func() { client.activeJavaWorker = previous }()
+	// The deadline is spent the moment the slice is granted. Leaving it set
+	// would make `nextJavaThreadDue` keep reporting a wait that has already
+	// been served, and a tick would then stand for no time at all for as long
+	// as the thread went without sleeping again — the guest clock would stop.
+	// A thread sets it again from inside the slice if it sleeps.
+	worker.wakeAt = 0
 	worker.grant <- ctx
 	return <-worker.events, nil
 }

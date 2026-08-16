@@ -510,8 +510,13 @@ func describeJavaClasses(classes []javaClass) []string {
 		for _, field := range class.Fields {
 			names = append(names, field.Name+":"+field.Descriptor)
 		}
+		// The body address goes in with the name, because an address is what
+		// everything else here reports: a profile, a platform call's `from=`,
+		// a backtrace frame and a disassembly all name code by where it
+		// starts, and this line is what turns one back into a method.
 		for _, method := range class.Methods {
-			names = append(names, method.Name+method.Descriptor)
+			names = append(names, fmt.Sprintf("%s%s@%#x",
+				method.Name, method.Descriptor, method.Body))
 		}
 		lines = append(lines, fmt.Sprintf("%#x %q access %#x super %q %d fields %d methods ends %#x [%s]",
 			class.Handle, class.Name, class.AccessFlags, super,

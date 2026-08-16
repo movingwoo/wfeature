@@ -6,6 +6,12 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	// The key table a route is written against is one table for every
+	// platform, and it lives beside the platform that needed it first — the
+	// CLI reaches for the same one when it runs an LGT route.
+	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/route"
 )
 
 // TestLGTLoadCostProbe is the LGT counterpart of the KTF load probe: it runs a
@@ -63,7 +69,7 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	paced := os.Getenv("WFEATURE_PACED") != ""
 	start := time.Now()
 	slowest := time.Duration(0)
-	for tick := 0; tick < ticks; tick++ {
+	tick := func() error {
 		began := time.Now()
 		var wait time.Duration
 		var err error
@@ -73,13 +79,60 @@ func TestLGTLoadCostProbe(t *testing.T) {
 			err = session.Tick(ctx)
 		}
 		if err != nil {
-			t.Fatalf("tick %d: %v", tick, err)
+			return err
 		}
 		if cost := time.Since(began); cost > slowest {
 			slowest = cost
 		}
 		if paced && wait > 0 {
 			time.Sleep(wait)
+		}
+		return nil
+	}
+	// **WFEATURE_PERF_ROUTE is what makes this probe measure a game.** Without
+	// one a title spends its first thousands of ticks on a title screen it
+	// barely computes for, and the profile is of a session waiting. A route
+	// drives it to where it is doing the work the report is about, which is
+	// the only place a throughput number means anything.
+	if script := os.Getenv("WFEATURE_PERF_ROUTE"); script != "" {
+		text, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := route.Parse(string(text), ktf.KeyCodeByName)
+		if err != nil {
+			t.Fatalf("route %s: %v", script, err)
+		}
+		stopped := false
+		runner := &route.Runner{
+			MaxTicks: ticks,
+			Hold:     20,
+			Digest:   session.FrameDigest,
+			Advance: func(context.Context) (bool, error) {
+				if err := tick(); err != nil {
+					stopped = true
+					return false, err
+				}
+				return true, nil
+			},
+			SendKey: func(_ context.Context, pressed bool, key int32) error {
+				session.SendKey(pressed, uint32(key))
+				return nil
+			},
+			Stalled: func() bool { return stopped },
+		}
+		result, err := runner.Run(ctx, parsed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.Completed {
+			t.Logf("route stopped at step %d (%s)", result.StoppedAt+1, result.Reason)
+		}
+	} else {
+		for step := 0; step < ticks; step++ {
+			if err := tick(); err != nil {
+				t.Fatalf("tick %d: %v", step, err)
+			}
 		}
 	}
 	host := time.Since(start)

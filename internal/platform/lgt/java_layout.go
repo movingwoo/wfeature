@@ -92,6 +92,7 @@ var javaPlatformSupers = map[string]string{
 	"java/io/UnsupportedEncodingException":              "java/io/IOException",
 	"java/io/UTFDataFormatException":                    "java/io/IOException",
 	"org/kwis/msp/io/FileSystemException":               "java/io/IOException",
+	"org/kwis/msf/io/SchemeNotFoundException":           "java/io/IOException",
 	"javax/microedition/io/ConnectionNotFoundException": "java/io/IOException",
 }
 
@@ -306,12 +307,35 @@ func (client *Client) defineJavaClass(values []uint32) error {
 		return fmt.Errorf("write %s's virtual method answers at %#x: %w", record.Name, values[9], err)
 	}
 	if client.logger != nil {
+		// `entries` is which of the surface's field-table entries this class
+		// answered, which is what a field index read out of a disassembly is
+		// an index into: it says which class owns the field an out-array
+		// offset names.
 		client.logger.Debug("LGT java class laid out",
 			"class", record.Name, "super", record.Super+record.SuperName,
 			"instance", record.InstanceSize, "vtable", record.VTableSize,
-			"fields", len(answers.Fields), "virtual", len(answers.Virtual))
+			"fields", len(answers.Fields), "virtual", len(answers.Virtual),
+			"entries", describeJavaEntries(answers.Fields))
 	}
 	return nil
+}
+
+// describeJavaEntries names the stretch of a member table a class answered,
+// as `first..last`, for the debug line above.
+func describeJavaEntries(answers map[uint32]uint32) string {
+	if len(answers) == 0 {
+		return "none"
+	}
+	first, last := ^uint32(0), uint32(0)
+	for entry := range answers {
+		if entry < first {
+			first = entry
+		}
+		if entry > last {
+			last = entry
+		}
+	}
+	return fmt.Sprintf("%d..%d", first, last)
 }
 
 // javaClassAnswers is what one application class's layout comes to: a slot per

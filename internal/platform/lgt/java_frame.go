@@ -112,7 +112,14 @@ func (client *Client) paintJavaCard(ctx context.Context, thread *armcore.Thread)
 	if err := client.callJavaCardMethod(ctx, thread, javaCardPaintMethod, graphics); err != nil {
 		return err
 	}
-	if err := client.syncFromGuest(client.screen); err != nil {
+	// The frame goes the other way here than it does on the Clet path. A Clet
+	// wrote its pixels into guest memory itself, so a flush reads them out; a
+	// Java title drew into the runtime's copy through `Graphics` and never
+	// touched guest memory, so a flush **publishes**. Reading here instead
+	// would overwrite the frame that was just painted with whatever guest
+	// memory still held. See javaDraw for why the two syncs live here rather
+	// than around every drawing call.
+	if err := client.syncToGuest(client.screen); err != nil {
 		return err
 	}
 	client.mu.Lock()

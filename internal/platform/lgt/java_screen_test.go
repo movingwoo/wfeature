@@ -102,3 +102,71 @@ func TestJavaGraphicsClipBoundsADraw(t *testing.T) {
 		t.Errorf("getClipWidth() = %d, want 2", width)
 	}
 }
+
+// A Java drawing call does not touch guest memory, in either direction. That
+// is the difference between this path and a Clet's, and it is worth pinning
+// because putting the pair of syncs back would be invisible — every frame
+// would still be right, and the emulator would spend two thirds of its time
+// copying 150 KiB round trips that never find anything.
+//
+// The test poisons guest memory behind the surface. A draw that read it back
+// would bring the poison into the runtime's pixels; a draw that wrote through
+// would take the poison out of guest memory. Neither may happen, and the
+// flush's publish afterwards is what puts the two back in step.
+func TestAJavaDrawLeavesGuestMemoryToTheFlush(t *testing.T) {
+	client := fixtureClient(t)
+	screen, err := client.screenSurface()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if screen.address == 0 {
+		t.Fatal("the screen surface has no guest address, so this proves nothing")
+	}
+	const poison = 0xa5
+	bytes := make([]byte, len(screen.pixels)*2)
+	for index := range bytes {
+		bytes[index] = poison
+	}
+	if err := client.core.Memory().Write(screen.address, bytes); err != nil {
+		t.Fatal(err)
+	}
+
+	object, err := client.newJavaGraphics(screen.handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaSetColorPacked(client, nil, nil, []uint32{object, 0xffffff}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaFillRect(client, nil, nil, []uint32{object, 0, 0, 2, 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A pixel the fill did not cover still holds what the runtime had, not
+	// what guest memory holds.
+	outside := screen.pixels[len(screen.pixels)-1]
+	if outside == poison<<8|poison {
+		t.Error("the draw read the surface back out of guest memory")
+	}
+	// And guest memory still holds the poison, because the draw did not
+	// publish.
+	after := make([]byte, 4)
+	if err := client.core.Memory().Read(screen.address, after); err != nil {
+		t.Fatal(err)
+	}
+	if after[0] != poison || after[1] != poison {
+		t.Errorf("the draw wrote %#x %#x through to guest memory", after[0], after[1])
+	}
+
+	// The flush is what reconciles them, and after it the drawn pixel is the
+	// one guest memory holds.
+	if err := client.syncToGuest(screen); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.core.Memory().Read(screen.address, after); err != nil {
+		t.Fatal(err)
+	}
+	if got := uint16(after[0]) | uint16(after[1])<<8; got != screen.pixels[0] {
+		t.Errorf("after the publish guest memory holds %#x, want the drawn %#x", got, screen.pixels[0])
+	}
+}

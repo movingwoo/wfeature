@@ -107,6 +107,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return contactSheet(args[1:], stdout, stderr)
 	case "framediff":
 		return frameDiff(args[1:], stdout, stderr)
+	case "zoom":
+		return zoomFrame(args[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		return 2
@@ -1359,6 +1361,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  wfeature provision <game.zip> [-save dir] [-number N] [-dry-run]")
 	fmt.Fprintln(output, "  wfeature contactsheet <framedir> <out.png> [-every N] [-columns N] [-shrink N] [-from tick] [-to tick]")
 	fmt.Fprintln(output, "  wfeature framediff <dirA> <dirB> [-limit N]")
+	fmt.Fprintln(output, "  wfeature zoom <frame.png> <out.png> [-x N] [-y N] [-width N] [-height N] [-scale N]")
 	fmt.Fprintln(output, "  wfeature licenses")
 }
 
@@ -1789,6 +1792,13 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		"busy_ms":         busy.Milliseconds(),
 		"slowest_tick":    slowestTick,
 		"slowest_tick_ms": slowestTickCost.Milliseconds(),
+		// Steps and the host nanoseconds each one cost. A throughput change
+		// moves `ns_per_step` and nothing else here reliably does: busy time
+		// alone moves when a change alters how much guest work a tick holds,
+		// which is exactly what a scene reached by a route does from run to
+		// run.
+		"steps":       session.Steps(),
+		"ns_per_step": float64(busy.Nanoseconds()) / float64(max(session.Steps(), 1)),
 		// The guest's own clock. A tick here stands for the time until the
 		// guest's next scheduled work rather than a fixed span, so the tick
 		// count no longer says how much guest time a run covered — and guest

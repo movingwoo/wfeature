@@ -232,6 +232,14 @@ func (session *Session) tickSpan() time.Duration {
 		return session.tick
 	}
 	wait, pending := session.client.nextTimerDue()
+	// A Java title arms no timer — its frame loop is a thread that sleeps —
+	// so the same question has to be asked of the threads, and the tick
+	// stands for whichever comes first. See nextJavaThreadDue for what the
+	// rounding costs a title that sleeps 100ms on a 50ms tick.
+	if threadWait, sleeping := session.client.nextJavaThreadDue(); sleeping &&
+		(!pending || threadWait < wait) {
+		wait, pending = threadWait, true
+	}
 	if !pending || wait > session.tick {
 		return session.tick
 	}
@@ -294,6 +302,20 @@ func (session *Session) GuestElapsed() time.Duration {
 		return 0
 	}
 	return session.client.clock.now()
+}
+
+// Steps is how many guest instructions the run has retired. Host time per tick
+// is not comparable across a change that alters how much guest work a tick
+// holds, so a throughput change is judged on host nanoseconds per step — and
+// that needs this beside the busy time a run already reports. The load probe
+// answers the same question for a run with no route; this is how a run that
+// was driven to a scene answers it, which is the only place a title is doing
+// the work worth measuring.
+func (session *Session) Steps() uint64 {
+	if session == nil || session.client == nil || session.client.core == nil {
+		return 0
+	}
+	return session.client.core.Steps()
 }
 
 // Flushes counts the presentations the game has asked for. A Host compares it

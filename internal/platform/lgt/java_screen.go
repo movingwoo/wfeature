@@ -160,11 +160,32 @@ func (client *Client) javaDrawContext(state *javaGraphics) (*graphicsContext, er
 	return context, nil
 }
 
-// javaDraw runs one drawing call: read the receiver's state, take the surface's
-// pixels as the guest last left them, draw, and write them back. The
-// synchronisation is the same pair a Clet's draw makes, because a Java title's
-// pictures are Clet surfaces and a title may hold a framebuffer pointer of its
-// own.
+// javaDraw runs one drawing call: read the receiver's state and draw into the
+// surface the runtime holds.
+//
+// **It does not synchronise the surface with guest memory, and that is the
+// whole difference between a Java title's drawing and a Clet's.** A Clet is
+// handed the framebuffer's address and writes pixels into it behind the
+// platform's back, so a draw there has to re-read before it blends and write
+// back after — the pair `syncFromGuest`/`syncToGuest` exists for exactly that.
+// A Java title has no such address: it draws only through `Graphics`, and the
+// runtime's copy is the only one anything writes.
+//
+// Doing it here anyway cost more than everything else the platform did. Each
+// call read the whole surface out of guest memory, converted it a byte at a
+// time, drew, converted it back and wrote it — 150 KiB each way for a call
+// that might set one pixel. Two local Java titles were measured over a real
+// session: **1,711,725 and 82,017 of those round trips, and not one of them
+// found a single pixel the guest had changed.** The same instrumentation on
+// two Clets found 600 changed frames out of 1,201 calls, which is the case
+// worth paying for and the only one.
+//
+// The invariant is restored once per frame instead: `paintJavaCard` publishes
+// the finished frame to guest memory, so guest and runtime agree at every
+// frame boundary. What it assumes is that nothing on the Clet side of the
+// platform touches a Java title's surfaces between frames, which is true
+// because a Java title registers no Clet and calls no `MC_grp` slot — and if
+// it ever stops being true, the acceptance probe and a frame diff say so.
 func (client *Client) javaDraw(
 	object uint32, draw func(*graphicsContext, *javaGraphics) error,
 ) error {
@@ -176,13 +197,7 @@ func (client *Client) javaDraw(
 	if err != nil {
 		return err
 	}
-	if err := client.syncFromGuest(context.target); err != nil {
-		return err
-	}
-	if err := draw(context, state); err != nil {
-		return err
-	}
-	return client.syncToGuest(context.target)
+	return draw(context, state)
 }
 
 // javaGraphicsMethods is the drawing surface, keyed the way every platform
