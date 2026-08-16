@@ -44,10 +44,14 @@ type PanelFreeze struct {
 	Type    string `json:"type"`
 }
 
-// PanelHit is one recorded write to a watched address.
+// PanelHit is one recorded write to a watched address. Origin is "guest" or
+// "host"; the page needs it because a host hit's PC is the last guest
+// instruction rather than the writer, and showing the two alike would offer an
+// address to disassemble that has nothing to do with the write.
 type PanelHit struct {
 	Address uint32 `json:"address"`
 	PC      uint32 `json:"pc"`
+	Origin  string `json:"origin"`
 	Value   int64  `json:"value"`
 	Size    int    `json:"size"`
 	Count   int64  `json:"count"`
@@ -219,6 +223,7 @@ func PanelWatchHits(session *Session) (PanelHits, error) {
 		items = append(items, PanelHit{
 			Address: hit.Address,
 			PC:      hit.PC,
+			Origin:  hit.Origin.String(),
 			Value:   int64(hit.Value),
 			Size:    int(hit.Size),
 			Count:   int64(hit.Count),

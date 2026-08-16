@@ -13,6 +13,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/movingwoo/wfeature/internal/zipentry"
 	"unicode/utf8"
 )
 
@@ -96,7 +98,7 @@ func SaveOwner(descriptor Descriptor) string {
 // JAR and client image this way, so a title whose executable this build cannot
 // load still contributes its identity.
 func ReadDescriptor(data []byte) (Descriptor, error) {
-	files, err := readZIP(data, "KTF archive")
+	files, err := readOuterZIP(data)
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -112,7 +114,7 @@ func ReadDescriptor(data []byte) (Descriptor, error) {
 }
 
 func Open(data []byte) (*Archive, error) {
-	files, err := readZIP(data, "KTF archive")
+	files, err := readOuterZIP(data)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +268,18 @@ func parseBSSSize(name string) (uint32, error) {
 		return 0, fmt.Errorf("KTF client image %q has invalid BSS size: %w", name, err)
 	}
 	return uint32(value), nil
+}
+
+// readOuterZIP reads the archive itself, as opposed to the JAR inside it. The
+// difference is that a repacked copy can have gained a containing folder, and
+// the markers this loader looks up by exact name are then one level down. See
+// internal/archive: a JAR never qualifies, so only the outer read asks.
+func readOuterZIP(data []byte) (map[string][]byte, error) {
+	files, err := readZIP(data, "KTF archive")
+	if err != nil {
+		return nil, err
+	}
+	return zipentry.Unwrap(files), nil
 }
 
 func readZIP(data []byte, label string) (map[string][]byte, error) {

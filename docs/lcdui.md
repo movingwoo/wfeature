@@ -87,6 +87,22 @@ second path into the sink. A network locator is **refused** rather than
 accepted and left silent: a game told a player exists waits for events that
 would never come — the same decision `docs/network.md` makes everywhere else.
 
+## The curve calls were missing entirely
+
+`Graphics` had `drawRect` and `fillRect` and nothing that curves:
+`drawArc`, `fillArc`, `drawRoundRect` and `fillRoundRect` were not declared on
+the class at all. That is not a shape drawn approximately — an undeclared
+method does not resolve, so a MIDlet reaching for one ends there.
+
+All four are now declared and bound to `internal/curve`, which walks the shape
+and hands out horizontal spans that go through the same translated, clipped
+fill `fillRect` uses. The angles are MIDP's: zero degrees at three o'clock,
+positive counter-clockwise, the second angle an extent rather than an end, and
+the arc centred in the rectangle it was given. `arcWidth` and `arcHeight` are
+corner **diameters**, so one equal to the side it rounds makes the shape an
+ellipse rather than overflowing it. The other two platforms draw these through
+the same geometry; see `ktf.md`, "The same geometry, on five surfaces".
+
 ## Deliberately incomplete
 
 - **No on-screen text entry.** A `TextBox` or `TextField` reports and renders

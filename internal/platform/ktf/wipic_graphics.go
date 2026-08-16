@@ -14,6 +14,7 @@ import (
 	// KTF archives carry BMP assets, including ones renamed to .dat.
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -265,6 +266,79 @@ func (runtime *initializationRuntime) wipicDrawRect(thread *armcore.Thread) (uin
 		return 0, err
 	}
 	return 0, runtime.outlineFramebufferRect(framebuffer, clip, op, pixel, rectangle[0], rectangle[1], rectangle[2], rectangle[3])
+}
+
+// wipicArcCall reads the argument shape MC_grpDrawArc and MC_grpFillArc share:
+// the rectangle the arc is inscribed in, then its start angle and its extent.
+//
+//	void MC_grpDrawArc(MC_GrpFrameBuffer dst, M_Int32 x, M_Int32 y,
+//	                   M_Int32 w, M_Int32 h, M_Int32 s, M_Int32 e,
+//	                   MC_GrpContext *pgc)
+//
+// Eight arguments, so the last four arrive on the stack; wipicArgument already
+// knows where. The context is the eighth rather than the sixth, which is the
+// one thing that stops this from being the rectangle reader with two extra
+// words on the end.
+func (runtime *initializationRuntime) wipicArcCall(thread *armcore.Thread, call string) (wipicFramebuffer, uint32, wipicClip, wipicPixelOp, [4]int32, [2]int32, bool, error) {
+	registers := make([]uint32, 8)
+	for index := range registers {
+		value, err := runtime.wipicArgument(thread, index)
+		if err != nil {
+			return wipicFramebuffer{}, 0, wipicClip{}, wipicPixelOp{}, [4]int32{}, [2]int32{}, false, err
+		}
+		registers[index] = value
+	}
+	framebuffer, ok, err := runtime.readWIPICDrawSurface(registers[0], call)
+	if err != nil || !ok {
+		return wipicFramebuffer{}, 0, wipicClip{}, wipicPixelOp{}, [4]int32{}, [2]int32{}, false, err
+	}
+	context := registers[7]
+	pixel, err := runtime.wipicReadContextForeground(context)
+	if err != nil {
+		return wipicFramebuffer{}, 0, wipicClip{}, wipicPixelOp{}, [4]int32{}, [2]int32{}, false, err
+	}
+	clip, err := runtime.wipicReadContextClip(context)
+	if err != nil {
+		return wipicFramebuffer{}, 0, wipicClip{}, wipicPixelOp{}, [4]int32{}, [2]int32{}, false, err
+	}
+	op, err := runtime.wipicReadContextPixelOp(context)
+	if err != nil {
+		return wipicFramebuffer{}, 0, wipicClip{}, wipicPixelOp{}, [4]int32{}, [2]int32{}, false, err
+	}
+	bounds := [4]int32{int32(registers[1]), int32(registers[2]), int32(registers[3]), int32(registers[4])}
+	angles := [2]int32{int32(registers[5]), int32(registers[6])}
+	return framebuffer, pixel, clip, op, bounds, angles, true, nil
+}
+
+// wipicDrawArc implements MC_grpDrawArc: the curve alone, since the pie's two
+// straight edges belong to the fill.
+func (runtime *initializationRuntime) wipicDrawArc(thread *armcore.Thread) (uint32, error) {
+	framebuffer, pixel, clip, op, bounds, angles, ok, err := runtime.wipicArcCall(thread, "draw arc")
+	if err != nil || !ok {
+		return 0, err
+	}
+	return 0, curve.DrawArc(bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
+		runtime.framebufferCurveEmit(framebuffer, clip, op, pixel))
+}
+
+// wipicFillArc implements MC_grpFillArc: the pie slice the arc cuts out of its
+// bounding ellipse.
+func (runtime *initializationRuntime) wipicFillArc(thread *armcore.Thread) (uint32, error) {
+	framebuffer, pixel, clip, op, bounds, angles, ok, err := runtime.wipicArcCall(thread, "fill arc")
+	if err != nil || !ok {
+		return 0, err
+	}
+	return 0, curve.FillArc(bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
+		runtime.framebufferCurveEmit(framebuffer, clip, op, pixel))
+}
+
+// framebufferCurveEmit fills each span a curve hands out through the same
+// clipped rectangle fill every other drawing call uses, so the context's clip
+// and its pixel operation apply to a curve exactly as they do to a rectangle.
+func (runtime *initializationRuntime) framebufferCurveEmit(framebuffer wipicFramebuffer, clip wipicClip, op wipicPixelOp, pixel uint32) curve.Emit {
+	return func(span curve.Span) error {
+		return runtime.fillFramebufferRect(framebuffer, clip, op, pixel, span.X, span.Y, span.Width, 1)
+	}
 }
 
 // outlineFramebufferRect draws the border of the same rectangle
@@ -589,6 +663,15 @@ func decodeGuestImage(encoded []byte) (stdimage.Image, error) {
 		// in the header is applied first and then read back out the same way
 		// as any other encoding's. See wipic.DecodeBitmap.
 		decoded, err := wipic.DecodeBitmap(encoded)
+		if err != nil {
+			return nil, err
+		}
+		return withOpacity(decoded), nil
+	}
+	if wipic.IsLBMP(encoded) {
+		// The handset's own bitmap: LCD pixels with a 24-byte header and no
+		// encoding the standard library would recognise. See wipic.DecodeLBMP.
+		decoded, err := wipic.DecodeLBMP(encoded)
 		if err != nil {
 			return nil, err
 		}

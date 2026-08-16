@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -436,6 +437,49 @@ func (runtime *Runtime) fillGraphicsRect(_ *jvm.VM, arguments []jvm.Value) (jvm.
 		context.fillRect(rect)
 	})
 	return jvm.VoidValue(), nil
+}
+
+// graphicsCurve is the shape the four curve calls share: a bounding rectangle
+// and two more integers that mean corner diameters for a rounded rectangle and
+// a start angle with an extent for an arc. They differ only in which geometry
+// they walk, and every span goes through the same translated, clipped fill the
+// rectangle calls use.
+//
+// The destination write wraps the whole shape rather than each span, because a
+// curve is one drawing operation and a reader watching the destination should
+// see it as one.
+func (runtime *Runtime) graphicsCurve(
+	walk func(x, y, width, height, first, second int32, emit curve.Emit) error,
+) func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		context, err := graphicsReceiver(arguments)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		x, y, width, height, err := rectArguments(arguments, 1)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		first, err := intArgument(arguments, 5)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		second, err := intArgument(arguments, 6)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		var walkErr error
+		context.withDestinationWrite(func() {
+			walkErr = walk(x, y, width, height, first, second, func(span curve.Span) error {
+				rect := context.translatedRect(span.X, span.Y, span.Width, 1).intersect(context.clip)
+				if !rect.empty() {
+					context.fillRect(rect)
+				}
+				return nil
+			})
+		})
+		return jvm.VoidValue(), walkErr
+	}
 }
 
 func (runtime *Runtime) drawGraphicsLine(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

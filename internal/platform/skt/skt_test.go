@@ -396,3 +396,29 @@ func TestDiagnosticsCountsWhatATitleUsed(t *testing.T) {
 		t.Errorf("FormatCounts() = %q", text)
 	}
 }
+
+// The other two platforms had to learn to see through a wrapping folder,
+// because their loaders look their marker up by exact name. This one never
+// needed to: it finds the descriptor by extension wherever it is, derives the
+// JAR from the descriptor's own name so the two move together, and files the
+// installed files by base name. That is worth a test rather than an assertion,
+// because it is the reason the unwrap deliberately stops short of here.
+func TestOpenReadsAnArchiveInsideAFolder(t *testing.T) {
+	const descriptor = "MIDlet-Name: 테스트게임\r\n" +
+		"MIDlet-1: 테스트게임,23x23.bmp,SKVMMIDlet\r\n" +
+		"DD-ProgName: 0056194389\r\n"
+	archive, err := skt.Open(buildArchive(t, map[string][]byte{
+		"내 게임/0056194389.msd": []byte(descriptor),
+		"내 게임/0056194389.jar": stripManifestMIDlet(t, skvmJAR),
+		"내 게임/0056194389.wmr": []byte("icon"),
+	}))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if archive.MainClass.Name != "SKVMMIDlet" {
+		t.Fatalf("MainClass = %q, want SKVMMIDlet", archive.MainClass.Name)
+	}
+	if owner := skt.SaveOwner(archive.Descriptor); owner != "0056194389" {
+		t.Fatalf("SaveOwner() = %q, want the program number", owner)
+	}
+}

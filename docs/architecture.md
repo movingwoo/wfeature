@@ -34,6 +34,35 @@ redefining its boundaries as Go packages.
 layer and API surface. `cmd/cli` and `cmd/server` are thin Host entry points
 that call the same platform packages.
 
+`internal/zipentry` is shared the same way and for the same reason: it holds
+the conventions a platform archive's entry names follow, and the three loaders
+would otherwise each answer them separately. Today that is one rule. **A copy
+that was unpacked and zipped up again often gains the game's name as a
+containing folder**, which leaves `__adf__` or `app_info` one level below where
+the loader looks them up by exact name — so detection claims the archive for
+nobody and a loader handed it reports a missing marker. Neither says "this is
+packed differently"; both say "this is not a game".
+
+Removing a directory that every entry shares cannot damage an archive that
+works, which is what makes the rule safe to apply without asking. If every
+entry is inside one directory then the marker is not at the root, and an
+archive whose marker is not at the root is one no loader here reads today. It
+fires exactly on archives that are already failing. A JAR is unaffected without
+being excluded, because `META-INF/` always sits beside the rest — and the
+loaders ask only when reading the outer archive, never the JAR.
+
+Two things bound it. Only one level comes off, so an archive nested twice is
+still reported rather than dug through until something matches. And **no local
+archive is wrapped** — all 64 carry their marker at the root — so this is
+written against a shape that has been described rather than one measured here,
+and the tests build it rather than finding it.
+
+The SKT loader was already immune and stays untouched, which is the more
+interesting half: it finds its descriptor by extension wherever it sits,
+derives the JAR name from the descriptor's own so the two move together, and
+files installed files by base name. Nothing there looks up a fixed path. That
+is the shape the other two would have to grow to stop needing the rule at all.
+
 `internal/route` is a Host-side tool rather than a layer: it reads a scripted
 way back to a scene and drives one, and it belongs to no platform. What it
 needs of a session — advance a tick, fingerprint the screen, send a key, say

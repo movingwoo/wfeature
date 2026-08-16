@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/curve"
 )
 
 // handleDraw services the graphics slots that write pixels.
@@ -104,6 +105,23 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 			return err
 		}
 		drawContext.polygon(xs, ys, drawContext.foreground, slot == slotFillPolygon)
+
+	case slotDrawArc, slotFillArc:
+		// `MC_grpDrawArc(dst, x, y, w, h, s, e, pgc)`: the rectangle the arc is
+		// inscribed in, then the start angle and the extent. Every span goes
+		// through the same fill the rectangle calls use, so the context's clip
+		// and pixel operation apply to a curve as they do to a rectangle.
+		emit := func(span curve.Span) error {
+			drawContext.fill(int(span.X), int(span.Y), int(span.Width), 1, drawContext.foreground)
+			return nil
+		}
+		arc := curve.DrawArc
+		if slot == slotFillArc {
+			arc = curve.FillArc
+		}
+		if err := arc(values[1], values[2], values[3], values[4], values[5], values[6], emit); err != nil {
+			return err
+		}
 	}
 
 	// A pixel operation runs guest code, which can fail; put has no way to say
@@ -125,7 +143,7 @@ func drawArgumentCount(slot uint32) int {
 		return 4
 	case slotDrawLine, slotDrawRect, slotFillRect, slotDrawString:
 		return 6
-	case slotCopyArea:
+	case slotCopyArea, slotDrawArc, slotFillArc:
 		return 8
 	case slotCopyFramebuffer, slotDrawImage:
 		return 9

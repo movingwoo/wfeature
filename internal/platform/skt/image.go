@@ -15,6 +15,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 const maxEncodedImageBytes = 16 * 1024 * 1024
@@ -319,12 +320,24 @@ func decodeMIDPImage(data []byte) (*jvm.Object, error) {
 	if len(data) == 0 || len(data) > maxEncodedImageBytes {
 		return nil, fmt.Errorf("encoded image length %d is outside 1..%d", len(data), maxEncodedImageBytes)
 	}
+	// The handset's own bitmap, which no standard decoder recognises. No local
+	// archive for this platform ships one — the format was found in another
+	// vendor's — but the decode is shared and the alternative to routing it
+	// here is a title that ends on an image the other platforms can read.
+	if wipic.IsLBMP(data) {
+		decoded, err := wipic.DecodeLBMP(data)
+		if err != nil {
+			return nil, err
+		}
+		return midpImageFromDecoded(decoded)
+	}
 	config, _, err := stdimage.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("decode image header: %w", err)
 	}
-	byteLength, err := backend.RGBAByteLength(config.Width, config.Height)
-	if err != nil {
+	// The header is checked before the pixels are decoded, so a header naming
+	// a size nothing could hold costs a refusal rather than the allocation.
+	if _, err := backend.RGBAByteLength(config.Width, config.Height); err != nil {
 		return nil, fmt.Errorf("decode image dimensions: %w", err)
 	}
 	decoded, _, err := stdimage.Decode(bytes.NewReader(data))
@@ -335,18 +348,31 @@ func decodeMIDPImage(data []byte) (*jvm.Object, error) {
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
 		return nil, fmt.Errorf("decoded image dimensions changed from %dx%d to %dx%d", config.Width, config.Height, bounds.Dx(), bounds.Dy())
 	}
+	return midpImageFromDecoded(decoded)
+}
+
+// midpImageFromDecoded copies a decoded image into the straight-alpha RGBA an
+// Image holds. Every decode path ends here, so a format added to the router
+// above is stored the same way as any other.
+func midpImageFromDecoded(decoded stdimage.Image) (*jvm.Object, error) {
+	bounds := decoded.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	byteLength, err := backend.RGBAByteLength(width, height)
+	if err != nil {
+		return nil, fmt.Errorf("decode image dimensions: %w", err)
+	}
 	rgba := make([]byte, byteLength)
-	for y := 0; y < config.Height; y++ {
-		for x := 0; x < config.Width; x++ {
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
 			pixel := color.NRGBAModel.Convert(decoded.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
-			index := (y*config.Width + x) * 4
+			index := (y*width + x) * 4
 			rgba[index] = pixel.R
 			rgba[index+1] = pixel.G
 			rgba[index+2] = pixel.B
 			rgba[index+3] = pixel.A
 		}
 	}
-	return newMIDPImage(config.Width, config.Height, false, rgba)
+	return newMIDPImage(width, height, false, rgba)
 }
 
 func (image *imageData) snapshot() []byte {

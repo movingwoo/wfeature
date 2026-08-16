@@ -1137,7 +1137,10 @@ const initCheat = () => {
       address.className = "cheat-address";
       address.textContent = hex(hit.address);
       const detail = document.createElement("span");
-      detail.textContent = `pc ${hex(hit.pc)} · ${hit.count}회 · ${hex(hit.value)}`;
+      // A host write's pc is the last guest instruction, not the writer, so it
+      // is labelled rather than shown as an address to go and disassemble.
+      const writer = hit.origin === "host" ? `호스트 · 직전 pc ${hex(hit.pc)}` : `pc ${hex(hit.pc)}`;
+      detail.textContent = `${writer} · ${hit.count}회 · ${hex(hit.value)}`;
       row.append(address, detail);
       hitsList.append(row);
     }

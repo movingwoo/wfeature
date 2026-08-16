@@ -72,3 +72,66 @@ func TestSessionCheatScansAndFreezesGuestMemory(t *testing.T) {
 		t.Fatalf("console does not share the session: %q", output)
 	}
 }
+
+// The store instrumentation is shared with the other ARM platform, but the
+// routing that keeps the cheat's own writes out of it is per-platform wiring,
+// so it is proved here too: a platform write is recorded and labelled, and the
+// per-tick freeze rewrite is not recorded at all.
+func TestWatchSeesPlatformWritesButNotTheCheatsOwn(t *testing.T) {
+	session, err := StartSession(context.Background(), fixtureArchive(t), SessionOptions{
+		Width: 16, Height: 8, MaxSteps: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := session.Cheat()
+
+	const address = fixtureDataBase + 0xf0
+	if err := engine.Watch(address); err != nil {
+		t.Fatal(err)
+	}
+
+	var word [4]byte
+	binary.LittleEndian.PutUint32(word[:], 4242)
+	if err := session.client.core.Memory().Write(address, word[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, _, err := engine.WatchHits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := 0
+	for _, hit := range hits {
+		if hit.Address == address && hit.Origin == cheat.OriginHost && hit.Value == 4242 {
+			host++
+		}
+	}
+	if host != 1 {
+		t.Fatalf("platform write recorded as %+v, want one host write of 4242", hits)
+	}
+
+	valueType, _ := cheat.ParseValueType("u32")
+	if _, err := engine.Freeze(address, valueType, 9999, "hp"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(hits)
+	for range 5 {
+		if err := session.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, _, err := engine.WatchHits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hit := range after {
+		if hit.Address == address && hit.Value == 9999 {
+			t.Fatalf("the cheat's own freeze was recorded as a writer: %+v", hit)
+		}
+	}
+	if len(after) != before {
+		t.Fatalf("ticking added %d writers to %#x, want none from the cheat itself: %+v",
+			len(after)-before, address, after)
+	}
+}

@@ -518,6 +518,19 @@ and-menu runs the census above was taken on — it is still zero. That is the
 answer worth having: the earlier count could be read as "these runs stop too
 early to ask", and this one cannot.
 
+## Images this platform can read but no local title sends
+
+`Image.createImage` here decodes PNG, JPEG and GIF through the standard
+library, and now also the handset bitmap the other two platforms' archives
+carry (`wipic.DecodeLBMP`, described in `ktf.md` under "LBMP: the handset's own
+bitmap"). **No SKT archive in this repository ships one, and none ships a BMP
+either** — a sweep of every local archive found LBMP in exactly one KTF title
+and BMPs across KTF with a single one in LGT. The routing is here anyway
+because the decode is shared and an image the neighbouring platforms read
+without trouble should not be the thing that ends a title. If a title ever does
+send one, this is where it lands; if one sends a BMP, that path is still
+missing and this is the note that says so.
+
 ## Deliberately incomplete
 
 - **`SISImage` does not decode.** The container's frame and object tables are

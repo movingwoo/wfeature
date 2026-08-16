@@ -101,19 +101,122 @@ that made it.
 required permission, clipped to their mapping bounds. Memory scanners (the
 cheat engine) sweep these instead of the mapped reservations.
 
-`Core.Watch` records every guest store to an address with the instruction that
-made it (`watch.go`). It was built for cheats — finding the address of a health
-bar is a scan, finding the instruction that decrements it is a watch — and it
-answers a second kind of question just as well: **what wrote over a structure
-this platform handed the guest.** One LGT defect that had survived three passes
-of reasoning was named by one run with a watch on the word that kept changing;
-see `docs/lgt.md`, "A class's statics live in its class object". Reach for it
-before reasoning about who could have written something.
+`Core.Watch` records every store to an address with the instruction that made it
+(`watch.go`). It was built for cheats — finding the address of a health bar is a
+scan, finding the instruction that decrements it is a watch — and it answers a
+second kind of question just as well: **what wrote over a structure this
+platform handed the guest.** One LGT defect that had survived three passes of
+reasoning was named by one run with a watch on the word that kept changing; see
+`docs/lgt.md`, "A class's statics live in its class object". Reach for it before
+reasoning about who could have written something.
+
+### Not every store is a guest instruction
+
+The watch used to record guest stores only, and that made it wrong rather than
+incomplete on exactly the addresses worth watching. This platform writes into
+the guest's own address space continuously: a Java object's fields are guest
+words the runtime keeps in step, a supervisor call servicing `memcpy` writes the
+destination itself, an image blit and a published frame land the same way. None
+of those is an emulated instruction, so an address the host rewrote every tick
+answered **no writers at all** — which does not read as "the instrumentation
+does not cover this", it reads as "nothing touches this", and that is an answer
+that ends an investigation instead of starting one.
+
+So `Memory.Write` is instrumented too and every hit carries a `WriteOrigin`:
+
+- **guest** — an emulated store. Its PC names the instruction exactly.
+- **host** — a store by this platform. Its PC is the last guest instruction to
+  have run, which is worth two very different amounts. Reached from inside a
+  supervisor call it names the guest instruction that made the call, which is
+  precisely the caller wanted. Reached from a host path the guest never entered
+  — a field synchronised between ticks, a frame published at a tick boundary —
+  it names wherever the guest happened to stop, and means nothing. The reader
+  has to be told which, so the origin travels with the hit and the console
+  prints `host, last pc` rather than presenting an address to disassemble.
+
+A guest and a host writer at the same PC stay separate hits, because they are
+separate facts and folding them together would hide whichever arrived second
+behind the other's count.
+
+Walking the watch list rather than the written run is what keeps this affordable:
+a frame published into guest memory is a hundred kilobytes and the watched
+addresses are a handful, so a host write costs one span test and then one pass
+over the watches — never one pass over the bytes.
+
+`Memory.WriteUntracked` is the deliberate hole in it, and it has exactly one
+caller: the cheat engine, which rewrites its frozen values every tick and pokes
+addresses on command. Recording those would bury the writer a user is hunting
+under the user's own tooling, and would report a value as written by something
+in the game when nothing in the game is writing it. Both ARM platforms route
+`cheatTarget.WriteMemory` through it; nothing else has any business doing so.
+
+How much this was hiding, measured on two real titles rather than argued:
+watching three words of a KTF title's platform arena reported `no writes
+recorded yet` before and three host writers after, and the same watch across an
+LGT Clet's arena now reports eight, several of them landing `0xef5def5d` — one
+RGB565 colour twice over, which is the frame being published into guest memory.
+Every one of those addresses was being written several times a second the whole
+time, and the tool said nothing was writing them.
 
 `Thread.SetContext` replaces the whole guest-visible state, which is what a long
 jump is: the condition flags and the instruction set of the saved point come
 back with the registers, and a handler that restores a context register by
 register leaves those behind. LGT's Java exceptions are built on it.
+
+## What the guests actually spend their instructions on
+
+The library hooks in `ktf.md`, "Recognising the C runtime in the image", answer
+`memcpy`, `memset`, `strlen` and `strcpy` natively because interpreting a
+byte-at-a-time fill is the worst thing this emulator can be asked to do. The
+obvious next step is the same treatment for copy loops the compiler *inlined*,
+which have no entry point to hook. That was measured before it was built, and
+the measurement says not to build it.
+
+Two titles profiled to the instruction, in a real scene rather than at a menu:
+
+| share | what the hot range is |
+|---|---|
+| 54.5% | a halfword fill — the engine's own rectangle fill |
+| 36.1% | 4-bit pixels unpacked through a palette into a 16-bit surface |
+| 43.8% | packed pixels through a palette with a transparent-colour key |
+| 21.9% | another halfword fill, written as pairs of byte stores |
+| 16.9% | an RGB565 alpha blend |
+
+The first two are one title and the last three another; in both, two ranges
+account for over 90% and 65% of all guest execution respectively. A third
+title's hottest range is an AOT Java sprite draw instead. **Not one of them is
+a copy loop.** Every one is the game's own rasteriser.
+
+Then the specific question, asked of the whole local corpus rather than of a
+profile. Scanning all 32 KTF images byte-exactly for the two inline-copy shapes
+worth hooking — a register-form `ldrb`/`strb` loop advancing both pointers, and
+the stack-form an unoptimised build emits with `dst`, `src` and `len` all in
+frame slots:
+
+- register form: **3 sites, in 2 of 32 images**
+- stack form: **0 sites in 32 images**
+
+A looser sweep that only asks for a load, a store and both pointers advancing
+inside a short backward branch finds 8 copy-shaped and 34 fill-shaped loops
+across roughly ten million decoded instructions. And the one register-form site
+inside a title profiled deeply **was never sampled at all** — zero share, in a
+run of eight billion instructions.
+
+So a pattern engine for those two shapes would be machinery for something the
+corpus barely contains and never runs hot. What it would have to match instead
+is engine code, and that does not generalise either: the two halfword fills
+above are the same operation in two titles and share no instruction sequence —
+one counts down a register and stores halfwords, the other walks a destination
+pointer against an end pointer storing bytes in pairs from a fixed source. A
+pattern that matched both would have to be a loop recogniser rather than a byte
+pattern.
+
+**Beware the tool before the conclusion.** The first version of that corpus
+sweep reported zero copy loops everywhere, which looked like a clean answer and
+was an artifact: the disassembler stops at the first halfword it cannot decode,
+so it had read 822 instructions of the 140,000 in the first image and every
+image after was the same silence. A survey that reports "none" has to be made
+to report a known-present case first.
 
 ## Interpreter throughput
 

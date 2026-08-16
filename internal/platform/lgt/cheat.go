@@ -23,8 +23,11 @@ func (target cheatTarget) ReadMemory(address uint32, destination []byte) error {
 	return target.client.core.Memory().Read(address, destination)
 }
 
+// WriteMemory deliberately does not go through the watched write path: the
+// engine's own freeze rewrites land every tick, and recording them would make
+// the cheat the loudest writer of every address it holds.
 func (target cheatTarget) WriteMemory(address uint32, data []byte) error {
-	return target.client.core.Memory().Write(address, data)
+	return target.client.core.Memory().WriteUntracked(address, data)
 }
 
 func (target cheatTarget) Regions() []cheat.Region {
@@ -74,13 +77,24 @@ func (target cheatTarget) WatchHits() []cheat.WatchHit {
 	converted := make([]cheat.WatchHit, len(hits))
 	for index, hit := range hits {
 		converted[index] = cheat.WatchHit{
-			Address: hit.Address, PC: hit.PC, Value: hit.Value, Size: hit.Size, Count: hit.Count,
+			Address: hit.Address, PC: hit.PC, Origin: writeOrigin(hit.Origin),
+			Value: hit.Value, Size: hit.Size, Count: hit.Count,
 		}
 	}
 	return converted
 }
 
 func (target cheatTarget) WatchHitsOverflowed() bool { return target.client.core.WatchHitsOverflowed() }
+
+// writeOrigin translates the core's answer for the cheat engine, which is kept
+// free of the ARM core so a platform without one can still hold a session.
+// Translating rather than sharing the type is what keeps that true.
+func writeOrigin(origin armcore.WriteOrigin) cheat.WriteOrigin {
+	if origin == armcore.OriginHost {
+		return cheat.OriginHost
+	}
+	return cheat.OriginGuest
+}
 
 // Cheat returns the session's attached cheat engine, creating it on first use.
 // Session.Tick reapplies its frozen values after every round.
