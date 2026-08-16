@@ -30,6 +30,14 @@ func guestException(className, message string) error {
 	}
 }
 
+// Throw builds the error a Go method body returns to raise a guest exception
+// the game can catch. The message is what the exception's getMessage answers,
+// so it is written for whoever reads the game's own error path, not only for a
+// log line.
+func Throw(className, message string) error {
+	return guestException(className, message)
+}
+
 // IsGuestException reports whether err contains a guest exception assignable to
 // className. It recognizes both runtime-owned core exception classes and
 // application classes loaded from the configured class source.

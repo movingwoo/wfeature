@@ -94,54 +94,67 @@ it" case.
 
 ```sh
 ./build.sh [debug|release]                 # the Makefile's targets, one command
-./start.sh [debug|release] [server args…]  # background; prints the URL and the pid
+./start.sh [debug|release] [server args…]  # background; prints where it is
 ./status.sh [port]                         # what is running, on which port
-./stop.sh [debug|release|<port>]           # stops it again
+./stop.sh [port]                           # stops it again
 ```
 
-**A bare command means the release profile** in all three, since that is the
-build a machine is left running. `make serve` still means debug, because
-watching a log is what the debug build is for. Both profiles can run at once —
-each owns its own pid file — as long as they are not asked for the same port.
+**A bare command means the release profile** in the two that take one, since
+that is the build a machine is left running. `make serve` still means debug,
+because watching a log is what the debug build is for. Both profiles can run at
+once, as long as they are not asked for the same port.
 
-`start.sh` writes the pid and the log under `var/run/`, refuses to start a
-second copy of a profile already running, and reports the address the server
-actually bound rather than the one it was asked for. `stop.sh` reads that pid,
-sends `SIGTERM` so a save in flight still finishes, and only forces the process
-after ten seconds.
+`start.sh` does one thing: it builds the profile if it has to, starts the
+server in the background with its log under `var/run/`, and prints what the
+server then says about itself. There is no pid file — nothing needs one any
+more.
 
-A server started by hand leaves no pid file, so a bare `stop.sh` also clears the
-usual port, whichever profile is on it: a bare command is what gets reached for
-when a port will not free up. **It never kills on the strength of a port
-alone** — it asks the port what it is first, and something that is not this
-server is reported and left alone. Finding a listener needs `lsof` or `ss`;
-without either, only servers started by `start.sh` can be stopped.
+`stop.sh` and `status.sh` are one line each, because the work is
+`wfeature-server stop` and `wfeature-server status`. Both take a port and
+nothing else: **the server is asked what it is** rather than looked up in a
+process list, so a stranger holding the port is reported and left alone, and
+`go run`'s executable-in-the-build-cache is recognised like any other.
 
-`status.sh` answers the other half: which profile is up, on which port, and
-whether a pid file is claiming a server that has gone. It reads the profile from
-the server rather than from the path, because a path cannot answer it — `go run`
-compiles into the build cache under a name of its own.
+A stop asks the server to stop itself, which drains the same way Ctrl-C does
+and finishes a save in flight. Only a server that will not answer is signalled,
+and only one that ignores the signal is forced.
 
 ### /api/status
 
 The server answers `GET /api/status` with what it is:
 
 ```json
-{"server":"wfeature","profile":"debug","version":"dev"}
+{"server":"wfeature","profile":"debug","version":"dev","pid":4242}
 ```
 
 The profile is the binary that is running, and from outside the process there is
 nothing else to read it from: two servers on two ports look alike, and the
 executable's path says nothing when it was started with `go run` or renamed into
-a release archive. The scripts use it for two things — naming the profile, and
-telling this server from a stranger holding the port before anything is killed.
-The version is the one stamped by `make dist`, and `dev` in every other build.
+a release archive. `status` and `stop` use it for three things — naming the
+profile, telling this server from a stranger holding the port before anything is
+stopped, and knowing which process to signal if the polite stop below does not
+work. The version is the one stamped by `make dist`, and `dev` in every other
+build.
 
-Windows has no equivalent of these four scripts in a checkout; the PowerShell
-block above and closing the window are the procedure there. A release archive is
+### /api/shutdown
+
+`POST /api/shutdown` stops the server the way closing its window does: it stops
+accepting, finishes what is in flight, and exits. **Only a caller on this
+machine may use it** — the server binds every interface so a phone can play, and
+a stop anyone on that network could send is a way to end somebody's game from
+the next room. A request from anywhere else is refused with 403.
+
+It exists because the alternative is finding the process behind a port from
+outside, which took a different tool on every operating system (`lsof`, `ss`,
+`fuser`, `netstat`) and still could not tell this server from a stranger. With
+the route, one implementation in `internal/launcher` behaves the same
+everywhere, and Windows gets the same graceful stop as the others rather than a
+`taskkill`.
+
+Windows has no equivalent of these scripts in a checkout; the PowerShell block
+above and closing the window are the procedure there. A release archive is
 different — it carries `start`, `stop` and `status` for all three systems,
-Windows included, working from the port rather than from a pid file (see
-`packaging/README.md`).
+Windows included (see `packaging/README.md`).
 
 ### Behind a reverse proxy, on a Unix socket
 
@@ -202,9 +215,8 @@ serving is never removed**: starting a second server on it fails with `a server
 is already serving this socket`, and the first one keeps running. A clean stop
 removes the file itself.
 
-**`start.sh`, `stop.sh` and `status.sh` do not manage a socket server.** They
-find a server by its port and confirm its identity by asking that port for the
-page, and neither works against a path. That is deliberate rather than missing:
+**`start.sh`, `stop.sh` and `status.sh` are written for a port.** They ask a
+port what is behind it, and neither that nor the stop route reaches a path. That is deliberate rather than missing:
 a deployment that wants a reverse proxy has a service manager already, and the
 unit above is the whole of what those scripts would have done. To ask a socket
 server what it is, the same endpoint the scripts use answers over the socket:
@@ -361,9 +373,13 @@ written for all three.
 
 The gap that leaves is what `.github/workflows/checks.yml` is for. Its `smoke`
 job runs on Ubuntu, Windows and macOS runners and, on each, builds the release
-server, stages it the way an archive does, and then checks the five things a
+server, stages it the way an archive does, and then checks the seven things a
 download has to do: report its version, bind its port, answer `/api/status`,
-serve the page it carries, and name the folder beside it as its data root. That
+serve the page it carries, name the folder beside it as its data root, say what
+it is when asked with `status`, and stop when asked with `stop` — draining
+rather than being killed. The last two are why the job matters most on Windows:
+that is the one system where a stop has no signal to fall back on, so the route
+the server answers is the whole of it there. That
 is a real run on each OS rather than a compile. `verify.yml` calls it on every
 push and pull request, and `release.yml` calls it before it publishes, so no
 tag can ship a binary this never started.

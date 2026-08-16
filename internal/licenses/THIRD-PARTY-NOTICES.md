@@ -23,7 +23,7 @@ mechanical translation of the hqx crate's decision tables — a substantial
 portion of that work rather than an independent reimplementation — so its
 copyright notice below applies to them.
 
-The Java class fixtures under `internal/*/classdata` and `internal/*/testdata`,
+The runtime's own class library, the Java fixtures under `internal/*/testdata`,
 the fonts' rasterizer, the SMAF/MIDI code, and the emulator core were authored
 for this project.
 

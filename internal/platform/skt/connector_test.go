@@ -53,12 +53,8 @@ func TestConnectionClassesResolve(t *testing.T) {
 		midp.ConnectionNotFoundExceptionClass,
 	}
 	for _, name := range classes {
-		if _, ok := (midp.Library{}).ClassBytes(name); !ok {
-			t.Errorf("ClassBytes(%q) is missing from the library", name)
-			continue
-		}
-		// Walking to Object is what makes the loader parse the class, so a
-		// class file that no longer loads fails here rather than inside a
+		// Walking to Object is what makes the runtime resolve the class, so a
+		// name the library stopped declaring fails here rather than inside a
 		// game.
 		loaded, err := runtime.VM.IsSubclassOf(name, "java/lang/Object")
 		if err != nil {

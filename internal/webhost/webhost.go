@@ -21,7 +21,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -76,6 +79,12 @@ type Options struct {
 	// unstamped build leaves it empty and the endpoint says so.
 	Version string
 
+	// RequestShutdown asks the process to stop the way a signal does: drain,
+	// then exit. It is what POST /api/shutdown calls, and a host that does not
+	// install it has no such route — a server embedded in something larger
+	// does not get to end that program.
+	RequestShutdown func()
+
 	Logger *slog.Logger
 }
 
@@ -96,6 +105,9 @@ type Server struct {
 	// server keeps only the counted totals.
 	traceLimit int
 	version    string
+	// requestShutdown is Options.RequestShutdown; nil means the route is not
+	// served at all.
+	requestShutdown func()
 
 	// parked holds games whose page went away, waiting under the token that
 	// page was given; see resume.go. They live on the Server because they have
@@ -114,14 +126,15 @@ func New(options Options) (*Server, error) {
 		logger = backend.NewLogger(io.Discard)
 	}
 	return &Server{
-		client:     options.Client,
-		gameRoot:   options.GameRoot,
-		saveRoot:   options.SaveRoot,
-		logRoot:    options.LogRoot,
-		logger:     logger,
-		profile:    backend.BuildProfile(),
-		traceLimit: sessionTraceLimit(),
-		version:    options.Version,
+		client:          options.Client,
+		gameRoot:        options.GameRoot,
+		saveRoot:        options.SaveRoot,
+		logRoot:         options.LogRoot,
+		logger:          logger,
+		profile:         backend.BuildProfile(),
+		traceLimit:      sessionTraceLimit(),
+		version:         options.Version,
+		requestShutdown: options.RequestShutdown,
 	}, nil
 }
 
@@ -155,6 +168,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveGameArchive(writer, request)
 	case requestPath == "/api/status":
 		s.serveStatus(writer, request)
+	case requestPath == "/api/shutdown":
+		s.serveShutdown(writer, request)
 	case requestPath == "/licenses":
 		s.serveLicenses(writer, request)
 	default:
@@ -183,12 +198,67 @@ func (s *Server) serveStatus(writer http.ResponseWriter, request *http.Request) 
 		Server  string `json:"server"`
 		Profile string `json:"profile"`
 		Version string `json:"version"`
-	}{Server: "wfeature", Profile: s.profile, Version: version})
+		PID     int    `json:"pid"`
+	}{Server: "wfeature", Profile: s.profile, Version: version, PID: os.Getpid()})
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 	writeJSON(writer, http.StatusOK, body)
+}
+
+// serveShutdown stops the server the way closing its window does. It exists
+// because that window is often gone — a launcher double-clicked weeks ago, a
+// login that has ended — and because the alternative is finding the process
+// that holds the port from outside, which took a different tool on every
+// operating system and could not tell this server from a stranger.
+//
+// **Only a caller on this machine may use it.** The server binds every
+// interface so a phone on the same network can play, and a stop anyone on that
+// network can send is a way to end somebody's game from the next room. Local
+// callers gain nothing they did not already have: whoever can reach loopback
+// here can signal the process anyway.
+//
+// The answer is sent before the drain starts, because the drain waits for
+// in-flight requests and this is one of them.
+func (s *Server) serveShutdown(writer http.ResponseWriter, request *http.Request) {
+	if s.requestShutdown == nil {
+		writeError(writer, http.StatusNotFound, "Not Found")
+		return
+	}
+	if request.Method != http.MethodPost {
+		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	if !isLoopbackRequest(request) {
+		s.logger.Warn("refused a shutdown from off this machine", "from", request.RemoteAddr)
+		writeError(writer, http.StatusForbidden, "Forbidden")
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, []byte(`{"stopping":true}`))
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	s.logger.Info("stopping at a local request")
+	go s.requestShutdown()
+}
+
+// isLoopbackRequest reports whether the peer is on this machine. A Unix socket
+// has no address to read, and being on one is itself the answer: nothing off
+// the machine can open it.
+func isLoopbackRequest(request *http.Request) bool {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	if host == "" || host == "@" {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return address.IsLoopback()
 }
 
 // serveLicenses answers with this project's licence and the notices for every

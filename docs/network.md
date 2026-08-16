@@ -88,8 +88,8 @@ handling the answer. Asking is the whole point of the call.
 
 ## The Generic Connection Framework
 
-`javax.microedition.io` is in `internal/api/midp/java/javax/microedition/io`,
-compiled into `classdata` and served by `midp.Library`. The Go side is
+`javax.microedition.io` is declared in `internal/api/midp/definitions.go` and
+installed by `midp.Define`. The Go side is
 `internal/platform/skt/connector.go`.
 
 `Connector` is native on all seven entry points and every one lands on the
@@ -217,17 +217,12 @@ reaches them and a stub would be a contract invented for no caller:
 - `PushRegistry` — inbound push is a different feature from the outbound path
   this document covers
 
-## Rebuilding the classes
+## Changing the classes
 
-The `.class` files under `internal/api/midp/classdata` are checked in and
-embedded, so a change to the Java sources needs:
-
-```sh
-javac -source 1.8 -target 1.8 -g:none \
-  -cp internal/api/midp/classdata:internal/jvm/classdata \
-  -d internal/api/midp/classdata \
-  $(find internal/api/midp/java/javax/microedition/io -name '*.java')
-```
+The framework's classes are Go declarations in `internal/api/midp`, so a change
+to one is a change to that file and nothing else — no class files to rebuild.
+`internal/tools/javastub` is what a fixture is compiled against; see
+`docs/testing.md`.
 
 ## Tests
 

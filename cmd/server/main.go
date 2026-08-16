@@ -19,11 +19,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/launcher"
 	"github.com/movingwoo/wfeature/internal/webhost"
 	"github.com/movingwoo/wfeature/internal/wipic"
 	"github.com/movingwoo/wfeature/web"
@@ -37,10 +40,19 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// A command that already explained itself to the user in their own
+		// words does not get a second, English line under it.
+		if !errors.Is(err, errAlreadyReported) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
+
+// errAlreadyReported marks a failure the user has been told about. It still
+// ends the process with a non-zero status, which is what a script around it
+// reads.
+var errAlreadyReported = errors.New("already reported")
 
 // environmentOr lets the documented environment variables keep working while
 // the flags take precedence, so a shell profile can set a game root once and a
@@ -80,6 +92,19 @@ func dataRoot() (root string, layout string) {
 // flag package says about a mistyped flag. `-version` is an answer, so it has
 // to be readable through a pipe; the log is not, so it stays out of one.
 func run(arguments []string, answer, output *os.File) error {
+	// Two of the three things a launcher does are questions about a server
+	// rather than a server to run, and they are answered here so that the
+	// double-click scripts beside a release are a line each instead of a
+	// per-operating-system reimplementation. See internal/launcher.
+	if len(arguments) > 0 {
+		switch arguments[0] {
+		case "status":
+			return reportStatus(arguments[1:], answer, output)
+		case "stop":
+			return stopServer(arguments[1:], answer, output)
+		}
+	}
+
 	flags := flag.NewFlagSet("server", flag.ContinueOnError)
 	flags.SetOutput(output)
 	root, layout := dataRoot()
@@ -95,6 +120,8 @@ func run(arguments []string, answer, output *os.File) error {
 		"directory receiving debug reports")
 	number := flags.String("number", environmentOr("WFEATURE_PHONE_NUMBER", wipic.SubscriberNumber()),
 		"the subscriber number this handset answers with; a shorter one opens a title that gates on billing")
+	openPage := flags.Bool("open", environmentOr("WFEATURE_OPEN", "") != "",
+		"open the page in a browser once the server is listening")
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -125,6 +152,14 @@ func run(arguments []string, answer, output *os.File) error {
 		source = *webRoot
 	}
 
+	// The local stop request and a signal end at the same drain; this is the
+	// channel the route closes. sync.Once keeps a second request from closing
+	// a closed channel.
+	shutdownRequested := make(chan struct{})
+	var once sync.Once
+	options.RequestShutdown = func() { once.Do(func() { close(shutdownRequested) }) }
+	requestShutdown := shutdownRequested
+
 	server, err := webhost.New(options)
 	if err != nil {
 		return err
@@ -145,7 +180,157 @@ func run(arguments []string, answer, output *os.File) error {
 		"games", *gameRoot,
 		"saves", *saveRoot)
 
-	return serve(listener, server, logger)
+	if *openPage {
+		openWhenServing(listener)
+	}
+	return serve(listener, server, logger, requestShutdown)
+}
+
+// openWhenServing shows the page once the port answers. A launcher used to
+// sleep a second and hope; this waits for the listener to be answering as this
+// server, which is the condition that was being guessed at.
+func openWhenServing(listener net.Listener) {
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return
+	}
+	go func() {
+		report, serving := launcher.WaitUntilServing(context.Background(), address.Port, 10*time.Second)
+		if !serving {
+			return
+		}
+		_ = launcher.OpenBrowser(report.URL())
+	}()
+}
+
+// portArgument reads the port a launcher passes. The flag is the documented
+// spelling and the bare number is what the scripts these commands replaced
+// took, so `stop 11599` keeps working.
+func portArgument(name string, arguments []string, output *os.File) (int, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(output)
+	port := flags.Int("port", defaultPort(), "the port the server is on")
+	if err := flags.Parse(arguments); err != nil {
+		return 0, err
+	}
+	switch rest := flags.Args(); len(rest) {
+	case 0:
+	case 1:
+		value, err := strconv.Atoi(rest[0])
+		if err != nil || value <= 0 || value > 65535 {
+			return 0, fmt.Errorf("%s: expected a port number, got %q", name, rest[0])
+		}
+		*port = value
+	default:
+		return 0, fmt.Errorf("%s: expected at most one port, got %d arguments", name, len(rest))
+	}
+	return *port, nil
+}
+
+// defaultPort is the port every launcher, the page and the documentation use,
+// unless the environment moved it.
+func defaultPort() int {
+	if value, err := strconv.Atoi(environmentOr("WFEATURE_PORT", "")); err == nil && value > 0 {
+		return value
+	}
+	return launcher.DefaultPort
+}
+
+// The text these two commands print is Korean, unlike everything else this
+// binary writes. They are what a release user reads: the launcher beside the
+// server is a double-clicked script that runs one of them and shows the
+// answer, so this is the same audience the packaging README is written for.
+// The log stays English, because it is read while debugging rather than while
+// playing.
+
+// reportStatus says whether a server is up on a port and which build it is.
+func reportStatus(arguments []string, answer, output *os.File) error {
+	port, err := portArgument("status", arguments, output)
+	if err != nil {
+		return err
+	}
+	report := launcher.Query(context.Background(), port)
+	switch report.State {
+	case launcher.Ours:
+		fmt.Fprintln(answer, "wfeature 서버가 돌고 있습니다.")
+		fmt.Fprintf(answer, "  주소       %s\n", report.URL())
+		if lan := report.LANURL(); lan != "" {
+			fmt.Fprintf(answer, "  다른 기기  %s\n", lan)
+		}
+		fmt.Fprintf(answer, "  버전       %s (%s)\n", versionOrUnknown(report.Version), report.Profile)
+		fmt.Fprintf(answer, "  멈추기     %s stop %d\n", launcherName(), port)
+	case launcher.Foreign:
+		fmt.Fprintf(answer, "포트 %d 를 쓰는 것이 있지만 wfeature 서버가 아닙니다.\n", port)
+		fmt.Fprintf(answer, "  %s\n", foreignReason(report))
+		if port < 65535 {
+			fmt.Fprintf(answer, "  다른 포트로 띄우려면: %s -addr :%d\n", launcherName(), port+1)
+		}
+	default:
+		fmt.Fprintf(answer, "포트 %d 에는 wfeature 서버가 없습니다.\n", port)
+	}
+	return nil
+}
+
+// foreignReason says, in the user's language, what is known about whatever is
+// holding the port. The technical half stays in the report for a log.
+func foreignReason(report launcher.Report) string {
+	switch report.Reason {
+	case launcher.OtherServer:
+		return "다른 프로그램이 응답합니다."
+	default:
+		return "연결은 되지만 응답이 없습니다."
+	}
+}
+
+func versionOrUnknown(version string) string {
+	if version == "" {
+		return "알 수 없음"
+	}
+	return version
+}
+
+// stopServer stops the server on a port, and nothing else that happens to be
+// there.
+func stopServer(arguments []string, answer, output *os.File) error {
+	port, err := portArgument("stop", arguments, output)
+	if err != nil {
+		return err
+	}
+	report, outcome, err := launcher.Stop(context.Background(), port)
+	switch outcome {
+	case launcher.AlreadyStopped:
+		fmt.Fprintf(answer, "포트 %d 에는 아무것도 없습니다. 서버는 이미 멈춰 있습니다.\n", port)
+		return nil
+	case launcher.Refused:
+		if errors.Is(err, launcher.ErrNotOurs) {
+			fmt.Fprintf(answer, "포트 %d 를 쓰는 것은 wfeature 서버가 아닙니다. 건드리지 않습니다.\n", port)
+			fmt.Fprintf(answer, "  %s\n", foreignReason(report))
+			return errAlreadyReported
+		}
+		return err
+	case launcher.Signalled, launcher.Killed:
+		fmt.Fprintf(answer, "wfeature 서버를 멈췄습니다 (pid %d).\n", report.PID)
+		fmt.Fprintln(answer, "  정상 종료에 응답하지 않아 강제로 멈췄습니다.")
+		return nil
+	default:
+		fmt.Fprintf(answer, "wfeature 서버를 멈췄습니다 (pid %d).\n", report.PID)
+		return nil
+	}
+}
+
+// launcherName is how this binary was invoked, for the line that tells a user
+// what to type next. A release user typed ./wfeature-server beside the games
+// folder; a checkout typed a path into build/, and repeating the path they
+// used is the half that can be pasted back.
+func launcherName() string {
+	if invoked := os.Args[0]; strings.ContainsRune(invoked, filepath.Separator) {
+		return invoked
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return "wfeature-server"
+	}
+	return "." + string(filepath.Separator) + filepath.Base(executable)
 }
 
 // defaultAddress keeps the port the page and the documentation already use,
@@ -241,7 +426,7 @@ func serverURL(listener net.Listener) string {
 	return "http://" + listener.Addr().String()
 }
 
-func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger) error {
+func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, requested <-chan struct{}) error {
 	httpServer := &http.Server{
 		Handler: handler,
 		// A game archive is tens of megabytes over a home network, so the
@@ -265,17 +450,27 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger) 
 			return nil
 		}
 		return err
+	case <-requested:
+		logger.Info("shutting down")
+		return drain(httpServer, handler, logger)
 	case <-signalled.Done():
 		logger.Info("shutting down")
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdown); err != nil {
-			logger.Error("shutdown was not clean", "error", err)
-		}
-		// A game waiting for a page to come back has no window left to wait
-		// in; its guest goroutines would otherwise outlive this process's
-		// reason to exist.
-		handler.CloseParkedSessions()
-		return nil
+		return drain(httpServer, handler, logger)
 	}
+}
+
+// drain stops accepting and finishes what is in flight, which is what makes a
+// stop safe during a save write. Both ways of asking end here: the signal a
+// window's Ctrl-C sends, and the local request POST /api/shutdown makes.
+func drain(httpServer *http.Server, handler *webhost.Server, logger *slog.Logger) error {
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdown); err != nil {
+		logger.Error("shutdown was not clean", "error", err)
+	}
+	// A game waiting for a page to come back has no window left to wait in;
+	// its guest goroutines would otherwise outlive this process's reason to
+	// exist.
+	handler.CloseParkedSessions()
+	return nil
 }

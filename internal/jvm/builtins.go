@@ -629,8 +629,15 @@ func parseInteger(radix int) NativeMethod {
 	}
 }
 
+// contextBuiltin installs one of the runtime's own bodies that needs the
+// execution it was called on. It replaces whatever was registered for the
+// method before, including a class definition's body, so the last registration
+// is the one that runs whichever registry it landed in.
 func (vm *VM) contextBuiltin(class, name, descriptor string, method contextNativeMethod) {
-	vm.contextNatives[methodKey{class: class, name: name, descriptor: descriptor}] = method
+	key := methodKey{class: class, name: name, descriptor: descriptor}
+	delete(vm.natives, key)
+	vm.contextNatives[key] = method
+	vm.builtinNatives[key] = true
 }
 
 func (vm *VM) threadState(thread *Object) *guestThread {
@@ -1393,8 +1400,11 @@ func indexUTF16(value, needle []uint16, from int) int {
 	return -1
 }
 
+// builtin installs one of the runtime's own bodies. See contextBuiltin for why
+// it clears the other registry.
 func (vm *VM) builtin(class, name, descriptor string, method NativeMethod) {
 	key := methodKey{class: class, name: name, descriptor: descriptor}
+	delete(vm.contextNatives, key)
 	vm.natives[key] = method
 	vm.builtinNatives[key] = true
 }

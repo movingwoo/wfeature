@@ -151,11 +151,12 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("validate framebuffer: %w", err)
 	}
-	// The runtime libraries precede the application so a game cannot replace
-	// a platform class, and SKVM follows MIDP because it is built on it. Both
-	// are unconditional: every title this package runs is an SKT title, and
-	// one that never touches com.skt.m simply never loads those classes.
-	source := jvm.ClassSources{midp.Library{}, skvm.Library{}, archive}
+	// The runtime libraries are declared on the VM below rather than loaded
+	// from it, and a declared class outranks one an archive ships under the
+	// same name, so a game cannot replace a platform class. Both libraries are
+	// unconditional: every title this package runs is an SKT title, and one
+	// that never touches com.skt.m simply never initializes those classes.
+	source := jvm.ClassSources{archive}
 	runtime := &Runtime{}
 	// A title's own thread is the game: it decodes its images, loads its world
 	// and runs its frames, and it does that for as long as the title is up. So
@@ -180,6 +181,12 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		options.JVM.ByteEncoder = encodePlatformString
 	}
 	machine := jvm.New(source, options.JVM)
+	if err := midp.Define(machine); err != nil {
+		return nil, err
+	}
+	if err := skvm.Define(machine); err != nil {
+		return nil, err
+	}
 	*runtime = Runtime{
 		Archive:     archive,
 		VM:          machine,

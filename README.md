@@ -79,15 +79,16 @@ make serve
 ./build.sh        # 빌드
 ./start.sh        # 백그라운드로 기동 — 주소와 pid를 알려줍니다
 ./status.sh       # 지금 뭐가 몇 번 포트에 떠 있는지
-./stop.sh         # 종료
+./stop.sh         # 종료 (`./stop.sh 11599` 처럼 포트를 줄 수 있습니다)
 ```
 
 인자 없이 부르면 **릴리즈 프로필**입니다.  
-디버그로 쓰려면 `./build.sh debug`, `./start.sh debug`, `./stop.sh debug`처럼 붙입니다.  
+디버그로 쓰려면 `./build.sh debug`, `./start.sh debug`처럼 붙입니다.  
 `./start.sh` 뒤에 붙인 나머지 인자는 서버로 그대로 넘어갑니다(`./start.sh debug -addr 127.0.0.1:11599`).
 
-`./stop.sh <포트>`는 스크립트 밖에서 띄운 서버도 정리합니다.  
-포트만 보고 죽이지는 않고, **그 포트가 wfeature인지 확인한 뒤에만** 종료합니다.
+`./status.sh`와 `./stop.sh`는 포트를 받습니다(`./stop.sh 11599`).  
+스크립트 밖에서 띄운 서버도 정리하고, 포트만 보고 죽이지는 않습니다 —
+**그 포트가 wfeature인지 서버에게 물어본 뒤에만** 종료합니다.
 
 Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.
 

@@ -89,9 +89,12 @@ session too.
 
 Regenerate the fixture with:
 
+`$stub_dir/classes` is the signature classpath from
+[`testing.md`](testing.md); build it once per session.
+
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-rms-fixture.XXXXXX)"
-javac -source 1.8 -target 1.8 -g:none -cp internal/api/midp/classdata \
+javac -source 1.8 -target 1.8 -g:none -cp "$stub_dir/classes" \
   -d "$fixture_dir" internal/platform/skt/testdata/src/RecordStoreMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/RECORDSTORE.MF "$fixture_dir/META-INF/MANIFEST.MF"
