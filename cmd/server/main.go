@@ -236,12 +236,12 @@ func defaultPort() int {
 	return launcher.DefaultPort
 }
 
-// The text these two commands print is Korean, unlike everything else this
-// binary writes. They are what a release user reads: the launcher beside the
-// server is a double-clicked script that runs one of them and shows the
-// answer, so this is the same audience the packaging README is written for.
-// The log stays English, because it is read while debugging rather than while
-// playing.
+// These two commands print English, like everything else this binary writes.
+// A release user does reach them — the launcher beside the server is a
+// double-clicked script that runs one of them and shows the answer — but the
+// launcher's own words are where that audience is addressed, in the language
+// the packaging README uses. What the server says about itself is a port, a
+// build and a pid, and it is read beside a log that has always been English.
 
 // reportStatus says whether a server is up on a port and which build it is.
 func reportStatus(arguments []string, answer, output *os.File) error {
@@ -252,39 +252,39 @@ func reportStatus(arguments []string, answer, output *os.File) error {
 	report := launcher.Query(context.Background(), port)
 	switch report.State {
 	case launcher.Ours:
-		fmt.Fprintln(answer, "wfeature 서버가 돌고 있습니다.")
-		fmt.Fprintf(answer, "  주소       %s\n", report.URL())
+		fmt.Fprintln(answer, "wfeature server is running.")
+		fmt.Fprintf(answer, "  address    %s\n", report.URL())
 		if lan := report.LANURL(); lan != "" {
-			fmt.Fprintf(answer, "  다른 기기  %s\n", lan)
+			fmt.Fprintf(answer, "  other host %s\n", lan)
 		}
-		fmt.Fprintf(answer, "  버전       %s (%s)\n", versionOrUnknown(report.Version), report.Profile)
-		fmt.Fprintf(answer, "  멈추기     %s stop %d\n", launcherName(), port)
+		fmt.Fprintf(answer, "  version    %s (%s)\n", versionOrUnknown(report.Version), report.Profile)
+		fmt.Fprintf(answer, "  stop with  %s stop %d\n", launcherName(), port)
 	case launcher.Foreign:
-		fmt.Fprintf(answer, "포트 %d 를 쓰는 것이 있지만 wfeature 서버가 아닙니다.\n", port)
+		fmt.Fprintf(answer, "Something is using port %d, but it is not a wfeature server.\n", port)
 		fmt.Fprintf(answer, "  %s\n", foreignReason(report))
 		if port < 65535 {
-			fmt.Fprintf(answer, "  다른 포트로 띄우려면: %s -addr :%d\n", launcherName(), port+1)
+			fmt.Fprintf(answer, "  To start one on another port: %s -addr :%d\n", launcherName(), port+1)
 		}
 	default:
-		fmt.Fprintf(answer, "포트 %d 에는 wfeature 서버가 없습니다.\n", port)
+		fmt.Fprintf(answer, "No wfeature server on port %d.\n", port)
 	}
 	return nil
 }
 
-// foreignReason says, in the user's language, what is known about whatever is
-// holding the port. The technical half stays in the report for a log.
+// foreignReason says what is known about whatever is holding the port, in the
+// one line a person needs. The technical half stays in the report for a log.
 func foreignReason(report launcher.Report) string {
 	switch report.Reason {
 	case launcher.OtherServer:
-		return "다른 프로그램이 응답합니다."
+		return "Another program answers there."
 	default:
-		return "연결은 되지만 응답이 없습니다."
+		return "It accepts a connection but does not answer."
 	}
 }
 
 func versionOrUnknown(version string) string {
 	if version == "" {
-		return "알 수 없음"
+		return "unknown"
 	}
 	return version
 }
@@ -299,21 +299,21 @@ func stopServer(arguments []string, answer, output *os.File) error {
 	report, outcome, err := launcher.Stop(context.Background(), port)
 	switch outcome {
 	case launcher.AlreadyStopped:
-		fmt.Fprintf(answer, "포트 %d 에는 아무것도 없습니다. 서버는 이미 멈춰 있습니다.\n", port)
+		fmt.Fprintf(answer, "Nothing is on port %d; the server is already stopped.\n", port)
 		return nil
 	case launcher.Refused:
 		if errors.Is(err, launcher.ErrNotOurs) {
-			fmt.Fprintf(answer, "포트 %d 를 쓰는 것은 wfeature 서버가 아닙니다. 건드리지 않습니다.\n", port)
+			fmt.Fprintf(answer, "What is using port %d is not a wfeature server; leaving it alone.\n", port)
 			fmt.Fprintf(answer, "  %s\n", foreignReason(report))
 			return errAlreadyReported
 		}
 		return err
 	case launcher.Signalled, launcher.Killed:
-		fmt.Fprintf(answer, "wfeature 서버를 멈췄습니다 (pid %d).\n", report.PID)
-		fmt.Fprintln(answer, "  정상 종료에 응답하지 않아 강제로 멈췄습니다.")
+		fmt.Fprintf(answer, "Stopped the wfeature server (pid %d).\n", report.PID)
+		fmt.Fprintln(answer, "  It did not answer a graceful stop, so it was forced.")
 		return nil
 	default:
-		fmt.Fprintf(answer, "wfeature 서버를 멈췄습니다 (pid %d).\n", report.PID)
+		fmt.Fprintf(answer, "Stopped the wfeature server (pid %d).\n", report.PID)
 		return nil
 	}
 }

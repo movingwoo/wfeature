@@ -10,5 +10,5 @@ cd "$(dirname "$0")"
 # A double-clicked window closes the moment the script ends, and the answer
 # would go with it.
 echo
-printf "이 창은 닫아도 됩니다. Enter 를 누르면 닫힙니다: "
+printf "You can close this window. Press Enter to close it: "
 read -r _

@@ -29,7 +29,9 @@ system, each finding the process behind the port with whichever tool that system
 had: `lsof`, `ss` or `fuser` on Linux, `lsof` on macOS, `netstat` and `tasklist`
 on Windows. They are gone. What is left in each script is what only a script can
 do — set the working directory, clear macOS quarantine, hold a double-clicked
-window open — and the Korean line the user reads.
+window open — and the one line that says what is starting and how to stop it.
+That line is English, like the server's own output underneath it: the Korean in
+a release is in the `README.txt` beside these, not in the window they open.
 
 The repository's own `build.sh` and `start.sh` are a different set for a
 different job: they take a profile and build from source, neither of which

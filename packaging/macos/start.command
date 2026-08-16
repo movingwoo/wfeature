@@ -15,6 +15,6 @@ cd "$(dirname "$0")"
 # why the launcher exists rather than the bare binary.
 xattr -dr com.apple.quarantine . 2>/dev/null || true
 
-echo "wfeature 서버를 시작합니다. 이 창을 닫거나 Control-C를 누르면 멈춥니다."
+echo "Starting the wfeature server. Close this window or press Control-C to stop it."
 echo
 exec ./wfeature-server -open "$@"
