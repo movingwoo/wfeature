@@ -69,7 +69,13 @@
           </button>
           <div class="keypad-main">
             <div class="direction-pad type1-direction-pad">
+              <!-- Type3 is Type1 with the two upper diagonals brought over from
+                   the number pad, so the row a thumb rests on reads 1 2 3. The
+                   same keys, moved rather than added: the number pad gives them
+                   up while this layout holds. -->
+              <button class="key-top-left type3-only" data-key="1">1</button>
               <button class="key-up" data-key="2">2</button>
+              <button class="key-top-right type3-only" data-key="3">3</button>
               <button class="key-left" data-key="4">4</button>
               <button class="key-right" data-key="6">6</button>
               <button class="key-down" data-key="8">8</button>
@@ -82,9 +88,9 @@
               <button class="key-down" data-key="DOWN">↓</button>
             </div>
             <div class="number-pad">
-              <button class="key-top-left" data-key="1">1</button>
+              <button class="key-top-left type3-hidden" data-key="1">1</button>
               <button class="key-up type2-only" data-key="2">2</button>
-              <button class="key-top-right" data-key="3">3</button>
+              <button class="key-top-right type3-hidden" data-key="3">3</button>
               <button class="key-left type2-only" data-key="4">4</button>
               <button class="key-center" data-key="5">5</button>
               <button class="key-right type2-only" data-key="6">6</button>

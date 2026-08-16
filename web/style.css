@@ -223,6 +223,9 @@ body {
 }
 
 .button-container {
+  /* One key's height, named once: the pads size their rows from it and the
+     buttons take it as their own, so an empty row is still a row tall. */
+  --keypad-key-height: clamp(36px, 6vh, 48px);
   position: relative;
   display: grid;
   width: min(100vw, 480px);
@@ -292,18 +295,23 @@ body {
   gap: clamp(20px, 8vw, 56px);
 }
 
+/* The rows are the key's own height rather than auto: a layout that leaves a
+   row of the number pad empty — Type3 takes both of its top keys away — would
+   otherwise collapse that row to nothing and slide the pad up out of line with
+   the direction pad beside it. */
 .direction-pad,
 .number-pad {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, auto);
+  grid-template-rows: repeat(3, var(--keypad-key-height));
   align-items: center;
   justify-items: center;
   gap: 8px 4px;
 }
 
 .type2-direction-pad,
-.type2-only {
+.type2-only,
+.type3-only {
   display: none;
 }
 
@@ -317,6 +325,16 @@ body {
 
 .button-container[data-layout="type2"] .type2-only {
   display: block;
+}
+
+/* Type3 keeps the Type1 direction pad and fills the corners of its top row
+   with the 1 and 3 the number pad hands over. */
+.button-container[data-layout="type3"] .type3-only {
+  display: block;
+}
+
+.button-container[data-layout="type3"] .type3-hidden {
+  display: none;
 }
 
 .key-up,
@@ -365,7 +383,7 @@ body {
 .keypad-footer button {
   width: min(100%, 64px);
   min-width: 0;
-  height: clamp(36px, 6vh, 48px);
+  height: var(--keypad-key-height);
   margin: 0;
   font-size: 1em;
   -webkit-touch-callout: none;
