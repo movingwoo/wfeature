@@ -556,6 +556,61 @@ bottom — behind the pointer; a clip that does not describe a rectangle is take
 as the whole surface, because a game that never set one would otherwise draw
 nothing.
 
+### A Java title's drawing does not synchronise, and a Clet's has to
+
+A surface here exists twice: as the runtime's `[]uint16` and as bytes in guest
+memory at the address the surface was allocated at. Keeping the two in step is
+what `syncFromGuest` and `syncToGuest` do, and **which of them is needed
+depends entirely on who is writing pixels**:
+
+- **A Clet is handed the framebuffer's address** — that is what
+  `MC_grpGetScreenFrameBuffer` is for — and it writes pixels into it directly,
+  bypassing every `MC_grp` call. Its draws therefore have to read the surface
+  back before they blend and write it out after. Nothing here can be dropped:
+  instrumented over 1,200 ticks, two Clets found the guest had changed pixels
+  in 600 and 601 of the 1,201 syncs, two million pixels between them.
+- **A Java title never gets an address.** It draws only through `Graphics`
+  objects the platform hands it, and the runtime's copy is the only one that
+  anything writes.
+
+Doing it on the Java path anyway was, for a long time, **the single most
+expensive thing this platform did**. Every drawing call read the whole surface
+out of guest memory, converted it a byte at a time into `uint16`, drew, and
+converted and wrote all of it back — 150 KiB each way for a call that might set
+one pixel, and a title makes tens of thousands of them a scene. A host profile
+put `syncToGuest` and `syncFromGuest` at **55% of the emulator's time**, against
+4.2% for the whole ARM interpreter.
+
+The same instrumentation that priced the Clet case settled the Java one:
+**1,711,725 round trips in one title's session and 82,017 in another's, and not
+one of them found a single pixel the guest had changed.** They were removed, and
+the invariant they were maintaining is restored once a frame instead — the
+flush publishes the finished frame to guest memory rather than reading it back,
+because on this path the runtime's copy is the newer one. What that assumes is
+that nothing on the Clet side touches a Java title's surfaces between frames,
+which holds because a Java title registers no Clet and calls no `MC_grp` slot.
+
+Measured over **all 28 local archives**, 900 ticks each, host nanoseconds per
+guest instruction before and after:
+
+| | before | after | |
+|---|---|---|---|
+| the four Java titles | 705.5 / 614.7 / 207.8 / 207.4 | **67.5 / 170.3 / 38.9 / 39.2** | 3.6x to 10.5x |
+| the twenty-four Clets | 6.47 – 222.2 | the same | none slower by as much as 2% |
+
+and on the two runs that matter, driven to where a title is actually working:
+
+| | before | after |
+|---|---|---|
+| one Java title, 1,500 ticks | 701.5 ns a step | **67.3** |
+| the other, a whole in-game session | 366.6 ns a step | **41.0** |
+
+That session went from 150.9s of host time to 16.9s — 25.5ms a tick to 2.9ms,
+and from 1.96 times the guest clock to 17.5 — while retiring the same
+411,577,534 guest instructions. Every frame of both Java runs came back
+byte-identical, 750 and 2,484 of them, which is what says this was a cost being
+paid for nothing rather than a behaviour something relied on.
+
 ### The field numbers are the specification's, and index 3 is a gap
 
 The identifiers are not a guess and do not need to be inferred from callers.
@@ -853,6 +908,24 @@ So repeats stay unimplemented for the reason anything else here does: there is
 no caller, and a cadence invented for none would be a contract this platform
 would then have to keep.
 
+### A facing is read off the sprite, and it needs magnifying to be read at all
+
+One title was reported turning the wrong way: pressing left and attacking left
+turns the character to the right. Nothing in a trace answers that — a facing is
+the title's own state and it reaches the platform as sprite blits — so the
+answer has to come off the screen, and **a character on a 240-wide handset
+screen is about twenty pixels tall.** At 1:1 a contact sheet cannot tell one
+facing from the other; at five times, with pixels repeated rather than
+smoothed, the eye and the sword are unmistakable. That is what
+`wfeature zoom` is for ([`cli.md`](cli.md)), and it is the thing that had been
+missing rather than any run.
+
+With it, the title's facing is **correct in isolation**: a short press of left,
+of right and of up each turns the character that way, the attack that follows
+keeps the facing it was given, and the frames after the attack keep it too.
+The report is about an attack with an enemy on the screen, so what is left is
+to reach one — the facing itself is no longer the unknown.
+
 ## The guest clock advances with work, not only with ticks
 
 `Session.Tick` moves the clock by one tick. That is not enough on its own: a
@@ -957,6 +1030,58 @@ floor, which is the original mistake in miniature — the 46ms title came out at
 Measured across the local set with `-ticks 600`, before against after, as guest
 milliseconds per frame: 101.7→56.9, 50.0→19.0, 50.1→47.6, 100.0→83.1,
 102.2→80.1, 101.0→72.1, 102.3→68.3, 230.0→200.0, 50.1→27.3. Nothing is slower.
+
+### A Java title's frame loop is not a timer, and it lost a tick a frame twice
+
+Everything above is about `MC_knlSetTimer`, which is a **Clet's** frame loop. A
+Java title arms no timer: its loop is a thread, and it ends each frame with
+`Thread.yield()` and `Thread.sleep(n)`. Both of those were costing it a whole
+session tick per frame, for two different reasons, and the report that found
+them was a player's — "it is a little faster, but it still lags when I move" —
+against a build whose host cost had just come down ninefold.
+
+**The tick did not know when the thread wanted to wake.** `tickSpan` asked
+`nextTimerDue` and nothing else, so a title with no Clet timer always got the
+full session tick. Now it asks `nextJavaThreadDue` as well and takes whichever
+comes first — including **zero**, for a thread whose deadline has already
+arrived. That last part is the whole of it: the tick that services the wake
+advances the clock before handing over the slice, so without it every wait came
+out one tick long. A thread that merely spent its budget is skipped, since zero
+there means "no deadline" rather than "due now", and treating it as due would
+stop the guest clock.
+
+**And `Thread.yield()` parked.** Parking ends the slice, and a slice is granted
+once a tick, so a yield with no other thread to hand the turn to bought nothing
+and cost 50ms of guest time. One local title's loop is `work; repaint; yield;
+sleep(100)` — one of each per frame — and it was being charged **150ms of guest
+time for the 100 it asked for**, which is a third of its frame rate spent on a
+hint. A yield now only parks when another thread could actually run.
+
+That needs a bound, and finding out why is the other half of the lesson: a loop
+that yields is not always a frame loop. Another local title spins on `yield`
+while it waits, and letting that through unparked spent the whole four-million
+step budget every tick — 26.7 million instructions became 4.8 **billion**, and
+a run that took seconds took minutes. `javaYieldBurst` caps a slice at eight
+free yields, which leaves the frame loop's single one alone and parks a spin
+almost at once.
+
+| the reported title, in game | before | after |
+|---|---|---|
+| guest ms a frame | 122.7 | **86.4** |
+| frames a second | 8.15 | **11.6** |
+| what its sleep asks for | 100ms, given 150 | 100ms, given 100 |
+
+Host cost moves the other way and that is the right direction: the same session
+costs 21.6s rather than the 16.9s the section above measured, because the
+emulator is no longer idling through ticks it had no reason to wait out — it is
+drawing 35% more frames in the same guest time, at 40.4ns a step. Twelve times
+the guest clock, with the frames the title actually asked for.
+
+**Neither of these is visible in host time, which is why they outlived a
+profile.** The emulator was not working harder for the slow frames — it was
+idle, waiting out a tick it had no reason to wait for. `ns_per_step` does not
+move, `busy_ms` does not move, and the only number that says anything is guest
+milliseconds per frame.
 **In the world, where the report came from, one title's frame goes from 127.3ms
 to 87.1ms** over the same scripted route — 1.46x, and what is left there is
 throughput rather than pacing, which is the engine-hook question below.
@@ -3341,6 +3466,34 @@ than the five to six times a Clet manages, and a reported session at 10fps sits
 inside that gap. The same run on a debug build costs 167.1s, which is **10.8%**
 of it: a player who wants the frames back should be on the release build first.
 
+#### That profile was of the guest, and the host was doing something else
+
+Every number above is a **guest** profile: it says which guest instructions
+were executed, and it was read as if it also said where the host's time went.
+It does not, and taking a host profile of the same run says so plainly:
+
+| | share of host time |
+|---|---|
+| `syncToGuest` | 29.0% |
+| `syncFromGuest` | 26.3% |
+| the scheduler parking and waking guest threads | ~17% |
+| **the whole ARM interpreter** | **4.2%** |
+
+The interpreter was never the problem. **Two thirds of the host's time was
+copying the framebuffer in and out of guest memory around every drawing call**
+— see `javaDraw` — and the fix is in "A Java title's drawing does not
+synchronise, and a Clet's has to" below. After it, the same route on the same
+build costs **16.9s instead of 150.9s**, with the same 411,577,534 guest
+instructions retired and all 2,484 frames byte-identical: 41.0ns a step rather
+than 366.6, and 17.5 times the guest clock rather than 1.96. A tick went from
+25.5ms to 2.9ms.
+
+The lesson is worth more than the number. A guest profile answers "what is the
+title computing"; only a host profile answers "what is this emulator spending
+its time on", and the two had been read as the same question for as long as
+this section has existed. `docs/armcore.md` carries the same correction from
+the other side.
+
 ## Finding out what a title was told
 
 A fault here is almost never at the instruction that reports it. A slot answers
@@ -3449,14 +3602,106 @@ cmp   ip, #0
 bne   … sleep(10) and test again
 ```
 
-So it is `while (slots[index] != null) sleep(10)` — the method waits for one
-entry of an object array to be **cleared**, and the entry is chosen by a global
-short at `0x01500a74`. It is not waiting on the network, on a timer, or on a
-key: something has to null that slot, and the only thing that ever does is
-whatever the entry itself is. That is the next thread to pull — a watch on the
-slot's address would name the code that filled it — and it is a title's own
-book-keeping rather than a platform call, which is why no trace of platform
-calls has ever pointed at it.
+A first reading took that for `while (slots[index] != null)` — an object array
+indexed by a global short — and it was wrong in the way that matters, because
+it sent the next step at a watchpoint on an address that does not exist.
+**`0x01500a30` is not a variable. It is the field-index out array**, the
+seventh argument of the load call (`0x14`), which this platform fills in at
+startup. So `ldrsh r2, [r2, #0x44]` reads a *constant for the run* — the word
+index of field-table **entry 34** — and `[r3, r2, lsl #2]` is one field of one
+object, not one element of an array.
+
+Three debug lines turn that into names, and each was added for this:
+
+- `LGT java platform class` now lists the **field table** entry by entry.
+  Entry 34 is `d:Z`, a boolean.
+- `LGT java class laid out` now carries `entries=first..last`, which class
+  answered which stretch of that table. 34 falls in `w`'s 29..38, so the field
+  is `w.d`.
+- `LGT java class` now prints each method body's address beside its name, which
+  is what names an address the other direction. `w.i()V@0xd7048` puts the
+  sleeping `+0xf0` at `0xd7138`, exactly where the trace said.
+
+So the predicate is `while (this.d) sleep(10)` on a boolean — and a boolean has
+writers, which a scan finds. Every access to entry 34 is an `ldrsh` of `#0x44`
+against a base loaded from the literal pool, and there are **four in the whole
+module**:
+
+| Site | In | What it does |
+|---|---|---|
+| `0xd3078` | `w.<init>()V` | sets `d = 1` |
+| `0xd7eec` | `w.l()V` | sets `d = 1` |
+| `0xd7148` | `w.i()V` | the wait above |
+| `0xd6f30` | `w.b(Lorg/kwis/msp/lcdui/Graphics;)V` | **clears it** — `d = 0` |
+
+One writer clears it, and `w.b(Graphics)` is the method that draws the card's
+own content: it dispatches virtual entry 71, `a(Lorg/kwis/msp/lcdui/Graphics;)V`
+— the override each card class carries — and clears the flag on the way out.
+`d` is "this card has not drawn yet", and `i()` is the wait for it to have
+drawn.
+
+**`w.b(Graphics)` is reached from exactly one place**, and it is not a vtable:
+`w.paint`'s literal pool holds its address at `0xd6ca8` and calls it at
+`0xd6c44`, behind a test of one of the class's own statics. In a stuck session
+`w.paint` runs — the debug build's `from=` addresses land inside it — and the
+guarded call never does. **The title is waiting for a card that the platform
+is painting**, and paint is taking its other branch every time.
+
+#### The gate, and what holds it open
+
+The static `w.paint` tests at `0xd6aec` is one of the class's own, at
+`data + 0xd4`, and the same scan finds its two writers among the class's
+methods: `w.f()V` sets it to 1 and bumps a counter beside it, `w.g()V` sets
+both back to 0. A notice is up, and paint draws the notice instead of the card
+while it is. `f` and `g` are virtual entries 63 and 61, and the dispatch scan
+gives their call sites: **`g` has two in the whole module**, and one of them is
+in `w.k(I)I` — the save-backup routine, the method holding the `Network` calls.
+
+`w.k(I)I` is where it comes apart:
+
+```
+ldr ip, [r7, #0x84] ; mov lr, pc ; bx ip   ; Network.connect()
+cmn r0, #1                                 ; did it answer -1?
+bne  0xd8384                               ; no: dial the socket
+mov  r0, r8 ; …call…                       ; yes: one call
+mov  r0, #2
+b    0xd8e28                               ; the epilogue — past its own g()
+```
+
+**The failure branch jumps past the teardown.** The notice stays up, paint keeps
+drawing it, `w.d` is never cleared, and the Jlet's loop parks in `w.i()`
+for ever. No platform call is wrong and nothing reports anything.
+
+Two experiments say so, both with the cheat console patching one word of guest
+code in a running session — which is what that console turns out to be good for
+beside cheats:
+
+- **Force the gate.** `set 0xd6af4 0xea00004e` makes `paint` always call
+  `w.b(Graphics)`. The wait report disappears, flushes go from 528 to 1351, and
+  the title paints its way to its own title menu.
+- **Force the connect test.** `set 0xd8368 0xea000005` makes `k` take the
+  branch it would have taken had the network answered. It dials
+  `URL.find("socket://…")` — which used to stop the session as an unimplemented
+  slot and now answers the specification's `SchemeNotFoundException` — the
+  title **catches it**, takes its own notice down, and reaches the same menu.
+
+So this title is not blocked on anything the platform gets wrong; it is blocked
+on `Network.connect` answering `-1`, which is what the specification says a
+handset with no access answers. [`network.md`](network.md) carries that
+decision and why it was not changed on one title's evidence.
+
+What is worth keeping past this title is the recipe, because an out-array
+offset in a disassembly is the commonest dead end this ABI produces:
+
+1. read the offset and the base out of the instruction;
+2. match the base against the load call's arguments to say *which* table it is
+   (`0x1500a30` fields, `0x150086c` static fields, `0x15007b4` virtual methods,
+   `0x150086e` methods, `0x1500874` static methods — this title's, and the
+   addresses are the module's own);
+3. halve the offset for the entry, and take the name off the debug lines above;
+4. scan `.text` for every other `ldrsh` of that offset against that base. The
+   instruction after each says load or store, which sorts readers from writers
+   in one pass.
 
 ## Playing a title from the command line
 
