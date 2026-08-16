@@ -33,6 +33,8 @@ something the game handles.
 | LGT | `MC_netConnect` | accepted, then fails through its callback |
 | LGT | `MC_netClose` | success, because the call returns void |
 | LGT | the rest of the net block — socket connect/write/read/close, both callback setters | error |
+| LGT | `org.kwis.msf.io.Network.connect` | `-1`, and one title disagrees — below |
+| LGT | `org.kwis.msf.io.URL.find` | `SchemeNotFoundException`, the failure the specification names |
 | SKT | `SMS.send`, `Call.call` | `false` |
 | SKT | `PhoneBook` reads | empty, null, or zero |
 | SKT | the WAP browser entry point | accepted and discarded |
@@ -171,6 +173,35 @@ more gracefully cannot move them: there is nothing wrong with the refusal, and
 the server they want no longer exists. Which titles those are, and which ones
 turned out to be handled paths rather than missing servers, is tracked per
 title in the local support matrix.
+
+### One title does not report its own error, it parks
+
+The decision above assumes the refusal lands somewhere the title has code for.
+One LGT Java title says that is not always the same place, and it is worth
+writing down because the two answers are only three instructions apart in its
+own code.
+
+Its save-backup routine puts a notice up, calls `Network.connect`, and on `-1`
+**returns without taking the notice back down** — the branch jumps past its own
+teardown call to the epilogue. The notice being up is what makes its card's
+`paint` draw the notice instead of the card, which is what leaves the flag its
+Jlet loop waits on set for ever ([`lgt.md`](lgt.md), "What that wait is
+actually testing"). Nothing reports anything: the screen holds one line of text
+and the game is gone.
+
+Its other path works. Patching `connect` to look like a success in a running
+session sends it to `URL.find("socket://…")` one call later — which is why
+`find` is served now — and the `SchemeNotFoundException` this platform answers
+with is **caught by the title**, which takes its notice down and carries on to
+its title menu. Same session, same archive, one branch apart.
+
+So the decision "answer `-1`, because that is the specification's failure" is
+right by the specification (`connect` answers 0 when access is already
+available, 1 when it was just established, and -1 when it failed) and wrong for
+this title. Answering 0 would be claiming a network this platform does not
+have, and it would change the first thing every other local title is told — so
+it is not a change to make on one title's evidence without measuring the other
+sixty. It is recorded here rather than made.
 
 ## Not implemented
 

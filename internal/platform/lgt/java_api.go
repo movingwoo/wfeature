@@ -200,6 +200,18 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// taking delivery of the object the module allocated.
 	"org/kwis/msf/io/Network.<init>()V": {Words: 1, Implementat: javaNoResult},
 
+	// The socket factory, refused the way the specification refuses it. A
+	// title that gets past `connect` dials here, and until this existed the
+	// call was **absent** rather than refused: an unimplemented slot stops the
+	// session with a host error no guest `catch` can see, which is the failure
+	// docs/network.md exists to avoid. `find` is documented as throwing
+	// `SchemeNotFoundException` when it cannot make a socket, so that is what
+	// a handset with no coverage does and what a title's own error path was
+	// written around.
+	"org/kwis/msf/io/URL.find(Ljava/lang/String;)Lorg/kwis/msf/io/Socket;": {
+		Words: 1, Implementat: javaURLFind},
+	"org/kwis/msf/io/URL.<init>()V": {Words: 1, Implementat: javaNoResult},
+
 	// The handset's own values, out of the table the WIPI C call answers from:
 	// one handset, one answer, whichever side of the platform asks for it.
 	// The specification defines the identifiers as the ones `MH_sysGetInformation`
@@ -580,6 +592,28 @@ func javaScreenHeight(
 ) (uint32, error) {
 	return uint32(client.screen.height), nil
 }
+
+// javaURLFind refuses a socket the way the specification refuses one, and
+// names what was dialled while doing it: a refused connection that reports the
+// address is what says afterwards whether a title stopped at its own server or
+// at this platform.
+func javaURLFind(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	url, ok := client.javaText(arguments[0])
+	if !ok {
+		url = fmt.Sprintf("the string at %#x", arguments[0])
+	}
+	if client.logger != nil {
+		client.logger.Debug("LGT java socket refused", "url", url)
+	}
+	return 0, client.throwJavaPlatform(thread, javaSchemeNotFoundClass, ": "+url)
+}
+
+// javaSchemeNotFoundClass is `find`'s documented failure, and the
+// specification roots it at `IOException` — which is what makes a title's
+// `catch (IOException)` around a connection attempt match it.
+const javaSchemeNotFoundClass = "org/kwis/msf/io/SchemeNotFoundException"
 
 func javaNoResult(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
 	return 0, nil
