@@ -200,8 +200,9 @@ const initInput = () => {
   const pressedButtons = new Map();
 
   // A key can be printed on more than one button — the type-2 layout keeps the
-  // digits the type-1 direction pad uses — so lighting a key lights every
-  // button carrying it, of which at most one is on screen.
+  // digits the type-1 direction pad uses, and type 3 prints 1 and 3 on the
+  // direction pad as well — so lighting a key lights every button carrying it,
+  // of which at most one is on screen.
   const buttonsByKey = new Map();
   for (const button of document.querySelectorAll("button[data-key]")) {
     const named = buttonsByKey.get(button.dataset.key) ?? [];
@@ -553,14 +554,20 @@ const initRestart = () => {
   });
 };
 
+// The one button cycles the layouts rather than naming them in a list: there
+// are few enough of them that pressing it again is quicker than opening a menu,
+// and it reads as the layout it is showing, not the one it would move to.
+const KEYPAD_LAYOUTS = ["type1", "type2", "type3"];
+
 const initKeypadLayout = () => {
   const container = document.querySelector(".button-container");
   const toggle = document.getElementById("keypad-layout-toggle");
 
   toggle?.addEventListener("click", () => {
-    const layout = container.dataset.layout === "type1" ? "type2" : "type1";
+    const next = KEYPAD_LAYOUTS.indexOf(container.dataset.layout) + 1;
+    const layout = KEYPAD_LAYOUTS[next % KEYPAD_LAYOUTS.length];
     container.dataset.layout = layout;
-    toggle.textContent = layout === "type1" ? "Type1" : "Type2";
+    toggle.textContent = `Type${KEYPAD_LAYOUTS.indexOf(layout) + 1}`;
   });
 };
 

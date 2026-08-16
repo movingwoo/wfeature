@@ -39,9 +39,12 @@ the token, so the restart button still starts a game over.
 - **Screen** — a 240x320 Host framebuffer presented on the canvas, scaled to the
   viewport with a 3:4 wrapper.
 - **Keypad** — `CLR`, `Call`, a direction pad, the twelve phone keys, and a
-  Type1/Type2 toggle. Type1 drives the direction pad with `2/4/6/8`, Type2 with
-  the arrow keys plus `OK`. `Call` is the handset's send key: a game that
-  answers it usually answers with a quick save, and no other button reaches it.
+  layout toggle that cycles Type1 → Type2 → Type3. Type1 drives the direction
+  pad with `2/4/6/8`, Type2 with the arrow keys plus `OK`, and Type3 is Type1
+  with `1` and `3` moved off the number pad into the direction pad's top row,
+  which is where a game that walks diagonally wants them. `Call` is the
+  handset's send key: a game that answers it usually answers with a quick save,
+  and no other button reaches it.
   The three soft keys are not here at all, by neither button nor shortcut: a
   game that wants one — one LGT title hangs its party screen off a soft key and
   the choice that leaves the screen off `EZ` — is reachable only from the CLI's
