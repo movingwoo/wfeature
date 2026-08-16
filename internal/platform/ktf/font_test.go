@@ -1,6 +1,11 @@
 package ktf
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/armcore"
+)
 
 // One face for the whole library. The screen size the descriptor declares
 // looked like it should choose between two — half these archives say 176x220
@@ -39,6 +44,78 @@ func TestFontMetricsComeFromTheFace(t *testing.T) {
 	}
 	if value, _ := baseline.Int32(); value != runtime.fontBaseline() {
 		t.Fatalf("Font.getBaselinePosition = %d, want the face's %d", value, runtime.fontBaseline())
+	}
+}
+
+// The WIPI-C side asks the same three questions through the graphics table,
+// and the answer must not depend on the handle it is holding.
+//
+// MC_grpGetFont takes a size that is an identifier and not a measurement:
+// MC_GRP_FT_SIZE_SMALL is 8, MEDIUM is 0 and LARGE is 16. Answering
+// MC_grpGetFontHeight with the handle read those constants as pixel counts, so
+// a title that asked for the small font was told its line was eight rows tall,
+// laid every menu entry out as an eight-row band, clipped its own text to it —
+// and lost the top row of every Korean syllable the eleven-row face drew.
+func TestWIPICFontMetricsIgnoreTheHandle(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+
+	call := func(function uint32, arguments ...uint32) uint32 {
+		t.Helper()
+		thread := armcore.NewThread(armcore.NewContext())
+		for index, value := range arguments {
+			if err := thread.SetRegister(index, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		answer, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, function)
+		if err != nil {
+			t.Fatalf("graphics function %d: %v", function, err)
+		}
+		return answer
+	}
+
+	const (
+		sizeMedium = 0
+		sizeSmall  = 8
+		sizeLarge  = 16
+	)
+	for _, size := range []uint32{sizeMedium, sizeSmall, sizeLarge} {
+		handle := call(26, 0, size, 0)
+		if handle == 0 {
+			t.Fatalf("MC_grpGetFont(size %d) answered no handle", size)
+		}
+		if got := int32(call(27, handle)); got != runtime.fontHeight() {
+			t.Fatalf("MC_grpGetFontHeight for size %d = %d, want the face's %d", size, got, runtime.fontHeight())
+		}
+		if got := int32(call(28, handle)); got != runtime.fontBaseline() {
+			t.Fatalf("MC_grpGetFontAscent for size %d = %d, want the face's %d", size, got, runtime.fontBaseline())
+		}
+		if got, want := int32(call(29, handle)), runtime.fontHeight()-runtime.fontBaseline(); got != want {
+			t.Fatalf("MC_grpGetFontDescent for size %d = %d, want the face's %d", size, got, want)
+		}
+	}
+}
+
+// Whatever those three answer has to hold the glyphs the renderer draws, or a
+// game that clips to the line it was promised cuts its own text. Every
+// character has to fit between the ascent above the baseline and the descent
+// below it.
+func TestTheFaceFitsTheMetricsItReports(t *testing.T) {
+	runtime := &initializationRuntime{}
+	face := runtime.fontFace()
+	ascent, descent := runtime.fontBaseline(), runtime.fontHeight()-runtime.fontBaseline()
+	for _, character := range []rune("이어하기예아니오각힣ABCgjpqy0123456789") {
+		bitmap := face.Render(character)
+		if len(bitmap.Rows) == 0 {
+			continue
+		}
+		if top := int32(bitmap.Ascent); top > ascent {
+			t.Fatalf("%q rises %d rows above the baseline, past the reported ascent %d", character, top, ascent)
+		}
+		if bottom := int32(len(bitmap.Rows) - bitmap.Ascent); bottom > descent {
+			t.Fatalf("%q falls %d rows below the baseline, past the reported descent %d", character, bottom, descent)
+		}
 	}
 }
 
