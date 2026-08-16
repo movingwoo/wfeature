@@ -13,7 +13,7 @@ RELEASE_SERVER := build/release/wfeature-server
 # version is stamped into the binary and into the archive names, and is set by
 # hand — `make dist VERSION=0.2.0` — because a tag is a decision, not a build
 # artefact.
-VERSION ?= 0.1.0
+VERSION ?= 0.1.1
 DIST := build/dist
 DIST_PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 

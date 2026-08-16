@@ -55,7 +55,7 @@ go version
 
 ```
 var/games/ktf/<게임>.zip           KTF WIPI 게임
-var/games/lgt/<게임>.zip           LG텔레콤 WIPI 게임
+var/games/lgt/<게임>.zip           LGT WIPI 게임
 var/games/skt/<게임>.zip           SKT 게임
 ```
 
@@ -219,7 +219,7 @@ make serve-release      # 릴리즈
 make run ARGS="runktf var/games/ktf/game.zip -play"
 ```
 
-`-framedir`로 남긴 프레임은 `contactsheet`로 한 장에 모아 보고 `framediff`로 두 빌드를 비교합니다.  
+`-framedir`로 남긴 프레임은 `contactsheet`로 한 장에 모아 보고 `framediff`로 두 빌드를 비교하며, `zoom`으로 한 프레임의 일부를 확대해 봅니다.  
 명령과 플래그 전체, 재현 스크립트와 `ktfdump`는 [`docs/cli.md`](docs/cli.md)에 있습니다.
 
 ## 테스트
