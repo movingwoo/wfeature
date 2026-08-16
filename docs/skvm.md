@@ -558,10 +558,13 @@ paint, and `TestXDisplayPublishesFramebufferSize` for the screen fields.
 
 Regenerate the fixture with:
 
+`$stub_dir/classes` is the signature classpath from
+[`testing.md`](testing.md); build it once per session.
+
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-skvm-fixture.XXXXXX)"
 javac -source 1.8 -target 1.8 -g:none \
-  -cp internal/api/midp/classdata:internal/api/skvm/classdata:internal/jvm/classdata \
+  -cp "$stub_dir/classes" \
   -d "$fixture_dir" internal/platform/skt/testdata/src/SKVMMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/SKVM.MF "$fixture_dir/META-INF/MANIFEST.MF"
@@ -569,10 +572,6 @@ cp internal/platform/skt/testdata/SKVM.MF "$fixture_dir/META-INF/MANIFEST.MF"
 cp "$fixture_dir/skvm.jar" internal/platform/skt/testdata/skvm.jar
 ```
 
-Regenerate the class library with:
-
-```sh
-javac -source 1.8 -target 1.8 -g:none \
-  -cp internal/api/midp/classdata:internal/jvm/classdata \
-  -d internal/api/skvm/classdata $(find internal/api/skvm/java -name '*.java')
-```
+The class library itself is declared in `internal/api/skvm/definitions.go` and
+installed by `skvm.Define`, so changing it is a Go change with nothing to
+rebuild.

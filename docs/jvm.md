@@ -115,6 +115,44 @@ The default native hooks provide an initial subset of `Object`,
 `System.currentTimeMillis`, `System.arraycopy`, `Math.abs/min/max`, and
 `String.length/charAt/equals/hashCode`.
 
+## The class library is declared, not compiled
+
+The classes this runtime owns — CLDC's core, MIDP, SKVM — are declared in Go as
+`jvm.ClassDefinition` values and installed with `DefineClass`. There are no
+class files behind them and no JDK in the build.
+
+A definition carries what a class file carried: the name, the superclass and
+interfaces a game's `instanceof` reads, the fields and methods it links
+against, the constants it reads straight out of the class, and the checked
+exceptions each method declares. What it adds is the Go body of every method
+the runtime implements itself. A method declared without a body is either
+abstract, or one a platform fills in with `RegisterNative` because its answer
+depends on the Host.
+
+Two rules keep a Go body behaving like the bytecode it replaced.
+
+A field the class declares lives on the object under that field's name rather
+than in Go state beside it, because a game may subclass these classes and read
+what they wrote — `java.io.ByteArrayOutputStream`'s protected `buf` is the
+case.
+
+A call a library method makes on its own receiver goes back through the VM
+rather than calling the Go function directly, because that is what
+`invokevirtual` did: a game that overrides `InputStream.read` is calling its own
+method from the inherited `read(byte[])`.
+
+`synchronized` survives the move. The interpreter takes the receiver's monitor
+for a bytecode body, and `invokeInstance` now does the same before it enters a
+Go body whose declaration says synchronized, which is what keeps
+`java.util.Vector` thread-safe for a title that shares one between threads.
+
+A declared class outranks a class of the same name in the game's archive, the
+way the library source preceded the JAR before. `jvm.CoreLibraryDefinitions`,
+`midp.Definitions` and `skvm.Definitions` hand the same declarations to tools;
+`internal/tools/javastub` turns them back into Java signatures so a test fixture
+can still be compiled against this runtime with `javac` (see
+[`testing.md`](testing.md)).
+
 ## Deliberately incomplete
 
 - the Java core class library and most MIDP/WIPI API classes. What is present

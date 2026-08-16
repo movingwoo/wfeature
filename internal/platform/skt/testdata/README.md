@@ -70,11 +70,22 @@ cp internal/jvm/testdata/Arithmetic*.class "$fixture_dir/"
 mv /tmp/wfeature-arithmetic.jar internal/platform/skt/testdata/arithmetic.jar
 ```
 
+The MIDP and SKVM classes a fixture compiles against are declared in Go rather
+than shipped as class files, so `javac` needs signatures written out first.
+Do this once per session and reuse `$stub_dir/classes` as the classpath below:
+
+```sh
+stub_dir="$(mktemp -d /tmp/wfeature-stubs.XXXXXX)"
+go run ./internal/tools/javastub -out "$stub_dir/src"
+(cd "$stub_dir/src" && javac -source 1.8 -target 1.8 -nowarn -d "$stub_dir/classes" \
+  $(find javax com net -name '*.java'))
+```
+
 Regenerate the lifecycle fixtures with:
 
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-midlet-fixture.XXXXXX)"
-javac -source 1.8 -target 1.8 -g:none -cp internal/api/midp/classdata -d "$fixture_dir" internal/platform/skt/testdata/src/LifecycleMIDlet.java
+javac -source 1.8 -target 1.8 -g:none -cp "$stub_dir/classes" -d "$fixture_dir" internal/platform/skt/testdata/src/LifecycleMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/LIFECYCLE.MF "$fixture_dir/META-INF/MANIFEST.MF"
 (cd "$fixture_dir" && zip -X -q "$fixture_dir/lifecycle.jar" META-INF/MANIFEST.MF LifecycleMIDlet.class)
@@ -91,7 +102,7 @@ Regenerate the display fixture with:
 
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-display-fixture.XXXXXX)"
-javac -source 1.8 -target 1.8 -g:none -cp internal/api/midp/classdata:internal/jvm/classdata -d "$fixture_dir" internal/platform/skt/testdata/src/DisplayMIDlet.java
+javac -source 1.8 -target 1.8 -g:none -cp "$stub_dir/classes" -d "$fixture_dir" internal/platform/skt/testdata/src/DisplayMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/DISPLAY.MF "$fixture_dir/META-INF/MANIFEST.MF"
 (cd "$fixture_dir" && zip -X -q "$fixture_dir/display.jar" META-INF/MANIFEST.MF DisplayMIDlet.class 'DisplayMIDlet$Counter.class' 'DisplayMIDlet$Loop.class' 'DisplayMIDlet$FirstScreen.class' 'DisplayMIDlet$SecondScreen.class')
@@ -102,7 +113,7 @@ Regenerate the Canvas fixture with:
 
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-canvas-fixture.XXXXXX)"
-javac -source 1.8 -target 1.8 -g:none -cp internal/api/midp/classdata -d "$fixture_dir" internal/platform/skt/testdata/src/CanvasMIDlet.java
+javac -source 1.8 -target 1.8 -g:none -cp "$stub_dir/classes" -d "$fixture_dir" internal/platform/skt/testdata/src/CanvasMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/CANVAS.MF "$fixture_dir/META-INF/MANIFEST.MF"
 base64 -D -i internal/platform/skt/testdata/FIXTURE.PNG.b64 -o "$fixture_dir/fixture.png"
@@ -126,7 +137,7 @@ Regenerate the connection fixture with:
 
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-connector-fixture.XXXXXX)"
-javac -source 1.8 -target 1.8 -g:none -cp internal/api/midp/classdata \
+javac -source 1.8 -target 1.8 -g:none -cp "$stub_dir/classes" \
   -d "$fixture_dir" internal/platform/skt/testdata/src/ConnectorMIDlet.java
 mkdir -p "$fixture_dir/META-INF"
 cp internal/platform/skt/testdata/CONNECTOR.MF "$fixture_dir/META-INF/MANIFEST.MF"

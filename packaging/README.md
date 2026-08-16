@@ -14,16 +14,27 @@ packaging/games/    README.txt     shared by every platform
 `stop` and `status` are the other half of leaving a server running. Closing the
 window stops it and Ctrl-C stops it, but neither is available from the next
 login, and a server nobody can find is what a held port looks like from outside.
-They work from the **port** rather than from a pid file: the archive has no
-place to keep run state that survives being moved, and the port is what the user
-is actually asking about. Which is why `/api/status` exists — it is the only way
-to tell this server from a stranger holding the port, since a released binary's
-path says nothing about what it is. Nothing is killed without that answer.
+They work from the **port**: the archive has no place to keep run state that
+survives being moved, and the port is what the user is actually asking about.
 
-The repository's own `build.sh`, `start.sh`, `stop.sh` and `status.sh` are a
-different set for a different job: they take a profile, build from source and
-keep pid files under `var/run/`. None of that exists in an archive, so the
-scripts here are written separately rather than shared.
+**Each of them is one line, because the work is in the binary.** `wfeature-server
+status` and `wfeature-server stop` ask `/api/status` what is there — the only way
+to tell this server from a stranger holding the port, since a released binary's
+path says nothing about what it is — and stop it through `/api/shutdown`, which
+drains the way closing the window does. Nothing is stopped without that answer.
+See `internal/launcher` and `docs/running.md`.
+
+That used to be three implementations of the same procedure, one per operating
+system, each finding the process behind the port with whichever tool that system
+had: `lsof`, `ss` or `fuser` on Linux, `lsof` on macOS, `netstat` and `tasklist`
+on Windows. They are gone. What is left in each script is what only a script can
+do — set the working directory, clear macOS quarantine, hold a double-clicked
+window open — and the Korean line the user reads.
+
+The repository's own `build.sh` and `start.sh` are a different set for a
+different job: they take a profile and build from source, neither of which
+exists in an archive. Its `stop.sh` and `status.sh` are the same one line these
+are, pointed at whichever binary the checkout has built.
 
 The launcher exists because of two things a bare binary cannot do when it is
 double-clicked: set the working directory to the extracted folder, so the

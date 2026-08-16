@@ -107,4 +107,27 @@ jobs:
           # The data root is the folder beside the binary, which is what keeps
           # a release from writing saves into the directory it was started in.
           grep -q "beside the executable" server.log
-          kill "$server"
+
+          # The launcher scripts beside a release are a line each: the work is
+          # the two commands below. Windows is the reason they are checked
+          # here — it is the one system where a stop cannot fall back to a
+          # signal, so the route the server answers is the whole of it there.
+          ./${{ matrix.binary }} status | tee status.txt
+          grep -q "11541" status.txt
+          ./${{ matrix.binary }} stop | tee stopped.txt
+          for attempt in $(seq 1 20); do
+            if ! curl -fsS --max-time 2 http://127.0.0.1:11541/api/status -o /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          # Nothing is on the port any more, and the server says so itself.
+          ./${{ matrix.binary }} status | tee gone.txt
+          grep -q "11541" gone.txt
+          if curl -fsS --max-time 2 http://127.0.0.1:11541/api/status -o /dev/null; then
+            echo "the server is still serving after stop"; exit 1
+          fi
+          # It drained rather than being killed: the log carries the same line
+          # a Ctrl-C leaves.
+          grep -q "shutting down" server.log
+          wait "$server" || true

@@ -121,17 +121,20 @@ type VM struct {
 	// platform registrations of the same method stay an error, because that
 	// is a mistake rather than an override.
 	builtinNatives map[methodKey]bool
-	statics        map[fieldKey]Value
-	classMonitors  map[string]*monitor
-	nextExecution  atomic.Uint64
-	nextObject     atomic.Uint32
-	arraycopyMu    sync.Mutex
-	threadMu       sync.Mutex
-	threads        map[*Object]*guestThread
-	aotClasses     map[string]AOTClassMetadata
-	aotAddresses   map[uint32]string
-	aotObjects     map[uint32]aotBinding
-	aotInvoker     AOTInvoker
+	// definedConstants holds the static finals of classes declared in Go,
+	// which have no constant pool for the class initializer to read them from.
+	definedConstants map[string][]definedConstant
+	statics          map[fieldKey]Value
+	classMonitors    map[string]*monitor
+	nextExecution    atomic.Uint64
+	nextObject       atomic.Uint32
+	arraycopyMu      sync.Mutex
+	threadMu         sync.Mutex
+	threads          map[*Object]*guestThread
+	aotClasses       map[string]AOTClassMetadata
+	aotAddresses     map[uint32]string
+	aotObjects       map[uint32]aotBinding
+	aotInvoker       AOTInvoker
 
 	initMu       sync.Mutex
 	initCond     *sync.Cond
@@ -176,7 +179,7 @@ func New(source ClassSource, options Options) *VM {
 		options.MaxArrayLength = 16 * 1024 * 1024
 	}
 	vm := &VM{
-		loader:         NewLoader(ClassSources{CoreLibrary{}, source}),
+		loader:         NewLoader(source),
 		config:         options,
 		natives:        make(map[methodKey]NativeMethod),
 		contextNatives: make(map[methodKey]contextNativeMethod),
@@ -198,6 +201,14 @@ func New(source ClassSource, options Options) *VM {
 	// extend it without requiring a java/lang/Exception class file.
 	vm.initialized["java/lang/Exception"] = true
 	vm.registerBuiltins()
+	if err := vm.registerCoreLibrary(); err != nil {
+		// The core library is a table in this package rather than anything the
+		// caller supplied, so a rejected definition is a mistake in that table
+		// and every VM in the process has it. There is nothing a caller could
+		// do with the error, and continuing would hand a game a library with a
+		// hole in it.
+		panic(err)
+	}
 	return vm
 }
 
@@ -220,7 +231,12 @@ func (vm *VM) RegisterNative(class, name, descriptor string, method NativeMethod
 	key := methodKey{class: class, name: name, descriptor: descriptor}
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
-	if _, exists := vm.natives[key]; exists && !vm.builtinNatives[key] {
+	_, plain := vm.natives[key]
+	_, context := vm.contextNatives[key]
+	if (plain || context) && !vm.builtinNatives[key] {
+		// A body is already here and it is not the runtime's own, so it is a
+		// library's — the method is implemented, and registering over it would
+		// replace behavior a caller of this API did not know was there.
 		return fmt.Errorf("native method already registered: %s.%s%s", class, name, descriptor)
 	}
 	// A platform registration overrides the built-in implementation,
@@ -476,7 +492,14 @@ func (vm *VM) invokeInstance(
 	class, method, resolveErr := vm.resolveInstanceMethod(lookupClass, name, descriptor)
 	var contextNative contextNativeMethod
 	var native NativeMethod
+	// A synchronized method implemented in Go still holds the receiver's
+	// monitor. The interpreter takes it below for a bytecode body, and a
+	// library method that says synchronized — java/util/Vector says it on
+	// nearly all of them — would quietly stop being one when its body moved
+	// out of bytecode.
+	synchronizedNative := false
 	if resolveErr == nil {
+		synchronizedNative = method.AccessFlags&0x0020 != 0
 		vm.mu.RLock()
 		contextNative = vm.contextNatives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
 		native = vm.natives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
@@ -485,19 +508,22 @@ func (vm *VM) invokeInstance(
 		contextNative = vm.resolveContextNativeInstance(lookupClass, name, descriptor)
 		native = vm.resolveNativeInstance(lookupClass, name, descriptor)
 	}
-	if contextNative != nil {
-		result, err := contextNative(vm, state, combined)
-		if err != nil {
-			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", lookupClass, name, descriptor, err)
+	if contextNative != nil || native != nil {
+		if synchronizedNative {
+			receiver.monitor.enter(state.id)
 		}
-		methodType, _ := ParseMethodDescriptor(descriptor)
-		if err := validateValue(result, methodType.Return); err != nil {
-			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", lookupClass, name, descriptor, err)
+		var result Value
+		var err error
+		if contextNative != nil {
+			result, err = contextNative(vm, state, combined)
+		} else {
+			result, err = native(vm, combined)
 		}
-		return result, nil
-	}
-	if native != nil {
-		result, err := native(vm, combined)
+		if synchronizedNative {
+			if exitErr := receiver.monitor.exit(state.id); err == nil && exitErr != nil {
+				err = exitErr
+			}
+		}
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", lookupClass, name, descriptor, err)
 		}
@@ -765,6 +791,29 @@ func (vm *VM) newObject(state *execution, className string) (*Object, error) {
 	return object, nil
 }
 
+// Field reads one instance field of an object, the way getfield does. A method
+// body written in Go needs it for the same reason bytecode needed the opcode:
+// the object holds the state its class declared, including the fields a
+// subclass in the game can see.
+func (vm *VM) Field(object *Object, className, name, descriptor string) (Value, error) {
+	return vm.instanceValue(object, classfile.Reference{
+		Kind:       classfile.FieldReference,
+		Class:      className,
+		Name:       name,
+		Descriptor: descriptor,
+	})
+}
+
+// SetField writes one instance field, the putfield to Field's getfield.
+func (vm *VM) SetField(object *Object, className, name, descriptor string, value Value) error {
+	return vm.setInstanceValue(object, classfile.Reference{
+		Kind:       classfile.FieldReference,
+		Class:      className,
+		Name:       name,
+		Descriptor: descriptor,
+	}, value)
+}
+
 func (vm *VM) instanceValue(object *Object, reference classfile.Reference) (Value, error) {
 	if object == nil {
 		return VoidValue(), guestException("java/lang/NullPointerException", "get field "+reference.Class+"."+reference.Name)
@@ -967,13 +1016,20 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 	if err := vm.initializeStaticFields(class); err != nil {
 		return err
 	}
+	vm.seedDefinedConstants(className)
 	initializer := class.FindMethod("<clinit>", "()V")
 	if initializer == nil {
 		return nil
 	}
 	code := initializer.CodeAttribute()
 	if code == nil {
-		return fmt.Errorf("class initializer has no code: %s", className)
+		// A class declared in Go writes its initializer as a method body like
+		// any other, so the class initializer is a native here rather than
+		// bytecode.
+		if _, err := vm.invokeStatic(state, className, "<clinit>", "()V", nil); err != nil {
+			return fmt.Errorf("initialize class %s: %w", className, err)
+		}
+		return nil
 	}
 	_, err = vm.execute(state, class, initializer, code, nil)
 	if err != nil {

@@ -444,3 +444,73 @@ func TestStatusCallsAnUnstampedBuildDev(t *testing.T) {
 		t.Errorf("status = %s, want a dev version", recorder.Body.String())
 	}
 }
+
+// The pid is what a stop signals when the polite route cannot be used — an
+// older build, or a server too wedged to serve — so the status has to carry it.
+func TestStatusNamesItsOwnProcess(t *testing.T) {
+	server := newTestServer(t, Options{})
+	recorder := get(t, server, "/api/status")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /api/status answered %d", recorder.Code)
+	}
+	var status struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatalf("the status is not JSON: %v", err)
+	}
+	if status.PID != os.Getpid() {
+		t.Errorf("pid = %d, want this process %d", status.PID, os.Getpid())
+	}
+}
+
+// Stopping is what the launchers ask for instead of finding the process behind
+// a port. The route has to be there when the host installed a way to stop,
+// absent when it did not, and closed to everything off this machine.
+func TestShutdownIsLocalOnlyAndAsksTheHost(t *testing.T) {
+	post := func(server *Server, from string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/shutdown", nil)
+		request.RemoteAddr = from
+		server.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	// A host that installed no way to stop does not serve the route at all.
+	silent := newTestServer(t, Options{})
+	if recorder := post(silent, "127.0.0.1:5000"); recorder.Code != http.StatusNotFound {
+		t.Errorf("a server with no shutdown hook answered %d, want 404", recorder.Code)
+	}
+
+	asked := make(chan struct{}, 1)
+	server := newTestServer(t, Options{RequestShutdown: func() { asked <- struct{}{} }})
+
+	if recorder := get(t, server, "/api/shutdown"); recorder.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /api/shutdown answered %d, want 405", recorder.Code)
+	}
+
+	// The server binds every interface so a phone can play; a stop from that
+	// phone would be a way to end somebody's game from the next room.
+	for _, remote := range []string{"192.168.0.42:5000", "[2001:db8::1]:5000"} {
+		if recorder := post(server, remote); recorder.Code != http.StatusForbidden {
+			t.Errorf("a shutdown from %s answered %d, want 403", remote, recorder.Code)
+		}
+	}
+	select {
+	case <-asked:
+		t.Fatal("a shutdown from off this machine reached the host")
+	default:
+	}
+
+	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000"} {
+		recorder := post(server, remote)
+		if recorder.Code != http.StatusAccepted {
+			t.Fatalf("a shutdown from %s answered %d, want 202", remote, recorder.Code)
+		}
+		select {
+		case <-asked:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("a shutdown from %s never reached the host", remote)
+		}
+	}
+}

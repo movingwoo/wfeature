@@ -225,6 +225,32 @@ not always the screen that is wrong — one investigation was saved by finding
 that the reported frame was byte-identical before and after, and the real
 break was three hundred ticks later.
 
+## Compiling a Java fixture
+
+A fixture is guest code, so it is still Java compiled with `javac`. What it
+compiles *against* is no longer a directory of class files: the runtime
+declares its class library in Go (see [`jvm.md`](jvm.md)), and
+`internal/tools/javastub` writes that library out as Java signatures for the
+compiler:
+
+```sh
+stub_dir="$(mktemp -d /tmp/wfeature-stubs.XXXXXX)"
+go run ./internal/tools/javastub -out "$stub_dir/src"
+(cd "$stub_dir/src" && javac -source 1.8 -target 1.8 -nowarn -d "$stub_dir/classes" \
+  $(find javax com net -name '*.java'))
+```
+
+`$stub_dir/classes` is then the classpath every fixture recipe in this
+repository uses — `internal/platform/skt/testdata/README.md` has one per JAR,
+and [`rms.md`](rms.md), [`lcdui.md`](lcdui.md) and [`skvm.md`](skvm.md) have
+the rest. The stubs carry signatures, constants and `throws` clauses and no
+behavior at all; the fixture runs on the runtime.
+
+The `java.*` classes come from the JDK's own `rt.jar` as they always did. This
+runtime implements a subset of them, so a fixture can compile against a method
+that is not here — which shows up when the fixture runs, as a missing method
+rather than a compile error.
+
 ## Go
 
 ```sh

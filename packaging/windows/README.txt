@@ -68,7 +68,7 @@ W-Feature — 피처폰 게임 에뮬레이터 (Windows)
    - 방향키가 안 먹는 경우: 
      - 키패드 위 Type1 버튼을 눌러 Type2 배치로 바꿔본다.
    - 포트가 이미 쓰이는 경우: 
-     - status.bat 으로 누가 쓰는지 본다. 
+     - status.bat 으로 wfeature 서버인지 다른 프로그램인지 본다. 
      - 예전 서버면 stop.bat 으로 멈추고, 다른 프로그램이면 wfeature-server.exe -addr :11542 처럼 포트를 바꿔 띄운다.
    - 목록에 게임이 안 보이는 경우: 
      - 확장자가 .zip 또는 .jar 인지, games\ 아래 폴더에 들어 있는지 확인한다.

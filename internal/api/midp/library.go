@@ -1,6 +1,10 @@
 package midp
 
-import _ "embed"
+import (
+	"fmt"
+
+	"github.com/movingwoo/wfeature/internal/jvm"
+)
 
 const (
 	MIDletClass                     = "javax/microedition/midlet/MIDlet"
@@ -87,267 +91,83 @@ const (
 	PlayerEventClosed  = "closed"
 )
 
-//go:embed classdata/javax/microedition/lcdui/Canvas.class
-var canvasClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Display.class
-var displayClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Displayable.class
-var displayableClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Graphics.class
-var graphicsClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Font.class
-var fontClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Image.class
-var imageClass []byte
-
-//go:embed classdata/javax/microedition/midlet/MIDlet.class
-var midletClass []byte
-
-//go:embed classdata/javax/microedition/midlet/MIDletStateChangeException.class
-var midletStateChangeExceptionClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordStore.class
-var recordStoreClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordSet.class
-var recordSetClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordEnumeration.class
-var recordEnumerationClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordFilter.class
-var recordFilterClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordComparator.class
-var recordComparatorClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordListener.class
-var recordListenerClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordStoreException.class
-var recordStoreExceptionClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordStoreNotOpenException.class
-var recordStoreNotOpenExceptionClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordStoreNotFoundException.class
-var recordStoreNotFoundExceptionClass []byte
-
-//go:embed classdata/javax/microedition/rms/RecordStoreFullException.class
-var recordStoreFullExceptionClass []byte
-
-//go:embed classdata/javax/microedition/rms/InvalidRecordIDException.class
-var invalidRecordIDExceptionClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Alert.class
-var alertClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/AlertType.class
-var alertTypeClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Choice.class
-var choiceClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/ChoiceGroup.class
-var choiceGroupClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Command.class
-var commandClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/CommandListener.class
-var commandListenerClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Form.class
-var formClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/ImageItem.class
-var imageItemClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Item.class
-var itemClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/ItemCommandListener.class
-var itemCommandListenerClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/ItemStateListener.class
-var itemStateListenerClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/List.class
-var listClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Screen.class
-var screenClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/StringItem.class
-var stringItemClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/TextBox.class
-var textBoxClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/TextField.class
-var textFieldClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/Ticker.class
-var tickerClass []byte
-
-//go:embed classdata/javax/microedition/lcdui/game/GameCanvas.class
-var gameCanvasClass []byte
-
-//go:embed classdata/javax/microedition/media/Manager.class
-var managerClass []byte
-
-//go:embed classdata/javax/microedition/media/Player.class
-var playerClass []byte
-
-//go:embed classdata/javax/microedition/media/PlayerListener.class
-var playerListenerClass []byte
-
-//go:embed classdata/javax/microedition/media/MediaException.class
-var mediaExceptionClass []byte
-
-//go:embed classdata/javax/microedition/io/Connector.class
-var connectorClass []byte
-
-//go:embed classdata/javax/microedition/io/Connection.class
-var connectionClass []byte
-
-//go:embed classdata/javax/microedition/io/InputConnection.class
-var inputConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/OutputConnection.class
-var outputConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/StreamConnection.class
-var streamConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/ContentConnection.class
-var contentConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/StreamConnectionNotifier.class
-var streamConnectionNotifierClass []byte
-
-//go:embed classdata/javax/microedition/io/HttpConnection.class
-var httpConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/SocketConnection.class
-var socketConnectionClass []byte
-
-//go:embed classdata/javax/microedition/io/ConnectionNotFoundException.class
-var connectionNotFoundExceptionClass []byte
-
-// Library is the runtime-owned MIDP class source. It is placed before an
-// application's JAR so a game cannot replace platform classes.
-type Library struct{}
-
-func (Library) ClassBytes(name string) ([]byte, bool) {
-	switch name {
-	case CanvasClass:
-		return canvasClass, true
-	case DisplayClass:
-		return displayClass, true
-	case DisplayableClass:
-		return displayableClass, true
-	case GraphicsClass:
-		return graphicsClass, true
-	case FontClass:
-		return fontClass, true
-	case ImageClass:
-		return imageClass, true
-	case MIDletClass:
-		return midletClass, true
-	case MIDletStateChangeExceptionClass:
-		return midletStateChangeExceptionClass, true
-	case RecordStoreClass:
-		return recordStoreClass, true
-	case RecordSetClass:
-		return recordSetClass, true
-	case RecordEnumerationClass:
-		return recordEnumerationClass, true
-	case RecordFilterClass:
-		return recordFilterClass, true
-	case RecordComparatorClass:
-		return recordComparatorClass, true
-	case RecordListenerClass:
-		return recordListenerClass, true
-	case RecordStoreExceptionClass:
-		return recordStoreExceptionClass, true
-	case RecordStoreNotOpenExceptionClass:
-		return recordStoreNotOpenExceptionClass, true
-	case RecordStoreNotFoundExceptionClass:
-		return recordStoreNotFoundExceptionClass, true
-	case RecordStoreFullExceptionClass:
-		return recordStoreFullExceptionClass, true
-	case InvalidRecordIDExceptionClass:
-		return invalidRecordIDExceptionClass, true
-	case AlertClass:
-		return alertClass, true
-	case AlertTypeClass:
-		return alertTypeClass, true
-	case ChoiceClass:
-		return choiceClass, true
-	case ChoiceGroupClass:
-		return choiceGroupClass, true
-	case CommandClass:
-		return commandClass, true
-	case CommandListenerClass:
-		return commandListenerClass, true
-	case FormClass:
-		return formClass, true
-	case ImageItemClass:
-		return imageItemClass, true
-	case ItemClass:
-		return itemClass, true
-	case ItemCommandListenerClass:
-		return itemCommandListenerClass, true
-	case ItemStateListenerClass:
-		return itemStateListenerClass, true
-	case ListClass:
-		return listClass, true
-	case ScreenClass:
-		return screenClass, true
-	case StringItemClass:
-		return stringItemClass, true
-	case TextBoxClass:
-		return textBoxClass, true
-	case TextFieldClass:
-		return textFieldClass, true
-	case TickerClass:
-		return tickerClass, true
-	case GameCanvasClass:
-		return gameCanvasClass, true
-	case ManagerClass:
-		return managerClass, true
-	case PlayerClass:
-		return playerClass, true
-	case PlayerListenerClass:
-		return playerListenerClass, true
-	case MediaExceptionClass:
-		return mediaExceptionClass, true
-	case ConnectorClass:
-		return connectorClass, true
-	case ConnectionClass:
-		return connectionClass, true
-	case InputConnectionClass:
-		return inputConnectionClass, true
-	case OutputConnectionClass:
-		return outputConnectionClass, true
-	case StreamConnectionClass:
-		return streamConnectionClass, true
-	case ContentConnectionClass:
-		return contentConnectionClass, true
-	case StreamConnectionNotifierClass:
-		return streamConnectionNotifierClass, true
-	case HTTPConnectionClass:
-		return httpConnectionClass, true
-	case SocketConnectionClass:
-		return socketConnectionClass, true
-	case ConnectionNotFoundExceptionClass:
-		return connectionNotFoundExceptionClass, true
+// Define installs the runtime-owned MIDP surface on a VM. The classes are
+// declared in Go rather than shipped as class files, so this has to run before
+// a game's own classes are linked against them — and it always runs, because
+// a title that never opens a record store simply never initializes those
+// classes.
+//
+// A definition publishes the signature; the body behind a native one is
+// registered by the platform, which is where the Host — a screen, a save
+// directory, an audio sink — actually is.
+func Define(machine *jvm.VM) error {
+	for _, definition := range definitions() {
+		if err := machine.DefineClass(definition); err != nil {
+			return fmt.Errorf("MIDP library: %w", err)
+		}
 	}
-	return nil, false
+	return nil
 }
+
+// exceptionInit is the body of an exception constructor that only hands its
+// arguments to its superclass, which is where the message a catch block reads
+// is kept.
+func exceptionInit(superName, descriptor string) jvm.ContextMethod {
+	return func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+		receiver, err := arguments[0].Reference()
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		_, err = call.InvokeSpecial(receiver, superName, "<init>", descriptor, arguments[1:]...)
+		return jvm.VoidValue(), err
+	}
+}
+
+// emptyInit is the body of a constructor whose class keeps its state on the
+// runtime side, so there is nothing to set up when one is made.
+func emptyInit(_ *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.VoidValue(), nil
+}
+
+// ignore is the body of a method a game may call and this runtime has nothing
+// to do for. It is not a stub for something missing: the MIDP contract allows
+// the runtime to do nothing here.
+func ignore(_ *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.VoidValue(), nil
+}
+
+// answerBool is the body of a capability question with a fixed answer.
+func answerBool(answer bool) jvm.ContextMethod {
+	return func(_ *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
+		if answer {
+			return jvm.IntValue(1), nil
+		}
+		return jvm.IntValue(0), nil
+	}
+}
+
+// answerInt is the body of a method that always answers the same number.
+func answerInt(answer int32) jvm.ContextMethod {
+	return func(_ *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
+		return jvm.IntValue(answer), nil
+	}
+}
+
+// receiver reads the object a method was called on.
+func receiver(arguments []jvm.Value) (*jvm.Object, error) {
+	if len(arguments) == 0 {
+		return nil, fmt.Errorf("instance method called without a receiver")
+	}
+	object, err := arguments[0].Reference()
+	if err != nil {
+		return nil, err
+	}
+	if object == nil {
+		return nil, jvm.Throw("java/lang/NullPointerException", "null receiver")
+	}
+	return object, nil
+}
+
+// Definitions is the MIDP surface as data, for the tools that have to see it
+// rather than run it. See jvm.CoreLibraryDefinitions.
+func Definitions() []jvm.ClassDefinition { return definitions() }

@@ -1,6 +1,10 @@
 package skvm
 
-import _ "embed"
+import (
+	"fmt"
+
+	"github.com/movingwoo/wfeature/internal/jvm"
+)
 
 // The SKVM class surface. Names are the internal form the loader uses.
 const (
@@ -32,143 +36,64 @@ const (
 	RuntimeAudioClipClass           = "net/wfeature/RuntimeAudioClip"
 )
 
-//go:embed classdata/com/skt/m/AudioClip.class
-var audioClipBytes []byte
-
-//go:embed classdata/com/skt/m/AudioSystem.class
-var audioSystemBytes []byte
-
-//go:embed classdata/com/skt/m/BackLight.class
-var backLightBytes []byte
-
-//go:embed classdata/com/skt/m/Call.class
-var callBytes []byte
-
-//go:embed classdata/com/skt/m/Device.class
-var deviceBytes []byte
-
-//go:embed classdata/com/skt/m/Graphics2D.class
-var graphics2DBytes []byte
-
-//go:embed classdata/com/skt/m/MathFP.class
-var mathFPBytes []byte
-
-//go:embed classdata/com/skt/m/PhoneBook.class
-var phoneBookBytes []byte
-
-//go:embed classdata/com/skt/m/ProgressBar.class
-var progressBarBytes []byte
-
-//go:embed classdata/com/skt/m/ResourceAllocException.class
-var resourceAllocExceptionBytes []byte
-
-//go:embed classdata/com/skt/m/SISImage.class
-var sISImageBytes []byte
-
-//go:embed classdata/com/skt/m/SMS.class
-var sMSBytes []byte
-
-//go:embed classdata/com/skt/m/SMSListener.class
-var sMSListenerBytes []byte
-
-//go:embed classdata/com/skt/m/SMSMessage.class
-var sMSMessageBytes []byte
-
-//go:embed classdata/com/skt/m/UnsupportedFormatException.class
-var unsupportedFormatExceptionBytes []byte
-
-//go:embed classdata/com/skt/m/UserStopException.class
-var userStopExceptionBytes []byte
-
-//go:embed classdata/com/skt/m/Vibration.class
-var vibrationBytes []byte
-
-//go:embed classdata/com/skt/m3d/Graphics3D.class
-var graphics3DBytes []byte
-
-//go:embed classdata/com/skt/m3d/Object3D.class
-var object3DBytes []byte
-
-//go:embed classdata/com/xce/io/FileInputStream.class
-var fileInputStreamBytes []byte
-
-//go:embed classdata/com/xce/io/FileOutputStream.class
-var fileOutputStreamBytes []byte
-
-//go:embed classdata/com/xce/io/XFile.class
-var xFileBytes []byte
-
-//go:embed classdata/com/xce/lcdui/Toolkit.class
-var toolkitBytes []byte
-
-//go:embed classdata/com/xce/lcdui/XDisplay.class
-var xDisplayBytes []byte
-
-//go:embed classdata/com/xce/lcdui/XTextField.class
-var xTextFieldBytes []byte
-
-//go:embed classdata/net/wfeature/RuntimeAudioClip.class
-var runtimeAudioClipBytes []byte
-
-// Library is the runtime-owned SKVM class source. It is placed before an
-// application's JAR so a game cannot replace platform classes, and after the
-// MIDP library because these classes are built on it.
-type Library struct{}
-
-func (Library) ClassBytes(name string) ([]byte, bool) {
-	switch name {
-	case AudioClipClass:
-		return audioClipBytes, true
-	case AudioSystemClass:
-		return audioSystemBytes, true
-	case BackLightClass:
-		return backLightBytes, true
-	case CallClass:
-		return callBytes, true
-	case DeviceClass:
-		return deviceBytes, true
-	case Graphics2DClass:
-		return graphics2DBytes, true
-	case MathFPClass:
-		return mathFPBytes, true
-	case PhoneBookClass:
-		return phoneBookBytes, true
-	case ProgressBarClass:
-		return progressBarBytes, true
-	case ResourceAllocExceptionClass:
-		return resourceAllocExceptionBytes, true
-	case SISImageClass:
-		return sISImageBytes, true
-	case SMSClass:
-		return sMSBytes, true
-	case SMSListenerClass:
-		return sMSListenerBytes, true
-	case SMSMessageClass:
-		return sMSMessageBytes, true
-	case UnsupportedFormatExceptionClass:
-		return unsupportedFormatExceptionBytes, true
-	case UserStopExceptionClass:
-		return userStopExceptionBytes, true
-	case VibrationClass:
-		return vibrationBytes, true
-	case Graphics3DClass:
-		return graphics3DBytes, true
-	case Object3DClass:
-		return object3DBytes, true
-	case FileInputStreamClass:
-		return fileInputStreamBytes, true
-	case FileOutputStreamClass:
-		return fileOutputStreamBytes, true
-	case XFileClass:
-		return xFileBytes, true
-	case ToolkitClass:
-		return toolkitBytes, true
-	case XDisplayClass:
-		return xDisplayBytes, true
-	case XTextFieldClass:
-		return xTextFieldBytes, true
-	case RuntimeAudioClipClass:
-		return runtimeAudioClipBytes, true
+// Define installs the runtime-owned SKVM surface on a VM. It follows MIDP,
+// which it is built on: com.skt.m.Graphics2D wraps a MIDP Graphics, and
+// com.xce.io writes through the same save boundary MIDP RMS uses.
+func Define(machine *jvm.VM) error {
+	for _, definition := range definitions() {
+		if err := machine.DefineClass(definition); err != nil {
+			return fmt.Errorf("SKVM library: %w", err)
+		}
 	}
-	return nil, false
+	return nil
 }
+
+// forwardInit is the body of a constructor that only hands its arguments to
+// the private native behind it, which is where the platform builds the state
+// the object stands for.
+func forwardInit(className, name, descriptor string) jvm.ContextMethod {
+	return func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+		object, err := receiver(arguments)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		_, err = call.InvokeSpecial(object, className, name, descriptor, arguments[1:]...)
+		return jvm.VoidValue(), err
+	}
+}
+
+// emptyInit is the body of a constructor for a class that keeps no state of
+// its own: its methods are static, or the platform holds what they need.
+func emptyInit(_ *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.VoidValue(), nil
+}
+
+// exceptionInit hands an exception constructor's arguments to its superclass.
+func exceptionInit(descriptor string) jvm.ContextMethod {
+	return func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+		object, err := receiver(arguments)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		_, err = call.InvokeSpecial(object, "java/lang/Exception", "<init>", descriptor, arguments[1:]...)
+		return jvm.VoidValue(), err
+	}
+}
+
+func receiver(arguments []jvm.Value) (*jvm.Object, error) {
+	if len(arguments) == 0 {
+		return nil, fmt.Errorf("instance method called without a receiver")
+	}
+	object, err := arguments[0].Reference()
+	if err != nil {
+		return nil, err
+	}
+	if object == nil {
+		return nil, jvm.Throw("java/lang/NullPointerException", "null receiver")
+	}
+	return object, nil
+}
+
+// Definitions is the SKVM surface as data, for the tools that have to see it
+// rather than run it. See jvm.CoreLibraryDefinitions.
+func Definitions() []jvm.ClassDefinition { return definitions() }
