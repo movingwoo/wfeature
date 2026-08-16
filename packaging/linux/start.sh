@@ -9,6 +9,6 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "wfeature 서버를 시작합니다. Control-C를 누르면 멈춥니다."
+echo "Starting the wfeature server. Press Control-C to stop it."
 echo
 exec ./wfeature-server -open "$@"
