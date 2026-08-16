@@ -892,6 +892,70 @@ context. The Java-side draw path has a clip of its own and is untouched.
 What was left in that scene was smaller and different, and it was not about the
 clip at all: see the next section.
 
+## A font handle is an identifier, and it was being read as a height
+
+A title's menu came back with the top row shaved off every Korean syllable —
+`이어하기` with the tops of its `ㅇ` open, `예` reading as `네`, `아니오` as
+`바니노` — but only inside its menu bars and its confirmation boxes. The same
+title's save-slot screen, which draws its text into open space, was correct.
+That split is the whole diagnosis: **the text was not drawn wrong, it was
+drawn taller than the box the title clipped it to.**
+
+The title asks for its font once:
+
+```
+MC_grpGetFont(face 0, size 8, style 0)   ->  handle
+MC_grpGetFontHeight(handle)              ->  8
+```
+
+and then lays every menu entry out as a band that tall, clipping each one
+before it draws: clip `(70,155)-(171,163)` with the baseline at 161, six rows
+above the baseline and two below. The handset face draws a Korean syllable
+nine rows tall, from `baseline-7` to `baseline+1` — row 154, one above the
+clip — so exactly one row was cut, and one row is the entire top arc of a `ㅇ`.
+
+`MC_grpGetFontHeight` was answering with the handle it was handed. That reads
+as reasonable until the specification's constants are looked up:
+`MC_GRP_FT_SIZE_SMALL` is **8**, `MC_GRP_FT_SIZE_MEDIUM` is **0** and
+`MC_GRP_FT_SIZE_LARGE` is **16**. They are identifiers for the three sizes a
+handset offers, not measurements, and 8 only looked like a pixel count because
+of which identifier it is. A title that asked for the small font was told its
+line was eight pixels tall and believed it.
+
+So the three metric slots answer for the face the renderer actually draws with
+— height 11, ascent 8, descent 3 — whatever handle they are given, which is
+what the LGT side already does and for the reason written down there: a height
+that disagrees with the glyphs is a layout that disagrees with the text inside
+it. `MC_grpGetFont` still hands the requested size back as the handle, because
+a handle is opaque and two different requests should stay two different
+handles; nothing measures it any more.
+
+The title's own arithmetic then does the rest. The same menu, after: clip
+`(70,154)-(171,165)`, eleven rows, baseline 163 — its formula is
+`baseline = top + height - 2` and it simply had the wrong height. The glyphs
+land inside with two rows to spare above.
+
+**One face means one set of metrics, and that is the real constraint.** There
+is no smaller face to answer SMALL with, so answering SMALL with smaller
+numbers can only ever describe a font that will not be drawn.
+`TestTheFaceFitsTheMetricsItReports` pins the invariant that matters — every
+glyph fits between the reported ascent and descent — so a later change to
+either the face or the numbers cannot quietly reintroduce a gap for a clip to
+find.
+
+What else moved: a title whose opening notice is three lines of Korean in a
+framed box had been drawing them 8 rows apart into an 11-row face, so the
+lines touched; they are now spaced and the box is drawn to fit. Across the
+whole local KTF set the deterministic first-frame sweep changes those two
+titles and nothing outside the family that differs against itself.
+
+The other two platforms were checked before this was changed. LGT already
+answers its three font slots off the face. SKT keeps a small table of heights
+per MIDP size — SMALL 8/7, MEDIUM 10/8, LARGE 16/14 — that does not describe
+the face either, but every local SKT title asks only for MEDIUM, whose box the
+glyphs fit inside; the mismatch there is latent and has no caller, so it is a
+watch item rather than a fix made blind.
+
 ## An image is drawn through its own handle, not the framebuffer inside it
 
 The same map drew a few of its objects — a bush, a fence, a hanging vine —

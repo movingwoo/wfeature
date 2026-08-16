@@ -1210,8 +1210,12 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		runtime.postRepaintEvent()
 		return 0, nil
 	case table == wipicTableGraphics && function == 26:
-		// MC_grpGetFont returns an opaque font handle; the handle carries the
-		// requested size with a sensible floor.
+		// MC_grpGetFont returns an opaque font handle. The size it is asked
+		// for is one of three identifiers rather than a pixel count —
+		// MC_GRP_FT_SIZE_SMALL is 8, MEDIUM is 0 and LARGE is 16 — and the
+		// handle carries it back so that two different requests stay two
+		// different handles. What the handle *measures* is the question the
+		// three metric slots below answer, and there is one face to measure.
 		size, err := thread.Register(1)
 		if err != nil {
 			return 0, err
@@ -1221,20 +1225,20 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		}
 		return size, nil
 	case table == wipicTableGraphics && function == 27:
-		// MC_grpGetFontHeight for the handle produced above.
-		font, err := thread.Register(0)
-		if err != nil {
-			return 0, err
-		}
-		if int32(font) < 1 {
-			font = uint32(runtime.fontHeight())
-		}
-		return font, nil
+		// MC_grpGetFontHeight, MC_grpGetFontAscent and MC_grpGetFontDescent
+		// answer for the face the renderer actually draws with, whatever
+		// handle they are handed. Echoing the handle instead is what made a
+		// title's menu look sliced: it asked for the small font, was told
+		// "8 pixels tall" because MC_GRP_FT_SIZE_SMALL happens to be 8, laid
+		// each menu entry out as an eight-row band and clipped its text to it
+		// — and the eleven-row face drew a Korean syllable whose top row fell
+		// one row above that band and was cut off. Only a screen that clips
+		// showed it, so the wide-spaced screens looked right and every menu
+		// and dialogue box lost the top of its text.
+		return uint32(runtime.fontHeight()), nil
 	case table == wipicTableGraphics && function == 28:
-		// MC_grpGetFontAscent approximates the runtime bitmap font baseline.
 		return uint32(runtime.fontBaseline()), nil
 	case table == wipicTableGraphics && function == 29:
-		// MC_grpGetFontDescent.
 		return uint32(runtime.fontHeight() - runtime.fontBaseline()), nil
 	case table == wipicTableGraphics && function == 30:
 		// MC_grpGetStringWidth measures the EUC-KR string with the real glyph
