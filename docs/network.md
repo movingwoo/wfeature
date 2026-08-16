@@ -172,7 +172,7 @@ They stop on their own network screen and report their own error. Refusing
 more gracefully cannot move them: there is nothing wrong with the refusal, and
 the server they want no longer exists. Which titles those are, and which ones
 turned out to be handled paths rather than missing servers, is tracked per
-title in the local support matrix.
+title in the support matrix ([`support.md`](support.md)).
 
 ### One title does not report its own error, it parks
 

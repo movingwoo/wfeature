@@ -6,6 +6,7 @@ KTF·LGT·SKT 게임을 지원합니다.
 > [!IMPORTANT]
 > ⚠️ **개발 중인 베타버전입니다.**  
 > 모든 게임을 지원하지 않습니다.  
+> 지원 게임 목록 : [`docs/support.md`](docs/support.md)
 
 서버를 기동 후 웹 브라우저로 접근하는 방식이며 PWA 설치를 지원합니다.  
 기본 접속 정보는 `http://127.0.0.1:11541`입니다.  
@@ -250,6 +251,7 @@ make test          # go test + Node 테스트
 | [`docs/audio.md`](docs/audio.md) | 소리 |
 | [`docs/hqx.md`](docs/hqx.md) | hqx 화면 확대 |
 | [`docs/testing.md`](docs/testing.md) | 테스트 전략과 로컬 검증 |
+| [`docs/support.md`](docs/support.md) | 지원 게임 목록 — 타이틀별 구동·테스트 상태 |
 
 작업 규칙은 [`AGENTS.md`](AGENTS.md)에 있습니다.
 

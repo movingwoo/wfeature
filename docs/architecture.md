@@ -125,10 +125,10 @@ the native argument-container entry forms.
 
 **Titles run rather than merely start**: input, timers, guest threads, archive
 resources, sound and persistence are all in the path a played game takes. What
-each title actually reaches is a per-title question, tracked per title in a
-local support matrix (`docs/support.md`, which is working state rather than
-published documentation) and deliberately not summarised here, where it would
-go stale. The probes and their counts are in [`testing.md`](testing.md); the
+each title actually reaches is a per-title question, tracked per title in the
+support matrix ([`support.md`](support.md)) and deliberately not summarised
+here, where it would go stale. The probes and their counts are in
+[`testing.md`](testing.md); the
 instruction subset and the KTF format's boundaries are in
 [`armcore.md`](armcore.md) and [`ktf.md`](ktf.md).
 
