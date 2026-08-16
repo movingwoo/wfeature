@@ -104,6 +104,11 @@ func TestListsAndServesTheArchivesThePickerOffers(t *testing.T) {
 		// loads a file is the engine's answer from the bytes, not the
 		// extension's.
 		{"skt", "미들렛.jar", "PK"},
+		// A game dropped into the root rather than filed under a platform is
+		// still offered: the packaged tree ships a README there too, so the
+		// root is filtered by extension exactly like a platform directory.
+		{"", "루트게임.zip", "PK"},
+		{"", "README.txt", "put games here"},
 	} {
 		directory := filepath.Join(gameRoot, entry.group)
 		if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -130,6 +135,7 @@ func TestListsAndServesTheArchivesThePickerOffers(t *testing.T) {
 		{Group: "ktf", Name: "샘플게임", Path: "games/ktf/" + url.PathEscape("샘플게임.zip")},
 		{Group: "skt", Name: "미들렛", Path: "games/skt/" + url.PathEscape("미들렛.jar")},
 		{Group: "skt", Name: "테스트게임", Path: "games/skt/" + url.PathEscape("테스트게임.zip")},
+		{Group: "", Name: "루트게임", Path: "games/" + url.PathEscape("루트게임.zip")},
 	}
 	if len(listed) != len(want) {
 		t.Fatalf("listed %d games, want %d: %+v", len(listed), len(want), listed)
@@ -168,6 +174,12 @@ func TestListsAndServesTheArchivesThePickerOffers(t *testing.T) {
 	midlet := get(t, server, "/"+want[1].Path)
 	if got := midlet.Header().Get("Content-Type"); got != "application/java-archive" {
 		t.Errorf("MIDlet Content-Type = %q", got)
+	}
+
+	// The ungrouped archive is one path component rather than two, which is the
+	// shape the archive route has to accept for the picker's offer to load.
+	if root := get(t, server, "/"+want[3].Path); root.Code != http.StatusOK {
+		t.Fatalf("root archive status = %d", root.Code)
 	}
 }
 

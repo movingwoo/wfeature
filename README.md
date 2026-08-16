@@ -52,13 +52,11 @@ go version
 
 ## 2. 게임 파일 넣기
 
-저장소 안 `var/games/` 아래 폴더에 넣습니다.  
+저장소 안 `var/games/` 아래에 넣습니다.  
 
-```
-var/games/ktf/<게임>.zip           KTF WIPI 게임
-var/games/lgt/<게임>.zip           LGT WIPI 게임
-var/games/skt/<게임>.zip           SKT 게임
-```
+어느 플랫폼으로 읽을지는 폴더 이름이 아니라 파일 내용을 보고 정합니다.  
+폴더는 카테고리 명으로 사용되며 아무 이름이나 지어도 됩니다.  
+2 Depth 폴더부터는 인식하지 않습니다.
 
 ## 3. 실행
 

@@ -344,6 +344,11 @@ var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
 ```
 
+The picker lists the `.zip` and `.jar` files one level under `var/games/` and
+the ones sitting in it directly, which the page groups as `기타`. The directory
+name is a label and nothing else — the platform comes from the archive's bytes
+— and nothing deeper than one level is scanned.
+
 `<owner>` is the game's PID for KTF and LGT and its `MIDlet-Name` for
 SKT. The browser reaches the same tree through the save API:
 `/api/saves/<owner>` is KTF (the form the page has always used) and
