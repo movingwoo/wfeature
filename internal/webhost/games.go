@@ -22,7 +22,8 @@ var gameExtensions = map[string]bool{".zip": true, ".jar": true}
 
 // Game is one entry in the picker.
 type Game struct {
-	// Group is the platform directory the archive sits in.
+	// Group is the platform directory the archive sits in, and is empty for an
+	// archive dropped straight into the game root.
 	Group string `json:"group"`
 	// Name is the archive's file name without its extension.
 	Name string `json:"name"`
@@ -31,13 +32,14 @@ type Game struct {
 }
 
 // ListGames describes the game root as the picker consumes it: one entry per
-// archive, grouped by the platform directory holding it. A missing root is an
-// empty list rather than an error — a fresh install has no games yet, and the
-// page has to load anyway so the user can see where to put them.
+// archive, grouped by the platform directory holding it, and then the archives
+// sitting in the root itself. A missing root is an empty list rather than an
+// error — a fresh install has no games yet, and the page has to load anyway so
+// the user can see where to put them.
 func ListGames(gameRoot string) []Game {
 	// ReadDir sorts by name, so the platform groups come out in a stable
 	// order without a second pass over them.
-	groups, err := os.ReadDir(gameRoot)
+	entries, err := os.ReadDir(gameRoot)
 	if err != nil {
 		return []Game{}
 	}
@@ -45,31 +47,46 @@ func ListGames(gameRoot string) []Game {
 	// no reader recognises.
 	korean := collate.New(language.Korean)
 	games := []Game{}
-	for _, group := range groups {
-		if !group.IsDir() {
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		entries, err := os.ReadDir(filepath.Join(gameRoot, group.Name()))
+		inside, err := os.ReadDir(filepath.Join(gameRoot, entry.Name()))
 		if err != nil {
 			continue
 		}
-		found := []Game{}
-		for _, entry := range entries {
-			if entry.IsDir() || !gameExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
-				continue
-			}
-			found = append(found, Game{
-				Group: group.Name(),
-				Name:  strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
-				Path:  "games/" + url.PathEscape(group.Name()) + "/" + url.PathEscape(entry.Name()),
-			})
-		}
-		sort.SliceStable(found, func(left, right int) bool {
-			return korean.CompareString(found[left].Name, found[right].Name) < 0
-		})
-		games = append(games, found...)
+		games = append(games, archives(entry.Name(), inside, korean)...)
 	}
-	return games
+	// A file dropped straight into the root is a game the user meant to play
+	// rather than a mistake to hide, and which platform loads it is decided by
+	// its bytes and not by the directory it was filed under. It lists after
+	// the platform groups: an ungrouped archive is the exception.
+	return append(games, archives("", entries, korean)...)
+}
+
+// archives picks the loadable archives out of one directory listing and orders
+// them the way a Korean reader expects. group names the directory the entries
+// were read from, and is empty for the game root itself.
+func archives(group string, entries []os.DirEntry, korean *collate.Collator) []Game {
+	prefix := "games/"
+	if group != "" {
+		prefix += url.PathEscape(group) + "/"
+	}
+	found := []Game{}
+	for _, entry := range entries {
+		if entry.IsDir() || !gameExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
+			continue
+		}
+		found = append(found, Game{
+			Group: group,
+			Name:  strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
+			Path:  prefix + url.PathEscape(entry.Name()),
+		})
+	}
+	sort.SliceStable(found, func(left, right int) bool {
+		return korean.CompareString(found[left].Name, found[right].Name) < 0
+	})
+	return found
 }
 
 func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request) {

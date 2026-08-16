@@ -495,7 +495,9 @@ const initGameSelect = async () => {
 
     for (const group of [...new Set(games.map(game => game.group))]) {
       const optionGroup = document.createElement("optgroup");
-      optionGroup.label = group.toUpperCase();
+      // An archive sitting in the game root has no platform directory to name
+      // it, and a blank optgroup label reads as a glitch.
+      optionGroup.label = group ? group.toUpperCase() : "기타";
       for (const game of games.filter(candidate => candidate.group === group)) {
         const option = document.createElement("option");
         option.value = game.path;
