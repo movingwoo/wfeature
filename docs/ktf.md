@@ -4,9 +4,9 @@ This platform validates a KTF archive, locates its native image, maps it into
 the pure-Go ARM core and runs it: the client relocates itself, initializes, is
 asked for its main class, and from there the title plays — its own Java through
 the AOT bridge, its drawing through the WIPI C surface, its saves through the
-shared save store. How far each title gets is tracked per title in the local
-support matrix; this file is how the platform works and what it cost to find
-out.
+shared save store. How far each title gets is tracked per title in the support
+matrix ([`support.md`](support.md)); this file is how the platform works and
+what it cost to find out.
 
 ## Input path
 

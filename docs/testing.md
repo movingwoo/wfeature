@@ -36,9 +36,10 @@ habits are worth keeping:
   title sat in the support list as "needs an authentication server" for several
   sessions; its dialog simply wanted its confirm key, and behind it the game
   runs to its ending credits.
-- **A shallow row in the support matrix is a to-do, not a limitation.** Three
-  sibling titles once sat at the shallowest depth in that table, which looked
-  like one shared platform gap worth investigating — and it was worth
+- **A shallow row in the support matrix ([`support.md`](support.md)) is a
+  to-do, not a limitation.** Three sibling titles once sat at the shallowest
+  depth in that table, which looked like one shared platform gap worth
+  investigating — and it was worth
   investigating, but the answer was that nobody had pressed confirm enough
   times. All three reach a play screen with nine presses over three thousand
   ticks and produce no `tick_error`, no `stub table`, no `not implemented`.
