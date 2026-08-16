@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // A monitor counts: the same runner may take a lock it already holds, and it is
@@ -65,5 +66,43 @@ func TestJavaSleepOutsideAThreadAdvancesTheClock(t *testing.T) {
 	}
 	if moved := client.clock.now() - before; moved < 50*1e6 {
 		t.Errorf("the clock moved %v, want at least 50ms", moved)
+	}
+}
+
+// A yield parks only when another thread could take the turn. Parking ends the
+// slice, and a slice is granted once a tick, so a yield with nobody to hand to
+// costs a whole tick of guest time — a third of one local title's frame rate,
+// since its loop yields once per frame.
+func TestAYieldOnlyParksWhenSomethingElseCanRun(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	alone := &javaWorker{}
+	runtime.workers = []*javaWorker{alone}
+	if client.otherJavaWorkerReady(alone) {
+		t.Error("a lone thread was told something else could run")
+	}
+
+	// A second thread that is runnable now is somewhere to hand the turn to.
+	other := &javaWorker{}
+	runtime.workers = []*javaWorker{alone, other}
+	if !client.otherJavaWorkerReady(alone) {
+		t.Error("a runnable second thread was not seen")
+	}
+
+	// One that is finished, or parked on a deadline that has not arrived, is
+	// not.
+	other.done = true
+	if client.otherJavaWorkerReady(alone) {
+		t.Error("a finished thread was counted as runnable")
+	}
+	other.done, other.wakeAt = false, client.clock.now()+time.Hour
+	if client.otherJavaWorkerReady(alone) {
+		t.Error("a thread sleeping for an hour was counted as runnable")
+	}
+	// And one whose deadline has passed is.
+	client.clock.advance(time.Second)
+	other.wakeAt = 10 * time.Millisecond
+	if !client.otherJavaWorkerReady(alone) {
+		t.Error("a thread whose wait has passed was not seen")
 	}
 }
