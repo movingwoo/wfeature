@@ -145,3 +145,71 @@ func TestFrameDiffRefusesRunsWithNothingInCommon(t *testing.T) {
 		t.Fatalf("framediff accepted two unrelated runs: %s", stdout.String())
 	}
 }
+
+// A zoom keeps every pixel of the box it was asked for, repeated scale times
+// in each direction. Nearest-neighbour is the whole point: the marked pixel
+// has to come back as a solid block of its own colour, because a sprite's
+// facing is read off exactly such a block.
+func TestZoomCropsAndScalesWithoutBlending(t *testing.T) {
+	directory := t.TempDir()
+	source := writeFrame(t, directory, 1, 0x40, image.Pt(5, 2))
+	out := filepath.Join(directory, "zoom.png")
+
+	var stdout, stderr strings.Builder
+	code := zoomFrame([]string{source, out,
+		"-x", "4", "-y", "1", "-width", "3", "-height", "3", "-scale", "4"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("zoom exited %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "(4,1)-(7,4) at 4x") {
+		t.Fatalf("zoom reported %q", stdout.String())
+	}
+	zoomed, err := readPNG(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := zoomed.Bounds().Size(); got != (image.Point{X: 12, Y: 12}) {
+		t.Fatalf("zoom wrote %v, want 12x12", got)
+	}
+	// The marked pixel is frame (5,2), so box (1,1), so the block at (4..7,
+	// 4..7) of the zoom — every pixel of it, with nothing blended at the edge.
+	for y := 4; y < 8; y++ {
+		for x := 4; x < 8; x++ {
+			red, green, blue, _ := zoomed.At(x, y).RGBA()
+			if red>>8 != 0xff || green != 0 || blue != 0 {
+				t.Fatalf("zoom (%d,%d) = %v, want the marked colour", x, y, zoomed.At(x, y))
+			}
+		}
+	}
+	if red, _, _, _ := zoomed.At(3, 4).RGBA(); red>>8 == 0xff {
+		t.Fatalf("zoom bled the mark into the pixel beside it")
+	}
+}
+
+// A box that runs off the edge is clipped rather than refused, because the
+// coordinates come from guessing where a sprite is. A box entirely outside the
+// frame is the mistake worth reporting.
+func TestZoomClipsToTheFrameAndRefusesABoxOutsideIt(t *testing.T) {
+	directory := t.TempDir()
+	source := writeFrame(t, directory, 1, 0x40, image.Pt(-1, 0))
+	out := filepath.Join(directory, "zoom.png")
+
+	var stdout, stderr strings.Builder
+	if code := zoomFrame([]string{source, out,
+		"-x", "6", "-width", "40", "-height", "40", "-scale", "2"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("zoom exited %d: %s", code, stderr.String())
+	}
+	zoomed, err := readPNG(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := zoomed.Bounds().Size(); got != (image.Point{X: 4, Y: 12}) {
+		t.Fatalf("clipped zoom is %v, want 4x12", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := zoomFrame([]string{source, out, "-x", "80", "-y", "80"}, &stdout, &stderr); code == 0 {
+		t.Fatalf("zoom accepted a box outside the frame: %s", stdout.String())
+	}
+}

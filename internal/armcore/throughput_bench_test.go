@@ -273,3 +273,105 @@ func BenchmarkEngineBlitSamePage(b *testing.B) { benchmarkBlit(b, 512, 8) }
 // the throughput section of docs/armcore.md for the two cache shapes that were
 // built to close the gap this reports and rejected on real games.
 func BenchmarkEngineBlitCrossPage(b *testing.B) { benchmarkBlit(b, 512, 512*1024) }
+
+// armALULoopMemory is the ALU loop above in ARM rather than Thumb: `adds r0,
+// r0, #1` ending in a backward branch. The pair exists because **the two
+// instruction sets take different paths through the engine** — Thumb reaches a
+// decode cache and a routed switch, ARM is fetched and matched from scratch
+// every time — and the local titles are split between them: an LGT Clet runs
+// almost entirely Thumb, and an LGT Java title, compiled ahead of time, runs
+// mostly ARM. Optimising one path says nothing about the other, and until this
+// benchmark existed only the Thumb one could be measured at all.
+func armALULoopMemory(t testing.TB, instructions int) (*Memory, uint32) {
+	const base = uint32(0x10000)
+	memory := NewMemory()
+	if err := memory.Map(base, 1<<16, PermissionReadExecute); err != nil {
+		t.Fatal(err)
+	}
+	code := make([]byte, instructions*4)
+	for index := 0; index < instructions-1; index++ {
+		binary.LittleEndian.PutUint32(code[index*4:], 0xe2900001) // adds r0, r0, #1
+	}
+	// B back to base: target = (pc+8) + (offset<<2), pc = base+4*(n-1).
+	offset := -(instructions + 1)
+	binary.LittleEndian.PutUint32(code[(instructions-1)*4:], 0xea000000|uint32(offset)&0xffffff)
+	if err := memory.Load(base, code); err != nil {
+		t.Fatal(err)
+	}
+	return memory, base
+}
+
+func BenchmarkEngineARMALULoop(b *testing.B) {
+	memory, base := armALULoopMemory(b, 64)
+	context := NewContext()
+	if err := context.SetPC(base); err != nil {
+		b.Fatal(err)
+	}
+	engine := Engine{}
+	b.ResetTimer()
+	steps := 0
+	for steps < b.N {
+		result, err := engine.Run(&context, memory, 0xffffffff, 1_000_000)
+		if err != nil {
+			b.Fatal(err)
+		}
+		steps += int(result.Steps)
+	}
+	b.ReportMetric(float64(steps)/b.Elapsed().Seconds()/1e6, "MIPS")
+}
+
+// BenchmarkARMExecuteOnly and BenchmarkARMFetchOnly split the ARM step the way
+// the two Thumb benchmarks above split a Thumb one, which is what says where
+// the difference between them lives: the fetch, the match chain, or the
+// operation itself.
+func BenchmarkARMExecuteOnly(b *testing.B) {
+	memory, base := armALULoopMemory(b, 64)
+	context := NewContext()
+	if err := context.SetPC(base); err != nil {
+		b.Fatal(err)
+	}
+	memory.beginQuantum()
+	defer memory.endQuantum()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := executeARM(&context, memory, base, 0xe2900001); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds()/1e6, "MIPS")
+}
+
+func BenchmarkARMFetchOnly(b *testing.B) {
+	memory, base := armALULoopMemory(b, 64)
+	memory.beginQuantum()
+	defer memory.endQuantum()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := memory.fetch32(base + uint32(index%64)*4); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds()/1e6, "MIPS")
+}
+
+// BenchmarkARMDataProcessingOnly is the operation with the match chain taken
+// off: `executeARM` reaches data processing after about ten mask-and-compare
+// tests, and this calls the handler directly. The gap between this and
+// BenchmarkARMExecuteOnly is what a cached form would remove — the ARM half of
+// what the Thumb path's routed switch already does.
+func BenchmarkARMDataProcessingOnly(b *testing.B) {
+	memory, base := armALULoopMemory(b, 64)
+	context := NewContext()
+	if err := context.SetPC(base); err != nil {
+		b.Fatal(err)
+	}
+	memory.beginQuantum()
+	defer memory.endQuantum()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := executeARMDataProcessing(&context, base, 0xe2900001); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds()/1e6, "MIPS")
+}

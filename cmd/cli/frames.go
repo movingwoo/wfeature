@@ -122,6 +122,94 @@ func contactSheet(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// zoomFrame crops a box out of one frame and scales it up, pixel for pixel.
+//
+// It is the third way of looking, and it exists because of a question a
+// contact sheet cannot answer: **which way is the character facing.** A
+// handset screen is 240 wide and a sprite on it is twenty pixels; a report
+// that says "the attack goes the wrong way" is checked by reading a sprite
+// that small, and at 1:1 it cannot be read at all. At five times it is
+// obvious. Nearest-neighbour for the same reason `drawShrunk` drops pixels
+// rather than averaging them — a smoothed sprite is a sprite whose facing has
+// been invented by the filter.
+func zoomFrame(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintln(stderr,
+			"usage: wfeature zoom <frame.png> <out.png> [-x N] [-y N] [-width N] [-height N] [-scale N]")
+		return 2
+	}
+	source, destination := args[0], args[1]
+	x, y, width, height, scale := 0, 0, 0, 0, 4
+	for index := 2; index < len(args); index++ {
+		if index+1 >= len(args) {
+			fmt.Fprintf(stderr, "%s expects a value\n", args[index])
+			return 2
+		}
+		value, err := strconv.Atoi(args[index+1])
+		if err != nil {
+			fmt.Fprintf(stderr, "invalid %s %q\n", args[index], args[index+1])
+			return 2
+		}
+		switch args[index] {
+		case "-x":
+			x = value
+		case "-y":
+			y = value
+		case "-width":
+			width = value
+		case "-height":
+			height = value
+		case "-scale":
+			scale = value
+		default:
+			fmt.Fprintf(stderr, "unknown zoom option %q\n", args[index])
+			return 2
+		}
+		index++
+	}
+	if scale <= 0 {
+		fmt.Fprintln(stderr, "-scale must be positive")
+		return 2
+	}
+
+	frame, err := readPNG(source)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// The box is clipped to the frame rather than refused, so a guess at where
+	// a sprite is can be off the edge without costing a run.
+	bounds := frame.Bounds()
+	box := image.Rect(bounds.Min.X+x, bounds.Min.Y+y, bounds.Max.X, bounds.Max.Y)
+	if width > 0 {
+		box.Max.X = min(box.Max.X, box.Min.X+width)
+	}
+	if height > 0 {
+		box.Max.Y = min(box.Max.Y, box.Min.Y+height)
+	}
+	box = box.Intersect(bounds)
+	if box.Empty() {
+		fmt.Fprintf(stderr, "the box asked for is outside %s (%dx%d)\n",
+			source, bounds.Dx(), bounds.Dy())
+		return 1
+	}
+
+	zoomed := image.NewRGBA(image.Rect(0, 0, box.Dx()*scale, box.Dy()*scale))
+	for row := 0; row < zoomed.Bounds().Dy(); row++ {
+		for column := 0; column < zoomed.Bounds().Dx(); column++ {
+			zoomed.Set(column, row, frame.At(box.Min.X+column/scale, box.Min.Y+row/scale))
+		}
+	}
+	if err := encodePNG(destination, zoomed); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "(%d,%d)-(%d,%d) at %dx -> %s (%dx%d)\n",
+		box.Min.X, box.Min.Y, box.Max.X, box.Max.Y, scale, destination,
+		zoomed.Bounds().Dx(), zoomed.Bounds().Dy())
+	return 0
+}
+
 // drawShrunk copies a frame at 1/shrink by dropping pixels. Nearest-neighbour
 // rather than an average, because a contact sheet is read for what changed
 // between frames and a blur is exactly what hides that; the same reason the

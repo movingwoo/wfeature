@@ -129,10 +129,25 @@ WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_LOAD_TICKS=400 \
   go test -count=1 -run LGTLoadCost ./internal/platform/lgt -cpuprofile cpu.out
 ```
 
-That probe takes two knobs the KTF ones do not: `WFEATURE_TICK_MS` sets the
-tick the Host would use, and `WFEATURE_PACED` runs the session the way a Host
-on a real clock does rather than as fast as the machine allows — which is the
-difference between measuring throughput and measuring the game's own pace.
+That probe takes three knobs the KTF ones do not: `WFEATURE_TICK_MS` sets the
+tick the Host would use, `WFEATURE_PACED` runs the session the way a Host on a
+real clock does rather than as fast as the machine allows — which is the
+difference between measuring throughput and measuring the game's own pace — and
+**`WFEATURE_PERF_ROUTE` drives a route before measuring**.
+
+That last one is what makes the probe measure a game rather than a title
+screen, and it is not a convenience. A profile of a title's first few hundred
+ticks is a profile of a session waiting: the run that found where this
+platform's time actually went — two thirds of it in a framebuffer copy — was
+only possible once `-cpuprofile` could be pointed at a title in play
+(`lgt.md`, "That profile was of the guest, and the host was doing something
+else").
+
+```sh
+WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
+  WFEATURE_LOAD_TICKS=60000 \
+  go test -count=1 -run LGTLoadCost ./internal/platform/lgt -cpuprofile cpu.out -timeout 30m
+```
 
 `ns_per_step` is what a throughput change has to move, and the loop calls
 `Tick` rather than `TickFor` on purpose: `TickFor` answers how long the Host

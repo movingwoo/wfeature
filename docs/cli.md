@@ -39,6 +39,7 @@ wfeature checkgames [-games dir]                find titles that share a save di
 wfeature provision <game.zip> [flags]           write the certificate one title asks for
 wfeature contactsheet <framedir> <out.png>      tile a run's frames into one page
 wfeature framediff <dirA> <dirB> [-limit N]     name the frames two runs disagree on
+wfeature zoom <frame.png> <out.png> [flags]     magnify a corner of one frame
 wfeature licenses                               print the project and third-party notices
 ```
 
@@ -285,6 +286,15 @@ covered. `guest_ms` divided by `flushes` is the milliseconds per frame the
 title is being given, which is the number a pacing change is judged by: a run
 of the same length before and after says what the title's own frame rate did.
 
+And `steps` with `ns_per_step`, the guest instructions retired and what each
+cost the host. **The two answer different questions and a run needs both.**
+`busy_ms` alone moves when a change alters how much guest work a tick holds,
+which a scene reached by a route does from run to run; `ns_per_step` holds that
+still and is what a throughput change has to move. A pacing change is the
+opposite case and shows up in neither — it moves guest milliseconds per frame
+while the host's cost per instruction does not budge, which is exactly how one
+title lost a third of its frame rate without any profile noticing.
+
 ### Reading the platform-call trace
 
 The two trace flags answer different questions and are worth keeping straight.
@@ -348,7 +358,7 @@ in `internal/route` and takes the key table and the four session operations it
 needs (advance, digest, key, stall) as functions, so neither platform's session
 type is in it.
 
-## contactsheet and framediff
+## contactsheet, framediff and zoom
 
 Reviewing a `-framedir` run. A scripted run only says something if somebody
 looks at the frames, and a run is a few thousand of them.
@@ -356,6 +366,7 @@ looks at the frames, and a run is a few thousand of them.
 ```sh
 wfeature contactsheet <framedir> <out.png> [-every N] [-columns N] [-shrink N] [-from tick] [-to tick]
 wfeature framediff <dirA> <dirB> [-limit N]
+wfeature zoom <frame.png> <out.png> [-x N] [-y N] [-width N] [-height N] [-scale N]
 ```
 
 `contactsheet` tiles every Nth frame into one labelled page — every 20th frame,
@@ -376,6 +387,22 @@ Run the same script against the build before a change and the build after it,
 and the first differing tick says what the change did and where. A screen that
 comes back byte-identical is a screen the change did not touch — worth knowing
 before believing a fix. [`lgt.md`](lgt.md) has how both fit into a session.
+
+`zoom` crops a box out of one frame and scales it up pixel for pixel, which is
+the question the other two cannot answer: **which way is the character
+facing.** A handset screen is 240 across and a character on it is about twenty
+pixels, so a report of the shape "the attack goes the wrong way" is checked by
+reading a sprite too small to read at 1:1 — and at five times it is plain. The
+box is clipped to the frame rather than refused, because its coordinates come
+from guessing where the sprite is; a box entirely outside the frame is
+reported. The scale repeats pixels rather than smoothing them, for the reason
+the shrink drops them: a filtered sprite is one whose facing the filter
+invented.
+
+```sh
+wfeature zoom out/tick0900.png look.png -x 30 -y 130 -width 90 -height 70 -scale 5
+# (30,130)-(120,200) at 5x -> look.png (450x350)
+```
 
 ## checkgames
 

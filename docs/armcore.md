@@ -485,6 +485,158 @@ consist of.
 It answered its question in one run and is what any future claim about the
 cache's memory has to start from.
 
+### Both of those were about Thumb, and the slow titles are not Thumb
+
+Everything above — the decode cache, the routed switch, the blocks, the wider
+entry — is on the **Thumb** path. `Engine.Run` has two halves and they are not
+comparable: Thumb reads a cached decode and routes ten forms straight to their
+handler; ARM calls `fetch32` and then walks `executeARM`'s chain of mask-and-
+compare tests from the top, on **every instruction, every time**. There is no
+ARM decode cache at all.
+
+Which path a title takes is not a detail. Counting steps by instruction set
+over a real run of three local LGT archives:
+
+| title | Thumb | ARM |
+|---|---|---|
+| a Clet | 99.8% | 0.2% |
+| a Java title | 38.1% | 61.9% |
+| the Java title with the reported stutter | 21.1% | **78.9%** |
+
+**A Clet is Thumb and an ahead-of-time-compiled Java title is ARM**, which is
+the missing half of "a Java title is the other shape, and it is the slow one"
+(`lgt.md`). The Clets that run at five to six times the guest clock are the
+ones every optimisation above was measured on; the title that manages twice the
+clock spends four fifths of its instructions on the path none of them touched.
+
+What that path costs, on the same machine as every number above (`-benchtime 2s`,
+Apple M1):
+
+| benchmark | ns/step |
+|---|---|
+| `BenchmarkEngineALULoop` — a whole Thumb step | 4.64 |
+| `BenchmarkThumbExecuteOnly` — the same without the fetch | 4.70 |
+| `BenchmarkFetchOnly` — `fetch16` alone | 8.16 |
+| `BenchmarkEngineARMALULoop` — a whole ARM step | **17.03** |
+| `BenchmarkARMExecuteOnly` — the match chain and the operation | 8.78 |
+| `BenchmarkARMFetchOnly` — `fetch32` alone | 8.18 |
+| `BenchmarkARMDataProcessingOnly` — the operation alone | 4.65 |
+
+**The ARM step decomposes exactly**, which is what makes it worth acting on:
+
+```
+fetch 8.18  +  match chain 4.13  +  operation 4.65  =  16.96 ≈ 17.03
+```
+
+and the two facts that follow are the whole design:
+
+- **A whole Thumb step is cheaper than a single fetch** — 4.64 against 8.16.
+  That is the decode cache paying for itself: it removes the fetch, and the
+  fetch is the most expensive part of an instruction.
+- **An ARM operation alone costs what an entire Thumb step costs**, 4.65
+  against 4.64. The arithmetic is not the problem. Everything ARM pays over
+  Thumb is fetch and dispatch — 12.3ns of the 17.03 — and both are exactly what
+  the Thumb path already removed.
+
+So the cheapest thing left *inside the interpreter* is *the ARM decode cache,
+with the form stored in the entry so the chain becomes a routed switch* — the
+one mechanism here with a measured precedent rather than a projection, the same
+change on the same engine, on the other half of the same loop. It should land
+an ARM step near a Thumb one, since after it the two are the same three things
+in the same order: a cached decode, a switch, and the operation. That is ~3.4x
+on ARM steps and, on a title that is 78.9% ARM against 21.1% Thumb, about 2.9x
+on **interpreted** time:
+
+```
+now    0.789 × 17.03 + 0.211 × 4.64 = 14.4 ns a step
+after  0.789 ×  5.0  + 0.211 × 4.64 =  4.9 ns a step
+```
+
+### And none of that was worth doing, because the interpreter was 4% of the run
+
+**This is the correction that matters most in this document.** Everything
+above — the mix, the benchmarks, the projection — is about what an instruction
+costs. It says nothing about how much of the emulator's time goes on
+instructions, and on the title the whole exercise started from, the answer was
+**4.2%**.
+
+A host CPU profile of that title's in-game session, taken through the load
+probe's `WFEATURE_PERF_ROUTE`:
+
+| | share of host time |
+|---|---|
+| `lgt.(*Client).syncToGuest` | 29.0% |
+| `lgt.(*Client).syncFromGuest` | 26.3% |
+| `runtime.kevent` — parking and waking guest threads | 16.5% |
+| `armcore.Engine.Run`, everything under it | 4.2% |
+| of which `fetch32`, the part a decode cache removes | 1.4% |
+
+The ARM decode cache's ~48% of an ARM step is 48% of 4.2%. **The whole change
+was worth two per cent of the run**, and the two framebuffer syncs — which
+`lgt.md` shows were copying 150 KiB in each direction around every drawing call
+a Java title made, and were measured over 1.7 million calls to have never once
+found a changed pixel — were worth two thirds of it. Removing them took the
+same session from 366.6 to 41.0 nanoseconds a step, 150.9s to 16.9s, with every
+frame byte-identical.
+
+So the ARM cache is still the right *next* interpreter change and the numbers
+above still hold for what it would do; it is simply not what the title needed,
+and the reason is the whole lesson:
+
+**A guest profile and a host profile answer different questions, and this
+project had been reading one for the other.** `-profile` says which guest
+instructions a title executes, which is how its own hot loops were found. Where
+the *emulator's* time goes is a Go profile of a run driven to a scene, and it
+took one to find that 55% of it was a copy nobody needed. Ask for the host
+profile first, before any throughput reasoning at all: the fastest interpreter
+in the world would have moved this title by four per cent.
+
+The two failures above do not argue against it. Both were attempts to make an
+*already cached* path faster — widening an entry that existed, blocking a loop
+that already skipped its fetch — and both lost to cache footprint and register
+pressure. Adding the first cache to a path that has none is the change those
+two were competing against, not a repeat of them.
+
+What to measure, in order, before believing any of it:
+
+1. the ARM entry's footprint, from `Memory.DecodeCacheStats` — an ARM module
+   is a megabyte where a Clet is a kilobyte of hot code, and the Thumb cache's
+   0.1–0.5 MiB is not a prediction for it;
+2. `ns_per_step` on the two ARM-heavy titles and, as the regression guard, on
+   the Clets that are 99.8% Thumb and must not move;
+3. only then the routed switch for ARM's ten commonest forms, which is the
+   second half of what Thumb has and worth its own A/B.
+
+### Why a translator is not the answer even with unlimited effort
+
+Asked plainly — ignoring how much work each is — a translator still loses, and
+the numbers above are why. After the cache and the switch an ARM step is about
+5ns, of which **4.65 is the operation itself**. Everything a translator could
+still remove is the ~0.4ns of dispatch left over. The larger prize it is
+usually reached for — specialising operands at translate time — is the design
+measured in "A wider decode cache entry was built and lost, twice over", where
+reading a pre-extracted field came out *slower* than recomputing it from the
+raw word, at equal width, by 9 to 10%.
+
+And how this ships decides the rest. A translator that emits machine code and
+marks a page executable is out on its own terms: `make dist` cross-compiles the
+server to five operating systems from one machine with no cgo, which is a
+constraint on the project rather than on the design (`AGENTS.md`). The portable
+form, a closure per instruction, pays one indirect call per guest instruction —
+measured here at 0.9ns natively — against the ~0.4ns of dispatch it would be
+removing. It loses before it starts.
+
+(The browser is not the constraint it would once have been: the page ran the
+emulator in wasm once and no longer does — the emulator runs natively on a
+server and the phone is a thin client, see `architecture.md`. The wasm
+measurements further down are that era's, and they are kept because what they
+found about Go's wasm backend is still true of the client.)
+
+So a translator is worth at most a rounding error. The throughput left after
+the ARM cache is in the operations themselves and in the 11.8% a Java title
+spends in call thunks — not in dispatch, which will by then have been taken
+twice.
+
 ## Why the browser was seven times slower
 
 The same Thumb loop cost 9.0ns an instruction natively and 63.5ns in wasm.
