@@ -35,6 +35,15 @@ type clientMessage struct {
 	// multiplier for "speed" and the magnification for "scale".
 	Value float64 `json:"value,omitempty"`
 
+	// Width and Height are the handset screen a "start" asks for. They are
+	// optional and the server's default stands when they are absent, which is
+	// what every game but a handful wants. A title packaged for a smaller
+	// phone reads its screen and then loads artwork by that size, so the one
+	// that ships no 240-wide set cannot be run on a 240-wide screen at all —
+	// see docs/skvm.md. KTF ignores the request: its screen is the platform's.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
+
 	// The cheat fields, for kind "cheat". Op names the operation; Command is
 	// the line for the text console, and the rest are the panel's arguments.
 	Op      string `json:"op,omitempty"`

@@ -457,6 +457,33 @@ func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 	return nil, 0, 0, false
 }
 
+// Screen is the guest's own screen, before any magnification. A Host lays out
+// around it and reports it to whatever is drawing the picture, so what it has
+// to answer is the size the platform actually took rather than the size the
+// Host asked for: KTF owns its screen and ignores the request, and the other
+// two honour it.
+//
+// It answers the requested size before the first frame exists, because a Host
+// that has just started a game asks then.
+func (s *Session) Screen() (width, height int) {
+	switch {
+	case s.ktf != nil:
+		// KTF's screen is the platform's own. Its frame says so once there is
+		// one, and before that the default is what it will be.
+		if _, frameWidth, frameHeight, _ := s.ktf.Frame(); frameWidth > 0 && frameHeight > 0 {
+			return frameWidth, frameHeight
+		}
+		return DefaultWidth, DefaultHeight
+	case s.lgt != nil:
+		if _, frameWidth, frameHeight, _ := s.lgt.Frame(); frameWidth > 0 && frameHeight > 0 {
+			return frameWidth, frameHeight
+		}
+	case s.surface != nil:
+		return s.surface.Dimensions()
+	}
+	return s.options.width(), s.options.height()
+}
+
 // Flushes reports how many frames the game has finished, which is what a Host
 // compares against to decide whether Frame is worth calling.
 func (s *Session) Flushes() uint64 {

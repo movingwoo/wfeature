@@ -170,3 +170,35 @@ test("a token the server no longer holds resolves rather than throwing", async (
   assert.equal(answer.resumed, false);
   assert.ok(!answer.started);
 });
+
+// The screen a game runs on travels with the start, and only when it is not
+// the one the server would have chosen: a page that never opened the setting
+// has to send exactly what it always sent.
+test("a start carries a screen only when it is not the default", async () => {
+  const { session, socket } = await openFakeSession();
+  // Each start is answered, because an unanswered ask holds a five-minute
+  // timer open and the test would wait for it.
+  const started = async (path, scale, screen) => {
+    const asking = session.start(path, scale, screen);
+    const sent = socket.sent.at(-1);
+    socket.deliver({ kind: "started", id: sent.id, started: { platform: "skt", width: 240, height: 320 } });
+    await asking;
+    return sent;
+  };
+
+  const asDefault = await started("skt/game.zip", 1, { width: 240, height: 320 });
+  assert.equal(asDefault.kind, "start");
+  assert.equal(asDefault.width, undefined);
+  assert.equal(asDefault.height, undefined);
+
+  const asChosen = await started("skt/small.zip", 2, { width: 176, height: 220 });
+  assert.equal(asChosen.game, "skt/small.zip");
+  assert.equal(asChosen.value, 2);
+  assert.equal(asChosen.width, 176);
+  assert.equal(asChosen.height, 220);
+
+  // A start with no screen at all is the same message as before this existed.
+  const asPlain = await started("ktf/game.zip");
+  assert.equal(asPlain.width, undefined);
+  assert.equal(asPlain.height, undefined);
+});

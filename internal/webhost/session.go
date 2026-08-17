@@ -394,6 +394,18 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 	}
 }
 
+// The screen sizes a page may ask for. The floor is smaller than any handset
+// these games shipped on and the ceiling is larger, because what this bounds is
+// an allocation from a message rather than a taste in phones.
+const (
+	minScreen = 32
+	maxScreen = 1024
+)
+
+func validScreen(width, height int) bool {
+	return width >= minScreen && width <= maxScreen && height >= minScreen && height <= maxScreen
+}
+
 func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	r.stopGame()
 
@@ -417,11 +429,26 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	if message.Value >= 1 && message.Value <= 4 {
 		scale = int(message.Value)
 	}
+	// A screen the page did not ask for is the default one, and a size outside
+	// what a handset ever had is refused rather than clamped: it would come
+	// from a page this server does not serve, and a game started on a screen
+	// nothing was drawn for is worse than a game that did not start.
+	screenWidth, screenHeight := 0, 0
+	if message.Width != 0 || message.Height != 0 {
+		if !validScreen(message.Width, message.Height) {
+			r.send(serverMessage{Kind: serverError, ID: message.ID,
+				Message: fmt.Sprintf("screen %dx%d is outside %d..%d", message.Width, message.Height, minScreen, maxScreen)})
+			return
+		}
+		screenWidth, screenHeight = message.Width, message.Height
+	}
 	started, err := session.Start(r.gameCtx, archive, session.Options{
 		SaveStore: r.server.saveStore(summary.Platform, summary.SaveOwner),
 		AudioSink: r.audio,
 		Logger:    r.server.logger,
 		Scale:     scale,
+		Width:     screenWidth,
+		Height:    screenHeight,
 		// A debug build is the one that collects a report, and the ordered
 		// trace is what it collects.
 		TraceLimit: r.server.traceLimit,
@@ -453,8 +480,13 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.token = ""
 		r.server.logger.Warn("session resume token unavailable", "error", tokenErr)
 	}
+	// The size reported is the one the platform took rather than the one the
+	// page asked for, because KTF ignores the request and a page that laid out
+	// for a screen the game is not drawing has the picture in the wrong place.
+	startedWidth, startedHeight := started.Screen()
 	r.server.logger.Info("session started",
-		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner)
+		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner,
+		"screen", fmt.Sprintf("%dx%d", startedWidth, startedHeight))
 	r.started = startedMessage{
 		Platform:  summary.Platform,
 		AID:       summary.AID,
@@ -462,8 +494,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		Name:      summary.Name,
 		SaveOwner: summary.SaveOwner,
 		MainClass: summary.MainClass,
-		Width:     session.DefaultWidth,
-		Height:    session.DefaultHeight,
+		Width:     startedWidth,
+		Height:    startedHeight,
 		Token:     r.token,
 	}
 	identity := r.started
