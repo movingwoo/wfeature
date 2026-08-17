@@ -572,8 +572,75 @@ func dataInputStreamDefinition() ClassDefinition {
 			{Name: "readInt", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadInt},
 			{Name: "readLong", Descriptor: "()J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadLong},
 			{Name: "readUTF", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative, Throws: []string{"java/io/IOException"}},
+			{Name: "readFully", Descriptor: "([B)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyArray},
+			{Name: "readFully", Descriptor: "([BII)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyRange},
 		},
 	}
+}
+
+// dataInputReadFullyArray and dataInputReadFullyRange fill the caller's buffer
+// or raise. A title reads a fixed-size record with these and then decodes it
+// by offset, so a short read that answered with a count would leave it
+// decoding whatever the buffer held before.
+func dataInputReadFullyArray(call *Invocation, arguments []Value) (Value, error) {
+	array, err := requireObject(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	data, err := ByteArraySnapshot(array)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return dataInputReadFully(call, arguments, 0, int32(len(data)))
+}
+
+func dataInputReadFullyRange(call *Invocation, arguments []Value) (Value, error) {
+	offset, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	length, err := nativeInt(arguments, 3)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return dataInputReadFully(call, arguments, offset, length)
+}
+
+// dataInputReadFully reads through the stream's own read([BII), because a
+// subclass that replaced it is what a game wrapped this around.
+func dataInputReadFully(call *Invocation, arguments []Value, offset, length int32) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := requireObject(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	data, err := ByteArraySnapshot(array)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if offset < 0 || length < 0 || int64(offset)+int64(length) > int64(len(data)) {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException", "readFully range")
+	}
+	for filled := int32(0); filled < length; {
+		result, readErr := call.InvokeVirtual(stream, "read", "([BII)I",
+			ReferenceValue(array), IntValue(offset+filled), IntValue(length-filled))
+		if readErr != nil {
+			return VoidValue(), readErr
+		}
+		count, countErr := result.Int32()
+		if countErr != nil {
+			return VoidValue(), countErr
+		}
+		if count <= 0 {
+			return VoidValue(), guestException("java/io/EOFException",
+				fmt.Sprintf("readFully wanted %d bytes and reached the end after %d", length, filled))
+		}
+		filled += count
+	}
+	return VoidValue(), nil
 }
 
 func dataInputStreamInit(call *Invocation, arguments []Value) (Value, error) {

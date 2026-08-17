@@ -32,7 +32,7 @@ func (vm *VM) registerCoreLibrary() error {
 }
 
 func coreLibraryDefinitions() []ClassDefinition {
-	return []ClassDefinition{
+	definitions := []ClassDefinition{
 		runnableDefinition(),
 		classDefinition(),
 		stringDefinition(),
@@ -51,7 +51,20 @@ func coreLibraryDefinitions() []ClassDefinition {
 		vectorDefinition(),
 		hashtableDefinition(),
 		randomDefinition(),
+		integerDefinition(),
+		longDefinition(),
+		byteDefinition(),
+		mathDefinition(),
+		runtimeDefinition(),
+		calendarDefinition(),
+		dateDefinition(),
+		enumerationDefinition(),
+		stackDefinition(),
+		arrayEnumerationDefinition(),
 	}
+	// The throwables come last only because they are a generated group rather
+	// than a hand-written one; nothing here depends on the order.
+	return append(definitions, throwableDefinitions()...)
 }
 
 func runnableDefinition() ClassDefinition {
@@ -192,6 +205,7 @@ func systemDefinition() ClassDefinition {
 			{Name: "arraycopy", Descriptor: "(Ljava/lang/Object;ILjava/lang/Object;II)V", Access: staticNative},
 			{Name: "gc", Descriptor: "()V", Access: staticNative},
 			{Name: "getProperty", Descriptor: "(Ljava/lang/String;)Ljava/lang/String;", Access: staticNative},
+			{Name: "exit", Descriptor: "(I)V", Access: staticNative},
 			{Name: "<clinit>", Descriptor: "()V", Access: AccessStatic, Body: systemClassInit},
 		},
 	}
@@ -226,6 +240,10 @@ func threadDefinition() ClassDefinition {
 		Access:     AccessPublic,
 		Fields: []FieldDefinition{
 			{Name: "target", Descriptor: "Ljava/lang/Runnable;", Access: AccessPrivate},
+			{Name: "priority", Descriptor: "I", Access: AccessPrivate},
+			{Name: "MIN_PRIORITY", Descriptor: "I", Access: AccessPublic | AccessStatic | AccessFinal, Constant: IntValue(1)},
+			{Name: "NORM_PRIORITY", Descriptor: "I", Access: AccessPublic | AccessStatic | AccessFinal, Constant: IntValue(5)},
+			{Name: "MAX_PRIORITY", Descriptor: "I", Access: AccessPublic | AccessStatic | AccessFinal, Constant: IntValue(10)},
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: emptyConstructor},
@@ -236,8 +254,47 @@ func threadDefinition() ClassDefinition {
 			{Name: "run", Descriptor: "()V", Access: AccessPublic, Body: threadRun},
 			{Name: "sleep", Descriptor: "(J)V", Access: AccessPublic | AccessStatic | AccessNative, Throws: []string{"java/lang/InterruptedException"}},
 			{Name: "yield", Descriptor: "()V", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "currentThread", Descriptor: "()Ljava/lang/Thread;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "setPriority", Descriptor: "(I)V", Access: AccessPublic | AccessFinal, Body: threadSetPriority},
+			{Name: "getPriority", Descriptor: "()I", Access: AccessPublic | AccessFinal, Body: threadGetPriority},
 		},
 	}
+}
+
+// threadSetPriority keeps what it is told and changes nothing else. There is
+// no priority to set: guest threads here are goroutines the platform's own
+// scheduler drives in turn, and a title that raises its loader above its frame
+// loop is expressing a preference this runtime cannot honour without a
+// scheduler that reads it. Keeping the value means getPriority answers what
+// was set, which is what a title that saves and restores one is doing.
+func threadSetPriority(call *Invocation, arguments []Value) (Value, error) {
+	thread, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	priority, err := nativeInt(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if priority < 1 || priority > 10 {
+		return VoidValue(), guestException("java/lang/IllegalArgumentException", "thread priority out of range")
+	}
+	return VoidValue(), setIntField(call.vm, thread, ThreadClass, "priority", priority)
+}
+
+func threadGetPriority(call *Invocation, arguments []Value) (Value, error) {
+	thread, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	priority, err := intField(call.vm, thread, ThreadClass, "priority")
+	if err != nil {
+		return VoidValue(), err
+	}
+	if priority == 0 {
+		return IntValue(5), nil
+	}
+	return IntValue(priority), nil
 }
 
 func threadInit(call *Invocation, arguments []Value) (Value, error) {
