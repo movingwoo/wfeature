@@ -629,14 +629,30 @@ func TestScreenGraphicsStaysUsableAfterPaint(t *testing.T) {
 	if !invokeFixtureBoolean(t, runtime, "CanvasMIDlet", "drawAfterPaint") {
 		t.Fatal("drawAfterPaint() = false, want the kept Graphics to draw")
 	}
-	// XDisplay.refresh is how such a title puts what it drew on the screen.
+	// XDisplay.refresh is how such a title puts what it drew on the screen. It
+	// marks the screen ready rather than presenting on the spot — one local
+	// family pushes about a hundred times per Host pass — so the picture
+	// arrives with the pass, which is where a Host reads it anyway.
 	if _, err := runtime.VM.InvokeStatic(skvm.XDisplayClass, "refresh", "(IIII)V",
 		jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(1), jvm.IntValue(1)); err != nil {
 		t.Fatalf("XDisplay.refresh() error = %v", err)
 	}
+	if _, presents := framebuffer.Snapshot(); presents != 1 {
+		t.Fatalf("framebuffer presents = %d before the Host pass, want the refresh to wait for it", presents)
+	}
+	if err := runtime.RunPending(); err != nil {
+		t.Fatalf("RunPending() error = %v", err)
+	}
 	frame, presents := framebuffer.Snapshot()
 	if presents != 2 {
-		t.Fatalf("framebuffer presents = %d after a refresh, want 2", presents)
+		t.Fatalf("framebuffer presents = %d after a refresh and a pass, want 2", presents)
+	}
+	// A pass with nothing pushed since the last one presents nothing.
+	if err := runtime.RunPending(); err != nil {
+		t.Fatalf("RunPending() error = %v", err)
+	}
+	if _, again := framebuffer.Snapshot(); again != 2 {
+		t.Errorf("framebuffer presents = %d after an idle pass, want 2", again)
 	}
 	assertRGBAPixel(t, frame, 0, 0, []byte{0x00, 0xff, 0x00, 0xff})
 	// The pixel the paint drew is still there: drawing outside paint adds to

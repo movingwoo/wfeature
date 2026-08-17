@@ -52,6 +52,9 @@ type Runtime struct {
 	currentDisplayable  *jvm.Object
 	pendingDisplayable  *jvm.Object
 	displayUpdateQueued bool
+	// refreshPending is set by XDisplay.refresh and cleared by the Host pass
+	// that presents; refreshFrame is the picture it took. See presentRefresh.
+	refreshPending bool
 	// pendingSerial holds the Runnables Display.callSerially was handed. One
 	// comes off per Host pass rather than all of them at once: see
 	// callSeriallyRunnable.
@@ -62,6 +65,7 @@ type Runtime struct {
 	frameHeight  int
 	renderMu     sync.Mutex
 	frameRGBA    []byte
+	refreshFrame []byte
 	pendingPaint paintRect
 	paintCanvas  *jvm.Object
 	paintQueued  bool
@@ -298,7 +302,12 @@ func (runtime *Runtime) RunPending() error {
 	if err := runtime.postNextSerialRunnable(); err != nil {
 		return err
 	}
-	return runtime.runEvents()
+	if err := runtime.runEvents(); err != nil {
+		return err
+	}
+	// A title that draws through the vendor's direct display pushes whenever
+	// it likes; this is where those pushes become one picture.
+	return runtime.presentRefresh()
 }
 
 func (runtime *Runtime) State() LifecycleState {
@@ -397,7 +406,16 @@ func (runtime *Runtime) dispatch(name string, handler func() error) error {
 	if err := runtime.events.Post(name, handler); err != nil {
 		return runtime.fail("queue "+name, err)
 	}
-	return runtime.runEvents()
+	err := runtime.runEvents()
+	// A lifecycle action is a Host pass too, and it is the only one some
+	// titles get: one that draws its notice through the direct display and
+	// then leaves does all of it inside startApp, and a Host that stops
+	// ticking a destroyed MIDlet would never show the notice. See
+	// presentRefresh.
+	if presentErr := runtime.presentRefresh(); err == nil {
+		err = presentErr
+	}
+	return err
 }
 
 func (runtime *Runtime) runEvents() error {

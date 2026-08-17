@@ -1126,23 +1126,74 @@ func (runtime *Runtime) emptyStringArray(vm *jvm.VM, _ []jvm.Value) (jvm.Value, 
 
 // --- XDisplay / Toolkit / XTextField ---
 
-// xDisplayRefresh pushes what the game drew straight to the Host, which is
-// what SKVM's direct display model means.
+// xDisplayRefresh is how a title on this vendor says the screen is ready: it
+// draws into the Graphics whenever it likes and then pushes, rather than
+// waiting to be asked for a paint. What it does here is mark the screen ready
+// and return; the Host pass presents it.
+//
+// **It used to present on the spot, and one title family calls it about a
+// hundred times per Host pass** — 496,029 calls in 4,000 ticks, against
+// another title's 3.7. Their loop draws as fast as the machine will let it and
+// pushes every time round, so every call allocated a copy of the framebuffer
+// and handed it to a surface that copied it again, for a picture no Host could
+// show: the CLI reads the surface at a tick boundary and the page sends at most
+// one frame per tick.
+//
+// **What the call still does on the spot is take the picture.** The refresh is
+// the game's own frame boundary — it is the moment the guest thread says the
+// screen is complete, and it is that thread calling — so copying then is what
+// makes the picture whole. Waiting until the Host pass to copy shows whatever
+// the game happened to be halfway through drawing, which is a torn frame and,
+// worse, a different one every run. What waits for the pass is the *present*.
+//
+// One reusable buffer holds it, so a hundred pushes a pass cost a hundred
+// memcpys and no allocation, and the Host is handed one frame. That is a fifth
+// of the host CPU off that family's runs with the pictures unchanged.
+//
+// The rectangle is validated and then ignored, as it was before: this
+// runtime's surface is presented whole.
 func (runtime *Runtime) xDisplayRefresh(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if _, _, _, _, err := rectArguments(arguments, 0); err != nil {
 		return jvm.VoidValue(), err
 	}
 	runtime.renderMu.Lock()
+	if len(runtime.refreshFrame) != len(runtime.frameRGBA) {
+		runtime.refreshFrame = make([]byte, len(runtime.frameRGBA))
+	}
+	copy(runtime.refreshFrame, runtime.frameRGBA)
+	runtime.renderMu.Unlock()
+
+	runtime.displayMu.Lock()
+	runtime.refreshPending = true
+	runtime.displayMu.Unlock()
+	return jvm.VoidValue(), nil
+}
+
+// presentRefresh shows the picture a title pushed with XDisplay.refresh, once
+// per Host pass. A pass with nothing pushed since the last one costs nothing.
+func (runtime *Runtime) presentRefresh() error {
+	runtime.displayMu.Lock()
+	pending := runtime.refreshPending
+	runtime.refreshPending = false
+	runtime.displayMu.Unlock()
+	if !pending {
+		return nil
+	}
+	runtime.renderMu.Lock()
 	frame := backend.Frame{
 		Width:  runtime.frameWidth,
 		Height: runtime.frameHeight,
-		RGBA:   append([]byte(nil), runtime.frameRGBA...),
+		RGBA:   runtime.refreshFrame,
 	}
+	// The surface copies what it is given and keeps nothing, so the buffer is
+	// handed over rather than copied again. It is read under the same lock the
+	// refresh writes it under.
+	err := runtime.framebuffer.Present(frame)
 	runtime.renderMu.Unlock()
-	if err := runtime.framebuffer.Present(frame); err != nil {
-		return jvm.VoidValue(), fmt.Errorf("XDisplay.refresh: %w", err)
+	if err != nil {
+		return fmt.Errorf("XDisplay.refresh: %w", err)
 	}
-	return jvm.VoidValue(), nil
+	return nil
 }
 
 // xDisplayDrawImageEx is the vendor's blit with a source rectangle, which the

@@ -84,6 +84,27 @@ screen Graphics for the life of the runtime; each paint resets it to that
 repaint's clip, no translation, and the default font. Two guest threads drawing
 at once still race — that is the game's business, as it was on the handset.
 
+**`XDisplay.refresh` takes the picture at once and shows it with the pass.**
+The call is the game's own frame boundary — the guest thread saying the screen
+is complete — so the surface is copied there, on that thread, which is what
+makes the picture whole rather than half-drawn. What waits for the Host pass is
+the *present*, because a Host can show at most one frame per pass anyway: the
+CLI reads the surface at a tick boundary and the page sends one frame a tick.
+
+That matters because one title family pushes about a hundred times per pass —
+**496,029 calls in 4,000 ticks**, against another title's 3.7 per pass. Their
+loop draws as fast as the machine allows and pushes every time round. Presenting
+each call allocated a copy of the framebuffer and handed it to a surface that
+copied it again; coalescing took **a fifth of the host CPU** off those runs
+(19.4s to 15.1s of user time for 900 ticks) with the pictures unchanged, and it
+makes the guest wait for nothing.
+
+A lifecycle dispatch presents a pending picture too, and that is not a detail: a
+title that draws its notice through the direct display and then calls
+`System.exit` does all of it inside `startApp`, so the only pass it ever gets is
+that one. Two local titles are exactly that, and without it they show a black
+screen instead of what they wanted to say.
+
 **`XDisplay.width`, `height` and `height2` are fields, not methods.** A game
 reads the screen size straight out of them, typically caching it in a Canvas
 constructor and repainting that rectangle forever after, so the runtime fills
