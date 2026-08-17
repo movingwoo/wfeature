@@ -353,6 +353,82 @@ typed exception retaining both forms when no guest handler matches. The handler
 head is a thread-local guest word: nested calls inherit it, while independent
 ARM threads cannot corrupt each other's chains.
 
+### The same lie, one table over: the graphics destroys
+
+`MC_knlFree` was not the only accepted no-op resting on "the arena is reclaimed
+with the client". `MC_grpDestroyOffScreenFrameBuffer` and `MC_grpDestroyImage`
+were the same reasoning on the graphics table, and they outlived the fix to
+free because nothing in the local set had yet been driven far enough into play
+to fall over on them.
+
+A newly added title does. It draws each frame into an off-screen buffer it
+creates and destroys again — 49,109 creates against 49,109 destroys over 6,100
+ticks, a pair every time, so the game is not leaking anything — and each
+create is two arena blocks: a 240x320 pixel allocation and the twenty-byte
+record naming it. The arena climbed a flat ~264 KB between collection cycles
+from the first field screen onwards and never came back down, and the run died
+at tick 26,332 with the screen black:
+
+```
+"tick_error": "service KTF timer at 0x110031: handle supervisor call 0x3 at 0x35000ed8:
+               allocate KTF pixel buffer: KTF platform initialization data space exhausted"
+```
+
+That is about six minutes of play. **A user would have read it as the game
+freezing, not as memory** — there is no message, the last frame stays on
+screen, and the failure surfaces inside a timer service rather than at any
+drawing call the player could connect to what they were doing.
+
+Two things worth keeping beside the earlier free write-up:
+
+- **The collector's own cost is the second symptom, and it shows first.** A
+  cycle scans every committed word, so it grows with the arena: 700 µs at the
+  first field screen, 16 ms at 17 MB, 94 ms at 59 MB. Long before the ceiling
+  the game is losing whole frames to collections that find nothing, which is
+  what "it gets choppier the longer you play" looks like from a report.
+- **A leaked destroy does not show up in `wipic 0x15`/`0x16` at all.** The
+  balance test in the section above reads the kernel table, and these blocks
+  never go through it: the create is `wipic 0x30004` and the destroy `0x30003`.
+  Reading the *graphics* create/destroy slots as a pair is the same test, and
+  it is what named this one.
+
+Three allocations were being kept where the platform had promised to give them
+back, and the third is the specification's rather than this platform's:
+
+- **The off-screen framebuffer**: the record and its pixel allocation. The
+  specification also says the call does nothing when it is handed the *screen*
+  framebuffer, and obeying that is not politeness here — this platform hands out
+  one cached record for the screen, so freeing it would take the screen from
+  every later caller rather than from the one that asked.
+- **The image**: the record, the pixels decoded into it, and the framebuffer
+  record `MC_grpCreateImage` builds and then copies word for word into the image
+  record. That inner record is dead the moment it is copied; it was leaking
+  thirty-two bytes for every image any title had ever created.
+- **The image's encoded source buffer.** `MC_grpCreateImage`'s contract is that
+  the buffer it is handed "is released inside the image function", which is why
+  the specification requires it to be an `MC_knlCalloc` identifier. The title
+  relies on it: it callocs a buffer per image and frees none of them, and its
+  outstanding allocation count tracked its image count exactly. Freeing it at
+  destroy rather than at create covers the animated case the specification
+  splits out, which this platform does not decode.
+
+A handle the platform never issued is ignored rather than fatal, on the same
+reading `MC_knlFree` takes: a double destroy arrives here as a block already
+gone. It is ignored *silently*, unlike a stray free, because a Java array
+reaches the image calls as a handle too and counting every one of those would
+bury the diagnostic that names a real stray.
+
+**The other two platforms do not have it.** LGT's `destroyOffscreen` and
+`destroyImage` slots both call `releaseSurface`, and SKT has no guest arena at
+all — an SKVM image is a Go object on the shared JVM and is collected there.
+This was a KTF-only omission.
+
+**What it cost the rest of the set.** The same 6,100-tick route now peaks at
+1.1 MB of arena with three collection cycles in the whole run, against 17.5 MB
+and fifty-two before. First frames of all 33 local KTF archives are unchanged
+except for the six that differ from the baseline run against itself — the
+documented noise floor of this comparison, below.
+
 ### The kernel table beyond the specification
 
 The kernel interface is a flat table of 65 entries and its order is the WIPI
@@ -837,17 +913,60 @@ blue at zero throughout, which is a gold-on-black gradient. Decoded, the image
 is a gold dragon, and the file beside it is green foliage. A palette-indexed
 reading has to explain the scattered indices and cannot.
 
-The sixth header word is zero in all five and nothing reads it. If the format
-has a colour key, no local file exercises it, and guessing would put holes in
-an image on no evidence.
+The sixth header word is zero in all five and nothing read it. If the format
+had a colour key, no local file exercised it, and guessing would have put holes
+in an image on no evidence.
 
 **Where it is wired matters more than where it was found.** The format turned
-up in a KTF archive, not in the vendor whose name it carries; a sweep of every
-local archive found LBMP only there, hundreds of BMPs across KTF and one in
-LGT, and neither format in any SKT archive. So the decoder sits in
-`internal/wipic` beside `DecodeBitmap` and all three platforms route to it —
-the two with real callers because they have them, and the third because an
-image its neighbours can read should not be what ends a title.
+up in a KTF archive, not in the vendor whose name it carries; the sweep that
+found it read every local archive and found LBMP only there, hundreds of BMPs
+across KTF and one in LGT. So the decoder sits in `internal/wipic` beside
+`DecodeBitmap` and all three platforms route to it — the two with real callers
+because they had them, and the third because an image its neighbours can read
+should not be what ends a title.
+
+### The other half of the format, from the vendor that owns the name
+
+That third platform then got the callers. The SKT archives carry LBMP
+everywhere — about nine hundred files across the corpus, against the five that
+first described it — and two more halves of the format come out of that many:
+
+- **The sixth word is a mask flag, and a 1 means a one-bit transparency mask
+  follows the pixels.** Its length is `width * ceil(height / 8)` in every file
+  that has one, and that is the arithmetic that identified it: the payload of a
+  masked file is exactly the pixels plus that. This is what the five KTF files
+  could not have shown, because all five have the flag clear.
+- **A set bit is the transparent one**, which the files say twice over. Every
+  pixel a set bit covers in one title's sprites is the same magenta, and no
+  artist paints a solid region in one colour; read the other way, a sprite is
+  that magenta with its artwork punched out of it, which is exactly what three
+  sibling titles drew before the polarity was settled.
+- **A depth below 8 is stored as bit planes**, and each plane is the LCD's own
+  page layout: byte `(y / 8) * width + x`, one row of pixels per bit, the top
+  row of the band in bit 0. `size` is then one plane rather than the whole
+  payload, which is what says the plane is the unit — a two-bit image is two of
+  them and its mask is a third. Read any other way the same file is noise; read
+  this way it is a company logo.
+
+**The planar ramp runs the other way from the packed depths: zero is white and
+the widest value is black.** One title settles it by shipping the same glyph
+sheets twice — a white font and a black font, the same shapes with the same
+mask, differing only in the value under it, zero in the white one and three in
+the black one — and by shipping one sheet of that white font at eight bits a
+pixel instead of two, where the pixels are 0xfe and 0xff. Read as light rather
+than as ink, that title's whole script is black text on a black screen, which
+is what it was.
+
+What the levels *between* mean is still unsettled: every planar file here uses
+the two ends of its range and nothing between, so the ramp is the even one and
+the plane order is undetermined; a file with a middle level would be the
+evidence that says otherwise.
+
+**Neither half of this is cosmetic.** A sprite drawn without its mask is a
+rectangle of magenta, which is how the mask was noticed at all; a planar sheet
+read as light instead of ink is invisible, which is how the ramp was. Three
+sibling SKT titles drew their world in magenta blocks and a fourth drew its
+whole opening narration in black on black. `docs/skvm.md` has that pass.
 
 ## The graphics context's clip is how a tile gets drawn
 
