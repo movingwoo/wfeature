@@ -201,6 +201,11 @@ type Client struct {
 	// trace records recent platform calls when a caller asked for one. It is
 	// nil otherwise, which is what keeps an untraced run free of the cost.
 	trace *svcTrace
+
+	// imports is every (category, slot) the module has resolved. It is the
+	// only list of what a title links against that exists anywhere. See
+	// imports.go.
+	imports map[[2]uint32]bool
 }
 
 // pendingEvent is one Clet event waiting to be delivered.
@@ -670,16 +675,20 @@ func (client *Client) importFunction(table, index uint32) (uint32, error) {
 		if !knownWIPICSlot(index) && !unknownSlotAccepted(index) && client.logger != nil {
 			client.logger.Debug("LGT unimplemented WIPI C slot resolved", "slot", index)
 		}
+		client.recordImport(svcCategoryWIPIC, index)
 		return client.stub(svcCategoryWIPIC, index)
 	case importTableStdlib:
+		client.recordImport(svcCategoryStdlib, index)
 		return client.stub(svcCategoryStdlib, index)
 	case importTableOEM:
 		if index == oemJavaFunction {
+			client.recordImport(svcCategoryJava, javaAuxiliarySlot(table, index))
 			return client.stub(svcCategoryJava, javaAuxiliarySlot(table, index))
 		}
 		if !knownOEMSlot(index) && client.logger != nil {
 			client.logger.Debug("LGT unknown OEM slot resolved", "slot", index)
 		}
+		client.recordImport(svcCategoryOEM, index)
 		return client.stub(svcCategoryOEM, index)
 	case importTableJava:
 		// LGT Java apps are AOT-compiled to native ARM and hand the runtime
@@ -687,9 +696,11 @@ func (client *Client) importFunction(table, index uint32) (uint32, error) {
 		// implemented — see docs/lgt.md — but the table resolves, so the
 		// title reaches the call that would hand the metadata over and this
 		// platform can record what it was going to say.
+		client.recordImport(svcCategoryJava, index)
 		return client.javaInterfaceFunction(index)
 	}
 	if javaAuxiliaryTables[table] {
+		client.recordImport(svcCategoryJava, javaAuxiliarySlot(table, index))
 		return client.stub(svcCategoryJava, javaAuxiliarySlot(table, index))
 	}
 	return 0, fmt.Errorf("unknown LGT import table %#x (function %#x)", table, index)

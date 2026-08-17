@@ -92,20 +92,39 @@ habits are worth keeping:
 
 **A corpus is scanned before it is run.** When a batch of archives arrives,
 `internal/tools/apiscan` answers what they link against that this runtime does
-not have, without running anything: every symbolic reference in every class,
-minus what the library declares and what the platform registers, ranked by how
-many titles want each entry.
+not have: what the archive names, minus what the library declares and what the
+platform registers, ranked by how many titles want each entry.
 
 ```sh
 go run ./internal/tools/apiscan -games var/games/skt -natives report.json
+go run ./internal/tools/apiscan -games var/games/ktf
+go run ./internal/tools/apiscan -games var/games/lgt
 ```
 
-`-natives` takes any `runskt -diag` report, because a platform registers half
-its surface on a live runtime and a bare VM cannot see those registrations;
-without it the scan over-reports exactly that half. This is the cheap half of a
-compatibility pass — one run instead of the fix-run-fix loop a `-diag` report
-puts you in, and it ranks the work — but it is only the half a *link* can
-answer. Everything below is still how a title that starts is made to run.
+Each archive is scanned as the platform it belongs to — detection is the
+archive's own shape, so a mixed directory is one pass — and **what a link is
+differs by vendor**, which is the whole reason the three commands read
+differently:
+
+- **SKT** titles are Java: every reference is in a constant pool, so the scan
+  reads them and nothing runs. `-natives` takes any `runskt -diag` report,
+  because the platform registers half its surface on a live runtime and a bare
+  VM cannot see those registrations; without it the scan over-reports exactly
+  that half.
+- **KTF** titles are compiled: the constant pools are gone, and what is left is
+  the name pool inside the client image. It names the platform *classes* a
+  title could ask for — never which class a method belongs to. Nothing runs.
+  See "What the corpus names, and what it never asks for" in `docs/ktf.md`.
+- **LGT** titles carry no list at all: a module's imports exist only as the
+  calls it makes while it starts, so the scan starts each one and reads back
+  what it resolved. One boot per archive rather than a read. See "The imports a
+  module resolves are its link map" in `docs/lgt.md`.
+
+This is the cheap half of a compatibility pass — one pass instead of the
+fix-run-fix loop a `-diag` report puts you in, and it ranks the work — and it
+is only the half a *link* can answer: a name in an archive is what a title
+*could* ask for, not what it does. Everything below is still how a title that
+starts is made to run.
 
 **Find the gap before reading the code.** `runktf -diag` counts what the title
 asked for, and the answer is usually already in it: read the `stub table`,
