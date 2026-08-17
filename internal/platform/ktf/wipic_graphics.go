@@ -792,6 +792,114 @@ func (runtime *initializationRuntime) newWIPICFramebufferRecord(width, height ui
 	return record, nil
 }
 
+// destroyWIPICFramebufferRecord gives one framebuffer record and the pixel
+// allocation it names back to the arena. Both came from allocateWIPIC, so both
+// go back through the same path MC_knlFree uses.
+//
+// The screen framebuffer is left alone: the specification says a destroy call
+// handed the screen framebuffer does nothing, and this platform hands out one
+// cached record for it, so freeing it would take the screen away from every
+// later caller rather than from the one that asked.
+//
+// A handle whose record does not read back is counted and ignored, and a
+// destroy of a block this platform never issued releases nothing — which is
+// what makes a double destroy safe rather than a block handed to two owners,
+// since the first one dropped the handle from the allocation table. That is the
+// same judgement MC_knlFree makes: a handset would not end the program over a
+// program's own error.
+func (runtime *initializationRuntime) destroyWIPICFramebufferRecord(handle uint32) {
+	if handle == 0 || handle == runtime.screenFramebuffer {
+		return
+	}
+	framebuffer, err := runtime.readWIPICFramebuffer(handle)
+	if err != nil {
+		runtime.countDiagnostic("destroy of an unreadable framebuffer")
+		return
+	}
+	runtime.releaseWIPICIfOwned(framebuffer.buffer)
+	runtime.releaseWIPICIfOwned(handle)
+}
+
+// wipicDestroyOffScreenFrameBuffer implements
+// MC_grpDestroyOffScreenFrameBuffer. The call returns nothing.
+//
+// It has to actually free. One local title draws each frame into an off-screen
+// buffer it creates and destroys again — eight times a tick — and while the
+// destroy was a no-op the arena grew by a quarter of a megabyte every second
+// and the session died inside ten minutes of play at "platform initialization
+// data space exhausted", with nothing on screen to say why.
+func (runtime *initializationRuntime) wipicDestroyOffScreenFrameBuffer(thread *armcore.Thread) (uint32, error) {
+	handle, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	runtime.destroyWIPICFramebufferRecord(handle)
+	return 0, nil
+}
+
+// wipicDestroyImage implements MC_grpDestroyImage: the image record, the pixels
+// it decoded into, and the encoded source buffer the guest handed to
+// MC_grpCreateImage all go back.
+//
+// The source buffer is the platform's to free rather than the caller's. The
+// specification says so of MC_grpCreateImage — the buffer passed in "is
+// released inside the image function", which is why it has to be an
+// MC_knlCalloc identifier — and a local title relies on it: it callocs a buffer
+// per image and never frees one, so its allocation count tracked its image
+// count exactly.
+func (runtime *initializationRuntime) wipicDestroyImage(thread *armcore.Thread) (uint32, error) {
+	handle, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	if handle == 0 {
+		return 0, nil
+	}
+	runtime.releaseImageSourceBuffer(handle)
+	runtime.destroyWIPICFramebufferRecord(handle)
+	return 0, nil
+}
+
+// releaseImageSourceBuffer frees the encoded buffer an MC_GrpImage record names,
+// before the record itself goes back and takes the word naming it with it.
+//
+// The word is only read when the block is a whole image record. A handle that
+// is something smaller — an off-screen framebuffer handed to the wrong destroy
+// is the case that happens — has no word thirteen of its own, and reading past
+// the block would find whatever the next allocation holds. That is not merely
+// nonsense: the neighbouring blocks here are framebuffer records, whose fields
+// are themselves handles, so a stray word could name a live block and free
+// something the game is still drawing with.
+func (runtime *initializationRuntime) releaseImageSourceBuffer(handle uint32) {
+	const imageRecordWords = 17
+	if runtime.wipicAllocations[handle] < uint64(wipicAllocationOverhead)+imageRecordWords*4 {
+		return
+	}
+	fields, err := runtime.readAOTWords(handle, 1, "image handle")
+	if err != nil {
+		return
+	}
+	record, err := runtime.readAOTWords(fields[0]+8, 14, "image record")
+	if err != nil {
+		return
+	}
+	runtime.releaseWIPICIfOwned(record[13])
+}
+
+// releaseWIPICIfOwned frees a block this platform handed out and ignores
+// anything else. The silence is the point: a Java array reaches the image calls
+// as a handle too, and counting every one of those as a stray free would bury
+// the diagnostic that names a real one.
+func (runtime *initializationRuntime) releaseWIPICIfOwned(handle uint32) {
+	if handle == 0 {
+		return
+	}
+	if _, ok := runtime.wipicAllocations[handle]; !ok {
+		return
+	}
+	runtime.freeWIPIC(handle)
+}
+
 // fillWIPICFramebuffer writes one pixel value over a framebuffer's whole
 // pixel allocation.
 func (runtime *initializationRuntime) fillWIPICFramebuffer(handle uint32, pixel uint16) error {
@@ -897,6 +1005,11 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 	// to answer to both, or every C-side image blit runs fully opaque: one
 	// title's map objects each came out inside a black rectangle that way.
 	runtime.setFramebufferOpacity(image, imageOpacityOf(decoded))
+	// The inner framebuffer record has been copied word for word into the image
+	// record and nothing reads it again — the pixel allocation it named is what
+	// lives on, now named by the image. Keeping the record would leak twenty
+	// bytes and its header for every image a title ever creates.
+	runtime.releaseWIPICIfOwned(framebuffer)
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], image)
 	if err := memory.Write(targetPointer, word[:]); err != nil {

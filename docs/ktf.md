@@ -353,6 +353,82 @@ typed exception retaining both forms when no guest handler matches. The handler
 head is a thread-local guest word: nested calls inherit it, while independent
 ARM threads cannot corrupt each other's chains.
 
+### The same lie, one table over: the graphics destroys
+
+`MC_knlFree` was not the only accepted no-op resting on "the arena is reclaimed
+with the client". `MC_grpDestroyOffScreenFrameBuffer` and `MC_grpDestroyImage`
+were the same reasoning on the graphics table, and they outlived the fix to
+free because nothing in the local set had yet been driven far enough into play
+to fall over on them.
+
+A newly added title does. It draws each frame into an off-screen buffer it
+creates and destroys again — 49,109 creates against 49,109 destroys over 6,100
+ticks, a pair every time, so the game is not leaking anything — and each
+create is two arena blocks: a 240x320 pixel allocation and the twenty-byte
+record naming it. The arena climbed a flat ~264 KB between collection cycles
+from the first field screen onwards and never came back down, and the run died
+at tick 26,332 with the screen black:
+
+```
+"tick_error": "service KTF timer at 0x110031: handle supervisor call 0x3 at 0x35000ed8:
+               allocate KTF pixel buffer: KTF platform initialization data space exhausted"
+```
+
+That is about six minutes of play. **A user would have read it as the game
+freezing, not as memory** — there is no message, the last frame stays on
+screen, and the failure surfaces inside a timer service rather than at any
+drawing call the player could connect to what they were doing.
+
+Two things worth keeping beside the earlier free write-up:
+
+- **The collector's own cost is the second symptom, and it shows first.** A
+  cycle scans every committed word, so it grows with the arena: 700 µs at the
+  first field screen, 16 ms at 17 MB, 94 ms at 59 MB. Long before the ceiling
+  the game is losing whole frames to collections that find nothing, which is
+  what "it gets choppier the longer you play" looks like from a report.
+- **A leaked destroy does not show up in `wipic 0x15`/`0x16` at all.** The
+  balance test in the section above reads the kernel table, and these blocks
+  never go through it: the create is `wipic 0x30004` and the destroy `0x30003`.
+  Reading the *graphics* create/destroy slots as a pair is the same test, and
+  it is what named this one.
+
+Three allocations were being kept where the platform had promised to give them
+back, and the third is the specification's rather than this platform's:
+
+- **The off-screen framebuffer**: the record and its pixel allocation. The
+  specification also says the call does nothing when it is handed the *screen*
+  framebuffer, and obeying that is not politeness here — this platform hands out
+  one cached record for the screen, so freeing it would take the screen from
+  every later caller rather than from the one that asked.
+- **The image**: the record, the pixels decoded into it, and the framebuffer
+  record `MC_grpCreateImage` builds and then copies word for word into the image
+  record. That inner record is dead the moment it is copied; it was leaking
+  thirty-two bytes for every image any title had ever created.
+- **The image's encoded source buffer.** `MC_grpCreateImage`'s contract is that
+  the buffer it is handed "is released inside the image function", which is why
+  the specification requires it to be an `MC_knlCalloc` identifier. The title
+  relies on it: it callocs a buffer per image and frees none of them, and its
+  outstanding allocation count tracked its image count exactly. Freeing it at
+  destroy rather than at create covers the animated case the specification
+  splits out, which this platform does not decode.
+
+A handle the platform never issued is ignored rather than fatal, on the same
+reading `MC_knlFree` takes: a double destroy arrives here as a block already
+gone. It is ignored *silently*, unlike a stray free, because a Java array
+reaches the image calls as a handle too and counting every one of those would
+bury the diagnostic that names a real stray.
+
+**The other two platforms do not have it.** LGT's `destroyOffscreen` and
+`destroyImage` slots both call `releaseSurface`, and SKT has no guest arena at
+all — an SKVM image is a Go object on the shared JVM and is collected there.
+This was a KTF-only omission.
+
+**What it cost the rest of the set.** The same 6,100-tick route now peaks at
+1.1 MB of arena with three collection cycles in the whole run, against 17.5 MB
+and fifty-two before. First frames of all 33 local KTF archives are unchanged
+except for the six that differ from the baseline run against itself — the
+documented noise floor of this comparison, below.
+
 ### The kernel table beyond the specification
 
 The kernel interface is a flat table of 65 entries and its order is the WIPI
