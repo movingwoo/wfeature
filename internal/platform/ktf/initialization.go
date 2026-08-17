@@ -1160,9 +1160,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		}
 		return runtime.newWIPICFramebufferRecord(width, height)
 	case table == wipicTableGraphics && function == 3:
-		// MC_grpDestroyOffScreenFrameBuffer: arena storage is reclaimed with
-		// the client.
-		return 0, nil
+		return runtime.wipicDestroyOffScreenFrameBuffer(thread)
 	case table == wipicTableGraphics && function == 8:
 		return runtime.wipicPutPixel(thread)
 	case table == wipicTableGraphics && function == 9:
@@ -1259,8 +1257,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	case table == wipicTableGraphics && function == 32:
 		return runtime.wipicCreateImage(thread)
 	case table == wipicTableGraphics && function == 33:
-		// MC_grpDestroyImage.
-		return 0, nil
+		return runtime.wipicDestroyImage(thread)
 	case table == wipicTableGraphics && function == 35:
 		return runtime.wipicEncodeImage(thread)
 	case table == wipicTableRecordDatabase:

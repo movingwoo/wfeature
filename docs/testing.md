@@ -423,7 +423,7 @@ KTF parsing has a separate opt-in local probe. It never executes game code:
 WFEATURE_KTF_ACCEPTANCE=1 go test -run TestLocalKTFArchivesParse -v ./internal/platform/ktf
 ```
 
-All 32 ignored KTF archives currently present under `var/games/ktf` pass the
+All 33 ignored KTF archives currently present under `var/games/ktf` pass the
 outer archive, ADF, nested JAR, and client-image detection boundary.
 
 Executing third-party client code is a separate opt-in acceptance probe:
@@ -433,7 +433,7 @@ WFEATURE_KTF_EXECUTE_ACCEPTANCE=1 go test -run TestLocalKTFArchivesInitialize -v
 ```
 
 It performs bounded self-relocation, validates the returned executable descriptor
-chain, and calls the interface and WIPI initialization functions. All 32 current
+chain, and calls the interface and WIPI initialization functions. All 33 current
 clients return zero from both initializers. The slowest WIPI initializer retires
 8,330,820 instructions; the probe does not start the game lifecycle.
 
@@ -443,7 +443,7 @@ Resolving the ADF main class is a separate lifecycle probe:
 WFEATURE_KTF_LIFECYCLE_ACCEPTANCE=1 go test -run TestLocalKTFArchivesLoadMainClass -v ./internal/platform/ktf
 ```
 
-All 32 current archives call the real `ExeInterface.GetClass` export and return
+All 33 current archives call the real `ExeInterface.GetClass` export and return
 validated metadata for their `MClass`. This probe does not allocate the class.
 
 The next probe allocates the paired guest/JVM object and invokes `<init>()V`:
@@ -452,7 +452,7 @@ The next probe allocates the paired guest/JVM object and invokes `<init>()V`:
 WFEATURE_KTF_CONSTRUCT_ACCEPTANCE=1 go test -run TestLocalKTFArchivesConstructMainClass -v ./internal/platform/ktf
 ```
 
-All 32 constructors now return. This probe was written as a diagnostic that
+All 33 constructors now return. This probe was written as a diagnostic that
 exited nonzero — eleven of the eighteen archives then present got through it,
 and the rest either spun allocating across the runtime-Java bridge until the
 instruction limit or stopped at an absent runtime API — and it is a pass
@@ -467,7 +467,7 @@ WFEATURE_KTF_START_ACCEPTANCE=1 go test -run TestLocalKTFArchivesStartMainClass 
 WFEATURE_KTF_FRAME_ACCEPTANCE=1 go test -run TestLocalKTFArchivesRenderFirstFrame -v ./internal/platform/ktf
 ```
 
-All 32 archives start their main class, and all 32 present a first frame with
+All 33 archives start their main class, and all 33 present a first frame with
 something lit in it.
 
 LGT has one opt-in probe, and it is the only test in that package that runs a
