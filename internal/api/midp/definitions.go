@@ -497,6 +497,12 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "drawChars", Descriptor: "([CIIIII)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "drawString", Descriptor: "(Ljava/lang/String;III)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "drawSubstring", Descriptor: "(Ljava/lang/String;IIIII)V", Access: jvm.AccessPublic | jvm.AccessNative},
+				// reset is not MIDP's. It is this vendor's addition, and nine
+				// local titles call it: the handset runtime handed out one
+				// screen Graphics for the life of the MIDlet, so a title that
+				// kept it needed a way to put back the state a fresh one would
+				// have had.
+				{Name: "reset", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},
 			},
 		},
 		{

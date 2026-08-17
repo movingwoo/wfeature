@@ -341,6 +341,24 @@ func (runtime *Runtime) setGraphicsClip(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	return jvm.VoidValue(), nil
 }
 
+// resetGraphics puts a Graphics back to the state a freshly handed-out one has:
+// the whole target clipped in, no translation, and the default font. It is not
+// MIDP's — see the declaration — and it exists because this vendor's titles
+// keep one Graphics for the life of the MIDlet. What it does not reset is the
+// colour, which the handset runtime left alone and which every caller sets
+// before it draws anyway.
+func (runtime *Runtime) resetGraphics(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	context, err := graphicsReceiver(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	context.clip = context.deviceClip
+	context.translateX = 0
+	context.translateY = 0
+	context.font = runtime.fontObject(fontSystem, fontPlain, fontMedium)
+	return jvm.VoidValue(), nil
+}
+
 func (runtime *Runtime) clipGraphicsRect(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	context, err := graphicsReceiver(arguments)
 	if err != nil {
@@ -723,7 +741,13 @@ func (runtime *Runtime) canvasReceiver(vm *jvm.VM, arguments []jvm.Value) (*jvm.
 }
 
 func graphicsReceiver(arguments []jvm.Value) (*graphicsContext, error) {
-	receiver, err := referenceArgument(arguments, 0)
+	return graphicsArgument(arguments, 0)
+}
+
+// graphicsArgument reads a Graphics that is not the receiver, which is what
+// the com.xce static drawing methods take.
+func graphicsArgument(arguments []jvm.Value, index int) (*graphicsContext, error) {
+	receiver, err := referenceArgument(arguments, index)
 	if err != nil {
 		return nil, err
 	}

@@ -59,6 +59,11 @@ func (runtime *Runtime) registerSKVMNatives() error {
 
 		{skvm.VibrationClass, "start", "(II)V", runtime.vibrationStart},
 		{skvm.VibrationClass, "stop", "()V", runtime.vibrationStop},
+		{skvm.ToolkitClass, "screenGraphics", "()Ljavax/microedition/lcdui/Graphics;", runtime.toolkitScreenGraphics},
+		{skvm.ByteToCharEUCKRClass, "convert", "([BII[CII)I", runtime.byteToCharConvert},
+		{skvm.ByteToCharEUCKRClass, "flush", "([CII)I", runtime.byteToCharFlush},
+		{skvm.VibrationClass, "isSupported", "()Z", runtime.vibrationSupported},
+		{skvm.VibrationClass, "getLevelNum", "()I", runtime.vibrationLevels},
 
 		{skvm.DeviceClass, "beep", "(II)V", runtime.deviceBeep},
 		{skvm.DeviceClass, "setNAI", "(I)V", runtime.deviceSetNAI},
@@ -126,6 +131,8 @@ func (runtime *Runtime) registerSKVMNatives() error {
 		{skvm.PhoneBookClass, "isUsed", "(I)Z", zeroInt},
 
 		{skvm.XDisplayClass, "refresh", "(IIII)V", runtime.xDisplayRefresh},
+		{skvm.XDisplayClass, "drawImageEx", "(" + graphics + image + "II" + image + "IIIII)V", runtime.xDisplayDrawImageEx},
+		{skvm.XDisplayClass, "copyLCD", "(" + graphics + image + "IIII)V", runtime.xDisplayCopyLCD},
 		{skvm.ToolkitClass, "drawString", "(" + text + "III)V", runtime.toolkitDrawString},
 		{skvm.ToolkitClass, "getScreenWidth", "()I", runtime.toolkitScreenWidth},
 		{skvm.ToolkitClass, "getScreenHeight", "()I", runtime.toolkitScreenHeight},

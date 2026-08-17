@@ -100,7 +100,7 @@ public final class SKVMMIDlet extends MIDlet {
         int direct = surface.getPixel(1, 1);
         surface.invertRect(0, 0, 1, 1);
         int inverted = surface.getPixel(0, 0);
-        Image captured = surface.captureLCD(0, 0, 2, 2);
+        Image captured = Graphics2D.captureLCD(0, 0, 2, 2);
         StringBuffer result = new StringBuffer();
         result.append(Integer.toString(direct));
         result.append('|');
@@ -115,7 +115,7 @@ public final class SKVMMIDlet extends MIDlet {
     /** fileState writes a file, reopens it, and reads it back. */
     public static String fileState() {
         try {
-            XFile out = new XFile("save.dat", XFile.WRITE | XFile.CREATE);
+            XFile out = new XFile("save.dat", XFile.WRITE);
             out.write(new byte[] { 1, 2, 3, 4 }, 0, 4);
             out.close();
 

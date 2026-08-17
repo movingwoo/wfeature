@@ -437,16 +437,21 @@ func (runtime *Runtime) graphics2DInvertRect(_ *jvm.VM, arguments []jvm.Value) (
 	return jvm.VoidValue(), nil
 }
 
-// graphics2DCaptureLCD copies a region of the surface into a new immutable
-// Image, which is what a game uses to save the screen before an overlay.
+// graphics2DCaptureLCD copies a region of the screen into a new immutable
+// Image, which is what a game uses to save what is on the LCD before it draws
+// an overlay over it. It is static — the region comes from the screen rather
+// than from any Graphics — so the rectangle starts at the first argument.
 func (runtime *Runtime) graphics2DCaptureLCD(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	context, err := graphics2DContext(arguments)
+	x, y, width, height, err := rectArguments(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	x, y, width, height, err := rectArguments(arguments, 1)
-	if err != nil {
-		return jvm.VoidValue(), err
+	runtime.renderMu.Lock()
+	defer runtime.renderMu.Unlock()
+	full := paintRect{maxX: runtime.frameWidth, maxY: runtime.frameHeight}
+	context := &graphicsContext{
+		pixels: runtime.frameRGBA, width: runtime.frameWidth, height: runtime.frameHeight,
+		deviceClip: full, clip: full, active: true,
 	}
 	if width <= 0 || height <= 0 {
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
@@ -625,6 +630,22 @@ func (runtime *Runtime) vibrationStop(_ *jvm.VM, _ []jvm.Value) (jvm.Value, erro
 	state.mu.Unlock()
 	return jvm.VoidValue(), nil
 }
+
+// vibrationSupported and vibrationLevels answer the two questions a title asks
+// before it vibrates. There is no motor here and Vibration.start only records
+// that it was asked, but a vibration is fire-and-forget: nothing comes back
+// that a title could be misled by, and one that is told the handset cannot
+// vibrate hides the setting rather than leaving it switched off. The level
+// count is the handset's ten.
+func (runtime *Runtime) vibrationSupported(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(1), nil
+}
+
+func (runtime *Runtime) vibrationLevels(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(vibrationLevelCount), nil
+}
+
+const vibrationLevelCount = 10
 
 // deviceBeep plays the tone through the same timeline every other sound uses,
 // so a beep is audible wherever the rest of the audio is.
@@ -1124,6 +1145,89 @@ func (runtime *Runtime) xDisplayRefresh(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	return jvm.VoidValue(), nil
 }
 
+// xDisplayDrawImageEx is the vendor's blit with a source rectangle, which the
+// MIDP Graphics of the day had no form of. Thirteen call sites in one local
+// title settle the arguments: a Graphics to draw on, a second Image that is
+// null at every one of them, the destination point, the source image and its
+// rectangle, and a mode that is zero at every one of them.
+//
+// **The second Image and a non-zero mode are unexercised.** A non-null image
+// there is drawn as if it were absent and a mode is ignored, because the only
+// alternative on no evidence is to refuse a draw a title is making — and the
+// title that makes it is the one this was written for. What either means is
+// the note in docs/skvm.md rather than a guess in this body.
+func (runtime *Runtime) xDisplayDrawImageEx(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	context, err := graphicsArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	x, y, err := pointArguments(arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	source, err := midpImageArgument(arguments, 4)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	sourceX, sourceY, width, height, err := rectArguments(arguments, 5)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if _, err := intArgument(arguments, 9); err != nil {
+		return jvm.VoidValue(), err
+	}
+	pixels := source.snapshot()
+	context.withDestinationWrite(func() {
+		for row := int32(0); row < height; row++ {
+			for column := int32(0); column < width; column++ {
+				sx, sy := sourceX+column, sourceY+row
+				if sx < 0 || sy < 0 || int(sx) >= source.width || int(sy) >= source.height {
+					continue
+				}
+				index := (int(sy)*source.width + int(sx)) * 4
+				context.blendPixel(int64(x+column), int64(y+row),
+					pixels[index], pixels[index+1], pixels[index+2], pixels[index+3])
+			}
+		}
+	})
+	return jvm.VoidValue(), nil
+}
+
+// xDisplayCopyLCD copies what is on the screen into an image, which is what a
+// title takes before it draws an overlay it means to undo. It is the same
+// answer Graphics2D.captureLCD gives, written into an image the caller already
+// owns rather than into a new one.
+func (runtime *Runtime) xDisplayCopyLCD(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if _, err := graphicsArgument(arguments, 0); err != nil {
+		return jvm.VoidValue(), err
+	}
+	target, err := midpImageArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	x, y, width, height, err := rectArguments(arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.renderMu.Lock()
+	defer runtime.renderMu.Unlock()
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	for row := int32(0); row < height && int(row) < target.height; row++ {
+		for column := int32(0); column < width && int(column) < target.width; column++ {
+			screenX, screenY := x+column, y+row
+			if screenX < 0 || screenY < 0 ||
+				int(screenX) >= runtime.frameWidth || int(screenY) >= runtime.frameHeight {
+				continue
+			}
+			from := (int(screenY)*runtime.frameWidth + int(screenX)) * 4
+			to := (int(row)*target.width + int(column)) * 4
+			copy(target.rgba[to:to+4], runtime.frameRGBA[from:from+4])
+		}
+	}
+	return jvm.VoidValue(), nil
+}
+
 func (runtime *Runtime) toolkitScreenWidth(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	return jvm.IntValue(int32(runtime.frameWidth)), nil
 }
@@ -1153,6 +1257,17 @@ func (runtime *Runtime) toolkitDrawString(_ *jvm.VM, arguments []jvm.Value) (jvm
 	}
 	font.render(context, []rune(text), int64(x), int64(y))
 	return jvm.VoidValue(), nil
+}
+
+// toolkitScreenGraphics answers the Graphics com.xce.lcdui.Toolkit publishes as
+// a static field. It is the one screen Graphics a Canvas paint is handed —
+// see screenGraphics for why this vendor has only one — clipped to the whole
+// screen, because a title reading the field is about to draw outside a paint.
+func (runtime *Runtime) toolkitScreenGraphics(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	runtime.renderMu.Lock()
+	defer runtime.renderMu.Unlock()
+	full := paintRect{maxX: runtime.frameWidth, maxY: runtime.frameHeight}
+	return jvm.ReferenceValue(runtime.screenGraphics(full)), nil
 }
 
 func (runtime *Runtime) initXTextField(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
