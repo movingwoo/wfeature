@@ -22,12 +22,16 @@ var ErrKilled = errors.New("gdb client killed the target")
 type CoreTarget struct {
 	core *armcore.Core
 
-	stops   chan armcore.DebugStop
-	resumes chan struct{}
-	thread  atomic.Pointer[armcore.Thread]
+	stops  chan armcore.DebugStop
+	thread atomic.Pointer[armcore.Thread]
 
-	mu       sync.Mutex
-	parked   bool
+	mu sync.Mutex
+	// wakeup is the parked guest's own wakeup, non-nil only while one is
+	// parked. It belongs to that one park rather than to the target, so a
+	// release that arrives before the guest reaches its receive still lands:
+	// the channel exists from the moment the park is visible, and closing it
+	// wakes a guest that is already waiting and one that is about to.
+	wakeup   chan struct{}
 	finished bool
 	killed   bool
 }
@@ -36,9 +40,8 @@ type CoreTarget struct {
 // one instruction per quantum; see armcore.AttachDebugger.
 func NewCoreTarget(core *armcore.Core) *CoreTarget {
 	target := &CoreTarget{
-		core:    core,
-		stops:   make(chan armcore.DebugStop, 1),
-		resumes: make(chan struct{}),
+		core:  core,
+		stops: make(chan armcore.DebugStop, 1),
 	}
 	core.AttachDebugger(target.hook)
 	return target
@@ -71,7 +74,8 @@ func (target *CoreTarget) hook(_ context.Context, _ *armcore.Core, thread *armco
 		target.mu.Unlock()
 		return ErrKilled
 	}
-	target.parked = true
+	wakeup := make(chan struct{})
+	target.wakeup = wakeup
 	target.mu.Unlock()
 
 	target.thread.Store(thread)
@@ -81,10 +85,12 @@ func (target *CoreTarget) hook(_ context.Context, _ *armcore.Core, thread *armco
 		// A stop nobody collected means the client is not listening; the
 		// guest still parks, because stopping is what a breakpoint means.
 	}
-	<-target.resumes
+	<-wakeup
 
 	target.mu.Lock()
-	target.parked = false
+	if target.wakeup == wakeup {
+		target.wakeup = nil
+	}
 	killed := target.killed
 	target.mu.Unlock()
 	if killed {
@@ -95,17 +101,18 @@ func (target *CoreTarget) hook(_ context.Context, _ *armcore.Core, thread *armco
 
 // release lets a parked guest continue. It never blocks: a release with
 // nothing parked is what an early continue is, and dropping it is correct.
+// Taking the wakeup out of the target before closing it is what makes a
+// second release a no-op rather than a panic, and what keeps a stale one
+// from waking the next park.
 func (target *CoreTarget) release() {
 	target.mu.Lock()
-	parked := target.parked
+	wakeup := target.wakeup
+	target.wakeup = nil
 	target.mu.Unlock()
-	if !parked {
+	if wakeup == nil {
 		return
 	}
-	select {
-	case target.resumes <- struct{}{}:
-	default:
-	}
+	close(wakeup)
 }
 
 // context reads the parked guest's registers.
