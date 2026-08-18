@@ -40,6 +40,15 @@ type Audio struct {
 	next   AudioHandle
 	// maxSounds bounds what a game can retain by loading and never closing.
 	maxSounds int
+	// volume is the device level, 0 to 100, which a guest sets through its
+	// platform's media API. It scales note velocities and wave samples on the
+	// way to the sink rather than being a gain the Host applies, because the
+	// Host's own volume control is the user's and these two are different
+	// settings: a game that fades its music out has not turned the speaker
+	// down. A note already sounding keeps the level it started at — the scale
+	// is applied where an event is emitted — so a fade moves in note-sized
+	// steps, which is what the games doing it play anyway.
+	volume int
 }
 
 type sound struct {
@@ -66,7 +75,51 @@ const defaultMaxSounds = 256
 // NewAudio returns an Audio writing to sink. A nil sink is allowed and makes
 // every sound silent, which is what a Host without an audio device wants.
 func NewAudio(sink AudioSink) *Audio {
-	return &Audio{sink: sink, sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds}
+	return &Audio{sink: sink, sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, volume: maxAudioVolume}
+}
+
+// maxAudioVolume is the loudest a WIPI or MIDP volume goes; zero is silent.
+const maxAudioVolume = 100
+
+// SetVolume sets the device level a guest asked for, clamped to 0..100.
+// Zero silences everything sounding now as well, because a game that sets the
+// volume to nothing expects the note under it to stop rather than to ring on
+// until it happens to end.
+func (audio *Audio) SetVolume(percent int) {
+	if audio == nil {
+		return
+	}
+	switch {
+	case percent < 0:
+		percent = 0
+	case percent > maxAudioVolume:
+		percent = maxAudioVolume
+	}
+	audio.mutex.Lock()
+	defer audio.mutex.Unlock()
+	audio.volume = percent
+	if percent > 0 || audio.sink == nil {
+		return
+	}
+	for _, current := range audio.sounds {
+		if !current.playing {
+			continue
+		}
+		for _, note := range current.activeNotes {
+			audio.sink.MIDINoteOff(note.channel, note.note, 0)
+		}
+		current.activeNotes = nil
+	}
+}
+
+// Volume reports the level SetVolume was last given.
+func (audio *Audio) Volume() int {
+	if audio == nil {
+		return maxAudioVolume
+	}
+	audio.mutex.Lock()
+	defer audio.mutex.Unlock()
+	return audio.volume
 }
 
 // Load decodes a sound and answers a handle for it. Data that is not a format
@@ -246,9 +299,9 @@ func (audio *Audio) advanceSound(current *sound, now time.Duration) {
 func (audio *Audio) emit(current *sound, event smaf.Event) {
 	switch event.Type {
 	case smaf.EventWave:
-		audio.sink.PlayWave(event.WaveChannels, event.SamplingRate, event.Wave)
+		audio.sink.PlayWave(event.WaveChannels, event.SamplingRate, audio.scaleWave(event.Wave))
 	case smaf.EventNoteOn:
-		audio.sink.MIDINoteOn(event.Channel, event.Note, event.Velocity)
+		audio.sink.MIDINoteOn(event.Channel, event.Note, audio.scaleVelocity(event.Velocity))
 		current.activeNotes = append(current.activeNotes, activeNote{event.Channel, event.Note})
 		current.markChannel(event.Channel)
 	case smaf.EventNoteOff:
@@ -266,6 +319,31 @@ func (audio *Audio) emit(current *sound, event smaf.Event) {
 	case smaf.EventSysEx:
 		audio.sink.MIDISysEx(event.SysEx)
 	}
+}
+
+// scaleVelocity applies the device volume to a note. A note whose velocity
+// scales to zero is still sent: a note-on at zero velocity is a note-off, which
+// is what a note played at silence should be, and dropping it instead would
+// leave the note-off that follows unmatched.
+func (audio *Audio) scaleVelocity(velocity uint8) uint8 {
+	if audio.volume >= maxAudioVolume {
+		return velocity
+	}
+	return uint8(int(velocity) * audio.volume / maxAudioVolume)
+}
+
+// scaleWave applies the device volume to a sampled sound. It copies rather
+// than scaling in place: the samples belong to the loaded sound and a repeat
+// plays them again.
+func (audio *Audio) scaleWave(samples []int16) []int16 {
+	if audio.volume >= maxAudioVolume || len(samples) == 0 {
+		return samples
+	}
+	scaled := make([]int16, len(samples))
+	for index, sample := range samples {
+		scaled[index] = int16(int(sample) * audio.volume / maxAudioVolume)
+	}
+	return scaled
 }
 
 // silence ends playback and leaves the synthesiser as it found it: every note

@@ -231,3 +231,70 @@ func TestAudioWithoutASinkStaysSilentRatherThanFailing(t *testing.T) {
 	}
 	audio.Advance(time.Second)
 }
+
+// TestVolumeScalesWhatReachesTheSink pins the device level a guest sets
+// through its platform's media API. The level is not the Host's volume
+// control — that one is the user's — so it has to change what is emitted
+// rather than being remembered for a getter.
+func TestVolumeScalesWhatReachesTheSink(t *testing.T) {
+	sink := &recordingSink{}
+	audio := NewAudio(sink)
+	handle, err := audio.Load(oneNoteSMAF())
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio.SetVolume(50)
+	if err := audio.Play(handle, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	audio.Advance(100 * time.Millisecond)
+
+	var noteOn string
+	for _, call := range sink.calls {
+		if len(call) >= 3 && call[:3] == "on " {
+			noteOn = call
+			break
+		}
+	}
+	// The file's note carries velocity 100, so half of it is 50.
+	if noteOn != "on 0 60 50" {
+		t.Fatalf("note on at half volume = %q, want the velocity halved", noteOn)
+	}
+}
+
+// TestZeroVolumeStopsWhatIsAlreadySounding is the fade a game ends on. Scaling
+// the next note is not enough: a note started at full volume rings on under a
+// volume the game has already set to nothing.
+func TestZeroVolumeStopsWhatIsAlreadySounding(t *testing.T) {
+	sink := &recordingSink{}
+	audio := NewAudio(sink)
+	handle, err := audio.Load(oneNoteSMAF())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audio.Play(handle, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	audio.Advance(20 * time.Millisecond)
+	if sink.count("on") == 0 {
+		t.Fatal("the note never started")
+	}
+	before := sink.count("off")
+	audio.SetVolume(0)
+	if sink.count("off") <= before {
+		t.Fatal("setting the volume to zero left the sounding note alone")
+	}
+}
+
+// TestVolumeIsClampedToItsScale keeps a guest number out of the arithmetic.
+func TestVolumeIsClampedToItsScale(t *testing.T) {
+	audio := NewAudio(&recordingSink{})
+	audio.SetVolume(-40)
+	if level := audio.Volume(); level != 0 {
+		t.Fatalf("volume = %d after a negative level, want 0", level)
+	}
+	audio.SetVolume(400)
+	if level := audio.Volume(); level != maxAudioVolume {
+		t.Fatalf("volume = %d after an over-range level, want %d", level, maxAudioVolume)
+	}
+}
