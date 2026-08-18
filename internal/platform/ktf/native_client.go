@@ -61,18 +61,6 @@ const (
 	// nativeApplicationOut receives the title's own object.
 	nativeApplicationOut = nativeScratchBase + 0x300
 
-	// nativeBSSAllowance is mapped past the module's own length.
-	//
-	// The information file names the module's page-rounded length and one
-	// other size beside it, but its header packs fields at a stride that has
-	// not been established, so reading that second number out of it would be
-	// reading an artefact of the alignment as often as a value. Until the
-	// header is decoded, a fixed allowance is the honest version of the same
-	// guess, and over-mapping only costs address space: a probe that faulted
-	// just past the image would report the fault instead of the call list it
-	// exists to collect. See docs/ktf.md.
-	nativeBSSAllowance = 0x8000
-
 	// The module asks the platform for memory before it does anything else, so
 	// a probe that cannot allocate sees one call and nothing after it. The
 	// arena is bump-only here: this client exists to find out what a module
@@ -127,7 +115,10 @@ type NativeClient struct {
 	mapped  uint32
 	calls   []NativeCall
 	served  map[nativeSlotKey]NativeSlotHandler
-	arena   uint32
+	arena   *guestArena
+	// blocks records the size of every live allocation, because the module
+	// gives a block back as a bare pointer.
+	blocks map[uint32]uint64
 
 	surfaces   []nativeSurfaceTable
 	interfaces map[uint32]uint32
@@ -193,7 +184,8 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 		mapped:     mapped,
 		served:     map[nativeSlotKey]NativeSlotHandler{},
 		interfaces: map[uint32]uint32{},
-		arena:      nativeArenaBase,
+		arena:      newGuestArena(nativeArenaBase, nativeArenaSize),
+		blocks:     map[uint32]uint64{},
 	}
 	platformTable, err := client.addSurface(NativePlatformTable)
 	if err != nil {
@@ -222,6 +214,13 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 	client.thread = armcore.NewThread(initial)
 	client.archive = archive
 	return client, nil
+}
+
+// AddSurface builds a trapped table that is not tied to an interface number,
+// for the objects a served slot hands back. Every instance of one kind shares
+// its table, so a handler tells them apart by the object it is called on.
+func (client *NativeClient) AddSurface(name NativeSurface) (uint32, error) {
+	return client.addSurface(name)
 }
 
 // addSurface builds one trapped table and returns its address. Every slot is a
@@ -256,11 +255,19 @@ func (client *NativeClient) addSurface(name NativeSurface) (uint32, error) {
 
 // nativeMappedSize decides how much to map for a module.
 //
-// The information file names the module's page-rounded length, and beside it
-// sits a second size whose meaning is not established. Mapping their sum is
-// deliberate over-mapping: a probe that faults just past the image would report
-// the fault rather than the call that caused it, and the point of this run is
-// the call list.
+// It maps the module's own length rounded to a page, and nothing beyond it.
+// That is not an assumption but a measurement: this module addresses its data
+// PC-relatively, holds no absolute address at all, and reads exactly one word
+// from outside its image — the platform table pointer the loader plants below
+// it. Everything else it works on it asks the platform to allocate, including
+// the object it keeps its whole state in. A local title runs its start-up, its
+// data loading and thousands of frames byte-identically with no allowance past
+// the image and with the 0x8000 an earlier pass mapped.
+//
+// So the second size the information file names is not a BSS size for this
+// module. If a module of this generation ever does need space past its image,
+// it faults on the first access rather than running on quietly, and the fault
+// names the address — which is the report that would say so.
 func nativeMappedSize(archive *NativeArchive) (uint32, error) {
 	rounded := (uint64(len(archive.Module)) + nativePageSize - 1) &^ (nativePageSize - 1)
 	named, ok := archive.Info.ModuleSpan(len(archive.Module))
@@ -270,11 +277,10 @@ func nativeMappedSize(archive *NativeArchive) (uint32, error) {
 	if uint64(named) != rounded {
 		return 0, fmt.Errorf("KTF module information file names %#x for a %d byte module, want %#x", named, len(archive.Module), rounded)
 	}
-	total := rounded + nativeBSSAllowance
-	if total > maxClientMappedSize {
-		return 0, fmt.Errorf("KTF native module maps %d bytes, limit %d", total, maxClientMappedSize)
+	if rounded > maxClientMappedSize {
+		return 0, fmt.Errorf("KTF native module maps %d bytes, limit %d", rounded, maxClientMappedSize)
 	}
-	return uint32(total), nil
+	return uint32(rounded), nil
 }
 
 // Serve answers one table slot from here on. It is how a slot moves from the
@@ -440,6 +446,11 @@ func (client *NativeClient) EntryResult() (uint32, error) {
 	return binary.LittleEndian.Uint32(word), nil
 }
 
+// Steps reports how many instructions this client's core has executed, which
+// is how a probe tells a frame that ran the game from one that returned
+// immediately.
+func (client *NativeClient) Steps() uint64 { return client.core.Steps() }
+
 // Calls reports every platform-table call the module made, in order.
 func (client *NativeClient) Calls() []NativeCall {
 	return client.calls
@@ -520,7 +531,9 @@ func (client *NativeClient) handleSupervisorCall(ctx context.Context, thread *ar
 	return thread.SetRegister(0, result)
 }
 
-// Allocate hands out zeroed guest memory from this client's arena.
+// Allocate hands out zeroed guest memory from this client's arena and
+// remembers the block's size, which is what lets Free give it back: the module
+// hands a block back as a bare pointer.
 func (client *NativeClient) Allocate(size uint32) (uint32, error) {
 	if size == 0 {
 		return 0, fmt.Errorf("KTF native allocation of zero bytes")
@@ -530,17 +543,34 @@ func (client *NativeClient) Allocate(size uint32) (uint32, error) {
 	}
 	// Eight-byte alignment is what an ARM procedure call standard block needs,
 	// and a module that stores doubles into what it was handed needs it here.
-	aligned := (uint64(size) + 7) &^ 7
-	if uint64(client.arena)+aligned > uint64(nativeArenaBase)+nativeArenaSize {
+	aligned := alignArenaSize(uint64(size))
+	address, ok := client.arena.allocate(uint64(size))
+	if !ok {
 		return 0, fmt.Errorf("KTF native arena exhausted at %d bytes", size)
 	}
-	address := client.arena
-	client.arena += uint32(aligned)
+	client.blocks[address] = aligned
 	if err := client.core.Memory().Write(address, make([]byte, aligned)); err != nil {
 		return 0, fmt.Errorf("clear KTF native allocation at %#x: %w", address, err)
 	}
 	return address, nil
 }
+
+// Free gives a block back. A pointer this client never handed out is ignored
+// rather than refused: the module frees what it built during a start-up that
+// failed too, and a run that stops on a stray free reports the free instead of
+// what failed before it.
+func (client *NativeClient) Free(address uint32) {
+	size, ok := client.blocks[address]
+	if !ok {
+		return
+	}
+	delete(client.blocks, address)
+	client.arena.release(address, size)
+}
+
+// AvailableMemory reports what a further allocation could still claim, which
+// is the number the module asks the platform for before sizing its own caches.
+func (client *NativeClient) AvailableMemory() uint64 { return client.arena.available() }
 
 // ServeAllocator answers one table slot as an allocator taking its size in r0.
 func (client *NativeClient) ServeAllocator(surface NativeSurface, offset uint32) {

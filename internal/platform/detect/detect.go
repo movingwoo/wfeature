@@ -47,6 +47,21 @@ const (
 	sktExtension = ".msd"
 )
 
+// An earlier generation of the KTF download package carries no descriptor and
+// no JAR: a module information file beside a raw module, and the title's own
+// resource files. It is the same vendor and the same platform name — what
+// differs is the package, and telling a Host otherwise would make it look for
+// a loader that does not exist.
+//
+// The pair is the discriminator, and it has to be a pair: a lone `.mod` is a
+// common enough extension that claiming an archive for it would be a guess,
+// while a `.mif` beside exactly one `.mod` is this package's shape. See
+// docs/ktf.md, "An earlier KTF package".
+const (
+	ktfNativeInfoExtension   = ".mif"
+	ktfNativeModuleExtension = ".mod"
+)
+
 // skvmPrefixes are class-name prefixes only an SKT title refers to. A class
 // file stores the names it references verbatim in its constant pool, so a
 // title calling com.skt.m.Device carries the string; a plain MIDlet, whose
@@ -106,6 +121,9 @@ func Archive(data []byte) (Platform, error) {
 			return SKT, nil
 		}
 	}
+	if isKTFNativePackage(names, wrapper) {
+		return KTF, nil
+	}
 	skvm, err := referencesSKVM(reader)
 	if err != nil {
 		return "", err
@@ -114,6 +132,25 @@ func Archive(data []byte) (Platform, error) {
 		return SKT, nil
 	}
 	return Unknown, nil
+}
+
+// isKTFNativePackage reports whether the entry names are the earlier KTF
+// package's. It is only asked after every marker has failed, so it costs
+// nothing on an archive that named itself.
+func isKTFNativePackage(names []string, wrapper string) bool {
+	info, module := 0, 0
+	for _, name := range names {
+		if wrapper != "" {
+			name = strings.TrimPrefix(name, wrapper+"/")
+		}
+		switch {
+		case strings.EqualFold(path.Ext(name), ktfNativeInfoExtension):
+			info++
+		case strings.EqualFold(path.Ext(name), ktfNativeModuleExtension):
+			module++
+		}
+	}
+	return info == 1 && module == 1
 }
 
 // entryName normalizes a zip entry the way the platform loaders do, so a

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -74,6 +75,19 @@ func Inspect(archive []byte) (Summary, error) {
 	summary := Summary{Platform: string(platform)}
 	switch platform {
 	case detect.KTF:
+		// The vendor ships two generations of package, and only one of them
+		// has a descriptor. The earlier one names itself in its module
+		// information file instead. See docs/ktf.md, "An earlier KTF package".
+		if ktf.IsNativeArchive(archive) {
+			opened, err := ktf.OpenNative(archive)
+			if err != nil {
+				return summary, err
+			}
+			summary.AID = strconv.FormatUint(uint64(opened.Info.ApplicationID), 10)
+			summary.Name = opened.Info.Name
+			summary.SaveOwner = ktf.NativeSaveOwner(opened.Info)
+			return summary, nil
+		}
 		opened, err := ktf.Open(archive)
 		if err != nil {
 			return summary, err
@@ -159,9 +173,10 @@ type Session struct {
 	summary  Summary
 	options  Options
 
-	ktf     *ktf.Session
-	lgt     *lgt.Session
-	runtime *skt.Runtime
+	ktf       *ktf.Session
+	ktfNative *ktf.NativeSession
+	lgt       *lgt.Session
+	runtime   *skt.Runtime
 
 	// surface receives frames on the platforms that draw into one. It also
 	// gives those platforms a flush counter they do not otherwise have.
@@ -198,6 +213,19 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 
 	switch platform {
 	case detect.KTF:
+		if ktf.IsNativeArchive(archive) {
+			started, err := ktf.StartNativeSession(ctx, archive, ktf.NativeSessionOptions{
+				SaveStore: options.SaveStore,
+				AudioSink: options.AudioSink,
+				Logger:    options.Logger,
+			})
+			if err != nil {
+				return nil, err
+			}
+			session.ktfNative = started
+			session.startedAt = time.Now()
+			return session, nil
+		}
 		started, err := ktf.StartSession(ctx, archive, ktf.SessionOptions{
 			AudioSink:  options.AudioSink,
 			SaveStore:  options.SaveStore,
@@ -281,6 +309,8 @@ func (s *Session) Cheat() *cheat.Session {
 		return nil
 	case s.ktf != nil:
 		return s.ktf.Cheat()
+	case s.ktfNative != nil:
+		return s.ktfNative.Cheat()
 	case s.lgt != nil:
 		return s.lgt.Cheat()
 	case s.runtime != nil:
@@ -298,6 +328,8 @@ func (s *Session) CheatConsole() *cheat.Console {
 		return nil
 	case s.ktf != nil:
 		return s.ktf.CheatConsole()
+	case s.ktfNative != nil:
+		return s.ktfNative.CheatConsole()
 	case s.lgt != nil:
 		return s.lgt.CheatConsole()
 	case s.runtime != nil:
@@ -347,6 +379,12 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 			return progress, nil
 		}
 		return progress, err
+	case s.ktfNative != nil:
+		// The earlier KTF package's title paces itself: it hands the platform
+		// an interval and a function, and what is left of that interval is the
+		// wait. See ktf.NativeSession.TickFor.
+		progressed, wait, err := s.ktfNative.TickFor(ctx, budget)
+		return Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktfNative.Flushes())}, err
 	case s.lgt != nil:
 		// LGT paces itself against the wall clock rather than reporting a
 		// frame's worth of wait: its guest clock only moves when a tick moves
@@ -403,6 +441,12 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
 		return s.endedOrFailed(s.ktf.SendKey(ctx, eventType, ktfKeyCode(code)))
+	case s.ktfNative != nil:
+		eventType, ok := ktfKeyEventType(action)
+		if !ok {
+			return fmt.Errorf("session: unknown key action %q", action)
+		}
+		return s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code))
 	case s.lgt != nil:
 		// A Clet compares against the same key values a KTF game does, so the
 		// translation is shared. A repeat arrives as a fresh press: the Clet
@@ -446,6 +490,9 @@ func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 	case s.ktf != nil:
 		frame, frameWidth, frameHeight, _ := s.ktf.Frame()
 		return s.magnify(frame, frameWidth, frameHeight)
+	case s.ktfNative != nil:
+		frame, frameWidth, frameHeight, _ := s.ktfNative.Frame()
+		return s.magnify(frame, frameWidth, frameHeight)
 	case s.lgt != nil:
 		frame, frameWidth, frameHeight, _ := s.lgt.Frame()
 		return s.magnify(frame, frameWidth, frameHeight)
@@ -478,6 +525,13 @@ func (s *Session) Screen() (width, height int) {
 			return frameWidth, frameHeight
 		}
 		return DefaultWidth, DefaultHeight
+	case s.ktfNative != nil:
+		// The earlier package's screen is the platform's own too: the title
+		// asks for its size once and draws into what it is given.
+		if _, frameWidth, frameHeight, _ := s.ktfNative.Frame(); frameWidth > 0 && frameHeight > 0 {
+			return frameWidth, frameHeight
+		}
+		return DefaultWidth, DefaultHeight
 	case s.lgt != nil:
 		if _, frameWidth, frameHeight, _ := s.lgt.Frame(); frameWidth > 0 && frameHeight > 0 {
 			return frameWidth, frameHeight
@@ -504,6 +558,8 @@ func (s *Session) GuestElapsed() (time.Duration, bool) {
 	switch {
 	case s.ktf != nil:
 		return s.ktf.GuestElapsed(), true
+	case s.ktfNative != nil:
+		return s.ktfNative.GuestElapsed(), true
 	case s.lgt != nil:
 		return s.lgt.GuestElapsed(), true
 	}
@@ -516,6 +572,8 @@ func (s *Session) Flushes() uint64 {
 	switch {
 	case s.ktf != nil:
 		return uint64(s.ktf.Flushes())
+	case s.ktfNative != nil:
+		return uint64(s.ktfNative.Flushes())
 	case s.lgt != nil:
 		return s.lgt.Flushes()
 	case s.surface != nil:
@@ -565,7 +623,7 @@ func (s *Session) Scale() int { return s.options.scale() }
 
 // Running reports whether there is still a game to tick.
 func (s *Session) Running() bool {
-	return s.ktf != nil || s.lgt != nil || s.runtime != nil
+	return s.ktf != nil || s.ktfNative != nil || s.lgt != nil || s.runtime != nil
 }
 
 // Close ends the session. It is safe to call more than once, and safe to call
@@ -574,6 +632,10 @@ func (s *Session) Close() {
 	if s.ktf != nil {
 		s.ktf.Close()
 		s.ktf = nil
+	}
+	if s.ktfNative != nil {
+		s.ktfNative.Close()
+		s.ktfNative = nil
 	}
 	if s.lgt != nil {
 		_ = s.lgt.Close(context.Background())

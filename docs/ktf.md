@@ -2884,8 +2884,9 @@ Reading the rest of the header would need its record stride, which is not four
 bytes — a second size, `0x5000`, sits at an offset that makes the surrounding
 words decode as tag-and-value pairs on a stride that has not been pinned down.
 Any aligned-word scan of that area picks up boundaries as if they were values;
-one did, and mapped 0x85000 for a module needing 0x25000. Until the stride is
-established, the loader maps a fixed allowance instead of pretending to read one.
+one did, and mapped 0x85000 for a module needing 0x25000. The loader reads none
+of it: it maps the module's own page-rounded length and nothing more, which the
+module turns out not to need — see "There is no BSS" below.
 
 ### The module needs no relocation
 
@@ -2999,8 +3000,8 @@ into a success in the probe's own log for two runs.
 
 ### What the title asks for once it starts
 
-The first run to reach app code produced this, and it is the specification for
-the work that remains:
+The first run to reach app code produced this, and it was the specification for
+the work that followed:
 
 ```
 entry object        offset 0x0000 (slot  0)  raise
@@ -3012,8 +3013,8 @@ platform            offset 0x00ac (slot 43)
 platform            offset 0x00c0 (slot 48)
 ```
 
-It stops in the title's own code dereferencing a null it was handed, which is
-what an unanswered slot looks like from inside a game. Each row is answered the
+It stopped in the title's own code dereferencing a null it was handed, which is
+what an unanswered slot looks like from inside a game. Each row was answered the
 same way slot 26 and the interface query were: name it, serve it, run again.
 
 **The slot numbering is not this platform's.** Slot 26 allocates and slot 27
@@ -3021,19 +3022,393 @@ frees, where the kernel table serving the descriptor package has its allocator
 at 20 and its calloc at 21. Nothing about the descriptor package's numbering
 carries over.
 
+### The surface is bounded, and a taint sweep is what says so
+
+Answering one slot at a time says what to do next but never says how much is
+left. A static sweep does: the module reaches the platform table through one
+global — the word at `ImageBase-4`, which every function loads PC-relatively as
+`base+0x3c` off `ImageBase-0x40` — so a linear pass over the image that follows
+that value from register to register, adding the `adds rN, #k` it accumulates
+and recording each `ldr` off it, enumerates the table.
+
+Sweeping the whole image finds **sixteen slots**, and that is the flat half of
+the package entire:
+
+```
+0x00 memcpy      0x14 strlen      0x68 allocate    0xbc  ?
+0x04 memset      0x20 sprintf     0x6c free        0xc0  current application
+0x08 strcpy      0x64 ?           0x8c ?           0xcc  ?
+0x0c strcat      ...              0xac milliseconds 0xdc ?
+```
+
+Two things make the sweep trustworthy where the disassembly alone is not. The
+module is mixed ARM and Thumb, so a *linear* decode stops after twelve
+instructions and reports zero call sites — decode each address independently.
+And the same base word is read from ninety-four sites and no other offset off
+that base is ever read, so `base+0x3c` is the whole of what the loader has to
+plant.
+
+What each slot does came off its call sites rather than out of a name:
+
+- **`memset` then `memcpy`.** One function clears `0x1b` bytes at a stack
+  address through slot 4 and then copies ten bytes into it through slot 0. Two
+  arguments and a length, a destination returned: that is the pair.
+- **`strlen`.** Slot 5 is called on a buffer and its answer compared against 14,
+  and the module's own write wrapper calls it when its caller passes no length.
+- **`sprintf`.** Slot 8 takes a buffer, a format string from the image, and two
+  halfwords. It renders through the same WIPI C formatter the descriptor
+  package uses, with the variadic arguments walked from r2 through the stack.
+- **A millisecond clock.** Slot 43 is read, saved, and read again in a loop that
+  spins while the difference is below 2,000 — and the module seeds its own
+  generator from it.
+- **"Which application am I".** Slot 48 is called from thirty-nine sites and its
+  result indexed at `+0x20`, `+0x28`, `+0x2c`, `+0x4c`, `+0x50`, `+0x54`,
+  `+0x84`. Those are the offsets the title's own object uses on itself, so the
+  answer is that object. The module does not carry `this` through its own
+  calls; it asks the platform for it.
+
+### The three surfaces, and the objects the module asks for by number
+
+The package is not one table. It is three kinds of thing, and telling them apart
+is what makes a call log readable:
+
+1. **The flat table below the image**, above.
+2. **The object handed to the entry.** Its first three vtable entries raise a
+   count, drop it and answer a query by number; `+0x10` fills a display record;
+   `+0x2c` takes an interval, a function and a context.
+3. **One object per interface number.** The module queries five —
+   `0x1001001`, `0x1001002`, `0x1001003`, `0x100100b`, `0x1002000` — and one
+   more, `0x18000fe`, from the object it already holds. Each answered query gets
+   a trap table of its own, so what the module calls on one is recorded apart
+   from every other.
+
+`0x1001001` is the screen, and the class factory queries it while it is still
+building the title's object, writing it through a pointer it checks rather than
+the result it reads. `0x1001002` is asked how much memory is free and whether a
+given size can be had — the module walks it down from 64KB by halves and keeps
+the largest block both it and the allocator will give. `0x1001003` is the
+title's own files. `0x1002000` and `0x100100b` each take a function and a
+context; one of the two functions the module registers clears the flag its own
+modal wait spins on, so those are event sources it waits on rather than
+observes.
+
+### A file is an object, and the module's own wrapper names its methods
+
+The file interface hands back an object rather than a number, so one trap table
+serves every open file and a handler tells them apart by the object it was
+called on — which is what the module does too.
+
+The module's own file wrapper is what names the methods, because it calls them
+in a shape that only reads one way:
+
+```
+if mode == 2:  exists(name)            ; and create(name) when that says no
+handle = open(name, mode)              ; retried with mode 4 when 2 or 8 failed
+information(name, this+8)              ; and the length lands at this+0x10
+```
+
+and then, through the object:
+
+```
+seek(whence, offset)   the wrapper computes its own position from the same two
+                       arguments and passes them straight through, so both
+                       sides agree on the codes: 0 from the start, 1 back from
+                       the last byte, 2 from where it is
+read(buffer, length)   at 0x0c
+write(buffer, length)  at 0x14
+```
+
+One loop in the module drives read and write both and picks between them on a
+flag its caller passes. Serving `0x14` as a second read is what a first pass
+did, and the title loaded its data perfectly well — and then failed a gate
+whose whole purpose was to find out whether it could write.
+
+### The gate that reads as a memory error, and the write behind it
+
+With every file call answered but the write, the title booted, loaded all five
+of its data files, registered its frame and then drew this, once, and never
+moved again:
+
+> FS 메모리 공간이 부족합니다 / 최소 2KB 이상의 메모리를 확보한 뒤 다시 시작해
+> 주십시오
+
+The message names memory, and it is about the file system. Its code is a byte
+the title sets in itself, and a **watchpoint on that byte** named the
+instruction that set it in one run — which is worth more than any amount of
+reading, because the branch that reaches it is not the one the message suggests.
+What it does is: clear 64 bytes, then write them to a scratch file thirty-two
+times and check that each write returns 64. Thirty-two times sixty-four is the
+2KB in the message. A write that answers zero is a handset with no room.
+
+So the title's start-up gate is a file it creates, writes 2KB to, and deletes.
+Opening a name that is not there for writing has to create it, and what the
+title writes has to be readable back: both are the same requirement, and
+`docs/skvm.md` records the same one arrived at from a different direction.
+
+### The title does not have a loop of its own
+
+Its start event ends by handing the platform an interval, a function and a
+context through the entry object's `+0x2c`, and everything after that happens
+inside that function: it reads the clock, steps its own state machine, draws,
+and asks to be called again — the re-arm is the last thing each frame does, so
+the schedule replaces rather than accumulates. A Host that only starts the title
+sees it load its data and stop.
+
+The interval this title asks for is 48ms.
+
+### What the title draws with, and the table that named the colours
+
+The screen interface's `+0x14` takes a rectangle of four halfwords, two colours
+and a mode. What the colours *are* came out of the module's own data: one call
+site walks a 36-word table drawing 1x1 rectangles, and that table holds
+`0xffffff00`, `0x0000ff00`, `0x00ff0000`, `0xff000000`, `0x00ffff00`,
+`0xff00ff00`, `0xffff0000` and zero. White, blue, green, red, cyan, magenta,
+yellow, black — so a colour is `0xRRGGBB00`, and no amount of staring at the
+call site would have said which end the red was on.
+
+`+0x1c` ends a frame: it is the only call the title makes in a frame that draws
+nothing.
+
+**The title draws its own text.** There is no glyph call in the trace — the
+version string and its menus are drawn as runs of 1x1 rectangles through
+`+0x14`, which is why the first screen a Host would show is legible before any
+font work exists at all.
+
+### The sprites are Windows bitmaps, and the title builds them itself
+
+`+0x18` on the screen is the blit, and for a long while it arrived with a null
+where its pixels should be. The argument order was not the problem: a
+breakpoint at the call site showed the null already there, and following it up
+through two frames of the title's own code reached an array of image pointers
+the title fills once, at startup.
+
+**A watchpoint on one of those array slots named the writer in a single run.**
+It is `platform slot 25`, which the module calls as
+
+	create(0x1004001, data, out, out)
+
+with a number from the same family as the interfaces it queries. So the slot is
+a factory and `0x1004001` is a class. Dumping `data` at the call settles what
+the class is:
+
+```
+42 4d 18 0f 00 00 ... 36 04 00 00 28 00 00 00 36 00 00 00 32 00 00 00
+01 00 08 00 00 00 00 00 ...
+```
+
+"BM", a file size, pixels at 0x436, a 40-byte information header, 54 by 50, one
+plane, eight bits, no compression — a **Windows bitmap**, with its 256-entry
+palette in the 0x400 between the two headers. The title decodes its own
+graphics archive itself and hands the platform the one format every handset of
+the era already had a decoder for.
+
+Two details of the object matter beyond decoding it:
+
+- **Its first word points at the bitmap.** One of the title's own paths reads
+  that word and indexes the bitmap through it, so an object that only the
+  platform can read would break a path that never calls the platform at all.
+- **Magenta is not drawn.** Eleven of the fourteen images the local title
+  builds for its title screen have `0xff00ff` in their top-left corner, and
+  drawing it opaque puts a magenta box around every sprite. The blit carries no
+  colour of its own and the mode it passes is always 7, so the artwork is the
+  whole of the evidence.
+
+### The title takes keys as events, and its own menus decode them
+
+Reading the switch in the title's event handler is what named the numbers. It
+compares the event against 0, 1, 2 and 3, and then against `0x101`, `0x102` and
+`0x404`. The first two store a code and hand it to the current screen: a key
+pressed and a key released. `0x404` is compared and ignored.
+
+The code space came out of the screen that acts on it. The title's own key
+handler compares against `0xe030` and `0xe035`, so a key is `0xE000` with a
+character in the low byte — the keypad's digits are their own characters, and
+the five-way pad is the ring around the 5:
+
+```
+0xe032 up      0xe034 left    0xe035 select    0xe036 right    0xe038 down
+```
+
+Sweeping codes and comparing the frame afterwards is what proved it, and it is
+worth saying why the sweep had to be *shaped*: a sweep of 0 to 63 moves
+nothing, because no code in that range is a key. A sweep of `0xe000` upwards
+found exactly one code that changed the screen — and that one opened the
+title's menu.
+
+From there the route into the game is the title's own:
+
+```
+select   the title screen opens its menu
+select   the menu enters its first item
+left     the two choices under it, and the second is the new game
+select   a difficulty
+select   and the game starts
+```
+
+Driving that is what the acceptance run does, because every screen after the
+first is one the title only reaches by being played — and it is also what says
+the input contract is right, since a wrong key code is indistinguishable from a
+title that ignores keys.
+
+### The sound is SMAF, which this project already decodes
+
+The title plays through an interface it queries by number and hands a block of
+memory to, and what that block is settles what the interface is. Dumping it at
+the call:
+
+```
+4d 4d 4d 44 00 00 00 c6 43 4e 54 49 ... 53 54 3a 75 6e 74 69 74 6c 65 64
+```
+
+"MMMD", a length, a `CNTI` chunk, `ST:untitled,VN:PsmPlayer V5` — a **SMAF**
+file, the same format the descriptor package's titles keep their sound in. So
+the earlier package needed no new decoder, only the three calls around one:
+`+0x0c` sets the clip, `+0x10` starts it, `+0x14` stops it. The call passes no
+length, and none is needed: a SMAF file names its own in the four bytes after
+its magic.
+
+**The end of a clip has to be reported.** The module sets a flag when it starts
+a sound and clears it only inside the function its own listener calls, so a
+platform that never says "that finished" leaves the title believing its music
+is still playing. Its listener recognises the pair (1, 14) and nothing else,
+which is the whole evidence for what those two numbers are.
+
+Beside the player is a second source the title starts with a duration in
+milliseconds and then *waits* on: it sets a flag beside the call and clears it
+only when that source reports 2 or 3. Both are answered here, which is why
+this platform delivers events to the listeners the module registered rather
+than only collecting them.
+
+### The last of the flat table, and the objects nobody reads the answer to
+
+- **Slot 47 is a second deallocator.** Its call site picks between it and the
+  ordinary free on a flag the module keeps beside each entry, and what it hands
+  over is one of the objects the factory built. So an object is destroyed
+  through the slot that knows what it is, and everything else through free.
+- **The screen's `+0x10` is a status line** — the title passes a flag word and
+  a message, and the message on this title is `WAIT..`. There is nowhere for a
+  Host to put it: the title draws its own screen, and this is the handset's
+  furniture. It is recorded rather than drawn over what the title is drawing.
+- **The screen's `+0x24` is called once a second** while the title runs, which
+  is what a handset's "keep the backlight on" looks like.
+- **`0x18000fe` fills a 38-byte record** the title turns into a 26-character
+  identifier, padding whatever the record leaves empty with `X`. It hashes the
+  result and compares it against a hash it computed the same way, so what is in
+  the record decides nothing on its own — but a record left empty is the same
+  identifier on every handset that ever ran it, so the subscriber number this
+  emulator already answers with goes in.
+
+### The header sections have a stride, and two numbers found it
+
+The information file's two header sections were carried verbatim because
+reading them needed a stride nothing had established. The stride is **eight
+bytes, with the tag in the last halfword**, and what establishes it is that the
+module's own page-rounded length and the other size beside it land at the same
+place in consecutive records with consecutive tags:
+
+```
+value 0x00060001  extra 1  tag 2
+value 0x03e80001  extra 0  tag 4
+value 0x00005000  extra 0  tag 5
+value 0x00025000  extra 0  tag 6   <- the module's length, rounded to a page
+```
+
+An aligned word scan of the same bytes reads the boundary between two records
+as a value of its own, which is how an earlier pass mapped 0x85000 for a module
+needing 0x25000. The loader now reads tag 6 — and still checks it against the
+length it can work out for itself, because a package whose tag 6 disagrees with
+the module beside it is a package this reader has misread, and mapping what it
+said anyway is how a wrong stride becomes a wrong map.
+
+Only tag 6 is established. The rest are decoded and carried.
+
+### How a Host holds it
+
+The package is wired to every Host through the layer they already share, which
+means none of them has a branch of its own:
+
+- `internal/platform/detect` names it `ktf`. It is the same vendor and the same
+  platform; what differs is the package, and telling a Host otherwise would
+  send it looking for a loader that does not exist. The discriminator is a
+  `.mif` beside exactly one `.mod`, and it is only consulted after every
+  descriptor marker has failed — a lone `.mod` is too common an extension to
+  claim an archive for.
+- `ktf.NativeSession` is the same shape on the outside as the descriptor
+  package's `Session`: start, tick, take the frame, send keys, search memory.
+  Underneath, a tick is "run the title's frame if it is due" and the wait it
+  answers with is what is left of the interval *the title* asked for, so a Host
+  that honours it runs the game at the speed it was written for.
+- `internal/session` picks between the two generations inside its KTF case,
+  which is what puts the earlier one in the browser, the CLI and anything else
+  built on it at once.
+- The identity comes out of the module information file rather than a
+  descriptor: its name for a label, and its application number for the
+  directory the saves belong in. That number is not a claim the package makes
+  about itself and nothing else — it is the same number the module's own class
+  factory is asked for, so a package whose number did not match its module
+  would not start at all.
+- The cheat engine attaches the way it does to the descriptor package, over a
+  core of its own. The map is different and the labels say so: this title keeps
+  its whole state in what the platform allocated for it, so `arena` is where a
+  search for a health bar will find one.
+
+`runktf` takes both generations, and refuses by name the options that only mean
+something to the other one: there are no AOT method bodies to profile or
+symbolize here, no descriptor to inspect, and no repro route runner yet.
+
+### A save is a file the title writes
+
+The title writes its settings and its save slots as ordinary files beside its
+own data, so they go to the same `fs/` space in the save store the descriptor
+package's guest filesystem uses. Two things follow, and both are what a player
+would expect rather than what fell out:
+
+- **A save wins over the package's own copy of the same name.** The title ships
+  a settings file and then writes to it; a lookup that preferred the archive
+  would start every session from the shipped settings.
+- **A write reaches the store as it happens**, not at some close that a title
+  killed mid-session never performs.
+
 ### What is still open
 
-- **Every slot but two.** The list above is the current front, and it grows as
-  each one is answered.
-- **The BSS size**, and with it the second header size. A fully
-  position-independent module addresses its own data PC-relatively, so the
-  pointer-distribution test that would normally expose a BSS range says nothing
-  here — it was run, and found no pointer past the image at all.
-- **The remaining information-file numbers**, which need the header's record
-  stride first.
-- **Nothing is wired to a Host.** `detect` answers `unknown` for this package
-  and `runktf` refuses it, deliberately: a title that cannot paint has nothing
-  to show a Host yet.
+- **Nothing on this title's route still traps.** Every slot it reaches through
+  its own menus and into its first map is served, so the next unknown will
+  arrive as a trap in a run rather than as a list here. Read the acceptance
+  run's table: it marks each slot `served` or `trap`.
+- **The keys with no code.** The two soft keys, send and the volume pair are
+  not mapped: nothing establishes what this handset numbers them, and a value
+  sent as itself cannot be told from a mapping that is wrong. What the module
+  compares against is a set per screen — `0xE021`, `0xE02B`, `0xE030` and
+  `0xE03E` all cancel on the screens that take any of them — so there is more
+  than one key here that a Host has no name for.
+- **The information file's other tagged fields.** The stride is established and
+  four fields decode; only the module length is understood. `0x5000` under tag
+  5 sits beside it and is not a BSS size, which the run below settles.
+- **A repro route runner.** `internal/route` drives the descriptor package's
+  sessions; this one takes a key script on the command line instead.
+
+### There is no BSS, and mapping nothing extra is the measurement
+
+An earlier pass mapped a fixed `0x8000` past the image because the information
+file names a second size beside the module's own and neither could be read out
+of it safely. That allowance is now gone, and removing it is a result rather
+than a tidy-up:
+
+- The module holds **no absolute address at all** — it is position independent
+  and addresses everything PC-relatively.
+- It reads **exactly one word from outside its image**, the platform table
+  pointer below it. A sweep for every other offset off that same base finds
+  none.
+- Everything it works on it asks the platform to allocate, including the object
+  it keeps its whole state in.
+- A run with no allowance and a run with `0x8000` are byte-identical through
+  start-up, data loading and three thousand frames: same draws, same presents,
+  same call counts.
+
+So the second size the information file names is not a BSS size for this module.
+If a module of this generation ever does need space past its image, it faults on
+the first access rather than running on quietly, and the fault names the
+address — which is the report that would say so.
 
 ## Sound in C, and the table that was accepted and thrown away
 

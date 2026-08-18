@@ -51,13 +51,75 @@ type NativeInfo struct {
 	Vendor        string
 	Icons         []NativeIcon
 	// Sections holds the two header sections that precede the span table, as
-	// words. One of their values is the module's size rounded up to a page,
-	// which is the only one of them corroborated from outside this file.
+	// words. They are kept verbatim beside the decoded Fields because a
+	// section whose length is not a whole number of records still says what
+	// bytes were there.
 	Sections [][]uint32
+	// Fields holds the header sections decoded on the stride they are written
+	// at. See NativeField.
+	Fields []NativeField
 	// Records holds every numeric span as words, in file order.
 	Records [][]uint32
 	// Trailer holds the identity record after the last span, words first.
 	Trailer []uint32
+}
+
+// NativeField is one record of a header section.
+//
+// The stride is eight bytes and the tag is the last halfword — which is what
+// two numbers established rather than what the shape suggested. The module's
+// own page-rounded length is in the file, and so is one other size; laying an
+// eight byte record over the section puts them at the same place in
+// consecutive records, with consecutive tags:
+//
+//	value 0x00060001  extra 1  tag 2
+//	value 0x03e80001  extra 0  tag 4
+//	value 0x00005000  extra 0  tag 5
+//	value 0x00025000  extra 0  tag 6   <- the module's length, rounded to a page
+//
+// An aligned word scan of the same bytes reads the boundaries as values, which
+// is how an earlier pass mapped 0x85000 for a module needing 0x25000. The
+// stride is what stops that.
+//
+// Only tag 6 is established. The rest are carried so a later reading has them,
+// and so a package whose numbers do not look like this one's can be told
+// apart from one that does.
+type NativeField struct {
+	Value uint32
+	Extra uint16
+	Tag   uint16
+}
+
+// nativeFieldStride is how far apart the records are.
+const nativeFieldStride = 8
+
+// NativeFieldModuleLength is the tag on the module's page-rounded length.
+const NativeFieldModuleLength = 6
+
+// Field finds a header record by tag.
+func (info NativeInfo) Field(tag uint16) (NativeField, bool) {
+	for _, field := range info.Fields {
+		if field.Tag == tag {
+			return field, true
+		}
+	}
+	return NativeField{}, false
+}
+
+// nativeFields decodes one header section on the record stride. A trailing
+// part-record is dropped rather than guessed at: the sections are bounded by
+// the next offset in the header, and nothing says that boundary lands on a
+// record.
+func nativeFields(section []byte) []NativeField {
+	fields := make([]NativeField, 0, len(section)/nativeFieldStride)
+	for offset := 0; offset+nativeFieldStride <= len(section); offset += nativeFieldStride {
+		fields = append(fields, NativeField{
+			Value: binary.LittleEndian.Uint32(section[offset:]),
+			Extra: binary.LittleEndian.Uint16(section[offset+4:]),
+			Tag:   binary.LittleEndian.Uint16(section[offset+6:]),
+		})
+	}
+	return fields
 }
 
 // NativeArchive is an opened earlier-generation KTF package.
@@ -209,6 +271,7 @@ func ParseNativeInfo(data []byte) (NativeInfo, error) {
 			return NativeInfo{}, fmt.Errorf("module information file header section %#x..%#x is not inside its %d bytes", bounds[0], bounds[1], len(data))
 		}
 		info.Sections = append(info.Sections, nativeWords(data[bounds[0]:bounds[1]]))
+		info.Fields = append(info.Fields, nativeFields(data[bounds[0]:bounds[1]])...)
 	}
 	for index := 0; index < int(spanCount); index++ {
 		span := data[offsets[index]:offsets[index+1]]
@@ -303,6 +366,13 @@ func (info NativeInfo) ModuleSpan(moduleLength int) (mapped uint32, ok bool) {
 	rounded := (uint64(moduleLength) + nativePageSize - 1) &^ (nativePageSize - 1)
 	if rounded == 0 || rounded > 1<<32 {
 		return 0, false
+	}
+	// The tagged record is what the file means to say, and the search is what
+	// says the record was read on the right stride: a package whose tag 6 does
+	// not match the module beside it is a package this loader has misread, and
+	// mapping what it said anyway is how a wrong stride becomes a wrong map.
+	if field, found := info.Field(NativeFieldModuleLength); found && uint64(field.Value) == rounded {
+		return field.Value, true
 	}
 	for _, section := range info.Sections {
 		for _, word := range section {
