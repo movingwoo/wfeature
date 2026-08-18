@@ -99,11 +99,21 @@ type nativeOpenFile struct {
 	writable bool
 }
 
-// nativeModeRead is the only mode this title opens a file it only reads with.
-// The module's own wrapper retries a refused open of mode 2 or 8 with mode 4,
-// which is what says those are writes: a read that failed would have nothing
-// to retry with. So anything but a plain read may create the file.
-const nativeModeRead = 1
+// The open modes, which the WIPI specification names and the module's own
+// wrapper corroborates: it retries a refused open of mode 2 or 8 with mode 4,
+// and a read that failed would have nothing to retry with. So 1 is the only
+// mode that cannot write, and anything else may create the file.
+//
+// Only 1 and 2 are reached by the local title — the specification is what says
+// what 4 means, and it says the size goes to zero. Serving it as an ordinary
+// write would leave the tail of a longer previous save behind the shorter one
+// that replaced it.
+const (
+	nativeModeRead = 1
+	// nativeModeWriteTruncate is the specification's MC_FILE_OPEN_WRTRUNC:
+	// "쓰기만 가능하고 파일이 존재하면 파일 크기를 0 으로 만듬".
+	nativeModeWriteTruncate = 4
+)
 
 // installFiles registers the file interface and the table its objects share.
 func (platform *NativePlatform) installFiles() error {
@@ -213,6 +223,13 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	writable := int32(mode) != nativeModeRead
 	data, ok := platform.contents(name)
 	platform.opens = append(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
+	if ok && int32(mode) == nativeModeWriteTruncate {
+		// The file is there and the mode says to empty it. Emptying it here
+		// rather than on the first write is what the mode means: a title that
+		// opens this way and then writes nothing has still emptied the file.
+		platform.keep(strings.ToLower(path.Base(name)), []byte{})
+		data = nil
+	}
 	if !ok {
 		if !writable {
 			// A file the package does not carry is a refusal, not a failure.
@@ -305,20 +322,46 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 }
 
 // create makes an empty file, and keep records what the title wrote. Both go
-// to the store as well as to the session, so a save survives the session that
-// wrote it.
+// to the session, and to the store at the next boundary, so a save survives
+// the session that wrote it.
 func (platform *NativePlatform) create(key string) { platform.keep(key, []byte{}) }
 
+// keep takes what the title wrote into the session's own copy and marks it for
+// the store.
+//
+// It does not write it out. A title writes a file in the chunks its own buffer
+// holds — the local one fills a 2KB scratch file 64 bytes at a time — and a
+// store call per chunk rewrites the whole file once per chunk, which for that
+// file is 34 writes totalling sixteen times its length. What the store wants
+// is the file, not every state it passed through, so the writing happens at a
+// boundary: when the title closes the file, and at the end of a frame for a
+// title that keeps one open.
 func (platform *NativePlatform) keep(key string, data []byte) {
 	platform.written[key] = data
 	if platform.saves == nil {
 		return
 	}
-	if err := platform.saves.StoreSave(nativeSaveKey(key), data); err != nil {
-		// A store that refuses is not the title's problem: it wrote what it
-		// wrote, and the session still reads it back. The Host's log is where
-		// a failing store belongs.
-		platform.storeFailures++
+	if platform.unsaved == nil {
+		platform.unsaved = map[string]bool{}
+	}
+	platform.unsaved[key] = true
+}
+
+// FlushSaves writes what the title has changed out to the store. It is called
+// where a write burst ends rather than inside one, and again when the session
+// closes, so nothing a title wrote is left only in memory.
+func (platform *NativePlatform) FlushSaves() {
+	if platform.saves == nil || len(platform.unsaved) == 0 {
+		return
+	}
+	for key := range platform.unsaved {
+		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
+			// A store that refuses is not the title's problem: it wrote what
+			// it wrote, and the session still reads it back. The Host's log is
+			// where a failing store belongs.
+			platform.storeFailures++
+		}
+		delete(platform.unsaved, key)
 	}
 }
 
@@ -347,6 +390,9 @@ func (platform *NativePlatform) closeFile(thread *armcore.Thread) (uint32, error
 	}
 	delete(platform.files, object)
 	platform.client.Free(object)
+	// The title is done with the file, which is the moment its contents are
+	// worth keeping.
+	platform.FlushSaves()
 	return 0, nil
 }
 

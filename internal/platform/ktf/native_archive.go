@@ -146,13 +146,25 @@ func (archive *NativeArchive) GuestFiles() map[string][]byte {
 
 // IsNativePackage reports whether an outer archive's entries look like this
 // package rather than the descriptor package. It answers from names alone, so
-// it costs the central directory the reader has already parsed.
+// an archive a Host has already read costs nothing more to classify.
 func IsNativePackage(files map[string][]byte) bool {
 	if _, ok := findEntry(files, adfPath); ok {
 		return false
 	}
-	info, module := 0, 0
+	names := make([]string, 0, len(files))
 	for name := range files {
+		names = append(names, name)
+	}
+	return isNativeShape(names)
+}
+
+// isNativeShape reports whether a set of unwrapped entry names is this
+// package's. The pair is the discriminator and it has to be a pair: a lone
+// `.mod` is a common enough extension that claiming an archive for it would be
+// a guess, while a `.mif` beside exactly one `.mod` is this package's shape.
+func isNativeShape(names []string) bool {
+	info, module := 0, 0
+	for _, name := range names {
 		switch strings.ToLower(path.Ext(name)) {
 		case nativeInfoExtension:
 			info++
@@ -258,8 +270,14 @@ func ParseNativeInfo(data []byte) (NativeInfo, error) {
 			return NativeInfo{}, fmt.Errorf("module information file span %d ends at %#x, before it starts at %#x", index-1, offsets[index], offsets[index-1])
 		}
 	}
-	if uint64(offsets[len(offsets)-1]) > uint64(len(data)) {
-		return NativeInfo{}, fmt.Errorf("module information file last span ends at %#x, past its %d bytes", offsets[len(offsets)-1], len(data))
+	// The identity record sits between the last span and the trailer magic, so
+	// the last span has to end before the magic rather than merely inside the
+	// file. A span that runs into it leaves the record a negative length, which
+	// is a slice this cannot take: the bound is what keeps a truncated file a
+	// refusal rather than a panic in whoever asked what the package is.
+	recordEnd := uint64(len(data) - len(nativeInfoTrailerMagic))
+	if uint64(offsets[len(offsets)-1]) > recordEnd {
+		return NativeInfo{}, fmt.Errorf("module information file last span ends at %#x, past the %d bytes before its trailer", offsets[len(offsets)-1], recordEnd)
 	}
 
 	info := NativeInfo{}
@@ -300,7 +318,7 @@ func ParseNativeInfo(data []byte) (NativeInfo, error) {
 			info.Records = append(info.Records, nativeWords(span))
 		}
 	}
-	trailer := data[offsets[len(offsets)-1] : len(data)-len(nativeInfoTrailerMagic)]
+	trailer := data[offsets[len(offsets)-1]:recordEnd]
 	info.Trailer = nativeWords(trailer)
 	// The identity record's second word is the application identifier, and the
 	// package names its information file after it.

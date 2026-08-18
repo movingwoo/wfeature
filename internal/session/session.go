@@ -218,6 +218,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 				SaveStore: options.SaveStore,
 				AudioSink: options.AudioSink,
 				Logger:    options.Logger,
+				Speed:     options.Speed,
 			})
 			if err != nil {
 				return nil, err
@@ -384,7 +385,17 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		// an interval and a function, and what is left of that interval is the
 		// wait. See ktf.NativeSession.TickFor.
 		progressed, wait, err := s.ktfNative.TickFor(ctx, budget)
-		return Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktfNative.Flushes())}, err
+		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktfNative.Flushes())}
+		// The two generations end the same way for a Host, even though no slot
+		// this package serves asks to exit yet: the day one does, a Host that
+		// sorted the ending from a failure for one and not the other would
+		// report a game that finished as a game that broke.
+		if errors.Is(err, ktf.ErrGuestExited) {
+			s.Close()
+			progress.Exited = true
+			return progress, nil
+		}
+		return progress, err
 	case s.lgt != nil:
 		// LGT paces itself against the wall clock rather than reporting a
 		// frame's worth of wait: its guest clock only moves when a tick moves
@@ -446,7 +457,7 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 		if !ok {
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
-		return s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code))
+		return s.endedOrFailed(s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code)))
 	case s.lgt != nil:
 		// A Clet compares against the same key values a KTF game does, so the
 		// translation is shared. A repeat arrives as a fresh press: the Clet
@@ -607,6 +618,9 @@ func (s *Session) magnify(frame []byte, width, height int) ([]byte, int, int, bo
 func (s *Session) SetSpeed(multiplier float64) {
 	if s.ktf != nil {
 		s.ktf.SetSpeed(multiplier)
+	}
+	if s.ktfNative != nil {
+		s.ktfNative.SetSpeed(multiplier)
 	}
 }
 
