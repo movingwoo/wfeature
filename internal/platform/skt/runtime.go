@@ -97,6 +97,10 @@ type Runtime struct {
 	heap         *heapMap
 	cheat        *cheat.Session
 	cheatConsole *cheat.Console
+	// watches is what the write watcher has been asked to record. It has a
+	// lock of its own because the interpreter fires it on a guest thread while
+	// the Host adds and reads between passes; see watch.go.
+	watches watchState
 
 	audioMu sync.Mutex
 	audio   *backend.Audio

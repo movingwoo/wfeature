@@ -55,6 +55,9 @@ type PanelHit struct {
 	Value   int64  `json:"value"`
 	Size    int    `json:"size"`
 	Count   int64  `json:"count"`
+	// Site names the writer on a platform where a PC cannot; empty otherwise,
+	// and the page shows whichever it was given. See cheat.WatchHit.Site.
+	Site string `json:"site,omitempty"`
 }
 
 // PanelHits is the recorded-write answer.
@@ -227,6 +230,7 @@ func PanelWatchHits(session *Session) (PanelHits, error) {
 			Value:   int64(hit.Value),
 			Size:    int(hit.Size),
 			Count:   int64(hit.Count),
+			Site:    hit.Site,
 		})
 	}
 	return PanelHits{Items: items, Total: len(hits), Overflowed: overflowed}, nil

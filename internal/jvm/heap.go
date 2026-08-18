@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
 )
@@ -269,4 +270,37 @@ func SetArrayElement(object *Object, index int, value Value) error {
 		return err
 	}
 	return array.Store(index, value)
+}
+
+// StoreEvent is one guest store, shown to a VM's store observer.
+//
+// It is deliberately unassembled. A platform that watches writes needs to know
+// which address was written before it needs anything else, and building a name
+// for the code that did it on every `putfield` would cost every title that is
+// not watching anything. The pieces are here; the observer joins them only
+// when it has decided the store matters.
+type StoreEvent struct {
+	// Object is the instance or array written. It is nil for a class static,
+	// which Class names instead.
+	Object *Object
+	Class  string
+	// Key names an instance or static field the way the field map does; see
+	// HeapField.Key. It is empty for an array element, which Index names.
+	Key   string
+	Index int
+	Value Value
+
+	// SiteClass, SiteMethod and SitePC are the code that performed the store.
+	SiteClass  string
+	SiteMethod string
+	SitePC     int
+}
+
+// Site assembles the name of the code that performed a store, in the form a
+// person reads: `com/example/Game.tick+42`.
+func (event StoreEvent) Site() string {
+	if event.SiteClass == "" && event.SiteMethod == "" {
+		return ""
+	}
+	return event.SiteClass + "." + event.SiteMethod + "+" + strconv.Itoa(event.SitePC)
 }

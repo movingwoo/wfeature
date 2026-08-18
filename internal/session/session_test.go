@@ -355,11 +355,12 @@ func TestCheatIsAnsweredWhereThereIsGuestMemoryToSearch(t *testing.T) {
 	if len(engine.Regions()) == 0 {
 		t.Error("the MIDP engine found nothing to search")
 	}
-	// A watch names the instruction behind a write, which needs store
-	// instrumentation this platform does not have. Saying so is the designed
-	// answer; a Host reads it as "no watch control here".
-	if engine.CanWatch() {
-		t.Error("the MIDP engine claimed it can watch writes")
+	// A watch names the code behind a write. There are no instructions to trap
+	// here, so the interpreter reports its own stores instead — see
+	// internal/platform/skt/watch.go — and a Host reads this as "offer the
+	// watch control".
+	if !engine.CanWatch() {
+		t.Error("the MIDP engine says it cannot watch writes")
 	}
 
 	// A session that never started answers the same way rather than panicking

@@ -38,6 +38,11 @@ type WatchHit struct {
 	Value   uint32
 	Size    uint8
 	Count   uint64
+	// Site names the writer when a PC cannot. On a platform whose code is in
+	// the address space the PC is the answer and this is empty; on one whose
+	// code is class files there is no address to print, so the writer arrives
+	// as `com/example/Game.tick+42`. A reader shows whichever it was given.
+	Site string
 }
 
 // WatchTarget is a MemoryTarget that can report what writes an address.
