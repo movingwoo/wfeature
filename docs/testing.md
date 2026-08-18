@@ -474,6 +474,23 @@ chain, and calls the interface and WIPI initialization functions. All 33 current
 clients return zero from both initializers. The slowest WIPI initializer retires
 8,330,820 instructions; the probe does not start the game lifecycle.
 
+The earlier KTF package — a `.mif` beside a raw `.mod`, with no descriptor and
+no JAR — has a probe of its own. It parses every local archive of that shape,
+maps its module, plants a fully trapping platform table below it, performs the
+start-up handshake and sends the title its first event:
+
+```sh
+WFEATURE_KTF_NATIVE_ACCEPTANCE=1 go test -run TestLocalKTFNativePackage -v ./internal/platform/ktf
+```
+
+It asserts that the start-up protocol completes — that part is understood, so a
+regression in it is a defect — and nothing about the slots the title then calls,
+because that list is what the probe exists to produce. Each row carries the link
+register of its first call site, which is the module code to disassemble. `docs/ktf.md`, "An earlier KTF package",
+has what the current list means. **Read its output rather than its exit
+status** — the probe passes as long as the module loads and runs, so a run that
+stops early still passes and says where it stopped.
+
 Resolving the ADF main class is a separate lifecycle probe:
 
 ```sh

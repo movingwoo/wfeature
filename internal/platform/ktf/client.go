@@ -24,6 +24,31 @@ const (
 	ThreadStackSize uint64 = 1 << 20
 )
 
+// svcStubSize is how many bytes one supervisor-call stub occupies.
+const svcStubSize = 16
+
+// svcStub builds the Thumb stub a guest reaches the platform through. It
+// stashes the identifier in r12, crosses the supervisor-call boundary and
+// returns through lr, so the guest calls it like any other function and a
+// handler that answers with nothing still returns to the caller.
+//
+// Three places build one and they had drifted into three copies of the same
+// twelve bytes: the platform's callback tables, the hooks written over a
+// recognized C routine in the guest image, and the trap tables the native
+// package's loader plants. The identifier is what tells them apart, so the
+// bytes are shared and only the category and the identifier differ.
+func svcStub(category, id uint32) []byte {
+	return []byte{
+		0x10, 0xb4, // push {r4}
+		0x02, 0x4c, // ldr r4, [pc, #8]
+		0xa4, 0x46, // mov r12, r4
+		0x10, 0xbc, // pop {r4}
+		byte(category), 0xdf, // svc #category
+		0x70, 0x47, // bx lr
+		byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24),
+	}
+}
+
 type Client struct {
 	core                  *armcore.Core
 	thread                *armcore.Thread

@@ -2833,63 +2833,207 @@ Three things are worth keeping from that:
 
 ## An earlier KTF package: a module file with no descriptor and no JAR
 
-Every KTF archive this build loads has the same two things in it: an `__adf__`
-descriptor at the top level, and a JAR holding a `client.bin<BSS-size>` native
-image. `internal/platform/ktf/archive.go` opens on the first and executes the
-second, and `internal/platform/detect` uses `__adf__` as the discriminator that
-names the platform.
+Every KTF archive this platform grew up on has the same two things in it: an
+`__adf__` descriptor at the top level, and a JAR holding a
+`client.bin<BSS-size>` native image. `archive.go` opens on the first and
+executes the second, and `internal/platform/detect` uses `__adf__` as the
+discriminator that names the platform.
 
 A local archive dated 2005 has neither. Inside a single directory named after
 the title — its entry names are EUC-KR, so a UTF-8 `unzip` cannot even extract
 it — sit a `.mif`, a `.mod`, a `.sig`, a `.cfg`, and the title's own resource
-files. There is no JAR and no class file anywhere in it. The loader stops at
+files. There is no JAR and no class file anywhere in it. The descriptor loader
+stops at `KTF archive has no __adf__` and detection answers `unknown`, both
+correctly: this is a different generation of the carrier's download package,
+not a damaged copy of the one we read. `OpenNative` in `native_archive.go`
+reads it, and `IsNativePackage` tells the two apart from entry names alone.
+
+### The information file
+
+`.mif` is a fixed header, a table of span offsets, and the spans:
 
 ```
-KTF archive has no __adf__
+0x00  four 16-bit header fields
+0x08  offset of the first header section
+0x0c  offset of the second header section
+0x10  offset of the span table
+0x14  span count
+0x18  offset of the first span, repeating the span table's first entry
+0x1c  a further offset
 ```
 
-and detection answers `unknown`, both correctly: this is a different generation
-of the carrier's download package, not a damaged copy of the one we read.
+The span table holds one offset per span and then the end of the last one, and
+whatever follows that end is an identity record closing with the four bytes
+`1fim`. That trailer is the only self-identifying mark the format has — there is
+no leading magic — so it is what the parser validates.
 
-**The `.mod` is the same kind of thing `client.bin` is.** It begins at offset
-zero with ARM code — `stmfd sp!, {r1,r2,r3,lr}` — and carries the usual
-ARM/Thumb veneer table a few instructions in, so it is a raw image with no
-header rather than an ELF or a container. Its string table holds the floating
-point and heap diagnostics a WIPI C runtime prints, which is the same runtime
-surface the images we already run were linked against.
+Three span shapes carry their own marks and are decoded: a 16-bit length
+covering itself, a MIME name and its terminator introduces a typed blob (the
+icons, `image/bmp`); two `0xfe` bytes introduce EUC-KR text (the vendor twice,
+then the title); anything unmarked is numbers. The numbers are kept verbatim,
+because what most of them mean is not established.
 
-**The specification covers the runtime and not the packaging.** The Clet
-contract a `.mod` implements is published in full — `startClet`,
-`handleCletEvent`, `paintClet` and the `MC_*` calls under "5.1 C API" — and it
-is the surface this platform already serves. The download package is not:
-searching the specification for the module-information file returns nothing,
-and the descriptor is referenced exactly once, as "the name written in the ADF
-file", without a word about its layout. That is consistent with what it is —
-a standard for what an application may call once it is on the handset, not for
-what an operator wraps it in. The `client.bin<BSS-size>` naming rule we do
-implement is likewise not in the specification; it was read off the archives.
+**Two of them are.** One header word is the module's own length rounded up to a
+page, and `NativeInfo.ModuleSpan` finds it by computing that length and looking
+for it. A size the platform can work out for itself is a weak thing to read out
+of a file, but it is the anchor that says which of the unlabelled words are
+sizes at all. The other is in a span: `0x00100000`, the same image base this
+platform already maps a KTF executable at.
 
-**So what is missing is a loader, not an API.** Four numbers separate this
-package from a run: the load address, the entry point, the BSS size, and
-whether the image needs relocating at all. Three of them are given to us for
-the JAR generation — two by the `client.bin` name and the mapping code, one by
-the descriptor — and here they would have to come from the `.mif`.
+Reading the rest of the header would need its record stride, which is not four
+bytes — a second size, `0x5000`, sits at an offset that makes the surrounding
+words decode as tag-and-value pairs on a stride that has not been pinned down.
+Any aligned-word scan of that area picks up boundaries as if they were values;
+one did, and mapped 0x85000 for a module needing 0x25000. Until the stride is
+established, the loader maps a fixed allowance instead of pretending to read one.
 
-That file is structured and readable. Its head is a table of offsets; a MIME
-string `image/bmp` introduces an embedded icon bitmap; a string table at the
-tail holds the vendor name and the title's own name in EUC-KR. Between them
-are numeric fields that have not been identified, and the four numbers above
-are the reason to identify them.
+### The module needs no relocation
 
-Two levers make the guessing cheap, should this be picked up:
+The two executables look alike and are not. The descriptor package's
+`client.bin` **begins with a self-relocation loop**: it takes its own load
+address from `pc`, subtracts its link address, and walks a table of offsets at
+file offset 0x88 adding that delta to every word. That is why its literals are
+zero-based, and why `armcore` documents a loader that "relocates itself".
 
-- **A wrong load address faults immediately.** The image branches through
-  absolute addresses in its literal pools within the first few hundred
-  instructions, so a candidate either survives that or dies at it, and the
-  guest fault report names the address it died on.
-- **The literal pools pin the answer directly.** The absolute addresses a raw
-  image carries are the addresses it expects to be loaded at, so reading them
-  out statically proposes the load address before any run happens.
+The `.mod` has no such loop and **no relocation table at all** — scanning for
+the ascending-offset runs that make one finds eighteen in the descriptor
+package's image and zero here. Its code is uniformly PC-relative instead:
+
+```
+ldr r0, [pc, #n]      ; a link-time offset
+add r0, pc, r0        ; the module's own base, position independently
+```
+
+Sweeping candidate link bases across the address space finds no absolute base it
+prefers. It is position independent, so it is loaded rather than relocated, and
+the load address is the platform's choice.
+
+### The platform table is planted below the module
+
+The module finds the platform in the word immediately **below its own load
+address**:
+
+```
+ldr r0, [pc, #n] ; add r0, pc, r0   ; its own base
+ldr r0, [r0, #-4]                   ; the pointer the loader planted
+ldr r1, [r0, #0x68]                 ; one of its functions
+bx  r1
+```
+
+So a loader has to map a page under the image and put a table pointer in its
+last word. That is `nativeHeaderBase` in `native_client.go`, and it is a
+different binding from the descriptor package, whose entry is handed
+initialization arguments and asks for interfaces by name.
+
+**The slot numbering is not the one this platform serves.** The module calls
+slot 26 with a size, null-checks the result and fills the block with its own
+function pointers — an allocator — where the kernel table here has its allocator
+at 20 and its calloc at 21. Rather than guess a mapping, `LoadNativeClient`
+fills every slot of both surfaces with a distinct trap stub carrying its own
+number across the supervisor-call boundary, so a run reports the slots the
+module asked for, in order, with the link register of each call site. `Serve`
+then answers one slot at a time: name it, answer it, run again, and see what
+the module asks for next.
+
+Reaching for a static scan instead does not work here, and the way it fails is
+worth knowing. A linear disassembly of the `.mod` **stops after twelve
+instructions**: offset 0x2c is a Thumb veneer table, and the module is mixed
+ARM and Thumb throughout. Two scans built on a linear decode reported zero
+call sites each, which reads exactly like "the module never calls the platform"
+rather than "the disassembler stopped". Decode each address independently in
+both states, or run it.
+
+### The start-up protocol
+
+Both halves of the package negotiate through one reference-counted interface
+shape, and they use the same one: an object is a pointer to a table whose first
+two entries raise and drop a count and whose third dispatches. Nothing is named.
+Every step is a number, and the numbers that matter come out of the information
+file rather than out of the module. `native_client.go` performs it in three
+calls:
+
+1. **The entry returns a factory.** Called with the platform object, a spare
+   argument and an out parameter, the module allocates 0x24 bytes through
+   platform slot 26, fills the block's tail with four of its own functions,
+   points the block's first word at them, sets its second word to 1 — the
+   reference count — calls slot 0 of the platform object, and writes the block
+   through the out parameter. The four functions are *not* the Clet entry
+   points: they are raise, drop, dispatch and a return.
+
+2. **The factory creates the title's object.** Dispatching on it with the
+   identifier the information file carries reaches a class factory that
+   allocates 0xe8 bytes and then asks the platform object for interface
+   `0x01001001` — and that query is what has to succeed, because the module
+   checks the pointer it passed rather than the result. Given an object it
+   raises the count on both sides and writes the title's own object out.
+
+3. **A small integer is an event.** The title's object dispatches straight into
+   its own handler, which switches on 0, 1, 2, 3 and above. That is the Clet
+   event contract the specification describes, reached at last: sending 0 runs
+   the title's code, and it begins asking for graphics and file slots within a
+   few hundred instructions.
+
+**The identifier is picked out by two anchors landing in one record.** That
+record's last word is the image base and its first is the constant the module's
+own dispatch compares against. Neither alone would do: the file holds other
+round numbers, and taking the first record's first word picks up a `0x1000` the
+module refuses.
+
+### Two steps that look like they succeeded when they have not
+
+Both cost a session, and both are the same mistake in different clothes.
+
+- **The result is not the answer; the out parameter is.** The factory writes the
+  object it built through a pointer the caller passed and returns something
+  else. A caller reading the result alone sees zero and calls it success.
+- **A missing argument reads as a broken module.** The factory rejects a null
+  second or fourth argument before doing anything, and returns exactly as it
+  would on any other failure. Called with three arguments instead of four it
+  does nothing, silently, and the module looks inert.
+
+A third belongs beside them, on our side of the line: `armcore.Call` derives a
+temporary context and restores the parent by leaving it untouched, so reading r0
+off the *thread* after a call reports whatever the parent held — zero on a fresh
+client. The result has to come off the run summary. That one turned a failure
+into a success in the probe's own log for two runs.
+
+### What the title asks for once it starts
+
+The first run to reach app code produced this, and it is the specification for
+the work that remains:
+
+```
+entry object        offset 0x0000 (slot  0)  raise
+entry object        offset 0x0008 (slot  2)  query interface
+interface 0x1001001 offset 0x0014 (slot  5)
+platform            offset 0x0068 (slot 26)  allocate
+platform            offset 0x008c (slot 35)
+platform            offset 0x00ac (slot 43)
+platform            offset 0x00c0 (slot 48)
+```
+
+It stops in the title's own code dereferencing a null it was handed, which is
+what an unanswered slot looks like from inside a game. Each row is answered the
+same way slot 26 and the interface query were: name it, serve it, run again.
+
+**The slot numbering is not this platform's.** Slot 26 allocates and slot 27
+frees, where the kernel table serving the descriptor package has its allocator
+at 20 and its calloc at 21. Nothing about the descriptor package's numbering
+carries over.
+
+### What is still open
+
+- **Every slot but two.** The list above is the current front, and it grows as
+  each one is answered.
+- **The BSS size**, and with it the second header size. A fully
+  position-independent module addresses its own data PC-relatively, so the
+  pointer-distribution test that would normally expose a BSS range says nothing
+  here — it was run, and found no pointer past the image at all.
+- **The remaining information-file numbers**, which need the header's record
+  stride first.
+- **Nothing is wired to a Host.** `detect` answers `unknown` for this package
+  and `runktf` refuses it, deliberately: a title that cannot paint has nothing
+  to show a Host yet.
 
 ## Sound in C, and the table that was accepted and thrown away
 
