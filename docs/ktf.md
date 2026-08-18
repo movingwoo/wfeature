@@ -2831,13 +2831,153 @@ Three things are worth keeping from that:
   whenever a title that used to reach its menu stops at a start-up gate, and it
   is answered in one run by pointing `-save` at an empty directory.
 
+## An earlier KTF package: a module file with no descriptor and no JAR
+
+Every KTF archive this build loads has the same two things in it: an `__adf__`
+descriptor at the top level, and a JAR holding a `client.bin<BSS-size>` native
+image. `internal/platform/ktf/archive.go` opens on the first and executes the
+second, and `internal/platform/detect` uses `__adf__` as the discriminator that
+names the platform.
+
+A local archive dated 2005 has neither. Inside a single directory named after
+the title — its entry names are EUC-KR, so a UTF-8 `unzip` cannot even extract
+it — sit a `.mif`, a `.mod`, a `.sig`, a `.cfg`, and the title's own resource
+files. There is no JAR and no class file anywhere in it. The loader stops at
+
+```
+KTF archive has no __adf__
+```
+
+and detection answers `unknown`, both correctly: this is a different generation
+of the carrier's download package, not a damaged copy of the one we read.
+
+**The `.mod` is the same kind of thing `client.bin` is.** It begins at offset
+zero with ARM code — `stmfd sp!, {r1,r2,r3,lr}` — and carries the usual
+ARM/Thumb veneer table a few instructions in, so it is a raw image with no
+header rather than an ELF or a container. Its string table holds the floating
+point and heap diagnostics a WIPI C runtime prints, which is the same runtime
+surface the images we already run were linked against.
+
+**The specification covers the runtime and not the packaging.** The Clet
+contract a `.mod` implements is published in full — `startClet`,
+`handleCletEvent`, `paintClet` and the `MC_*` calls under "5.1 C API" — and it
+is the surface this platform already serves. The download package is not:
+searching the specification for the module-information file returns nothing,
+and the descriptor is referenced exactly once, as "the name written in the ADF
+file", without a word about its layout. That is consistent with what it is —
+a standard for what an application may call once it is on the handset, not for
+what an operator wraps it in. The `client.bin<BSS-size>` naming rule we do
+implement is likewise not in the specification; it was read off the archives.
+
+**So what is missing is a loader, not an API.** Four numbers separate this
+package from a run: the load address, the entry point, the BSS size, and
+whether the image needs relocating at all. Three of them are given to us for
+the JAR generation — two by the `client.bin` name and the mapping code, one by
+the descriptor — and here they would have to come from the `.mif`.
+
+That file is structured and readable. Its head is a table of offsets; a MIME
+string `image/bmp` introduces an embedded icon bitmap; a string table at the
+tail holds the vendor name and the title's own name in EUC-KR. Between them
+are numeric fields that have not been identified, and the four numbers above
+are the reason to identify them.
+
+Two levers make the guessing cheap, should this be picked up:
+
+- **A wrong load address faults immediately.** The image branches through
+  absolute addresses in its literal pools within the first few hundred
+  instructions, so a candidate either survives that or dies at it, and the
+  guest fault report names the address it died on.
+- **The literal pools pin the answer directly.** The absolute addresses a raw
+  image carries are the addresses it expects to be loaded at, so reading them
+  out statically proposes the load address before any run happens.
+
+## Sound in C, and the table that was accepted and thrown away
+
+Fourteen of the thirty-three local archives keep their sound in the **WIPI C**
+media block — table 10 — rather than in `org.kwis.msp.media`. That block was
+stubbed: `MC_mdaClipCreate` answered a 32-byte record and everything else
+returned zero. Every one of those calls succeeded, the game had no way to tell,
+and the title was silent. Two of them were reported by the user as "no sound",
+and the corpus scan afterwards said the other twelve were in the same position.
+
+The evidence for what each function is comes from the callers rather than from
+the specification's print order, which this block does **not** follow. The
+specification lists twenty-one `MC_mda*` functions; a title that loads seven
+sounds reaches 0, 4, 8, 11, 15 and 16, where the printed order would put the
+same six operations at 0, 3, 11, 14, 17 and 18. Dumping the argument registers
+of every call settles them:
+
+| fn | arguments seen | what it is |
+|---|---|---|
+| 0 | `("Yamaha_MA2", 0x1a4e, cb)` | `MC_mdaClipCreate` — r0 is the media type and r1 is the byte count of the sound about to be loaded |
+| 4 | `(clip, →"MMMD", 0x1a4e)` | `MC_mdaClipPutData` — r1 points at the SMAF magic and r2 is the size the create asked for |
+| 8 | `(clip, 0 or 1)` | `MC_mdaPlay(clip, repeat)` — called immediately after each putData |
+| 11 | `(clip)` | `MC_mdaStop` — the first of the three calls that end a clip |
+| 7 | `(clip)` | `MC_mdaClipClearData` — the second |
+| 3 | `(clip)` | `MC_mdaClipFree` — the third, after which the handle is never named again |
+| 15 | `(5, 10, 15 … 100)` | `MC_mdaSetVolume` — one argument, walking a fade |
+| 16 | `(20, 50)`, `(100, 50)`, `(0, 0)` | `MC_mdaVibrator(level, timeout)` |
+| 17 | `(3, 1)` | `MC_mdaSetMuteState(source, bmute)` |
+
+What pins the teardown run is an ordered trace rather than counts. Four titles
+produce exactly:
+
+```
+fn=0  ("Yamaha_MA3", 0x3cdb, cb)   create
+fn=4  (clip, →"MMMD", 0x3cdb)      put data
+fn=8  (clip, 1)                    play
+fn=7  (clip)                       clear
+fn=11 (clip)                       stop
+fn=3  (clip)                       free
+fn=0  ("Yamaha_MA3", 0x3cdb, cb)   … and the next sound
+```
+
+Stop, clear, free is what a title does with a sound it has finished with, and
+play/pause/resume/stop in the run 8..11 is what puts stop at 11 rather than
+free. The one call whose reading is left open is **26**, which arrives as
+`(clip, 45)` or `(clip, 60)` between a putData and its play: either a per-clip
+volume or the water mark a streaming clip raises its callback at. Nothing here
+has a per-sound gain and nothing here streams, so both readings come out as the
+same accepted no-op and choosing between them on this evidence would only put a
+guess in the record. `internal/platform/ktf/wipic_media.go` carries the table
+and this reasoning beside it.
+
+**The volume reaches the sound path.** `MC_mdaSetVolume` is not stored and
+ignored the way the LGT block stores its own: a title fades its music out by
+walking this to zero, and a runtime that remembers the number and keeps playing
+at full has heard the request and disregarded it. `backend.Audio.SetVolume`
+scales note velocities and wave samples on the way to the sink, and zero also
+releases whatever is sounding — scaling the next note is not enough when a note
+started at full volume is ringing under a volume the game has already set to
+nothing. A note already sounding otherwise keeps the level it started at, so a
+fade moves in note-sized steps, which is what these titles play anyway.
+
+**The mute state is accepted and not applied.** Its argument is a *source*, and
+nothing here says which source a number names; reading a per-source mute as a
+global one silences every clip in the game. That is the LGT block's decision in
+`docs/lgt.md` "Sound", reached again from the same evidence — one caller, once,
+at startup.
+
+**Nothing frees the clip's guest record.** Releasing it would be right if
+function 3 is a free and a use-after-free if it is not, and what says it is a
+free is a call order rather than a contract. Thirty-two bytes per sound a title
+finishes with is the price of not having to be right about that; the bytes that
+cost something are the sound's, and those do go. A title that creates a clip per
+effect and frees none of them is bounded separately: past 64 live clips the
+oldest one's sound is dropped, which is what a handset out of audio memory does.
+
+The two reported titles record 1,343 and 3,243 MIDI messages over a scripted
+run where both recorded zero before. Across the whole KTF corpus the first-frame
+A/B is unchanged: six frames differ and they are the six that differ from
+themselves.
+
 ## Deliberately incomplete
 
 - repairing a guest write to a published instance field rather than reporting
   it: see "A published instance field has two storages". The mechanism is
   there and the counter is zero across every local archive, so which side wins
   would be decided without a case to decide it on
-- pause/resume/destroy lifecycle, pointer input, and sound
+- pause/resume/destroy lifecycle and pointer input
 - the WIPI Java entries listed in `testdata/wipi_java_gaps.txt`, each with its
   reason, and the fixed-value answers inventoried in
   `testdata/wipi_java_stubs.txt`

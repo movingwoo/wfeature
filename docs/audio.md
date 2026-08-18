@@ -125,13 +125,58 @@ The five recordings that found it now end with nothing sounding, and
 `internal/backend`'s recording tests parse the file the way a player would
 rather than matching bytes.
 
+## Two sound surfaces per platform, and the one that was silent
+
+A WIPI title reaches sound through either the Java classes or the C block, and
+which one it takes is the title's business. LGT implemented both. KTF
+implemented the Java classes and left the C block at accepted no-ops — and
+**fourteen of the thirty-three local KTF archives keep their sound there**, so
+they created clips, filled them with SMAF and played them, and every call
+succeeded into nothing.
+
+That block is now real: create, put data, play, stop, clear, free, volume,
+vibrator and mute, on the same `backend.Audio` timeline the Java classes use.
+Its function numbers are read off the callers rather than off the
+specification's print order, which this vendor's table does not follow — the
+table, the argument shapes it was recovered from, and the one call left
+deliberately unread are in [`ktf.md`](ktf.md), "Sound in C, and the table that
+was accepted and thrown away".
+
+The lesson for the next platform is the one the KTF record database taught
+first: **a stub that answers success is a value the game will believe.** Nothing
+in a title's behaviour distinguishes "the handset played it" from "the runtime
+accepted it and dropped it", so a whole surface can be missing for as long as
+nobody plays the game with the sound on.
+
+## A device volume, and whose it is
+
+`backend.Audio.SetVolume(percent)` is the level a *guest* asked for through its
+platform's media API. It is not the Host's volume control — that one is the
+user's, and the page has its own sliders — and the two are different settings: a
+game that fades its music out has not turned the speaker down.
+
+It scales note velocities and wave samples where an event is emitted, so a note
+already sounding keeps the level it started at and a fade moves in note-sized
+steps, which is what the titles doing it play anyway. **Zero also releases what
+is sounding**, because scaling the next note is not enough when a note started
+at full volume is ringing under a volume the game has already set to nothing.
+
+Only KTF's C block drives it so far. LGT's `MC_mdaSetVolume` still stores the
+number and echoes it back, which is what its own titles needed; pointing it at
+this is a one-line change whenever a title is found that fades.
+
 ## Deliberately incomplete
 
 - **`Player.record`** is refused outright: no microphone can be offered.
 - **`PlayListener`** never fires. Nothing yet reports a clip finishing back
   into the guest.
-- **`Volume`** answers zero. Device volume is the Host's setting, not the
-  game's, and the page already exposes its own.
+- **KTF's Java `Volume` class** answers zero, where the same platform's C
+  `MC_mdaSetVolume` is honoured. The class is a device-volume *getter* surface —
+  `getDefaultVolume`, `getMute` — and answering the Host's own setting through
+  it would be reporting the user's slider as the game's; the C call is a setter
+  a title drives on purpose. A title that reads a level back through the class
+  and expects to find what it set through the block is where that split would
+  have to be revisited.
 - **Pause does not resume mid-phrase.** Playback is tracked by clock position,
   and these games pause only in order to stop.
 - **Non-ADPCM wave formats.** `TwosComplementPCM`, `OffsetBinary`, TwinVQ, and

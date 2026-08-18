@@ -271,7 +271,13 @@ type initializationRuntime struct {
 	removedCDatabases map[string]bool
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
-	clips          map[*jvm.Object]*clipState
+	clips map[*jvm.Object]*clipState
+	// wipicClips is the same thing for the WIPI C media block, whose clips are
+	// guest addresses rather than Java objects. wipicClipOrder is their
+	// creation order, which is what bounds how many keep their bytes. See
+	// wipic_media.go.
+	wipicClips     map[uint32]*wipicMediaClip
+	wipicClipOrder []uint32
 	runtimeObjects map[string]*jvm.Object
 	classAliases   map[uint32]uint32
 	// aotCallDepth is nesting per guest call stack, not per runtime. A guest
@@ -1265,7 +1271,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	case table == wipicTableDatabase:
 		return runtime.handleWIPICDatabaseCall(thread, function)
 	case table == wipicTableMedia:
-		return runtime.handleWIPICMediaCall(function)
+		return runtime.handleWIPICMediaCall(thread, function)
 	case table == wipicTableNet:
 		return runtime.handleWIPICNetCall(thread, function)
 	case table == wipicTableUIC:
@@ -1302,22 +1308,6 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	// indexes it, so the table number never appears in the guest's own code.
 	return 0, fmt.Errorf("KTF WIPI C table %d function %d is not implemented%s",
 		table, function, runtime.callerSite(thread))
-}
-
-// handleWIPICMediaCall keeps the media surface at accepted no-ops: clips are
-// opaque records and playback becomes audible when the sound path arrives.
-func (runtime *initializationRuntime) handleWIPICMediaCall(function uint32) (uint32, error) {
-	switch function {
-	case 0:
-		// MC_mdaClipCreate returns an opaque clip record.
-		return runtime.allocate(32)
-	case 3, 4, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 25, 26:
-		// free, put data, play/pause/resume/stop, volume, and vibrator paths
-		// accept and discard their arguments.
-		return 0, nil
-	default:
-		return 0, fmt.Errorf("KTF WIPI C media function %d is not implemented", function)
-	}
 }
 
 // The MC_GrpContext record is 52 bytes: mask, four 16-bit clip bounds, the
