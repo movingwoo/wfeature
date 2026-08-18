@@ -68,6 +68,13 @@ const (
 	nativeArenaBase = platformDataBase + (maxNativeSurfaces+1)*nativePageSize
 	nativeArenaSize = 32 << 20
 
+	// nativeBlockAlignment is what an ARM procedure call standard block needs,
+	// and the arena's own alignment is four. Rounding every size to it in
+	// Allocate is what holds the whole arena on that grid rather than only the
+	// first block: the cursor moves by a rounded size and nothing else, and a
+	// released block goes back and comes out again on the same boundary.
+	nativeBlockAlignment = 8
+
 	// svcCategoryNativeTable is this client's only supervisor-call category:
 	// a native client runs on a core of its own with a handler of its own, so
 	// which surface a stub belongs to travels in the identifier rather than in
@@ -543,8 +550,8 @@ func (client *NativeClient) Allocate(size uint32) (uint32, error) {
 	}
 	// Eight-byte alignment is what an ARM procedure call standard block needs,
 	// and a module that stores doubles into what it was handed needs it here.
-	aligned := alignArenaSize(uint64(size))
-	address, ok := client.arena.allocate(uint64(size))
+	aligned := (uint64(size) + nativeBlockAlignment - 1) &^ uint64(nativeBlockAlignment-1)
+	address, ok := client.arena.allocate(aligned)
 	if !ok {
 		return 0, fmt.Errorf("KTF native arena exhausted at %d bytes", size)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -30,9 +31,13 @@ type NativeSession struct {
 	Archive  *NativeArchive
 	Client   *NativeClient
 	platform *NativePlatform
-	clock    Clock
-	started  time.Time
-	logger   *slog.Logger
+	// clock is the title's own clock, which a speed setting moves faster or
+	// slower than the Host's; source is the Host's, which is what a probe
+	// jumps and what a deadline has to be expressed on to be waited for.
+	clock   Clock
+	source  Clock
+	started time.Time
+	logger  *slog.Logger
 
 	cheat        *cheat.Session
 	cheatConsole *cheat.Console
@@ -55,6 +60,9 @@ type NativeSessionOptions struct {
 	// AudioSink is where the title's music goes. Nil is silent, which is what
 	// a Host without an audio device wants.
 	AudioSink backend.AudioSink
+	// Speed scales how fast the title runs against the clock above. Zero and
+	// one are both the speed it was written for; see NativePlatform.SetSpeed.
+	Speed float64
 }
 
 // nativeSessionDefaultMaxSteps covers the title's own start-up, which loads
@@ -62,14 +70,23 @@ type NativeSessionOptions struct {
 const nativeSessionDefaultMaxSteps = 200_000_000
 
 // IsNativeArchive reports whether an archive is the earlier package rather
-// than the descriptor one. It answers from entry names, so it costs the
-// central directory a Host has already read.
+// than the descriptor one.
+//
+// It reads the central directory and nothing else. A Host asks this on the way
+// to every other question it has — what the game is called, and then how to
+// start it — so answering it by opening the package would decompress tens of
+// megabytes several times over before the title ran at all.
 func IsNativeArchive(data []byte) bool {
-	files, err := readOuterZIP(data)
+	names, err := outerZIPNames(data)
 	if err != nil {
 		return false
 	}
-	return IsNativePackage(files)
+	for _, name := range names {
+		if strings.EqualFold(name, adfPath) {
+			return false
+		}
+	}
+	return isNativeShape(names)
 }
 
 // NativeSaveOwner names the directory a title's saves belong in. The earlier
@@ -100,6 +117,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 		return nil, err
 	}
 	platform := NewNativePlatform(client, archive, options.Clock)
+	platform.SetSpeed(options.Speed)
 	platform.AttachSaves(options.SaveStore)
 	platform.AttachAudio(options.AudioSink)
 	if err := platform.Boot(ctx); err != nil {
@@ -110,6 +128,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 		Client:   client,
 		platform: platform,
 		clock:    platform.clock,
+		source:   platform.pace.source,
 		started:  platform.clock.Now(),
 		logger:   options.Logger,
 	}
@@ -211,6 +230,24 @@ func (session *NativeSession) SendKey(ctx context.Context, eventType, key int32)
 	return fmt.Errorf("KTF native key event type %d is not one of pressed, released or repeated", eventType)
 }
 
+// SetSpeed scales how fast the title runs. It is the same setting and the same
+// range the descriptor package's games take, because it is the same question a
+// Host is asking; what differs is only which clock underneath it moves.
+func (session *NativeSession) SetSpeed(multiplier float64) {
+	if session == nil || session.platform == nil {
+		return
+	}
+	session.platform.SetSpeed(multiplier)
+}
+
+// Speed reports the multiplier in force.
+func (session *NativeSession) Speed() float64 {
+	if session == nil || session.platform == nil {
+		return 1
+	}
+	return session.platform.Speed()
+}
+
 // GuestElapsed reports how much time the title has seen pass.
 func (session *NativeSession) GuestElapsed() time.Duration {
 	if session == nil {
@@ -219,13 +256,18 @@ func (session *NativeSession) GuestElapsed() time.Duration {
 	return session.clock.Now().Sub(session.started)
 }
 
-// NextDeadline reports when the title's frame is next due, which is what a
-// Host on a manual clock jumps to.
+// NextDeadline reports when the title's frame is next due, on the Host's own
+// clock: it is what a Host waits until and what one on a manual clock jumps
+// to, and neither can use an instant on a clock that runs at another rate.
 func (session *NativeSession) NextDeadline() (time.Time, bool) {
 	if session == nil || session.platform == nil {
 		return time.Time{}, false
 	}
-	return session.platform.NextFrame()
+	due, ok := session.platform.NextFrame()
+	if !ok {
+		return time.Time{}, false
+	}
+	return session.platform.pace.sourceInstant(due), true
 }
 
 // SkipToNextDeadline moves a manual clock to the next frame. It answers false
@@ -234,7 +276,7 @@ func (session *NativeSession) SkipToNextDeadline() bool {
 	if session == nil {
 		return false
 	}
-	manual, ok := session.clock.(*ManualClock)
+	manual, ok := session.source.(*ManualClock)
 	if !ok {
 		return false
 	}
@@ -263,10 +305,14 @@ func (session *NativeSession) SaveOwner() string {
 }
 
 // Close releases the session. There are no guest threads here — the title runs
-// only inside the frame it asked for — so this only drops the platform.
+// only inside the frame it asked for — so this only writes out what the title
+// has not had a boundary to save at yet, and drops the platform.
 func (session *NativeSession) Close() {
 	if session == nil {
 		return
+	}
+	if session.platform != nil {
+		session.platform.FlushSaves()
 	}
 	session.platform = nil
 }

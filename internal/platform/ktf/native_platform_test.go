@@ -539,6 +539,146 @@ func TestNativeTimedServiceReportsItsEnd(t *testing.T) {
 	}
 }
 
+// TestNativeSpeedMovesTheTitlesOwnClock covers the setting a Host offers a
+// person. The title paces itself by reading the clock, so what a multiplier
+// has to change is that clock — and what a Host waits between callbacks has to
+// come back down by the same factor, or the game would be called at the rate
+// it was written for however fast its clock ran.
+func TestNativeSpeedMovesTheTitlesOwnClock(t *testing.T) {
+	source := NewManualClock(time.Time{})
+	platform := newTestNativePlatformOn(t, nil, source)
+	// The title registers its frame: an interval, a function and a context.
+	nativeCall(t, platform.schedule, 0, 50, 0x1000, 0)
+	if wait := platform.UntilNextFrame(); wait != 50*time.Millisecond {
+		t.Fatalf("wait at the written speed = %v, want 50ms", wait)
+	}
+
+	platform.SetSpeed(2)
+	if speed := platform.Speed(); speed != 2 {
+		t.Fatalf("speed = %v, want 2", speed)
+	}
+	if wait := platform.UntilNextFrame(); wait != 25*time.Millisecond {
+		t.Errorf("wait at twice the speed = %v, want 25ms", wait)
+	}
+
+	// Ten milliseconds of the Host's time is twenty of the title's, which is
+	// what a title measuring its own elapsed time reads.
+	before := platform.clock.Now()
+	source.Advance(10 * time.Millisecond)
+	if seen := platform.clock.Now().Sub(before); seen != 20*time.Millisecond {
+		t.Errorf("the title saw %v pass in 10ms, want 20ms", seen)
+	}
+	if wait := platform.UntilNextFrame(); wait != 15*time.Millisecond {
+		t.Errorf("wait after 10ms = %v, want 15ms", wait)
+	}
+	source.Advance(15 * time.Millisecond)
+	if wait := platform.UntilNextFrame(); wait != 0 {
+		t.Errorf("wait once due = %v, want 0", wait)
+	}
+
+	// A multiplier outside the range clamps, and nothing selects the speed the
+	// title was written for as surely as asking for none.
+	platform.SetSpeed(0)
+	if speed := platform.Speed(); speed != 1 {
+		t.Errorf("speed after asking for none = %v, want 1", speed)
+	}
+}
+
+// TestNativeSpeedTakesEverySettingAHostOffers covers the values the browser's
+// own control carries. They are inside the range every platform here clamps
+// to, so what this asserts is that none of them is quietly turned into
+// another: a setting a person picks and does not get is worse than no setting.
+func TestNativeSpeedTakesEverySettingAHostOffers(t *testing.T) {
+	for _, multiplier := range []float64{0.25, 0.5, 0.75, 1, 1.5, 2, 4} {
+		source := NewManualClock(time.Time{})
+		platform := newTestNativePlatformOn(t, nil, source)
+		platform.SetSpeed(multiplier)
+		if speed := platform.Speed(); speed != multiplier {
+			t.Errorf("speed = %v, want the %v that was asked for", speed, multiplier)
+		}
+		nativeCall(t, platform.schedule, 0, 48, 0x1000, 0)
+		// A frame 48ms away on the title's clock is 48ms divided by the rate
+		// on the Host's, which is what decides how often the game is stepped.
+		want := time.Duration(float64(48*time.Millisecond) / multiplier)
+		if wait := platform.UntilNextFrame(); wait != want {
+			t.Errorf("at %vx the wait is %v, want %v", multiplier, wait, want)
+		}
+	}
+}
+
+// TestNativeSavesReachTheStoreAtABoundary covers what a title's write burst
+// costs. The local one fills a scratch file 64 bytes at a time, and a store
+// call per chunk rewrites the whole file once per chunk.
+func TestNativeSavesReachTheStoreAtABoundary(t *testing.T) {
+	store := &countingSaveStore{saves: map[string][]byte{}}
+	platform := newTestNativePlatform(t, nil)
+	platform.AttachSaves(store)
+
+	name := nativeString(t, platform, "burst.dat")
+	object := nativeCall(t, platform.openFile, 0, name, 2)
+	if object == 0 {
+		t.Fatal("opening for writing did not create the file")
+	}
+	chunk := nativeString(t, platform, "0123456789abcdef")
+	for round := 0; round < 8; round++ {
+		nativeCall(t, platform.writeFile, object, chunk, 16)
+	}
+	if store.stores != 0 {
+		t.Errorf("%d store writes during the burst, want none until a boundary", store.stores)
+	}
+	nativeCall(t, platform.closeFile, object)
+	if store.stores != 1 {
+		t.Errorf("%d store writes at the close, want 1", store.stores)
+	}
+	if got := len(store.saves[nativeSaveKey("burst.dat")]); got != 128 {
+		t.Errorf("stored %d bytes, want the 128 the title wrote", got)
+	}
+}
+
+// TestNativeTruncatingOpenEmptiesTheFile covers the mode the specification
+// names MC_FILE_OPEN_WRTRUNC. A shorter save written over a longer one would
+// otherwise keep the tail of the one it replaced.
+func TestNativeTruncatingOpenEmptiesTheFile(t *testing.T) {
+	platform := newTestNativePlatform(t, map[string][]byte{"settings.dat": []byte("a much longer previous save")})
+	name := nativeString(t, platform, "settings.dat")
+
+	object := nativeCall(t, platform.openFile, 0, name, nativeModeWriteTruncate)
+	if object == 0 {
+		t.Fatal("the truncating open was refused")
+	}
+	chunk := nativeString(t, platform, "short")
+	nativeCall(t, platform.writeFile, object, chunk, 5)
+	nativeCall(t, platform.closeFile, object)
+
+	if got, _ := platform.contents("settings.dat"); string(got) != "short" {
+		t.Errorf("file = %q, want %q", got, "short")
+	}
+
+	// An ordinary write open keeps what is there, because the mode that empties
+	// a file is the one that says so.
+	object = nativeCall(t, platform.openFile, 0, name, 2)
+	if got := platform.files[object]; got == nil || string(got.data) != "short" {
+		t.Errorf("an ordinary write open did not keep the file it opened")
+	}
+}
+
+// countingSaveStore counts what reaches it as well as keeping it.
+type countingSaveStore struct {
+	saves  map[string][]byte
+	stores int
+}
+
+func (store *countingSaveStore) StoreSave(name string, data []byte) error {
+	store.stores++
+	store.saves[name] = append([]byte(nil), data...)
+	return nil
+}
+
+func (store *countingSaveStore) LoadSave(name string) ([]byte, bool) {
+	data, ok := store.saves[name]
+	return data, ok
+}
+
 // TestNativeMappedSizeNeedsTheNamedSize keeps the loader from mapping a size it
 // worked out for itself: the information file naming the module's own length is
 // the anchor that says the file and the module belong together.
@@ -575,4 +715,27 @@ func TestNativeAllocatorReusesReleasedBlocks(t *testing.T) {
 	}
 	// A pointer the platform never handed out is ignored rather than refused.
 	platform.client.Free(0xdeadbeef)
+}
+
+// TestNativeAllocationsAreEightAligned covers what the procedure call standard
+// asks of a block a module stores a double into. The arena underneath aligns
+// to four, so the rounding has to happen where the platform's own allocator
+// hands one out — and it has to hold for every block rather than the first,
+// which is what an odd size followed by another allocation shows.
+func TestNativeAllocationsAreEightAligned(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	previous := uint32(0)
+	for _, size := range []uint32{1, 3, 4, 5, 12, 13, 64, 100} {
+		address, err := platform.client.Allocate(size)
+		if err != nil {
+			t.Fatalf("allocate %d bytes: %v", size, err)
+		}
+		if address%nativeBlockAlignment != 0 {
+			t.Errorf("allocation of %d bytes at %#x, which is not %d-aligned", size, address, nativeBlockAlignment)
+		}
+		if previous != 0 && address <= previous {
+			t.Errorf("allocation of %d bytes at %#x overlaps the block at %#x", size, address, previous)
+		}
+		previous = address
+	}
 }

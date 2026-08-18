@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -166,6 +167,18 @@ func TestParseNativeInfoRejectsDamage(t *testing.T) {
 		}
 	})
 
+	t.Run("a span running into the trailer", func(t *testing.T) {
+		damaged := append([]byte{}, good...)
+		table := binary.LittleEndian.Uint32(damaged[0x10:])
+		// The span table's last entry is where the identity record starts, so a
+		// file whose last span runs to the very end leaves no record at all —
+		// and the trailer magic is inside the span rather than after it.
+		binary.LittleEndian.PutUint32(damaged[table+4:], uint32(len(damaged)))
+		if _, err := ParseNativeInfo(damaged); err == nil {
+			t.Fatal("a span running into the trailer parsed")
+		}
+	})
+
 	t.Run("spans out of order", func(t *testing.T) {
 		damaged := append([]byte{}, good...)
 		table := binary.LittleEndian.Uint32(damaged[0x10:])
@@ -174,6 +187,87 @@ func TestParseNativeInfoRejectsDamage(t *testing.T) {
 			t.Fatal("a span ending before it starts parsed")
 		}
 	})
+}
+
+// buildTestZIP packs entries the way a download package is packed, so a test
+// that asks what an archive is asks it of a zip rather than of a map.
+func buildTestZIP(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	out := &bytes.Buffer{}
+	writer := zip.NewWriter(out)
+	for name, contents := range files {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		if _, err := entry.Write(contents); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	return out.Bytes()
+}
+
+// TestIsNativeArchiveAnswersFromEntryNames covers the question every Host asks
+// before it asks anything else. It is answered from the central directory, so
+// what it must get right is the shape: the pair that names this package, the
+// descriptor that names the other one, and a folder the whole package sits in.
+func TestIsNativeArchiveAnswersFromEntryNames(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		files map[string][]byte
+		want  bool
+	}{
+		{
+			name:  "a module beside its information file",
+			files: map[string][]byte{"title.mif": {1}, "title.mod": {2}, "data.dat": {3}},
+			want:  true,
+		},
+		{
+			name:  "the same through a wrapping folder",
+			files: map[string][]byte{"Game/title.mif": {1}, "Game/title.mod": {2}, "Game/data.dat": {3}},
+			want:  true,
+		},
+		{
+			name:  "the descriptor package is the other generation",
+			files: map[string][]byte{adfPath: {1}, "title.mif": {2}, "title.mod": {3}},
+			want:  false,
+		},
+		{
+			name:  "a lone module is not enough",
+			files: map[string][]byte{"title.mod": {1}},
+			want:  false,
+		},
+		{
+			name:  "two modules are not this package either",
+			files: map[string][]byte{"title.mif": {1}, "title.mod": {2}, "other.mod": {3}},
+			want:  false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			data := buildTestZIP(t, testCase.files)
+			if got := IsNativeArchive(data); got != testCase.want {
+				t.Errorf("IsNativeArchive() = %v, want %v", got, testCase.want)
+			}
+			// The cheap answer and the one an opened package gives have to
+			// agree, or a Host would pick a loader the archive then refuses.
+			opened, err := readOuterZIP(data)
+			if err != nil {
+				t.Fatalf("open archive: %v", err)
+			}
+			if got := IsNativePackage(opened); got != testCase.want {
+				t.Errorf("IsNativePackage() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestIsNativeArchiveRefusesWhatIsNotAnArchive(t *testing.T) {
+	if IsNativeArchive([]byte("not a zip")) {
+		t.Error("something that is not an archive was claimed")
+	}
 }
 
 // TestLocalKTFNativePackageParses is opt-in because real games are ignored

@@ -282,6 +282,48 @@ func readOuterZIP(data []byte) (map[string][]byte, error) {
 	return zipentry.Unwrap(files), nil
 }
 
+// outerZIPNames lists an archive's entries without decompressing any of them,
+// normalized the way readOuterZIP normalizes them: folders are dropped, an
+// unsafe entry refuses the archive, and a folder every entry sits inside is
+// removed.
+//
+// It exists because a Host has to know which generation of package it is
+// holding before it opens one, and opening one to find out costs every byte in
+// it. The question is answered by the central directory alone, which the zip
+// reader has already parsed to find anything at all.
+func outerZIPNames(data []byte) ([]string, error) {
+	if len(data) > maxArchiveInputSize {
+		return nil, fmt.Errorf("KTF archive exceeds %d input bytes", maxArchiveInputSize)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("open KTF archive: %w", err)
+	}
+	if len(reader.File) > maxEntryCount {
+		return nil, fmt.Errorf("KTF archive contains %d entries, limit %d", len(reader.File), maxEntryCount)
+	}
+	names := make([]string, 0, len(reader.File))
+	for _, file := range reader.File {
+		if len(file.Name) > maxEntryNameSize {
+			return nil, fmt.Errorf("KTF archive entry name exceeds %d bytes", maxEntryNameSize)
+		}
+		name, err := safeEntryName(file.Name)
+		if err != nil {
+			return nil, fmt.Errorf("KTF archive contains unsafe entry: %w", err)
+		}
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		names = append(names, name)
+	}
+	if wrapper := zipentry.Directory(names); wrapper != "" {
+		for index, name := range names {
+			names[index] = strings.TrimPrefix(name, wrapper+"/")
+		}
+	}
+	return names, nil
+}
+
 func readZIP(data []byte, label string) (map[string][]byte, error) {
 	if len(data) > maxArchiveInputSize {
 		return nil, fmt.Errorf("%s exceeds %d input bytes", label, maxArchiveInputSize)

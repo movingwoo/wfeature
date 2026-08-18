@@ -155,8 +155,15 @@ func (platform *NativePlatform) Blits() []NativeBlit { return platform.screen.bl
 // mode that is always the same says nothing about what its bits mean.
 func (platform *NativePlatform) blit(thread *armcore.Thread) (uint32, error) {
 	stacked := platform.varargs(thread, 4)
+	// An argument that cannot be read is kept rather than swallowed: a stacked
+	// read only fails when the caller's stack is not where it should be, and a
+	// blit assembled out of zeroes would draw rather than say so.
+	var stackedErr error
 	next := func() uint32 {
-		value, _ := stacked(1)
+		value, err := stacked(1)
+		if err != nil && stackedErr == nil {
+			stackedErr = err
+		}
 		return uint32(value)
 	}
 	x, err := thread.Register(1)
@@ -181,6 +188,9 @@ func (platform *NativePlatform) blit(thread *armcore.Thread) (uint32, error) {
 	record.SourceX = int(int32(next()))
 	record.SourceY = int(int32(next()))
 	record.Mode = next()
+	if stackedErr != nil {
+		return 0, fmt.Errorf("read KTF native blit arguments: %w", stackedErr)
+	}
 	if len(platform.screen.blits) < maxNativeRecordedBlits {
 		platform.screen.blits = append(platform.screen.blits, record)
 	}
@@ -209,22 +219,25 @@ var nativeTransparent = color.RGBA{R: 0xff, G: 0x00, B: 0xff, A: 0xff}
 func (platform *NativePlatform) drawImage(source *nativeImage, blit NativeBlit) {
 	frame := platform.screen.frame
 	bounds := source.frame.Bounds()
-	for row := 0; row < blit.Height; row++ {
+	// The size comes off the guest's own stack, so the loop is bounded by where
+	// the copy can land rather than by what it was told. Skipping the rows and
+	// columns one at a time is the same picture, but a width the title computed
+	// wrongly would be counted to instead of drawn — and at the top of the
+	// range that is thousands of millions of turns doing nothing.
+	rows := blit.Height
+	columns := blit.Width
+	rows = min(rows, min(bounds.Max.Y-blit.SourceY, frame.Bounds().Max.Y-blit.Y))
+	columns = min(columns, min(bounds.Max.X-blit.SourceX, frame.Bounds().Max.X-blit.X))
+	for row := 0; row < rows; row++ {
 		sourceY := blit.SourceY + row
 		targetY := blit.Y + row
-		if sourceY < bounds.Min.Y || sourceY >= bounds.Max.Y {
+		if sourceY < bounds.Min.Y || targetY < 0 {
 			continue
 		}
-		if targetY < 0 || targetY >= frame.Bounds().Max.Y {
-			continue
-		}
-		for column := 0; column < blit.Width; column++ {
+		for column := 0; column < columns; column++ {
 			sourceX := blit.SourceX + column
 			targetX := blit.X + column
-			if sourceX < bounds.Min.X || sourceX >= bounds.Max.X {
-				continue
-			}
-			if targetX < 0 || targetX >= frame.Bounds().Max.X {
+			if sourceX < bounds.Min.X || targetX < 0 {
 				continue
 			}
 			pixel := source.frame.RGBAAt(sourceX, sourceY)
