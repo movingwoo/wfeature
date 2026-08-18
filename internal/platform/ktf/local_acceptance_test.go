@@ -38,6 +38,20 @@ func localAcceptanceMaxSteps(t *testing.T) uint64 {
 	return parsed
 }
 
+// isNativePackageArchive reports whether an outer archive is the earlier KTF
+// package — a module information file beside a raw module — rather than the
+// descriptor package these probes drive. The local corpus holds both, and the
+// earlier one has no __adf__ to open, so a probe that does not tell them apart
+// reports a format it was never asked to handle as a parse failure. See
+// native_archive.go.
+func isNativePackageArchive(data []byte) bool {
+	files, err := readOuterZIP(data)
+	if err != nil {
+		return false
+	}
+	return IsNativePackage(files)
+}
+
 // TestLocalKTFArchivesParse is opt-in because real games are ignored local
 // data, not repository fixtures. It validates every local KTF outer archive
 // without executing third-party guest code.
@@ -54,7 +68,7 @@ func TestLocalKTFArchivesParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read local KTF game directory: %v", err)
 	}
-	parsed := 0
+	parsed, native := 0, 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
 			continue
@@ -62,6 +76,10 @@ func TestLocalKTFArchivesParse(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
 		if err != nil {
 			t.Errorf("read %q: %v", entry.Name(), err)
+			continue
+		}
+		if isNativePackageArchive(data) {
+			native++
 			continue
 		}
 		if _, err := Open(data); err != nil {
@@ -73,7 +91,7 @@ func TestLocalKTFArchivesParse(t *testing.T) {
 	if parsed == 0 {
 		t.Fatal("no local KTF archives parsed")
 	}
-	t.Logf("parsed %d local KTF archives", parsed)
+	t.Logf("parsed %d local KTF archives, and passed over %d of the earlier package", parsed, native)
 }
 
 // TestLocalKTFArchivesInitialize is a separate opt-in probe because it runs
@@ -103,6 +121,9 @@ func TestLocalKTFArchivesInitialize(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if isNativePackageArchive(data) {
+				t.Skip("the earlier KTF package, which these probes do not drive")
 			}
 			archive, err := Open(data)
 			if err != nil {
@@ -173,6 +194,9 @@ func TestLocalKTFArchivesLoadMainClass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if isNativePackageArchive(data) {
+				t.Skip("the earlier KTF package, which these probes do not drive")
+			}
 			archive, err := Open(data)
 			if err != nil {
 				t.Fatal(err)
@@ -234,6 +258,9 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if isNativePackageArchive(data) {
+				t.Skip("the earlier KTF package, which these probes do not drive")
 			}
 			archive, err := Open(data)
 			if err != nil {
@@ -298,6 +325,9 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if isNativePackageArchive(data) {
+				t.Skip("the earlier KTF package, which these probes do not drive")
 			}
 			archive, err := Open(data)
 			if err != nil {
@@ -389,6 +419,9 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(gameDirectory, name))
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if isNativePackageArchive(data) {
 			continue
 		}
 		archive, err := Open(data)

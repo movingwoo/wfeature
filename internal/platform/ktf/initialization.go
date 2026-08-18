@@ -2045,21 +2045,12 @@ func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) 
 	if address := runtime.stubs[key]; address != 0 {
 		return address, nil
 	}
-	const stubSize = uint64(16)
+	const stubSize = uint64(svcStubSize)
 	if runtime.codeCursor+stubSize > uint64(platformCodeBase)+platformCodeSize {
 		return 0, fmt.Errorf("KTF platform callback stub space exhausted")
 	}
 	address := uint32(runtime.codeCursor)
-	stub := []byte{
-		0x10, 0xb4,
-		0x02, 0x4c,
-		0xa4, 0x46,
-		0x10, 0xbc,
-		byte(category), 0xdf,
-		0x70, 0x47,
-		byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24),
-	}
-	if err := runtime.client.core.Memory().Load(address, stub); err != nil {
+	if err := runtime.client.core.Memory().Load(address, svcStub(category, id)); err != nil {
 		return 0, fmt.Errorf("load KTF platform callback stub: %w", err)
 	}
 	runtime.codeCursor += stubSize

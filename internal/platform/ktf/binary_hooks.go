@@ -150,18 +150,10 @@ func (runtime *initializationRuntime) installBinaryHooks(image []byte, base uint
 // r12, trap, and return to the caller's link register. Guest arguments stay in
 // r0-r2 where the routine expects them.
 // hookStubSize is how many bytes a stub occupies at a routine's entry.
-const hookStubSize = 16
+const hookStubSize = svcStubSize
 
 func (runtime *initializationRuntime) installHookStub(address uint32, kind binaryHookKind) error {
-	stub := []byte{
-		0x10, 0xb4, // push {r4}
-		0x02, 0x4c, // ldr r4, [pc, #8]
-		0xa4, 0x46, // mov r12, r4
-		0x10, 0xbc, // pop {r4}
-		byte(svcCategoryBinaryHook), 0xdf, // svc #category
-		0x70, 0x47, // bx lr
-		byte(kind), byte(kind >> 8), byte(kind >> 16), byte(kind >> 24),
-	}
+	stub := svcStub(svcCategoryBinaryHook, uint32(kind))
 	if err := runtime.client.core.Memory().Load(address&^1, stub); err != nil {
 		return fmt.Errorf("install KTF binary hook stub at %#x: %w", address, err)
 	}
