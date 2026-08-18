@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/wipic"
@@ -87,6 +88,15 @@ type Runtime struct {
 
 	skvmOnce  sync.Once
 	skvmState *skvmState
+
+	// The cheat engine and the synthetic address space it searches. heapMu
+	// guards the map's own structure — the fields behind it are guarded by the
+	// interpreter — and is held for the whole of one engine operation, which
+	// runs between Host passes rather than beside one. See cheat.go.
+	heapMu       sync.Mutex
+	heap         *heapMap
+	cheat        *cheat.Session
+	cheatConsole *cheat.Console
 
 	audioMu sync.Mutex
 	audio   *backend.Audio
@@ -307,7 +317,13 @@ func (runtime *Runtime) RunPending() error {
 	}
 	// A title that draws through the vendor's direct display pushes whenever
 	// it likes; this is where those pushes become one picture.
-	return runtime.presentRefresh()
+	if err := runtime.presentRefresh(); err != nil {
+		return err
+	}
+	// Frozen values are rewritten after the game has run and painted, so a
+	// cheat wins over whatever the game just wrote rather than being written
+	// over by it.
+	return runtime.serviceCheat()
 }
 
 func (runtime *Runtime) State() LifecycleState {

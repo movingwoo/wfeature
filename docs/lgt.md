@@ -3974,8 +3974,9 @@ everything behind it was built. The server asked the platform-specific
 KTF" when that came back nil, so a panel over an LGT game refused every
 operation while the engine it was refusing on behalf of was attached and
 running. Hosts now ask `session.Cheat()` and `session.CheatConsole()`, which
-answer for either ARM platform and nil for the MIDP runtime — the one platform
-with no address space to sweep, where the page removes the toggle rather than
-offering a panel that could only say no. Reaching for a platform by name is
+answer for whichever platform is behind the session and nil where none does.
+That indirection paid for itself twice: the MIDP runtime, which had no address
+space to sweep and answered nil, later grew a synthetic one and needed two lines
+here to reach the same panel (`docs/skvm.md`). Reaching for a platform by name is
 what hid this: the refusal message named the platform it had asked for rather
 than the property it needed, so it read as a decision instead of a gap.

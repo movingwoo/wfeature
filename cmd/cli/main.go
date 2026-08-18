@@ -148,6 +148,8 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	keyEvents := map[int][]int32{}
 	keyHold := 1
 	diagPath := ""
+	cheatConsole := false
+	ticksChosen := false
 	// The screen is the handset's, and on this vendor it is not the same
 	// handset for every title: one local archive ships its artwork only in the
 	// 120 and 176 wide sets and asks for a 240 one it does not contain, which
@@ -167,6 +169,9 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			ticks = parsed
+			ticksChosen = true
+		case "-cheat":
+			cheatConsole = true
 		case "-frame":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-frame expects a path")
@@ -267,6 +272,25 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	// Reading stdin on its own goroutine keeps the tick loop paced; the
+	// commands run between Host passes, which is the only time reading and
+	// freezing the object graph is safe.
+	var cheatCommands chan string
+	if cheatConsole {
+		cheatCommands = make(chan string, 16)
+		go func() {
+			lines := bufio.NewScanner(os.Stdin)
+			for lines.Scan() {
+				cheatCommands <- lines.Text()
+			}
+			close(cheatCommands)
+		}()
+		// A cheat session runs until it is interrupted, unless the caller asked
+		// for a specific number of ticks.
+		if !ticksChosen {
+			ticks = 1 << 30
+		}
+	}
 	startedAt := time.Now()
 	// A scripted key is released -hold ticks after its press for the reason it
 	// is on the WIPI paths: a Canvas that samples the keypad once a frame never
@@ -303,6 +327,23 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		delete(keyReleases, ran)
+		if cheatConsole {
+			for done := false; !done; {
+				select {
+				case line, ok := <-cheatCommands:
+					if !ok {
+						cheatCommands = nil
+						done = true
+						break
+					}
+					if output := runtime.CheatConsole().Execute(line); output != "" {
+						fmt.Fprintln(stdout, output)
+					}
+				default:
+					done = true
+				}
+			}
+		}
 		if runErr == nil {
 			runtime.AdvanceAudio(time.Since(startedAt))
 			runErr = runtime.RunPending()
@@ -1383,6 +1424,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
 	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-save dir] [-diag report.json]")
+	fmt.Fprintln(output, "                            [-screen WxH] [-cheat]")
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")

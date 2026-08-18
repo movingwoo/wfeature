@@ -1021,7 +1021,7 @@ const cheatEngine = () => {
   // completed here as well as sent complete.
   const candidates = answer => ({ count: answer.count ?? 0, items: answer.items ?? [] });
   return {
-    available: () => currentPlatform === "ktf" || currentPlatform === "lgt",
+    available: () => currentPlatform === "ktf" || currentPlatform === "lgt" || currentPlatform === "skt",
     scan: (type, filter, operand) => call("scan", { type, filter, operand }).then(candidates),
     refresh: () => call("refresh").then(candidates),
     undo: () => call("undo").then(candidates),
@@ -1042,10 +1042,10 @@ const initCheat = () => {
   const toggle = document.getElementById("cheat-toggle");
   if (!panel || !toggle) return;
 
-  // The cheat engine reads and freezes ARM memory, so it exists for the two
-  // platforms that have any. The MIDP runtime keeps its state in Go objects
-  // with no addresses to sweep, so the toggle is removed there rather than
-  // offering a panel that could only answer nothing.
+  // Every platform this emulator runs has an engine now: the two ARM ones
+  // search guest memory, and the MIDP runtime searches a synthetic space laid
+  // over its object graph. The toggle is still asked rather than assumed,
+  // because a platform added later may not have one.
   const cheat = cheatEngine();
   if (!cheat.available()) {
     toggle.remove();

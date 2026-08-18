@@ -268,10 +268,10 @@ func (s *Session) Summary() Summary { return s.summary }
 // which is the answer a Host needs anyway.
 func (s *Session) KTF() *ktf.Session { return s.ktf }
 
-// Cheat exposes the attached cheat engine. Both ARM platforms have one,
-// because both give the guest a flat address space a scan can sweep; the MIDP
-// runtime keeps its state in Go objects with no addresses to search, so it
-// answers nil and a Host reads that as "no cheat panel here".
+// Cheat exposes the attached cheat engine. Every platform has one now. The two
+// ARM platforms give the guest a flat address space a scan can sweep; the MIDP
+// runtime has no address space at all, so it builds one over its object graph
+// and answers that (`docs/skvm.md`, "A heap with addresses in it").
 //
 // A Host asks this rather than reaching through KTF(), which is what kept the
 // engine LGT already had from ever being reachable from the browser.
@@ -283,6 +283,8 @@ func (s *Session) Cheat() *cheat.Session {
 		return s.ktf.Cheat()
 	case s.lgt != nil:
 		return s.lgt.Cheat()
+	case s.runtime != nil:
+		return s.runtime.Cheat()
 	default:
 		return nil
 	}
@@ -298,6 +300,8 @@ func (s *Session) CheatConsole() *cheat.Console {
 		return s.ktf.CheatConsole()
 	case s.lgt != nil:
 		return s.lgt.CheatConsole()
+	case s.runtime != nil:
+		return s.runtime.CheatConsole()
 	default:
 		return nil
 	}

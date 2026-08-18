@@ -155,6 +155,8 @@ the save API or the game archives.
 - **SKT titles start and paint one frame.** All three local archives get that
   far and then present nothing over the next 200 ticks, so they are running but
   not yet progressing; whether one plays is unverified.
-- The cheat engine is KTF-only, so the panel does not appear on other
-  platforms even though LGT also runs ARM code.
+- The cheat panel appears on every platform. The two ARM ones search guest
+  memory; the MIDP runtime searches a synthetic address space over its object
+  graph, where the region labels are class names and the write watch is not
+  offered.
 - There are no soft-key buttons, matching the original layout.

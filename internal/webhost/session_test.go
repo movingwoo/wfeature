@@ -264,19 +264,28 @@ func TestSessionWritesItsOwnReport(t *testing.T) {
 	}
 }
 
-func TestSessionCheatIsRefusedWhereThereIsNoGuestMemory(t *testing.T) {
-	// The engine sweeps a flat guest address space, which the MIDP runtime
-	// does not have. Saying so beats a silent failure on a platform where the
-	// panel should not have appeared.
+func TestSessionCheatSearchesAMIDletsObjectGraph(t *testing.T) {
+	// The engine sweeps a flat guest address space, which the MIDP runtime does
+	// not have — so it builds one over its object graph, and the panel reaches
+	// it through the same socket vocabulary the ARM platforms answer.
 	connection, _ := sessionFixture(t)
 	expectMessage(t, connection, serverReady)
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 	expectMessage(t, connection, serverStarted)
 
-	send(t, connection, clientMessage{Kind: clientCheat, ID: 3, Command: "help"})
+	send(t, connection, clientMessage{Kind: clientCheat, ID: 3, Command: "regions"})
 	result := expectMessage(t, connection, serverResult)
-	if result.ID != 3 || !strings.Contains(result.Message, "no searchable guest memory") {
+	if result.ID != 3 || result.Cheat == nil || !result.Cheat.Searchable {
 		t.Fatalf("cheat answer = %+v", result)
+	}
+	if !strings.Contains(result.Message, "region(s)") {
+		t.Fatalf("regions listing = %q, want the map of the object graph", result.Message)
+	}
+
+	send(t, connection, clientMessage{Kind: clientCheat, ID: 4, Op: "scan", Type: "u32", Filter: "unknown"})
+	scan := expectMessage(t, connection, serverResult)
+	if scan.Cheat == nil || scan.Cheat.Count == 0 {
+		t.Fatalf("a first scan over a MIDlet's graph found %+v", scan.Cheat)
 	}
 }
 

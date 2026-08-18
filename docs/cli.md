@@ -188,7 +188,7 @@ watching — a release build is not, and carries none of the three.
 ```
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
                                     [-key tick:name] [-hold N] [-save dir]
-                                    [-diag report.json] [-screen WxH]
+                                    [-diag report.json] [-screen WxH] [-cheat]
 ```
 
 | Flag | What it does |
@@ -201,6 +201,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-save dir` | the save tree. Defaults to `var/savedata/<profile>/skt/<owner>` |
 | `-diag report.json` | write what the run used: classes loaded, classes missing, and a call count per registered native |
 | `-screen WxH` | the handset screen, 240x320 by default |
+| `-cheat` | attach the text cheat console. Without `-ticks` the run continues until it is interrupted |
 
 The summary a run prints carries `ticks` and `lit` — the count of non-black
 pixels — beside the MIDlet's state, because "active with a Canvas shown" and
@@ -225,6 +226,15 @@ artwork set it does not contain, because it was packaged for a smaller phone;
 at `-screen 176x220` it runs. Nothing detects that — an SKT descriptor declares
 no screen size — so it is a flag rather than a rule, and `docs/skvm.md` has the
 title's own branch.
+
+`-cheat` attaches the same console the two WIPI paths take, against the
+synthetic address space this platform lays over its object graph
+(`docs/skvm.md`, "A heap with addresses in it"). The vocabulary is the same, and
+so is the pacing — commands run between Host passes, which is the only time
+reading and freezing the graph is safe. Two commands read differently here:
+`regions` names classes rather than a module and a heap, so a hit says which
+class it is in, and `watch` answers "this platform cannot watch writes" because
+nothing instruments a `putfield`.
 
 There is no `-play` or `-speed`. A MIDlet's threads sleep against the wall clock
 and there is no guest clock to multiply, so a tick here is a real frame: the run

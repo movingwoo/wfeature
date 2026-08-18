@@ -246,19 +246,33 @@ func TestAGuestEndingIsAnEndingRatherThanAFailure(t *testing.T) {
 
 // The cheat engine is reached through the session rather than through KTF(),
 // because reaching through KTF() is what kept the engine LGT already had from
-// ever answering a browser. A platform with no flat guest address space has
-// nothing to sweep and says so by answering nil.
+// ever answering a browser. The MIDP runtime has no guest address space at all
+// and used to answer nil here; it now lays a synthetic one over its object
+// graph, so every platform this emulator runs answers an engine.
 func TestCheatIsAnsweredWhereThereIsGuestMemoryToSearch(t *testing.T) {
 	running, err := Start(context.Background(), sktFixture(t), Options{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer running.Close()
-	if engine := running.Cheat(); engine != nil {
-		t.Errorf("a MIDP runtime answered a cheat engine %p, want nil", engine)
+	engine := running.Cheat()
+	if engine == nil {
+		t.Fatal("a MIDP runtime answered no cheat engine")
 	}
-	if console := running.CheatConsole(); console != nil {
-		t.Errorf("a MIDP runtime answered a cheat console %p, want nil", console)
+	if running.CheatConsole() == nil {
+		t.Error("a MIDP runtime answered no cheat console")
+	}
+	// The regions are the graph: a MIDlet that has started has at least its own
+	// class's statics in one, and an engine with nothing to sweep would answer
+	// an empty list without failing.
+	if len(engine.Regions()) == 0 {
+		t.Error("the MIDP engine found nothing to search")
+	}
+	// A watch names the instruction behind a write, which needs store
+	// instrumentation this platform does not have. Saying so is the designed
+	// answer; a Host reads it as "no watch control here".
+	if engine.CanWatch() {
+		t.Error("the MIDP engine claimed it can watch writes")
 	}
 
 	// A session that never started answers the same way rather than panicking
