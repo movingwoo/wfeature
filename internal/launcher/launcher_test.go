@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -129,8 +130,13 @@ func TestStopAsksTheServerToStopItself(t *testing.T) {
 				return
 			}
 			writer.WriteHeader(http.StatusAccepted)
+			// Shutdown rather than Close, because that is what the real server
+			// does and the difference is the whole test: Close tears down the
+			// connection this reply is still travelling on, so the stop request
+			// fails, Stop skips the drain it would have won, and falls through
+			// to signalling the pid the server named — which here is 1.
 			go func() {
-				_ = server.Close()
+				_ = server.Shutdown(context.Background())
 				close(stopped)
 			}()
 		default:
@@ -153,6 +159,63 @@ func TestStopAsksTheServerToStopItself(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the server was never asked to stop")
+	}
+}
+
+// TestSignallableRefusesWhatIsNotAServer covers the number Stop is about to
+// signal. It is checked here rather than through Stop for the case that
+// matters most: a test that drove Stop with this process's own pid would, the
+// day the check regressed, kill the run that was meant to report it.
+func TestSignallableRefusesWhatIsNotAServer(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		pid  int
+		want bool
+	}{
+		{name: "init", pid: 1, want: false},
+		{name: "the process asking", pid: os.Getpid(), want: false},
+		{name: "nothing", pid: 0, want: false},
+		{name: "a negative pid", pid: -1, want: false},
+		{name: "another process", pid: os.Getpid() + 1, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := signallable(testCase.pid); got != testCase.want {
+				t.Errorf("signallable(%d) = %v, want %v", testCase.pid, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestStopRefusesTheServerThatNamesInit is the same refusal through Stop, on
+// the one pid a run can drive without risking itself.
+func TestStopRefusesTheServerThatNamesInit(t *testing.T) {
+	listener, port := listenLocal(t)
+	// A server that answers as ours and then refuses to stop is what puts Stop
+	// on the signalling path at all.
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/status" {
+			fmt.Fprint(writer, `{"server":"wfeature","profile":"release","version":"dev","pid":1}`)
+			return
+		}
+		http.Error(writer, "no", http.StatusInternalServerError)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
+
+	report, outcome, err := Stop(context.Background(), port)
+	if err == nil {
+		t.Fatal("a server naming init was believed")
+	}
+	if outcome != Refused {
+		t.Errorf("outcome = %v, want Refused", outcome)
+	}
+	if report.PID != 1 {
+		t.Errorf("report.PID = %d, want the 1 the server named", report.PID)
+	}
+	// The refusal has to be the check rather than a kill that happened to
+	// fail, because a kill that happened to succeed is the thing being avoided.
+	if !strings.Contains(err.Error(), "not a process to stop") {
+		t.Errorf("error = %v, want the refusal rather than a failed signal", err)
 	}
 }
 

@@ -249,6 +249,10 @@ func Stop(ctx context.Context, port int) (Report, Outcome, error) {
 		return report, Refused, fmt.Errorf(
 			"the server on port %d did not stop and did not say which process it is", port)
 	}
+	if !signallable(report.PID) {
+		return report, Refused, fmt.Errorf(
+			"the server on port %d named pid %d, which is not a process to stop", port, report.PID)
+	}
 	process, err := os.FindProcess(report.PID)
 	if err != nil {
 		return report, Refused, fmt.Errorf("find pid %d: %w", report.PID, err)
@@ -265,6 +269,18 @@ func Stop(ctx context.Context, port int) (Report, Outcome, error) {
 			"the process on port %d is still there after being killed", port)
 	}
 	return report, Killed, nil
+}
+
+// signallable reports whether a pid a server named is one this may signal.
+//
+// The number came out of a network reply and nothing has checked it against
+// anything. Init is not a server, and neither is the process doing the asking;
+// the cost of believing either is not a failed stop but a killed init on a host
+// where this runs with the permission to do it, or a launcher that kills itself
+// halfway through stopping something else. Refusing by name says what happened,
+// where signalling would say nothing until something else broke.
+func signallable(pid int) bool {
+	return pid > 0 && pid != 1 && pid != os.Getpid()
 }
 
 // requestShutdown asks the server to stop itself.
