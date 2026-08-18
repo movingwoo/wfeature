@@ -98,8 +98,13 @@ var runtimeClassParents = map[string]string{
 	RuntimeExceptionClass:                       "java/lang/Exception",
 	"java/lang/InterruptedException":            "java/lang/Exception",
 	"java/io/IOException":                       "java/lang/Exception",
+	"java/io/EOFException":                      "java/io/IOException",
+	"java/io/UnsupportedEncodingException":      "java/io/IOException",
+	"java/lang/ClassNotFoundException":          "java/lang/Exception",
 	"java/lang/Exception":                       "java/lang/Throwable",
 	"java/lang/Error":                           "java/lang/Throwable",
+	"java/util/NoSuchElementException":          "java/lang/RuntimeException",
+	"java/util/EmptyStackException":             "java/lang/RuntimeException",
 	"java/lang/Throwable":                       "java/lang/Object",
 }
 

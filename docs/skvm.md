@@ -84,6 +84,27 @@ screen Graphics for the life of the runtime; each paint resets it to that
 repaint's clip, no translation, and the default font. Two guest threads drawing
 at once still race — that is the game's business, as it was on the handset.
 
+**`XDisplay.refresh` takes the picture at once and shows it with the pass.**
+The call is the game's own frame boundary — the guest thread saying the screen
+is complete — so the surface is copied there, on that thread, which is what
+makes the picture whole rather than half-drawn. What waits for the Host pass is
+the *present*, because a Host can show at most one frame per pass anyway: the
+CLI reads the surface at a tick boundary and the page sends one frame a tick.
+
+That matters because one title family pushes about a hundred times per pass —
+**496,029 calls in 4,000 ticks**, against another title's 3.7 per pass. Their
+loop draws as fast as the machine allows and pushes every time round. Presenting
+each call allocated a copy of the framebuffer and handed it to a surface that
+copied it again; coalescing took **a fifth of the host CPU** off those runs
+(19.4s to 15.1s of user time for 900 ticks) with the pictures unchanged, and it
+makes the guest wait for nothing.
+
+A lifecycle dispatch presents a pending picture too, and that is not a detail: a
+title that draws its notice through the direct display and then calls
+`System.exit` does all of it inside `startApp`, so the only pass it ever gets is
+that one. Two local titles are exactly that, and without it they show a black
+screen instead of what they wanted to say.
+
 **`XDisplay.width`, `height` and `height2` are fields, not methods.** A game
 reads the screen size straight out of them, typically caching it in a Canvas
 constructor and repainting that rectangle forever after, so the runtime fills
@@ -115,13 +136,75 @@ and what a game prints goes to the logging boundary at debug level, one line per
 call. What matters is that the field resolves: a game that cannot read
 `System.out` dies in whichever method happened to contain the print.
 
+## Fifteen titles, and the pass that made room for twelve of them
+
+The corpus went from three local titles to fifteen in one step, and the twelve
+new ones arrived as a stack of lifecycle failures: eleven of the fifteen
+refused to start at all. What they refused over was almost never a defect —
+it was surface this runtime had never been asked for, because three titles is
+not a corpus.
+
+**The pass that fixed them did not start from a run.** `runskt -diag` reports
+what a title asked for before it stopped, which means one gap per run, and a
+rebuild between each. `internal/tools/apiscan` reads the classes instead: every
+symbolic reference in every class of every archive, minus what the library
+declares and what the platform registers, is the whole list before anything
+runs — and, scanned over a corpus at once, it is ranked by how many titles want
+each entry. The first scan answered 55 entries across 12 titles; the last one
+answers 31 across 4, and 11 titles have nothing missing at all. Its `-natives`
+flag takes a `-diag` report, because a platform registers half its surface on a
+live runtime and a bare VM cannot see those registrations.
+
+What that list turned into, roughly in the order it was worked:
+
+- **The class library grew the java.lang a title names rather than calls.**
+  `Integer`, `Math`, `Runtime`, `Throwable` and the whole exception hierarchy
+  were natives with no class behind them, which works until a title writes
+  `new Integer(3)` or `catch (Throwable t)`. See `docs/jvm.md`, "The classes a
+  title names".
+- **`Graphics.reset()`**, which is not MIDP's, is what nine titles call on the
+  screen Graphics they kept. It puts back the state a fresh one would have had.
+- **`Graphics2D.getGraphics2D(Graphics)`** is how six titles make the wrapper,
+  and **`captureLCD` is static** — three titles call it with `invokestatic`
+  before they have a wrapper at all, which is also what says it copies the
+  screen rather than any surface.
+- **`com.xce.lcdui.Toolkit` publishes fields, not only methods.** Ten titles
+  read `FONT_HEIGHT`, `graphics`, `DEFAULT_FONT` or `MAX_CHARWIDTH`, and a
+  field no class initializer filled is a zero — a title that lays out a menu on
+  a font height of zero draws every line on top of the last. The initializer
+  reads them from the font and the screen this runtime actually draws with.
+- **`com.xce.io.ByteToCharEUC_KR`** is the vendor's decoder as a class: the
+  java.io converter API of the day, `convert` filling a char array and
+  answering how many characters it wrote. The counts are lengths rather than
+  end indexes, which the call site settles — one title computes `end - start`
+  for the input and `chars.length - offset` for the output.
+- **`System.exit` reaches the lifecycle.** A MIDlet is supposed to leave
+  through `notifyDestroyed`, but these titles call `exit` on the way out of an
+  error dialog, and the two now land on the same teardown.
+- **`m.MODEL` is answered, and the subscriber number is read late.** One title
+  parses the model number before it compares it against the two handsets it
+  carries workarounds for, so a null was a hard stop. And `MIN` used to be
+  copied into a table at package load, which meant a Host that set the number
+  afterwards — `-number`, `WFEATURE_PHONE_NUMBER` — was ignored here. It is
+  read when it is asked for now, which matters because one title authenticates
+  against it; see "One title checks its licence against the handset's number".
+- **An EUC-KR file name in an archive stopped an archive from opening.**
+  `zip.Reader.Open` takes an io/fs path and refuses a name that is not valid
+  UTF-8, which is what a Korean handset's own data file has. Entries are read
+  from the entry list by their exact stored name now, and an installed file
+  answers to both spellings of its name — the bytes the archive stored and the
+  text they decode to — because which one a title asks with is its business.
+
+Four of the fifteen needed something beyond the library, and those have
+sections of their own below.
+
 ## What the local titles still stop at
 
-Three SKT titles run here and each is further along than the last, so what is
-left is best read as a list of what has not been driven rather than of what is
-broken. The one that used to head this list — a title that would not leave its
-guardian-selection screen — is off it: the confirm key was fire all along, and
-what the script was missing has a section of its own below.
+The three titles this platform started with each went further than the last, so
+what is left for them is best read as a list of what has not been driven rather
+than of what is broken. The one that used to head this list — a title that
+would not leave its guardian-selection screen — is off it: the confirm key was
+fire all along, and what the script was missing has a section of its own below.
 
 - ~~**Progress saving and loading have not been driven** on any of the three.~~
   **All three are closed end to end now**: the `RecordStore` one — see "A
@@ -518,18 +601,117 @@ and-menu runs the census above was taken on — it is still zero. That is the
 answer worth having: the earlier count could be read as "these runs stop too
 early to ask", and this one cannot.
 
-## Images this platform can read but no local title sends
+### The handset bitmap is this vendor's format after all
 
 `Image.createImage` here decodes PNG, JPEG and GIF through the standard
-library, and now also the handset bitmap the other two platforms' archives
-carry (`wipic.DecodeLBMP`, described in `ktf.md` under "LBMP: the handset's own
-bitmap"). **No SKT archive in this repository ships one, and none ships a BMP
-either** — a sweep of every local archive found LBMP in exactly one KTF title
-and BMPs across KTF with a single one in LGT. The routing is here anyway
-because the decode is shared and an image the neighbouring platforms read
-without trouble should not be the thing that ends a title. If a title ever does
-send one, this is where it lands; if one sends a BMP, that path is still
+library, and the handset bitmap through `wipic.DecodeLBMP` (`ktf.md`, "LBMP:
+the handset's own bitmap"). That routing used to carry a note saying no SKT
+archive shipped one and it was here only because the decode was shared. **The
+note was true of three titles and false of the vendor**: the wider corpus
+carries about nine hundred LBMP files, and they are what the SKT titles draw
+almost everything with.
+
+They also carry the half of the format the KTF files could not show — a
+one-bit transparency mask after the pixels, and bit planes for the depths below
+8 — and both were found from these titles' screens. One drew its title menu not
+at all, because a two-bit logo decoded as an unsupported depth and the title
+caught the `IOException` and drew a null image on its own thread; three
+siblings drew their world as blocks of magenta, which is what a masked sprite
+looks like with its mask ignored. `ktf.md` has the format; the arithmetic that
+identified the mask is `width * ceil(height / 8)` and it holds across every
+masked file in the corpus.
+
+**No local archive ships a BMP for this platform** — that path is still
 missing and this is the note that says so.
+
+### Three siblings loaded their tables through the wrong class
+
+Three sibling titles stopped before their first frame with a null `Vector`,
+inside a method that reads a table the class initializer should have filled.
+The loader is `Runtime.getRuntime().getClass().getResourceAsStream("table.gft")`
+and the file is plainly at the top of the JAR — but a relative resource name
+resolves against its class's package, and that class is `java/lang/Runtime`,
+which asks for `java/lang/table.gft`. The stream came back null, the
+`DataInputStream` over it threw inside the title's own `catch (Exception)`, and
+the loader returned `true` having filled nothing. The failure then landed
+several methods later, on the read.
+
+The handset runtime answered that name, or the titles would not have shipped.
+So a relative name its class's package does not answer is looked up again at
+the root of the archive — the strict answer still wins when it finds
+something, so this only replaces a null. All three now draw.
+
+**What this is worth remembering for**: a `catch` around a load is where a
+platform's null goes to be forgotten. The exception the title swallowed named
+the problem exactly, and the failure it eventually reported was a `Vector` in
+an unrelated class.
+
+### One title checks its licence against the handset's number
+
+One title draws "인증 되지 않은 컨텐츠 입니다" and stops. Nothing is broken: its
+`SecureUtil` hashes the subscriber number, a slice of the service ID out of
+`MIDlet-Jar-URL`, and a constant, and compares the hex digest against the
+`MIDlet-Key` in the archive's own descriptor. The key was made for the handset
+the title was bought on, so it authenticates against a number this runtime does
+not have.
+
+That makes it a setting rather than a defect: the number the emulator answers
+with is `-number` on the server and `WFEATURE_PHONE_NUMBER` for the CLI, and
+this platform reads it late enough to see one now. The KTF platform has a title
+in the same position for the same reason — `docs/network.md`, "The subscriber
+number is the one property worth changing". **Whether any number the user has
+is the right one is theirs to know**; nothing here recovers it from the key.
+
+### The four that were left, and what each one actually wanted
+
+None of the four was short of the surface the scan had listed. Each was one
+contract read the wrong way round, and the scan's remaining entries — the two
+`java.io` interfaces, `java.util.Timer`, `TextComponentHandler` — turned out to
+be on paths none of them takes.
+
+- **Three siblings drew their world in magenta blocks**: the transparency mask
+  was being applied with its polarity inverted, so every sprite came out as its
+  own transparent colour with the artwork cut away. `ktf.md` has how the files
+  settle it. Their `XDisplay.refresh` count — 110,048 calls in 900 ticks — is
+  not related and is still worth a look one day; it is a title presenting far
+  more often than it draws.
+- **One drew its whole opening narration in black on black**: it composes
+  Korean out of its own initial/medial/final jamo sheets, which are two-bit
+  planar LBMP, and the planar ramp was being read as light when it is ink.
+  Inverting it turned a screen of scattered consonants into the script.
+- **One stopped at a studio logo** on `XDisplay.drawImageEx`, the vendor's blit
+  with a source rectangle. Thirteen call sites in that title settle its
+  arguments; two of them are unexercised and this platform says so rather than
+  guessing (see below). It reaches its play screen now.
+- **One asked for artwork its own archive does not contain.** It branches on
+  the screen width and loads `main_logo_240.png` on anything 240 wide or
+  wider — and this SKU ships only the 120 and 176 sets, because it was packaged
+  for a smaller handset. Nothing is wrong with the emulator except the screen
+  it offers: at `-screen 176x220` the title runs to its menu, its opening and
+  its first scene. **Both Hosts can choose one**: `runskt -screen WxH`, and the
+  page's settings panel, which remembers the choice per game and sends it with
+  `start`. Nothing detects it — an SKT descriptor declares no screen size — so
+  it is a setting rather than a rule. `docs/session.md`, "The screen is part of
+  starting a game".
+
+### What drawImageEx is, and the two things it does not say
+
+`XDisplay.drawImageEx(Graphics, Image, int x, int y, Image source, int sx,
+int sy, int width, int height, int mode)` draws a rectangle of the source at a
+point on the Graphics. The thirteen local call sites fix that shape completely,
+and they also leave two arguments unexercised: **the second Image is null at
+every one of them and the mode is zero at every one of them.**
+
+So a non-null second image is drawn as if it were absent, and a non-zero mode
+is ignored. Both readings of that Image — a destination to draw into instead of
+the Graphics, or a mask for the source — are plausible, and refusing the call
+would fail the one title that makes it on evidence that names neither. If a
+title turns up that passes either, this paragraph is where the guess was
+recorded.
+
+`XDisplay.copyLCD(Graphics, Image, int x, int y, int width, int height)` is the
+neighbouring call and it copies the screen into the caller's image, which is
+what `Graphics2D.captureLCD` does into a new one.
 
 ## Deliberately incomplete
 
@@ -555,7 +737,13 @@ missing and this is the note that says so.
 
 ## Validation
 
-There is **no SKT game archive in this repository**, so nothing here is tested
+The local corpus has an opt-in probe of its own now —
+`WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint
+./internal/platform/skt` — which starts all fifteen archives, ticks each for
+300 ticks and requires a frame with something lit in it. All fifteen pass.
+[`testing.md`](testing.md) has what it does and does not claim.
+
+There is still **no SKT game archive in this repository**, so nothing here is tested
 against a real title in CI — only against a newly authored fixture
 (`internal/platform/skt/testdata/skvm.jar`) that exercises each surface and
 checks the values that come back. The fixed-point scale, the file semantics

@@ -81,8 +81,13 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "getPixelMask", Descriptor: "(II)Z", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setPixelMask", Descriptor: "(IIZ)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "invertRect", Descriptor: "(IIII)V", Access: jvm.AccessPublic | jvm.AccessNative},
-				{Name: "captureLCD", Descriptor: "(IIII)Ljavax/microedition/lcdui/Image;", Access: jvm.AccessPublic | jvm.AccessNative},
+				// captureLCD is static: it copies the screen, not the surface
+				// a wrapper was built around, and three local titles call it
+				// with invokestatic before they have made a wrapper at all.
+				{Name: "captureLCD", Descriptor: "(IIII)Ljavax/microedition/lcdui/Image;", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "drawImage", Descriptor: "(IILjavax/microedition/lcdui/Image;IIIII)V", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "getGraphics2D", Descriptor: "(Ljavax/microedition/lcdui/Graphics;)Lcom/skt/m/Graphics2D;", Access: jvm.AccessPublic | jvm.AccessStatic, Body: graphics2DFor},
+				{Name: "createMaskableImage", Descriptor: "(II)Ljavax/microedition/lcdui/Image;", Access: jvm.AccessPublic | jvm.AccessStatic, Body: createMaskableImage},
 			},
 		},
 		{
@@ -253,6 +258,8 @@ func definitions() []jvm.ClassDefinition {
 			Methods: []jvm.MethodDefinition{
 				{Name: "start", Descriptor: "(II)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "stop", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "isSupported", Descriptor: "()Z", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "getLevelNum", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 			},
 		},
 		{
@@ -369,12 +376,62 @@ func definitions() []jvm.ClassDefinition {
 			},
 		},
 		{
+			// The vendor's decoder pair, which is the java.io converter API of
+			// the day: convert fills a char array from a byte array and
+			// answers how many characters it wrote, and flush empties whatever
+			// a partial character left behind. A title reads its own Korean
+			// text through this rather than through String, because it wants
+			// the characters in a buffer it already owns.
+			Name:      ByteToCharConverterClass,
+			SuperName: "java/lang/Object",
+			Access:    jvm.AccessPublic | jvm.AccessAbstract,
+			Methods: []jvm.MethodDefinition{
+				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessProtected, Body: emptyInit},
+				{Name: "convert", Descriptor: "([BII[CII)I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "flush", Descriptor: "([CII)I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+			},
+		},
+		{
+			Name:      ByteToCharEUCKRClass,
+			SuperName: ByteToCharConverterClass,
+			Access:    jvm.AccessPublic,
+			Fields: []jvm.FieldDefinition{
+				// The byte a converted range ended on when it was the first
+				// half of a character. The next convert starts with it.
+				{Name: "pending", Descriptor: "I", Access: jvm.AccessPrivate},
+			},
+			Methods: []jvm.MethodDefinition{
+				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessPublic, Body: emptyInit},
+				{Name: "convert", Descriptor: "([BII[CII)I", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "flush", Descriptor: "([CII)I", Access: jvm.AccessPublic | jvm.AccessNative},
+			},
+		},
+		{
 			Name:      "com/xce/lcdui/Toolkit",
 			SuperName: "java/lang/Object",
 			Access:    jvm.AccessPublic,
+			// The vendor's toolkit publishes the metrics of the one font a
+			// handset drew everything with, and the screen Graphics beside
+			// them. Ten local titles read one of these fields, and they read
+			// them rather than call anything: a field a class initializer never
+			// filled is a zero, and a title that lays a menu out on a font
+			// height of zero draws every line on top of the last.
+			Fields: []jvm.FieldDefinition{
+				{Name: "DEFAULT_FONT", Descriptor: "Ljavax/microedition/lcdui/Font;", Access: jvm.AccessPublic | jvm.AccessStatic},
+				{Name: "FONT_HEIGHT", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic},
+				{Name: "FONT_GAP", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic},
+				{Name: "MAX_CHARWIDTH", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic},
+				{Name: "graphics", Descriptor: "Ljavax/microedition/lcdui/Graphics;", Access: jvm.AccessPublic | jvm.AccessStatic},
+				{Name: "BLACK", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessFinal, Constant: jvm.IntValue(0x000000)},
+				{Name: "DK_GRAY", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessFinal, Constant: jvm.IntValue(0x555555)},
+				{Name: "LT_GRAY", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessFinal, Constant: jvm.IntValue(0xaaaaaa)},
+				{Name: "WHITE", Descriptor: "I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessFinal, Constant: jvm.IntValue(0xffffff)},
+			},
 			Methods: []jvm.MethodDefinition{
 				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessPublic, Body: emptyInit},
+				{Name: "<clinit>", Descriptor: "()V", Access: jvm.AccessStatic, Body: toolkitClassInit},
 				{Name: "drawString", Descriptor: "(Ljava/lang/String;III)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "screenGraphics", Descriptor: "()Ljavax/microedition/lcdui/Graphics;", Access: jvm.AccessPrivate | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "getScreenWidth", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "getScreenHeight", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 			},
@@ -390,6 +447,8 @@ func definitions() []jvm.ClassDefinition {
 			},
 			Methods: []jvm.MethodDefinition{
 				{Name: "refresh", Descriptor: "(IIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "drawImageEx", Descriptor: "(Ljavax/microedition/lcdui/Graphics;Ljavax/microedition/lcdui/Image;IILjavax/microedition/lcdui/Image;IIIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "copyLCD", Descriptor: "(Ljavax/microedition/lcdui/Graphics;Ljavax/microedition/lcdui/Image;IIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 			},
 		},
 		{

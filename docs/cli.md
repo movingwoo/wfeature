@@ -188,7 +188,7 @@ watching — a release build is not, and carries none of the three.
 ```
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
                                     [-key tick:name] [-hold N] [-save dir]
-                                    [-diag report.json]
+                                    [-diag report.json] [-screen WxH]
 ```
 
 | Flag | What it does |
@@ -200,6 +200,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-hold N` | how many ticks a `-key` press is held before its release, 1 by default |
 | `-save dir` | the save tree. Defaults to `var/savedata/<profile>/skt/<owner>` |
 | `-diag report.json` | write what the run used: classes loaded, classes missing, and a call count per registered native |
+| `-screen WxH` | the handset screen, 240x320 by default |
 
 The summary a run prints carries `ticks` and `lit` — the count of non-black
 pixels — beside the MIDlet's state, because "active with a Canvas shown" and
@@ -217,6 +218,13 @@ is no ordered trace here: what an SKT run is asked is which of the runtime's
 Java surface the title reached, and a call count of zero beside a registered
 native is the answer worth reading. [`skvm.md`](skvm.md) has what it found
 across the local titles.
+
+`-screen` is here because the screen is not the same handset for every title on
+this vendor. One local archive branches on the width and asks for a 240-wide
+artwork set it does not contain, because it was packaged for a smaller phone;
+at `-screen 176x220` it runs. Nothing detects that — an SKT descriptor declares
+no screen size — so it is a flag rather than a rule, and `docs/skvm.md` has the
+title's own branch.
 
 There is no `-play` or `-speed`. A MIDlet's threads sleep against the wall clock
 and there is no guest clock to multiply, so a tick here is a real frame: the run

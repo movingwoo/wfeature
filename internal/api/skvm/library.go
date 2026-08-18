@@ -30,6 +30,8 @@ const (
 	FileInputStreamClass            = "com/xce/io/FileInputStream"
 	FileOutputStreamClass           = "com/xce/io/FileOutputStream"
 	XFileClass                      = "com/xce/io/XFile"
+	ByteToCharConverterClass        = "com/xce/io/ByteToCharConverter"
+	ByteToCharEUCKRClass            = "com/xce/io/ByteToCharEUC_KR"
 	ToolkitClass                    = "com/xce/lcdui/Toolkit"
 	XDisplayClass                   = "com/xce/lcdui/XDisplay"
 	XTextFieldClass                 = "com/xce/lcdui/XTextField"

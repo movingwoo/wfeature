@@ -170,8 +170,15 @@ export class GameSession {
   // start loads a game on the server. A KTF title's start takes tens of
   // seconds inside the guest, so the wait is long by nature rather than by
   // fault, and the answer only arrives when the game is up.
-  start(gamePath, scale = 1) {
-    return this.ask({ kind: "start", game: gamePath, value: scale }, 300000);
+  start(gamePath, scale = 1, screen = null) {
+    const message = { kind: "start", game: gamePath, value: scale };
+    // The screen travels only when it is not the server's own default, so a
+    // page that never opened the setting sends what it always sent.
+    if (screen && (screen.width !== 240 || screen.height !== 320)) {
+      message.width = screen.width;
+      message.height = screen.height;
+    }
+    return this.ask(message, 300000);
   }
 
   // resume asks for the game the server parked when this page's last socket

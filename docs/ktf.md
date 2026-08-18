@@ -913,17 +913,60 @@ blue at zero throughout, which is a gold-on-black gradient. Decoded, the image
 is a gold dragon, and the file beside it is green foliage. A palette-indexed
 reading has to explain the scattered indices and cannot.
 
-The sixth header word is zero in all five and nothing reads it. If the format
-has a colour key, no local file exercises it, and guessing would put holes in
-an image on no evidence.
+The sixth header word is zero in all five and nothing read it. If the format
+had a colour key, no local file exercised it, and guessing would have put holes
+in an image on no evidence.
 
 **Where it is wired matters more than where it was found.** The format turned
-up in a KTF archive, not in the vendor whose name it carries; a sweep of every
-local archive found LBMP only there, hundreds of BMPs across KTF and one in
-LGT, and neither format in any SKT archive. So the decoder sits in
-`internal/wipic` beside `DecodeBitmap` and all three platforms route to it —
-the two with real callers because they have them, and the third because an
-image its neighbours can read should not be what ends a title.
+up in a KTF archive, not in the vendor whose name it carries; the sweep that
+found it read every local archive and found LBMP only there, hundreds of BMPs
+across KTF and one in LGT. So the decoder sits in `internal/wipic` beside
+`DecodeBitmap` and all three platforms route to it — the two with real callers
+because they had them, and the third because an image its neighbours can read
+should not be what ends a title.
+
+### The other half of the format, from the vendor that owns the name
+
+That third platform then got the callers. The SKT archives carry LBMP
+everywhere — about nine hundred files across the corpus, against the five that
+first described it — and two more halves of the format come out of that many:
+
+- **The sixth word is a mask flag, and a 1 means a one-bit transparency mask
+  follows the pixels.** Its length is `width * ceil(height / 8)` in every file
+  that has one, and that is the arithmetic that identified it: the payload of a
+  masked file is exactly the pixels plus that. This is what the five KTF files
+  could not have shown, because all five have the flag clear.
+- **A set bit is the transparent one**, which the files say twice over. Every
+  pixel a set bit covers in one title's sprites is the same magenta, and no
+  artist paints a solid region in one colour; read the other way, a sprite is
+  that magenta with its artwork punched out of it, which is exactly what three
+  sibling titles drew before the polarity was settled.
+- **A depth below 8 is stored as bit planes**, and each plane is the LCD's own
+  page layout: byte `(y / 8) * width + x`, one row of pixels per bit, the top
+  row of the band in bit 0. `size` is then one plane rather than the whole
+  payload, which is what says the plane is the unit — a two-bit image is two of
+  them and its mask is a third. Read any other way the same file is noise; read
+  this way it is a company logo.
+
+**The planar ramp runs the other way from the packed depths: zero is white and
+the widest value is black.** One title settles it by shipping the same glyph
+sheets twice — a white font and a black font, the same shapes with the same
+mask, differing only in the value under it, zero in the white one and three in
+the black one — and by shipping one sheet of that white font at eight bits a
+pixel instead of two, where the pixels are 0xfe and 0xff. Read as light rather
+than as ink, that title's whole script is black text on a black screen, which
+is what it was.
+
+What the levels *between* mean is still unsettled: every planar file here uses
+the two ends of its range and nothing between, so the ramp is the even one and
+the plane order is undetermined; a file with a middle level would be the
+evidence that says otherwise.
+
+**Neither half of this is cosmetic.** A sprite drawn without its mask is a
+rectangle of magenta, which is how the mask was noticed at all; a planar sheet
+read as light instead of ink is invisible, which is how the ramp was. Three
+sibling SKT titles drew their world in magenta blocks and a fourth drew its
+whole opening narration in black on black. `docs/skvm.md` has that pass.
 
 ## The graphics context's clip is how a tile gets drawn
 

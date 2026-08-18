@@ -114,6 +114,42 @@ const reportError = error => {
 // clean one. Saves live on the server, so nothing but unsaved progress is lost.
 const LAST_GAME_KEY = "wfeature:lastGame";
 const FRAME_SCALE_KEY = "wfeature:frameScale";
+// The screen is remembered per game rather than once for the page: it is a
+// property of the title — which artwork its archive carries — and not a taste.
+const SCREEN_KEY_PREFIX = "wfeature:screen:";
+const DEFAULT_SCREEN = "240x320";
+
+const screenKey = path => `${SCREEN_KEY_PREFIX}${path}`;
+
+// storedScreen answers the size stored for a game, or the default. A stored
+// value that is not two numbers is treated as absent rather than sent on: it
+// can only come from an older page or from somebody editing storage.
+const storedScreen = path => {
+  let stored = DEFAULT_SCREEN;
+  try {
+    stored = localStorage.getItem(screenKey(path)) ?? DEFAULT_SCREEN;
+  } catch {
+    // Private browsing denies storage; the default is the answer.
+  }
+  const [width, height] = String(stored).split("x").map(Number);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 32 || height < 32) {
+    return { width: 240, height: 320 };
+  }
+  return { width, height };
+};
+
+const rememberScreen = (path, value) => {
+  if (!path) return;
+  try {
+    localStorage.setItem(screenKey(path), value);
+  } catch {
+    // Private browsing denies storage; the setting then lasts one session.
+  }
+};
+
+// chosenGame is the game the screen setting is about: whatever the list is
+// showing, and the last game played once the list is gone.
+const chosenGame = () => document.getElementById("game-select")?.value || lastGame() || "";
 
 const rememberGame = path => {
   try {
@@ -465,7 +501,7 @@ const startServerGame = async (path, scale) => {
   // Starting a game is the user gesture browsers require before an
   // AudioContext may run, so this is where the audio graph comes up.
   pageAudio?.ensure();
-  const answer = await session.start(path, scale);
+  const answer = await session.start(path, scale, storedScreen(path));
   currentPlatform = answer.started?.platform ?? "";
   // The token names this game while the page is away from it; keeping it is
   // the whole of what a reconnect needs.
@@ -737,6 +773,32 @@ const initSettings = () => {
     rememberSpeed(speed.value);
   });
   if (speed) speed.value = String(storedSpeed());
+
+  // The screen belongs to the game rather than to the page, so the menu shows
+  // what the game about to start is set to and changing it is a decision about
+  // that game. It cannot apply to a running one — a MIDlet reads its screen
+  // once, at startup — so the panel says restart rather than pretending.
+  const screen = document.getElementById("screen-size");
+  const screenNote = document.getElementById("screen-note");
+  if (screen) {
+    const showStored = () => {
+      const { width, height } = storedScreen(chosenGame());
+      screen.value = `${width}x${height}`;
+    };
+    showStored();
+    // The list is what says which game the setting is about, so the menu
+    // follows it: picking another game shows that game's screen.
+    document.getElementById("game-select")?.addEventListener("change", showStored);
+    screen.addEventListener("change", () => {
+      const path = chosenGame();
+      if (!path) return;
+      rememberScreen(path, screen.value);
+      if (screenNote) {
+        screenNote.textContent = gameRunning ? "다시 시작해야 새 화면 크기로 적용됩니다." : "";
+        screenNote.classList.toggle("hidden", !gameRunning);
+      }
+    });
+  }
 };
 
 // Whether this browser has a keyboard, which is what decides whether the key

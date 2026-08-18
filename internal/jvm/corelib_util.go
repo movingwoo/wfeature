@@ -619,8 +619,169 @@ func hashtableDefinition() ClassDefinition {
 			{Name: "isEmpty", Descriptor: "()Z", Access: sync, Body: hashtableIsEmpty},
 			{Name: "put", Descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", Access: sync, Body: hashtablePut},
 			{Name: "remove", Descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", Access: sync, Body: hashtableRemove},
+			{Name: "size", Descriptor: "()I", Access: sync, Body: hashtableSize},
+			{Name: "clear", Descriptor: "()V", Access: sync, Body: hashtableClear},
+			{Name: "keys", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: hashtableView("keys")},
+			{Name: "elements", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: hashtableView("values")},
 		},
 	}
+}
+
+func hashtableSize(call *Invocation, arguments []Value) (Value, error) {
+	table, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	size, err := intField(call.vm, table, HashtableClass, "size")
+	if err != nil {
+		return VoidValue(), err
+	}
+	return IntValue(size), nil
+}
+
+func hashtableClear(call *Invocation, arguments []Value) (Value, error) {
+	table, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	keys, values, size, err := hashtableState(call.vm, table)
+	if err != nil {
+		return VoidValue(), err
+	}
+	for index := int32(0); index < size; index++ {
+		for _, array := range []*Array{keys, values} {
+			if err := array.Store(int(index), ReferenceValue(nil)); err != nil {
+				return VoidValue(), err
+			}
+		}
+	}
+	return VoidValue(), setIntField(call.vm, table, HashtableClass, "size", 0)
+}
+
+// hashtableView answers an Enumeration over a copy of one of the two arrays.
+// A copy rather than a live view because a game walks a table while it edits
+// it — removing the entry it just handled is the common shape — and a live
+// view would have to decide what that means. The standard leaves it undefined,
+// so what is chosen here is the harmless reading.
+func hashtableView(field string) ContextMethod {
+	return func(call *Invocation, arguments []Value) (Value, error) {
+		table, err := requireObject(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		keys, values, size, err := hashtableState(call.vm, table)
+		if err != nil {
+			return VoidValue(), err
+		}
+		source := keys
+		if field == "values" {
+			source = values
+		}
+		snapshot, err := call.vm.newArray(objectArrayType, size)
+		if err != nil {
+			return VoidValue(), err
+		}
+		elements, err := source.LoadRange(0, int(size))
+		if err != nil {
+			return VoidValue(), err
+		}
+		if err := SetArrayRange(snapshot, 0, elements); err != nil {
+			return VoidValue(), err
+		}
+		view, err := call.NewObject(ArrayEnumerationClass, "([Ljava/lang/Object;)V", ReferenceValue(snapshot))
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(view), nil
+	}
+}
+
+// arrayEnumerationDefinition walks a snapshot. It is the runtime's own class
+// rather than one from java/util, because the standard names no implementation
+// of Enumeration and a game only ever holds the interface.
+func arrayEnumerationDefinition() ClassDefinition {
+	return ClassDefinition{
+		Name:       ArrayEnumerationClass,
+		SuperName:  ObjectClass,
+		Interfaces: []string{EnumerationClass},
+		Access:     AccessPublic | AccessFinal,
+		Fields: []FieldDefinition{
+			{Name: "elements", Descriptor: "[Ljava/lang/Object;", Access: AccessPrivate},
+			{Name: "index", Descriptor: "I", Access: AccessPrivate},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "([Ljava/lang/Object;)V", Access: AccessPublic, Body: arrayEnumerationInit},
+			{Name: "hasMoreElements", Descriptor: "()Z", Access: AccessPublic, Body: arrayEnumerationHasMore},
+			{Name: "nextElement", Descriptor: "()Ljava/lang/Object;", Access: AccessPublic, Body: arrayEnumerationNext},
+		},
+	}
+}
+
+func arrayEnumerationInit(call *Invocation, arguments []Value) (Value, error) {
+	view, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), call.vm.SetField(view, ArrayEnumerationClass, "elements", vectorElementsType, arguments[1])
+}
+
+// arrayEnumerationElements reads the snapshot and the position together, which
+// is what both methods need.
+func arrayEnumerationElements(call *Invocation, view *Object) (*Array, int32, error) {
+	value, err := call.vm.Field(view, ArrayEnumerationClass, "elements", vectorElementsType)
+	if err != nil {
+		return nil, 0, err
+	}
+	object, err := value.Reference()
+	if err != nil {
+		return nil, 0, err
+	}
+	elements, err := guestArray(object)
+	if err != nil {
+		return nil, 0, err
+	}
+	index, err := intField(call.vm, view, ArrayEnumerationClass, "index")
+	if err != nil {
+		return nil, 0, err
+	}
+	return elements, index, nil
+}
+
+func arrayEnumerationHasMore(call *Invocation, arguments []Value) (Value, error) {
+	view, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, index, err := arrayEnumerationElements(call, view)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if int(index) < elements.Length() {
+		return IntValue(1), nil
+	}
+	return IntValue(0), nil
+}
+
+func arrayEnumerationNext(call *Invocation, arguments []Value) (Value, error) {
+	view, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, index, err := arrayEnumerationElements(call, view)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if int(index) >= elements.Length() {
+		return VoidValue(), guestException("java/util/NoSuchElementException", "the enumeration is exhausted")
+	}
+	element, err := elements.Load(int(index))
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := setIntField(call.vm, view, ArrayEnumerationClass, "index", index+1); err != nil {
+		return VoidValue(), err
+	}
+	return element, nil
 }
 
 const hashtableInitialCapacity = 8
@@ -888,6 +1049,185 @@ func hashtableRemove(call *Invocation, arguments []Value) (Value, error) {
 		return VoidValue(), err
 	}
 	return previous, nil
+}
+
+// calendarDefinition and dateDefinition publish the clock pair. Their bodies
+// are natives in builtins.go because both stand for an instant the Host owns;
+// what the declarations add is the field constants a title indexes get() with
+// and a class for `new Date()` to resolve.
+func calendarDefinition() ClassDefinition {
+	native := AccessPublic | AccessNative
+	constant := AccessPublic | AccessStatic | AccessFinal
+	return ClassDefinition{
+		Name:      CalendarClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessAbstract,
+		Fields: []FieldDefinition{
+			{Name: "YEAR", Descriptor: "I", Access: constant, Constant: IntValue(1)},
+			{Name: "MONTH", Descriptor: "I", Access: constant, Constant: IntValue(2)},
+			{Name: "DATE", Descriptor: "I", Access: constant, Constant: IntValue(5)},
+			{Name: "DAY_OF_MONTH", Descriptor: "I", Access: constant, Constant: IntValue(5)},
+			{Name: "DAY_OF_WEEK", Descriptor: "I", Access: constant, Constant: IntValue(7)},
+			{Name: "HOUR", Descriptor: "I", Access: constant, Constant: IntValue(10)},
+			{Name: "HOUR_OF_DAY", Descriptor: "I", Access: constant, Constant: IntValue(11)},
+			{Name: "MINUTE", Descriptor: "I", Access: constant, Constant: IntValue(12)},
+			{Name: "SECOND", Descriptor: "I", Access: constant, Constant: IntValue(13)},
+			{Name: "MILLISECOND", Descriptor: "I", Access: constant, Constant: IntValue(14)},
+		},
+		Methods: []MethodDefinition{
+			{Name: "getInstance", Descriptor: "()Ljava/util/Calendar;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "get", Descriptor: "(I)I", Access: native},
+			{Name: "getTime", Descriptor: "()Ljava/util/Date;", Access: AccessPublic | AccessFinal | AccessNative},
+			{Name: "setTime", Descriptor: "(Ljava/util/Date;)V", Access: AccessPublic | AccessFinal | AccessNative},
+		},
+	}
+}
+
+func dateDefinition() ClassDefinition {
+	native := AccessPublic | AccessNative
+	return ClassDefinition{
+		Name:      DateClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: native},
+			{Name: "<init>", Descriptor: "(J)V", Access: native},
+			{Name: "getTime", Descriptor: "()J", Access: native},
+			{Name: "setTime", Descriptor: "(J)V", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
+		},
+	}
+}
+
+// enumerationDefinition is the interface Hashtable's two views answer with. A
+// game holds one and walks it; nothing here implements it but the two views,
+// which are declared beside the table itself.
+func enumerationDefinition() ClassDefinition {
+	return ClassDefinition{
+		Name:      EnumerationClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessInterface | AccessAbstract,
+		Methods: []MethodDefinition{
+			{Name: "hasMoreElements", Descriptor: "()Z", Access: AccessPublic | AccessAbstract},
+			{Name: "nextElement", Descriptor: "()Ljava/lang/Object;", Access: AccessPublic | AccessAbstract},
+		},
+	}
+}
+
+// stackDefinition is Vector with the four methods that make it a stack. It is
+// a subclass in the standard library too, so a title that stores into it
+// through the Vector half sees what it expects.
+func stackDefinition() ClassDefinition {
+	return ClassDefinition{
+		Name:      StackClass,
+		SuperName: VectorClass,
+		Access:    AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: superInit(VectorClass, "()V")},
+			{Name: "push", Descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", Access: AccessPublic, Body: stackPush},
+			{Name: "pop", Descriptor: "()Ljava/lang/Object;", Access: AccessPublic, Body: stackPop},
+			{Name: "peek", Descriptor: "()Ljava/lang/Object;", Access: AccessPublic, Body: stackPeek},
+			{Name: "empty", Descriptor: "()Z", Access: AccessPublic, Body: stackEmpty},
+			{Name: "search", Descriptor: "(Ljava/lang/Object;)I", Access: AccessPublic, Body: stackSearch},
+		},
+	}
+}
+
+func stackPush(call *Invocation, arguments []Value) (Value, error) {
+	stack, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(stack, "addElement", "(Ljava/lang/Object;)V", arguments[1]); err != nil {
+		return VoidValue(), err
+	}
+	return arguments[1], nil
+}
+
+// stackTop answers the index of the top element, or the empty-stack exception
+// the standard raises rather than an out-of-range read.
+func stackTop(call *Invocation, stack *Object) (int32, error) {
+	result, err := call.InvokeVirtual(stack, "size", "()I")
+	if err != nil {
+		return 0, err
+	}
+	size, err := result.Int32()
+	if err != nil {
+		return 0, err
+	}
+	if size == 0 {
+		return 0, guestException("java/util/EmptyStackException", "the stack is empty")
+	}
+	return size - 1, nil
+}
+
+func stackPop(call *Invocation, arguments []Value) (Value, error) {
+	stack, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	top, err := stackTop(call, stack)
+	if err != nil {
+		return VoidValue(), err
+	}
+	element, err := call.InvokeVirtual(stack, "elementAt", "(I)Ljava/lang/Object;", IntValue(top))
+	if err != nil {
+		return VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(stack, "removeElementAt", "(I)V", IntValue(top)); err != nil {
+		return VoidValue(), err
+	}
+	return element, nil
+}
+
+func stackPeek(call *Invocation, arguments []Value) (Value, error) {
+	stack, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	top, err := stackTop(call, stack)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return call.InvokeVirtual(stack, "elementAt", "(I)Ljava/lang/Object;", IntValue(top))
+}
+
+func stackEmpty(call *Invocation, arguments []Value) (Value, error) {
+	stack, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return call.InvokeVirtual(stack, "isEmpty", "()Z")
+}
+
+// stackSearch counts from the top, where the top is 1, and answers -1 for an
+// element the stack does not hold.
+func stackSearch(call *Invocation, arguments []Value) (Value, error) {
+	stack, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	found, err := call.InvokeVirtual(stack, "lastIndexOf", "(Ljava/lang/Object;)I", arguments[1])
+	if err != nil {
+		return VoidValue(), err
+	}
+	index, err := found.Int32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	if index < 0 {
+		return IntValue(-1), nil
+	}
+	result, err := call.InvokeVirtual(stack, "size", "()I")
+	if err != nil {
+		return VoidValue(), err
+	}
+	size, err := result.Int32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	return IntValue(size - index), nil
 }
 
 // randomDefinition is the CLDC generator. The sequence is the one the standard

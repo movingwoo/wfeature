@@ -74,6 +74,13 @@ type Options struct {
 	// runtime being torn down — which is the only condition a spinning guest can
 	// be stopped by. Returning an error ends the execution with that error.
 	RenewSteps func() error
+	// Exit is what System.exit(status) does. A MIDlet is not supposed to call
+	// it — notifyDestroyed is the lifecycle's own way out — but titles of this
+	// era ship it on the path out of an error dialog, and with no hook the
+	// call ends the session as a failed method rather than as the shutdown the
+	// title asked for. A platform installs the same teardown its destroy path
+	// uses.
+	Exit func(status int32) error
 }
 
 // decodePlatformBytes converts guest byte content to text using the
@@ -131,6 +138,7 @@ type VM struct {
 	arraycopyMu      sync.Mutex
 	threadMu         sync.Mutex
 	threads          map[*Object]*guestThread
+	mainThread       *Object
 	aotClasses       map[string]AOTClassMetadata
 	aotAddresses     map[uint32]string
 	aotObjects       map[uint32]aotBinding

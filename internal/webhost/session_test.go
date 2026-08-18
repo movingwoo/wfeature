@@ -158,6 +158,42 @@ func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 	expectFrame(t, connection)
 }
 
+// A handful of titles were packaged for a smaller phone and load their artwork
+// by the screen they are given, so the page may ask for one. What the started
+// message then has to carry is the screen the platform took, because that is
+// what the picture will be.
+func TestSessionRunsAGameOnTheScreenThePageAsksFor(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip", Width: 176, Height: 220})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil {
+		t.Fatal("the started message carries no description")
+	}
+	if started.Started.Width != 176 || started.Started.Height != 220 {
+		t.Errorf("screen = %dx%d, want 176x220", started.Started.Width, started.Started.Height)
+	}
+	width, height := expectFrame(t, connection)
+	if width != 176 || height != 220 {
+		t.Fatalf("frame is %dx%d, want the screen that was asked for", width, height)
+	}
+}
+
+// A size no handset ever had is refused rather than clamped: it can only come
+// from a page this server does not serve, and starting a game on a screen
+// nothing was drawn for is worse than not starting it.
+func TestSessionRefusesAScreenOutsideTheHandsetRange(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip", Width: 20000, Height: 220})
+	refusal := expectMessage(t, connection, serverError)
+	if !strings.Contains(refusal.Message, "screen") {
+		t.Errorf("refusal = %q, want it to name the screen", refusal.Message)
+	}
+}
+
 func TestSessionMagnifiesWhenTheScaleIsRaised(t *testing.T) {
 	// The filter runs on the server, so a phone receives pixels it can draw
 	// without resampling — and this is a WIPI-only path, so on a MIDlet the

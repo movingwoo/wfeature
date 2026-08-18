@@ -52,6 +52,9 @@ type Runtime struct {
 	currentDisplayable  *jvm.Object
 	pendingDisplayable  *jvm.Object
 	displayUpdateQueued bool
+	// refreshPending is set by XDisplay.refresh and cleared by the Host pass
+	// that presents; refreshFrame is the picture it took. See presentRefresh.
+	refreshPending bool
 	// pendingSerial holds the Runnables Display.callSerially was handed. One
 	// comes off per Host pass rather than all of them at once: see
 	// callSeriallyRunnable.
@@ -62,6 +65,7 @@ type Runtime struct {
 	frameHeight  int
 	renderMu     sync.Mutex
 	frameRGBA    []byte
+	refreshFrame []byte
 	pendingPaint paintRect
 	paintCanvas  *jvm.Object
 	paintQueued  bool
@@ -181,6 +185,12 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if options.JVM.ByteEncoder == nil {
 		options.JVM.ByteEncoder = encodePlatformString
 	}
+	// A MIDlet leaves through notifyDestroyed, but titles of this era call
+	// System.exit on the way out of an error dialog or a quit menu. It means
+	// the same thing here, so it lands on the same teardown.
+	if options.JVM.Exit == nil {
+		options.JVM.Exit = runtime.exit
+	}
 	machine := jvm.New(source, options.JVM)
 	if err := midp.Define(machine); err != nil {
 		return nil, err
@@ -292,7 +302,12 @@ func (runtime *Runtime) RunPending() error {
 	if err := runtime.postNextSerialRunnable(); err != nil {
 		return err
 	}
-	return runtime.runEvents()
+	if err := runtime.runEvents(); err != nil {
+		return err
+	}
+	// A title that draws through the vendor's direct display pushes whenever
+	// it likes; this is where those pushes become one picture.
+	return runtime.presentRefresh()
 }
 
 func (runtime *Runtime) State() LifecycleState {
@@ -391,7 +406,16 @@ func (runtime *Runtime) dispatch(name string, handler func() error) error {
 	if err := runtime.events.Post(name, handler); err != nil {
 		return runtime.fail("queue "+name, err)
 	}
-	return runtime.runEvents()
+	err := runtime.runEvents()
+	// A lifecycle action is a Host pass too, and it is the only one some
+	// titles get: one that draws its notice through the direct display and
+	// then leaves does all of it inside startApp, and a Host that stops
+	// ticking a destroyed MIDlet would never show the notice. See
+	// presentRefresh.
+	if presentErr := runtime.presentRefresh(); err == nil {
+		err = presentErr
+	}
+	return err
 }
 
 func (runtime *Runtime) runEvents() error {
@@ -477,6 +501,7 @@ func (runtime *Runtime) registerMIDletNatives() error {
 		{midp.GraphicsClass, "getFont", "()Ljavax/microedition/lcdui/Font;", runtime.getGraphicsFont},
 		{midp.GraphicsClass, "setFont", "(Ljavax/microedition/lcdui/Font;)V", runtime.setGraphicsFont},
 		{midp.GraphicsClass, "setClip", "(IIII)V", runtime.setGraphicsClip},
+		{midp.GraphicsClass, "reset", "()V", runtime.resetGraphics},
 		{midp.GraphicsClass, "clipRect", "(IIII)V", runtime.clipGraphicsRect},
 		{midp.GraphicsClass, "getClipX", "()I", runtime.getGraphicsClipX},
 		{midp.GraphicsClass, "getClipY", "()I", runtime.getGraphicsClipY},
@@ -744,9 +769,11 @@ var systemProperties = map[string]string{
 	"microedition.encoding":      "ISO-8859-1",
 	"microedition.locale":        "ko-KR",
 
-	"MIN":                  wipic.SystemProperties["MIN"],
-	"m.MIN":                wipic.SystemProperties["MIN"],
-	"m.VENDER":             "wfeature",
+	"m.VENDER": "wfeature",
+	// The model number is read as a number — one title parses it before it
+	// compares it against the two handsets it carries workarounds for — so it
+	// is a number this runtime can answer without claiming to be either.
+	"m.MODEL":              "0",
 	"m.CARRIER":            "SKT",
 	"m.COLOR":              "7",
 	"m.SK_VM":              "10",
@@ -762,7 +789,15 @@ func (runtime *Runtime) getSystemProperty(_ *jvm.VM, arguments []jvm.Value) (jvm
 	if err != nil {
 		return jvm.VoidValue(), fmt.Errorf("system property key: %w", err)
 	}
+	// The subscriber number is read when it is asked for rather than copied
+	// into the table above, because a Host sets it after this package is
+	// loaded — `-number`, or WFEATURE_PHONE_NUMBER — and a title that
+	// authenticates against it would otherwise be handed the default no matter
+	// what the user chose. See docs/network.md.
 	value, ok := systemProperties[key]
+	if key == "MIN" || key == "m.MIN" {
+		value, ok = wipic.SubscriberNumber(), true
+	}
 	if !ok {
 		return jvm.ReferenceValue(nil), nil
 	}
@@ -794,6 +829,24 @@ func (runtime *Runtime) notifyDestroyed(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 		return nil
 	})
 	return jvm.VoidValue(), runtime.queueNotificationError("notifyDestroyed", err)
+}
+
+// exit is System.exit reaching the lifecycle. It is deliberately the same post
+// notifyDestroyed makes rather than an immediate teardown: the call is made
+// from guest code that is still running, and ending the runtime under it would
+// take the thread out mid-frame.
+func (runtime *Runtime) exit(status int32) error {
+	if runtime.logger != nil {
+		runtime.logger.Debug("MIDlet called System.exit", "status", status)
+	}
+	err := runtime.events.Post("System.exit", func() error {
+		state := runtime.State()
+		if state != StateDestroyed && state != StateError {
+			runtime.transition("exit", StateDestroyed)
+		}
+		return nil
+	})
+	return runtime.queueNotificationError("exit", err)
 }
 
 func (runtime *Runtime) resumeRequest(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

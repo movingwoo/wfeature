@@ -35,6 +35,18 @@ func (runtime *Runtime) getResourceAsStream(vm *jvm.VM, arguments []jvm.Value) (
 		return jvm.ReferenceValue(nil), nil
 	}
 	data, ok := findEntry(runtime.Archive.Entries, cleaned)
+	if !ok && cleaned != name {
+		// A relative name that its class's package does not answer is looked
+		// up again at the root of the archive. Three sibling titles load their
+		// tables with `Runtime.getRuntime().getClass().getResourceAsStream(
+		// "table.gft")`, where the strict reading asks java/lang for a file
+		// that is plainly at the top of the JAR: the handset runtime answered
+		// it, the titles shipped, and the class they ask through is a platform
+		// class with no package of its own to hold a game's data. The strict
+		// answer still wins when it finds something, so this only replaces a
+		// null.
+		data, ok = findEntry(runtime.Archive.Entries, path.Base(cleaned))
+	}
 	if !ok {
 		return jvm.ReferenceValue(nil), nil
 	}

@@ -153,6 +153,56 @@ way the library source preceded the JAR before. `jvm.CoreLibraryDefinitions`,
 can still be compiled against this runtime with `javac` (see
 [`testing.md`](testing.md)).
 
+### The classes a title names
+
+A native table and a class are not the same thing, and a runtime can carry one
+without the other for a long time before it matters. `Integer.parseInt` was
+answered here for sessions while `java/lang/Integer` did not exist as a class:
+every call resolved, because a native is looked up by name and descriptor
+before anything resolves a class at all. The day a title writes `new
+Integer(3)`, `catch (Throwable t)` or `x instanceof RuntimeException`, the
+class is what is asked for, and the answer was `class not found` on a method
+the runtime had implemented all along.
+
+Twelve archives arriving at once made that the largest single cause of a title
+refusing to start, so the boxed numbers, `Math`, `Runtime` and the whole
+throwable hierarchy are declared now. Three of those declarations are worth
+their own line:
+
+- **The exception classes are generated from the chain the runtime already
+  had.** `runtimeClassParents` is what a `catch` has always been resolved
+  through; the declarations are built from that same table rather than from a
+  second one beside it, so the class a `catch` resolves and the class a `new`
+  resolves cannot disagree. `instanceof` and `checkcast` work on them now as a
+  side effect, which was the open item this closed.
+- **A declaration whose method has no body is answered by the native under the
+  same key.** That is how `String` has always worked here, and the boxed
+  numbers now do the same: the declaration is the surface, `builtins.go` is the
+  behavior.
+- **Declaring a method the runtime does not implement is worse than not
+  declaring it.** Resolution finds the declared method, finds no body, and
+  fails with `method has no code` — where before it would have inherited a
+  working one from `java/lang/Object`. `Integer.equals` is the case: declaring
+  it meant implementing it, and value equality is what a title searching a
+  `Vector` of boxed numbers was always asking for.
+
+Two smaller rules came out of the same pass. **A parse of a null string is
+`NumberFormatException`**, not a failed native — a title parsing a system
+property the platform does not answer is asking a question with a Java answer,
+and it catches it. And **a charset name is either UTF-8, the handset's, or
+refused**: `String(byte[], String)` and `getBytes(String)` recognise the
+EUC-KR spellings a Korean title uses and route them through the platform's own
+encoder, because every handset this runtime serves has that default charset;
+anything else is refused rather than guessed at, since decoding text with the
+wrong table produces a screen full of plausible-looking mistakes.
+
+**`System.exit` is a Host decision, so it is a hook.** `Options.Exit` is what
+the call reaches, and a platform installs the teardown its own destroy path
+uses. A MIDlet is not supposed to call it — `notifyDestroyed` is the
+lifecycle's way out — but titles of this era ship it on the path out of an
+error dialog, and with no hook the call is a missing method that ends the
+session as a failure rather than as the shutdown the title asked for.
+
 ## Deliberately incomplete
 
 - the Java core class library and most MIDP/WIPI API classes. What is present
@@ -161,8 +211,14 @@ can still be compiled against this runtime with `javac` (see
   what a played game needs, and [`ktf.md`](ktf.md) is where it is described
 - the complete verifier and access control
 - complete assignability checks for interface inheritance and array covariance
-- complete guest thread lifecycle (`join`, priority, daemon, current-thread
-  identity) and full interruption semantics outside `Thread.sleep`
+- complete guest thread lifecycle (`join`, daemon) and full interruption
+  semantics outside `Thread.sleep`. `Thread.currentThread` answers the running
+  execution's thread, and the execution that is not a guest thread gets one
+  object of its own and keeps it. **Priority is kept and not honoured**: guest
+  threads here are driven in turn by the platform's own scheduler, so a title
+  that raises its loader above its frame loop is expressing a preference this
+  runtime cannot act on, and `getPriority` answering what was set is the honest
+  half of that
 - reflection, class loader object, weak reference
 - execution semantics for `invokedynamic`, method handles, and module constants
 - the LCDUI presentation for uncaught exceptions already retained in host

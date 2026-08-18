@@ -90,6 +90,23 @@ habits are worth keeping:
   recorded it as broken. Run it twice against the same save before calling
   anything a defect.
 
+**A corpus is scanned before it is run.** When a batch of archives arrives,
+`internal/tools/apiscan` answers what they link against that this runtime does
+not have, without running anything: every symbolic reference in every class,
+minus what the library declares and what the platform registers, ranked by how
+many titles want each entry.
+
+```sh
+go run ./internal/tools/apiscan -games var/games/skt -natives report.json
+```
+
+`-natives` takes any `runskt -diag` report, because a platform registers half
+its surface on a live runtime and a bare VM cannot see those registrations;
+without it the scan over-reports exactly that half. This is the cheap half of a
+compatibility pass — one run instead of the fix-run-fix loop a `-diag` report
+puts you in, and it ranks the work — but it is only the half a *link* can
+answer. Everything below is still how a title that starts is made to run.
+
 **Find the gap before reading the code.** `runktf -diag` counts what the title
 asked for, and the answer is usually already in it: read the `stub table`,
 `not implemented`, `throw` and `raise` lines first. One title's two-frames-per-
@@ -469,6 +486,22 @@ WFEATURE_KTF_FRAME_ACCEPTANCE=1 go test -run TestLocalKTFArchivesRenderFirstFram
 
 All 33 archives start their main class, and all 33 present a first frame with
 something lit in it.
+
+SKT has the same shape of probe, and it is the only test in that package that
+runs a real title:
+
+```sh
+WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./internal/platform/skt
+```
+
+Every archive under `var/games/skt` is started, ticked for 300 ticks and
+required to end somewhere other than the error state with something lit in its
+frame. **All 15 currently pass.** A tick here is real time — a MIDlet's threads
+sleep against the wall clock — so the subtests run in parallel and the whole
+probe takes about half a minute. Two of the fifteen finish early and still
+pass: they check a licence against the handset's subscriber number, draw the
+refusal and call `System.exit`, which is a title behaving correctly on a
+handset that is not the one it was bought for (`docs/skvm.md`).
 
 LGT has one opt-in probe, and it is the only test in that package that runs a
 real module:

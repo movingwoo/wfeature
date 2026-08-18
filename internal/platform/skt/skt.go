@@ -126,6 +126,13 @@ func installedFiles(reader *zip.Reader) (map[string][]byte, error) {
 			return nil, fmt.Errorf("read SKT installed file %q: %w", file.Name, err)
 		}
 		installed[name] = data
+		// A Korean file name is stored in the archive as EUC-KR bytes, while
+		// the name the title opens it by is a string constant out of its own
+		// class file, which is Unicode. Both spellings answer, because which
+		// one a title asks with is its business and neither is wrong.
+		if decoded := string(decodeArchiveText([]byte(name))); decoded != name {
+			installed[decoded] = data
+		}
 	}
 	return installed, nil
 }
@@ -147,8 +154,24 @@ func onlyJAR(reader *zip.Reader) ([]byte, error) {
 	return readArchiveEntry(reader, found.Name)
 }
 
+// readArchiveEntry reads one entry by its exact stored name. It walks the
+// entry list rather than calling Reader.Open, because Open takes a path in the
+// io/fs sense and refuses a name that is not valid UTF-8 — and a Korean
+// handset's archive carries EUC-KR file names, which one local title's data
+// file is. That refusal reads as "invalid argument" on a file that is right
+// there in the archive.
 func readArchiveEntry(reader *zip.Reader, name string) ([]byte, error) {
-	opened, err := reader.Open(name)
+	var found *zip.File
+	for _, file := range reader.File {
+		if file.Name == name {
+			found = file
+			break
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("SKT archive has no entry %q", name)
+	}
+	opened, err := found.Open()
 	if err != nil {
 		return nil, err
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 	"github.com/movingwoo/wfeature/internal/route"
+	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -147,6 +148,11 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	keyEvents := map[int][]int32{}
 	keyHold := 1
 	diagPath := ""
+	// The screen is the handset's, and on this vendor it is not the same
+	// handset for every title: one local archive ships its artwork only in the
+	// 120 and 176 wide sets and asks for a 240 one it does not contain, which
+	// is a title packaged for a smaller phone than the default.
+	screenWidth, screenHeight := session.DefaultWidth, session.DefaultHeight
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "-ticks":
@@ -201,6 +207,18 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			}
 			index++
 			diagPath = args[index]
+		case "-screen":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-screen expects <width>x<height>")
+				return 2
+			}
+			index++
+			width, height, err := parseScreenSize(args[index])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			screenWidth, screenHeight = width, height
 		case "-hold":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-hold expects a tick count")
@@ -225,7 +243,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	framebuffer, err := backend.NewMemoryFramebuffer(240, 320)
+	framebuffer, err := backend.NewMemoryFramebuffer(screenWidth, screenHeight)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -339,6 +357,22 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 
 // parseSKTKeyEvent splits "<tick>:<name>" the way parseKeyEvent does, against
 // the MIDP key codes a MIDlet compares with.
+// parseScreenSize reads a `<width>x<height>` screen. The bounds are the ones a
+// framebuffer of that size has to be worth allocating from an argument.
+func parseScreenSize(text string) (int, int, error) {
+	width, height, found := strings.Cut(strings.ToLower(text), "x")
+	if !found {
+		return 0, 0, fmt.Errorf("invalid -screen %q, want <width>x<height>", text)
+	}
+	parsedWidth, widthErr := strconv.Atoi(width)
+	parsedHeight, heightErr := strconv.Atoi(height)
+	if widthErr != nil || heightErr != nil ||
+		parsedWidth < 32 || parsedHeight < 32 || parsedWidth > 1024 || parsedHeight > 1024 {
+		return 0, 0, fmt.Errorf("invalid -screen %q, want two sizes between 32 and 1024", text)
+	}
+	return parsedWidth, parsedHeight, nil
+}
+
 func parseSKTKeyEvent(spec string) (int, int32, error) {
 	colon := strings.IndexByte(spec, ':')
 	if colon <= 0 || colon == len(spec)-1 {

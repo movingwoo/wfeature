@@ -82,61 +82,11 @@ func (vm *VM) registerBuiltins() {
 	vm.registerStringBuiltins()
 	vm.registerStringBuilderBuiltins(StringBufferClass)
 	vm.registerStringBuilderBuiltins(StringBuilderClass)
-	vm.registerExceptionBuiltins()
 	vm.registerMonitorBuiltins()
 	vm.registerThreadBuiltins()
 	vm.registerDataInputBuiltins()
 	vm.registerUtilityBuiltins()
-}
-
-func (vm *VM) registerExceptionBuiltins() {
-	vm.builtin("java/lang/Exception", "<init>", "()V", func(_ *VM, arguments []Value) (Value, error) {
-		if _, err := nativeReference(arguments, 0); err != nil {
-			return VoidValue(), err
-		}
-		return VoidValue(), nil
-	})
-	vm.builtin("java/lang/Exception", "<init>", "(Ljava/lang/String;)V", func(_ *VM, arguments []Value) (Value, error) {
-		object, err := nativeReference(arguments, 0)
-		if err != nil {
-			return VoidValue(), err
-		}
-		messageObject, err := nativeReference(arguments, 1)
-		if err != nil {
-			return VoidValue(), err
-		}
-		if messageObject == nil {
-			object.Native = nil
-			return VoidValue(), nil
-		}
-		message, ok := nativeStringObject(messageObject)
-		if !ok {
-			return VoidValue(), fmt.Errorf("native argument 1 is not a string")
-		}
-		object.Native = message
-		return VoidValue(), nil
-	})
-	vm.builtin("java/lang/Throwable", "printStackTrace", "()V", func(vm *VM, arguments []Value) (Value, error) {
-		object, err := nativeReference(arguments, 0)
-		if err != nil {
-			return VoidValue(), err
-		}
-		if vm.config.Logger != nil {
-			vm.config.Logger.Error("guest exception stack trace", "class", object.ClassName, "message", object.Native)
-		}
-		return VoidValue(), nil
-	})
-	vm.builtin("java/lang/Throwable", "getMessage", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
-		object, err := nativeReference(arguments, 0)
-		if err != nil {
-			return VoidValue(), err
-		}
-		message, _ := object.Native.(string)
-		if message == "" {
-			return ReferenceValue(nil), nil
-		}
-		return ReferenceValue(nativeStringValue(message)), nil
-	})
+	vm.registerLanguageBuiltins()
 }
 
 func (vm *VM) registerMonitorBuiltins() {
@@ -387,7 +337,7 @@ func (vm *VM) registerUtilityBuiltins() {
 	})
 	vm.builtin("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", parseInteger(10))
 	vm.builtin("java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I", func(_ *VM, arguments []Value) (Value, error) {
-		text, err := nativeString(arguments, 0)
+		text, err := parsedText(arguments)
 		if err != nil {
 			return VoidValue(), err
 		}
@@ -406,7 +356,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), err
 	})
 	vm.builtin("java/lang/Integer", "valueOf", "(Ljava/lang/String;)Ljava/lang/Integer;", func(_ *VM, arguments []Value) (Value, error) {
-		text, err := nativeString(arguments, 0)
+		text, err := parsedText(arguments)
 		if err != nil {
 			return VoidValue(), err
 		}
@@ -617,7 +567,7 @@ func (vm *VM) registerUtilityBuiltins() {
 
 func parseInteger(radix int) NativeMethod {
 	return func(_ *VM, arguments []Value) (Value, error) {
-		text, err := nativeString(arguments, 0)
+		text, err := parsedText(arguments)
 		if err != nil {
 			return VoidValue(), err
 		}
@@ -627,6 +577,25 @@ func parseInteger(radix int) NativeMethod {
 		}
 		return IntValue(int32(value)), nil
 	}
+}
+
+// parsedText reads the string a parse method was handed. A null is the
+// standard's NumberFormatException rather than a failed native, because a
+// title parsing a property the platform does not answer is asking a question
+// with a Java answer: it catches the exception and takes its other path.
+func parsedText(arguments []Value) (string, error) {
+	object, err := nativeReference(arguments, 0)
+	if err != nil {
+		return "", err
+	}
+	if object == nil {
+		return "", guestException("java/lang/NumberFormatException", "null")
+	}
+	value, ok := nativeStringObject(object)
+	if !ok {
+		return "", fmt.Errorf("native argument 0 is not a string")
+	}
+	return value, nil
 }
 
 // contextBuiltin installs one of the runtime's own bodies that needs the

@@ -584,6 +584,16 @@ body:has(.status-message.visible) .modal-backdrop {
   cursor: default;
 }
 
+/* A settings note says what a setting will and will not do to the game that is
+   running. It sits under its own control rather than in a status line, because
+   what it is about is that control. */
+.settings-note {
+  margin: 2px 0 8px;
+  color: #f0c674;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
 .key-bindings-hint {
   margin: 6px 0;
   color: #aaa;

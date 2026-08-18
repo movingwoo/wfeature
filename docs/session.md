@@ -50,7 +50,7 @@ envelope at all.
 
 | From the page | Means |
 |---|---|
-| `start` | run this archive, named by its `games.json` path |
+| `start` | run this archive, named by its `games.json` path, optionally on a named screen size |
 | `key` | one press, release or repeat, with the MIDP-style code the keypad has always sent |
 | `speed`, `scale` | the settings panel's two knobs |
 | `cheat` | one panel operation, or a text console line |
@@ -61,7 +61,7 @@ envelope at all.
 | From the server | Means |
 |---|---|
 | `ready` | the session will take a game, and which build profile is running |
-| `started` | the game is up, with its identity and screen size |
+| `started` | the game is up, with its identity and the screen it is actually drawing |
 | binary | one finished frame, PNG |
 | `audio` | a batch of sink calls in the order the guest made them |
 | `stats` | frames sent, frames dropped, average tick cost, average frame size |
@@ -73,6 +73,30 @@ half — the run log beside the screen and the button that saves a report — an
 release has no use for either. Which build is running is the server's answer
 rather than the page's guess: they are the same files, and the binary serving
 them is the one thing that knows.
+
+### The screen is part of starting a game
+
+A `start` may carry a `width` and a `height`, and the settings panel is where a
+page gets them. Almost every title here was drawn for 240x320 and that is the
+default, which is why the field is optional and absent from an ordinary start.
+A few were packaged for a smaller phone and **load their artwork by the screen
+they are given** — one local archive branches on the width and asks for a set
+of images its own package does not contain, so on a 240-wide screen it cannot
+run at all. `docs/skvm.md` has that title's own branch.
+
+Two rules keep the setting honest:
+
+- **The size the server refuses is the size no handset had.** Anything outside
+  32..1024 in either direction is answered with an error rather than clamped:
+  it can only come from a page this server does not serve, and starting a game
+  on a screen nothing was drawn for is worse than not starting it.
+- **`started` reports the screen the platform took, not the one the page asked
+  for.** KTF owns its screen and ignores the request; a page that laid out for
+  a size the game is not drawing would put the picture in the wrong place.
+
+The page remembers the choice per game rather than once, because it is a
+property of the title rather than a taste, and it applies at the next start — a
+MIDlet reads its screen once, when it starts.
 
 ### What a frame costs on its way out
 

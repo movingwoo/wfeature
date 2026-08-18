@@ -130,6 +130,21 @@
               <option value="4">hq4x (매우 느림)</option>
             </select>
           </label>
+          <label>📱 화면
+            <!-- The handset screen the game runs on. Almost every title here
+                 was drawn for 240x320 and that is the default; a few were
+                 packaged for a smaller phone and load their artwork by the
+                 size they are given, so running one on the wrong screen means
+                 it asks for pictures its own archive does not contain. It
+                 takes effect on the next start, which is why the note says so
+                 rather than the setting silently doing nothing. -->
+            <select id="screen-size" class="game-speed">
+              <option value="240x320" selected>240 × 320 (기본)</option>
+              <option value="176x220">176 × 220</option>
+              <option value="128x160">128 × 160</option>
+            </select>
+          </label>
+          <p id="screen-note" class="settings-note hidden"></p>
           <label>⏩ 속도
             <select id="game-speed" class="game-speed">
               <option value="0.25">0.25배</option>
