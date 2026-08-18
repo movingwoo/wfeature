@@ -3395,7 +3395,19 @@ means none of them has a branch of its own:
 
 `runktf` takes both generations, and refuses by name the options that only mean
 something to the other one: there are no AOT method bodies to profile or
-symbolize here, no descriptor to inspect, and no repro route runner yet.
+symbolize here, and no descriptor to inspect.
+
+`-route` works on both. A route is written against what is on the screen and
+which keys are pressed, and neither of those is a property of how the title was
+packaged, so the script file and the runner are the same — `internal/route`
+asks a platform for four functions rather than for an interface. What the
+earlier package supplies differently is only where the frame comes from and
+what a tick costs: `NativePlatform.FrameDigest` fingerprints the screen in
+place so a wait can ask every tick without copying it, and `Stalled` is "no
+deadline is pending", which on this package means nothing is left to run the
+title at all — it has no loop of its own. A `mark` names a place on the way
+rather than somewhere to start measuring from, because there is no profiler
+here to reset.
 
 ### What a run keeps of the calls it traps
 

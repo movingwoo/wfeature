@@ -724,15 +724,14 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// The vendor shipped two generations of package and this subcommand takes
 	// both, because a person with a game in their hand should not have to know
 	// which one it is. What the earlier one cannot do it refuses by name: it
-	// has no descriptor to inspect, no AOT methods to profile or symbolize,
-	// and no repro route runner yet. The cheat engine it does have.
+	// has no descriptor to inspect and no AOT methods to profile or symbolize.
+	// The cheat engine and the route runner it does have.
 	if ktf.IsNativeArchive(data) {
 		for name, unsupported := range map[string]bool{
 			"-diag":           diagPath != "",
 			"-gdb":            gdbAddress != "",
 			"-profile":        profilePath != "",
 			"-profile-folded": profileFoldedPath != "",
-			"-route":          routePath != "",
 		} {
 			if unsupported {
 				fmt.Fprintf(stderr, "%s is not available for the earlier KTF package\n", name)
@@ -742,6 +741,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		return runKTFNative(ctx, data, nativeRun{
 			ticks:        ticks,
 			ticksChosen:  ticksChosen,
+			script:       script,
 			framePath:    framePath,
 			frameDir:     frameDir,
 			play:         play,
