@@ -63,6 +63,10 @@ type NativeSessionOptions struct {
 	// Speed scales how fast the title runs against the clock above. Zero and
 	// one are both the speed it was written for; see NativePlatform.SetSpeed.
 	Speed float64
+	// Width and Height name the handset the title is told it runs on. Zero
+	// for either selects the platform's own 240x320; see
+	// NativePlatform.SetScreen.
+	Width, Height int
 }
 
 // nativeSessionDefaultMaxSteps covers the title's own start-up, which loads
@@ -118,6 +122,8 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	}
 	platform := NewNativePlatform(client, archive, options.Clock)
 	platform.SetSpeed(options.Speed)
+	// Before Boot, because Install builds the screen from it.
+	platform.SetScreen(options.Width, options.Height)
 	platform.AttachSaves(options.SaveStore)
 	platform.AttachAudio(options.AudioSink)
 	if err := platform.Boot(ctx); err != nil {

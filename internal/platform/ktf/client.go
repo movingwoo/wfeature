@@ -73,6 +73,11 @@ type Client struct {
 	frameWidth    int
 	frameHeight   int
 	flushCount    uint32
+	// screenWidth and screenHeight are the handset this game is told it runs
+	// on. Zero means the platform's own, which is what all but a title
+	// packaged for a smaller phone wants; see SetScreen.
+	screenWidth  int
+	screenHeight int
 	// framePending records that the guest flushed since the last conversion,
 	// so Frame knows it has work to do. See presentScreen.
 	framePending     bool
@@ -165,6 +170,43 @@ func (client *Client) guestPrint(line string) {
 		return
 	}
 	client.logger.Info("KTF guest printk", "text", strings.TrimRight(line, "\r\n"))
+}
+
+// SetScreen names the handset the game is told it runs on. Zero for either
+// side selects the platform's own 240x320, which is what every local title
+// but one packaged for a smaller phone wants.
+//
+// **It is an emulation input rather than a view setting.** Nothing here
+// scales a picture: how large the frame is drawn belongs to the Host, and
+// this changes what the guest is told and therefore which artwork it loads
+// and how it lays a screen out. A title that carries no artwork for the size
+// it is given draws nothing usable, so this is a choice about the archive
+// rather than a preference.
+//
+// **Both answers have to agree or the picture tears.** A game reads the size
+// from MC_grpGetDisplayInfo and the row stride from the framebuffer record,
+// and two local titles write into the buffer directly with the stride they
+// were told. Answering one and not the other lays every row at the wrong
+// offset — see docs/ktf.md. Both read the same fields here for that reason.
+//
+// It must be set before guest code runs: the screen framebuffer is built once,
+// on the game's first request for it, and never resized.
+func (client *Client) SetScreen(width, height int) {
+	if client == nil {
+		return
+	}
+	client.screenWidth = width
+	client.screenHeight = height
+}
+
+// screenSize is the handset to answer with, with the platform's own standing
+// in for whatever was not chosen.
+func (client *Client) screenSize() (int, int) {
+	width, height := runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	if client != nil && client.screenWidth > 0 && client.screenHeight > 0 {
+		width, height = client.screenWidth, client.screenHeight
+	}
+	return width, height
 }
 
 // Frame returns a copy of the last flushed RGBA screen frame with its size

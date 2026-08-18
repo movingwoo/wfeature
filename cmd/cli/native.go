@@ -33,11 +33,17 @@ type nativeRun struct {
 	keyHold      int
 	audioPrefix  string
 	cheatConsole bool
+	screenWidth  int
+	screenHeight int
 	logger       *slog.Logger
 }
 
 func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stderr io.Writer) int {
-	options := ktf.NativeSessionOptions{Logger: run.logger}
+	options := ktf.NativeSessionOptions{
+		Logger: run.logger,
+		Width:  run.screenWidth,
+		Height: run.screenHeight,
+	}
 	if run.saveRoot != "" {
 		owner, err := nativeSaveOwner(data)
 		if err != nil {

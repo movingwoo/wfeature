@@ -552,14 +552,14 @@ func init() {
 					name:           "getWidth",
 					descriptor:     "()I",
 					accessFlags:    0x0001,
-					implementation: runtimeCardIntField("w:I", 240),
+					implementation: runtimeCardScreenField("w:I", runtimeScreenWidth),
 				},
 				{
 					class:          runtimeCardClass,
 					name:           "getHeight",
 					descriptor:     "()I",
 					accessFlags:    0x0001,
-					implementation: runtimeCardIntField("h:I", 320),
+					implementation: runtimeCardScreenField("h:I", runtimeScreenHeight),
 				},
 				{
 					class:          runtimeCardClass,
@@ -974,21 +974,38 @@ func init() {
 	}
 }
 
+// The handset these games were written for. It is the default rather than the
+// rule: a Host may name another screen, and Client.SetScreen says what that
+// changes and what it does not.
 const (
 	runtimeDisplayPixelWidth  = 240
 	runtimeDisplayPixelHeight = 320
 )
 
+// runtimeScreenWidth and runtimeScreenHeight are the screen the Java surface
+// answers with. They read the same size the WIPI-C surface does, so a game
+// that asks Display and a game that asks MC_grpGetDisplayInfo are told the
+// same thing.
+func runtimeScreenWidth(runtime *initializationRuntime) int32 {
+	width, _ := runtime.screenSize()
+	return int32(width)
+}
+
+func runtimeScreenHeight(runtime *initializationRuntime) int32 {
+	_, height := runtime.screenSize()
+	return int32(height)
+}
+
 func runtimeGetNamedDisplay(runtime *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	return runtimeGetDefaultDisplay(runtime, vm, nil)
 }
 
-func runtimeDisplayWidth(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(runtimeDisplayPixelWidth), nil
+func runtimeDisplayWidth(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(runtimeScreenWidth(runtime)), nil
 }
 
-func runtimeDisplayHeight(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(runtimeDisplayPixelHeight), nil
+func runtimeDisplayHeight(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(runtimeScreenHeight(runtime)), nil
 }
 
 // runtimeDisplayCallSerially queues a Runnable for the Host event loop, which
@@ -2131,7 +2148,7 @@ func runtimeAnnunciatorShow(_ *initializationRuntime, _ *jvm.VM, arguments []jvm
 }
 
 func runtimeCardConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	return runtimeCardInitialize(runtime, arguments, 0, 0, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight, 0)
+	return runtimeCardInitialize(runtime, arguments, 0, 0, runtimeScreenWidth(runtime), runtimeScreenHeight(runtime), 0)
 }
 
 func runtimeCardConstructorTransparent(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2143,7 +2160,7 @@ func runtimeCardConstructorTransparent(runtime *initializationRuntime, _ *jvm.VM
 		}
 		transparent = value
 	}
-	return runtimeCardInitialize(runtime, arguments, 0, 0, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight, transparent)
+	return runtimeCardInitialize(runtime, arguments, 0, 0, runtimeScreenWidth(runtime), runtimeScreenHeight(runtime), transparent)
 }
 
 func runtimeCardConstructorBounds(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2192,6 +2209,16 @@ func runtimeCardInitialize(runtime *initializationRuntime, arguments []jvm.Value
 // runtimeCardIntField reads a Card geometry field set by its constructor and
 // falls back to the default screen bounds for instances the constructor has
 // not reached yet.
+// runtimeCardScreenField is runtimeCardIntField for the two fields whose
+// fallback is the screen rather than a constant. A Card built by the
+// constructors above carries w and h already; this is what answers for one
+// that reached the accessor without them.
+func runtimeCardScreenField(key string, fallback func(*initializationRuntime) int32) runtimeJavaImplementation {
+	return func(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		return runtimeCardIntField(key, fallback(runtime))(runtime, vm, arguments)
+	}
+}
+
 func runtimeCardIntField(key string, fallback int32) runtimeJavaImplementation {
 	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		if len(arguments) != 1 {

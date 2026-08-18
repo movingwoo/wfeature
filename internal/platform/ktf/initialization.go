@@ -1475,7 +1475,8 @@ func (runtime *initializationRuntime) wipicGetScreenFramebuffer() (uint32, error
 	if runtime.screenFramebuffer != 0 {
 		return runtime.screenFramebuffer, nil
 	}
-	record, err := runtime.newWIPICFramebufferRecord(runtimeDisplayPixelWidth, runtimeDisplayPixelHeight)
+	width, height := runtime.screenSize()
+	record, err := runtime.newWIPICFramebufferRecord(uint32(width), uint32(height))
 	if err != nil {
 		return 0, fmt.Errorf("create KTF screen framebuffer: %w", err)
 	}
@@ -1483,24 +1484,37 @@ func (runtime *initializationRuntime) wipicGetScreenFramebuffer() (uint32, error
 	return record, nil
 }
 
-// wipicGetDisplayInfo answers MC_grpGetDisplayInfo with the fixed 240x320
-// 16-bit 565 screen the original runtime reports. The struct stores the red,
-// blue, and green masks in that order.
+// screenSize is the handset this game was told it runs on. It is the one
+// answer the screen framebuffer and MC_grpGetDisplayInfo both read, because a
+// game that is given a width by one and a stride by the other writes its rows
+// at the wrong offsets; see Client.SetScreen.
+func (runtime *initializationRuntime) screenSize() (int, int) {
+	if runtime == nil {
+		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	}
+	return runtime.client.screenSize()
+}
+
+// wipicGetDisplayInfo answers MC_grpGetDisplayInfo with the 16-bit 565 screen
+// this game runs on — 240x320, the one the original runtime reports, unless
+// the Host named another handset. The struct stores the red, blue, and green
+// masks in that order.
 func (runtime *initializationRuntime) wipicGetDisplayInfo(thread *armcore.Thread) (uint32, error) {
 	outAddress, err := thread.Register(1)
 	if err != nil {
 		return 0, err
 	}
+	width, height := runtime.screenSize()
 	info := []uint32{
-		16,                           // bpp
-		16,                           // depth
-		runtimeDisplayPixelWidth,     // width
-		runtimeDisplayPixelHeight,    // height
-		2 * runtimeDisplayPixelWidth, // bytes per line
-		1,                            // direct color
-		0xf800,                       // red mask
-		0x001f,                       // blue mask
-		0x07e0,                       // green mask
+		16,                // bpp
+		16,                // depth
+		uint32(width),     // width
+		uint32(height),    // height
+		2 * uint32(width), // bytes per line
+		1,                 // direct color
+		0xf800,            // red mask
+		0x001f,            // blue mask
+		0x07e0,            // green mask
 	}
 	data := make([]byte, len(info)*4)
 	for index, word := range info {

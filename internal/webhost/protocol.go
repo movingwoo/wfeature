@@ -40,7 +40,8 @@ type clientMessage struct {
 	// what every game but a handful wants. A title packaged for a smaller
 	// phone reads its screen and then loads artwork by that size, so the one
 	// that ships no 240-wide set cannot be run on a 240-wide screen at all —
-	// see docs/skvm.md. KTF ignores the request: its screen is the platform's.
+	// see docs/skvm.md. Every platform honours it; the started message reports
+	// the screen the game actually got, which is what the page reads back.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
 

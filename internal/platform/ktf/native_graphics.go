@@ -58,8 +58,9 @@ type nativeScreen struct {
 
 // installScreen registers the screen interface.
 func (platform *NativePlatform) installScreen() {
+	width, height := platform.screenSize()
 	platform.screen = &nativeScreen{
-		frame: image.NewRGBA(image.Rect(0, 0, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight)),
+		frame: image.NewRGBA(image.Rect(0, 0, width, height)),
 	}
 	surface := nativeInterfaceSurface(nativeInterfaceApplication)
 	platform.client.Serve(surface, nativeScreenRectangle, platform.drawRectangle)
