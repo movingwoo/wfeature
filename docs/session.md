@@ -74,6 +74,49 @@ release has no use for either. Which build is running is the server's answer
 rather than the page's guess: they are the same files, and the binary serving
 them is the one thing that knows.
 
+### One touch can be a run of keys
+
+A finger dragged across the keypad presses each key it crosses and releases the
+one it leaves, so a thumb rolled around the direction pad sends 2, 6, 8, 4 in
+turn without lifting. The page is where this lives; the server sees ordinary
+`key` messages and cannot tell a slide from four separate presses.
+
+A slide does not have to begin on a key. A thumb on a handset presses whatever
+it reaches, so a finger that goes down on the screen or in the margin beside the
+pad is followed too, and the first key it crosses is pressed. That is why the
+keys are not bound one at a time — `pointerdown` is watched on the document, and
+what the finger went down on only decides whether a key is pressed straight
+away.
+
+What a slide runs across is the pad: the two key blocks and the row of `*`, `0`
+and `#` under them, which is `.keypad-main` and `.keypad-footer` in the markup.
+The keypad's top row is deliberately outside it. Opts, the layout toggle, Call
+and CLR are aimed at one at a time — a slide that woke one of them on its way
+past would be a surprise, and CLR in the middle of a game is an expensive one —
+so a press there holds that one key until the finger lifts, wherever it wanders,
+and a slide crossing the row presses nothing. A slide does not begin on any
+button that is not a key, nor on the keypad's own frame, nor in the run log or
+the cheat panel, which scroll and are selected and belong to the finger that
+lands in them. `web/keypad.test.mjs` holds the pad and the top row apart in the
+markup, since which side of that line a button sits on is what decides its
+behaviour.
+
+Two details are what make it behave. A press that starts on a key captures the
+pointer, because otherwise the moves and the release stop arriving the moment
+the finger leaves that button — and capture then means the event no longer says
+what is under the finger, so the point is asked with `elementFromPoint` instead.
+A finger that started beside the keys needs no capture: its events belong to no
+button and the window hears them wherever it goes. And the key being left is
+released before the next is pressed, since a game reads them in the order they
+arrive and one finger never means two keys held at once.
+
+Off the keys a finger holds nothing, and sliding back on presses again. Two
+fingers reaching the same key — one sliding onto what the other holds, or onto
+the second button a key is printed on, which the type-2 and type-3 layouts both
+do — are one press between them, released when the last of them leaves. That
+bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
+can drive it directly; what is under the finger stays `app.js`'s question.
+
 ### The screen is part of starting a game
 
 A `start` may carry a `width` and a `height`, and the settings panel is where a

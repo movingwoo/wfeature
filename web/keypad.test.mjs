@@ -78,3 +78,24 @@ test("no two keys share a code", () => {
     seen.set(code, name);
   }
 });
+
+test("the keys a finger can slide across are the pad's, and the top row is not", () => {
+  // app.js decides what a slide may press by where a button sits: inside
+  // `.keypad-main` or `.keypad-footer` it is the pad and a finger crossing it
+  // presses it, and outside them it is the top row, which is aimed at one key
+  // at a time. Moving a button between the two in the markup would change what
+  // a drag does with nothing else to say so.
+  const container = page.slice(page.indexOf('class="button-container"'), page.indexOf("</main>"));
+  const padStart = container.indexOf('class="keypad-main"');
+  const padEnd = container.indexOf("</p>", container.indexOf('class="keypad-footer"'));
+  assert.ok(padStart > 0 && padEnd > padStart, "the keypad's own markup has moved");
+
+  const keysIn = source => [...source.matchAll(/data-key="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(keysIn(container.slice(0, padStart)), ["CLR", "CALL"]);
+  assert.deepEqual(keysIn(container.slice(padEnd)), [], "a key sits below the pad");
+  // Everything else, and the pad is where a slide runs.
+  assert.deepEqual(
+    keysIn(container.slice(padStart, padEnd)),
+    buttonKeys.filter(name => name !== "CLR" && name !== "CALL"),
+  );
+});

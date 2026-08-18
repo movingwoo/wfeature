@@ -1,5 +1,6 @@
 import { clearLog, recordEvent, saveReport, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
+import { createKeyHolds } from "./key-holds.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import {
   assign,
@@ -233,8 +234,6 @@ const sendKey = (eventType, name) => {
 };
 
 const initInput = () => {
-  const pressedButtons = new Map();
-
   // A key can be printed on more than one button — the type-2 layout keeps the
   // digits the type-1 direction pad uses, and type 3 prints 1 and 3 on the
   // direction pad as well — so lighting a key lights every button carrying it,
@@ -254,29 +253,84 @@ const initInput = () => {
     for (const button of buttonsByKey.get(name) ?? []) button.classList.toggle("pressed", down);
   };
 
-  for (const button of document.querySelectorAll("button[data-key]")) {
-    button.addEventListener("pointerdown", event => {
-      event.preventDefault();
-      button.setPointerCapture(event.pointerId);
-      pressedButtons.set(event.pointerId, button.dataset.key);
-      showPressed(button.dataset.key, true);
-      sendKey("press", button.dataset.key);
-    });
-  }
-
-  const release = event => {
-    const name = pressedButtons.get(event.pointerId);
-    if (name === undefined) return;
-    pressedButtons.delete(event.pointerId);
-    showPressed(name, false);
-    sendKey("release", name);
-  };
-  window.addEventListener("pointerup", release);
-  window.addEventListener("pointercancel", release);
+  const holds = createKeyHolds({
+    press: name => {
+      showPressed(name, true);
+      sendKey("press", name);
+    },
+    release: name => {
+      showPressed(name, false);
+      sendKey("release", name);
+    },
+  });
 
   // Typing into the cheat panel must not reach the game.
   const isTextEntry = target =>
     target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "SELECT");
+
+  // The pad is what a finger slides across: the two key blocks and the row of
+  // *, 0 and # under them. The keypad's top row is not part of it. Opts, the
+  // layout toggle, Call and CLR are aimed at one at a time — a slide that woke
+  // one of them on its way past would be a surprise, and CLR in the middle of a
+  // game is an expensive one — so they are pressed the way every button here
+  // was before sliding: held until the finger lifts, wherever it wanders.
+  const padKey = element => {
+    const button = element?.closest?.("button[data-key]");
+    return button?.closest(".keypad-main, .keypad-footer") ? button.dataset.key : null;
+  };
+
+  // Where a slide may begin. A finger that goes down on the screen or in the
+  // margins is on a handset and takes the keys it reaches, which is the whole
+  // point of the gesture. Three places are not that: the run log and the cheat
+  // panel are a document, and they scroll and are selected; any other button is
+  // a control that was aimed at; and the keypad's own frame is where the top
+  // row sits, the strip this gesture is deliberately kept out of.
+  const slidesFrom = target =>
+    target instanceof Element &&
+    !isTextEntry(target) &&
+    !target.closest(".log-view, .cheat-panel") &&
+    !target.closest("button") &&
+    !target.matches(".button-container");
+
+  // The keys are not bound one by one, because a slide has to be able to begin
+  // where there is no key: pressing the pad is one gesture and the finger that
+  // arrives from the screen or the margin is the same finger.
+  document.addEventListener("pointerdown", event => {
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest("button[data-key]");
+    if (button) {
+      event.preventDefault();
+      // Capture keeps the moves and the release coming once the finger leaves
+      // the button it started on. A finger that started beside the keys needs
+      // nothing of the sort: its events already belong to no button, and the
+      // window hears them wherever it goes.
+      button.setPointerCapture(event.pointerId);
+      const name = button.dataset.key;
+      if (padKey(button)) holds.moveTo(event.pointerId, name);
+      else holds.latch(event.pointerId, name);
+      return;
+    }
+    if (slidesFrom(target)) holds.track(event.pointerId);
+  });
+
+  // Capture also means the event no longer says what is under the finger — it
+  // is still addressed to the button the press started on — so the point is
+  // asked instead. Off the pad the answer is null, and the key that was held is
+  // let go until the finger comes back — the top row counts as off the pad.
+  const keyUnder = event => padKey(document.elementFromPoint(event.clientX, event.clientY));
+
+  window.addEventListener(
+    "pointermove",
+    event => {
+      if (!holds.tracking(event.pointerId)) return;
+      holds.moveTo(event.pointerId, keyUnder(event));
+    },
+    { passive: true },
+  );
+
+  const release = event => holds.lift(event.pointerId);
+  window.addEventListener("pointerup", release);
+  window.addEventListener("pointercancel", release);
 
   // Resting on a key or smearing across the pad is a gesture the browser reads
   // as its own: Android offers to translate or search the word under the
