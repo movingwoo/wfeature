@@ -2094,6 +2094,49 @@ and `wfeature provision` writes one sealed for the number this platform
 answers with. It is a command a person runs deliberately for an archive they
 hold; nothing in the emulator calls it.
 
+## What the corpus names, and what it never asks for
+
+A KTF title is AOT-compiled, so the constant pools a scan of a Java archive
+reads are gone. What survives is the **name pool inside the client image**: a
+run of NUL-terminated strings holding class names on their own and member
+entries of the form `<descriptor>+<name>`. It is what the guest hands to the
+platform's class lookup, it is in the file rather than built at startup —
+relocation moves the image but does not write those strings — so reading it
+costs nothing and runs nothing. `internal/tools/apiscan` does it for a whole
+directory of archives and ranks the result by how many titles name each entry.
+
+**Only the class half of the question survives compilation.** A pool entry says
+a method exists by name and descriptor; which class owns it is in the records
+the image builds at runtime, not in the pool. So a method missing from a class
+this platform *does* publish is not something a scan can see here — that half
+is what a KTF corpus loses by not being class files, and it stays a matter for
+`-diag` and a run.
+
+**A name is what a title could ask for, not what it does.** Every one of the 33
+local archives names `org/kwis/msp/lcdui/PluginJlet`; the four checked with
+`ktfdump -classes` all extend `Jlet` instead, and their class tables after
+`startApp` have no PluginJlet in them. The pool is the SDK's as much as the
+title's — a name can be there because the toolchain put it there. That is the
+right bound for a pass planned before anything runs — it cannot miss a class a
+title will ask for — but a name in this list is a reason to look, not a defect.
+
+What the local corpus names and this platform does not publish, in the order
+the scan ranks it:
+
+| Named by | Class | Reading |
+|---|---|---|
+| 33 | `org/kwis/msp/lcdui/PluginJlet` | Named by every archive, extended by none. |
+| 14 | `org/kwis/msf/io/Socket`, `org/kwis/msf/io/URL` | The network classes beside `Network`, which is published. No local run has reached one. |
+| 2 | `java/lang/OutOfMemoryError` | A `catch` a title would only take if this arena ran out. |
+| 1 each | `java/lang/Short`, `org/kwis/msp/lwc/DialogComponent`, `org/kwis/msp/lwc/LabelComponent` | The two lwc components sit beside the ones that are published. |
+
+None of these is a title that fails today, which is exactly what makes the list
+worth keeping written down rather than acted on: the failure mode of a missing
+class is not a refusal at startup but "method … was not found from class …" at
+the first call, an hour into a save (see "A class left out of that table still
+resolves"). **If one of these names turns up in a report, it is already
+identified and the fix is the same shape as the others in the runtime table.**
+
 ## What a batch of new archives asked for
 
 Seven titles that had never run were driven from a fresh save, and what stopped

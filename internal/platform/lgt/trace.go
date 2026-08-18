@@ -232,6 +232,8 @@ func svcCategoryName(category uint32) string {
 		return "stdlib"
 	case svcCategoryOEM:
 		return "oem"
+	case svcCategoryJava:
+		return "java"
 	}
 	return fmt.Sprintf("category%d", category)
 }
@@ -442,4 +444,8 @@ var stdlibSlotNames = map[uint32]string{
 	stdlibMemset:    "memset",
 	stdlibTime:      "time",
 	stdlibLocaltime: "localtime",
+	// Named for what it was watched doing rather than after a C function; see
+	// stdlib.go. It is serviced like the rest, so leaving it out of this table
+	// made a trace call it `unnamed` and made an import scan count it as a gap.
+	stdlibRunFunction: "runFunction",
 }

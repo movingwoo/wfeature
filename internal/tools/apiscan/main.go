@@ -1,27 +1,42 @@
-// Command apiscan reads every class in a MIDlet archive and reports the
-// library classes, methods and fields the title links against that this
-// runtime does not answer.
+// Command apiscan reports, per archive, the platform surface a title links
+// against that this runtime does not answer — without playing it.
 //
-// It is a static read — nothing runs — which is what makes it worth having
-// beside `runskt -diag`. A report says what a title asked for before it
-// stopped; this says what it would ask for if it got that far, so a session
-// can be planned from one pass over the library instead of from a run, a fix,
-// and another run each time. A whole vendor's corpus scanned at once also
-// ranks the gaps by how many titles want them, which is the order worth
-// implementing in.
+// It is worth having beside a `-diag` report because the two answer different
+// questions. A report says what a title asked for before it stopped, which is
+// one gap per run and a rebuild between each; this says what it would ask for
+// if it got that far, so a session can be planned from one pass over a corpus.
+// Scanned over a whole vendor's archives at once it also ranks the gaps by how
+// many titles want each one, which is the order worth implementing in.
 //
 //	go run ./internal/tools/apiscan -games var/games/skt
 //	go run ./internal/tools/apiscan -games var/games/skt -natives report.json
+//	go run ./internal/tools/apiscan -games var/games/ktf
+//	go run ./internal/tools/apiscan -games var/games/lgt
 //
-// The `-natives` report is any `runskt -diag` output: a platform registers
-// part of its surface on a live runtime rather than in a declaration, and a
-// bare VM cannot see those registrations. Without it the scan over-reports
-// exactly that half.
+// Each archive is scanned as the platform it belongs to, so a mixed directory
+// is one pass. What "links against" means is not the same on all three, and
+// neither is the cost:
+//
+//   - An SKT title is Java, so every reference it makes is in its own constant
+//     pools. Reading them is the whole scan and nothing runs.
+//   - A KTF title is AOT-compiled to ARM, and what survives of its references
+//     is the name pool inside the client image: the platform classes it names.
+//     Nothing runs here either, and the method half of the question is gone —
+//     see ktfPlatformNames.
+//   - An LGT title is a native module whose imports exist nowhere but the calls
+//     it makes while it starts, so this scan starts it and reads back what it
+//     resolved. It is one boot per archive rather than a read.
+//
+// The `-natives` report is any `runskt -diag` output: the SKT platform
+// registers part of its surface on a live runtime rather than in a
+// declaration, and a bare VM cannot see those registrations. Without it the
+// scan over-reports exactly that half.
 package main
 
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -35,6 +50,9 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
+	"github.com/movingwoo/wfeature/internal/platform/detect"
+	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/platform/lgt"
 )
 
 type surface struct {
@@ -188,7 +206,7 @@ func main() {
 	total := map[string]*gap{}
 	for _, path := range paths {
 		title := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		gaps, err := scan(shape, path)
+		gaps, err := scanArchive(shape, path)
 		if err != nil {
 			fmt.Printf("%-28s ERROR %v\n", title, err)
 			continue
@@ -233,13 +251,33 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// scan reads every class in the archive's JAR and returns the references that
-// name a class outside the archive which this runtime does not answer.
-func scan(shape *surface, path string) (map[string]string, error) {
+// scanArchive scans one archive as the platform it belongs to. Detection is
+// the archive's own shape rather than the directory it was found in, so a
+// mixed directory scans in one pass and a misfiled archive is scanned
+// correctly rather than reported as broken.
+func scanArchive(shape *surface, path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	platform, err := detect.Archive(data)
+	if err != nil {
+		return nil, err
+	}
+	switch platform {
+	case detect.KTF:
+		return scanKTF(data)
+	case detect.LGT:
+		return scanLGT(data)
+	case detect.SKT:
+		return scan(shape, data)
+	}
+	return nil, fmt.Errorf("no platform claims this archive")
+}
+
+// scan reads every class in the archive's JAR and returns the references that
+// name a class outside the archive which this runtime does not answer.
+func scan(shape *surface, data []byte) (map[string]string, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err
@@ -354,4 +392,200 @@ func poolReference(pool classfile.ConstantPool, constant classfile.Constant) (cl
 		return classfile.Reference{}, err
 	}
 	return classfile.Reference{Class: className, Name: name, Descriptor: descriptor}, nil
+}
+
+// scanKTF reports the platform classes a KTF title names that this runtime
+// does not publish.
+//
+// A KTF title is AOT-compiled ARM rather than class files, so there are no
+// constant pools to read. What is left of its references is the name pool
+// inside the client image — the strings the guest hands to the platform's own
+// class lookup — and those are read straight out of the file: relocation moves
+// them but does not write them, so nothing has to run.
+func scanKTF(data []byte) (map[string]string, error) {
+	archive, err := ktf.Open(data)
+	if err != nil {
+		return nil, err
+	}
+	answered := ktfAnswered()
+	gaps := map[string]string{}
+	for _, name := range ktfPlatformNames(archive.JAR.Client.Data) {
+		if !answered[name] {
+			gaps[name] = "class"
+		}
+	}
+	return gaps, nil
+}
+
+// ktfAnswered is every class name a KTF guest can name and get a real class
+// back for: the platform's own published table, and the core library the JVM
+// carries underneath it, which is what a title's `catch` and its `new` on an
+// exception type resolve through.
+func ktfAnswered() map[string]bool {
+	answered := map[string]bool{}
+	for _, name := range ktf.RuntimeJavaClassNames() {
+		answered[name] = true
+	}
+	for _, definition := range jvm.CoreLibraryDefinitions() {
+		answered[definition.Name] = true
+	}
+	return answered
+}
+
+// ktfPlatformNames reads the class names out of a client image's name pool.
+//
+// The pool is a run of NUL-terminated strings holding everything the image
+// names by text: class names on their own, and method entries of the form
+// `<descriptor>+<name>`, whose descriptor carries the classes a signature
+// mentions. Both are read, because a class a title only ever passes as an
+// argument appears in no other form.
+//
+// **Only the method half of the question is lost.** A pool entry says which
+// methods exist by name and descriptor but not which class each one belongs
+// to — the pairing is in the class records the image builds at runtime — so a
+// missing method on a class this platform does publish is not something this
+// scan can see. It is the half a KTF corpus loses by being compiled.
+//
+// The pool also holds strings that are not class names at all: resource paths,
+// which are slash-separated too, and the title's own packages. Both are
+// dropped by asking whether the name sits in a package this platform publishes
+// classes in, which is exactly the set worth reporting a hole in.
+func ktfPlatformNames(image []byte) []string {
+	packages := map[string]bool{}
+	for name := range ktfAnswered() {
+		if index := strings.LastIndex(name, "/"); index > 0 {
+			packages[name[:index]] = true
+		}
+	}
+	found := map[string]bool{}
+	keep := func(name string) {
+		name = strings.TrimLeft(name, "[")
+		name = strings.TrimSuffix(strings.TrimPrefix(name, "L"), ";")
+		if !plainClassName(name) {
+			return
+		}
+		index := strings.LastIndex(name, "/")
+		if index <= 0 || !packages[name[:index]] {
+			return
+		}
+		found[name] = true
+	}
+	for _, entry := range poolStrings(image) {
+		keep(entry)
+		// A descriptor names its classes as `Lpackage/Class;`, and the entry
+		// holding it is the whole method signature rather than a bare name.
+		for rest := entry; ; {
+			start := strings.IndexByte(rest, 'L')
+			if start < 0 {
+				break
+			}
+			end := strings.IndexByte(rest[start:], ';')
+			if end < 0 {
+				break
+			}
+			keep(rest[start : start+end+1])
+			rest = rest[start+end+1:]
+		}
+	}
+	names := make([]string, 0, len(found))
+	for name := range found {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// poolStrings returns every printable NUL-terminated run in an image that is
+// shaped like a name: at least one slash, and nothing in it that a class name
+// or a descriptor cannot hold. The shape is what keeps the guest's own text —
+// messages, formats, file names — out of the answer.
+func poolStrings(image []byte) []string {
+	var entries []string
+	start := -1
+	for index := 0; index <= len(image); index++ {
+		if index < len(image) && image[index] >= 0x20 && image[index] < 0x7f {
+			if start < 0 {
+				start = index
+			}
+			continue
+		}
+		if start >= 0 && index < len(image) && image[index] == 0 {
+			if entry := string(image[start:index]); strings.Contains(entry, "/") && nameShaped(entry) {
+				entries = append(entries, entry)
+			}
+		}
+		start = -1
+	}
+	return entries
+}
+
+// plainClassName reports whether what is left after the array and descriptor
+// decoration have come off is a class name and nothing else. A pool entry
+// joins a descriptor to a member's name with `+`, so the entry as a whole is
+// only a class name when it carries none of that.
+func plainClassName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '/', character == '_', character == '$':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// nameShaped reports whether a string holds only what a class name or a method
+// entry can: the characters of an identifier, the separators a package and a
+// descriptor use, and the `+` a name entry joins its two halves with.
+func nameShaped(entry string) bool {
+	for index := 0; index < len(entry); index++ {
+		character := entry[index]
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9':
+		case strings.IndexByte("/_$;()[+<>", character) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// scanLGT reports the platform slots an LGT module resolves that this runtime
+// does not implement.
+//
+// Unlike the other two this one runs the title — as far as its initializer,
+// which is where a module resolves every platform function it might ever call.
+// Nothing else in the archive lists them: the ELF carries no dynamic symbols,
+// and a slot is a pair of numbers passed to a callback. A startup that fails
+// still resolved everything it got to, so what it did resolve is reported
+// either way and the failure is noted on stderr.
+func scanLGT(data []byte) (map[string]string, error) {
+	archive, err := lgt.Open(data)
+	if err != nil {
+		return nil, err
+	}
+	client, err := lgt.Load(archive, lgt.Options{})
+	if err != nil {
+		return nil, err
+	}
+	if err := client.Start(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "  start: %v\n", err)
+	}
+	gaps := map[string]string{}
+	for _, record := range client.ResolvedImports() {
+		if record.Implemented {
+			continue
+		}
+		gaps[record.Describe()] = "slot"
+	}
+	return gaps, nil
 }

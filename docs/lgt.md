@@ -109,6 +109,38 @@ third call the reading does not explain, and resizing the screen on a guess
 would break every title if the guess were wrong. Accepting and ignoring is what
 is known to be right; `internal/platform/lgt/oem.go` records the evidence.
 
+### The imports a module resolves are its link map
+
+Nothing in an LGT archive lists what a title links against. The ELF carries no
+dynamic symbols, a platform function is a pair of numbers rather than a name,
+and the only place those numbers appear is the resolution calls the module
+makes while it starts — every one of them, for everything it might ever call,
+before it runs any of its own code.
+
+So the platform keeps them. Each `(category, slot)` a module resolves is
+recorded once (`internal/platform/lgt/imports.go`), and `ResolvedImports`
+reports them with the platform's own name for each and whether reaching one
+would be serviced at all. `internal/tools/apiscan` starts every archive in a
+directory and prints the unserviced ones, ranked by how many titles resolve
+each. It is a boot per archive rather than a read, which is what the other two
+platforms' scans are; there is nothing cheaper here that is also exact. (The
+stub-record scan under "Reading a module without running it" recovers the same
+list statically, but it needs a disassembler this repository does not carry.)
+
+What the local corpus says: **the 25 Clet titles resolve nothing this platform
+does not implement** — the C surface is complete for everything they link
+against, which is a different and stronger statement than "they run". Every gap
+is on the Java side and belongs to the four Java titles: three auxiliary Java
+tables (`0x1fc`, `0x1ff`, `0x201`, index 3 of each), the OEM table's Java entry
+`0x17`, and C library slot `0x32`, which sits far below the C library's own
+base and is resolved by no Clet.
+
+The scan also found a naming hole rather than a gap: `0x424`, the slot that
+runs a function, is serviced but was missing from `stdlibSlotNames`, so every
+trace line for it read `unnamed` and the scan counted it as unimplemented. The
+table is the platform's record of what it services, and a hole in it is a hole
+in both readings.
+
 ## The WIPI C slots
 
 They are a flat index in blocks of 100 (`0x64`). Four blocks are identified,
@@ -3575,9 +3607,9 @@ side. With it, a screen that will not advance becomes a list of what the title
 was asking for while it would not — which is how the wait below was read:
 
 ```
-category5 0x2000030 java/lang/Thread.<class>(...) from 0xd7124
-category5 0x2000034 java/lang/Thread.sleep(J)V(0xa, ...) from 0xd7138
-category5 0x55 leave a method(...) from 0xd7118
+java 0x2000030 java/lang/Thread.<class>(...) from 0xd7124
+java 0x2000034 java/lang/Thread.sleep(J)V(0xa, ...) from 0xd7138
+java 0x55 leave a method(...) from 0xd7118
 ```
 
 Three lines, repeating, for the rest of the run. The names come from
