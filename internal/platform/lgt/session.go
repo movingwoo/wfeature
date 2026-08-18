@@ -19,6 +19,10 @@ type Session struct {
 	client  *Client
 	archive *Archive
 	tick    time.Duration
+	// speed is how fast the game runs against the wall. The guest clock here
+	// is virtual and moves a tick at a time, so what a multiplier changes is
+	// what a tick of guest time is allowed to cost — see SetSpeed.
+	speed float64
 
 	// nextDue is when the next tick should start, on the wall clock. It is
 	// only used by TickFor; a Host stepping ticks by hand never sets it.
@@ -45,6 +49,9 @@ type SessionOptions struct {
 	// question the ring cannot answer. See lgt.Options.
 	TraceLive string
 	TraceOut  io.Writer
+	// Speed is how fast the game runs against the wall. Zero and 1 are both
+	// the speed it was written for; see Session.SetSpeed.
+	Speed float64
 	// Tick is how much guest time one Tick advances. The guest clock is
 	// virtual, so a Host batching ticks sees the same sequence as one running
 	// in real time, only faster.
@@ -136,7 +143,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if tick <= 0 {
 		tick = defaultTick
 	}
-	return &Session{client: client, archive: archive, tick: tick}, nil
+	return &Session{client: client, archive: archive, tick: tick, speed: backend.ClampSpeed(options.Speed)}, nil
 }
 
 // StartFailure is a startup that failed with a platform call trace attached.
@@ -281,8 +288,13 @@ func (session *Session) TickFor(ctx context.Context) (time.Duration, error) {
 	// apart.
 	span, err := session.tickOnce(ctx)
 	now := time.Now()
-	session.nextDue = session.nextDue.Add(span)
-	if floor := now.Add(-session.tick); session.nextDue.Before(floor) {
+	// The speed setting is applied here and nowhere else. The guest's clock is
+	// virtual, so running the game faster is not a matter of telling it a
+	// different time — it is a matter of buying its time more cheaply: at
+	// twice the speed a tick standing for 20ms of guest time is owed 10ms of
+	// wall time, and the Host comes back for the next one twice as soon.
+	session.nextDue = session.nextDue.Add(session.realTime(span))
+	if floor := now.Add(-session.realTime(session.tick)); session.nextDue.Before(floor) {
 		session.nextDue = floor
 	}
 	wait := session.nextDue.Sub(now)
@@ -290,6 +302,38 @@ func (session *Session) TickFor(ctx context.Context) (time.Duration, error) {
 		wait = 0
 	}
 	return wait, err
+}
+
+// realTime is what a stretch of guest time costs on the wall at the speed in
+// force.
+func (session *Session) realTime(guest time.Duration) time.Duration {
+	return time.Duration(float64(guest) / session.speedOrDefault())
+}
+
+func (session *Session) speedOrDefault() float64 {
+	if session == nil || session.speed <= 0 {
+		return 1
+	}
+	return session.speed
+}
+
+// SetSpeed scales how fast the game runs. It takes the same numbers the other
+// platforms here take and means the same thing by them; what differs is only
+// which clock underneath moves, and on this platform the guest's clock is the
+// tick, so what moves is how often a tick is bought. See backend.ClampSpeed.
+func (session *Session) SetSpeed(multiplier float64) {
+	if session == nil {
+		return
+	}
+	session.speed = backend.ClampSpeed(multiplier)
+}
+
+// Speed reports the multiplier in force.
+func (session *Session) Speed() float64 {
+	if session == nil {
+		return 1
+	}
+	return session.speedOrDefault()
 }
 
 // GuestElapsed is how much time has passed on the guest's own clock. The clock

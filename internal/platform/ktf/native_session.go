@@ -134,7 +134,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 		Client:   client,
 		platform: platform,
 		clock:    platform.clock,
-		source:   platform.pace.source,
+		source:   platform.source,
 		started:  platform.clock.Now(),
 		logger:   options.Logger,
 	}
@@ -273,7 +273,7 @@ func (session *NativeSession) NextDeadline() (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	return session.platform.pace.sourceInstant(due), true
+	return session.platform.pace.SourceInstant(due), true
 }
 
 // SkipToNextDeadline moves a manual clock to the next frame. It answers false

@@ -52,7 +52,7 @@ envelope at all.
 |---|---|
 | `start` | run this archive, named by its `games.json` path, optionally on a named screen size |
 | `key` | one press, release or repeat, with the MIDP-style code the keypad has always sent |
-| `speed`, `scale` | the settings panel's two knobs |
+| `speed`, `scale` | the settings panel's two knobs. `speed` reaches every platform; see "One setting, three clocks" in [`cli.md`](cli.md) for what each one scales |
 | `cheat` | one panel operation, or a text console line |
 | `report` | write the session's diagnostics under `logs/` |
 | `stop` | end the game without closing the connection |
