@@ -108,7 +108,7 @@ func (vm *VM) registerMonitorBuiltins() {
 				}
 				timeout = time.Duration(milliseconds) * time.Millisecond
 			}
-			if err := object.monitor.wait(state.id, timeout); err != nil {
+			if err := object.monitor.wait(state.id, vm.guestDelay(timeout)); err != nil {
 				return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
 			}
 			return VoidValue(), nil
@@ -202,9 +202,10 @@ func (vm *VM) registerThreadBuiltins() {
 		if milliseconds < 0 {
 			return VoidValue(), guestException("java/lang/IllegalArgumentException", "negative sleep timeout")
 		}
+		requested := vm.guestDelay(time.Duration(milliseconds) * time.Millisecond)
 		if execution.thread == nil {
-			time.Sleep(time.Duration(milliseconds) * time.Millisecond)
-		} else if err := vm.sleepGuestThread(execution.thread, time.Duration(milliseconds)*time.Millisecond); err != nil {
+			time.Sleep(requested)
+		} else if err := vm.sleepGuestThread(execution.thread, requested); err != nil {
 			return VoidValue(), err
 		}
 		return VoidValue(), vm.threadYield()
@@ -295,6 +296,20 @@ func decodeModifiedUTF8(data []byte) (string, error) {
 
 type calendarData struct {
 	time time.Time
+}
+
+// guestDelay is what a wait the guest asked for costs on the wall. A game runs
+// faster by having its waits cost less and its clock move more, which are the
+// two halves of one setting: see Options.Speed.
+func (vm *VM) guestDelay(requested time.Duration) time.Duration {
+	if vm == nil || vm.config.Speed == nil || requested <= 0 {
+		return requested
+	}
+	speed := vm.config.Speed()
+	if speed <= 0 {
+		return requested
+	}
+	return time.Duration(float64(requested) / speed)
 }
 
 // nowMilliseconds is the clock every date-shaped builtin reads: the guest's

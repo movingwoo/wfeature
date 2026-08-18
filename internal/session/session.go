@@ -250,6 +250,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			SaveStore: options.SaveStore,
 			Width:     options.width(),
 			Height:    options.height(),
+			Speed:     options.Speed,
 		})
 		if err != nil {
 			return nil, err
@@ -269,6 +270,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			JVM:         jvm.Options{Logger: options.Logger},
 			Framebuffer: surface,
 			SaveStore:   options.SaveStore,
+			Speed:       options.Speed,
 		})
 		// A failed start still hands back the runtime it got to, and closing
 		// it is the Host's job either way.
@@ -415,10 +417,14 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 	case s.runtime != nil:
 		// A MIDlet has no tick of its own: it runs on the callbacks the Host
 		// makes and whatever those deferred. Its audio timeline is advanced by
-		// the Host for the same reason.
-		s.runtime.AdvanceAudio(time.Since(s.startedAt))
+		// the Host for the same reason, and on the guest's clock rather than
+		// the wall so that a game running fast hears its music at the pace it
+		// is playing at.
+		s.runtime.AdvanceAudio(s.runtime.GuestElapsed())
 		err := s.runtime.RunPending()
-		progress := Progress{Progressed: true, Wait: FramePace, Flushes: s.surface.Flushes()}
+		// The pace is what the Host comes back at, so it carries the speed the
+		// same way every other platform's wait does.
+		progress := Progress{Progressed: true, Wait: guestPace(FramePace, s.runtime.Speed()), Flushes: s.surface.Flushes()}
 		if state := s.runtime.State(); state == skt.StateDestroyed || state == skt.StateError {
 			progress.Exited = true
 		}
@@ -618,9 +624,11 @@ func (s *Session) magnify(frame []byte, width, height int) ([]byte, int, int, bo
 	return scaled, scaledWidth, scaledHeight, true
 }
 
-// SetSpeed changes the pace of a running game on the platforms that own a
-// clock. It is silently ignored elsewhere, because there is nothing there to
-// speed up: a MIDlet runs at the rate its Host makes callbacks.
+// SetSpeed changes the pace of a running game. Every platform here answers it,
+// and every one means the same thing by a multiplier — the guest's clock runs
+// at that rate and the waits between its callbacks cost that much less — even
+// though what is underneath differs: a virtual clock the tick moves on LGT, a
+// scaled wall clock on KTF, and the VM's own sleeps on a MIDlet.
 func (s *Session) SetSpeed(multiplier float64) {
 	if s.ktf != nil {
 		s.ktf.SetSpeed(multiplier)
@@ -628,6 +636,20 @@ func (s *Session) SetSpeed(multiplier float64) {
 	if s.ktfNative != nil {
 		s.ktfNative.SetSpeed(multiplier)
 	}
+	if s.lgt != nil {
+		s.lgt.SetSpeed(multiplier)
+	}
+	if s.runtime != nil {
+		s.runtime.SetSpeed(multiplier)
+	}
+}
+
+// guestPace is what an interval of guest time costs a Host at a given speed.
+func guestPace(interval time.Duration, speed float64) time.Duration {
+	if speed <= 0 {
+		return interval
+	}
+	return time.Duration(float64(interval) / speed)
 }
 
 // SetScale changes the magnification applied to later frames.

@@ -3,6 +3,8 @@ package ktf
 import (
 	"sync"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // A game paces itself. Its frame loop asks for a wait — Thread.sleep, a WIPI
@@ -71,15 +73,6 @@ func (clock *ManualClock) Set(instant time.Time) {
 	}
 }
 
-const (
-	// speedFloor and speedCeiling bound the multiplier. The floor keeps a
-	// mistyped value from stalling a game into apparent death; the ceiling is
-	// the practical "as fast as it goes" setting, since past it the emulator's
-	// own throughput, not the guest's waits, is what limits the frame rate.
-	speedFloor   = 0.1
-	speedCeiling = 16.0
-)
-
 // SetSpeed scales how fast the game runs. 1 is the speed the game was written
 // for: every wait costs exactly what the guest asked for. 2 halves the waits
 // and runs the guest clock twice as fast, so a game that measures elapsed time
@@ -108,20 +101,11 @@ func (client *Client) Speed() float64 {
 // that keeps a speed setting of its own across sessions stores this rather than
 // what it was handed, so the setting it shows is the setting in force.
 func ClampSpeed(multiplier float64) float64 {
-	return clampSpeed(multiplier)
+	return backend.ClampSpeed(multiplier)
 }
 
 func clampSpeed(multiplier float64) float64 {
-	if multiplier <= 0 {
-		return 1
-	}
-	if multiplier < speedFloor {
-		return speedFloor
-	}
-	if multiplier > speedCeiling {
-		return speedCeiling
-	}
-	return multiplier
+	return backend.ClampSpeed(multiplier)
 }
 
 // speedOrDefault answers the multiplier a client with no configured speed

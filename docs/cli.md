@@ -47,6 +47,31 @@ wfeature licenses                               print the project and third-part
 archive's main class and prints what it returned, which is how a class file's
 behaviour is checked without a game around it.
 
+## One setting, three clocks
+
+A person moving the browser's speed control is asking one question, and every
+platform here answers it with the same numbers: 0.25 through 4 in the menu,
+clamped to `[0.1, 16]` by `backend.ClampSpeed`, with zero meaning the speed the
+game was written for. What a multiplier means is the same everywhere too — the
+guest's clock runs at that rate, and the waits between its callbacks cost that
+much less. Both halves are needed: a game that measures its own elapsed time
+and steps by it would, called twice as often against an unchanged clock, simply
+step half as far and not speed up at all.
+
+What differs is only what there is to scale.
+
+| platform | the guest's clock | what a Host waits |
+| --- | --- | --- |
+| KTF, both packages | a wall clock scaled by `backend.SpeedClock` | the callback interval, divided |
+| LGT | virtual: a tick moves it and nothing else does, so there is no rate to change | what a tick of guest time is allowed to cost |
+| SKT | the runtime's own clock, which `System.currentTimeMillis` and `RecordStore.getLastModified` both read | the VM's `Thread.sleep` and timed `Object.wait`, divided |
+
+The MIDP case is the one where the two halves are most visibly one thing: a
+title's frame loop is a thread that sleeps, so scaling the sleep without the
+clock leaves it stepping less each time it wakes, and scaling the clock without
+the sleep leaves it stepping further at the same rate. Both, and it runs
+faster.
+
 ## runktf
 
 ```
@@ -258,10 +283,13 @@ reading and freezing the graph is safe. Two commands read differently here:
 class it is in, and `watch` answers "this platform cannot watch writes" because
 nothing instruments a `putfield`.
 
-There is no `-play` or `-speed`. A MIDlet's threads sleep against the wall clock
-and there is no guest clock to multiply, so a tick here is a real frame: the run
-is paced at one every 16ms, the same interval the server session drives the same
-runtime with. A run of 1,800 ticks takes about half a minute of real time.
+There is no `-play` or `-speed` here, though the runtime itself now takes a
+speed setting: a MIDlet's threads sleep against a clock the runtime owns, and
+scaling that clock together with the sleeps taken against it is what a
+multiplier does — see "One setting, three clocks" above. What this command
+lacks is the flag, not the ability. A tick here is a real frame: the run is
+paced at one every 16ms, the same interval the server session drives the same
+runtime with, and a run of 1,800 ticks takes about half a minute of real time.
 
 Key names are the table `runktf` uses, translated to the MIDP key codes a MIDlet
 compares against — the direction pad, `fire`, `soft1`, `soft2`, `call`, and the
@@ -391,8 +419,9 @@ every one of them spends most of its instructions in about a kilobyte of code.
 
 `runlgt` has no `-play`, `-speed`, `-diag`, `-scale` or `-gdb`.
 Their absence is not a decision about LGT — the guest clock, the frame loop and
-the cheat engine are shared, so the flags would mostly work — it is that
-nothing here has needed them yet. `-route` was the one that was needed, and it
+the cheat engine are shared, and the session underneath does take a speed
+setting, so the flags would mostly work — it is that nothing here has needed
+them yet. `-route` was the one that was needed, and it
 is the same script and the same runner `runktf` uses: the route machinery lives
 in `internal/route` and takes the key table and the four session operations it
 needs (advance, digest, key, stall) as functions, so neither platform's session

@@ -409,3 +409,24 @@ func TestCaptureFramebufferAnswersACopy(t *testing.T) {
 		t.Fatal("two frames share one array")
 	}
 }
+
+// TestSpeedIsOneSettingAcrossEveryPlatform covers the arithmetic a Host uses
+// to turn a multiplier into the wait it takes between callbacks. Every
+// platform here means the same thing by the number, so the conversion is the
+// same one everywhere and lives in one place.
+func TestSpeedIsOneSettingAcrossEveryPlatform(t *testing.T) {
+	for _, testCase := range []struct {
+		speed float64
+		want  time.Duration
+	}{
+		{1, FramePace},
+		{2, FramePace / 2},
+		{0.5, FramePace * 2},
+		// A speed nothing set is the speed the game was written for.
+		{0, FramePace},
+	} {
+		if got := guestPace(FramePace, testCase.speed); got != testCase.want {
+			t.Errorf("at %vx a %v pace is %v, want %v", testCase.speed, FramePace, got, testCase.want)
+		}
+	}
+}

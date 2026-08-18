@@ -35,8 +35,10 @@ type NativePlatform struct {
 	archive *NativeArchive
 	clock   Clock
 	// pace is the same clock, kept in its own type so the rate can be changed
-	// and a guest duration converted back to what it costs a Host.
-	pace *nativeSpeedClock
+	// and a guest duration converted back to what it costs a Host. source is
+	// the clock underneath it, which is what a probe drives.
+	pace   *backend.SpeedClock
+	source Clock
 	// started is the guest's zero for its millisecond clock. The module reads
 	// that clock, subtracts a saved reading and loops while the difference is
 	// below a bound, so what it needs is a monotonic millisecond count rather
@@ -185,12 +187,13 @@ func NewNativePlatform(client *NativeClient, archive *NativeArchive, clock Clock
 	if clock == nil {
 		clock = wallClock{}
 	}
-	pace := newNativeSpeedClock(clock)
+	pace := backend.NewSpeedClock(clock.Now)
 	return &NativePlatform{
 		client:  client,
 		archive: archive,
 		clock:   pace,
 		pace:    pace,
+		source:  clock,
 		started: pace.Now(),
 	}
 }

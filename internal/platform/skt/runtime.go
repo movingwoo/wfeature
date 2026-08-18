@@ -109,6 +109,44 @@ type Runtime struct {
 	// field so a test can pin it; nothing else in this runtime depends on
 	// real time.
 	now func() int64
+	// pace is the clock the guest sees, and paceStart is its zero. A MIDlet
+	// keeps its own frame loop on a thread that sleeps, so a speed setting
+	// here has to reach both halves of what that loop does: the sleeps, which
+	// the VM takes through Options.Speed, and the clock the loop measures
+	// against, which is this. Scaling one without the other would leave a
+	// title stepping half as far each time it was called twice as often.
+	pace      *backend.SpeedClock
+	paceStart time.Time
+}
+
+// SetSpeed scales how fast the MIDlet runs. It takes the same numbers every
+// platform here takes; see backend.ClampSpeed.
+func (runtime *Runtime) SetSpeed(multiplier float64) {
+	if runtime == nil || runtime.pace == nil {
+		return
+	}
+	runtime.pace.SetSpeed(multiplier)
+}
+
+// Speed reports the multiplier in force.
+func (runtime *Runtime) Speed() float64 {
+	if runtime == nil || runtime.pace == nil {
+		return 1
+	}
+	return runtime.pace.Speed()
+}
+
+// speed is what the VM asks before it takes a wait the guest asked for.
+func (runtime *Runtime) speed() float64 { return runtime.Speed() }
+
+// GuestElapsed is how much time has passed on the MIDlet's own clock, which is
+// what its audio timeline is advanced against: a game running at twice the
+// speed has to hear its music at twice the speed too.
+func (runtime *Runtime) GuestElapsed() time.Duration {
+	if runtime == nil || runtime.pace == nil {
+		return 0
+	}
+	return runtime.pace.Now().Sub(runtime.paceStart)
 }
 
 // renewGuestSteps grants another step window while the MIDlet is running. See
@@ -121,10 +159,16 @@ func (runtime *Runtime) renewGuestSteps() error {
 	return nil
 }
 
-// clockMillis is the millisecond timestamp RMS stamps stores with.
+// clockMillis is the millisecond timestamp RMS stamps stores with, and the one
+// System.currentTimeMillis answers with. They are one clock on purpose: a
+// title that sleeps against one and measures against another measures nonsense,
+// and at any speed but the written one they would disagree.
 func (runtime *Runtime) clockMillis() int64 {
 	if runtime.now != nil {
 		return runtime.now()
+	}
+	if runtime.pace != nil {
+		return runtime.pace.Now().UnixMilli()
 	}
 	return time.Now().UnixMilli()
 }
@@ -135,6 +179,9 @@ type Options struct {
 	// SaveStore persists RMS record stores and com.xce.io files. Without one
 	// they live only as long as the session.
 	SaveStore backend.SaveStore
+	// Speed is how fast the MIDlet runs against the wall. Zero and 1 are both
+	// the speed it was written for; see Runtime.SetSpeed.
+	Speed float64
 }
 
 type RuntimeSummary struct {
@@ -201,6 +248,19 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if options.JVM.Exit == nil {
 		options.JVM.Exit = runtime.exit
 	}
+	// The guest's clock and the guest's waits are the two halves of the speed
+	// setting, and the VM owns the waits. Both are installed here rather than
+	// at the call sites so a Host that never sets a speed pays nothing: a nil
+	// hook is the speed the game was written for.
+	pace := backend.NewSpeedClock(nil)
+	pace.SetSpeed(options.Speed)
+	runtime.pace = pace
+	if options.JVM.Speed == nil {
+		options.JVM.Speed = runtime.speed
+	}
+	if options.JVM.Clock == nil {
+		options.JVM.Clock = runtime.clockMillis
+	}
 	machine := jvm.New(source, options.JVM)
 	if err := midp.Define(machine); err != nil {
 		return nil, err
@@ -209,6 +269,8 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		return nil, err
 	}
 	*runtime = Runtime{
+		pace:        pace,
+		paceStart:   pace.Now(),
 		Archive:     archive,
 		VM:          machine,
 		events:      backend.NewEventLoop(backend.EventLoopOptions{}),

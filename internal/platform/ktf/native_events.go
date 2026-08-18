@@ -290,63 +290,14 @@ func (platform *NativePlatform) Tick(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// nativeSpeedClock scales the time the title sees.
-//
-// The title paces itself by asking to be called back and then reading the
-// clock, so running it faster is a matter of moving its clock faster rather
-// than calling it more often: a title that measures its own elapsed time would
-// otherwise fight the change by stepping less per callback. What a Host waits
-// between callbacks is the other half, and UntilNextFrame divides that back
-// down — a frame half a second away on a clock running at twice the rate is a
-// quarter of a second away on the wall.
-//
-// It wraps whatever clock the session was given rather than replacing it, so a
-// probe on a manual clock keeps its manual clock underneath.
-type nativeSpeedClock struct {
-	source Clock
-	// sourceAt and guestAt are the instant the current rate started at, on
-	// each clock. Changing the rate rebases them, which keeps the time already
-	// seen and applies the new rate only to what follows.
-	sourceAt time.Time
-	guestAt  time.Time
-	speed    float64
-}
-
-func newNativeSpeedClock(source Clock) *nativeSpeedClock {
-	now := source.Now()
-	return &nativeSpeedClock{source: source, sourceAt: now, guestAt: now, speed: 1}
-}
-
-func (clock *nativeSpeedClock) Now() time.Time {
-	return clock.guestAt.Add(time.Duration(float64(clock.source.Now().Sub(clock.sourceAt)) * clock.speed))
-}
-
-// setSpeed changes the rate without moving the clock.
-func (clock *nativeSpeedClock) setSpeed(multiplier float64) {
-	clock.guestAt = clock.Now()
-	clock.sourceAt = clock.source.Now()
-	clock.speed = clampSpeed(multiplier)
-}
-
-// sourceDuration answers what a stretch of the title's time costs a Host.
-func (clock *nativeSpeedClock) sourceDuration(guest time.Duration) time.Duration {
-	return time.Duration(float64(guest) / clock.speed)
-}
-
-// sourceInstant answers when an instant on the title's clock arrives on the
-// Host's, which is what a Host waiting for one has to wait until.
-func (clock *nativeSpeedClock) sourceInstant(guest time.Time) time.Time {
-	return clock.sourceAt.Add(clock.sourceDuration(guest.Sub(clock.guestAt)))
-}
-
-// SetSpeed scales how fast the title runs. 1 is the speed it was written for;
-// values outside [0.1, 16] clamp, and a zero or negative multiplier selects 1,
-// which is the same range the descriptor package's games run in.
+// SetSpeed scales how fast the title runs. The title paces itself by asking to
+// be called back and then reading the clock, so what moves is that clock —
+// see backend.SpeedClock, which every platform here scales time with.
 func (platform *NativePlatform) SetSpeed(multiplier float64) {
 	if platform == nil || platform.pace == nil {
 		return
 	}
-	platform.pace.setSpeed(multiplier)
+	platform.pace.SetSpeed(multiplier)
 }
 
 // Speed reports the multiplier in force.
@@ -354,7 +305,7 @@ func (platform *NativePlatform) Speed() float64 {
 	if platform == nil || platform.pace == nil {
 		return 1
 	}
-	return platform.pace.speed
+	return platform.pace.Speed()
 }
 
 // NextFrame reports when the title's frame is next due, on the title's own
@@ -376,7 +327,7 @@ func (platform *NativePlatform) UntilNextFrame() time.Duration {
 		return 0
 	}
 	if wait := due.Sub(platform.clock.Now()); wait > 0 {
-		return platform.pace.sourceDuration(wait)
+		return platform.pace.SourceDuration(wait)
 	}
 	return 0
 }

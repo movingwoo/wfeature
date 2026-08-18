@@ -53,8 +53,15 @@ type Options struct {
 	MaxArrayLength int
 	Logger         *slog.Logger
 	Clock          func() int64
-	AsyncError     func(error)
-	ThreadYield    func() error
+	// Speed is how fast the guest's time runs against the wall, asked each
+	// time a wait is taken so a Host can change it while a game is running.
+	// Nil is the speed the game was written for. It scales what a guest wait
+	// costs — Thread.sleep, a monitor's timed wait — and a platform that
+	// installs it should scale Clock by the same factor, because a game that
+	// sleeps on one clock and measures on another measures nonsense.
+	Speed       func() float64
+	AsyncError  func(error)
+	ThreadYield func() error
 	// ByteDecoder converts platform byte content to text for the String byte
 	// constructors and ByteEncoder is its String.getBytes inverse. Platforms
 	// with a non-UTF-8 default charset, such as KTF's EUC-KR, install both;

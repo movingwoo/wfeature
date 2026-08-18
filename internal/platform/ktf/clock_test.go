@@ -3,6 +3,7 @@ package ktf
 import (
 	"context"
 	"encoding/binary"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"testing"
 	"time"
 
@@ -268,8 +269,8 @@ func TestSpeedClampsToItsRange(t *testing.T) {
 	}{
 		{set: 0, want: 1},
 		{set: -3, want: 1},
-		{set: 0.01, want: speedFloor},
-		{set: 1000, want: speedCeiling},
+		{set: 0.01, want: backend.SpeedFloor},
+		{set: 1000, want: backend.SpeedCeiling},
 		{set: 2.5, want: 2.5},
 	} {
 		client.SetSpeed(testCase.set)
