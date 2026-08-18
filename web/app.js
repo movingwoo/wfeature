@@ -118,6 +118,11 @@ const FRAME_SCALE_KEY = "wfeature:frameScale";
 // property of the title — which artwork its archive carries — and not a taste.
 const SCREEN_KEY_PREFIX = "wfeature:screen:";
 const DEFAULT_SCREEN = "240x320";
+// The range the server accepts, mirrored so a stored value outside it is
+// treated as absent here rather than sent on and refused there. See
+// `validScreen` in internal/webhost/session.go.
+const MIN_SCREEN = 32;
+const MAX_SCREEN = 1024;
 
 const screenKey = path => `${SCREEN_KEY_PREFIX}${path}`;
 
@@ -132,7 +137,9 @@ const storedScreen = path => {
     // Private browsing denies storage; the default is the answer.
   }
   const [width, height] = String(stored).split("x").map(Number);
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 32 || height < 32) {
+  const inRange = value =>
+    Number.isInteger(value) && value >= MIN_SCREEN && value <= MAX_SCREEN;
+  if (!inRange(width) || !inRange(height)) {
     return { width: 240, height: 320 };
   }
   return { width, height };
@@ -188,6 +195,14 @@ let currentPlatform = "";
 // every interval, the error reached the page, and the candidate refresh behind
 // it never ran — the whole panel read as broken over a feature it never had.
 let canWatchWrites = false;
+
+// The cheat panel is wired once and re-read per game. What it may offer is a
+// property of the session — which platform, and whether that platform can
+// watch writes — but the listeners and the poll belong to the page. Running
+// the whole of initCheat per game stacked a second click handler and a second
+// poller on the same panel every time a game was started.
+let cheatWired = false;
+let resetCheatPanel = () => {};
 
 // A dropped connection no longer ends the game: the server parks it for a few
 // minutes under a token it hands over when the game starts, and a page that
@@ -1060,15 +1075,32 @@ const initCheat = () => {
   // Every platform this emulator runs has an engine now: the two ARM ones
   // search guest memory, and the MIDP runtime searches a synthetic space laid
   // over its object graph. The toggle is still asked rather than assumed,
-  // because a platform added later may not have one.
+  // because a platform added later may not have one — and it is hidden rather
+  // than removed, because which platform is running changes with the game and
+  // a session without an engine must not take the panel away from the next
+  // session that has one.
   const cheat = cheatEngine();
-  if (!cheat.available()) {
-    toggle.remove();
-    panel.remove();
+  const usable = cheat.available();
+  toggle.classList.toggle("hidden", !usable);
+  if (!usable) {
+    panel.classList.remove("visible");
     return;
   }
 
-  toggle.classList.remove("hidden");
+  // Write watching is the session's answer too. Not every platform can say
+  // what wrote an address, and the ones that cannot say so before the panel
+  // opens rather than by failing the first poll.
+  for (const id of ["cheat-watch-section", "cheat-watch-row", "cheat-hits"]) {
+    document.getElementById(id)?.classList.toggle("hidden", !canWatchWrites);
+  }
+
+  // Everything below is the page's, not the session's, so a second game
+  // re-reads the answers above and stops here.
+  if (cheatWired) {
+    resetCheatPanel();
+    return;
+  }
+  cheatWired = true;
 
 
   const typeSelect = document.getElementById("cheat-type");
@@ -1199,12 +1231,7 @@ const initCheat = () => {
   document.getElementById("cheat-close")?.addEventListener("click", () => panel.classList.remove("visible"));
 
   // Write watching. A scan says where a value is; this says what changes it,
-  // which is the part that still means something in the next session. Not
-  // every platform can answer it, and the ones that cannot say so before the
-  // panel opens rather than by failing the first poll.
-  for (const id of ["cheat-watch-section", "cheat-watch-row", "cheat-hits"]) {
-    document.getElementById(id)?.classList.toggle("hidden", !canWatchWrites);
-  }
+  // which is the part that still means something in the next session.
   const hitsList = document.getElementById("cheat-hits");
   const watchAddress = document.getElementById("cheat-watch-address");
   const renderHits = value => {
@@ -1279,6 +1306,18 @@ const initCheat = () => {
       renderHits(await cheat.hits());
     });
   });
+
+  // A new game gets a new engine on the server, so what is on screen from the
+  // last one is not a narrower search — it is a list of addresses in somebody
+  // else's memory. The panel is emptied rather than left to be refreshed into
+  // agreement.
+  resetCheatPanel = () => {
+    lastCount = 0;
+    renderResults({ count: 0, items: [] });
+    renderFrozen([]);
+    renderHits({ items: [], total: 0, overflowed: false });
+    setCheatStatus("");
+  };
 
   // Keep candidate values and recorded writes live while the panel is open.
   // A refresh still in flight must not be asked for again: over a socket the

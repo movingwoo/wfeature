@@ -3367,9 +3367,13 @@ means none of them has a branch of its own:
 - `internal/platform/detect` names it `ktf`. It is the same vendor and the same
   platform; what differs is the package, and telling a Host otherwise would
   send it looking for a loader that does not exist. The discriminator is a
-  `.mif` beside exactly one `.mod`, and it is only consulted after every
-  descriptor marker has failed — a lone `.mod` is too common an extension to
-  claim an archive for.
+  `.mif` beside exactly one `.mod`, and it is consulted last — after every
+  descriptor marker has failed *and* after the class scan. A lone `.mod` is too
+  common an extension to claim an archive for, and the pair is a shape rather
+  than a marker, so a MIDlet repacked without its `.msd` could wear it by
+  accident; what a class file says it links against is evidence and outranks
+  it. The order is free on a real package of this generation, which carries no
+  class files for the scan to read.
 - `ktf.NativeSession` is the same shape on the outside as the descriptor
   package's `Session`: start, tick, take the frame, send keys, search memory.
   Underneath, a tick is "run the title's frame if it is due" and the wait it

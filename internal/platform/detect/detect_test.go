@@ -226,3 +226,38 @@ func TestArchiveDoesNotDigThroughTwoFolders(t *testing.T) {
 		t.Fatalf("Archive() = %q, want %q", got, detect.Unknown)
 	}
 }
+
+// The earlier KTF package is recognised by a shape rather than a marker: one
+// `.mif` beside one `.mod`. That is a guess, and `.mod` is a common enough
+// extension that a MIDlet repacked without its `.msd` can wear it by accident,
+// so what a class file says it links against is asked first.
+func TestTheClassScanWinsOverTheNativePackageShape(t *testing.T) {
+	archive := buildZIP(t, map[string][]byte{
+		"music.mod":  []byte("tracker module"),
+		"icon.mif":   []byte("an image"),
+		"Main.class": []byte("com/skt/m/Device"),
+	})
+	platform, err := detect.Archive(archive)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if platform != detect.SKT {
+		t.Fatalf("Archive() = %q, want %q — the shape outranked the constant pool", platform, detect.SKT)
+	}
+}
+
+// With nothing to contradict it, the shape still names the package: a real one
+// carries no class files at all, so the scan before it finds nothing.
+func TestTheNativePackageShapeStillNamesItWithNoClassesToRead(t *testing.T) {
+	archive := buildZIP(t, map[string][]byte{
+		"title.mif": []byte("an image"),
+		"title.mod": []byte("a module"),
+	})
+	platform, err := detect.Archive(archive)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if platform != detect.KTF {
+		t.Fatalf("Archive() = %q, want %q", platform, detect.KTF)
+	}
+}
