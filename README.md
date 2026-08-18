@@ -267,3 +267,10 @@ MIT — [`LICENSE`](LICENSE)
 
 전문은 [`internal/licenses/THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 **모든 릴리스 바이너리가 이 파일을 안고 나갑니다.**  
 `wfeature licenses`로 출력하거나 서버의 `/licenses`로 받을 수 있습니다.  
+
+## 후원
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/movingwoo)
+
+이 프로젝트가 마음에 드셨다면 [GitHub Sponsors](https://github.com/sponsors/movingwoo)로 후원할 수 있습니다.  
+후원은 전적으로 선택 사항이며, 후원 여부와 관계없이 모든 기능은 동일하게 제공됩니다.  
