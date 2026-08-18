@@ -48,6 +48,13 @@ go.work.sum
 .claude/
 **/node_modules/
 
+# The socket launchers. They are ./start.sh and ./stop.sh for one deployment's
+# Unix socket, and the path in them is that deployment's rather than this
+# repository's; the tracked scripts stay the ones written for a port.
+run/
+/sstart.sh
+/sstop.sh
+
 # Working notes rather than documentation.
 TODO.md
 # Should be temporarily banned

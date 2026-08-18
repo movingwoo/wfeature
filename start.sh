@@ -20,7 +20,15 @@ cd "$(dirname "$0")"
 
 profile="${1:-release}"
 case "$profile" in
-	debug | release) shift 2>/dev/null || true ;;
+	# The profile can come from the default rather than from an argument, so
+	# there is not always one to shift. The count is checked rather than the
+	# failure caught afterwards, because `shift` is a special builtin: dash —
+	# which is what Ubuntu points /bin/sh at — ends the script on it outright,
+	# and neither `2>/dev/null` nor `|| true` catches that. It only hid the
+	# message, so a bare `./start.sh` there exited 2 without a word.
+	debug | release)
+		if [ "$#" -gt 0 ]; then shift; fi
+		;;
 	-h | --help | help)
 		echo "usage: ./start.sh [debug|release] [server arguments...]    (release by default)"
 		exit 0
