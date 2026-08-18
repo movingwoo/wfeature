@@ -59,19 +59,13 @@ func TestLocalCheatProbe(t *testing.T) {
 	started := expectMessage(t, connection, serverStarted)
 	t.Logf("platform %s", started.Started.Platform)
 
-	// The console answers the same vocabulary on either ARM platform, and
-	// `regions` is the one command whose answer proves an address space was
-	// actually reached rather than a message composed about one.
+	// The console answers the same vocabulary on every platform, and `regions`
+	// is the one command whose answer proves an address space was actually
+	// reached rather than a message composed about one. On the MIDP runtime
+	// that space is the synthetic one over its object graph, and the listing
+	// names classes where the ARM platforms name a module and a heap.
 	send(t, connection, clientMessage{Kind: clientCheat, ID: 2, Command: "regions"})
 	regions := expectMessage(t, connection, serverResult)
-	// A MIDlet has no guest address space, and the refusal it gets back is the
-	// designed answer rather than a failure — the page removes the panel on
-	// that platform. Pointing this probe at one is asking a question it cannot
-	// answer, so say which and stop.
-	if strings.Contains(regions.Message, "no searchable guest memory") {
-		t.Skipf("%s: this platform keeps no guest address space, so there is nothing to search",
-			started.Started.Platform)
-	}
 	if !strings.Contains(regions.Message, "region(s)") {
 		t.Fatalf("regions answered %q", regions.Message)
 	}

@@ -215,10 +215,18 @@ Cheat operations run on the emulator's own goroutine, between ticks, because
 that is the only time reading and freezing guest memory is safe.
 
 Which sessions have one is asked of the session rather than of the platform:
-`session.Cheat()` and `session.CheatConsole()` answer for both ARM platforms
-and nil for the MIDP runtime, whose state is Go objects with no addresses to
-sweep. The page removes the toggle where the answer is nil. `docs/lgt.md` has
-why that indirection is worth the line it costs.
+`session.Cheat()` and `session.CheatConsole()` answer for every platform, and
+the page removes the toggle where the answer is nil. That indirection is what
+made the third one a two-line change — the MIDP runtime used to answer nil,
+because its state is Go objects with no addresses to sweep, and it now lays a
+synthetic address space over its object graph and answers an engine like the
+others (`docs/skvm.md`, "A heap with addresses in it"). `docs/lgt.md` has why
+the indirection was worth the line it costs.
+
+One operation differs by platform rather than by session: a **watch** needs
+store instrumentation, which only the ARM platforms have. `Session.CanWatch()`
+is what a panel asks, and the engine answers `cheat.ErrWatchUnsupported`
+elsewhere rather than doing nothing.
 
 **Driven end to end, on running games rather than fixtures.** Piping timed
 commands into `runlgt -cheat` and `runktf -cheat` walks the whole vocabulary
@@ -231,8 +239,8 @@ round-trip the table, and `watch` plus `hits` names what is behind each write �
 `written by host, last pc …` for a store this platform made itself, which is a
 distinction the reader needs rather than a detail (`docs/armcore.md`, "Not every
 store is a guest instruction"). The
-same flow through the socket is `TestLocalCheatProbe`, which passes for KTF and
-LGT and skips on a MIDlet, where the refusal is the designed answer.
+same flow through the socket is `TestLocalCheatProbe`, which passes for all
+three platforms — on a MIDlet the regions it lists are the game's own classes.
 
 ## The WebAssembly path is gone
 

@@ -713,6 +713,111 @@ recorded.
 neighbouring call and it copies the screen into the caller's image, which is
 what `Graphics2D.captureLCD` does into a new one.
 
+## A heap with addresses in it
+
+The cheat engine searches an address space. This runtime does not have one: a
+MIDlet's state is Go objects in a map, and the `int` a game keeps its gold in
+has no address to find, narrow down and freeze. That is why the browser removed
+the cheat panel on this platform and why `session.Cheat()` used to answer nil
+here.
+
+So one is made. `internal/platform/skt/heapmap.go` walks the object graph and
+gives every object, every array and every loaded class's statics a span of a
+synthetic space; `heapread.go` renders a span from the fields each time it is
+read and decodes a write back into the field it lands on. Nothing is copied and
+nothing is cached — a scan sees the game's state as it changes, and a freeze is
+a write to the object rather than to a shadow of it. The engine above is
+unchanged: it asks this the same three questions it asks the two ARM platforms.
+
+**The addresses are grouped by shape, not by allocation order.** Every instance
+of one class lands in that class's own arena, so the region listing names what
+a hit is *in*:
+
+```
+0x10000000-0x100003e8      1000  statics
+0x10010000-0x100143e8     17384  [B
+0x10030000-0x10030378       888  [Ljava/lang/Object;
+0x100b0000-0x100b0050        80  bd
+0x100f0000-0x100f0008         8  rpg/RPGHero2
+```
+
+"the address is in `cj`" is something a search can act on where "somewhere in
+the heap" is not, and it costs nothing: an arena is a bump allocator over 64KiB
+chunks of a 32-bit space, and a shape with three instances wastes the rest of
+one chunk of address space and no memory at all.
+
+Three properties make the addresses worth what a cheat needs them to be worth.
+
+- **They are stable.** A span is keyed by the VM's own object identity and the
+  allocator never reuses an address, so an object keeps its span for the life of
+  the session. A value found on one screen is at the same address on the next,
+  which is the whole point of a scan. Measured on one local title, the map grew
+  from 18 spans and 16KiB at the title screen to 22 spans and 21KiB in play, and
+  every address from the first walk was still where it had been.
+- **They do not keep the game's garbage alive.** A span holds a `weak.Pointer`,
+  so mapping an object does not stop it being collected and a dead one's span is
+  dropped on the next walk. A **frozen** address holds a strong reference
+  instead — `serviceCheat` retains exactly the objects the freeze list names
+  after every Host pass — because a freeze the collector can silently switch off
+  is worse than the memory it costs. That is the same decision KTF made when it
+  passed frozen addresses to its collector as extra roots.
+- **A record is laid out for a search, not for a JVM.** Every field takes four
+  bytes except a long or a double, which take eight, so an arena of one class's
+  instances is a table the four-byte default stride walks; a `short` sits sign
+  extended in its four bytes and is still found by a two-byte search. Array
+  elements take their *natural* width instead — a byte array is how a game packs
+  its map data, and spreading it over four bytes each would hide every pattern
+  in it.
+
+A reference field reads as the address of what it points at, so a `dump` can be
+followed from one object into the next, and it refuses to be written: writing
+one would mean inventing an object. A write narrower than the slot it lands in
+is a read-modify-write, so a one-byte `set` changes one byte of an `int` the way
+the same write against a real address space would.
+
+### What the walk starts from, and what it therefore cannot find
+
+The roots are every loaded class's static reference fields, every thread object
+the VM holds, and what this runtime holds in Go: the MIDlet, the Display and the
+Displayable being shown, the runnables `callSerially` was handed, the Canvas
+mid-paint, and **every Displayable the runtime has state for** — a title keeps
+its menus and its map screen as objects it comes back to, and between visits
+nothing static points at them.
+
+An object reachable only from a running method's local variable is not in that
+set. Nothing durable lives there — a game's own state is field-reachable, which
+is why it survives the method that made it — but a value that appears in a scan
+and then vanishes from the map is this boundary rather than a bug.
+
+**Reading a static must not initialize its class.** `VM.StaticField` runs
+`<clinit>` first because that is what a `getstatic` does, and a walk that
+touched every loaded class through it would run guest code the game never asked
+to run, from whichever goroutine was inspecting. `VM.StaticFieldValue` reads the
+map and answers "not set" instead, which is exactly right: a class that has not
+initialized has no values, and zero is what its fields hold.
+
+### What it does not do
+
+There is **no watch**. A watch names the instruction that wrote an address, and
+finding that here would mean instrumenting every `putfield` and every array
+store in the interpreter. The engine answers `cheat.ErrWatchUnsupported` and a
+Host reads that as "no watch control on this platform" rather than as a failure;
+`Session.CanWatch()` is what the panel asks first.
+
+There is also no object *header* in a span — no class word, no length word, no
+allocation metadata — because none of that exists here to present. A span is
+exactly the declared fields, or exactly the elements.
+
+### Driven end to end
+
+`wfeature runskt <game.zip> -cheat` attaches the same console the WIPI paths
+use, and `TestLocalCheatProbe` drives the browser's socket path against a local
+archive. On one local title: `regions` lists 22 spans, `scan unknown` over 5,222
+candidates narrows to one under two `scan changed` passes, `read` shows it
+counting up live, `freeze` holds it at 555 across seconds of the game writing
+over it every tick, and `unfreeze` lets the game's own value come back. The
+fixture-level tests are `TestHeapMap*` in `internal/platform/skt`.
+
 ## Deliberately incomplete
 
 - **`SISImage` does not decode.** The container's frame and object tables are

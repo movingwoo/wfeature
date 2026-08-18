@@ -195,9 +195,8 @@ reasons at once, and the instruction count is what holds the comparison still.
 `-count=1` matters here — a cached `go test` result reports the previous run's
 numbers, which look exactly like a change that did nothing.
 
-The browser's cheat path has a local probe of its own, because the packaged
-fixtures are a MIDlet and a MIDlet is the one platform that has no guest memory
-to scan:
+The browser's cheat path has a local probe of its own, because a scan against
+a fixture proves the plumbing and not the search:
 
 ```sh
 WFEATURE_CHEAT_ARCHIVE=<zip> go test -run TestLocalCheatProbe ./internal/webhost
@@ -205,7 +204,9 @@ WFEATURE_CHEAT_ARCHIVE=<zip> go test -run TestLocalCheatProbe ./internal/webhost
 
 It starts the real server over a temporary game root, opens the session socket,
 and asks for regions and a scan. Both ends of the protocol change are exercised
-by that: a build that compiles proves neither. **A probe that does not sleep for the wait it was
+by that: a build that compiles proves neither. It passes on all three platforms
+— point it at an SKT archive and the regions it lists are the game's own
+classes, over the synthetic space `docs/skvm.md` describes. **A probe that does not sleep for the wait it was
 handed measures nothing** — spinning instead makes every entry into the guest
 look free, which is the one result all of these exist to detect.
 
