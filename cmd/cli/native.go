@@ -14,6 +14,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/route"
 )
 
 // The carrier shipped two generations of download package, and `runktf` takes
@@ -36,6 +37,7 @@ type nativeRun struct {
 	keyHold      int
 	audioPrefix  string
 	cheatConsole bool
+	script       *route.Route
 	screenWidth  int
 	screenHeight int
 	logger       *slog.Logger
@@ -107,7 +109,27 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 	dumpedFlush := uint32(0)
 	keyReleases := map[int][]int32{}
 	var tickError error
-	for ; ran < run.ticks; ran++ {
+	var routeResult route.Result
+	if run.script != nil {
+		// A route runs until it arrives, so it does not inherit the tick count
+		// that bounds an unscripted probe; an explicit -ticks still caps it.
+		budget := run.ticks
+		if !run.ticksChosen {
+			budget = 0
+		}
+		routeResult, tickError = runNativeRoute(ctx, session, run.script, nativeRouteRun{
+			frameDir:   run.frameDir,
+			hold:       run.keyHold,
+			probeClock: probeClock,
+			maxTicks:   budget,
+			stderr:     stderr,
+		})
+		ran = routeResult.Ticks
+		if tickError != nil && !errors.Is(tickError, context.Canceled) {
+			fmt.Fprintf(stderr, "route: %v\n", tickError)
+		}
+	}
+	for ; run.script == nil && ran < run.ticks; ran++ {
 		if ctx.Err() != nil {
 			break
 		}
@@ -186,6 +208,18 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 		"height":     height,
 		"lit_pixels": lit,
 	}
+	if run.script != nil {
+		summary["route_completed"] = routeResult.Completed
+		marks := make([]map[string]any, 0, len(routeResult.Marks))
+		for _, mark := range routeResult.Marks {
+			marks = append(marks, map[string]any{"label": mark.Label, "tick": mark.Tick})
+		}
+		summary["route_marks"] = marks
+		if !routeResult.Completed {
+			summary["route_stopped_at"] = routeResult.StoppedAt + 1
+			summary["route_reason"] = routeResult.Reason
+		}
+	}
 	if platform := session.Platform(); platform != nil {
 		summary["draws"] = platform.Draws()
 		summary["images"] = platform.Images()
@@ -252,4 +286,78 @@ func nativePace(ctx context.Context, session *ktf.NativeSession, probeClock *ktf
 	case <-ctx.Done():
 	case <-time.After(wait):
 	}
+}
+
+// nativeRouteRun is what replaying a script against the earlier package needs
+// beyond the script itself.
+type nativeRouteRun struct {
+	frameDir string
+	// hold is how many ticks a scripted press is held before its release, for
+	// the reason it is on the other package: a title that samples the keypad
+	// once a frame never sees a press and a release delivered together.
+	hold       int
+	probeClock *ktf.ManualClock
+	maxTicks   int
+	stderr     io.Writer
+}
+
+// runNativeRoute replays a script against a started session of the earlier
+// package. The runner is the one the descriptor package uses and the script is
+// the same file: a route is written against what is on the screen and which
+// keys are pressed, and neither of those is a property of how the title was
+// packaged. What differs is only how a tick is spent and where the frame comes
+// from, which is what these four functions carry.
+//
+// Ticking stays here rather than in the runner so a route replays at whatever
+// speed the Host is already running at — a probe jumps its clock, a -play run
+// waits the interval out.
+func runNativeRoute(ctx context.Context, session *ktf.NativeSession, script *route.Route, options nativeRouteRun) (route.Result, error) {
+	var runError error
+	runner := &route.Runner{
+		MaxTicks: options.maxTicks,
+		Hold:     options.hold,
+		Digest:   session.FrameDigest,
+		SendKey: func(ctx context.Context, pressed bool, key int32) error {
+			eventType := ktf.KeyPressed
+			if !pressed {
+				eventType = ktf.KeyReleased
+			}
+			return session.SendKey(ctx, eventType, key)
+		},
+		Stalled: func() bool {
+			// The title has no loop of its own: everything it does happens
+			// inside the frame it asked to be called back on. With no deadline
+			// pending there is nothing left to run it.
+			_, pending := session.NextDeadline()
+			return !pending
+		},
+		Advance: func(ctx context.Context) (bool, error) {
+			progressed, err := session.Tick(ctx)
+			if err != nil {
+				return progressed, err
+			}
+			nativePace(ctx, session, options.probeClock)
+			return progressed, nil
+		},
+		Checkpoint: func(label string, tick int, reset bool) error {
+			// There is no profiler on this package, so a mark is a place on
+			// the way rather than somewhere to start measuring from.
+			if options.frameDir == "" {
+				return nil
+			}
+			frame, width, height, _ := session.Frame()
+			if width <= 0 || height <= 0 {
+				return nil
+			}
+			return writePNG(filepath.Join(options.frameDir, fmt.Sprintf("%s.png", label)), frame, width, height)
+		},
+	}
+	result, err := runner.Run(ctx, script)
+	if err != nil {
+		runError = err
+	}
+	if !result.Completed && runError == nil {
+		fmt.Fprintf(options.stderr, "route stopped at step %d (%s)\n", result.StoppedAt+1, result.Reason)
+	}
+	return result, runError
 }

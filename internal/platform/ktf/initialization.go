@@ -462,19 +462,23 @@ func newInitializationRuntime(client *Client) (*initializationRuntime, error) {
 		return nil, fmt.Errorf("map KTF platform callback stubs: %w", err)
 	}
 	runtime := &initializationRuntime{
-		client:            client,
-		arena:             newGuestArena(platformDataBase, platformDataSize),
-		objects:           make(map[uint32]objectRecord),
-		collectAt:         collectionFloor,
-		codeCursor:        uint64(platformCodeBase),
-		stubs:             make(map[uint64]uint32),
-		classes:           make(map[string]uint32),
-		loadedClasses:     make(map[string]uint32),
-		nativeMethods:     make(map[uint32]runtimeJavaInvocation),
-		runtimeObjects:    make(map[string]*jvm.Object),
-		classAliases:      make(map[uint32]uint32),
-		grabbedKeys:       make(map[int32]*jvm.Object),
-		virtualBaseMillis: time.Now().UnixMilli(),
+		client:         client,
+		arena:          newGuestArena(platformDataBase, platformDataSize),
+		objects:        make(map[uint32]objectRecord),
+		collectAt:      collectionFloor,
+		codeCursor:     uint64(platformCodeBase),
+		stubs:          make(map[uint64]uint32),
+		classes:        make(map[string]uint32),
+		loadedClasses:  make(map[string]uint32),
+		nativeMethods:  make(map[uint32]runtimeJavaInvocation),
+		runtimeObjects: make(map[string]*jvm.Object),
+		classAliases:   make(map[uint32]uint32),
+		grabbedKeys:    make(map[int32]*jvm.Object),
+		// The guest's absolute time follows the clock the Host supplied, not
+		// the wall: a Host running a manual clock is asking for a run it can
+		// repeat, and an epoch read from the wall makes every timestamp the
+		// guest sees differ between two runs of the same script.
+		virtualBaseMillis: client.now().UnixMilli(),
 		clockBase:         client.now(),
 		trace:             traceRing{limit: client.traceLimit},
 	}

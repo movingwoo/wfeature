@@ -327,3 +327,29 @@ func TestElapsedClientWaitIsNotADeadline(t *testing.T) {
 		t.Fatal("the client thread is not due after its wait elapsed")
 	}
 }
+
+// A manual clock is what makes a run repeatable, so the instant it starts at
+// has to repeat too. It used to start at the wall, which meant every timestamp
+// the guest read differed between two runs of the same script — a title that
+// seeds itself from the time of day then diverges, and the corpus A/B had a
+// noise floor made entirely of this.
+func TestAManualClockStartsSomewhereRepeatable(t *testing.T) {
+	first := NewManualClock(time.Time{})
+	second := NewManualClock(time.Time{})
+	if !first.Now().Equal(second.Now()) {
+		t.Errorf("two manual clocks started at %v and %v; a run cannot repeat", first.Now(), second.Now())
+	}
+
+	// It is a plausible date and not the zero time, because a title doing
+	// calendar arithmetic on it should not land in year one.
+	if year := first.Now().UTC().Year(); year < 2000 || year > 2100 {
+		t.Errorf("a manual clock starts in %d, which is not a date a handset would show", year)
+	}
+
+	// A named instant is still honoured — that is how a Host asks for a
+	// particular one.
+	chosen := time.Date(2009, 5, 4, 3, 2, 1, 0, time.UTC)
+	if got := NewManualClock(chosen).Now(); !got.Equal(chosen) {
+		t.Errorf("NewManualClock(%v).Now() = %v", chosen, got)
+	}
+}

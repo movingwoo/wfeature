@@ -122,6 +122,13 @@ type fieldKey struct {
 }
 
 type VM struct {
+	// storeObserver is shown every guest store to a field, a static or an
+	// array element. It is an atomic pointer because a Host installs it
+	// between ticks while guest threads are the ones that fire it, and it is
+	// nil whenever nobody is watching so a title that is not being
+	// investigated pays one nil check per store and nothing else.
+	storeObserver atomic.Pointer[func(StoreEvent)]
+
 	loader *Loader
 	config Options
 	aotMu  sync.RWMutex
@@ -837,7 +844,7 @@ func (vm *VM) instanceValue(object *Object, reference classfile.Reference) (Valu
 	if err != nil {
 		return VoidValue(), err
 	}
-	key := instanceFieldKey(reference)
+	key := fieldReferenceKey(reference)
 	object.fieldMu.RLock()
 	value, ok := object.Fields[key]
 	object.fieldMu.RUnlock()
@@ -862,12 +869,17 @@ func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, va
 	if object.Fields == nil {
 		object.Fields = make(map[string]Value)
 	}
-	object.Fields[instanceFieldKey(reference)] = value
+	object.Fields[fieldReferenceKey(reference)] = value
 	object.fieldMu.Unlock()
 	return nil
 }
 
-func instanceFieldKey(reference classfile.Reference) string {
+// fieldReferenceKey names a field the way an object's field map does and the
+// way HeapField.Key does, so a tool reading the heap and the interpreter
+// writing it agree on what a field is called. Statics are keyed by a struct
+// rather than by this string, but a store observer is shown this form for both
+// so that an observer has one thing to match on.
+func fieldReferenceKey(reference classfile.Reference) string {
 	return reference.Class + "." + reference.Name + ":" + reference.Descriptor
 }
 
@@ -1085,4 +1097,28 @@ func (vm *VM) initializeStaticFields(class *classfile.Class) error {
 		vm.mu.Unlock()
 	}
 	return nil
+}
+
+// SetStoreObserver installs f as the observer of guest stores, or clears it
+// when f is nil. A platform that watches writes installs one while it has a
+// watch and takes it away when the last one goes.
+func (vm *VM) SetStoreObserver(f func(StoreEvent)) {
+	if vm == nil {
+		return
+	}
+	if f == nil {
+		vm.storeObserver.Store(nil)
+		return
+	}
+	vm.storeObserver.Store(&f)
+}
+
+// observeStore shows one store to the observer if there is one.
+func (vm *VM) observeStore(event StoreEvent) {
+	if vm == nil {
+		return
+	}
+	if observe := vm.storeObserver.Load(); observe != nil {
+		(*observe)(event)
+	}
 }

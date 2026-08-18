@@ -77,6 +77,25 @@ func (platform *NativePlatform) Frame() (*image.RGBA, int) {
 	return platform.screen.frame, platform.screen.presents
 }
 
+// FrameDigest fingerprints the current screen without copying it out.
+//
+// It is a fingerprint and not an identity: two different screens can collide.
+// For deciding whether a title is still animating that is harmless, and it
+// keeps the check to one pass over the pixels.
+func (platform *NativePlatform) FrameDigest() uint64 {
+	if platform == nil || platform.screen == nil || platform.screen.frame == nil {
+		return 0
+	}
+	// FNV-1a over the frame bytes, which is what the descriptor package's
+	// Client.FrameDigest answers with too — one route runner reads both.
+	const offset64, prime64 = uint64(14695981039346656037), uint64(1099511628211)
+	digest := offset64
+	for _, value := range platform.screen.frame.Pix {
+		digest = (digest ^ uint64(value)) * prime64
+	}
+	return digest
+}
+
 // Missed reports blits whose image the platform never built.
 func (platform *NativePlatform) Missed() int {
 	if platform.screen == nil {

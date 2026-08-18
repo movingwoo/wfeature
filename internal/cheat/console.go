@@ -172,10 +172,18 @@ func (console *Console) hits(args []string) (string, error) {
 			break
 		}
 		// A host write's PC is the last guest instruction rather than the
-		// writer, so it is labelled instead of being presented as one.
+		// writer, so it is labelled instead of being presented as one. A
+		// platform whose code is not in the address space names the writer
+		// instead of addressing it; see WatchHit.Site.
 		writer := fmt.Sprintf("pc %#08x", hit.PC)
+		if hit.Site != "" {
+			writer = hit.Site
+		}
 		if hit.Origin == OriginHost {
 			writer = fmt.Sprintf("host, last pc %#08x", hit.PC)
+			if hit.Site != "" {
+				writer = "host, last at " + hit.Site
+			}
 		}
 		fmt.Fprintf(&builder, "%#08x written by %s  %d time(s)  last %#x (%d bytes)\n",
 			hit.Address, writer, hit.Count, hit.Value, hit.Size)

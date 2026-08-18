@@ -1695,6 +1695,18 @@ option. Because it tracks a clock rather than accumulating declared waits, a
 guest that polls the time without ever sleeping still sees it move, so a
 busy-wait loop terminates.
 
+**Where that timeline starts is the Host's clock, not the wall.** It used to be
+`time.Now()` regardless, which quietly cost every probe its reproducibility: a
+Host on a `ManualClock` is asking for a run it can repeat, and a title that
+seeds itself from the time of day repeats only if the time of day does. One
+local title's repro route stopped at 877 ticks, then 2,353, then 877 again, and
+five of the corpus's first frames differed against themselves — that was the
+whole of the corpus A/B noise floor. Both are gone: the epoch follows
+`client.now()`, `NewManualClock` starts at a fixed date when the caller names
+no instant, and the same script now lands on the same tick and the same pixels
+every time. A Host on the wall clock — a person playing — still sees real
+dates.
+
 The native CLI runs a KTF archive headlessly:
 
 ```sh
@@ -3367,9 +3379,13 @@ means none of them has a branch of its own:
 - `internal/platform/detect` names it `ktf`. It is the same vendor and the same
   platform; what differs is the package, and telling a Host otherwise would
   send it looking for a loader that does not exist. The discriminator is a
-  `.mif` beside exactly one `.mod`, and it is only consulted after every
-  descriptor marker has failed — a lone `.mod` is too common an extension to
-  claim an archive for.
+  `.mif` beside exactly one `.mod`, and it is consulted last — after every
+  descriptor marker has failed *and* after the class scan. A lone `.mod` is too
+  common an extension to claim an archive for, and the pair is a shape rather
+  than a marker, so a MIDlet repacked without its `.msd` could wear it by
+  accident; what a class file says it links against is evidence and outranks
+  it. The order is free on a real package of this generation, which carries no
+  class files for the scan to read.
 - `ktf.NativeSession` is the same shape on the outside as the descriptor
   package's `Session`: start, tick, take the frame, send keys, search memory.
   Underneath, a tick is "run the title's frame if it is due" and the wait it
@@ -3391,7 +3407,19 @@ means none of them has a branch of its own:
 
 `runktf` takes both generations, and refuses by name the options that only mean
 something to the other one: there are no AOT method bodies to profile or
-symbolize here, no descriptor to inspect, and no repro route runner yet.
+symbolize here, and no descriptor to inspect.
+
+`-route` works on both. A route is written against what is on the screen and
+which keys are pressed, and neither of those is a property of how the title was
+packaged, so the script file and the runner are the same — `internal/route`
+asks a platform for four functions rather than for an interface. What the
+earlier package supplies differently is only where the frame comes from and
+what a tick costs: `NativePlatform.FrameDigest` fingerprints the screen in
+place so a wait can ask every tick without copying it, and `Stalled` is "no
+deadline is pending", which on this package means nothing is left to run the
+title at all — it has no loop of its own. A `mark` names a place on the way
+rather than somewhere to start measuring from, because there is no profiler
+here to reset.
 
 ### What a run keeps of the calls it traps
 

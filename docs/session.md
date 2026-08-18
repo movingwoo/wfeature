@@ -133,6 +133,11 @@ Two rules keep the setting honest:
   32..1024 in either direction is answered with an error rather than clamped:
   it can only come from a page this server does not serve, and starting a game
   on a screen nothing was drawn for is worse than not starting it.
+- **The screen range is the server's and the page mirrors it.** A stored size
+  outside 32..1024 is treated as absent by the page rather than sent on to be
+  refused, which is what the setting promised and did not do: the page checked
+  only a floor, so a value from an older page or from edited storage reached
+  the server and came back as an error instead of falling back to the default.
 - **`started` reports `can_watch`**, which says whether this platform can name
   what wrote an address. It is the panel's answer about a control before it
   offers it, not an error it discovers by using it; see `docs/skvm.md`, "A heap

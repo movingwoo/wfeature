@@ -121,9 +121,12 @@ func Archive(data []byte) (Platform, error) {
 			return SKT, nil
 		}
 	}
-	if isKTFNativePackage(names, wrapper) {
-		return KTF, nil
-	}
+	// Evidence before a guess. The pair below is a shape rather than a marker,
+	// and `.mod` is a common enough extension that an SKT title repacked
+	// without its `.msd` could wear it by accident; reading the constant pool
+	// says what a class file actually links against. The order costs nothing
+	// on a real package of the earlier generation, which has no classes to
+	// scan at all.
 	skvm, err := referencesSKVM(reader)
 	if err != nil {
 		return "", err
@@ -131,12 +134,16 @@ func Archive(data []byte) (Platform, error) {
 	if skvm {
 		return SKT, nil
 	}
+	if isKTFNativePackage(names, wrapper) {
+		return KTF, nil
+	}
 	return Unknown, nil
 }
 
 // isKTFNativePackage reports whether the entry names are the earlier KTF
-// package's. It is only asked after every marker has failed, so it costs
-// nothing on an archive that named itself.
+// package's. It is only asked after every marker has failed and after the
+// class scan, so it costs nothing on an archive that named itself and cannot
+// claim one whose classes say otherwise.
 func isKTFNativePackage(names []string, wrapper string) bool {
 	info, module := 0, 0
 	for _, name := range names {

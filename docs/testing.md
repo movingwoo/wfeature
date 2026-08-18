@@ -249,14 +249,20 @@ wfeature runktf <archive> -ticks 64 -frame before.png -save <fresh dir>   # each
 wfeature runktf <archive> -ticks 64 -scale 2 -frame before2x.png -save <fresh dir>
 ```
 
-Measured across the whole local set, with a fresh save directory per run: **56
-of 60 archives are byte-identical at scale 1, and 26 of 32 KTF archives at each
-of hq2x, hq3x and hq4x** — `runlgt` has no `-scale`. The rest are one title's
-family, and they differ *against themselves*: three runs of one binary produced
-three different first frames for every one of them. So the floor in this mode
-is that family and nothing else, and a difference anywhere outside it is a
-finding rather than noise. Use a fresh save directory on both sides or the
-second run starts from the first run's save.
+**The KTF floor is now zero.** It used to be one title's family, which differed
+*against itself* — three runs of one binary produced three different first
+frames — and that family set the floor for every comparison: a real change
+under about 290 pixels was indistinguishable from the noise. The cause was the
+clock. A probe runs on a `ManualClock` precisely so it repeats, and the clock
+started at the wall, so every timestamp the guest read differed between runs and
+a title seeding itself from the time of day went somewhere else. It starts at a
+fixed date now, and a sweep over all 35 local KTF archives run twice on the same
+binary comes back **byte-identical on every one**. Use a fresh save directory on
+both sides or the second run starts from the first run's save.
+
+Two things follow. A difference anywhere is now a finding, with no family to
+discount — and if a floor ever reappears, measure it before reading anything
+into a diff, because something has gone back to reading the wall.
 
 **A route is the cheaper control.** `-route` waits on what the screen is doing
 rather than on tick numbers, so the same script lands on the same screen under

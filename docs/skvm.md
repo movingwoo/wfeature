@@ -769,22 +769,37 @@ nothing is cached — a scan sees the game's state as it changes, and a freeze i
 a write to the object rather than to a shadow of it. The engine above is
 unchanged: it asks this the same three questions it asks the two ARM platforms.
 
-**Write watching is the one question this map cannot answer.** A watch names
-the instruction that wrote an address, and there is no instruction here: a
-field is assigned by the interpreter, not by a store the core can trap. The
-target is deliberately not a `WatchTarget`, and the watch calls refuse rather
-than doing nothing quietly.
+**Watching writes needs a different trap, and the interpreter is it.** On the
+two ARM platforms a watch is the core noticing a store instruction against a
+real address. Here there is no instruction and no address: a field is the
+interpreter assigning into a map, and the address is one this map invented. So
+the interpreter reports its own stores — `putfield`, `putstatic` and the array
+stores hand a `jvm.StoreEvent` to the VM's store observer — and
+`internal/platform/skt/watch.go` turns one of those back into the address a
+search found, by the same identity the map is keyed on.
 
-What that cost was worth writing down. `CanWatch` existed for a Host to ask
-before offering the control, and nothing asked — so the browser panel showed
-the write-watch rows on this platform, and the poll that keeps the panel live
-asked for write hits on the same interval it refreshes candidates on. The hits
-call threw, the error reached the page, and the refresh queued behind it never
-ran: a panel whose working half was stopped every interval by the half this
-platform does not have. The capability now travels in the `started` message, so
-the page hides the control and stops asking, and the refresh runs first in that
-poll regardless — an optional feature must not be able to stop the one the
-panel is for.
+Three things about it are worth keeping.
+
+**It costs nothing when nobody is watching.** The observer is installed by the
+first watch and removed with the last, so a title being played rather than
+investigated pays one nil check per store: 4,000 ticks of a local title take
+2.03 seconds with the hook compiled in and 2.03 without. While a watch is
+installed a store costs a lock and a map lookup on the object's identity, and
+only a store to an object the search has actually mapped costs more.
+
+**The writer is named rather than addressed.** `pc 0x40183a2c` means something
+where the code is in the address space; here it is class files, so a hit
+carries `com/example/Game.tick+42` instead. That is `cheat.WatchHit.Site`,
+which the ARM platforms leave empty, and the console and the panel show
+whichever they were given.
+
+**The control is offered by the platform's own answer.** `CanWatch` is asked
+now, and the answer travels in the `started` message. It had been asked by
+nobody while this platform could not watch, which is how the browser panel came
+to offer the control here and then fail its poll every interval — the hits call
+threw, the error reached the page, and the candidate refresh queued behind it
+never ran. The refresh runs first in that poll now regardless: an optional
+feature must not be able to stop the one the panel is for.
 
 **The addresses are grouped by shape, not by allocation order.** Every instance
 of one class lands in that class's own arena, so the region listing names what

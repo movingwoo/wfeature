@@ -796,3 +796,37 @@ func TestNativeCallLogIsBoundedButTheCountsAreNot(t *testing.T) {
 		t.Errorf("the failed call was dropped; last kept is slot %d from %#x", last.Slot, last.Caller)
 	}
 }
+
+// A route waits on what the screen is doing — settled, or changed — and asks
+// that question every tick. The digest is what makes it affordable, so what it
+// has to answer is that an unchanged screen keeps its value and a drawn pixel
+// moves it.
+func TestNativeFrameDigestTracksTheScreen(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+
+	blank := platform.FrameDigest()
+	if blank == 0 {
+		t.Fatal("a started platform has a screen, and its digest should not be the zero answer")
+	}
+	if again := platform.FrameDigest(); again != blank {
+		t.Errorf("digest of an unchanged screen moved: %#x then %#x", blank, again)
+	}
+
+	rectangle, err := platform.client.Allocate(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := make([]byte, 8)
+	binary.LittleEndian.PutUint16(record[0:], 2)
+	binary.LittleEndian.PutUint16(record[2:], 3)
+	binary.LittleEndian.PutUint16(record[4:], 4)
+	binary.LittleEndian.PutUint16(record[6:], 5)
+	if err := platform.client.core.Memory().Write(rectangle, record); err != nil {
+		t.Fatal(err)
+	}
+	nativeCall(t, platform.drawRectangle, 0, rectangle, nativeNoColour, 0x0000ff00)
+
+	if drawn := platform.FrameDigest(); drawn == blank {
+		t.Error("the screen was drawn into and the digest did not move; a route would wait forever")
+	}
+}

@@ -205,6 +205,22 @@ func (session *NativeSession) Frame() ([]byte, int, int, uint32) {
 	return append([]byte(nil), frame.Pix...), bounds.Dx(), bounds.Dy(), uint32(presents)
 }
 
+// FrameDigest fingerprints the current screen. A route waits on what the
+// screen is doing — steady, or changed — and asking that every tick through
+// Frame would copy the whole picture out only to throw it away, so the hash is
+// taken over the frame in place. It is the same contract the descriptor
+// package's Client.FrameDigest answers, which is what lets one route runner
+// drive both generations.
+//
+// It is a fingerprint and not an identity: two different screens can collide.
+// For deciding whether a title is still animating that is harmless.
+func (session *NativeSession) FrameDigest() uint64 {
+	if session == nil {
+		return 0
+	}
+	return session.platform.FrameDigest()
+}
+
 // Flushes reports how many frames the title has ended, without copying one.
 func (session *NativeSession) Flushes() uint32 {
 	if session == nil || session.platform == nil {

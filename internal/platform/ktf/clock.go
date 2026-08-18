@@ -37,11 +37,24 @@ type ManualClock struct {
 	now   time.Time
 }
 
-// NewManualClock starts a manual clock at start. A zero start uses the current
-// wall clock, so guest-visible timestamps still look like real dates.
+// manualClockEpoch is where a manual clock starts when the caller names no
+// instant: 2007-01-01T00:00:00Z, which is a plausible date for these handsets
+// and lands a title's calendar arithmetic somewhere sane.
+const manualClockEpochMillis = 1167609600000
+
+// NewManualClock starts a manual clock at start. A zero start uses a fixed
+// date rather than the wall clock.
+//
+// A manual clock exists so a run repeats — that is the whole of what a probe
+// and a repro route are for — and starting it at the wall gave that away for
+// timestamps that look real. A title that seeds itself from the time of day
+// repeats only if the time of day does: one local title's route stopped at
+// 877 ticks, then 2,353, then 877 again, and the run became reproducible the
+// moment this stopped moving. Timestamps still look like real dates; they are
+// just the same real dates every time.
 func NewManualClock(start time.Time) *ManualClock {
 	if start.IsZero() {
-		start = time.Now()
+		start = time.UnixMilli(manualClockEpochMillis).UTC()
 	}
 	return &ManualClock{now: start}
 }

@@ -159,7 +159,7 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		index := int((opcode - 0x3b) % 4)
 		return stepResult{}, storeLocal(frame, index, loadStoreKind(group))
 	case opcode >= 0x4f && opcode <= 0x56:
-		return stepResult{}, arrayStore(frame, opcode)
+		return stepResult{}, vm.arrayStore(frame, opcode)
 	case opcode == 0x57:
 		value, err := frame.pop()
 		if err != nil {
@@ -333,7 +333,14 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 			if err != nil {
 				return stepResult{}, err
 			}
-			return stepResult{}, vm.setStaticValue(state, reference, value)
+			if err := vm.setStaticValue(state, reference, value); err != nil {
+				return stepResult{}, err
+			}
+			vm.observeStore(StoreEvent{
+				Class: reference.Class, Key: fieldReferenceKey(reference), Index: -1, Value: value,
+				SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
+			})
+			return stepResult{}, nil
 		}
 		if opcode == 0xb4 {
 			object, err := popReference(frame)
@@ -354,7 +361,16 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		if err != nil {
 			return stepResult{}, err
 		}
-		return stepResult{}, vm.setInstanceValue(object, reference, value)
+		if err := vm.setInstanceValue(object, reference, value); err != nil {
+			return stepResult{}, err
+		}
+		// Reported after the store and only when it happened: an observer is
+		// answering "what wrote this", and a store that threw wrote nothing.
+		vm.observeStore(StoreEvent{
+			Object: object, Key: fieldReferenceKey(reference), Index: -1, Value: value,
+			SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
+		})
+		return stepResult{}, nil
 	case opcode == 0xb6 || opcode == 0xb7 || opcode == 0xb8 || opcode == 0xb9:
 		index, err := frame.u2()
 		if err != nil {
@@ -1255,26 +1271,29 @@ func objectArray(object *Object) (*Array, error) {
 	return array, nil
 }
 
-func arrayIndex(frame *frame) (*Array, int, error) {
+// arrayIndex answers the object as well as the array behind it, because a
+// store observer identifies what was written by the object rather than by its
+// storage.
+func arrayIndex(frame *frame) (*Object, *Array, int, error) {
 	index, err := popInt(frame)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	object, err := popReference(frame)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	array, err := objectArray(object)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if index < 0 || int64(index) >= int64(array.Length()) {
-		return nil, 0, guestException(
+		return nil, nil, 0, guestException(
 			"java/lang/ArrayIndexOutOfBoundsException",
 			fmt.Sprintf("index %d for length %d", index, array.Length()),
 		)
 	}
-	return array, int(index), nil
+	return object, array, int(index), nil
 }
 
 func (vm *VM) handleException(frame *frame, opcodePC int, exception *GuestException) (bool, error) {
@@ -1301,7 +1320,7 @@ func (vm *VM) handleException(frame *frame, opcodePC int, exception *GuestExcept
 }
 
 func arrayLoad(frame *frame, opcode byte) (Value, error) {
-	array, index, err := arrayIndex(frame)
+	_, array, index, err := arrayIndex(frame)
 	if err != nil {
 		return VoidValue(), err
 	}
@@ -1316,13 +1335,13 @@ func arrayLoad(frame *frame, opcode byte) (Value, error) {
 	return value, nil
 }
 
-func arrayStore(frame *frame, opcode byte) error {
+func (vm *VM) arrayStore(frame *frame, opcode byte) error {
 	want := []ValueKind{ValueInt, ValueLong, ValueFloat, ValueDouble, ValueReference, ValueInt, ValueInt, ValueInt}[opcode-0x4f]
 	value, err := frame.popKind(want)
 	if err != nil {
 		return err
 	}
-	array, index, err := arrayIndex(frame)
+	object, array, index, err := arrayIndex(frame)
 	if err != nil {
 		return err
 	}
@@ -1346,7 +1365,14 @@ func arrayStore(frame *frame, opcode byte) error {
 		}
 		value = IntValue(integer)
 	}
-	return array.Store(index, value)
+	if err := array.Store(index, value); err != nil {
+		return err
+	}
+	vm.observeStore(StoreEvent{
+		Object: object, Index: index, Value: value,
+		SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
+	})
+	return nil
 }
 
 func arrayOpcodeMatches(component Type, group byte) bool {

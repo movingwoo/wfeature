@@ -509,10 +509,11 @@ func TestPNGBufferPoolAnswersNothingWithNil(t *testing.T) {
 }
 
 // The panel polls for write hits on the same interval it refreshes candidates
-// on, so a platform that cannot record them has to say so before the panel
-// opens. A MIDlet's state is Go objects rather than a memory image: there is no
-// store to instrument, and asking anyway answered with an error every interval
-// while the refresh behind it never ran.
+// on, so what a platform can do has to reach the page before the panel opens
+// rather than as an error every interval. Every platform can watch writes now
+// — the MIDlet runtime through the interpreter rather than through a core —
+// so what this pins is that the answer is carried at all, and that asking for
+// hits is a normal answer rather than a refusal.
 func TestStartedSaysWhetherThePlatformCanWatchWrites(t *testing.T) {
 	connection, _ := sessionFixture(t)
 	expectMessage(t, connection, serverReady)
@@ -522,15 +523,16 @@ func TestStartedSaysWhetherThePlatformCanWatchWrites(t *testing.T) {
 	if started.Started == nil {
 		t.Fatal("the started message carries no description")
 	}
-	if started.Started.CanWatch {
-		t.Error("a MIDlet session said it can watch writes; the panel would offer the control")
+	if !started.Started.CanWatch {
+		t.Error("a MIDlet session said it cannot watch writes; the panel would hide a control that works")
 	}
 
-	// The operation itself still refuses rather than doing nothing quietly, so
-	// a page that asks anyway is told why.
 	send(t, connection, clientMessage{Kind: clientCheat, Op: "hits"})
-	refusal := expectMessage(t, connection, serverError)
-	if !strings.Contains(refusal.Message, "watch") {
-		t.Errorf("refusal = %q, want it to name watching", refusal.Message)
+	answer := expectMessage(t, connection, serverResult)
+	if answer.Cheat == nil || answer.Cheat.Hits == nil {
+		t.Fatalf("asking for write hits answered %+v, want an empty list", answer.Cheat)
+	}
+	if len(answer.Cheat.Hits.Items) != 0 {
+		t.Errorf("a session that has watched nothing reported %d writers", len(answer.Cheat.Hits.Items))
 	}
 }

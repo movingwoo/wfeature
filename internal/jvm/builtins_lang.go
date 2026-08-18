@@ -557,7 +557,10 @@ func charsetOf(name string) charset {
 	switch normalized {
 	case "UTF8":
 		return charsetUTF8
-	case "EUCKR", "KSC5601", "KSC56011987", "KSC56011989", "MS949", "CP949", "X-WINDOWS-949", "WINDOWS949":
+	// Every name here is already normalized: upper case with the separators
+	// taken out, because that is what the switch is reading. A name spelled
+	// with its hyphens can never match and is a case that does nothing.
+	case "EUCKR", "KSC5601", "KSC56011987", "KSC56011989", "MS949", "CP949", "XWINDOWS949", "WINDOWS949":
 		return charsetPlatform
 	}
 	return charsetUnknown

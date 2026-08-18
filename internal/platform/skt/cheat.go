@@ -13,12 +13,9 @@ import (
 // there the answers come from a guest address space and here they are made:
 // see heapmap.go.
 //
-// It is not a WatchTarget. A watch names the instruction that wrote an address,
-// and finding that here would mean instrumenting every `putfield` and every
-// array store in the interpreter — which is a real thing to build and a
-// different one from this. The engine answers cheat.ErrWatchUnsupported until
-// it exists, and a Host reads that as "no watch control on this platform"
-// rather than as a failure.
+// It is a WatchTarget as well, and that half is in watch.go: a watch names the
+// code that wrote an address, and on a platform whose stores are interpreter
+// assignments rather than instructions the interpreter is what has to say so.
 type cheatTarget struct {
 	runtime *Runtime
 }
