@@ -3183,6 +3183,16 @@ sees it load its data and stop.
 
 The interval this title asks for is 48ms.
 
+Because the re-arm replaces the schedule rather than editing it, a Host tick has
+to read it *after* it has run the title's other callbacks and not before. The
+sound and timed services are answered first, both of them reach the title's own
+listener, and a listener that re-arms leaves the pointer a tick took earlier
+naming a struct nothing else points at: the tick would then stamp its next due
+date onto that orphan and call the function the title has just moved on from.
+`NativePlatform.Tick` reads `platform.frame` after the two advances for that
+reason. No local title has been seen to re-arm from a listener, so this is the
+contract holding rather than a fault observed.
+
 ### What the title draws with, and the table that named the colours
 
 The screen interface's `+0x14` takes a rectangle of four halfwords, two colours
@@ -3382,6 +3392,29 @@ means none of them has a branch of its own:
 `runktf` takes both generations, and refuses by name the options that only mean
 something to the other one: there are no AOT method bodies to profile or
 symbolize here, no descriptor to inspect, and no repro route runner yet.
+
+### What a run keeps of the calls it traps
+
+Every platform-table call is trapped, and for a while every one of them was also
+kept. That is affordable for a probe and not for a session: the title calls the
+platform for as long as it runs, about seven times a frame at rest and 237,801
+times over the acceptance route alone, and at 48 bytes a record the list was
+costing a player roughly 25 MB an hour and never giving any of it back.
+
+The list was serving two questions that turn out to have different shapes. *How
+many times was this slot called, and where was it first called from* is what
+says whether implementing a slot matters, and it is bounded by the number of
+slots — 37 on the local title — so `NativeClient` accumulates it in a map that
+cannot grow with the session. *What did the module do, in order* is a start-up
+diagnostic, so the ordered log keeps the first `maxNativeRecordedCalls` records
+the way `Trace` and the blit list keep theirs, plus any call that failed: a
+failing call is the one a reader opened the log for, and it ends the run anyway.
+
+`Calls()` is therefore a window and `CallCount()` is the total, while
+`SlotSummary()` counts every call the run ever made and reports whether the slot
+was ever answered. Measured on the local title after the split: the ordered log
+settles at its bound, the heap stops moving between tick 1,000 and tick 3,000,
+and the slot count is unchanged.
 
 ### A save is a file the title writes
 

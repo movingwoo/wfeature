@@ -115,6 +115,10 @@ differently:
   the name pool inside the client image. It names the platform *classes* a
   title could ask for — never which class a method belongs to. Nothing runs.
   See "What the corpus names, and what it never asks for" in `docs/ktf.md`.
+  The vendor's **earlier package** has no client image and so no name pool at
+  all, and the scan says `not scanned` for it rather than counting it as a
+  title with nothing missing. There is no link to read there, which is a
+  different answer from having read one and found no gaps.
 - **LGT** titles carry no list at all: a module's imports exist only as the
   calls it makes while it starts, so the scan starts each one and reads back
   what it resolved. One boot per archive rather than a read. See "The imports a

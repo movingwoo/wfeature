@@ -201,6 +201,11 @@ func TestSessionRunsTheEarlierKTFPackage(t *testing.T) {
 	if started.Started.Width != 240 || started.Started.Height != 320 {
 		t.Errorf("screen = %dx%d, want 240x320", started.Started.Width, started.Started.Height)
 	}
+	// This platform runs on a memory image with instrumented stores, so the
+	// panel's write-watch control means something here and is offered.
+	if !started.Started.CanWatch {
+		t.Error("a WIPI session said it cannot watch writes; the panel would hide a control that works")
+	}
 	// Without an owner the session would silently play with no persistence,
 	// and this package's owner comes out of its module information file.
 	if started.Started.SaveOwner == "" {
@@ -501,4 +506,31 @@ func TestPNGBufferPoolAnswersNothingWithNil(t *testing.T) {
 	}
 	pool.Put(&png.EncoderBuffer{})
 	pool.Get()
+}
+
+// The panel polls for write hits on the same interval it refreshes candidates
+// on, so a platform that cannot record them has to say so before the panel
+// opens. A MIDlet's state is Go objects rather than a memory image: there is no
+// store to instrument, and asking anyway answered with an error every interval
+// while the refresh behind it never ran.
+func TestStartedSaysWhetherThePlatformCanWatchWrites(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil {
+		t.Fatal("the started message carries no description")
+	}
+	if started.Started.CanWatch {
+		t.Error("a MIDlet session said it can watch writes; the panel would offer the control")
+	}
+
+	// The operation itself still refuses rather than doing nothing quietly, so
+	// a page that asks anyway is told why.
+	send(t, connection, clientMessage{Kind: clientCheat, Op: "hits"})
+	refusal := expectMessage(t, connection, serverError)
+	if !strings.Contains(refusal.Message, "watch") {
+		t.Errorf("refusal = %q, want it to name watching", refusal.Message)
+	}
 }

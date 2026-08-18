@@ -686,6 +686,15 @@ body:has(.status-message.visible) .modal-backdrop {
   opacity: 0.8;
 }
 
+/* A control for something this platform cannot do is worse than no control:
+   it invites a click that can only fail. The panel hides the write-watch rows
+   rather than disabling them, so what is on screen is what works here. */
+.cheat-section.hidden,
+.cheat-row.hidden,
+.cheat-list.hidden {
+  display: none;
+}
+
 .cheat-section {
   margin: 12px 0 6px;
   padding-top: 8px;

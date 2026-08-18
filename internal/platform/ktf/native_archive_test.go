@@ -456,16 +456,11 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 			name, sink.messages, sink.samples, len(platform.Messages()), platform.Messages())
 
 		summary := client.SlotSummary()
-		t.Logf("%s: %d calls over %d distinct slots", name, len(client.Calls()), len(summary))
-		served := map[nativeSlotKey]bool{}
-		for _, call := range client.Calls() {
-			if call.Served {
-				served[nativeSlotKey{surface: call.Surface, slot: call.Slot}] = true
-			}
-		}
+		t.Logf("%s: %d calls over %d distinct slots (%d kept in the ordered log)",
+			name, client.CallCount(), len(summary), len(client.Calls()))
 		for _, entry := range summary {
 			mark := "trap"
-			if served[nativeSlotKey{surface: entry.Surface, slot: entry.Slot}] {
+			if entry.Served {
 				mark = "served"
 			}
 			t.Logf("  %-6s %-20s offset %#04x (slot %3d) called %d times, first from %#x",

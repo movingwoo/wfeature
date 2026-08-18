@@ -507,6 +507,7 @@ const defaultProbeTicks = 64
 // observable from the command line; with -route it replays a script instead.
 func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	ticks := defaultProbeTicks
+	ticksChosen := false
 	framePath := ""
 	frameDir := ""
 	play := false
@@ -555,6 +556,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			ticks = parsed
+			ticksChosen = true
 			index++
 		case "-frame":
 			if index+1 >= len(extra) {
@@ -723,7 +725,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// both, because a person with a game in their hand should not have to know
 	// which one it is. What the earlier one cannot do it refuses by name: it
 	// has no descriptor to inspect, no AOT methods to profile or symbolize,
-	// and no cheat engine attached yet.
+	// and no repro route runner yet. The cheat engine it does have.
 	if ktf.IsNativeArchive(data) {
 		for name, unsupported := range map[string]bool{
 			"-diag":           diagPath != "",
@@ -739,6 +741,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		}
 		return runKTFNative(ctx, data, nativeRun{
 			ticks:        ticks,
+			ticksChosen:  ticksChosen,
 			framePath:    framePath,
 			frameDir:     frameDir,
 			play:         play,
@@ -828,7 +831,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			}
 			close(cheatCommands)
 		}()
-		if ticks == defaultProbeTicks {
+		if !ticksChosen {
 			ticks = 1 << 30
 		}
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")

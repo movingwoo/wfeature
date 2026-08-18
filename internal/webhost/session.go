@@ -193,7 +193,14 @@ type sessionRunner struct {
 	// behind. It is the difference between a session the host cannot keep up
 	// with and one the link cannot: the first shows in the tick cost and the
 	// second shows here.
+	//
+	// It is two counters because it answers two questions. The page is shown a
+	// rate, so its window is emptied every time one is sent; the session report
+	// is a post-mortem and wants the whole run, and reading the window for it
+	// answered with however little had been shed since the last report -- a
+	// session that shed thousands early and none lately said zero.
 	shed       atomic.Uint64
+	shedTotal  atomic.Uint64
 	skipped    uint64
 	ticks      uint64
 	tickTotal  time.Duration
@@ -539,8 +546,9 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.server.logger.Warn("session resume token unavailable", "error", tokenErr)
 	}
 	// The size reported is the one the platform took rather than the one the
-	// page asked for, because KTF ignores the request and a page that laid out
-	// for a screen the game is not drawing has the picture in the wrong place.
+	// page asked for: a platform may answer with a size of its own, and a page
+	// that laid out for a screen the game is not drawing has the picture in
+	// the wrong place.
 	startedWidth, startedHeight := started.Screen()
 	r.server.logger.Info("session started",
 		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner,
@@ -555,6 +563,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		Width:     startedWidth,
 		Height:    startedHeight,
 		Token:     r.token,
+		CanWatch:  started.Cheat() != nil && started.Cheat().CanWatch(),
 	}
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
@@ -962,7 +971,7 @@ func (r *sessionRunner) composeReport(cause string) string {
 	if speed := r.guestSpeed(time.Since(r.statsSince), false); speed > 0 {
 		fmt.Fprintf(&report, "guest speed: %.2fx real time\n", speed)
 	}
-	if shed := r.shed.Load(); shed > 0 {
+	if shed := r.shedTotal.Load(); shed > 0 {
 		fmt.Fprintf(&report, "messages shed to a slow connection: %d\n", shed)
 	}
 	if ktfSession := r.game.KTF(); ktfSession != nil {
@@ -1066,6 +1075,7 @@ func (r *sessionRunner) queue(message serverMessage, droppable bool) {
 		case r.outText <- outgoing:
 		default:
 			r.shed.Add(1)
+			r.shedTotal.Add(1)
 		}
 		return
 	}

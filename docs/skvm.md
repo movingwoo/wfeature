@@ -559,6 +559,31 @@ three thousand ticks into a scripted run and looked like a title bug. What
 named it was the stack — the exception is thrown by the *title's* code, in the
 one call that was given a `getBytes` result rather than a resource array.
 
+#### Where a character starts is not the length of the chunk
+
+`ByteToCharConverter.convert` takes a range at a time, so a two-byte character
+can straddle two calls and the lead byte has to wait on the converter for its
+trail. Deciding *which* byte is waiting is the part that has a trap in it. The
+first rule here asked whether the last byte was in the lead range and whether
+the chunk had an odd number of bytes, and the parity is what makes that wrong:
+it stands in for "we are mid-character" only while the text is entirely
+double-byte.
+
+A title that writes `"name:"` before a Korean word breaks it in both
+directions. `"abc"` followed by a lead byte is four bytes, so the even count
+says the chunk ends whole, the lead byte decodes alone into a replacement
+character, and its trail arrives at the head of the next chunk with nothing to
+join — two bad characters from one. The other direction is worse because it
+damages text that was never split: `"a"` followed by a whole `가` is three
+bytes, and `가`'s trail byte `0xa1` is itself inside the lead range, so the odd
+count tears the trail off a complete character.
+
+The state is only recoverable by scanning forward from the start of the chunk:
+a byte in the lead range consumes the one after it, anything else advances by
+one, and the answer is whether the scan runs off the end on a lead byte.
+`danglingLeadByte` is that scan, and the two chunks above are in its table
+test.
+
 ### The diagnostic report, and the three questions it answered
 
 `runskt <zip> -diag report.json` writes what a run used: the classes the VM
@@ -713,6 +738,21 @@ recorded.
 neighbouring call and it copies the screen into the caller's image, which is
 what `Graphics2D.captureLCD` does into a new one.
 
+`captureLCD` is declared static, and the corpus is what decided that rather than
+the shape of the class around it. Five of the fifteen local titles name it, at
+eight call sites between them, and **every one of the eight is an
+`invokestatic`** — read out of each class's constant pool and its bytecode
+rather than from the source that is not available. It matches what the call
+does: it copies the screen, not the surface a wrapper was built around, so a
+title has no reason to make a wrapper first.
+
+The consequence is worth writing down because it is a hard failure rather than a
+degraded one. This VM refuses a virtual call on a static method outright —
+`resolveInstanceMethod` answers `method is static: …` — so a title that reached
+`captureLCD` with `invokevirtual` would stop there instead of falling back. No
+local title does, and the message names its own cause, so the fallback stays
+unbuilt until a caller for it turns up.
+
 ## A heap with addresses in it
 
 The cheat engine searches an address space. This runtime does not have one: a
@@ -728,6 +768,23 @@ read and decodes a write back into the field it lands on. Nothing is copied and
 nothing is cached — a scan sees the game's state as it changes, and a freeze is
 a write to the object rather than to a shadow of it. The engine above is
 unchanged: it asks this the same three questions it asks the two ARM platforms.
+
+**Write watching is the one question this map cannot answer.** A watch names
+the instruction that wrote an address, and there is no instruction here: a
+field is assigned by the interpreter, not by a store the core can trap. The
+target is deliberately not a `WatchTarget`, and the watch calls refuse rather
+than doing nothing quietly.
+
+What that cost was worth writing down. `CanWatch` existed for a Host to ask
+before offering the control, and nothing asked — so the browser panel showed
+the write-watch rows on this platform, and the poll that keeps the panel live
+asked for write hits on the same interval it refreshes candidates on. The hits
+call threw, the error reached the page, and the refresh queued behind it never
+ran: a panel whose working half was stopped every interval by the half this
+platform does not have. The capability now travels in the `started` message, so
+the page hides the control and stops asking, and the refresh runs first in that
+poll regardless — an optional feature must not be able to stop the one the
+panel is for.
 
 **The addresses are grouped by shape, not by allocation order.** Every instance
 of one class lands in that class's own arena, so the region listing names what

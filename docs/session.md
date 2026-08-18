@@ -90,6 +90,11 @@ Two rules keep the setting honest:
   32..1024 in either direction is answered with an error rather than clamped:
   it can only come from a page this server does not serve, and starting a game
   on a screen nothing was drawn for is worse than not starting it.
+- **`started` reports `can_watch`**, which says whether this platform can name
+  what wrote an address. It is the panel's answer about a control before it
+  offers it, not an error it discovers by using it; see `docs/skvm.md`, "A heap
+  with addresses in it", for the platform that answers no and what asking
+  anyway used to cost.
 - **`started` reports the screen the platform took, not the one the page asked
   for.** All three platforms honour the request now, but a page that laid out
   for a size the game is not drawing would put the picture in the wrong place,
@@ -140,6 +145,23 @@ holds a frame across ticks and hands it to another goroutine, and one platform
 was answering with its live conversion buffer while the MIDP surface handed out
 the bytes its own guest threads paint into. Both now copy where they know they
 have to, which is under the lock they already hold.
+
+### A shed message is counted twice, on purpose
+
+Audio and statistics are droppable: when the socket is behind, they are thrown
+away rather than made to wait, because the emulator waiting for the link is the
+one failure the pacing exists to prevent. Two things then want to know how much
+was shed, and they want different numbers.
+
+The page wants a rate. Its statistics message carries what was shed since the
+last one, so that counter is emptied every time a report is sent, and a run of
+zeros after a burst is the page saying the connection recovered.
+
+The session report wants the run. It is a post-mortem, and reading the page's
+counter for it answered with however little had been shed since the last
+report — a session that shed thousands in its first minute and none afterwards
+said nothing had been shed at all. `shedTotal` is the counter it reads, and it
+is never emptied.
 
 ## Pacing and frame skipping
 

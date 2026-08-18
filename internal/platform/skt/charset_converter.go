@@ -26,6 +26,32 @@ import (
 // on the converter until the next one.
 func eucKRLeadByte(value byte) bool { return value >= 0x81 && value <= 0xfe }
 
+// danglingLeadByte answers the index of a lead byte the chunk ends on without
+// its trail, or -1 when the chunk ends on a whole character.
+//
+// It has to be a forward scan. The same byte value is a lead byte in one
+// position and a trail byte in the next, so whether the last byte begins a
+// character is only decided by where the characters before it start. The
+// parity of the chunk stands in for that state only while the text is entirely
+// double-byte, and a title that writes "name:" before a Korean word breaks it
+// in both directions: an even chunk ending on a real lead byte decodes that
+// byte alone and corrupts its trail at the head of the next chunk, and an odd
+// chunk ending on a trail byte in the lead range has that trail torn off a
+// character that was whole.
+func danglingLeadByte(bytes []byte) int {
+	for index := 0; index < len(bytes); {
+		if !eucKRLeadByte(bytes[index]) {
+			index++
+			continue
+		}
+		if index == len(bytes)-1 {
+			return index
+		}
+		index += 2
+	}
+	return -1
+}
+
 func (runtime *Runtime) byteToCharConvert(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	converter, err := referenceArgument(arguments, 0)
 	if err != nil {
@@ -63,9 +89,9 @@ func (runtime *Runtime) byteToCharConvert(vm *jvm.VM, arguments []jvm.Value) (jv
 	// with a replacement character the caller would then have in its text
 	// forever, so it waits for the byte that completes it.
 	held := int32(0)
-	if len(bytes) > 0 && eucKRLeadByte(bytes[len(bytes)-1]) && len(bytes)%2 == 1 {
-		held = int32(bytes[len(bytes)-1])
-		bytes = bytes[:len(bytes)-1]
+	if index := danglingLeadByte(bytes); index >= 0 {
+		held = int32(bytes[index])
+		bytes = bytes[:index]
 	}
 	if err := setConverterPending(vm, converter, held); err != nil {
 		return jvm.VoidValue(), err

@@ -739,3 +739,60 @@ func TestNativeAllocationsAreEightAligned(t *testing.T) {
 		previous = address
 	}
 }
+
+// A title calls the platform for as long as it runs, so the ordered call log
+// is bounded while the per-slot counts -- the answer the summary exists to
+// give -- stay whole. The two used to be the same list, which meant a session
+// paid for the summary by never giving the log back.
+func TestNativeCallLogIsBoundedButTheCountsAreNot(t *testing.T) {
+	client := &NativeClient{}
+	const beyond = maxNativeRecordedCalls + 500
+
+	for index := 0; index < beyond; index++ {
+		client.recordCall(NativeCall{
+			Surface: NativePlatformTable,
+			Offset:  0x40,
+			Slot:    16,
+			Caller:  uint32(0x1000 + index),
+			Served:  true,
+		}, false)
+	}
+
+	if got := len(client.Calls()); got != maxNativeRecordedCalls {
+		t.Errorf("ordered log kept %d calls, want it bounded at %d", got, maxNativeRecordedCalls)
+	}
+	if got := client.CallCount(); got != beyond {
+		t.Errorf("CallCount() = %d, want %d", got, beyond)
+	}
+
+	summary := client.SlotSummary()
+	if len(summary) != 1 {
+		t.Fatalf("summary has %d rows, want one", len(summary))
+	}
+	// The count is the whole run's, not the window's: a slot called a hundred
+	// thousand times is what says implementing it matters.
+	if summary[0].Count != beyond {
+		t.Errorf("slot counted %d calls, want %d", summary[0].Count, beyond)
+	}
+	if !summary[0].Served {
+		t.Error("the slot was answered every time and the summary says it was a trap")
+	}
+	// First names the code to disassemble, so it has to survive the window
+	// scrolling past the call it came from.
+	if summary[0].First != 0x1000 {
+		t.Errorf("first caller = %#x, want %#x", summary[0].First, 0x1000)
+	}
+
+	// A call that failed is the one a reader opened the log for, so it is kept
+	// whatever the window already holds.
+	client.recordCall(NativeCall{
+		Surface: NativePlatformTable,
+		Offset:  0x80,
+		Slot:    32,
+		Caller:  0xdead,
+	}, true)
+	kept := client.Calls()
+	if last := kept[len(kept)-1]; last.Slot != 32 || last.Caller != 0xdead {
+		t.Errorf("the failed call was dropped; last kept is slot %d from %#x", last.Slot, last.Caller)
+	}
+}
