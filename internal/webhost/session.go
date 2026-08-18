@@ -73,7 +73,30 @@ const (
 	// a handful of fields; a cheat table load is the largest and is still
 	// small.
 	maxSessionMessage = 1 << 20
+
+	// outboundBuffer is how many finished messages may wait for the socket.
+	// Nothing but audio arrives fast enough to fill it, and a backlog deeper
+	// than this is a connection that has stopped rather than one that is
+	// behind.
+	outboundBuffer = 64
+
+	// writeTimeout bounds one write to the page. A phone that goes into a
+	// tunnel stops reading without closing anything, and a socket with no
+	// deadline on it waits for that forever — holding the last frame, and
+	// every message queued behind it, until the operating system gives up
+	// minutes later. Ten seconds is far longer than any write here takes and
+	// far shorter than that.
+	writeTimeout = 10 * time.Second
 )
+
+// outboundMessage is one thing on its way to the page. Text and pictures share
+// a writer because they share a socket: two goroutines writing to one
+// connection serialise on its write mutex anyway, and the one that loses is
+// whichever asked second — which used to be the emulator. See writeMessages.
+type outboundMessage struct {
+	text   string
+	binary []byte
+}
 
 // serveSession upgrades the connection and runs one game on it.
 func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request) {
@@ -91,6 +114,9 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		connection: connection,
 		commands:   make(chan clientMessage, commandBuffer),
 		frames:     make(chan pendingFrame, 1),
+		outText:    make(chan outboundMessage, outboundBuffer),
+		outFrames:  make(chan outboundMessage, 1),
+		writerDone: make(chan struct{}),
 	}
 	runner.run(request.Context())
 }
@@ -109,6 +135,20 @@ type sessionRunner struct {
 
 	commands chan clientMessage
 	frames   chan pendingFrame
+
+	// outText and outFrames are what the writer goroutine drains. They are
+	// separate because their backlogs mean opposite things. Text is small and
+	// mostly droppable, so a queue of it is cheap and worth keeping; a queue
+	// of pictures is stale by the time it goes out, and a phone that is behind
+	// is made later still by receiving it. One slot means the encoder blocks
+	// on the second frame, which is what pushFrame is already reading when it
+	// drops one — so the backpressure arrives where the session already knows
+	// how to answer it.
+	outText   chan outboundMessage
+	outFrames chan outboundMessage
+	// writerDone is closed when the writer goroutine has gone, so a send that
+	// cannot be dropped waits for the socket rather than forever.
+	writerDone chan struct{}
 
 	game      *session.Session
 	label     string
@@ -144,14 +184,25 @@ type sessionRunner struct {
 	// stats accumulate between the reports sent to the page. The page cannot
 	// measure any of this itself any more — the emulator is not in it.
 	//
-	// sent and frameBytes are counted by the encoder goroutine and read by the
-	// emulator's, so they are atomic; the rest never leave the emulator loop.
+	// sent, frameBytes and shed are counted by the writer goroutine and read
+	// by the emulator's, so they are atomic; the rest never leave the emulator
+	// loop.
 	sent       atomic.Uint64
 	frameBytes atomic.Uint64
+	// shed counts droppable messages thrown away because the connection was
+	// behind. It is the difference between a session the host cannot keep up
+	// with and one the link cannot: the first shows in the tick cost and the
+	// second shows here.
+	shed       atomic.Uint64
 	skipped    uint64
 	ticks      uint64
 	tickTotal  time.Duration
 	statsSince time.Time
+	// guestSince is the guest clock at the start of the stats window, and
+	// guestMarked says whether there is one to compare against — a game that
+	// has just started or restarted has a clock that begins again at zero.
+	guestSince  time.Duration
+	guestMarked bool
 }
 
 func (r *sessionRunner) run(parent context.Context) {
@@ -159,9 +210,10 @@ func (r *sessionRunner) run(parent context.Context) {
 	defer cancel()
 
 	var waiting sync.WaitGroup
-	waiting.Add(2)
+	waiting.Add(3)
 	go func() { defer waiting.Done(); r.readCommands(cancel) }()
 	go func() { defer waiting.Done(); r.writeFrames(ctx) }()
+	go func() { defer waiting.Done(); r.writeMessages(ctx, cancel) }()
 
 	r.send(serverMessage{Kind: serverReady, Profile: r.server.profile})
 	r.loop(ctx)
@@ -176,6 +228,11 @@ func (r *sessionRunner) run(parent context.Context) {
 		r.park()
 	}
 	close(r.frames)
+	// The loop only returns once the socket is already gone, so nothing is
+	// still owed to the page: cancelling here releases the encoder and the
+	// writer from whatever they were waiting on rather than discarding a
+	// message someone is still reading.
+	cancel()
 	_ = r.connection.Close()
 	waiting.Wait()
 }
@@ -234,9 +291,10 @@ func (p *pngBufferPool) Put(buffer *png.EncoderBuffer) { p.pool.Put(buffer) }
 
 var pngBuffers = &pngBufferPool{}
 
-// writeFrames encodes and sends pictures. Encoding is off the emulator's
-// goroutine so a slow compression pass costs frames rather than guest speed,
-// and a write that blocks on a slow phone blocks only this.
+// writeFrames encodes pictures and hands them to the writer. Encoding is off
+// the emulator's goroutine so a slow compression pass costs frames rather than
+// guest speed, and the write itself is off it too — see writeMessages for why
+// that took a goroutine of its own rather than this one.
 func (r *sessionRunner) writeFrames(ctx context.Context) {
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers}
 	buffer := &bytes.Buffer{}
@@ -251,15 +309,15 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 			r.server.logger.Warn("frame could not be encoded", "error", err)
 			continue
 		}
-		if err := r.connection.WriteBinary(buffer.Bytes()); err != nil {
-			if !errors.Is(err, wsproto.ErrClosed) {
-				r.server.logger.Debug("frame write failed", "error", err)
-			}
+		// The encoder's buffer is reused, so the picture travels as its own
+		// bytes. Waiting here for the writer is deliberate: it is what makes
+		// pushFrame drop the next one rather than queue it.
+		encoded := append([]byte(nil), buffer.Bytes()...)
+		select {
+		case r.outFrames <- outboundMessage{binary: encoded}:
+		case <-r.writerDone:
 			return
-		}
-		r.frameBytes.Add(uint64(buffer.Len()))
-		r.sent.Add(1)
-		if ctx.Err() != nil {
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -626,7 +684,7 @@ func (r *sessionRunner) flushAudio() {
 	if len(events) == 0 {
 		return
 	}
-	r.send(serverMessage{Kind: serverAudio, Audio: events})
+	r.sendDroppable(serverMessage{Kind: serverAudio, Audio: events})
 }
 
 func (r *sessionRunner) reportStats() {
@@ -637,8 +695,10 @@ func (r *sessionRunner) reportStats() {
 	sent := r.sent.Swap(0)
 	frameBytes := r.frameBytes.Swap(0)
 	stats := statsMessage{
-		Fps:     float64(sent) / elapsed.Seconds(),
-		Skipped: r.skipped,
+		Fps:      float64(sent) / elapsed.Seconds(),
+		Skipped:  r.skipped,
+		Shed:     r.shed.Swap(0),
+		TickRate: float64(r.ticks) / elapsed.Seconds(),
 	}
 	if r.ticks > 0 {
 		stats.TickMillis = float64(r.tickTotal.Microseconds()) / float64(r.ticks) / 1000
@@ -646,9 +706,62 @@ func (r *sessionRunner) reportStats() {
 	if sent > 0 {
 		stats.FrameBytes = int(frameBytes / sent)
 	}
-	r.send(serverMessage{Kind: serverStats, Stats: &stats})
+	stats.Speed = r.guestSpeed(elapsed, true)
+	r.sendDroppable(serverMessage{Kind: serverStats, Stats: &stats})
 	r.skipped, r.ticks, r.tickTotal = 0, 0, 0
 	r.statsSince = time.Now()
+}
+
+// guestSpeed is how much guest time the window bought, against how much real
+// time it cost.
+//
+// This is the number the other statistics cannot produce between them. A
+// session short of time drops no frames and reports no error: it hands the
+// game less clock than the wall gave it and everything else stays plausible.
+// Reading a tick cost against the frame rate only says so if you already know
+// how many ticks the game takes per picture, which varies by title and by
+// scene. This says it outright.
+//
+// **Below one is the reading worth acting on.** A session that keeps up sits
+// at one, because the platforms pace a tick of guest time to a tick of real
+// time and wait out the difference. Short of processor there is no difference
+// left to wait out, and the shortfall lands here in proportion: three quarters
+// means the game is playing a quarter slower than it was written to.
+//
+// Above one is not a session running fast. A guest clock advances by the
+// larger of the tick it stands for and the work the guest actually did — a
+// frame that takes a modelled handset longer than its own timer asked for took
+// that long, and saying otherwise would be claiming a phone the game never ran
+// on. Loading a world does it every time. It says the guest was busy, not that
+// the server was quick, and nothing here is wrong when it happens.
+//
+// It answers zero when there is nothing to compare — no game, a platform
+// without a clock of its own, or the first window after one started, whose
+// guest clock began again at zero.
+//
+// mark moves the window's start to now, which the report that closes a window
+// does and the one composed part way through a window must not: the mark and
+// statsSince are a pair, and moving one without the other would measure guest
+// time over the wrong stretch of wall time.
+func (r *sessionRunner) guestSpeed(elapsed time.Duration, mark bool) float64 {
+	guest, ok := time.Duration(0), false
+	if r.game != nil {
+		guest, ok = r.game.GuestElapsed()
+	}
+	if !ok {
+		if mark {
+			r.guestMarked = false
+		}
+		return 0
+	}
+	marked, since := r.guestMarked, r.guestSince
+	if mark {
+		r.guestSince, r.guestMarked = guest, true
+	}
+	if !marked || elapsed <= 0 || guest < since {
+		return 0
+	}
+	return float64(guest-since) / float64(elapsed)
 }
 
 // runCheat drives the cheat engine on behalf of the panel. Every operation
@@ -837,6 +950,20 @@ func (r *sessionRunner) composeReport(cause string) string {
 	if r.ticks > 0 {
 		fmt.Fprintf(&report, "tick cost: entries=%d average=%s\n",
 			r.ticks, (r.tickTotal / time.Duration(r.ticks)).Round(time.Microsecond))
+		// The rate against the cost is what says whether the loop was working
+		// or waiting: ticks a second times the average is the share of a core
+		// the emulator actually used.
+		if elapsed := time.Since(r.statsSince); elapsed > 0 {
+			fmt.Fprintf(&report, "tick rate: %.1f/s, busy %.0f%% of a core\n",
+				float64(r.ticks)/elapsed.Seconds(),
+				100*float64(r.tickTotal)/float64(elapsed))
+		}
+	}
+	if speed := r.guestSpeed(time.Since(r.statsSince), false); speed > 0 {
+		fmt.Fprintf(&report, "guest speed: %.2fx real time\n", speed)
+	}
+	if shed := r.shed.Load(); shed > 0 {
+		fmt.Fprintf(&report, "messages shed to a slow connection: %d\n", shed)
 	}
 	if ktfSession := r.game.KTF(); ktfSession != nil {
 		fmt.Fprintf(&report, "\n%s\n", ktfSession.HostCosts())
@@ -856,14 +983,97 @@ func (r *sessionRunner) composeReport(cause string) string {
 	return report.String()
 }
 
+// writeMessages is the only goroutine that writes to the socket.
+//
+// It exists because a connection has one write mutex and everything here used
+// to reach for it directly: pictures from the encoder, and audio and
+// statistics from the emulator itself. The encoder blocking on a slow phone
+// was the intended cost — a comment on writeFrames says as much — but the
+// emulator blocking behind it was not, and that is what happened. A game in a
+// busy scene sends a sound every tick, so every tick the emulator queued
+// behind a frame going out over a phone link, and the wait landed on the
+// guest's clock as slow motion. It never showed on a desktop, where a write to
+// the loopback interface returns before the socket has done anything with it.
+//
+// Nothing on the emulator's path may wait for a socket. That is the whole rule
+// this goroutine exists to keep.
+func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.CancelFunc) {
+	// Cancelling on the way out ends the session rather than leaving a game
+	// running for a page that can no longer be written to. The read side would
+	// notice eventually; a dead socket does not deserve a core until it does.
+	defer cancel()
+	defer close(r.writerDone)
+	for {
+		var message outboundMessage
+		select {
+		case <-ctx.Done():
+			return
+		case message = <-r.outFrames:
+		case message = <-r.outText:
+		}
+		// Text and pictures are ordered against themselves but not against
+		// each other, which costs nothing: a picture carries no reference to
+		// any message, and a frame that arrives just after the game said it
+		// had exited is the last thing the player saw either way.
+		_ = r.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
+		var err error
+		if message.binary != nil {
+			err = r.connection.WriteBinary(message.binary)
+		} else {
+			err = r.connection.WriteText(message.text)
+		}
+		if err != nil {
+			if !errors.Is(err, wsproto.ErrClosed) {
+				r.server.logger.Debug("session write failed", "error", err)
+			}
+			return
+		}
+		if message.binary != nil {
+			r.frameBytes.Add(uint64(len(message.binary)))
+			r.sent.Add(1)
+		}
+	}
+}
+
+// send queues a message for the page. It never blocks on the socket, and the
+// callers that matter are on the emulator's goroutine.
+//
+// A message the session may not lose still waits for room in the queue, which
+// is a backlog of sixty-odd messages deep and therefore a connection that has
+// stopped rather than one that is behind. Everything sent from inside the tick
+// loop while a game is playing — audio and statistics — is droppable, so that
+// wait is not on the guest's path.
 func (r *sessionRunner) send(message serverMessage) {
+	r.queue(message, false)
+}
+
+// sendDroppable queues a message the session would rather lose than wait for.
+// Audio and statistics both describe a moment that has already passed: a phone
+// that is behind is better served by the next one than by all of them.
+func (r *sessionRunner) sendDroppable(message serverMessage) {
+	r.queue(message, true)
+}
+
+func (r *sessionRunner) queue(message serverMessage, droppable bool) {
 	encoded, err := encodeMessage(message)
 	if err != nil {
 		r.server.logger.Warn("session message could not be encoded", "error", err)
 		return
 	}
-	if err := r.connection.WriteText(string(encoded)); err != nil && !errors.Is(err, wsproto.ErrClosed) {
-		r.server.logger.Debug("session message write failed", "kind", message.Kind, "error", err)
+	outgoing := outboundMessage{text: string(encoded)}
+	if droppable {
+		select {
+		case r.outText <- outgoing:
+		default:
+			r.shed.Add(1)
+		}
+		return
+	}
+	select {
+	case r.outText <- outgoing:
+	case <-r.writerDone:
+		// The page cannot be told anything more. Saying so once is the
+		// writer's job and it has already done it.
 	}
 }
 

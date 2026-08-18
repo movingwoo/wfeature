@@ -197,6 +197,22 @@ type statsMessage struct {
 	TickMillis float64 `json:"tick_ms"`
 	// FrameBytes is the average encoded size of a sent frame.
 	FrameBytes int `json:"frame_bytes"`
+	// TickRate is how many times a second the emulator went round. It is what
+	// separates a session that is short of processor from one that is stuck:
+	// the first turns as fast as it can and spends every tick working, and
+	// nothing but this says which of those the tick cost adds up to.
+	TickRate float64 `json:"tick_rate"`
+	// Speed is guest time over real time. One is the pace the game was written
+	// for and below one is the server falling short of it — 0.75 is a game
+	// playing a quarter slower than it should. Above one is a guest whose own
+	// work outran its timer schedule, which a world load does every time and
+	// which is not a fault. It is zero when the platform has no clock of its
+	// own to compare.
+	Speed float64 `json:"speed"`
+	// Shed counts messages — audio, statistics — thrown away because the
+	// connection was behind rather than the server. Frames dropped for the
+	// same reason are counted by Skipped.
+	Shed uint64 `json:"shed"`
 }
 
 // audioEvent is one call the guest made on the audio sink. The names match the

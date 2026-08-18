@@ -488,8 +488,15 @@ const initResumeOnReturn = () => {
 // rather than to a variable, because the log is what a report reads back.
 const recordSessionStats = stats => {
   if (!stats) return;
-  recordEvent(`session ${stats.fps.toFixed(1)}fps, tick ${stats.tick_ms.toFixed(1)}ms, ` +
-    `frame ${stats.frame_bytes}B, dropped ${stats.skipped}`);
+  // The speed and the tick rate are what make the rest readable. A frame rate
+  // below the game's own says nothing on its own — titles differ in how many
+  // ticks they take per picture — and the tick cost only says whether the
+  // server ran out of time once the rate says how many of them there were.
+  const speed = stats.speed > 0 ? `, speed ${stats.speed.toFixed(2)}x` : "";
+  const shed = stats.shed > 0 ? `, shed ${stats.shed}` : "";
+  recordEvent(`session ${stats.fps.toFixed(1)}fps, tick ${stats.tick_ms.toFixed(1)}ms` +
+    ` x${(stats.tick_rate ?? 0).toFixed(1)}/s${speed}, ` +
+    `frame ${stats.frame_bytes}B, dropped ${stats.skipped}${shed}`);
 };
 
 // startServerGame runs a game on the server and draws what comes back. The
