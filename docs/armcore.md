@@ -218,6 +218,83 @@ so it had read 822 instructions of the 140,000 in the first image and every
 image after was the same silence. A survey that reports "none" has to be made
 to report a known-present case first.
 
+The same warning caught the investigation below, from the other end. `-profile`
+prints a line per *region*, and a region is a run of sampled addresses with no
+large gap in it — `regionIndex` in `internal/guestprofile`. Several loops in one
+function land on one line, so a share read off it is the share of everything
+that ran there, not of a loop. One region reading 43.59% was four loops, and the
+one that looked like the answer turned out to be 0.18% of it. `-profile-folded`
+answers per address, and that is what a share should be taken from.
+
+## Standing in for the loops a rasteriser is made of
+
+The measurement above says a pattern engine for *copy* loops would be machinery
+for something the corpus barely contains. It also says what the corpus does
+contain: fills and blits, 34 fill-shaped loops to 8 copy-shaped ones, and the
+hot ranges in every title profiled are the game's own rasteriser. What was left
+open was that matching those needs a loop recogniser rather than a byte
+pattern, because two titles doing the same fill share no instruction sequence.
+
+A user reporting a specific title as slow is the condition this section named
+for revisiting it, and one arrived. Per address, in the scene reported:
+
+| share | loop |
+|---|---|
+| 28.6% | a blit through a palette: a source byte indexes a table, the colour goes out sixteen bits at a time |
+| 2.2% | the row loop around a fill |
+| 1.9% | a second, guarded blit of the same shape |
+| 0.18% | a constant halfword fill |
+
+So the recogniser was built for the two shapes that are actually there, in
+`fill_loop.go` and `table_blit.go`. Both are structural: they read the body
+between a backward branch and its target, give each instruction a role, and
+refuse a body where a role is filled twice, left empty, or played by a register
+that is also playing another. Recognition is attempted only when a backward
+branch is taken, so the cost on every other instruction in the program is one
+compare.
+
+Four rules keep a stand-in from being something the guest can tell apart:
+
+- **Spans are validated whole before anything moves.** A blit that would have
+  faulted partway faults where it would have, rather than after the stand-in
+  has filled everything before it.
+- **Only refusals are cached.** A positive answer is re-derived every time the
+  loop is stood in for — six to twelve decode-cache reads against the thousands
+  of pixels they authorise — because a cache of positives would have to be
+  invalidated whenever the guest rewrites code, and this platform rewrites it.
+  A run that merely declines is not a refusal: caching "too few iterations this
+  time" would write the loop off for the session.
+- **Registers and flags are left where the guest would have left them**, which
+  `fill_loop_test.go` pins by running the same loop both ways and comparing all
+  sixteen registers, the CPSR, and the memory it wrote.
+- **The step count is charged as though every instruction had run**, so a guest
+  that would have exhausted its budget still does and `MaxSteps` keeps meaning
+  what it meant. The cost of that is a profile artifact: the charged steps are
+  sampled at the PC after the loop, so the instructions around a stood-in loop
+  read as hot. Measure a stand-in by the share of the loop body itself, which
+  goes to nothing, and by the wall clock.
+
+Measured on the title that prompted it, over the same 1,790-tick route with the
+same save:
+
+| | before | after |
+|---|---|---|
+| busy | 21.8s | **18.0s** |
+| per tick p90 | 41.0ms | **35.2ms** |
+| per tick p99 | 46.7ms | **40.8ms** |
+| the blit body's share of instructions | 28.6% | **0.71%** |
+
+A tick of this title is about 44ms of guest time, so p90 moves from 1.07x real
+time — no headroom at all — to 1.25x. Every one of the 30 local LGT archives
+and all 35 KTF archives render byte-identical first frames before and after,
+and the engine benchmarks are unchanged, the existing blit benchmark's loop
+being a shape this does not match.
+
+**What is left is more of the same.** The stand-in still pays a bounds-checked
+read and write per pixel, which is why 28.6% of instructions became about 17%
+of time rather than all of it, and the next regions down the profile — 8.9%,
+8.8%, 5.6% — are further rasteriser loops in shapes neither recogniser knows.
+
 ## Interpreter throughput
 
 Two things dominated a step, and neither was the instruction itself.
