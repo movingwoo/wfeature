@@ -91,12 +91,35 @@ Two rules keep the setting honest:
   it can only come from a page this server does not serve, and starting a game
   on a screen nothing was drawn for is worse than not starting it.
 - **`started` reports the screen the platform took, not the one the page asked
-  for.** KTF owns its screen and ignores the request; a page that laid out for
-  a size the game is not drawing would put the picture in the wrong place.
+  for.** All three platforms honour the request now, but a page that laid out
+  for a size the game is not drawing would put the picture in the wrong place,
+  so the frame's own size is what the page reads back.
+
+**A screen is one answer, and it has to reach every surface a game can ask.**
+This is the part that is easy to half-build. A WIPI title asks the platform how
+big its screen is, and it asks again — by another route — where the pixels are
+and how far apart the rows sit. On KTF that is `MC_grpGetDisplayInfo` and the
+screen framebuffer record; two local titles read the size from the first and
+then write straight into the buffer from the second. Give them a new size
+through one route and not the other and every row after the first lands at the
+wrong offset: the picture shears into diagonal bands and reads exactly like a
+decoder bug. `internal/platform/ktf`'s `Client.SetScreen` is the single place
+both answers are read from for that reason, and `screen_test.go` fails if they
+ever disagree. The Java surface — `Display.getWidth`, a `Card`'s bounds — reads
+the same answer, because a title that lays out against one size while the
+platform draws at another is the same fault wearing different clothes.
 
 The page remembers the choice per game rather than once, because it is a
 property of the title rather than a taste, and it applies at the next start — a
 MIDlet reads its screen once, when it starts.
+
+**It is not the setting that makes the picture bigger.** That one is `scale`,
+which magnifies a finished frame and is a taste; this one changes what the
+guest is told and therefore which artwork it loads and how it lays a screen
+out. The two are worth keeping apart when a report says a title "looks wrong":
+an old game whose proportions are off on a modern display wants `scale` and the
+page's own letterboxing, while a title that draws into a corner of the screen
+or asks for images it does not carry is the one this setting is for.
 
 ### What a frame costs on its way out
 

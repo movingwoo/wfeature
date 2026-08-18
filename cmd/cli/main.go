@@ -522,6 +522,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	keyHold := 1
 	saveRoot := defaultSaveRoot()
 	gdbAddress := ""
+	screenWidth, screenHeight := 0, 0
 	for index := 0; index < len(extra); index++ {
 		switch extra[index] {
 		case "-save":
@@ -531,6 +532,18 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			}
 			saveRoot = extra[index+1]
 			index++
+		case "-screen":
+			if index+1 >= len(extra) {
+				fmt.Fprintln(stderr, "-screen expects <width>x<height>")
+				return 2
+			}
+			index++
+			width, height, err := parseScreenSize(extra[index])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			screenWidth, screenHeight = width, height
 		case "-ticks":
 			if index+1 >= len(extra) {
 				fmt.Fprintln(stderr, "-ticks expects a count")
@@ -734,6 +747,8 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			keyHold:      keyHold,
 			audioPrefix:  audioPrefix,
 			cheatConsole: cheatConsole,
+			screenWidth:  screenWidth,
+			screenHeight: screenHeight,
 			logger:       logger,
 		}, stdout, stderr)
 	}
@@ -754,6 +769,8 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		TraceLimit: traceLimit,
 		Logger:     logger,
 		Speed:      speed,
+		Width:      screenWidth,
+		Height:     screenHeight,
 	}
 	// The recording sink timestamps with guest time, which the session only
 	// answers once it exists, so the clock is attached just after the start.
@@ -1459,7 +1476,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")
-	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N]")
+	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-gdb host:port]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick] [-route script]")
 	fmt.Fprintln(output, "  wfeature invoke <game.jar> <method> <descriptor> [arguments...]")

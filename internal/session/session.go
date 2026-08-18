@@ -219,6 +219,8 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 				AudioSink: options.AudioSink,
 				Logger:    options.Logger,
 				Speed:     options.Speed,
+				Width:     options.width(),
+				Height:    options.height(),
 			})
 			if err != nil {
 				return nil, err
@@ -233,6 +235,8 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			Speed:      options.Speed,
 			TraceLimit: options.TraceLimit,
 			Logger:     options.Logger,
+			Width:      options.width(),
+			Height:     options.height(),
 		})
 		if err != nil {
 			return nil, err
@@ -530,19 +534,21 @@ func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 func (s *Session) Screen() (width, height int) {
 	switch {
 	case s.ktf != nil:
-		// KTF's screen is the platform's own. Its frame says so once there is
-		// one, and before that the default is what it will be.
+		// The frame is the answer once there is one, because it is built from
+		// the screen the game was actually given rather than from what was
+		// asked for. Before that, the request stands.
 		if _, frameWidth, frameHeight, _ := s.ktf.Frame(); frameWidth > 0 && frameHeight > 0 {
 			return frameWidth, frameHeight
 		}
-		return DefaultWidth, DefaultHeight
+		return s.options.width(), s.options.height()
 	case s.ktfNative != nil:
-		// The earlier package's screen is the platform's own too: the title
-		// asks for its size once and draws into what it is given.
+		// The earlier package answers the same way: the title asks for its
+		// size once and draws into what it is given, so the frame is what it
+		// actually got.
 		if _, frameWidth, frameHeight, _ := s.ktfNative.Frame(); frameWidth > 0 && frameHeight > 0 {
 			return frameWidth, frameHeight
 		}
-		return DefaultWidth, DefaultHeight
+		return s.options.width(), s.options.height()
 	case s.lgt != nil:
 		if _, frameWidth, frameHeight, _ := s.lgt.Frame(); frameWidth > 0 && frameHeight > 0 {
 			return frameWidth, frameHeight

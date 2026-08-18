@@ -2432,6 +2432,33 @@ one the detection rule proves rather than the one it was built for: a title
 that draws its art in a corner and its menus on the whole screen is telling you
 which of the two is the screen.
 
+### The screen is a Host's answer, and it has to reach both surfaces
+
+A Host may name another handset — `runktf -screen WxH`, or the page's setting
+— and both generations of package take it. `Client.SetScreen` and
+`NativePlatform.SetScreen` are where it lands, and
+[`session.md`](session.md) has the cross-platform contract.
+
+Two things about it belong here rather than there. **A size answered to one
+surface and not the other shears the picture.** A title reads the screen from
+`MC_grpGetDisplayInfo` and takes the pixel buffer from the screen framebuffer
+record, and two local titles then write into that buffer with the stride the
+info struct gave them; answer one and not the other and every row after the
+first lands at the wrong offset, which looks like a decoder fault rather than a
+half-wired setting. Both answers are read from one place for that reason, and
+`screen_test.go` fails if they diverge — on the earlier package too, where the
+pair is the display record and the image the blits land in.
+
+And **`DisplaySize` is still not the answer**, for the reason the section above
+established: thirteen local titles declare `176*220` and twelve draw across the
+whole 240x320 screen. The size stays something a Host is told rather than
+something the archive is asked, so a title that really was packaged for a
+smaller phone is a flag away and the twelve that were not are untouched.
+Measured across the 34 local archives: at the default screen 29 first frames
+are byte-identical to the previous build and the 6 that differ are the family
+whose noise floor is measured above; at 176x220, 33 run clean and lay
+themselves out correctly.
+
 ### An A/B sweep of the local set is half noise
 
 Driving every local title with the same script under two builds and diffing

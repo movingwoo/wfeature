@@ -55,6 +55,10 @@ type NativePlatform struct {
 	installed bool
 	// screen is what the title draws into.
 	screen *nativeScreen
+	// screenWidth and screenHeight are the handset the title is told it runs
+	// on. Zero is the platform's own; see SetScreen.
+	screenWidth  int
+	screenHeight int
 	// images holds every image the title asked the factory for, by the object
 	// it was handed back.
 	images map[uint32]*nativeImage
@@ -191,6 +195,30 @@ func NewNativePlatform(client *NativeClient, archive *NativeArchive, clock Clock
 	}
 }
 
+// SetScreen names the handset the title is told it runs on, with zero for
+// either side selecting the platform's own 240x320. It has the same contract
+// as the descriptor package's Client.SetScreen — the size the display record
+// reports and the size of the frame the title draws into are one answer, read
+// from here by both — and it has to be called before Install builds the
+// screen.
+func (platform *NativePlatform) SetScreen(width, height int) {
+	if platform == nil {
+		return
+	}
+	platform.screenWidth = width
+	platform.screenHeight = height
+}
+
+// screenSize is the handset to answer with, with the platform's own standing
+// in for whatever was not chosen.
+func (platform *NativePlatform) screenSize() (int, int) {
+	width, height := runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	if platform != nil && platform.screenWidth > 0 && platform.screenHeight > 0 {
+		width, height = platform.screenWidth, platform.screenHeight
+	}
+	return width, height
+}
+
 // Install registers every handler whose slot is established. It is called
 // before the module runs, and again for nothing afterwards: the application
 // object the module builds is read through the platform rather than bound
@@ -280,9 +308,10 @@ func (platform *NativePlatform) displayInfo(thread *armcore.Thread) (uint32, err
 	if err != nil {
 		return 0, err
 	}
+	width, height := platform.screenSize()
 	record := make([]byte, nativeDisplayRecordSize)
-	binary.LittleEndian.PutUint16(record[0:], runtimeDisplayPixelWidth)
-	binary.LittleEndian.PutUint16(record[2:], runtimeDisplayPixelHeight)
+	binary.LittleEndian.PutUint16(record[0:], uint16(width))
+	binary.LittleEndian.PutUint16(record[2:], uint16(height))
 	binary.LittleEndian.PutUint16(record[0xe:], nativeDisplayBitsPerPixel)
 	if err := platform.client.core.Memory().Write(out, record); err != nil {
 		return 0, fmt.Errorf("write KTF native display record at %#x: %w", out, err)

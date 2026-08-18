@@ -52,7 +52,7 @@ behaviour is checked without a game around it.
 ```
 wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
                            [-play] [-speed N] [-key tick:name] [-hold N] [-route script]
-                           [-cheat] [-gdb host:port]
+                           [-cheat] [-gdb host:port] [-screen WxH]
                            [-diag report.json] [-audio out] [-scale N]
                            [-profile report.txt] [-profile-folded stacks.txt]
                            [-profile-from tick]
@@ -73,6 +73,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port` |
 | `-diag report.json` | write the runtime-boundary diagnostics (below) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
+| `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
 | `-scale N` | run the hqx filter over captured frames: 2, 3 or 4 |
 | `-profile report.txt` | sample the ARM core and rank the result by symbol |
 | `-profile-folded stacks.txt` | the same profile as flamegraph-folded lines |
@@ -80,6 +81,27 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 
 `-speed`, `-key` and `-cheat` each turn `-play` on, because none of them means
 anything to a run that is stepping ticks by hand.
+
+**`-screen` changes what the game is told, not how big the picture is drawn.**
+That is `-scale`. Every local archive here was packaged for the 240x320 handset
+this carrier standardised on, so the default is the answer for all of them and
+this flag is for the archive that turns up packaged for something smaller — the
+case `runskt` already had. It has to be given at the start and cannot change
+during a run: the screen framebuffer is built once, on the game's first request
+for it. What a title does with a size it has no artwork for is its own
+business, and two local titles write into the framebuffer with the stride they
+were told, so a size is answered to every surface at once or to none —
+[`session.md`](session.md) has why that is the whole of the contract.
+
+**It is a flag rather than a rule, and on this platform that is a measured
+decision rather than a missing feature.** A KTF archive does declare a size —
+`DisplaySize` in its `__adf__` — and reading it would look like the obvious
+automation. Thirteen of the local titles declare `176*220` and twelve of them
+draw across the whole 240x320 screen, so adopting the declaration would shrink
+twelve working titles to fix one band that turned out to be a game's own
+artwork. [`ktf.md`](ktf.md), "A band beside a title screen was the title's
+own", is that investigation; this flag is what remains for the archive that
+really does want another handset.
 
 **`-hold` is worth raising before believing a title has stopped.** A press and
 its release used to be delivered in the same tick here, and a title that samples
