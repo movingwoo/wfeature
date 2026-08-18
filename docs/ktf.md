@@ -1695,6 +1695,18 @@ option. Because it tracks a clock rather than accumulating declared waits, a
 guest that polls the time without ever sleeping still sees it move, so a
 busy-wait loop terminates.
 
+**Where that timeline starts is the Host's clock, not the wall.** It used to be
+`time.Now()` regardless, which quietly cost every probe its reproducibility: a
+Host on a `ManualClock` is asking for a run it can repeat, and a title that
+seeds itself from the time of day repeats only if the time of day does. One
+local title's repro route stopped at 877 ticks, then 2,353, then 877 again, and
+five of the corpus's first frames differed against themselves — that was the
+whole of the corpus A/B noise floor. Both are gone: the epoch follows
+`client.now()`, `NewManualClock` starts at a fixed date when the caller names
+no instant, and the same script now lands on the same tick and the same pixels
+every time. A Host on the wall clock — a person playing — still sees real
+dates.
+
 The native CLI runs a KTF archive headlessly:
 
 ```sh
