@@ -359,6 +359,15 @@ const drawFrame = bitmap => {
     if (frame.width !== canvas.width || frame.height !== canvas.height) {
       canvas.width = frame.width;
       canvas.height = frame.height;
+      // The shape of the handset screen is the frame's, not a constant: the
+      // screen setting offers handsets that are not 3:4, and the stylesheet
+      // sizes the canvas from this rather than stretching the picture into the
+      // default shape. Magnification keeps the ratio, so a filtered frame
+      // answers the same as an unfiltered one.
+      canvas.parentElement?.style.setProperty(
+        "--screen-ratio",
+        String(frame.width / frame.height),
+      );
     }
     canvasContext.drawImage(frame, 0, 0);
     frame.close();
