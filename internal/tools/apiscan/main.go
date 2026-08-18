@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -207,6 +208,10 @@ func main() {
 	for _, path := range paths {
 		title := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		gaps, err := scanArchive(shape, path)
+		if errors.Is(err, errNoNamePool) {
+			fmt.Printf("%-28s not scanned: %v\n", title, err)
+			continue
+		}
 		if err != nil {
 			fmt.Printf("%-28s ERROR %v\n", title, err)
 			continue
@@ -403,6 +408,15 @@ func poolReference(pool classfile.ConstantPool, constant classfile.Constant) (cl
 // class lookup — and those are read straight out of the file: relocation moves
 // them but does not write them, so nothing has to run.
 func scanKTF(data []byte) (map[string]string, error) {
+	// The earlier package is the same vendor and the same platform, so
+	// detection names it KTF, but it has no client image and therefore no name
+	// pool to read: its classes are gone into the compile the way the
+	// descriptor package's methods are. There is nothing here to be wrong
+	// about, which is not the same as nothing being missing, so it is said
+	// rather than counted as a title with no gaps.
+	if ktf.IsNativeArchive(data) {
+		return nil, errNoNamePool
+	}
 	archive, err := ktf.Open(data)
 	if err != nil {
 		return nil, err
@@ -416,6 +430,10 @@ func scanKTF(data []byte) (map[string]string, error) {
 	}
 	return gaps, nil
 }
+
+// errNoNamePool says the archive is sound and simply carries nothing this scan
+// can read, which is a different answer from both a gap and a failure.
+var errNoNamePool = errors.New("the earlier KTF package carries no name pool")
 
 // ktfAnswered is every class name a KTF guest can name and get a real class
 // back for: the platform's own published table, and the core library the JVM

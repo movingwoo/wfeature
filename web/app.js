@@ -183,6 +183,13 @@ let currentGameLabel = "";
 // Empty until a game has been started.
 let currentPlatform = "";
 
+// Whether this platform can say what wrote an address. The panel asks before it
+// offers the control, because the poll that keeps the panel live shares a call
+// with the write hits: on a platform that cannot record them the poll threw
+// every interval, the error reached the page, and the candidate refresh behind
+// it never ran — the whole panel read as broken over a feature it never had.
+let canWatchWrites = false;
+
 // A dropped connection no longer ends the game: the server parks it for a few
 // minutes under a token it hands over when the game starts, and a page that
 // comes back sends the token to get it back. That is what makes this playable
@@ -575,6 +582,7 @@ const startServerGame = async (path, scale) => {
 // something against a live game and say which platform answered.
 const sessionStarted = info => {
   gameRunning = true;
+  canWatchWrites = info.can_watch === true;
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
   setStatus("");
   initCheat();
@@ -1245,7 +1253,12 @@ const initCheat = () => {
   document.getElementById("cheat-close")?.addEventListener("click", () => panel.classList.remove("visible"));
 
   // Write watching. A scan says where a value is; this says what changes it,
-  // which is the part that still means something in the next session.
+  // which is the part that still means something in the next session. Not
+  // every platform can answer it, and the ones that cannot say so before the
+  // panel opens rather than by failing the first poll.
+  for (const id of ["cheat-watch-section", "cheat-watch-row", "cheat-hits"]) {
+    document.getElementById(id)?.classList.toggle("hidden", !canWatchWrites);
+  }
   const hitsList = document.getElementById("cheat-hits");
   const watchAddress = document.getElementById("cheat-watch-address");
   const renderHits = value => {
@@ -1330,9 +1343,12 @@ const initCheat = () => {
     if (!panel.classList.contains("visible") || !gameRunning || refreshing) return;
     refreshing = true;
     void run(async () => {
-      renderHits(await cheat.hits());
-      if (lastCount === 0 || lastCount > REFRESH_LIMIT) return;
-      renderResults(await cheat.refresh());
+      // The refresh is the half every platform has, so it goes first: an
+      // optional feature must not be able to stop the one the panel is for.
+      if (lastCount > 0 && lastCount <= REFRESH_LIMIT) {
+        renderResults(await cheat.refresh());
+      }
+      if (canWatchWrites) renderHits(await cheat.hits());
     }).finally(() => { refreshing = false; });
   }, REFRESH_INTERVAL);
 };

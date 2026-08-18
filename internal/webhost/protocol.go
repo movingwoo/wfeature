@@ -182,6 +182,12 @@ type startedMessage struct {
 	// it for as long as the game runs and sends it with "resume" after a
 	// dropped connection; see resume.go for what it is worth and for how long.
 	Token string `json:"token,omitempty"`
+	// CanWatch says the platform can report what wrote an address. It is a
+	// property of the platform rather than of the game, and the page needs it
+	// before it offers the control: a panel that polls for write hits on a
+	// platform that cannot record them gets an error every interval, and the
+	// refresh that shares the poll never runs.
+	CanWatch bool `json:"can_watch"`
 }
 
 // statsMessage is how the page knows whether the server is keeping up. It is

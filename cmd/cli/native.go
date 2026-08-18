@@ -24,7 +24,10 @@ import (
 // and the options that only mean something to the other are refused by name
 // rather than ignored. See docs/ktf.md, "An earlier KTF package".
 type nativeRun struct {
-	ticks        int
+	ticks int
+	// ticksChosen says the count came from -ticks rather than from the probe
+	// default, which is what decides whether a cheat session may run past it.
+	ticksChosen  bool
 	framePath    string
 	frameDir     string
 	play         bool
@@ -91,6 +94,13 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 			}
 			close(cheatCommands)
 		}()
+		// A cheat session runs until it is interrupted, unless the caller asked
+		// for a specific number of ticks. Without this the console attaches to
+		// a run that is already 64 frames from ending, and the invitation to
+		// type a command is answered by the summary.
+		if !run.ticksChosen {
+			run.ticks = 1 << 30
+		}
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	ran := 0

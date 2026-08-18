@@ -120,9 +120,15 @@ type NativeClient struct {
 	thread  *armcore.Thread
 	archive *NativeArchive
 	mapped  uint32
-	calls   []NativeCall
-	served  map[nativeSlotKey]NativeSlotHandler
-	arena   *guestArena
+	// calls is the ordered log a probe reads, bounded by
+	// maxNativeRecordedCalls; slotCounts is what a run actually has to keep,
+	// and it is bounded by the number of slots rather than by the length of
+	// the session. calls made is the total the window no longer carries.
+	calls      []NativeCall
+	slotCounts map[nativeSlotKey]*NativeSlotCount
+	made       uint64
+	served     map[nativeSlotKey]NativeSlotHandler
+	arena      *guestArena
 	// blocks records the size of every live allocation, because the module
 	// gives a block back as a bare pointer.
 	blocks map[uint32]uint64
@@ -458,26 +464,25 @@ func (client *NativeClient) EntryResult() (uint32, error) {
 // immediately.
 func (client *NativeClient) Steps() uint64 { return client.core.Steps() }
 
-// Calls reports every platform-table call the module made, in order.
+// Calls reports the platform-table calls the module made, in order, up to
+// maxNativeRecordedCalls; a failed call is always among them. CallCount is how
+// many there were altogether, and SlotSummary counts every one of them.
 func (client *NativeClient) Calls() []NativeCall {
 	return client.calls
 }
 
+// CallCount is how many platform-table calls the module has made, including
+// the ones the ordered log no longer carries.
+func (client *NativeClient) CallCount() uint64 {
+	return client.made
+}
+
 // SlotSummary reports how many times each slot was called, lowest first. It is
-// the list that says what implementing this package actually costs.
+// the list that says what implementing this package actually costs, so it
+// counts every call rather than the ones the ordered log kept.
 func (client *NativeClient) SlotSummary() []NativeSlotCount {
-	counts := map[nativeSlotKey]*NativeSlotCount{}
-	for _, call := range client.calls {
-		key := nativeSlotKey{surface: call.Surface, slot: call.Slot}
-		entry, ok := counts[key]
-		if !ok {
-			entry = &NativeSlotCount{Surface: call.Surface, Offset: call.Offset, Slot: call.Slot, First: call.Caller}
-			counts[key] = entry
-		}
-		entry.Count++
-	}
-	summary := make([]NativeSlotCount, 0, len(counts))
-	for _, entry := range counts {
+	summary := make([]NativeSlotCount, 0, len(client.slotCounts))
+	for _, entry := range client.slotCounts {
 		summary = append(summary, *entry)
 	}
 	sort.Slice(summary, func(a, b int) bool {
@@ -498,6 +503,46 @@ type NativeSlotCount struct {
 	// First is the link register of the first call, which names the module
 	// code to disassemble when a slot has to be identified.
 	First uint32
+	// Served reports whether the platform answered any of these calls, which
+	// is what tells an implemented slot from one that is still a trap.
+	Served bool
+}
+
+// maxNativeRecordedCalls bounds the ordered call log. A title calls the
+// platform for as long as it runs -- about seven times a frame on the local
+// corpus -- so keeping every record cost a session roughly 25 MB an hour and
+// never gave it back. What a run needs kept is the per-slot count, which
+// recordCall accumulates in a map the number of slots bounds; the ordered list
+// is a start-up diagnostic, so it keeps the first calls the way Trace and the
+// blit list do.
+const maxNativeRecordedCalls = 16384
+
+// recordCall counts a call against its slot and keeps it in the ordered log if
+// there is still room. A call that failed is kept whatever the window holds:
+// it is the one a reader is looking for, and it ends the run anyway.
+func (client *NativeClient) recordCall(record NativeCall, failed bool) {
+	client.made++
+	if client.slotCounts == nil {
+		client.slotCounts = map[nativeSlotKey]*NativeSlotCount{}
+	}
+	key := nativeSlotKey{surface: record.Surface, slot: record.Slot}
+	entry, ok := client.slotCounts[key]
+	if !ok {
+		entry = &NativeSlotCount{
+			Surface: record.Surface,
+			Offset:  record.Offset,
+			Slot:    record.Slot,
+			First:   record.Caller,
+		}
+		client.slotCounts[key] = entry
+	}
+	entry.Count++
+	if record.Served {
+		entry.Served = true
+	}
+	if failed || len(client.calls) < maxNativeRecordedCalls {
+		client.calls = append(client.calls, record)
+	}
 }
 
 func (client *NativeClient) handleSupervisorCall(ctx context.Context, thread *armcore.Thread, call armcore.SupervisorCall) error {
@@ -529,12 +574,12 @@ func (client *NativeClient) handleSupervisorCall(ctx context.Context, thread *ar
 	result := uint32(0)
 	if handler, ok := client.served[nativeSlotKey{surface: surface, slot: slot}]; ok {
 		if result, err = handler(thread); err != nil {
-			client.calls = append(client.calls, record)
+			client.recordCall(record, true)
 			return fmt.Errorf("KTF native platform slot %#x (offset %#x): %w", slot, record.Offset, err)
 		}
 		record.Served = true
 	}
-	client.calls = append(client.calls, record)
+	client.recordCall(record, false)
 	return thread.SetRegister(0, result)
 }
 

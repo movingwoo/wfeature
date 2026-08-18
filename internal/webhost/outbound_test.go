@@ -77,3 +77,27 @@ func TestASendGivesUpOnceTheWriterHasGone(t *testing.T) {
 		t.Fatal("a send waited on a writer that had already gone")
 	}
 }
+
+// The page is shown a rate and the session report is shown a run, so emptying
+// the window a report is built from used to answer "nothing was shed" for a
+// session that had shed plenty.
+func TestTheSessionTotalSurvivesAStatisticsWindow(t *testing.T) {
+	runner := stalledRunner(t, 0)
+
+	for round := 0; round < 3; round++ {
+		runner.sendDroppable(serverMessage{Kind: serverStats, Stats: &statsMessage{}})
+	}
+	if shed := runner.shed.Load(); shed != 3 {
+		t.Fatalf("window shed = %d, want 3", shed)
+	}
+
+	// This is what reportStats does to the window every time it sends.
+	runner.shed.Swap(0)
+
+	if shed := runner.shed.Load(); shed != 0 {
+		t.Errorf("window shed = %d after a report, want it emptied", shed)
+	}
+	if total := runner.shedTotal.Load(); total != 3 {
+		t.Errorf("session total = %d, want the 3 it shed before the report", total)
+	}
+}

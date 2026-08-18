@@ -262,8 +262,7 @@ func (platform *NativePlatform) schedule(thread *armcore.Thread) (uint32, error)
 // often the frame actually runs, so a Host on a manual clock advances that
 // clock rather than calling faster.
 func (platform *NativePlatform) Tick(ctx context.Context) (bool, error) {
-	frame := platform.frame
-	if frame == nil || frame.function == 0 {
+	if platform.frame == nil || platform.frame.function == 0 {
 		return false, nil
 	}
 	// The sound and the timed service are answered before the frame, so a
@@ -274,6 +273,15 @@ func (platform *NativePlatform) Tick(ctx context.Context) (bool, error) {
 	}
 	if err := platform.advanceTimed(ctx); err != nil {
 		return false, err
+	}
+	// The schedule is read after those two and not before: both run the
+	// title's own listeners, and a listener that re-arms replaces the schedule
+	// rather than editing it. Holding the earlier pointer across them would
+	// stamp the new schedule's due date onto a struct nothing points at any
+	// more and then call the function the title has just moved on from.
+	frame := platform.frame
+	if frame == nil || frame.function == 0 {
+		return false, nil
 	}
 	now := platform.clock.Now()
 	if now.Before(frame.due) {

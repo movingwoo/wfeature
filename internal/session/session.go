@@ -532,8 +532,9 @@ func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 // Screen is the guest's own screen, before any magnification. A Host lays out
 // around it and reports it to whatever is drawing the picture, so what it has
 // to answer is the size the platform actually took rather than the size the
-// Host asked for: KTF owns its screen and ignores the request, and the other
-// two honour it.
+// Host asked for. All three honour the request now, and a platform may still
+// answer with a size of its own: what the guest took is the only answer a Host
+// can lay out against.
 //
 // It answers the requested size before the first frame exists, because a Host
 // that has just started a game asks then.

@@ -94,7 +94,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-key tick:name` | press a key at a tick, e.g. `-key 300:fire`. Repeatable; implies `-play` |
 | `-hold N` | how many ticks a `-key` press — or a route's `key` step — is held before its release, 1 by default |
 | `-route script` | replay a scripted way back to a scene (below) |
-| `-cheat` | attach the text cheat console, paced to about real time; implies `-play` |
+| `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted, on both generations of package |
 | `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port` |
 | `-diag report.json` | write the runtime-boundary diagnostics (below) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
