@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -31,6 +34,11 @@ func buildNativeInfo(t *testing.T, spans [][]byte, trailer []uint32) []byte {
 		_ = index
 	}
 	binary.LittleEndian.PutUint32(table[len(spans)*4:], start+uint32(body.Len()))
+	// The two header sections sit between the fixed fields and the span table.
+	// A fixture that leaves them empty would leave the record decoder with
+	// nothing to read, so the second one is placed where a real file puts it.
+	binary.LittleEndian.PutUint32(header[0x08:], 0x20)
+	binary.LittleEndian.PutUint32(header[0x0c:], 0x28)
 	binary.LittleEndian.PutUint32(header[0x10:], tableOffset)
 	binary.LittleEndian.PutUint32(header[0x14:], uint32(len(spans)))
 	binary.LittleEndian.PutUint32(header[0x18:], binary.LittleEndian.Uint32(table))
@@ -63,6 +71,43 @@ func nativeNumericSpan(words ...uint32) []byte {
 		binary.LittleEndian.PutUint32(span[index*4:], word)
 	}
 	return span
+}
+
+// TestParseNativeInfoReadsHeaderFieldsOnTheirStride covers the record stride
+// the header sections are written at. Reading them as bare aligned words is
+// what made an earlier pass map four times the module's size: the boundary
+// between two records reads as a value of its own.
+func TestParseNativeInfoReadsHeaderFieldsOnTheirStride(t *testing.T) {
+	data := buildNativeInfo(t, [][]byte{nativeNumericSpan(1)}, []uint32{0, 1})
+	// Two records in the second section: one carrying nothing established,
+	// and the module's page-rounded length under its own tag.
+	binary.LittleEndian.PutUint32(data[0x28:], 0x03e80001)
+	binary.LittleEndian.PutUint16(data[0x2c:], 0)
+	binary.LittleEndian.PutUint16(data[0x2e:], 4)
+	binary.LittleEndian.PutUint32(data[0x30:], 2*nativePageSize)
+	binary.LittleEndian.PutUint16(data[0x34:], 0)
+	binary.LittleEndian.PutUint16(data[0x36:], NativeFieldModuleLength)
+
+	info, err := ParseNativeInfo(data)
+	if err != nil {
+		t.Fatalf("parse native info: %v", err)
+	}
+	field, ok := info.Field(NativeFieldModuleLength)
+	if !ok || field.Value != 2*nativePageSize {
+		t.Fatalf("tag %d = %+v (%v), want the module length", NativeFieldModuleLength, field, ok)
+	}
+	if other, ok := info.Field(4); !ok || other.Value != 0x03e80001 {
+		t.Errorf("tag 4 = %+v (%v), want the record beside it", other, ok)
+	}
+	if _, ok := info.Field(3); ok {
+		t.Error("a tag no record carries was answered")
+	}
+	// The size the loader maps comes from the tag, and the search that used to
+	// find it still corroborates: both answer the same number.
+	mapped, ok := info.ModuleSpan(2*nativePageSize - 8)
+	if !ok || mapped != 2*nativePageSize {
+		t.Fatalf("ModuleSpan = %#x (%v), want %#x", mapped, ok, 2*nativePageSize)
+	}
 }
 
 func TestParseNativeInfo(t *testing.T) {
@@ -149,6 +194,9 @@ func TestLocalKTFNativePackageParses(t *testing.T) {
 		t.Logf("%s: module %q %d bytes, id %d, vendor %q, name %q, %d icons, %d numeric records, trailer %v",
 			filepath.Base(path), archive.ModuleName, len(archive.Module), archive.Info.ApplicationID,
 			archive.Info.Vendor, archive.Info.Name, len(archive.Info.Icons), len(archive.Info.Records), archive.Info.Trailer)
+		for _, field := range archive.Info.Fields {
+			t.Logf("  header field tag %d extra %d value %#x", field.Tag, field.Extra, field.Value)
+		}
 		for index, record := range archive.Info.Records {
 			t.Logf("  record %d: %#x", index, record)
 		}
@@ -195,16 +243,15 @@ func localNativePackages(t *testing.T) []string {
 	return found
 }
 
-// TestLocalKTFNativePackageStarts performs the package's start-up protocol
-// against a local module and reports what the title then asks the platform for.
+// TestLocalKTFNativePackageRuns boots a local module against the platform half
+// and runs the frame the title registers.
 //
-// It asserts that the handshake completes, because that is now understood and a
-// regression in it is a defect. It asserts nothing about the slots the title
-// goes on to call: that list is the output, and it is the specification for
-// what implementing this package costs. **Read the log rather than the exit
-// status** — the run is expected to stop at the first slot that matters, and it
-// says which one.
-func TestLocalKTFNativePackageStarts(t *testing.T) {
+// It asserts what is established: the start-up protocol completes, the title
+// loads the files it names, it asks to be called back, and its frames run and
+// draw. It asserts nothing about the slots that are still traps — that list is
+// the output, and it is the specification for what implementing this package
+// still costs. **Read the log as well as the exit status.**
+func TestLocalKTFNativePackageRuns(t *testing.T) {
 	if os.Getenv("WFEATURE_KTF_NATIVE_ACCEPTANCE") != "1" {
 		t.Skip("set WFEATURE_KTF_NATIVE_ACCEPTANCE=1 to execute ignored local KTF native modules")
 	}
@@ -222,44 +269,228 @@ func TestLocalKTFNativePackageStarts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load %s: %v", name, err)
 		}
-		// Two slots are identified and answered; everything else stays a trap.
-		client.ServeAllocator(NativePlatformTable, 0x68)
-		client.ServeQueryInterface(NativeEntryObject, 0x8)
+		// A manual clock makes the frame the title asked for cost nothing:
+		// this measures what the guest computes, not how long it takes.
+		clock := NewManualClock(time.Time{})
+		platform := NewNativePlatform(client, archive, clock)
+		// The title's music is the only thing a run can check about sound
+		// without a person listening, and a count of nothing is what a silent
+		// platform produced before the player existed.
+		sink := &countingAudioSink{}
+		platform.AttachAudio(sink)
+		if err := platform.Boot(context.Background()); err != nil {
+			t.Fatalf("%s: boot: %v", name, err)
+		}
+		if platform.FrameInterval() == 0 {
+			t.Fatalf("%s: the title registered no frame", name)
+		}
+		t.Logf("%s: booted, frame every %v", name, platform.FrameInterval())
+		for _, open := range platform.FileOpens() {
+			t.Logf("  opened %-16q mode %d found=%v", open.Name, open.Mode, open.Found)
+		}
+		frames := 0
+		for round := 0; round < localNativeFrames; round++ {
+			clock.Advance(platform.FrameInterval())
+			ran, err := platform.Tick(context.Background())
+			if err != nil {
+				t.Fatalf("%s: frame %d: %v", name, frames, err)
+			}
+			if ran {
+				frames++
+			}
+		}
+		_, presents := platform.Frame()
+		t.Logf("%s: %d frames, %d draws, %d frames ended, %d images", name, frames, platform.Draws(), presents, len(platform.images))
+		if frames != localNativeFrames {
+			t.Errorf("%s: %d of %d frames ran", name, frames, localNativeFrames)
+		}
+		if platform.Draws() == 0 {
+			t.Errorf("%s: the title drew nothing", name)
+		}
+		if presents == 0 {
+			t.Errorf("%s: the title ended no frame", name)
+		}
+		if platform.Missed() != 0 {
+			t.Errorf("%s: %d blits named an image the platform did not build", name, platform.Missed())
+		}
 
-		if err := client.Start(context.Background()); err != nil {
-			t.Fatalf("%s: entry: %v", name, err)
+		// The route into the game, in the title's own terms: the select key
+		// opens the menu from the title screen, again enters the first item,
+		// the left key moves to the second of its two choices, and select
+		// twice more picks a difficulty and starts. Driving it is what proves
+		// the input contract, because every screen after the first is one the
+		// title only reaches by being played.
+		images, draws := len(platform.images), platform.Draws()
+		for _, step := range []struct {
+			key    uint32
+			frames int
+		}{
+			{NativeKeySelect, 60},
+			{NativeKeySelect, 60},
+			{NativeKeyLeft, 30},
+			{NativeKeySelect, 120},
+			{NativeKeySelect, 400},
+		} {
+			if err := platform.Key(context.Background(), step.key, true); err != nil {
+				t.Fatalf("%s: key %#x down: %v", name, step.key, err)
+			}
+			if err := platform.Key(context.Background(), step.key, false); err != nil {
+				t.Fatalf("%s: key %#x up: %v", name, step.key, err)
+			}
+			for round := 0; round < step.frames; round++ {
+				clock.Advance(platform.FrameInterval())
+				if _, err := platform.Tick(context.Background()); err != nil {
+					t.Fatalf("%s: frame after key %#x: %v", name, step.key, err)
+				}
+			}
 		}
-		record, err := client.ReadEntryRecord()
-		if err != nil {
-			t.Fatalf("%s: entry record: %v", name, err)
+		t.Logf("%s: after the menu route, %d draws and %d images", name, platform.Draws(), len(platform.images))
+		if len(platform.images) <= images {
+			t.Errorf("%s: the menu route loaded no further images (%d, was %d)", name, len(platform.images), images)
 		}
-		t.Logf("%s: entry returned a factory at %#x exporting %d functions", name, record.Address, len(record.Functions))
+		if platform.Draws() <= draws*4 {
+			t.Errorf("%s: the menu route drew %d, barely more than the %d before it", name, platform.Draws(), draws)
+		}
 
-		identifier, ok := archive.ApplicationIdentifier()
-		if !ok {
-			t.Fatalf("%s: information file carries no application identifier", name)
+		if sink.messages == 0 {
+			t.Errorf("%s: the title played no note", name)
 		}
-		object, err := client.CreateApplication(context.Background(), identifier)
-		if err != nil {
-			t.Fatalf("%s: create application %#x: %v", name, identifier, err)
+		if platform.ClipRefusals() != 0 {
+			t.Errorf("%s: %d clips were refused", name, platform.ClipRefusals())
 		}
-		t.Logf("%s: application %#x created at %#x", name, identifier, object)
-
-		result, err := client.SendEvent(context.Background(), object, 0, 0, 0)
-		t.Logf("%s: event 0 returned %#x, and stopped with: %v", name, result, err)
+		t.Logf("%s: %d MIDI messages, %d wave samples, %d status messages %q",
+			name, sink.messages, sink.samples, len(platform.Messages()), platform.Messages())
 
 		summary := client.SlotSummary()
 		t.Logf("%s: %d calls over %d distinct slots", name, len(client.Calls()), len(summary))
-		for _, entry := range summary {
-			t.Logf("  %-20s offset %#04x (slot %3d) called %d times, first from %#x",
-				entry.Surface, entry.Offset, entry.Slot, entry.Count, entry.First)
+		served := map[nativeSlotKey]bool{}
+		for _, call := range client.Calls() {
+			if call.Served {
+				served[nativeSlotKey{surface: call.Surface, slot: call.Slot}] = true
+			}
 		}
-		for index, call := range client.Calls() {
-			t.Logf("  #%02d %-20s offset %#04x (%#x, %#x, %#x, %#x) from %#x", index, call.Surface, call.Offset,
-				call.Arguments[0], call.Arguments[1], call.Arguments[2], call.Arguments[3], call.Caller)
+		for _, entry := range summary {
+			mark := "trap"
+			if served[nativeSlotKey{surface: entry.Surface, slot: entry.Slot}] {
+				mark = "served"
+			}
+			t.Logf("  %-6s %-20s offset %#04x (slot %3d) called %d times, first from %#x",
+				mark, entry.Surface, entry.Offset, entry.Slot, entry.Count, entry.First)
 		}
 	}
 }
+
+// TestLocalKTFNativePackageScreenshot writes what the title draws to a PNG,
+// after driving a key route into it. It is the eye on this package: the
+// acceptance run above says a title drew and how much, and only a picture says
+// whether what it drew is the screen it should be.
+//
+//	WFEATURE_KTF_NATIVE_ACCEPTANCE=1 \
+//	WFEATURE_KTF_NATIVE_SHOT=/tmp/frame.png \
+//	WFEATURE_KTF_NATIVE_ROUTE=e035:60,e035:60,e034:30,e035:120,e035:400 \
+//	go test ./internal/platform/ktf -run TestLocalKTFNativePackageScreenshot
+//
+// A route step is a key code in hex and how many of the title's frames to run
+// after it. WFEATURE_KTF_NATIVE_FRAMES sets the frames before the route.
+func TestLocalKTFNativePackageScreenshot(t *testing.T) {
+	out := os.Getenv("WFEATURE_KTF_NATIVE_SHOT")
+	if os.Getenv("WFEATURE_KTF_NATIVE_ACCEPTANCE") != "1" || out == "" {
+		t.Skip("set WFEATURE_KTF_NATIVE_ACCEPTANCE=1 and WFEATURE_KTF_NATIVE_SHOT")
+	}
+	frames := localNativeFrames
+	if value := os.Getenv("WFEATURE_KTF_NATIVE_FRAMES"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			t.Fatalf("invalid WFEATURE_KTF_NATIVE_FRAMES %q", value)
+		}
+		frames = parsed
+	}
+	for _, path := range localNativePackages(t) {
+		name := filepath.Base(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive, err := OpenNative(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := LoadNativeClient(archive, armcore.CoreOptions{MaxSteps: localAcceptanceMaxSteps(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock := NewManualClock(time.Time{})
+		platform := NewNativePlatform(client, archive, clock)
+		if err := platform.Boot(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		run := func(count int) {
+			for round := 0; round < count; round++ {
+				clock.Advance(platform.FrameInterval())
+				if _, err := platform.Tick(context.Background()); err != nil {
+					t.Fatalf("%s: frame: %v", name, err)
+				}
+			}
+		}
+		run(frames)
+		for _, step := range strings.Split(os.Getenv("WFEATURE_KTF_NATIVE_ROUTE"), ",") {
+			step = strings.TrimSpace(step)
+			if step == "" {
+				continue
+			}
+			codeText, framesText, _ := strings.Cut(step, ":")
+			code, err := strconv.ParseUint(strings.TrimPrefix(codeText, "0x"), 16, 32)
+			if err != nil {
+				t.Fatalf("route step %q: %v", step, err)
+			}
+			hold, err := strconv.Atoi(framesText)
+			if err != nil {
+				t.Fatalf("route step %q: %v", step, err)
+			}
+			if err := platform.Key(context.Background(), uint32(code), true); err != nil {
+				t.Fatal(err)
+			}
+			if err := platform.Key(context.Background(), uint32(code), false); err != nil {
+				t.Fatal(err)
+			}
+			run(hold)
+		}
+		frame, presents := platform.Frame()
+		t.Logf("%s: %d draws, %d frames ended, %d images", name, platform.Draws(), presents, len(platform.images))
+		file, err := os.Create(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: wrote %s", name, out)
+	}
+}
+
+// countingAudioSink counts what a title played without keeping any of it.
+type countingAudioSink struct {
+	messages int
+	samples  int
+}
+
+func (sink *countingAudioSink) PlayWave(_ uint8, _ uint32, samples []int16) {
+	sink.samples += len(samples)
+}
+func (sink *countingAudioSink) MIDINoteOn(uint8, uint8, uint8)        { sink.messages++ }
+func (sink *countingAudioSink) MIDINoteOff(uint8, uint8, uint8)       { sink.messages++ }
+func (sink *countingAudioSink) MIDIProgramChange(uint8, uint8)        { sink.messages++ }
+func (sink *countingAudioSink) MIDIControlChange(uint8, uint8, uint8) { sink.messages++ }
+func (sink *countingAudioSink) MIDIPitchBend(uint8, uint16)           { sink.messages++ }
+func (sink *countingAudioSink) MIDISysEx([]byte)                      { sink.messages++ }
+
+// localNativeFrames is how many of the title's own frames the acceptance run
+// drives. It is well past the point the title finishes loading and starts
+// drawing, and short enough that the run stays under a second.
+const localNativeFrames = 300
 
 // logTraceShape reports where a traced run spent its instructions, as module
 // offsets. A run that never leaves a few hundred bytes has not started a game.

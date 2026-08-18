@@ -42,6 +42,35 @@ func TestArchiveNamesEachPlatformFromItsMarkerEntry(t *testing.T) {
 			want:    detect.SKT,
 		},
 		{
+			// The earlier KTF download package has no descriptor and no JAR:
+			// a module information file beside a raw module. It is the same
+			// platform — what differs is the package.
+			name: "the earlier KTF package is a module beside its information file",
+			entries: map[string][]byte{
+				"a title/18933.mif": []byte("1fim"),
+				"a title/game.mod":  []byte("\x00\x00\x00\x00"),
+				"a title/data.bin":  nil,
+			},
+			want: detect.KTF,
+		},
+		{
+			// One of the pair is not the shape: `.mod` is a common enough
+			// extension that claiming an archive for it alone would be a
+			// guess rather than a discriminator.
+			name:    "a lone module is claimed by nobody",
+			entries: map[string][]byte{"game.mod": []byte("\x00")},
+			want:    detect.Unknown,
+		},
+		{
+			name: "two modules are not the shape either",
+			entries: map[string][]byte{
+				"18933.mif": []byte("1fim"),
+				"one.mod":   nil,
+				"two.mod":   nil,
+			},
+			want: detect.Unknown,
+		},
+		{
 			// No carrier claims a bare MIDlet. Naming one anyway is what used
 			// to hide a detection failure behind a platform that would then
 			// fail to load the archive.

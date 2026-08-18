@@ -475,21 +475,55 @@ clients return zero from both initializers. The slowest WIPI initializer retires
 8,330,820 instructions; the probe does not start the game lifecycle.
 
 The earlier KTF package — a `.mif` beside a raw `.mod`, with no descriptor and
-no JAR — has a probe of its own. It parses every local archive of that shape,
-maps its module, plants a fully trapping platform table below it, performs the
-start-up handshake and sends the title its first event:
+no JAR — has acceptance runs of its own. They parse every local archive of that
+shape, map its module, plant a trapping platform table below it, perform the
+start-up handshake, run the title's start-up, and then drive 300 of the frames
+the title itself asks to be called back on:
 
 ```sh
 WFEATURE_KTF_NATIVE_ACCEPTANCE=1 go test -run TestLocalKTFNativePackage -v ./internal/platform/ktf
 ```
 
-It asserts that the start-up protocol completes — that part is understood, so a
-regression in it is a defect — and nothing about the slots the title then calls,
-because that list is what the probe exists to produce. Each row carries the link
-register of its first call site, which is the module code to disassemble. `docs/ktf.md`, "An earlier KTF package",
-has what the current list means. **Read its output rather than its exit
-status** — the probe passes as long as the module loads and runs, so a run that
-stops early still passes and says where it stopped.
+The run asserts what is established — the handshake completes, the title
+registers a frame, every frame runs without a fault, the title draws and ends
+frames, **it plays notes**, and then a **key route drives it through its own
+menus into the game**, after which it has loaded five times the images it had.
+It asserts nothing about the slots that are still traps, because that list is
+what the run exists to produce; its table marks each slot `served` or `trap`,
+and on the local title nothing on that route traps any more. Its table marks each slot `served` or
+`trap`, and each row carries the link register of its first call site, which is
+the module code to disassemble. `docs/ktf.md`, "An earlier KTF package", has
+what the current list means. **Read its output as well as its exit status.**
+
+What the title actually draws is a picture, and only a picture says whether it
+is the right one:
+
+```sh
+WFEATURE_KTF_NATIVE_ACCEPTANCE=1 \
+WFEATURE_KTF_NATIVE_SHOT=/tmp/frame.png \
+WFEATURE_KTF_NATIVE_FRAMES=600 \
+WFEATURE_KTF_NATIVE_ROUTE=e035:60,e035:60,e034:30,e035:120,e035:400 \
+go test ./internal/platform/ktf -run TestLocalKTFNativePackageScreenshot
+```
+
+A route step is a key code in hex and how many of the title's own frames to run
+after it; `docs/ktf.md` has what the codes mean.
+
+The Host wiring has its own two runs, both opt-in on the same switch. One
+drives the package through the layer every Host shares
+(`internal/session`) — inspect, start, tick, take the frame, send a key — and
+one drives it **through the browser's own protocol** with a real handshake,
+the real archive and real frames (`internal/webhost`,
+`TestSessionRunsTheEarlierKTFPackage`). A package the shared layer does not
+carry is a package no Host can run, so that is where it is checked rather than
+in each entry point.
+
+The platform half has unit tests that need no local archive
+(`native_platform_test.go`): they build a synthetic package around a one
+instruction module and drive the handlers directly — the C library slots, the
+file interface including create-on-write and read-back, the screen's colour
+format, and the bitmap factory and blit including the colour that is not
+drawn.
 
 Resolving the ADF main class is a separate lifecycle probe:
 
