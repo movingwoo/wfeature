@@ -488,6 +488,28 @@ func (s *Session) Screen() (width, height int) {
 	return s.options.width(), s.options.height()
 }
 
+// GuestElapsed is how much time has passed on the guest's own clock, and ok
+// reports whether the platform has one to answer with.
+//
+// It is the only way a Host sees slow motion. A session that cannot keep up
+// drops no frames and reports no error — it simply gives the game less time
+// than the wall gave it, and every other number a Host has stays plausible
+// while it happens. Comparing this against the wall over the same window is
+// what says so: three quarters of a second of guest time in a second of real
+// time is a game running at three quarters speed.
+//
+// The MIDP runtimes answer false. They read the wall clock directly rather
+// than being advanced by a Host, so there is no second clock to compare.
+func (s *Session) GuestElapsed() (time.Duration, bool) {
+	switch {
+	case s.ktf != nil:
+		return s.ktf.GuestElapsed(), true
+	case s.lgt != nil:
+		return s.lgt.GuestElapsed(), true
+	}
+	return 0, false
+}
+
 // Flushes reports how many frames the game has finished, which is what a Host
 // compares against to decide whether Frame is worth calling.
 func (s *Session) Flushes() uint64 {
