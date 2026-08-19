@@ -85,7 +85,12 @@ type memoryPage struct {
 // 9% and reading the extracted fields costs another 9 to 10% on top of that.
 // See "A wider decode cache entry was built and lost, twice over".
 type decodedThumb struct {
-	form        thumbForm
+	form thumbForm
+	// refusedLoop marks a backward branch that analysis has already refused to
+	// stand in for. It lives in the padding byte the form leaves behind, so
+	// the entry is still four bytes and the engine reads the answer out of a
+	// word it had already loaded to decode the branch. See fill_loop.go.
+	refusedLoop bool
 	instruction uint16
 }
 
@@ -156,11 +161,11 @@ type Memory struct {
 	dataPage  *memoryPage
 	codeIndex uint32
 	codePage  *memoryPage
-	// refusedLoops remembers the backward branches that do not close a counted
-	// store loop, keyed by the loop's head, so a tight loop that is not one
-	// pays for the analysis once. Only refusals are kept: see fill_loop.go for
-	// why the answers worth caching are the ones that cannot go stale wrong.
-	refusedLoops map[uint32]bool
+	// standInsRefused turns every recogniser off for the life of this memory.
+	// It is the seam the recogniser tests interpret their reference run
+	// through, so the two sides of an A/B differ in nothing but whether a
+	// stand-in was allowed.
+	standInsRefused bool
 	// Write watching. watchCount, watchLow, and watchHigh are the span test an
 	// ordinary store pays for; the map and the hits are only reached once a
 	// store falls inside it. executingPC is where the engine currently is,
@@ -579,6 +584,23 @@ func (memory *Memory) decodedThumbFast(address uint32) (decodedThumb, bool) {
 	}
 	slot := page.decoded[(address&memoryPageMask)>>1]
 	return slot, slot.form != thumbUndecoded
+}
+
+// markLoopRefused remembers that the backward branch at address closes a loop
+// none of the recognisers can stand in for. The mark rides in the branch's own
+// decode-cache entry, so the engine reads it for free and it is dropped the
+// moment the page's instructions change — a rewritten loop is analysed again
+// rather than inheriting the old code's answer.
+//
+// A slot that is not cached — the diagnostic switch is off, or the page has no
+// decode table yet — simply does not remember, and the loop is analysed again
+// next time round. That costs an analysis, never a wrong stand-in.
+func (memory *Memory) markLoopRefused(address uint32) {
+	page := memory.codePage
+	if page == nil || memory.codeIndex != address>>memoryPageShift || page.decoded == nil || address&1 != 0 {
+		return
+	}
+	page.decoded[(address&memoryPageMask)>>1].refusedLoop = true
 }
 
 // fetch16 reads one Thumb instruction. The caller holds the memory lock.

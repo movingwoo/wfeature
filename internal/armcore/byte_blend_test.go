@@ -103,7 +103,7 @@ func TestStandingInForAByteBlendMatchesRunningIt(t *testing.T) {
 
 	interpreted, reference := build()
 	stood, subject := build()
-	interpreted.refusedLoops = map[uint32]bool{base: true}
+	interpreted.standInsRefused = true
 	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 1_000_000); err != nil {
 		t.Fatalf("interpreting the blend: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestAByteBlendChargesTheStoresItMade(t *testing.T) {
 	// And the same loop interpreted has to retire exactly that many, or the
 	// stand-in has quietly given the guest a longer run than its budget allows.
 	interpreted := fillLoopMemory(t, byteBlendBody, base, destination)
-	interpreted.refusedLoops = map[uint32]bool{base: true}
+	interpreted.standInsRefused = true
 	interpreted.beginQuantum()
 	for index := 0; index < bytes; index++ {
 		if err := interpreted.write8(source+uint32(index), 0); err != nil {

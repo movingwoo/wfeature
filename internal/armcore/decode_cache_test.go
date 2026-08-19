@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"unsafe"
 )
 
 // runThumb executes count instructions from address and answers the context.
@@ -212,5 +213,11 @@ func TestAccessCachesDoNotAuthorizeOtherRegions(t *testing.T) {
 	value, err = memory.read32(first)
 	if err != nil || value != 0x11223344 {
 		t.Fatalf("read32(first) after touching the second = %#x, %v", value, err)
+	}
+}
+
+func TestDecodedEntryStaysFourBytes(t *testing.T) {
+	if size := unsafe.Sizeof(decodedThumb{}); size != 4 {
+		t.Fatalf("decodedThumb is %d bytes, want 4", size)
 	}
 }

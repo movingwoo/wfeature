@@ -197,7 +197,7 @@ func TestStandingInForAModulateMatchesRunningIt(t *testing.T) {
 
 	interpreted, reference := build()
 	stood, subject := build()
-	interpreted.refusedLoops = map[uint32]bool{base: true}
+	interpreted.standInsRefused = true
 	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 10_000_000); err != nil {
 		t.Fatalf("interpreting the modulate: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestAModulateChargesWhatItStoodInFor(t *testing.T) {
 	run := func(refuse bool) uint32 {
 		memory := modulateMemory(t, body, base, data)
 		if refuse {
-			memory.refusedLoops = map[uint32]bool{base: true}
+			memory.standInsRefused = true
 		}
 		memory.beginQuantum()
 		if err := memory.writeData32(stack+8, factors); err != nil {

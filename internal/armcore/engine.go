@@ -101,7 +101,14 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				// whether it is one the engine can stand in for, so the cost
 				// on every other instruction in the program is this compare.
 				// See fill_loop.go.
-				if err == nil && supervisorCall == nil {
+				// decoded.refusedLoop is the answer analysis already gave for
+				// this branch, carried in the entry the decode read anyway, so
+				// a loop none of the recognisers can stand in for costs a bit
+				// test rather than a map lookup. Menus and text are made of
+				// small loops of exactly that kind, and paying a lookup every
+				// few instructions is what made the code the recognisers
+				// cannot help slower than it was before they existed.
+				if err == nil && supervisorCall == nil && !decoded.refusedLoop {
 					if head := context.Registers[RegisterPC]; head < pc && pc-head <= maxRecognisedLoopBytes {
 						stood, loopErr := memory.runStoreLoop(context, head, pc)
 						if loopErr != nil {
