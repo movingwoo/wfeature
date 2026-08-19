@@ -186,9 +186,36 @@ else").
 
 ```sh
 WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
-  WFEATURE_LOAD_TICKS=60000 \
+  WFEATURE_SAVE_ROOT=<a copy of a save> WFEATURE_LOAD_TICKS=60000 \
   go test -count=1 -run LGTLoadCost ./internal/platform/lgt -cpuprofile cpu.out -timeout 30m
 ```
+
+**A route usually needs a save to go with it.** The scene worth measuring is
+inside one — a field, a battle — and the same route replayed from a fresh boot
+stops at the title screen having measured nothing. `WFEATURE_SAVE_ROOT` points
+the session at one; **copy the directory first**, because the run plays and a
+probe that writes the save it starts from measures something different every
+time. Without it the probe makes a fresh save directory, which is what a
+route-less throughput run wants.
+
+The probe reports `busy` and `tick_p50/p90/p99` beside the mean, because the
+mean says nothing on either platform: a title computes almost nothing on most
+ticks and a whole frame on a few, so p50 is microseconds while p90 is the
+frame. **p90 against the guest's own tick is the number a "this is slow" report
+is about** — a title whose tick is 44ms of guest time and whose p90 is 35ms has
+a quarter of a tick in hand, and one whose p90 is 41ms has none.
+
+`WFEATURE_PROFILE=1` turns on the guest sampling profiler and prints the
+ranking at the end, which is what says *which loop* the time is in
+(`armcore.md`, "What a title spends its instructions on once the stand-ins are
+in"). It is off by default because the stack walk costs about 5% of the run —
+enough to move the percentiles the same run reports.
+
+**Do not read a macOS Go CPU profile of one of these runs without raising the
+quantum first.** It attributes 65 to 88% of the run to
+`runtime.pthread_cond_signal` under the `Gosched` the engine makes at the end
+of every quantum, which is not work at all; raise `cletQuantum` a thousandfold
+for the profiling run and the ranking becomes the interpreter's own.
 
 `ns_per_step` is what a throughput change has to move, and the loop calls
 `Tick` rather than `TickFor` on purpose: `TickFor` answers how long the Host
