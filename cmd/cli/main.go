@@ -1476,7 +1476,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
 	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-save dir] [-diag report.json]")
 	fmt.Fprintln(output, "                            [-screen WxH] [-cheat]")
-	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat]")
+	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")
 	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
@@ -1517,10 +1517,23 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	profilePath := ""
 	profileFoldedPath := ""
 	profileFrom := 0
+	screenWidth, screenHeight := 0, 0
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "-cheat":
 			cheatConsole = true
+		case "-screen":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-screen expects <width>x<height>")
+				return 2
+			}
+			index++
+			width, height, err := parseScreenSize(args[index])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			screenWidth, screenHeight = width, height
 		case "-profile":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-profile expects a report path")
@@ -1700,6 +1713,8 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		TraceSVC:  traceSVC,
 		TraceLive: traceLive,
 		MaxSteps:  maxSteps,
+		Width:     screenWidth,
+		Height:    screenHeight,
 	}
 	// The recording sink timestamps with guest time, which the session only
 	// answers once it exists, so the clock is attached just after the start.

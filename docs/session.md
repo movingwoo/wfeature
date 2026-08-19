@@ -174,6 +174,37 @@ an old game whose proportions are off on a modern display wants `scale` and the
 page's own letterboxing, while a title that draws into a corner of the screen
 or asks for images it does not carry is the one this setting is for.
 
+**A screen larger than the default is a handset too, and the menu offers two.**
+The carrier standardised on 240x320 for this library's generation, but the
+handsets that came after it did not stop there — 240x400 and 320x480 both
+shipped — so those are the sizes above the default, and they are handsets
+rather than round numbers for the same reason the two below it are. Every local
+title was run 400 ticks on each of them, and on the 480x800 screen of the last
+generation, which the menu does not offer: it is a phone this library was not
+written for, and a screen that large is a magnifier's job rather than this
+setting's.
+
+| Screen | What the local library did |
+|---|---|
+| 240x400 | every title ran; the one already-failing title is unrelated |
+| 320x480 | every title ran but one, which throws from its own code |
+| 480x800 | the same one title, and no other — measured, not offered |
+
+The one that throws indexes a fixed-length row of tiles it sized for a 240-wide
+screen and walks one past the end as soon as the screen is wider — a guest
+exception, not a platform fault, and the reason the setting is per game and
+reversible rather than a global taste. What the rest do with the extra room
+divides in two, and both are the game's own answer: most lay their scene out
+across whatever they are given, and some paint their 240x320 picture into the
+top-left corner and leave the rest black.
+
+**The page reads the shape of the screen off the frame.** Not every handset in
+the menu is 3:4, and the canvas used to be sized by a constant of that ratio, so
+anything else would have been stretched into it. `--screen-ratio` carries the
+frame's own ratio into the stylesheet, and the layout caps the canvas by the
+height that ratio implies rather than by a width alone — a 3:5 screen at the
+full column width would otherwise put the keypad below the fold.
+
 ### What a frame costs on its way out
 
 A presented frame is compressed on the writer's goroutine and handed there by

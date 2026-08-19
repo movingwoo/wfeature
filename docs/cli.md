@@ -118,6 +118,12 @@ business, and two local titles write into the framebuffer with the stride they
 were told, so a size is answered to every surface at once or to none —
 [`session.md`](session.md) has why that is the whole of the contract.
 
+**A larger handset is a screen this flag takes too**, and `runlgt` has it now
+for that reason: the browser has offered 240x400 and 320x480 since the menu
+grew, and a size the page can ask for has to be reachable from a command line
+or nothing can measure it. What the local library does on each of them is
+in [`session.md`](session.md).
+
 **It is a flag rather than a rule, and on this platform that is a measured
 decision rather than a missing feature.** A KTF archive does declare a size —
 `DisplaySize` in its `__adf__` — and reading it would look like the obvious
@@ -300,7 +306,7 @@ guessed at.
 
 ```
 wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
-                           [-key tick:name] [-hold N] [-steps N] [-cheat]
+                           [-key tick:name] [-hold N] [-steps N] [-cheat] [-screen WxH]
                            [-audio out] [-trace N] [-trace-live filter]
                            [-route script]
                            [-profile report.txt] [-profile-folded stacks.txt]
@@ -316,6 +322,7 @@ wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-key tick:name` | press a key at a tick, e.g. `-key 300:fire`. Repeatable |
 | `-hold N` | how many ticks a `-key` press — or a route's `key` step — is held before its release, 1 by default |
 | `-steps N` | the instruction budget for one call into the game |
+| `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
 | `-route script` | replay a scripted way back to a scene, the same script format `runktf` takes |
 | `-cheat` | attach the text cheat console, paced to about real time |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
