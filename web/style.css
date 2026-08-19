@@ -108,12 +108,19 @@ body {
 .canvas-wrapper {
   position: relative;
   margin: 0 auto;
-  width: min(100vw, 480px);
-  /* Not every handset the screen setting offers is 3:4 — one is 3:5 and one is
-     2:3 — so the shape is what the frame says rather than a constant, and the
-     canvas fills the wrapper. The fallback is the default screen, which is
-     what the page shows before the first frame arrives. */
-  aspect-ratio: var(--screen-ratio, 0.75);
+  /* The last term is a height budget: what has to stay on screen is the keypad
+     under the canvas, so the room left over for the hole is the viewport less
+     the keypad, turned back into a width by the hole's 3:4. It is in the base
+     rule rather than a media query because a keypad pushed off the bottom is
+     not a phone-only shape — a half-height desktop window does it too. */
+  width: min(100vw, 480px, calc((100dvh - 237px) * 0.75));
+  /* The wrapper is the hole the handset is looked at through, not the handset:
+     it keeps the default screen's 3:4 whatever the game is running on, so a
+     larger screen setting is shown smaller inside the same hole rather than
+     growing the page and pushing the keypad past the bottom of it. */
+  aspect-ratio: 0.75;
+  /* What the frame does not cover once it is fitted rather than stretched. */
+  background: #000;
   z-index: 1;
 }
 
@@ -121,6 +128,11 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  /* The element takes the whole hole, but the frame inside it is fitted rather
+     than stretched: the screen setting offers handsets that are 3:5 and 2:3 as
+     well as the hole's 3:4, and a frame of another shape keeps its own and
+     leaves the axis that does not fill as bezel — the wrapper's black. */
+  object-fit: contain;
   /* The frame is 240x320 shown several times that size, and the browser's
      default smoothing turns a pixel-art frame into a blurred one. Letting the
      compositor take the nearest pixel costs nothing and is what makes the
@@ -490,11 +502,9 @@ body:has(.status-message.visible) .modal-backdrop {
 
 @media (max-width: 480px) and (max-height: 760px) and (orientation: portrait) {
   .canvas-wrapper {
-    /* The cap is a height budget rather than a width: what has to stay on
-       screen is the keypad under the canvas, and how wide a canvas that allows
-       depends on the shape of the screen. At the default 3:4 this is the
-       `75dvh - 172px` it has always been. */
-    width: min(100vw, calc((100dvh - 229px) * var(--screen-ratio, 0.75)));
+    /* The same budget as the base rule, less the 8px of padding this layout
+       does not spend above the keypad. */
+    width: min(100vw, calc((100dvh - 229px) * 0.75));
   }
 }
 
@@ -837,13 +847,13 @@ body:has(.status-message.visible) .modal-backdrop {
     min-height: 0;
   }
 
-  /* The column is 480px wide, but a 3:5 screen filling it would be 800 tall and
-     leave the keypad below the fold. The cap is the height this layout has for
-     the canvas — the viewport less the keypad and the page's padding — turned
-     back into a width by the shape of the screen. At the default 3:4 on a
-     normal desktop window it is the 480px column it has always been. */
+  /* The column is 480px wide, and the cap is the height this layout has for the
+     canvas — the viewport less the keypad and the page's padding — turned back
+     into a width by the hole's 3:4. On a normal desktop window it is the 480px
+     column it has always been; the floor is there so a short window shows a
+     small screen rather than none. */
   .canvas-wrapper {
-    width: min(480px, max(240px, calc((100dvh - 261px) * var(--screen-ratio, 0.75))));
+    width: min(480px, max(240px, calc((100dvh - 261px) * 0.75)));
   }
 
   .log-view {

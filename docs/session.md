@@ -198,12 +198,14 @@ divides in two, and both are the game's own answer: most lay their scene out
 across whatever they are given, and some paint their 240x320 picture into the
 top-left corner and leave the rest black.
 
-**The page reads the shape of the screen off the frame.** Not every handset in
-the menu is 3:4, and the canvas used to be sized by a constant of that ratio, so
-anything else would have been stretched into it. `--screen-ratio` carries the
-frame's own ratio into the stylesheet, and the layout caps the canvas by the
-height that ratio implies rather than by a width alone — a 3:5 screen at the
-full column width would otherwise put the keypad below the fold.
+**A larger screen is shown smaller, not given more of the page.** The space the
+canvas occupies is a hole of the default screen's 3:4, capped by the height the
+page has left once the keypad under it is subtracted; it is the same hole
+whatever the game is running on. A frame of another shape — the menu offers 3:5
+and 2:3 as well — is fitted into that hole by `object-fit: contain` and keeps
+its own shape, so what does not fill is bezel. The alternative, sizing the hole
+from the frame, is what the page used to do, and a 480x800 screen sized that way
+put the keypad below the fold.
 
 ### What a frame costs on its way out
 
