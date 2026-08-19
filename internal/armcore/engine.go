@@ -102,7 +102,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				// on every other instruction in the program is this compare.
 				// See fill_loop.go.
 				if err == nil && supervisorCall == nil {
-					if head := context.Registers[RegisterPC]; head < pc && pc-head <= maxStoreLoopBytes {
+					if head := context.Registers[RegisterPC]; head < pc && pc-head <= maxRecognisedLoopBytes {
 						stood, loopErr := memory.runStoreLoop(context, head, pc)
 						if loopErr != nil {
 							return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: value, Thumb: true, Cause: loopErr}

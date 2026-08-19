@@ -1,6 +1,9 @@
 package armcore
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // The loop this recognises, as one title actually emits it: the stack pointer
 // copied into a low register, a colour read from a frame slot, a halfword
@@ -259,5 +262,156 @@ func TestStandingInForATableBlitMatchesRunningIt(t *testing.T) {
 		if want != got {
 			t.Fatalf("pixel %d is %#x after standing in, %#x after interpreting", pixel, got, want)
 		}
+	}
+}
+
+// fillLoopSpanMemory is fillLoopMemory with a destination wide enough for a
+// stand-in to cross a page inside one run. Pages are what the direct route is
+// handed out in, so a span that fits in one never exercises the seam.
+func fillLoopSpanMemory(t *testing.T, body []uint16, base, destination uint32, pages uint64) *Memory {
+	t.Helper()
+	memory := NewMemory()
+	if err := memory.Map(base, memoryPageSize, PermissionRead|PermissionExecute); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Map(destination, memoryPageSize*pages, PermissionRead|PermissionWrite); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Map(0x70000000, memoryPageSize, PermissionRead|PermissionWrite); err != nil {
+		t.Fatal(err)
+	}
+	code := make([]byte, len(body)*2)
+	for index, halfword := range body {
+		code[index*2] = byte(halfword)
+		code[index*2+1] = byte(halfword >> 8)
+	}
+	if err := memory.Load(base, code); err != nil {
+		t.Fatal(err)
+	}
+	return memory
+}
+
+// A stand-in reaches guest bytes a page at a time, so a fill longer than a
+// page is the case where the seam between two pages can be got wrong — a
+// halfword dropped at the boundary, or a page's worth written twice.
+func TestStandingInForAFillAcrossPagesMatchesRunningIt(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const stack, colour = 0x70000800, uint16(0xbeef)
+	// Two and a half pages of halfwords, started part way into the first page
+	// so that neither seam falls where the run begins.
+	const start = destination + 0x800
+	const count = uint32(memoryPageSize*2+memoryPageSize/2) / 2
+
+	interpreted := fillLoopSpanMemory(t, countedFillBody, base, destination, 4)
+	stood := fillLoopSpanMemory(t, countedFillBody, base, destination, 4)
+
+	setup := func(memory *Memory) *Context {
+		memory.beginQuantum()
+		if err := memory.writeData16(stack+24, colour); err != nil {
+			t.Fatal(err)
+		}
+		memory.endQuantum()
+		value := NewContext()
+		context := &value
+		context.Registers[RegisterSP] = stack
+		context.Registers[4] = start
+		context.Registers[5] = count
+		context.setThumbPC(base)
+		return context
+	}
+
+	branchPC := base + uint32(len(countedFillBody)-1)*2
+	reference := setup(interpreted)
+	interpreted.refusedLoops = map[uint32]bool{base: true}
+	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 10_000_000); err != nil {
+		t.Fatalf("interpreting the fill: %v", err)
+	}
+	subject := setup(stood)
+	if _, err := (Engine{}).Run(subject, stood, branchPC+2, 10_000_000); err != nil {
+		t.Fatalf("standing in for the fill: %v", err)
+	}
+
+	for register := 0; register < 16; register++ {
+		if reference.Registers[register] != subject.Registers[register] {
+			t.Errorf("r%d = %#x after standing in, %#x after interpreting",
+				register, subject.Registers[register], reference.Registers[register])
+		}
+	}
+	interpreted.beginQuantum()
+	stood.beginQuantum()
+	defer interpreted.endQuantum()
+	defer stood.endQuantum()
+	// One halfword past each end as well, because a run that overshoots its
+	// span is exactly what a page-at-a-time loop can do.
+	for offset := -2; offset < int(count+1)*2; offset += 2 {
+		address := uint32(int(start) + offset)
+		want, err := interpreted.readData16(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := stood.readData16(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want != got {
+			t.Fatalf("halfword at %#x is %#x after standing in, %#x after interpreting", address, got, want)
+		}
+	}
+}
+
+// A watched address has to report every store to it, and a stand-in is where
+// that is easiest to lose: it writes thousands of halfwords without executing
+// a store instruction. The direct route refuses a watched memory outright, so
+// the stores still go through the path that records them.
+func TestAStandInStillReportsWatchedStores(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const stack, colour, count = 0x70000800, uint16(0xbeef), uint32(64)
+	const watched = destination + 8
+
+	core := NewCore(CoreOptions{MaxSteps: 1_000_000})
+	memory := core.Memory()
+	for address, permission := range map[uint32]Permission{
+		base:        PermissionReadExecute,
+		destination: PermissionReadWrite,
+		0x70000000:  PermissionReadWrite,
+	} {
+		if err := memory.Map(address, memoryPageSize, permission); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code := make([]byte, len(countedFillBody)*2)
+	for index, halfword := range countedFillBody {
+		code[index*2] = byte(halfword)
+		code[index*2+1] = byte(halfword >> 8)
+	}
+	if err := memory.Load(base, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Write(stack+24, []byte{byte(colour & 0xff), byte(colour >> 8)}); err != nil {
+		t.Fatal(err)
+	}
+	core.Watch(watched)
+
+	initial := NewContext()
+	if err := initial.SetPC(base | 1); err != nil {
+		t.Fatal(err)
+	}
+	initial.Registers[RegisterSP] = stack
+	initial.Registers[4] = destination
+	initial.Registers[5] = count
+	branchPC := base + uint32(len(countedFillBody)-1)*2
+	if _, err := core.Run(context.Background(), NewThread(initial), branchPC+2, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	hits := core.WatchHits()
+	if len(hits) != 1 {
+		t.Fatalf("got %d watch hits, want the one store the fill makes to %#x: %+v", len(hits), watched, hits)
+	}
+	if hits[0].Address != watched || hits[0].Value != uint32(colour) || hits[0].Size != 2 {
+		t.Errorf("hit = %+v, want %#x written as %#x in two bytes", hits[0], watched, colour)
+	}
+	if hits[0].Origin != OriginGuest {
+		t.Errorf("hit origin = %s, want the guest's own store", hits[0].Origin)
 	}
 }

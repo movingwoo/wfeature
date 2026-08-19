@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -41,7 +42,18 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	}
 	ctx := context.Background()
 	opened := time.Now()
-	options := SessionOptions{SaveRoot: t.TempDir()}
+	// A fresh save directory by default, so a run is repeatable; but the scene
+	// a route is written for is usually inside a save — a field, a battle — and
+	// a route replayed from a fresh boot stops at the title screen having
+	// measured nothing. WFEATURE_SAVE_ROOT points the session at a copy of a
+	// real one. Copy it rather than naming the live directory: the run plays,
+	// and a probe that writes the save it depends on measures something
+	// different every time.
+	saveRoot := os.Getenv("WFEATURE_SAVE_ROOT")
+	if saveRoot == "" {
+		saveRoot = t.TempDir()
+	}
+	options := SessionOptions{SaveRoot: saveRoot}
 	if value := os.Getenv("WFEATURE_TICK_MS"); value != "" {
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {
@@ -67,8 +79,22 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	// whether guest time is keeping pace with real time or running away from
 	// it. Unpaced is for throughput, where waiting is noise.
 	paced := os.Getenv("WFEATURE_PACED") != ""
+	// WFEATURE_PROFILE samples where the guest spends its instructions. It is
+	// off by default because sampling costs a stack walk, and on a run of this
+	// length that is 5% of the wall clock — enough to move the tick
+	// percentiles this probe also reports.
+	if os.Getenv("WFEATURE_PROFILE") != "" {
+		session.EnableProfile(0)
+	}
 	start := time.Now()
 	slowest := time.Duration(0)
+	// The mean tick says nothing about this platform: a title computes almost
+	// nothing on most ticks and a frame on a few, so p50 is microseconds while
+	// p90 is the frame. **p90 against the guest's own tick is what says whether
+	// the emulator keeps up**, and it is the number a "combat is slow" report
+	// is about. Kept per tick rather than as a running estimate because the
+	// run is a few thousand ticks and exactness is free at that size.
+	costs := make([]time.Duration, 0, ticks)
 	tick := func() error {
 		began := time.Now()
 		var wait time.Duration
@@ -81,7 +107,9 @@ func TestLGTLoadCostProbe(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if cost := time.Since(began); cost > slowest {
+		cost := time.Since(began)
+		costs = append(costs, cost)
+		if cost > slowest {
 			slowest = cost
 		}
 		if paced && wait > 0 {
@@ -136,6 +164,17 @@ func TestLGTLoadCostProbe(t *testing.T) {
 		}
 	}
 	host := time.Since(start)
+	busy := time.Duration(0)
+	for _, cost := range costs {
+		busy += cost
+	}
+	slices.Sort(costs)
+	percentile := func(fraction float64) time.Duration {
+		if len(costs) == 0 {
+			return 0
+		}
+		return costs[int(float64(len(costs)-1)*fraction)]
+	}
 
 	// Host time per tick is not comparable across a change that alters how
 	// much guest work a tick contains, so the instruction count comes with it:
@@ -154,6 +193,12 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	cachePages, cacheBytes := session.client.core.Memory().DecodeCacheStats()
 	t.Logf("decode_cache_pages=%d decode_cache_bytes=%d (%.1f MiB)",
 		cachePages, cacheBytes, float64(cacheBytes)/(1<<20))
+	t.Logf("busy=%v tick_p50=%v tick_p90=%v tick_p99=%v",
+		busy.Round(time.Millisecond), percentile(0.50).Round(time.Microsecond),
+		percentile(0.90).Round(time.Microsecond), percentile(0.99).Round(time.Microsecond))
+	if os.Getenv("WFEATURE_PROFILE") != "" {
+		t.Logf("\n%s", session.Profile().Report(25))
+	}
 	t.Logf("startup=%v host=%v ticks=%d per_tick=%v slowest_tick=%v flushes=%d steps=%d ns_per_step=%.2f",
 		startup.Round(time.Millisecond), host.Round(time.Millisecond), ticks,
 		(host / time.Duration(ticks)).Round(time.Microsecond),

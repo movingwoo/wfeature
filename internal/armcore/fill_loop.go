@@ -1,5 +1,7 @@
 package armcore
 
+import "encoding/binary"
+
 // Recognising a counted store loop, and standing in for it.
 //
 // The library hooks answer `memcpy` and `memset` natively because interpreting
@@ -55,6 +57,12 @@ const maxStoreLoopBytes = 32
 // maxTableBlitBytes bounds a blit body, which is longer than a fill's.
 const maxTableBlitBytes = 48
 
+// maxRecognisedLoopBytes is the longest body any of the recognisers reads, and
+// so how far back a taken branch may reach before the engine stops asking. The
+// cost of raising it is one analysis per loop head that is not one of these
+// shapes, because a refusal is remembered.
+const maxRecognisedLoopBytes = wordModulateBytes
+
 // maxStoreLoopIterations bounds one stand-in. It is far past any real fill —
 // a whole 240x320 screen is 76,800 halfwords — and exists so that a counter
 // the recogniser has misread cannot become an unbounded write.
@@ -92,10 +100,17 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 	}
 	loop := memory.analyseStoreLoop(head, branchPC)
 	if loop == nil {
-		// The other shape worth standing in for: a blit through a lookup
-		// table. See table_blit.go.
-		blit := memory.analyseTableBlit(head, branchPC)
-		if blit == nil {
+		// The other shapes worth standing in for, each in a file of its own:
+		// a blit through a lookup table, a guarded byte blend, a modulate of
+		// two packed streams.
+		if blit := memory.analyseTableBlit(head, branchPC); blit != nil {
+			return memory.runTableBlit(context, blit)
+		}
+		if blend := memory.analyseByteBlend(head, branchPC); blend != nil {
+			return memory.runByteBlend(context, blend)
+		}
+		modulate := memory.analyseWordModulate(head, branchPC)
+		if modulate == nil {
 			// Refused by analysis, which is the only answer that cannot
 			// change while the code does not. A run that merely declines —
 			// too few iterations to be worth it, a span it could not
@@ -107,7 +122,7 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 			memory.refusedLoops[head] = true
 			return 0, nil
 		}
-		return memory.runTableBlit(context, blit)
+		return memory.runWordModulate(context, modulate)
 	}
 
 	iterations := context.Registers[loop.counter] + 1
@@ -141,10 +156,25 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 		return 0, nil
 	}
 
-	for offset := uint32(0); offset < span; offset += loop.width {
+	// The span is reached through its pages where that is allowed, a page at a
+	// time, so what the whole span already proved is not proved again per
+	// store. See raw_span.go. An odd destination is not: a halfword store
+	// aligns its address downward, so consecutive stores would land on top of
+	// each other and the checked path is what does that.
+	for offset := uint32(0); offset < span; {
+		if start&1 == 0 {
+			if to := memory.rawSpan(start+offset, span-offset, true); to != nil {
+				for at := 0; at+1 < len(to); at += 2 {
+					binary.LittleEndian.PutUint16(to[at:], uint16(value))
+				}
+				offset += uint32(len(to))
+				continue
+			}
+		}
 		if err := memory.writeData16(start+offset, uint16(value)); err != nil {
 			return 0, err
 		}
+		offset += loop.width
 	}
 
 	// The registers are left where the guest would have left them: the pointer

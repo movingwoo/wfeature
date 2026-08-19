@@ -246,10 +246,11 @@ for revisiting it, and one arrived. Per address, in the scene reported:
 | 0.18% | a constant halfword fill |
 
 So the recogniser was built for the two shapes that are actually there, in
-`fill_loop.go` and `table_blit.go`. Both are structural: they read the body
-between a backward branch and its target, give each instruction a role, and
-refuse a body where a role is filled twice, left empty, or played by a register
-that is also playing another. Recognition is attempted only when a backward
+`fill_loop.go` and `table_blit.go`; two more followed once those had been
+measured, in `byte_blend.go` and `word_modulate.go`. All of them are structural:
+they read the body between a backward branch and its target, give each
+instruction a role, and refuse a body where a role is filled twice, left empty,
+or played by a register that is also playing another. Recognition is attempted only when a backward
 branch is taken, so the cost on every other instruction in the program is one
 compare.
 
@@ -290,10 +291,175 @@ and all 35 KTF archives render byte-identical first frames before and after,
 and the engine benchmarks are unchanged, the existing blit benchmark's loop
 being a shape this does not match.
 
-**What is left is more of the same.** The stand-in still pays a bounds-checked
-read and write per pixel, which is why 28.6% of instructions became about 17%
-of time rather than all of it, and the next regions down the profile — 8.9%,
-8.8%, 5.6% — are further rasteriser loops in shapes neither recogniser knows.
+### A validated span does not have to be checked again per pixel
+
+That first stand-in still called the sized accessors per pixel, which is why
+28.6% of instructions became about 17% of time rather than all of it: each
+pixel paid a thread-local test, a page lookup, a permission compare and a
+bounds check for a span already proved reachable, once, whole.
+
+`raw_span.go` is the way out. It answers the page's own bytes for as much of a
+validated span as sits in one page, and both stand-ins index that slice — a
+page of destination at a time, with the decode cache retired once per page
+instead of once per store. **What keeps it honest is what it refuses**: a
+memory with anything watched (a stand-in that skipped a watch would be the one
+bug watchpoints exist to find), a span that could touch a thread-local word,
+and a page with no storage committed. Each refusal falls back to the checked
+path for that stretch — which also commits the page, so the next stretch is
+usually direct — and an odd destination stays on the checked path outright,
+because a halfword store aligns its address downward and the guest would be
+writing over its own previous pixel.
+
+Measured the same way, on the same route and save, against the same probe:
+
+| | before | after |
+|---|---|---|
+| busy | 18.6s | **17.5s** |
+| per tick p90 | 36.4ms | **35.1ms** |
+| per tick p99 | 42.5ms | **40.4ms** |
+| ns per instruction retired | 6.20 | **5.84** |
+
+The instruction count is bit-identical across the arms, which is what makes
+`ns_per_step` the comparison and not the tick time. On KTF, interleaved A/B on
+two titles: one −3.2% on both pairs, one unmoved — the second's loops are not
+shapes the recognisers match, so there was nothing there to make cheaper. All
+30 local LGT and 35 KTF archives still render byte-identical first frames.
+
+The same profile also showed the analysis allocating a five-entry map per
+stand-in to check that no two roles share a register; it is a bit per low
+register now.
+
+### What a title spends its instructions on once the stand-ins are in
+
+Same scene, per address, with the first two stand-ins running. The ranking is
+worth reading whole, because not all of it is something a recogniser can reach:
+
+| share | what it is |
+|---|---|
+| 34.6% | the region holding the stood-in blit. **This is the charging artefact**, not work: the steps are charged at the PC after the loop, and the loop itself is being run in Go |
+| 13.2% + 7.6% | **the guest's own allocator** — a walk down a free list of block headers, and the three leaf helpers it calls per block |
+| 7.3% | a modulate: two pixels packed in a word, each channel group masked, scaled by a byte from a third stream, two rows at a time |
+| 7.2% | a byte blend: `if src[i] - k > dst[i] { dst[i] = src[i] - k }` |
+| 4.6%, 4.1%, 2.9% | run-length sprite draws with a saturating additive blend per channel |
+
+**The largest single consumer left is the game's own `malloc` and `free`**, at a
+fifth of every instruction executed, and that is not ours: its cost is the
+length of the list the title itself keeps, its loop calls out to helpers, and
+standing in for it would mean reimplementing a heap whose layout the title
+reads back.
+
+The two shapes below it were built — `byte_blend.go` and `word_modulate.go` —
+and the three run-length draws were not. That is the line this section drew and
+it is worth keeping: each of these is a *different arithmetic*, so a recogniser
+for one does not read another, and the case for building one is how much of a
+reported-slow scene it is rather than how general it looks. The run-length
+draws are 64 instructions a pixel across three sites with saturation branches
+per channel; they are the point where a recogniser stops being a shape and
+starts being a rewrite of one title's sprite routine.
+
+### Two more shapes, and what they cost to recognise
+
+**A guarded byte blend** (`byte_blend.go`). Eleven instructions a byte, and the
+first body with a branch in it: the store is skipped by a forward conditional
+branch when the incoming byte does not win. The walk therefore gained a
+positional rule — the compare, the guard and the store adjacent and in that
+order, the guard landing on the instruction after the store — because a role
+walk alone cannot say *what* a guard guards. Its charge is the first that is
+not one number: a skipped store is one instruction less, and the test runs the
+same loop both ways and compares the counts.
+
+**A two-stream modulate** (`word_modulate.go`). Forty-two instructions a step
+over two rows at once, and **matched as a sequence rather than as a walk**. A
+role walk works when each instruction contributes one distinct effect; here the
+same thirteen-instruction computation appears twice over two stream pointers,
+and "the second half's third `ands`" is a position, not a role. So the body is
+read in order, every register bound where it is first met and checked wherever
+it recurs, every immediate and shift amount read out rather than assumed, and
+the two halves required to agree in all but which stream they walk. Nothing is
+matched by encoding — a title that allocated its registers differently would
+bind different numbers and still be recognised — but the sequence is one
+title's blend and the trade is written down here rather than implied.
+
+Both keep the existing rules, and both add one of their own:
+
+- **What the loop re-reads every step must be somewhere it does not write.**
+  The blend's constant lives in a frame slot; the modulate re-reads its two
+  masks out of its own code and its factor pointer out of the frame. A
+  stand-in reads each once, so a destination span covering any of them is
+  refused rather than modelled.
+- **The last iteration is left to the interpreter.** The stand-in runs all but
+  one of the iterations that remain and leaves the loop pointing at the last,
+  which the engine then interprets. That is what makes the scratch registers
+  right for free: both bodies leave several values in registers the code after
+  the loop reads, and reproducing each of them by hand is exactly the class of
+  mistake that does not show up until one title's shadows are wrong. The flags
+  come out right for the same reason. One interpreted iteration in a thousand
+  costs nothing.
+
+Recognition is attempted when a taken backward branch reaches no further than
+the longest body any recogniser reads, which these raised from 32 bytes to 84.
+The cost of that is one analysis per loop head inside the new range that is not
+one of these shapes, paid once because refusals are remembered; measured
+against two KTF titles, interleaved, it is inside the noise.
+
+Measured on the title that prompted all of this, same route, same save, same
+probe:
+
+| | no stand-ins | blit and fill | + raw spans | + blend | + modulate |
+|---|---|---|---|---|---|
+| busy | 22.1s | 18.6s | 17.5s | 16.2s | **14.6s** |
+| tick p90 | 41.5ms | 36.4ms | 35.1ms | 30.3ms | **24.1ms** |
+| tick p99 | 47.0ms | 42.5ms | 40.4ms | 38.7ms | **33.9ms** |
+
+A tick of this title is about 44ms of guest time, so p90 goes from 1.06x real
+time — no headroom at all — to **1.83x**. The check that matters more than the
+clock: **every one of the 770 frames the route paints is byte-identical**
+before and after, at the same tick numbers, and the whole-corpus first-frame
+sweep is unchanged on all 30 local LGT and 35 KTF archives.
+
+**Compare stand-ins by busy time, not by `ns_per_step`.** A quantum that ends
+inside a stand-in reports the quantum's size rather than what the stand-in
+charged — `Engine.Run` answers `count` on the exhausted path — so the steps a
+big charge overshoots by are lost from the accounting. It is the safe direction
+for a budget and it is invisible within one build, but across builds a
+recogniser that stands in for more loses more, which reads as a throughput gain
+that is partly an accounting one.
+
+### The block interpreter, measured before building it again
+
+`TODO.md` left the interpreter's remaining dispatch overhead as "size unknown,
+measure with a small benchmark before starting". Measured, on the game-shaped
+loop, as the *ideal* a block interpreter could reach — the PC read, the Thumb
+test, the `end` compare, the watch compare and the decode-cache lookup all
+gone, the same handlers behind the same switch, and the PC write kept because
+an instruction may still read it:
+
+| inner loop | ns per instruction |
+|---|---|
+| `Engine.Run` as it is | 5.26 |
+| ideal blocks of 8 instructions, one lookup per block | 4.96 (−5.8%) |
+| ideal blocks of 16 | 4.94 (−6.1%) |
+| ideal blocks of 32 | 4.76 (−9.5%) |
+| one ideal block of 160, no lookup at all | 4.11 (−22%) |
+| no dispatch whatsoever — every handler called straight | 3.20 (−39%) |
+
+Real blocks are 8.5 instructions, or 15.6 with `mov ip, rN` split at decode
+time (see the six arrangements above). **So the ceiling at real block lengths
+is about 6%, on a benchmark that pays none of what a real one pays** — no
+block building, no invalidation, no early exits, and no register pressure on
+the ordinary path. The six arrangements that were actually built returned 5 to
+9% on the code they targeted and cost 1 to 10% everywhere else, which is the
+same number arriving from the other side. **This is settled: the design cannot
+pay for itself, and the benchmark that says so is `BenchmarkEngineGameShapedLoop`
+against the ideal loop, not another arrangement.**
+
+A cheaper variant of the same idea was tried and dropped with it: routing five
+more Thumb forms — literal load, high register, push, pop, multiple transfer —
+straight from the engine's switch instead of through `executeThumbForm`, which
+a profile put at 2.2% of a run in second dispatch. Interleaved A/B, three pairs
+each: **−1.2% on an LGT title, +0.6% on a KTF one.** The hot switch growing
+costs the ordinary path about what the second dispatch cost the forms that took
+it, which is the same lesson the block arrangements taught.
 
 ## Interpreter throughput
 

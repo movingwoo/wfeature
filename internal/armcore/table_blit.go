@@ -1,5 +1,7 @@
 package armcore
 
+import "encoding/binary"
+
 // Recognising a table-lookup blit, and standing in for it.
 //
 // The counted fill in fill_loop.go is the simple half of what a game's
@@ -72,7 +74,39 @@ func (memory *Memory) runTableBlit(context *Context, loop *tableBlit) (uint32, e
 	// it is remembered as it is asked for.
 	var colours [256]uint16
 	var known [256]bool
-	for pixel := uint32(0); pixel < iterations; pixel++ {
+	// Both spans are reached through their pages where that is allowed, a page
+	// of destination at a time, so the bounds and the permission the whole
+	// span already proved are not proved again per pixel. See raw_span.go.
+	// An odd destination is not: a halfword store aligns its address downward,
+	// so the guest would be writing over its own previous pixel and the
+	// checked path is what does that.
+	for pixel := uint32(0); pixel < iterations; {
+		if destination&1 == 0 {
+			from := memory.rawSpan(source+pixel, iterations-pixel, false)
+			to := memory.rawSpan(destination+pixel*2, (iterations-pixel)*2, true)
+			if from != nil && to != nil {
+				count := uint32(len(from))
+				if pixels := uint32(len(to)) / 2; pixels < count {
+					count = pixels
+				}
+				for index := uint32(0); index < count; index++ {
+					colour := from[index]
+					if !known[colour] {
+						value, err := memory.readData16(table + uint32(colour)*2)
+						if err != nil {
+							return 0, err
+						}
+						colours[colour], known[colour] = value, true
+					}
+					binary.LittleEndian.PutUint16(to[index*2:], colours[colour])
+				}
+				pixel += count
+				continue
+			}
+		}
+		// Whatever the direct route refused — a watched address, a page with
+		// no storage yet — one pixel at a time, which also commits the page
+		// the next span may then be able to reach directly.
 		index, err := memory.read8(source + pixel)
 		if err != nil {
 			return 0, err
@@ -87,6 +121,7 @@ func (memory *Memory) runTableBlit(context *Context, loop *tableBlit) (uint32, e
 		if err := memory.writeData16(destination+pixel*2, colours[index]); err != nil {
 			return 0, err
 		}
+		pixel++
 	}
 
 	context.Registers[loop.source] = source + iterations
@@ -283,19 +318,22 @@ func (memory *Memory) analyseTableBlit(head, branchPC uint32) *tableBlit {
 	}
 	// The four registers the loop walks each need a register of their own, and
 	// none of them may be the scratch one — it is overwritten every pixel.
-	seen := map[uint32]bool{}
-	for _, register := range []uint32{loop.source, loop.destination, loop.table, loop.counter, scratch} {
-		if seen[register] {
+	// A bit per low register rather than a set: this runs once per stand-in,
+	// which is often enough that allocating a map for five entries showed up
+	// in a profile of the run it was meant to speed up.
+	var seen uint32
+	for _, register := range [...]uint32{loop.source, loop.destination, loop.table, loop.counter, scratch} {
+		if seen&(1<<register) != 0 {
 			return nil
 		}
-		seen[register] = true
+		seen |= 1 << register
 	}
 	// The limit may share the scratch register, and in the title this was read
 	// from it does: r3 carries the index, then the colour, then the limit, and
 	// the three never overlap in time because each is dead before the next is
 	// written. What it may not be is one of the four the loop walks, and a
 	// limit that is the counter would compare a register against itself.
-	if loop.limit != scratch && seen[loop.limit] {
+	if loop.limit != scratch && seen&(1<<loop.limit) != 0 {
 		return nil
 	}
 
