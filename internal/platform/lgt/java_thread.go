@@ -152,7 +152,7 @@ func javaThreadSleep(
 	wait := time.Duration(milliseconds) * time.Millisecond
 	worker := client.activeJavaWorker
 	if worker == nil {
-		client.clock.advance(wait)
+		_ = client.clock.advance(wait)
 		return 0, nil
 	}
 	worker.wakeAt = client.clock.now() + wait

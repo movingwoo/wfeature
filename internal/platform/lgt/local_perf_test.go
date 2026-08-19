@@ -40,6 +40,15 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if value := os.Getenv("WFEATURE_GUEST_MIPS"); value != "" {
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || parsed == 0 {
+			t.Fatalf("invalid WFEATURE_GUEST_MIPS %q", value)
+		}
+		restore := guestInstructionsPerMillisecond
+		guestInstructionsPerMillisecond = parsed
+		defer func() { guestInstructionsPerMillisecond = restore }()
+	}
 	ctx := context.Background()
 	opened := time.Now()
 	// A fresh save directory by default, so a run is repeatable; but the scene
@@ -95,6 +104,14 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	// is about. Kept per tick rather than as a running estimate because the
 	// run is a few thousand ticks and exactness is free at that size.
 	costs := make([]time.Duration, 0, ticks)
+	// What a player waits between frames, and how far the world moved while
+	// they waited. They have to be the same number: a wall gap shorter than
+	// the guest gap is the emulator handing the guest time it did not pay for,
+	// and neither percentile alone shows it.
+	wallGaps := make([]time.Duration, 0, 4096)
+	guestGaps := make([]time.Duration, 0, 4096)
+	lastWall, lastGuest := time.Time{}, time.Duration(0)
+	lastFlushes := uint64(0)
 	tick := func() error {
 		began := time.Now()
 		var wait time.Duration
@@ -109,6 +126,15 @@ func TestLGTLoadCostProbe(t *testing.T) {
 		}
 		cost := time.Since(began)
 		costs = append(costs, cost)
+		if f := uint64(session.Flushes()); f != lastFlushes {
+			lastFlushes = f
+			nowWall, nowGuest := time.Now(), session.GuestElapsed()
+			if !lastWall.IsZero() {
+				wallGaps = append(wallGaps, nowWall.Sub(lastWall))
+				guestGaps = append(guestGaps, nowGuest-lastGuest)
+			}
+			lastWall, lastGuest = nowWall, nowGuest
+		}
 		if cost > slowest {
 			slowest = cost
 		}
@@ -196,6 +222,24 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	t.Logf("busy=%v tick_p50=%v tick_p90=%v tick_p99=%v",
 		busy.Round(time.Millisecond), percentile(0.50).Round(time.Microsecond),
 		percentile(0.90).Round(time.Microsecond), percentile(0.99).Round(time.Microsecond))
+	if len(wallGaps) > 8 {
+		report := func(label string, gaps []time.Duration) {
+			sorted := slices.Clone(gaps)
+			slices.Sort(sorted)
+			at := func(f float64) time.Duration {
+				return sorted[int(float64(len(sorted)-1)*f)].Round(time.Millisecond)
+			}
+			total := time.Duration(0)
+			for _, gap := range gaps {
+				total += gap
+			}
+			t.Logf("%s gap p10=%v p50=%v p90=%v p99=%v mean=%v",
+				label, at(0.10), at(0.50), at(0.90), at(0.99),
+				(total / time.Duration(len(gaps))).Round(time.Millisecond))
+		}
+		report("wall ", wallGaps)
+		report("guest", guestGaps)
+	}
 	if os.Getenv("WFEATURE_PROFILE") != "" {
 		t.Logf("\n%s", session.Profile().Report(25))
 	}

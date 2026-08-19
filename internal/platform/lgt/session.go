@@ -183,8 +183,13 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 		return 0, fmt.Errorf("LGT session is not started")
 	}
 	client := session.client
-	span := session.tickSpan()
-	client.clock.advance(span)
+	// The tick stands for what the clock actually moved, which is the span it
+	// set out to stand for unless the guest's own work overran it. `TickFor`
+	// charges the wall clock with this number, so reporting the intent instead
+	// of the outcome hands a title's computation back for free — see
+	// `docs/lgt.md`, "The wall has to be charged for the work, not for the
+	// intent".
+	span := client.clock.advance(session.tickSpan())
 	if err := client.serviceTimers(ctx); err != nil {
 		return span, err
 	}

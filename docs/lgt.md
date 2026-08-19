@@ -1006,12 +1006,16 @@ it does that **inside one Clet call**, where the Host cannot get a tick in. The
 clock never moved, the wait never ended, and the run died on the instruction
 ceiling with the same timestamp on every read.
 
-So the clock also advances with instructions retired, at a rate of the order of
-an ARM9 handset (`guestInstructionsPerMillisecond`). The work is measured from
-the last tick rather than from the start, so the two do not compound over a run:
-a tick sets the floor and moves the baseline, and instructions carry the clock
-from there. What the rate really sets is what a spin-wait costs — a game waiting
-100ms spends about five million instructions on it.
+So the clock also advances with instructions retired, at the rate of the
+handset this platform stands in for (`guestInstructionsPerMillisecond`). The
+work is measured from the last tick rather than from the start, so the two do
+not compound over a run: a tick sets the floor and moves the baseline, and
+instructions carry the clock from there. The rate sets what a spin-wait costs —
+a game waiting 100ms spends fifteen million instructions on it — and, because a
+frame's computation is charged to the guest's own clock, it also sets whether a
+title can reach the frame period it asks for. That second job is what picked the
+number: "What the rate has to be for a title to get the period it asks for",
+below.
 
 **The floor is the larger of the two, not their sum**, and getting that wrong
 is not a rounding error. A tick is how much time the Host says has passed; the
@@ -1024,8 +1028,11 @@ the case the work clock exists for: a loading screen that burns three seconds
 of instructions inside one call moves the clock three seconds.
 
 The measured numbers, for anyone checking this again: a title in the world
-retires about 2.16M instructions per tick, which is 43ms of work against a 50ms
-tick; a world load retires 165M in one, which is 3300ms.
+retires about 2.16M instructions per tick and a world load retires 165M in one,
+which at the rate in force are 14ms of work against a 50ms tick, and 1,100ms.
+(Both were read when the rate was 50,000, where the same counts were 43ms and
+3,300ms; the instruction counts are the measurement, the milliseconds are the
+rate applied to them.)
 
 ### The Host has to pace the ticks, because nothing else does
 
@@ -1102,6 +1109,133 @@ floor, which is the original mistake in miniature — the 46ms title came out at
 Measured across the local set with `-ticks 600`, before against after, as guest
 milliseconds per frame: 101.7→56.9, 50.0→19.0, 50.1→47.6, 100.0→83.1,
 102.2→80.1, 101.0→72.1, 102.3→68.3, 230.0→200.0, 50.1→27.3. Nothing is slower.
+
+### The wall has to be charged for the work, not for the intent
+
+The paragraph above says `TickFor` waits for the span the tick actually stood
+for. It did not. `tickOnce` returned `tickSpan()` — the span it *set out* to
+stand for — while the clock moved by `max(work, span)`, so **every millisecond
+a title spent computing was handed back to it for free**. In a scene whose
+frames cost more than the interval between them the guest clock outran the wall
+by **2.27x**: a local title painted a frame every 44ms of real time, and each
+of those frames carried 100ms of its own.
+
+That is a third failure of the same family as the two above, and it looks like
+neither. It is not slow motion and it is not a frame rate: the frames arrive
+often and evenly, and each one moves the world further than the interval it was
+shown for. What a player sees is motion that steps rather than travels.
+
+**Both existing pacing tests passed throughout**, and the reason is worth
+keeping: the fixture module returns from every slot at once, so a fixture tick
+has no work to overrun its span with, and the case simply cannot arise in them.
+The two tests that pin it now supply the work instead of waiting for it — the
+clock's step source is the one thing a fixture cannot make expensive — and both
+fail on the old code with the numbers above:
+`TestATickReportsTheGuestTimeItActuallyStoodFor` and
+`TestTickForPacesGuestTimeWhenTheWorkOverrunsTheSpan`.
+
+`advance` reports what it applied and `tickOnce` returns that. Paced against
+the same route and save, the guest went from 2.27x the wall to **0.95x**.
+
+**Neither other platform can have this defect**, and the reason is that neither
+has a work clock. KTF's guest clock is the wall clock — a `ManualClock` that
+jumps to each next deadline only when a batching Host runs it (`ktf/clock.go`) —
+and SKT's is a pace clock over the wall (`skt/runtime.go`). Computation costs
+their guests nothing, so their guest time cannot outrun the wall by construction.
+What they have instead is the opposite failure: a Host that cannot finish a
+frame before the next deadline just runs late, and that is a throughput problem
+rather than a clock one.
+
+### What the rate has to be for a title to get the period it asks for
+
+Charging the wall honestly exposes what the charge is made of. A frame's
+computation is converted to guest milliseconds at
+`guestInstructionsPerMillisecond`, so **that rate decides whether a title can
+reach its own frame period** — the same rounding as the section above, with the
+handset's speed in place of the tick's granularity.
+
+The measured title asks for 55ms. At 50,000 instructions a millisecond it spent
+100ms of its own clock on the average frame, and a third of its frames cost
+twice what it asked for. Paced, same route and save, wall milliseconds between
+paints:
+
+| rate | p10 | p50 | p90 | p99 | frames a second | busy |
+|---|---|---|---|---|---|---|
+| 50,000 | 48 | 81 | 146 | 215 | 9.7 | 25.3s |
+| 100,000 | 42 | 55 | 84 | 120 | 14.2 | 20.9s |
+| **150,000** | **52** | **55** | **60** | 105 | 15.7 | 22.0s |
+
+At 150,000 the interval a player waits between frames is the interval the title
+asked for, held to within 5ms at p90, and it is the guest's own interval: wall
+p50 55ms and p90 60ms against guest p50 55ms and p90 56ms.
+
+**What is left is 7%.** The same run reports the guest at 0.93x the wall — the
+game runs slightly slow rather than slightly fast, and it is not throughput
+(21.8s of host work inside 57.3s). It is the tick cost and the sleep overshoot
+that the capped debt cannot repay. 0.93x is a seventh of what it was and in the
+direction that does not break animation, so it is left measured rather than
+chased.
+
+**Raising it cannot make a title run fast**, and that is structural rather than
+lucky. A tick advances the clock by `max(work, span)` where `span` is the wait
+until the guest's own next scheduled work, so the clock never steps past a due
+timer; raising the rate only shrinks `work`, which can move a tick from "the
+work overran" to "the timer was met" and no further. The knob saturates at the
+schedule the title wrote for itself.
+
+What it costs is throughput: the same computation now stands for less guest
+time, so the Host has proportionally less real time to do it in. That is what
+the stand-ins in `armcore.md` bought, and it is why this number could move at
+all. Swept over the 30 local archives — boot, 1,500 ticks each, guest time
+against host time:
+
+| | at 50,000 | at 150,000 |
+|---|---|---|
+| titles held back by the rate | 6 | 0 |
+| worst period asked-for vs got | 193ms | 77ms |
+| lowest headroom in the set | 1.05x | **1.02x** |
+| next lowest | 2.02x | 1.29x |
+
+The six that were held back gain the most — 193→77ms, 142→71ms (p90 221→85),
+68→50, 64→41, 38→24, 27→20 — and the rest are unchanged, because they were
+already meeting their period on the tick alone.
+
+**The title with no headroom does not pay for this.** It sits at 1.05x before
+and 1.02x after, because its boot loop is bounded by its own timer rather than
+by its computation: raising the rate barely moves its guest time, and its host
+cost does not change at all. A title that is expensive enough to be near the
+edge is near it either way; what the rate decides is only how much of its own
+clock its computation eats.
+
+**Confirmed from a player's side**, which is where the report started. Two
+sessions of the same title in the same field scene, logged by the browser: the
+build before this reported 11.9 to 15.4 frames a second, wandering by 3.5
+across eleven windows; after it, 17.9 to 18.4 across eleven on a desktop and
+18.0 to 18.4 on a phone. **18.2 is 1000/55** — the period the title asks for.
+The frame rate rising by a third is the smaller half of that; the spread
+falling from 3.5 to 0.5 is what a player was describing. Guest speed reads
+0.99 to 1.02x, nothing was dropped on either device, and the host cost fell
+with it — 26-33ms a tick to 10-14ms, 40% of a core on the desktop session and
+47% on the phone's — because the old build was computing a world running fast
+and could not show it.
+
+**A load reads slow now and is not.** Both sessions show one window at 0.34x
+crossing into the field, which is a world load spinning inside a single Clet
+call where no tick can get in. The instructions are the same and the Host does
+not wait during them, so the wall time is unchanged; what moved is only that
+the clock calls that load 1,100ms rather than 3,300. The logs agree — the
+stretch the stats windows were stalled for is 3.21s before against 2.88s after.
+
+The number is not a claim about a particular handset — nothing local names one,
+and the specification does not either. It is the point where the corpus stops
+being held back, chosen the only way this repository can choose it: by measuring
+what each title asks for against what it gets. `TestRateSweep` is that
+measurement, and `docs/testing.md` has how to run it again.
+
+Two checks came with it. Every local archive's first frame is byte-identical
+before and after except one title's, which reaches **further** in the same 64
+ticks — the same notice screen, now with its "press any key" line drawn. And
+the acceptance runs for all three platforms pass unchanged.
 
 ### A Java title's frame loop is not a timer, and it lost a tick a frame twice
 

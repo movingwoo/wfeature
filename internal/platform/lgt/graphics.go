@@ -141,11 +141,21 @@ type guestClock struct {
 	baseline uint64
 }
 
-// guestInstructionsPerMillisecond is the rate the work clock runs at. It is the
-// order of an ARM9 handset, and what it really sets is how many instructions a
-// spin-wait costs: a game waiting 100ms spends about five million of them,
-// well inside one call's ceiling.
-const guestInstructionsPerMillisecond = 50_000
+// guestInstructionsPerMillisecond is the rate the work clock runs at — the
+// speed of the handset this platform is standing in for. It decides two
+// things: what a spin-wait costs (a game waiting 100ms spends fifteen million
+// instructions on it, well inside one Clet call's three billion), and, because
+// a frame's computation is charged to the guest's own clock, **whether a title
+// gets the frame period it asks for**.
+//
+// It is a variable rather than a constant only so the measurement that picked
+// it can be repeated: `TestRateSweep` sets it and puts it back. Nothing in the
+// running emulator writes it.
+//
+// The number is 150,000 because that is where the local corpus stops being
+// held back by it — see `docs/lgt.md`, "What the rate has to be for a title to
+// get the period it asks for".
+var guestInstructionsPerMillisecond uint64 = 150_000
 
 func newGuestClock(steps func() uint64) *guestClock {
 	return &guestClock{
@@ -154,22 +164,23 @@ func newGuestClock(steps func() uint64) *guestClock {
 	}
 }
 
-func (clock *guestClock) advance(delta time.Duration) {
+func (clock *guestClock) advance(delta time.Duration) time.Duration {
 	clock.mu.Lock()
 	// The tick is a floor rather than an addition: the guest was busy for the
 	// work and idle for the rest of the tick, so the tick is what passed unless
 	// the work ran past it. Taking the larger of the two is also what keeps
 	// time from going backwards at the boundary, since a reader inside the tick
 	// has already seen elapsed plus the work.
+	applied := delta
 	if work := clock.workSince(); work > delta {
-		clock.elapsed += work
-	} else {
-		clock.elapsed += delta
+		applied = work
 	}
+	clock.elapsed += applied
 	if clock.steps != nil {
 		clock.baseline = clock.steps()
 	}
 	clock.mu.Unlock()
+	return applied
 }
 
 // workSince is how much time the instructions retired since the last tick
