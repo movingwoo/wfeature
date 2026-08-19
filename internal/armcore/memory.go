@@ -156,6 +156,11 @@ type Memory struct {
 	dataPage  *memoryPage
 	codeIndex uint32
 	codePage  *memoryPage
+	// refusedLoops remembers the backward branches that do not close a counted
+	// store loop, keyed by the loop's head, so a tight loop that is not one
+	// pays for the analysis once. Only refusals are kept: see fill_loop.go for
+	// why the answers worth caching are the ones that cannot go stale wrong.
+	refusedLoops map[uint32]bool
 	// Write watching. watchCount, watchLow, and watchHigh are the span test an
 	// ordinary store pays for; the map and the hits are only reached once a
 	// store falls inside it. executingPC is where the engine currently is,

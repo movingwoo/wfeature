@@ -96,6 +96,22 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				err = executeThumbALU(context, value)
 			case thumbConditionalBranch:
 				supervisorCall, err = executeThumbConditionalBranch(context, pc, value)
+				// A branch that was taken backwards by a few instructions has
+				// just closed a loop. That is the only moment worth asking
+				// whether it is one the engine can stand in for, so the cost
+				// on every other instruction in the program is this compare.
+				// See fill_loop.go.
+				if err == nil && supervisorCall == nil {
+					if head := context.Registers[RegisterPC]; head < pc && pc-head <= maxStoreLoopBytes {
+						stood, loopErr := memory.runStoreLoop(context, head, pc)
+						if loopErr != nil {
+							return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: value, Thumb: true, Cause: loopErr}
+						}
+						// Charged as if every instruction had run, so a guest
+						// that would have exhausted its budget still does.
+						steps += stood
+					}
+				}
 			case thumbBranch:
 				err = executeThumbBranch(context, pc, value)
 			case thumbImmediateTransfer:
