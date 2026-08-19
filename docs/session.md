@@ -117,6 +117,31 @@ do — are one press between them, released when the last of them leaves. That
 bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
 can drive it directly; what is under the finger stays `app.js`'s question.
 
+### The speed belongs to the game, not to the page
+
+The multiplier was one value shared by every game, and the setting it carries
+is not a taste — it is a correction for **how much of a game's frame period was
+its own drawing on the handset**, which is a fact about that game. One local
+title issues a couple of hundred platform draw calls a frame and asks to be
+woken 10ms later; the drawing is native code here, so almost the whole period
+comes back and it needs a quarter speed to look right. The title beside it
+rasterises in its own guest code, 2.2 million instructions a frame, and needs
+none. `docs/ktf.md` has both measurements.
+
+So a shared setting meant changing it by hand on every switch, and forgetting
+to is a game running at four times its own pace with nothing on screen to say
+why. It is stored per game now, keyed like the screen. Unlike the screen it
+applies to a running session — there is nothing to restart for — and the menu
+follows whichever game the setting is about: the one the list is showing before
+a game starts, the running one afterwards.
+
+The key an older page used for the shared speed is still **read**, for a game
+that has no speed of its own, and never written again. That direction is the
+conservative one: somebody who slowed a game down before this change finds it
+still slow, where ignoring the old key would silently speed it up. The first
+choice made for any game writes that game's own value, so the shared one only
+fades. `web/game-speed.js` holds the rule and its tests.
+
 ### The screen is part of starting a game
 
 A `start` may carry a `width` and a `height`, and the settings panel is where a
