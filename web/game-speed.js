@@ -17,14 +17,15 @@
 
 const SPEED_KEY_PREFIX = "wfeature:speed:";
 
-// LEGACY_SPEED_KEY is the key an earlier page used for the one speed every game
-// shared. It is still read, for a game that has no speed of its own, so that
-// somebody who slowed a game down before this change finds it still slow
-// afterwards. **Nothing writes it any more**: the first change made to any game
-// writes that game's own value, so the shared one only ever fades out. Reading
-// it is the conservative direction — inheriting a slow setting is a game that
-// looks as it did yesterday, where ignoring it is one that silently speeds up.
-const LEGACY_SPEED_KEY = "wfeature:speed";
+// An earlier page kept one speed for every game, under "wfeature:speed". That
+// key is **not** read any more. Inheriting it looked like the conservative
+// direction — somebody who slowed a game down before this change would find it
+// still slow — but the setting it carried was chosen for one title, and once
+// speeds became per-game it silently opened every other game at that title's
+// speed. A quarter-speed setting made for one title is not a sensible default
+// for the next one, and the page gives no reason on screen for why the game is
+// slow. A game nobody has chosen a speed for now runs at the speed it was
+// written for, and the setting is one change away for anyone who wants it back.
 
 export const DEFAULT_SPEED = 1;
 
@@ -53,12 +54,11 @@ export const createGameSpeed = (storage = globalThis.localStorage) => {
   };
 
   return {
-    // stored answers the multiplier for a game: its own, else the shared one an
-    // older page left behind, else 1.
+    // stored answers the multiplier for a game: its own, else the speed the
+    // game was written for.
     stored: path => {
       const own = path ? positive(read(speedKey(path))) : 0;
-      if (own) return own;
-      return positive(read(LEGACY_SPEED_KEY)) || DEFAULT_SPEED;
+      return own || DEFAULT_SPEED;
     },
     // remember stores a speed against the game it was chosen for. A call with
     // no game is a no-op rather than a write to a key nothing would read back.

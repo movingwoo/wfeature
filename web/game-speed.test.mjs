@@ -34,26 +34,29 @@ test("each game keeps its own speed", () => {
   assert.equal(speed.stored("ktf/untouched.zip"), DEFAULT_SPEED);
 });
 
-test("a game with no speed of its own inherits the one an older page shared", () => {
+test("the speed an older page shared is not inherited by anything", () => {
   const speed = createGameSpeed(storageOf({ [LEGACY]: "0.25" }));
-  // Somebody slowed a game down before the setting became per game. They should
-  // find it still slow rather than back at full speed with no warning.
-  assert.equal(speed.stored(GAME), 0.25);
+  // A speed chosen for one title, back when there was one setting for all of
+  // them, is not a default for the next title. A game nobody has chosen for
+  // opens at the speed it was written for.
+  assert.equal(speed.stored(GAME), DEFAULT_SPEED);
+  assert.equal(speed.stored(OTHER), DEFAULT_SPEED);
 });
 
-test("a game's own speed beats the shared one", () => {
+test("a game's own speed is used whatever the older page left behind", () => {
   const storage = storageOf({ [LEGACY]: "0.25" });
   const speed = createGameSpeed(storage);
-  speed.remember(GAME, 1);
-  assert.equal(speed.stored(GAME), 1);
-  // And the game beside it still inherits, because nothing was chosen for it.
-  assert.equal(speed.stored(OTHER), 0.25);
+  speed.remember(GAME, 2);
+  assert.equal(speed.stored(GAME), 2);
+  assert.equal(speed.stored(OTHER), DEFAULT_SPEED);
 });
 
 test("choosing a speed never writes the shared key back", () => {
   const storage = storageOf({ [LEGACY]: "0.25" });
   const speed = createGameSpeed(storage);
   speed.remember(GAME, 4);
+  // The key is neither read nor written now; a page that still has one is left
+  // holding it rather than having storage rewritten underneath it.
   assert.equal(storage.map.get(LEGACY), "0.25");
   assert.equal(storage.map.get(speedKey(GAME)), "4");
 });
