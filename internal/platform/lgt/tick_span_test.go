@@ -117,3 +117,110 @@ func TestTickForWaitsTheSpanTheTickStoodFor(t *testing.T) {
 		t.Fatalf("TickFor() wait with a 20ms timer = %v, want no more than 20ms", wait)
 	}
 }
+
+// A tick reports the guest time it **actually** stood for, not the span it set
+// out to stand for. `TickFor` charges the wall clock with that number, so a
+// tick whose work overran its span has to say so; reporting the span instead
+// hands the computation back for free and the guest clock outruns the wall.
+//
+// The test above and `TestTickForPacesGuestTimeAgainstTheWallClock` both passed
+// while that was wrong, because **the fixture module does no work to overrun
+// with** — its every slot returns at once. On a local title in a scene whose
+// frames cost more than the span between them, the guest ran **2.27x** the wall
+// and painted a frame every 44ms of real time that carried 100ms of its own.
+// So the work is supplied here rather than waited for: the clock's step source
+// is the one thing a fixture cannot make expensive.
+func TestATickReportsTheGuestTimeItActuallyStoodFor(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{
+		Width: 16, Height: 8, MaxSteps: 1 << 20, Tick: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+
+	// The clock counts instructions through this, so the tick can be made to
+	// overrun by exactly as much as the case under test needs.
+	retired := uint64(0)
+	session.client.clock.mu.Lock()
+	session.client.clock.steps = func() uint64 { return retired }
+	session.client.clock.baseline = 0
+	session.client.clock.mu.Unlock()
+	// The committed clock, not `now`: a reading taken inside a tick already
+	// carries the work the tick has not yet charged for, which is what keeps
+	// time from going backwards at the boundary. What a tick *stood for* is
+	// what it added.
+	committed := func() time.Duration {
+		session.client.clock.mu.Lock()
+		defer session.client.clock.mu.Unlock()
+		return session.client.clock.elapsed
+	}
+
+	// A tick the guest was idle for stands for its span, as before.
+	before := committed()
+	span, err := session.tickOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved := committed() - before; span != moved {
+		t.Fatalf("an idle tick reported %v and moved the clock %v", span, moved)
+	}
+
+	// A tick whose work overran its span stands for the work. This is the one
+	// the wall clock was not being charged for.
+	retired += 500 * guestInstructionsPerMillisecond
+	before = committed()
+	span, err = session.tickOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := committed() - before
+	if span != moved {
+		t.Fatalf("an overrunning tick reported %v and moved the clock %v", span, moved)
+	}
+	if span < 500*time.Millisecond {
+		t.Fatalf("an overrunning tick stood for %v, want at least the 500ms of work", span)
+	}
+}
+
+// The same defect from the end a player is at: guest time and wall time have to
+// advance together over a run of overrunning ticks, which is what
+// `TestTickForPacesGuestTimeAgainstTheWallClock` asks of a run of cheap ones.
+func TestTickForPacesGuestTimeWhenTheWorkOverrunsTheSpan(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{
+		Width: 16, Height: 8, MaxSteps: 1 << 20, Tick: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+
+	retired := uint64(0)
+	session.client.clock.mu.Lock()
+	session.client.clock.steps = func() uint64 { return retired }
+	session.client.clock.baseline = 0
+	session.client.clock.mu.Unlock()
+
+	before := session.client.clock.now()
+	started := time.Now()
+	for range 10 {
+		// Every tick costs half again what the session tick stands for, which
+		// is the shape of a frame that takes longer than the interval its title
+		// asked to be called back on.
+		retired += 30 * guestInstructionsPerMillisecond
+		wait, err := session.TickFor(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(wait)
+	}
+	guest := session.client.clock.now() - before
+	wall := time.Since(started)
+	// Loose in the one direction a loaded test machine can move it: it can only
+	// ever be slower than the pace, never faster.
+	if speed := guest.Seconds() / wall.Seconds(); speed > 1.2 {
+		t.Fatalf("guest ran at %.2fx wall clock (guest=%v wall=%v), want about 1x", speed, guest, wall)
+	}
+}

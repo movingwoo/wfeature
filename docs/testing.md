@@ -193,10 +193,15 @@ WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
 **A route usually needs a save to go with it.** The scene worth measuring is
 inside one — a field, a battle — and the same route replayed from a fresh boot
 stops at the title screen having measured nothing. `WFEATURE_SAVE_ROOT` points
-the session at one; **copy the directory first**, because the run plays and a
-probe that writes the save it starts from measures something different every
-time. Without it the probe makes a fresh save directory, which is what a
-route-less throughput run wants.
+the session at one; **copy the directory before every run, not once for the
+series**, because the run plays and a probe that writes the save it starts from
+measures something different every time. The drift is silent and it does not
+announce itself as drift: a series of runs on one copy went from 788 paints to
+350 and from a 42ms wall gap to 331ms, because the route had begun landing
+somewhere else entirely, and every number in between looked like a result. Two
+runs that agree to the millisecond are what says the save held — that is the
+check, not the copying. Without a save root at all the probe makes a fresh
+directory, which is what a route-less throughput run wants.
 
 The probe reports `busy` and `tick_p50/p90/p99` beside the mean, because the
 mean says nothing on either platform: a title computes almost nothing on most
@@ -210,6 +215,44 @@ ranking at the end, which is what says *which loop* the time is in
 (`armcore.md`, "What a title spends its instructions on once the stand-ins are
 in"). It is off by default because the stack walk costs about 5% of the run —
 enough to move the percentiles the same run reports.
+
+**With `WFEATURE_PACED` it also reports the gap between paints, on both clocks,
+and that pair is the number a "it is not quite smooth" report is about.** The
+wall gap is how long a player waited between frames; the guest gap is how far
+the world moved while they waited. They have to be the same number. When they
+are not, the emulator is either dropping the title's frames or handing it time
+it did not pay for — a run that reported a 44ms wall gap against a 100ms guest
+gap is what found the pacing defect in `lgt.md`, "The wall has to be charged for
+the work, not for the intent". Neither percentile alone shows it: the frame rate
+looked fine and the guest clock looked fine.
+
+**`WFEATURE_GUEST_MIPS` sets the speed of the handset the platform stands in
+for**, for the run only. It is how the number in `guestInstructionsPerMillisecond`
+was chosen and how it is checked again; nothing in the emulator writes it.
+
+**`TestRateSweep` asks that question of the whole local set at once**: what
+frame period does each title ask for, what does it get, and does the host still
+keep up.
+
+```sh
+WFEATURE_LGT_CORPUS=var/games/lgt WFEATURE_GUEST_MIPS=150000 \
+  WFEATURE_SWEEP_TICKS=1500 \
+  go test -v -count=1 -run RateSweep ./internal/platform/lgt -timeout 90m
+```
+
+Each row is one archive booted with a fresh save: the mode of its paint interval
+and how much of the run holds it, the p50 and p90 beside it, and `ratio` — guest
+time over host time, which is the headroom the title has over real time. A row
+whose ratio is below 1 is a title this machine cannot run at its own speed. Read
+the mode with its percentage: a title settled on one period reads 100%, and one
+being held back by its own computation reads 8 to 34% with a p90 well above the
+mode.
+
+**Set the rate very high and the sweep reports what each title *asks* for**,
+because computation then costs it no guest time at all. That is the control the
+comparison needs — a period measured at the rate in force is the title's request
+and the rate's effect mixed together. It runs `-v` or its rows are swallowed;
+`go test` only shows package output when it is asked to.
 
 **Do not read a macOS Go CPU profile of one of these runs without raising the
 quantum first.** It attributes 65 to 88% of the run to
