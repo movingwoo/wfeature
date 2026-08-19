@@ -20,6 +20,20 @@ import "encoding/binary"
 // slow, and the two halfword fills `armcore.md` profiled in other titles are
 // the same shape.
 //
+// **The shape is one loop written several ways**, and the ways are the
+// compiler's rather than the program's. A corpus sweep of the loops this hook
+// refuses found the same fill in three more titles at 19%, 29% and 69% of
+// everything they execute, each refused over a detail that changes nothing
+// about what the loop does — see `armcore.md`, "The same fill, written four
+// ways". So the analyser reads the parts that vary rather than a fixed
+// sequence:
+//
+//   - **how it ends.** `subs rD, #1` read by `bhs`, or `cmp rD, #0` read by
+//     `bne`. They differ in how many iterations are left to run and in where
+//     the counter and the flags end up, which `loopTermination` carries.
+//   - **how it addresses.** `[rB]` with rB advancing, or `[rB, rO]` with rB
+//     advancing and rO an index the body never moves.
+//
 // **The bar for standing in for guest code is that the guest cannot tell.** So
 // the recogniser refuses everything it has not proved:
 //
@@ -43,7 +57,20 @@ import "encoding/binary"
 // stores they authorise. That is deliberately the expensive choice, because
 // the alternative is a cache of positive answers that has to be invalidated
 // whenever the guest rewrites code, and this platform really does rewrite it.
-// A stale refusal only costs a missed stand-in, never a wrong one.
+//
+// A refusal is remembered **in the branch's own decode-cache entry**, in the
+// padding byte the form leaves behind, rather than in a map keyed by the loop
+// head. That matters because of what the hook costs where it never fires: a
+// title sitting on its own menus takes a backward branch every seventeen
+// instructions, so the answer is read tens of millions of times a minute for
+// code no recogniser will ever help — the whole hook costs 2 to 6% of such a
+// run. Reading the answer out of a word the decode had already loaded returns
+// about half of that on some titles and nothing on others; see `armcore.md`,
+// "What the hook costs where it never fires". The reason it is kept either way
+// is that riding on the decode entry drops the answer the moment the page's
+// instructions change, where a map keyed by the loop head never did — so a
+// rewritten loop is analysed again rather than inheriting the old code's
+// refusal.
 //
 // The step count is charged as if every instruction had run. A guest that
 // would have exhausted its budget still does, and `MaxSteps` keeps meaning
@@ -68,6 +95,24 @@ const maxRecognisedLoopBytes = wordModulateBytes
 // the recogniser has misread cannot become an unbounded write.
 const maxStoreLoopIterations = 1 << 22
 
+// A loop of this shape ends in one of two ways, and which one it is decides
+// how many iterations are left to run and where the counter and the flags are
+// left. Both are the same loop; they differ only in how the compiler chose to
+// ask whether the count has run out.
+type loopTermination uint8
+
+const (
+	// terminateBorrow is `subs rD, #1` read by `bhs`: the loop continues while
+	// the subtraction has not borrowed, so it runs one more time than the
+	// counter's value and leaves the counter at -1.
+	terminateBorrow loopTermination = iota
+	// terminateNotZero is `cmp rD, #0` read by `bne`. It runs exactly the
+	// counter's value of times and leaves the counter at zero. It is the same
+	// fill: three titles in the local corpus spend 19%, 29% and 69% of their
+	// instructions in a loop that differs from the one above in nothing else.
+	terminateNotZero
+)
+
 // storeLoop is a recognised counted store loop.
 type storeLoop struct {
 	// pointer is the register holding the destination, counter the register
@@ -77,6 +122,13 @@ type storeLoop struct {
 	width   uint32
 	// value is the register holding what is stored.
 	value uint32
+	// index is a second register added to the pointer to reach the
+	// destination, for the form that stores through `[rB, rO]` and advances
+	// rB. It is the address the guest computes, not a register the loop
+	// touches: indexed says whether there is one, and the body has to leave it
+	// alone for the whole loop.
+	indexed bool
+	index   uint32
 	// reload says the value is read from memory each iteration rather than
 	// held in a register. The address is the stack pointer plus offset, which
 	// is the form a compiler emits for a colour the caller left in a frame
@@ -84,6 +136,8 @@ type storeLoop struct {
 	// base a body of this shape cannot move.
 	reload bool
 	offset uint32
+	// terminate is which of the two endings the body proved.
+	terminate loopTermination
 	// steps is how many guest instructions one iteration is, including the
 	// branch, so a stand-in can charge what it stood in for.
 	steps uint32
@@ -95,7 +149,7 @@ type storeLoop struct {
 // branchPC back to head, running it if it is one this can stand in for. It
 // reports how many guest instructions it stood in for, and whether it did.
 func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uint32, error) {
-	if memory.refusedLoops[head] {
+	if memory.standInsRefused {
 		return 0, nil
 	}
 	loop := memory.analyseStoreLoop(head, branchPC)
@@ -116,16 +170,18 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 			// too few iterations to be worth it, a span it could not
 			// validate — must not be remembered, or one unlucky first
 			// encounter would write the loop off for the life of the session.
-			if memory.refusedLoops == nil {
-				memory.refusedLoops = map[uint32]bool{}
-			}
-			memory.refusedLoops[head] = true
+			memory.markLoopRefused(branchPC)
 			return 0, nil
 		}
 		return memory.runWordModulate(context, modulate)
 	}
 
-	iterations := context.Registers[loop.counter] + 1
+	iterations := context.Registers[loop.counter]
+	if loop.terminate == terminateBorrow {
+		// The borrow form runs once more than the counter says, because the
+		// iteration that takes the count to -1 has already stored.
+		iterations++
+	}
 	if iterations > maxStoreLoopIterations {
 		return 0, nil
 	}
@@ -147,7 +203,12 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 		value = uint32(loaded)
 	}
 
+	// The destination is where the guest's own store would have gone, which
+	// for the indexed form is the base plus the index it never moves.
 	start := context.Registers[loop.pointer]
+	if loop.indexed {
+		start += context.Registers[loop.index]
+	}
 	span := iterations * loop.width
 	// Checked whole, before anything is written: a loop that would have
 	// faulted partway has to fault where it would have, not after this has
@@ -178,11 +239,19 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 	}
 
 	// The registers are left where the guest would have left them: the pointer
-	// past the last store, the counter one below zero — which is what the
-	// borrow the branch read means — and the flags saying the count ran out.
-	context.Registers[loop.pointer] = start + span
-	context.Registers[loop.counter] = ^uint32(0)
-	context.setNZCV(^uint32(0), false, false)
+	// past the last store, and the counter and the flags exactly as the last
+	// test the branch read would have set them.
+	context.Registers[loop.pointer] += span
+	if loop.terminate == terminateBorrow {
+		// One below zero, which is what the borrow the branch read means.
+		context.Registers[loop.counter] = ^uint32(0)
+		context.setNZCV(^uint32(0), false, false)
+	} else {
+		// Zero, and the flags of the `cmp rD, #0` that found it there: a
+		// subtraction of nothing from nothing sets Z and never borrows.
+		context.Registers[loop.counter] = 0
+		context.setNZCV(0, true, false)
+	}
 	context.Registers[RegisterPC] = loop.after
 	return iterations * loop.steps, nil
 }
@@ -216,6 +285,12 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 		haveStore   bool
 		haveAdvance bool
 		haveCounter bool
+		// zeroTest is the `cmp rD, #0` of the second ending, and zeroTestAt
+		// where it was, because it only proves anything as the last
+		// instruction before the branch.
+		haveZeroTest bool
+		zeroTest     uint32
+		zeroTestAt   uint32
 	)
 
 	for address := head; address < branchPC; address += 2 {
@@ -243,6 +318,28 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 			}
 			spCopy[destination] = true
 			holdsSP[destination] = true
+
+		case thumbRegisterTransfer:
+			// `strh rD, [rB, rO]` — the same store reaching its destination
+			// through a base and an index instead of a base alone. Only the
+			// halfword store is this shape; every other operation the form
+			// encodes, including every load, is refused.
+			if instruction>>9&7 != 1 {
+				return nil
+			}
+			offsetRegister := instruction >> 6 & 7
+			base := instruction >> 3 & 7
+			data := instruction & 7
+			if haveStore || holdsSP[base] || holdsSP[offsetRegister] {
+				return nil
+			}
+			haveStore, loop.pointer, loop.width = true, base, 2
+			loop.indexed, loop.index = true, offsetRegister
+			if !loop.reload {
+				loop.value = data
+			} else if loop.value != data {
+				return nil
+			}
 
 		case thumbHalfwordTransfer:
 			load := instruction&(1<<11) != 0
@@ -293,7 +390,15 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 				loop.counter = register
 				written[register]++
 				holdsSP[register] = false
-			default: // MOV and CMP are not part of this shape.
+			case 1: // CMP rD, #0 — the second ending's test. It writes no
+				// register, so it changes nothing the walk is tracking; what
+				// it has to prove is checked below, where its position and
+				// the branch that reads it are both known.
+				if haveZeroTest || immediate != 0 {
+					return nil
+				}
+				haveZeroTest, zeroTest, zeroTestAt = true, register, address
+			default: // MOV is not part of this shape.
 				return nil
 			}
 
@@ -305,15 +410,31 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 	if !haveStore || !haveAdvance || !haveCounter {
 		return nil
 	}
-	// The counter's subtraction has to be the last thing before the branch, or
-	// the flags the branch reads are not the ones it set.
-	if !memory.subtractIsLast(branchPC, loop.counter) {
-		return nil
-	}
-	// The branch has to continue while the count has not run out. `bhs` reads
-	// the carry the subtraction leaves set until it borrows.
-	if !memory.branchIsUnsignedHigherOrSame(branchPC) {
-		return nil
+	// Whichever ending this is, the test the branch reads has to be the last
+	// instruction before it, on the counter, and the branch has to be the one
+	// that reads that test. A body carrying a zero test is only ever read the
+	// second way: `cmp rD, #0` leaves the carry set whatever the count is, so
+	// a `bhs` after one would never stop.
+	if haveZeroTest {
+		if zeroTest != loop.counter || zeroTestAt != branchPC-2 {
+			return nil
+		}
+		if !memory.branchIsNotEqual(branchPC) {
+			return nil
+		}
+		loop.terminate = terminateNotZero
+	} else {
+		// The counter's subtraction has to be the last thing before the
+		// branch, or the flags the branch reads are not the ones it set.
+		if !memory.subtractIsLast(branchPC, loop.counter) {
+			return nil
+		}
+		// The branch has to continue while the count has not run out. `bhs`
+		// reads the carry the subtraction leaves set until it borrows.
+		if !memory.branchIsUnsignedHigherOrSame(branchPC) {
+			return nil
+		}
+		loop.terminate = terminateBorrow
 	}
 	// One role each: the register the store walks is the one the add advances,
 	// and neither it nor the counter is anything else.
@@ -328,6 +449,15 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 	}
 	if loop.value == loop.pointer || loop.value == loop.counter {
 		return nil
+	}
+	// The index is an address the loop reads and never moves. A body that
+	// writes it, or that reached it through the stack pointer, has moved
+	// something this analysis assumed stood still — and it cannot be the
+	// pointer it is added to either.
+	if loop.indexed {
+		if loop.index == loop.pointer || written[loop.index] != 0 || spCopy[loop.index] {
+			return nil
+		}
 	}
 	if loop.reload {
 		if written[loop.value] != 1 {

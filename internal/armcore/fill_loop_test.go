@@ -130,6 +130,286 @@ func TestStandingInForAFillMatchesRunningIt(t *testing.T) {
 	}
 }
 
+// The same counted fill, ended the other way: the count is tested against zero
+// rather than read out of the subtraction's borrow. Three titles in the local
+// corpus spend 19%, 29% and 69% of their instructions in a loop of this shape,
+// and before the analyser knew this ending it refused every one of them.
+var zeroTestedFillBody = []uint16{
+	0x3b01, // subs r3, #1
+	0x800f, // strh r7, [r1]
+	0x3102, // adds r1, #2
+	0x2b00, // cmp  r3, #0
+	0xd1fa, // bne  -12
+}
+
+func TestAZeroTestedFillIsRecognised(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	memory := fillLoopMemory(t, zeroTestedFillBody, base, destination)
+	memory.beginQuantum()
+	defer memory.endQuantum()
+
+	branchPC := base + uint32(len(zeroTestedFillBody)-1)*2
+	loop := memory.analyseStoreLoop(base, branchPC)
+	if loop == nil {
+		t.Fatal("the zero-tested fill was not recognised")
+	}
+	if loop.terminate != terminateNotZero {
+		t.Errorf("terminate=%d, want the zero test", loop.terminate)
+	}
+	if loop.pointer != 1 || loop.counter != 3 || loop.value != 7 || loop.width != 2 {
+		t.Errorf("pointer=r%d counter=r%d value=r%d width=%d, want r1/r3/r7/2",
+			loop.pointer, loop.counter, loop.value, loop.width)
+	}
+	if loop.reload {
+		t.Error("reload is set, but this body holds its value in a register")
+	}
+}
+
+// A body carrying a zero test that the branch does not read, or reads the
+// wrong way, proves nothing and has to be refused rather than guessed at.
+func TestAZeroTestedFillIsRefusedWhenItProvesNothing(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	for name, body := range map[string][]uint16{
+		// `bhs` after a `cmp #0` never stops: the compare cannot borrow, so
+		// the carry it leaves is always set.
+		"the branch reads the carry the compare always sets": {
+			0x3b01, 0x800f, 0x3102, 0x2b00, 0xd2fa,
+		},
+		// The test is not on the register the body counts down.
+		"the compare is not on the counter": {
+			0x3b01, 0x800f, 0x3102, 0x2c00, 0xd1fa,
+		},
+		// The test is not the last thing before the branch, so the flags the
+		// branch reads came from somewhere else.
+		"the compare is not last": {
+			0x3b01, 0x2b00, 0x800f, 0x3102, 0xd1fa,
+		},
+		// A compare against anything but zero is a different loop.
+		"the compare is against one": {
+			0x3b01, 0x800f, 0x3102, 0x2b01, 0xd1fa,
+		},
+	} {
+		memory := fillLoopMemory(t, body, base, destination)
+		memory.beginQuantum()
+		branchPC := base + uint32(len(body)-1)*2
+		if loop := memory.analyseStoreLoop(base, branchPC); loop != nil {
+			t.Errorf("%s: recognised, want refused", name)
+		}
+		memory.endQuantum()
+	}
+}
+
+func TestStandingInForAZeroTestedFillMatchesRunningIt(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const value, count = uint32(0xbeef), uint32(40)
+
+	interpreted := fillLoopMemory(t, zeroTestedFillBody, base, destination)
+	stood := fillLoopMemory(t, zeroTestedFillBody, base, destination)
+
+	setup := func() *Context {
+		holder := NewContext()
+		context := &holder
+		context.Registers[1] = destination
+		context.Registers[3] = count
+		context.Registers[7] = value
+		context.setThumbPC(base)
+		return context
+	}
+
+	branchPC := base + uint32(len(zeroTestedFillBody)-1)*2
+	interpreted.standInsRefused = true
+	reference := setup()
+	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 100000); err != nil {
+		t.Fatalf("interpreting the loop: %v", err)
+	}
+	subject := setup()
+	if _, err := (Engine{}).Run(subject, stood, branchPC+2, 100000); err != nil {
+		t.Fatalf("standing in for the loop: %v", err)
+	}
+
+	for register := 0; register < 16; register++ {
+		if reference.Registers[register] != subject.Registers[register] {
+			t.Errorf("r%d = %#x after standing in, %#x after interpreting",
+				register, subject.Registers[register], reference.Registers[register])
+		}
+	}
+	if reference.CPSR != subject.CPSR {
+		t.Errorf("CPSR = %#x after standing in, %#x after interpreting", subject.CPSR, reference.CPSR)
+	}
+
+	interpreted.beginQuantum()
+	stood.beginQuantum()
+	defer interpreted.endQuantum()
+	defer stood.endQuantum()
+	for offset := uint32(0); offset < (count+2)*2; offset += 2 {
+		want, err := interpreted.readData16(destination + offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := stood.readData16(destination + offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want != got {
+			t.Fatalf("halfword at +%d is %#x after standing in, %#x after interpreting", offset, got, want)
+		}
+	}
+}
+
+// A count of one is the loop's own edge: the borrow ending runs twice there and
+// the zero test once, and a stand-in that charged the wrong one would leave the
+// pointer a halfword out. A count of zero is the guest's own runaway — the
+// zero-tested loop stores four billion times — and the stand-in must decline it
+// rather than reproduce it.
+func TestAZeroTestedFillAtItsEdges(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	for _, count := range []uint32{0, 1, 2, 3} {
+		interpreted := fillLoopMemory(t, zeroTestedFillBody, base, destination)
+		stood := fillLoopMemory(t, zeroTestedFillBody, base, destination)
+		setup := func() *Context {
+			holder := NewContext()
+			context := &holder
+			context.Registers[1] = destination
+			context.Registers[3] = count
+			context.Registers[7] = 0xbeef
+			context.setThumbPC(base)
+			return context
+		}
+		branchPC := base + uint32(len(zeroTestedFillBody)-1)*2
+		budget := uint32(100000)
+		if count == 0 {
+			// The real loop never ends. Both sides get the same budget, and
+			// what is checked is that they spent it in the same place.
+			budget = 5000
+		}
+		interpreted.standInsRefused = true
+		reference := setup()
+		if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, budget); err != nil {
+			t.Fatalf("count %d: interpreting: %v", count, err)
+		}
+		subject := setup()
+		if _, err := (Engine{}).Run(subject, stood, branchPC+2, budget); err != nil {
+			t.Fatalf("count %d: standing in: %v", count, err)
+		}
+		for register := 0; register < 16; register++ {
+			if reference.Registers[register] != subject.Registers[register] {
+				t.Errorf("count %d: r%d = %#x after standing in, %#x after interpreting",
+					count, register, subject.Registers[register], reference.Registers[register])
+			}
+		}
+		if reference.CPSR != subject.CPSR {
+			t.Errorf("count %d: CPSR = %#x after standing in, %#x after interpreting",
+				count, subject.CPSR, reference.CPSR)
+		}
+	}
+}
+
+// The same fill again, reaching its destination through a base and an index
+// the body never moves. One title spends 29% of its instructions here.
+var indexedFillBody = []uint16{
+	0x3d01, // subs r5, #1
+	0x5298, // strh r0, [r3, r2]
+	0x3302, // adds r3, #2
+	0x2d00, // cmp  r5, #0
+	0xd1fa, // bne  -12
+}
+
+func TestAnIndexedFillIsRecognised(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	memory := fillLoopMemory(t, indexedFillBody, base, destination)
+	memory.beginQuantum()
+	defer memory.endQuantum()
+
+	loop := memory.analyseStoreLoop(base, base+uint32(len(indexedFillBody)-1)*2)
+	if loop == nil {
+		t.Fatal("the indexed fill was not recognised")
+	}
+	if !loop.indexed || loop.index != 2 || loop.pointer != 3 || loop.counter != 5 || loop.value != 0 {
+		t.Errorf("indexed=%v index=r%d pointer=r%d counter=r%d value=r%d, want r2/r3/r5/r0",
+			loop.indexed, loop.index, loop.pointer, loop.counter, loop.value)
+	}
+}
+
+// The index has to stand still, and the form only ever means a halfword store.
+func TestAnIndexedFillIsRefusedWhenTheIndexMoves(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	for name, body := range map[string][]uint16{
+		// `adds r2, #2` moves the index the store reads.
+		"the index is advanced too": {
+			0x3d01, 0x5298, 0x3302, 0x3202, 0x2d00, 0xd1f9,
+		},
+		// `ldrh r0, [r3, r2]` is a load, not the store this stands in for.
+		"the transfer is a load": {
+			0x3d01, 0x5a98, 0x3302, 0x2d00, 0xd1fa,
+		},
+		// `str r0, [r3, r2]` is a word store, a different width.
+		"the transfer is a word": {
+			0x3d01, 0x5098, 0x3302, 0x2d00, 0xd1fa,
+		},
+	} {
+		memory := fillLoopMemory(t, body, base, destination)
+		memory.beginQuantum()
+		if loop := memory.analyseStoreLoop(base, base+uint32(len(body)-1)*2); loop != nil {
+			t.Errorf("%s: recognised, want refused", name)
+		}
+		memory.endQuantum()
+	}
+}
+
+func TestStandingInForAnIndexedFillMatchesRunningIt(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const index, count = uint32(0x40), uint32(33)
+
+	interpreted := fillLoopMemory(t, indexedFillBody, base, destination)
+	stood := fillLoopMemory(t, indexedFillBody, base, destination)
+	setup := func() *Context {
+		holder := NewContext()
+		context := &holder
+		context.Registers[0] = 0x1234
+		context.Registers[2] = index
+		context.Registers[3] = destination
+		context.Registers[5] = count
+		context.setThumbPC(base)
+		return context
+	}
+	branchPC := base + uint32(len(indexedFillBody)-1)*2
+	interpreted.standInsRefused = true
+	reference := setup()
+	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 100000); err != nil {
+		t.Fatalf("interpreting: %v", err)
+	}
+	subject := setup()
+	if _, err := (Engine{}).Run(subject, stood, branchPC+2, 100000); err != nil {
+		t.Fatalf("standing in: %v", err)
+	}
+	for register := 0; register < 16; register++ {
+		if reference.Registers[register] != subject.Registers[register] {
+			t.Errorf("r%d = %#x after standing in, %#x after interpreting",
+				register, subject.Registers[register], reference.Registers[register])
+		}
+	}
+	if reference.CPSR != subject.CPSR {
+		t.Errorf("CPSR = %#x after standing in, %#x after interpreting", subject.CPSR, reference.CPSR)
+	}
+	interpreted.beginQuantum()
+	stood.beginQuantum()
+	defer interpreted.endQuantum()
+	defer stood.endQuantum()
+	for offset := uint32(0); offset < index+(count+2)*2; offset += 2 {
+		want, err := interpreted.readData16(destination + offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := stood.readData16(destination + offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want != got {
+			t.Fatalf("halfword at +%d is %#x after standing in, %#x after interpreting", offset, got, want)
+		}
+	}
+}
+
 // tableBlitProgram is the blit this recognises, as the same title emits it: a
 // source byte indexes a palette, the colour goes out sixteen bits at a time,
 // and a sixteen-bit counter runs to a limit held in a literal. It was 28.6% of
@@ -228,7 +508,7 @@ func TestStandingInForATableBlitMatchesRunningIt(t *testing.T) {
 
 	// The reference runs with the recogniser unable to fire, so the two sides
 	// differ in nothing but whether the stand-in was allowed.
-	interpreted.refusedLoops = map[uint32]bool{base: true}
+	interpreted.standInsRefused = true
 	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 1000000); err != nil {
 		t.Fatalf("interpreting the blit: %v", err)
 	}
@@ -322,7 +602,7 @@ func TestStandingInForAFillAcrossPagesMatchesRunningIt(t *testing.T) {
 
 	branchPC := base + uint32(len(countedFillBody)-1)*2
 	reference := setup(interpreted)
-	interpreted.refusedLoops = map[uint32]bool{base: true}
+	interpreted.standInsRefused = true
 	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 10_000_000); err != nil {
 		t.Fatalf("interpreting the fill: %v", err)
 	}

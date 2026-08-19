@@ -348,6 +348,54 @@ length of the list the title itself keeps, its loop calls out to helpers, and
 standing in for it would mean reimplementing a heap whose layout the title
 reads back.
 
+How long that list is, counted rather than estimated: over 4,000 ticks of one
+title driven through a route, the search was entered **9,535 times and its body
+ran 33,253,303 times** — an average of **3,488 blocks walked per call**, 28
+instructions each, which is 27% of every instruction the run charged. It is a
+best-fit search over a singly linked list of block headers, so its cost is
+linear in how many blocks the title is holding, and nothing on our side of the
+boundary shortens it. The number is here so that a later "the emulator got
+slower the longer it ran" report can be checked against it rather than guessed
+at: if that list is longer than this, something is leaking into the title's own
+heap.
+
+**It is also not one number — it grows across a session**, and the growth is
+step-wise at scene loads rather than smooth:
+
+| ticks into the run | blocks walked per call |
+|---|---|
+| 50 – 200 | 1,242 – 1,257 |
+| 250 – 300, the first scene load | 3,344 |
+| 450 – 850 | 5,135 – 5,305 |
+| 1,000 – 1,050, the second load | 5,317 |
+| 1,150 – 1,450 | 5,654 – 6,151 |
+
+Five times longer by the end than at boot, and never shorter. Each load adds
+blocks the title does not give back, with a slow drift of a percent or two per
+two hundred ticks in between. **Whether any of that is ours is not settled**:
+the chain is the title's own, but a platform call that allocates a record in
+the guest heap and never frees it would land in exactly this list and would
+cost every allocation the title makes afterwards, because the search is linear
+in the chain's length. Answering it needs a census — walk the chain from the
+host at two points in a run and diff the blocks — not another profile.
+
+Where this shows up is worth stating plainly, because it decides what the next
+speed work is. Per fifty ticks of the same route, windows sorted by how much of
+this loop they contain:
+
+| the loop's iterations in the window | ns per step | share of the window's instructions the stand-ins covered |
+|---|---|---|
+| none | 3.7 – 4.2 | 55 – 65% |
+| 100k – 400k | 4.3 – 4.6 | 51 – 54% |
+| 500k – 900k | 4.9 – 5.8 | 33 – 46% |
+| 9.7M (a scene load) | 6.7 | 15% |
+| 18.1M (a scene load) | 7.8 | 4% |
+
+**The expensive windows are the allocating windows**, and the ranking is
+monotone in both columns. The stand-ins are not failing in those windows; there
+is simply nothing there for them to stand in for. A scene a person reports as
+slow is far more likely to be one of these than one the recognisers missed.
+
 The two shapes below it were built — `byte_blend.go` and `word_modulate.go` —
 and the three run-length draws were not. That is the line this section drew and
 it is worth keeping: each of these is a *different arithmetic*, so a recogniser
@@ -424,6 +472,121 @@ big charge overshoots by are lost from the accounting. It is the safe direction
 for a budget and it is invisible within one build, but across builds a
 recogniser that stands in for more loses more, which reads as a throughput gain
 that is partly an accounting one.
+
+### The same fill, written four ways
+
+The recognisers above were built against the title a person reported as slow,
+and the question they left open is how much of the rest of the corpus they
+reach. Answering it needs no profile: the hook already knows which backward
+branches it refused, so counting refusals per loop head over a boot of every
+local archive ranks each title's largest un-standable loop. Thirty archives,
+600 ticks each, share of the title's own instructions in the top loop:
+
+| share of everything the title executed | how many archives |
+|---|---|
+| over 60% | 5 |
+| 30 – 60% | 4 |
+| 15 – 30% | 8 |
+| under 15% or nothing hot | 13 |
+
+**Five titles spend more than sixty percent of every instruction in a single
+loop the recognisers refuse**, which is a stronger statement than the profile
+of one scene could make. Disassembling the top loops turned three of them into
+the same three instructions the counted fill already stands in for, refused
+over how the compiler asked whether the count had run out:
+
+| the loop, as the title emits it | share | why it was refused |
+|---|---|---|
+| `subs rC,#1 / strh rV,[rP] / adds rP,#2 / cmp rC,#0 / bne` | 19% | the count is tested against zero instead of read out of the subtraction's borrow |
+| `subs rC,#1 / strh rV,[rP,rI] / adds rP,#2 / cmp rC,#0 / bne` | 29% | that, and the store reaches its destination through a base and an index |
+| `mov rV,sp / ldrh rV,[rV,#4] / adds rC,#1 / strh rV,[rP] / adds rQ,#1 / adds rP,#2 / cmp rC,rL / ble` | 69% | the count runs up to a limit in a register, and a second register runs up beside it |
+
+The first two were built. The ending is now a property the walk reads rather
+than a fixed instruction order — `subs`+`bhs` runs one more time than the
+counter says and leaves it at -1, `cmp #0`+`bne` runs exactly the counter and
+leaves it at 0 — and the store may carry an index the body is required never to
+touch. Measured on the same 1,500 ticks per title:
+
+| | before | after |
+|---|---|---|
+| the 19% title | 13.85s busy | 11.41s (**−17.6%**) |
+| the 29% title | 3.68s busy | 2.59s (**−29.8%**) |
+| two titles whose loops are neither form | unchanged | unchanged |
+
+**The third was not built, and it is the largest number in the table.** It
+needs the counter to be allowed to run *up* against a limit held in a register,
+with a signed branch, and it needs any low register whose only effect in the
+body is `adds rD, #k` to be advanced by `k` times the iteration count rather
+than refused as a second counter. That is a real generalisation — an induction
+variable rather than one named pointer and one named counter — and it would
+subsume the pointer advance the analyser special-cases today. The evidence for
+doing it is in the table above: one archive at 69%, and its duplicate, and a
+second loop in the 29% title at 28%.
+
+What the sweep also says is that the remaining titles are *not* all fills. Two
+of the five over sixty percent are bit-test loops over a packed structure, and
+the shared sprite routine three titles carry is 29 – 49% of each of them. Each
+is a different arithmetic, and the rule from the section above still holds: the
+case for building one is how much of a reported-slow scene it is, not how
+general it looks. The difference this sweep makes is that the share is now
+known before anyone reports anything.
+
+### What the hook costs where it never fires
+
+The recogniser is reached from one compare on every taken conditional branch,
+and the tables above measure it where it fires. What it costs where it does
+*not* is a different question, and it is the one a person asks after a scene
+the recogniser cannot reach: **a title sitting on its own menus takes a
+backward branch every seventeen instructions**. Counted over 1,500 ticks of two
+titles idling on a title screen and its menus, with no stand-in of any kind:
+
+| | backward branches | guest instructions | branches per instruction | stand-ins |
+|---|---|---|---|---|
+| one title's title screen | 105,556,869 | 1,945,417,595 | 1 in 18.4 | 0 |
+| another's | 18,814,133 | 303,944,403 | 1 in 16.2 | 0 |
+
+Every one of those reached the refusal cache, which was a `map[uint32]bool`
+keyed by the loop head. Measured against a build with the hook compiled out —
+four titles, three interleaved runs each, on their own title screens and menus
+where no stand-in ever fires:
+
+| ns per step, title screen | hook compiled out | refusal in the decode entry | refusal in a map |
+|---|---|---|---|
+| A | 7.02 | 7.20 | 7.42 |
+| B | 11.11 | 11.60 | 11.44 |
+| C | 9.07 | 9.31 | 9.53 |
+| D | 7.50 | 7.64 | 7.65 |
+
+**The hook costs 2 to 6% of a run it never fires in.** Moving the refusal into
+the branch's own decode-cache entry — the padding byte beside the form, so the
+entry is still four bytes — returns about half of that on two of the four and
+nothing on the other two, one of them slightly the wrong way inside its own
+spread. It is kept for a reason the table does not show: a map keyed by the
+loop head is never invalidated, so a title that rewrites a page inherits the
+old code's refusal, while an answer riding on the decode entry is dropped with
+the entry when the page's instructions change.
+
+What is worth carrying out of this is the shape of the trade rather than the
+half point it returned: **the hook is not free on code it cannot help, and the
+code it cannot help is the code a person is looking at while nothing is
+moving** — menus, text, dialogue. A change here is judged on both scenes or it
+is judged on half of one.
+
+The same measurement answers a report that "the game got faster but the menus
+got slower". Per fifty ticks of one title driven through a route, before the
+stand-ins and after:
+
+| what the ticks are | before, ns/step | after, ns/step |
+|---|---|---|
+| boot and vendor splashes | 8.2 – 13.3 | 8.0 – 9.0 |
+| the scene load | 6.6 | 6.9 |
+| walking and drawing the map | 7.3 – 7.8 | 3.5 – 4.6 |
+
+Nothing halved twice and nothing doubled: the drawing halved and the menus did
+not move. The menus were always the expensive code per instruction — they
+interpret every one of theirs — and they only *read* as a regression once the
+scene beside them stopped being. A stand-in that reaches one scene widens the
+gap between two scenes, and the gap is what a person feels.
 
 ### The block interpreter, measured before building it again
 
