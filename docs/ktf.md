@@ -1681,6 +1681,57 @@ number that moves is the guest's own work per second: 1,040 sleeps in 21s at
 count is identical in both because paints are the Host's rounds rather than the
 guest's steps.
 
+### A second title, the same complaint, and a different place the time went
+
+The title above is one shape of this. A second one is reported the same way and
+is not the same shape at all, which is worth writing down because the obvious
+fix for one does nothing for the other.
+
+It never calls `Thread.sleep`. It builds a fresh one-shot WIPI timer every
+frame — `MC_knlDefTimer`, `MC_knlSetTimer`, `MC_knlUnsetTimer`, 5,758 of each
+over a route — and **every one of the 5,758 asks for 10 milliseconds**, never
+anything else. Its card paints exactly once per Host round. So its contract is
+"wake me 10ms after this frame ends", and its period is its own frame plus that
+10ms, which the Host honours exactly.
+
+Measured on that route with `-play`:
+
+| | this title | the heavier one beside it |
+|---|---|---|
+| the wait it asks for | 10ms | 10ms |
+| guest instructions a frame | **173,760** | **2,221,000** |
+| host CPU a frame | 6.2ms | 22.0ms |
+| period, measured | **18.0ms** (55 a second) | **33.3ms** (30 a second) |
+
+The Host is idle two thirds of the run — 35.70s of CPU against 103.83s of wall
+— so this is wait-bound rather than throughput-bound, and the arithmetic closes:
+6.2 + 10 is the 18ms observed.
+
+**The two titles ask for the same 10ms and run at half each other's rate**, and
+the reason is the first column. 173,760 instructions is not a frame of drawing;
+it is a frame of *asking* for drawing. The diagnostic counts say what it asks
+for: about 190 graphics-table calls a frame — 75 of function 13, 61 of function
+6, and a tail below those — plus 233 `memcpy` hooks and 99 pixel operations.
+**This title draws through the platform, and the platform is Go here.** The
+handset ran those same calls as the vendor's C on a hundred-megahertz ARM9,
+which is where its frame time went and where ours does not go.
+
+That is the measurement that decides what a work clock would be worth. LGT has
+one — guest instructions converted to guest milliseconds — and giving KTF the
+same thing would charge this title 1.2ms a frame at LGT's rate, on a period of
+18: **it would not touch the complaint.** What it would do is slow the title
+beside it by 15ms a frame, which nobody complained about. A clock that charges
+guest instructions cannot see work that is not guest instructions, and for this
+title almost none of it is.
+
+What would reach it is a cost model for the platform's own drawing — pixels
+touched against a rate the handset never wrote down. That is picking a number
+rather than honouring one, on a far larger surface than a single instruction
+rate, and it is not built. **The multiplier is still the answer**, and it is
+now stored per game (`docs/session.md`, "The speed belongs to the game, not to
+the page") so that a title needing a quarter speed keeps it while the title
+beside it keeps full speed.
+
 `SessionOptions.Speed` (and `Session.SetSpeed`, live) scales the pace between
 0.1x and 16x. It divides every wait and multiplies the guest's own clock by the
 same factor, so a game that times its animation with `MC_knlCurrentTime` speeds

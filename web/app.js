@@ -1,6 +1,7 @@
 import { clearLog, recordEvent, saveReport, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
+import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import {
   assign,
@@ -589,6 +590,10 @@ const startServerGame = async (path, scale) => {
   pageAudio?.ensure();
   const answer = await session.start(path, scale, storedScreen(path));
   currentPlatform = answer.started?.platform ?? "";
+  // The speed belongs to this game rather than to whatever the panel was
+  // showing before it started, and the socket was opened before any game was
+  // chosen — so the session hears it here, where the game is known.
+  applySpeed(storedSpeed(path));
   // The token names this game while the page is away from it; keeping it is
   // the whole of what a reconnect needs.
   rememberResumeToken(answer.started?.token ?? "");
@@ -848,18 +853,25 @@ const initSettings = () => {
     scale.addEventListener("change", () => applyScale(scale.value));
   }
 
-  // Speed is a multiple of the game's own pace, so it applies to a running
-  // session and to whatever starts next. Restarting reloads the page, which is
-  // why the choice is stored rather than kept in memory.
+  // Speed is a multiple of the game's own pace, so unlike the screen it does
+  // apply to a running session — there is nothing to restart for. It is stored
+  // per game and the menu follows whichever game the setting is about: the one
+  // the list is showing before a game starts, the running one afterwards.
   // The panel is wired before the socket is open, so the stored choice is only
   // shown here; applyStoredSpeed pushes it down once there is something to
   // push it to.
   const speed = document.getElementById("game-speed");
-  speed?.addEventListener("change", () => {
-    applySpeed(speed.value);
-    rememberSpeed(speed.value);
-  });
-  if (speed) speed.value = String(storedSpeed());
+  if (speed) {
+    const showStoredSpeed = () => {
+      speed.value = String(storedSpeed(chosenGame()));
+    };
+    showStoredSpeed();
+    document.getElementById("game-select")?.addEventListener("change", showStoredSpeed);
+    speed.addEventListener("change", () => {
+      applySpeed(speed.value);
+      rememberSpeed(chosenGame(), speed.value);
+    });
+  }
 
   // The screen belongs to the game rather than to the page, so the menu shows
   // what the game about to start is set to and changing it is a decision about
@@ -1037,27 +1049,14 @@ const initKeyBindings = () => {
 };
 
 const applyStoredSpeed = () => {
-  applySpeed(document.getElementById("game-speed")?.value ?? storedSpeed());
+  applySpeed(storedSpeed(chosenGame()));
 };
 
-const SPEED_KEY = "wfeature:speed";
+const gameSpeed = createGameSpeed();
 
-const storedSpeed = () => {
-  try {
-    const stored = Number(localStorage.getItem(SPEED_KEY));
-    return Number.isFinite(stored) && stored > 0 ? stored : 1;
-  } catch {
-    return 1;
-  }
-};
+const storedSpeed = path => gameSpeed.stored(path);
 
-const rememberSpeed = value => {
-  try {
-    localStorage.setItem(SPEED_KEY, String(value));
-  } catch {
-    // Private browsing denies storage; the setting then lasts one session.
-  }
-};
+const rememberSpeed = (path, value) => gameSpeed.remember(path, value);
 
 const applySpeed = value => {
   const multiplier = Number(value);
