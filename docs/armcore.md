@@ -1116,6 +1116,72 @@ What to measure, in order, before believing any of it:
 3. only then the routed switch for ARM's ten commonest forms, which is the
    second half of what Thumb has and worth its own A/B.
 
+### The host profile's next answer was a build flag, and it was 12%
+
+The section above says to ask for a host profile before any throughput
+reasoning. Asked again on a Clet — `WFEATURE_PERF_ROUTE` through a field scene
+of the title a person reported as slow — it answered something that is not an
+interpreter change at all:
+
+| | share of host time |
+|---|---|
+| `armcore.Engine.Run`, everything under it | **93.3%** |
+| of which `Engine.Run` itself — fetch, the watch and end compares, the switch | 23.5% |
+| of which `decodedThumbFast` | 17.2% |
+| of which every stand-in together (`runStoreLoop`) | 8.1% |
+| `syncToGuest` + `syncFromGuest` | **0%** |
+
+**This is the opposite title to the one above**, and the two rows that say so
+are the first and the last. A Clet is 99.8% Thumb and does not go through the
+framebuffer syncs at all, so here the interpreter really is the run — which is
+what makes a change to *how Go compiles the interpreter* worth anything.
+
+Go reads a pprof CPU profile from `default.pgo` beside a main package and needs
+no flag to do it. There is now one at `cmd/server/default.pgo` and
+`cmd/cli/default.pgo`, and it is a real run rather than a benchmark.
+
+| same route, same save, one machine (Ryzen 5 3600, linux/amd64) | before | after |
+|---|---|---|
+| an LGT Clet in-game, busy | 27.89s | **24.44s** (−12.4%) |
+| its `ns_per_step` | 8.45 | **7.22** (−14.6%) |
+| its tick p90 | 37.09ms | **31.52ms** (−15.0%) |
+| its tick p99 | 64.06ms | 56.48ms (−11.8%) |
+| a KTF title, a route to a scene | 20.78s | **18.19s** (−12.5%) |
+
+**All 883 frames the LGT route paints are byte-identical** before and after,
+at the same tick numbers. That is the whole of the safety argument: PGO changes
+inlining and code layout and nothing a guest can observe.
+
+**The profile is three runs merged, and that is not tidiness.** The first one
+taken was a single Clet, and it moved that Clet by 14.5% and the KTF title by
+only 7.0% — the compiler had been handed one title's shape and optimised the
+other two at its guess. `Engine.Run` has two halves that do not overlap
+(`executeARM` never appears in a Clet's profile at all), so the committed
+profile is a Clet in-game, an AOT-compiled LGT Java title in-game, and a KTF
+archive, symbolised separately and merged. That nearly doubled the KTF number
+and cost the Clet two points, which is the trade worth making: **a profile that
+covers one path is worse than no profile for the paths it does not cover.**
+
+`make pgo` regenerates it. It needs local archives and routes, which are under
+`var/` and are not in the repository, so it runs only on a machine that has
+them; the three it uses are named in the Makefile so that what produced the
+committed file is not a guess. **There is no SKT run in it** — that platform
+has no load probe, and its interpreter is `internal/jvm` rather than this one,
+so it is neither covered nor harmed.
+
+Two things this does not do, both worth stating because they are what a reader
+will assume.
+
+- **It does not lower a session's CPU.** A session that cannot keep up runs
+  with `TickFor`'s wait pinned at zero and therefore at 100% of a core, and a
+  cheaper tick is spent on more guest speed rather than on idling. The CPU
+  falls below one core at exactly the moment the game reaches its own clock and
+  not before. See `session.md`.
+- **It does not survive the code it was taken from.** A profile is a build
+  input that ages: it names functions, and a rename or a split silently drops
+  that function's weight. Re-take it when the engine's shape changes, and read
+  the table above as the measurement to repeat rather than a number to trust.
+
 ### Why a translator is not the answer even with unlimited effort
 
 Asked plainly — ignoring how much work each is — a translator still loses, and

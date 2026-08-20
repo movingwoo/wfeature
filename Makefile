@@ -1,4 +1,4 @@
-.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist
+.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist pgo
 
 # Each profile owns its own output directory so a debug and a release build can
 # coexist. Rebuilding one never silently replaces the other, and which binary
@@ -34,6 +34,63 @@ server:
 server-release:
 	mkdir -p $(dir $(RELEASE_SERVER))
 	go build -trimpath -ldflags="-s -w" -o $(RELEASE_SERVER) ./cmd/server
+
+# Profile-guided optimisation. `cmd/*/default.pgo` is picked up by `go build`
+# without a flag, so every way this repository is built — the targets here,
+# `go run ./cmd/server`, `npm run serve:release`, a bare `go build` — gets it.
+# That is why the profile is a committed file rather than a flag: a flag would
+# be a second place the build could be wrong, and the paths above do not read
+# this Makefile at all.
+#
+# Measured on one machine (Ryzen 5 3600, linux/amd64), same route and save,
+# frames byte-identical: an LGT Clet's in-game busy time fell 14.5% and its
+# tick p90 15.0%; a KTF title fell 7.0%. See docs/armcore.md.
+#
+# `make pgo` regenerates it. **It needs local archives and routes**, which are
+# under var/ and are not in the repository, so it runs only on a machine that
+# has them. The three runs below are not arbitrary: they are the three paths
+# through the same engine — a Clet is 99.8% Thumb, an AOT-compiled LGT Java
+# title is 78.9% ARM, and KTF is a third mix — and a profile of any one of them
+# alone leaves the other two at the compiler's guess. Override any of the five
+# variables to profile a different set.
+PGO_LGT_CLET       ?= var/games/lgt/제노니아1_인증우회.zip
+PGO_LGT_CLET_ROUTE ?= var/routes/제노니아1-필드-측정.route
+PGO_LGT_JAVA       ?= var/games/lgt/레전드오브마스터.zip
+PGO_LGT_JAVA_ROUTE ?= var/routes/레전드오브마스터-인게임.route
+PGO_KTF            ?= var/games/ktf/영웅서기2.zip
+PGO_WORK := build/pgo
+
+pgo:
+	@for archive in "$(PGO_LGT_CLET)" "$(PGO_LGT_JAVA)" "$(PGO_KTF)"; do \
+		[ -f "$$archive" ] || { echo "make pgo: $$archive is missing; see docs/armcore.md" >&2; exit 1; }; \
+	done
+	rm -rf $(PGO_WORK)
+	mkdir -p $(PGO_WORK)/save1 $(PGO_WORK)/save2
+	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_CLET)" \
+	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_CLET_ROUTE)" \
+	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save1" WFEATURE_LOAD_TICKS=20000 \
+		go test ./internal/platform/lgt -run LGTLoadCost \
+			-cpuprofile $(PGO_WORK)/lgt-clet.prof -o $(PGO_WORK)/lgt.test -timeout 30m
+	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_JAVA)" \
+	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_JAVA_ROUTE)" \
+	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save2" WFEATURE_LOAD_TICKS=20000 \
+		go test ./internal/platform/lgt -run LGTLoadCost \
+			-cpuprofile $(PGO_WORK)/lgt-java.prof -timeout 30m
+	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_KTF)" WFEATURE_LOAD_TICKS=40000 \
+		go test ./internal/platform/ktf -run TestLoadCostProbe \
+			-cpuprofile $(PGO_WORK)/ktf.prof -o $(PGO_WORK)/ktf.test -timeout 30m
+	@# Each profile is symbolised against the binary that produced it before the
+	@# three are merged, because a merge cannot symbolise two different binaries.
+	go tool pprof -proto $(PGO_WORK)/lgt.test $(PGO_WORK)/lgt-clet.prof > $(PGO_WORK)/clet.pb.gz
+	go tool pprof -proto $(PGO_WORK)/lgt.test $(PGO_WORK)/lgt-java.prof > $(PGO_WORK)/java.pb.gz
+	go tool pprof -proto $(PGO_WORK)/ktf.test $(PGO_WORK)/ktf.prof      > $(PGO_WORK)/ktf.pb.gz
+	go tool pprof -proto $(PGO_WORK)/clet.pb.gz $(PGO_WORK)/java.pb.gz $(PGO_WORK)/ktf.pb.gz \
+		> $(PGO_WORK)/default.pgo
+	cp $(PGO_WORK)/default.pgo cmd/server/default.pgo
+	cp $(PGO_WORK)/default.pgo cmd/cli/default.pgo
+	@echo
+	@echo "wrote cmd/server/default.pgo and cmd/cli/default.pgo"
+	@echo "the two are one file in two places; rebuild and re-measure before committing them."
 
 # dist builds the downloadable release: one archive per platform holding the
 # server, its launcher and the empty games/ tree.
