@@ -1212,6 +1212,130 @@ the ARM cache is in the operations themselves and in the 11.8% a Java title
 spends in call thunks — not in dispatch, which will by then have been taken
 twice.
 
+### The third form of translator, measured — a gate rather than a plan
+
+The section above closes two of the three shapes a translator can take: a
+closure per instruction loses on its own arithmetic, and one that emits machine
+code is out on how this ships. **It does not measure the third**, which is the
+one that would matter — registers allocated to the host's, a compare feeding a
+branch instead of writing an NZCV nothing reads, and memory reached through an
+inline page check. That form attacks what an instruction *costs* rather than
+what finding it costs, and the numbers in this document are all about the
+latter.
+
+`translator_gate_bench_test.go` is that measurement, and it is built to be able
+to **refuse** the design rather than to approve it. What it runs is one real
+block chain, not a synthetic loop: the run-length token decoder a local LGT
+title spends its interpreted time in, at the address it occupies in its own
+module so its literal-pool loads resolve where they really do. A host profile
+of that title's field scene puts 93.3% of the run inside `Engine.Run`, and the
+largest thing still interpreted inside it — the stand-ins already cover the
+pixel loops on either side — is this decoder's six addresses. One transparent
+token costs seventeen instructions, which `TestTokenDecodeCostsSeventeenSteps`
+holds to the code rather than to this paragraph.
+
+**The bar is 2.4x, and it comes from Amdahl rather than from taste.** Of that
+title's host time, 8.1% is already in stand-ins and 6.7% is outside the core,
+leaving 85.2% a translator could reach. The session needs 1.96x to reach its
+own clock, and 1/(0.148 + 0.852/N) = 1.96 at N = 2.4. The ceiling measured in
+"The block interpreter, measured before building it again" — every trace of
+dispatch gone, 5.26ns to 3.20ns — is N = 1.64, which is **1.50x on the run and
+therefore short**. That is the whole reason the third form had to be measured
+separately: the first two cannot reach the bar even in the limit.
+
+Two models were run, and both are required to leave the interpreter's own
+registers and to have charged its own step count
+(`TestTranslatedTokenDecodeMatchesTheInterpreter`), because a benchmark against
+a faster thing that computes something else measures nothing.
+
+| ns per guest instruction, five runs, Ryzen 5 3600 | | against the interpreter |
+|---|---|---|
+| interpreted | 9.746 | — |
+| interpreted, stream in the literal pool's page (diagnostic) | 8.748 | — |
+| translated, literals loaded every token | **0.167** | **58x** |
+| translated, literals folded into immediates | **0.123** | **79x** |
+
+**The gate does not refuse it, and the margin is what makes that worth
+believing.** The model is an upper bound by construction — it has no block
+lookup, no block entry or exit, no deoptimisation edge, and it is Go rather
+than emitted code — so the honest reading is not "a translator would be 58x".
+It is that **the model would have to be twenty-five times too generous before
+this block failed the bar**, and no amount of care about block overhead moves a
+number by that.
+
+What it does *not* say is worth as much. Amdahl caps the same title at 6.8x
+however fast translation gets, the block chosen is the one most favourable to
+translation in the title (seventeen guest instructions collapse to about nine
+host ones because most of them are redundant — two literal loads that fold, and
+flag writes nothing reads), and the stand-ins stay above a translator in the
+order things must be tried: they are six times cheaper per instruction than
+interpretation because a recognised fill is a slice fill, where compiled code is
+still one host store per guest store. **A translator must not swallow a loop a
+recogniser can take.**
+
+So the decision this leaves is a cost decision and no longer a throughput one:
+two code generators, W^X on three operating systems — `MAP_JIT` and a hardened
+runtime entitlement on the one this would most want to run on, which is not a
+signed build today — and the seven things the interpreter carries that compiled
+code would have to keep carrying: the step charge `SetStepBudget` and KTF's
+scheduler are built on, the supervisor-call boundary and its lock, `Core.Watch`,
+the debugger and the GDB stub, a page's compiled code dying with its decode
+cache when its bytes change, the recogniser ordering above, and the frame
+byte-identity every change here is judged by.
+
+The diagnostic row is not part of the verdict, and it turned into the section
+below. This block reads two literals out of its code page and two bytes out of
+the sprite stream every token; `Memory` keeps instruction fetch on a page of its
+own but has one data page, so those two evict each other and every access takes
+`pageFor`. Giving the stream the pool's page is worth 10.2% here — which is a
+second data slot's ceiling on this block, and looked like the cheap change the
+translator is not.
+
+### The second data slot was built, both ways, and lost
+
+That 10.2% is a ceiling on one block, and the two cache changes above are what a
+number like it has to be checked against. It was built twice and it loses twice,
+which is the third time this document has written that sentence.
+
+**Both slots checked in `mappedPage`.** `mappedPage` exists to be inlined — its
+own comment says reaching the general path costs a Go call and the general path
+then costs two more — and a second slot puts it over the budget:
+
+```
+cannot inline (*Memory).mappedPage: function too complex: cost 88 exceeds budget 80
+```
+
+| interleaved, same session | before | after |
+|---|---|---|
+| the token decoder above | 9.745ns | 9.012ns (**−7.5%**) |
+| `BenchmarkEngineGameShapedLoop` | 7.758ns | 8.012ns (**+3.3%**) |
+| `BenchmarkEngineLoadStoreLoop` | 10.943ns | 11.153ns (+1.9%) |
+
+The block the slot was for gains 7.5% and the shape 97% of a measured title
+executes loses 3.3%. That is the trade refused everywhere else in this section.
+
+**The second slot in `pageAt` only**, leaving the inlined path exactly as it
+was. This one is clean on the benchmarks — `mappedPage` still inlines,
+game-shaped moves −0.2% and load/store −0.2%, and the token decoder gains 5.4%.
+It still loses, and only a real title says so:
+
+| interleaved, both PGO builds | before | after |
+|---|---|---|
+| an LGT Clet in-game, busy | 23,856ms | 23,677ms (−0.75%, inside a 1.6% spread) |
+| a KTF title, a route to a scene | 17.935s | 18.44s (**+2.8%**) |
+
+The Clet's 5.4% on the benchmark arrives as nothing on the title, because the
+decoder is a minority of its interpreted time and the stand-ins already own the
+pixel loops on either side of it. The KTF regression is the consistent number
+of the four runs, not the noisy one: that platform crosses the Java bridge
+constantly and misses both slots, so it pays the second compare, the sixteen
+bytes and the shift on every miss and is never paid back.
+
+**A benchmark built to isolate a block reports that block's ceiling, and a
+ceiling on a block is not a share of a run.** That is the same mistake as
+reading a guest profile for a host one, arriving from the other direction, and
+it is what the real-title A/B is for.
+
 ## Why the browser was seven times slower
 
 The same Thumb loop cost 9.0ns an instruction natively and 63.5ns in wasm.

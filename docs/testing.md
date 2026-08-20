@@ -252,7 +252,49 @@ mode.
 because computation then costs it no guest time at all. That is the control the
 comparison needs — a period measured at the rate in force is the title's request
 and the rate's effect mixed together. It runs `-v` or its rows are swallowed;
-`go test` only shows package output when it is asked to.
+`go test` only shows package output when it is asked to. `WFEATURE_LGT_CORPUS`
+is read from the package's directory like every other `go test` path, so it
+wants an absolute one.
+
+### `ratio` is a floor, and only a floor
+
+**A row's `ratio` is measured at the title screen, and a title's problem is
+usually not there.** The sweep boots each archive with a fresh save and presses
+nothing, so what it runs is a boot, a vendor splash and whatever attract loop
+the title settles into — never a scene a person plays. Read a row above 1 as
+saying nothing at all about the title.
+
+How wrong that can be is measured rather than guessed. The title this project's
+throughput work was done against reads
+
+    제노니아1  paints=1500 mode=55ms (100%) guest=1m22.647s host=12.077s ratio=6.85
+
+and the same title, same machine, driven by a route into its field, runs its
+guest clock at **0.51x** — a tick costing 53.8ms against the 27.4ms it stands
+for. **Thirteen times apart, on the row and in the scene.** The mode column
+does not warn either: it reads 55ms at 100%, which is a title settled on one
+period, because at a title screen it is.
+
+So the sweep answers one question honestly and one not at all:
+
+- **`ratio` below 1 is real.** A title that cannot keep up while it is doing
+  almost nothing will not keep up later, and the mode's percentage is what says
+  which kind it is — a row at 100% is uniformly slow, and one at 8 to 34% with
+  a p90 well above its mode is being held back by its own computation in bursts.
+- **`ratio` above 1 is not a pass.** It is "not refused at the title screen".
+
+Over the thirty local LGT archives — twenty-three titles once patch variants are
+merged — four are below 1 at boot and two more sit between 1.0 and 1.3. That is
+a floor of a quarter of the library on the machine it was run on, and the true
+number is unknown, because the titles that fail in a scene are the ones this
+sweep cannot reach. Getting them needs `WFEATURE_PERF_ROUTE` and a route per
+title, which is why the routes under `var/routes/` are worth writing.
+
+Two rows are not measurements. An archive reporting `paints=2 (too few to
+read)` over three thousand ticks is not slow, it is not running, and belongs in
+a bug rather than in this table; and a ratio in the tens — one local title reads
+89.88, two and a half minutes of guest time for 1.7 seconds of host — is a title
+idling on a screen, not headroom.
 
 **Do not read a macOS Go CPU profile of one of these runs without raising the
 quantum first.** It attributes 65 to 88% of the run to
