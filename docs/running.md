@@ -247,6 +247,16 @@ GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o wfeature-server
 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o wfeature-server     ./cmd/server
 ```
 
+**Every one of those builds is profile-guided, including the two above and
+`go run ./cmd/server`.** `cmd/server/default.pgo` and `cmd/cli/default.pgo` are
+committed profiles of real game runs, and `go build` reads a `default.pgo`
+beside a main package without being told to — which is why it is a file rather
+than a flag: there is no build path that can miss it and no second place for it
+to be wrong. It is worth about 12% of a session's host time and changes nothing
+a guest can see. `make pgo` regenerates it; [`armcore.md`](armcore.md), "The
+host profile's next answer was a build flag", has the measurements and what the
+profile has to cover.
+
 ## The release archives
 
 `make dist` writes what a user downloads: one archive per platform under
