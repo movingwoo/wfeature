@@ -1283,14 +1283,58 @@ the debugger and the GDB stub, a page's compiled code dying with its decode
 cache when its bytes change, the recogniser ordering above, and the frame
 byte-identity every change here is judged by.
 
-The diagnostic row is a loose end rather than part of the verdict. This block
-reads two literals out of its code page and two bytes out of the sprite stream
-every token; `Memory` keeps instruction fetch on a page of its own but has one
-data page, so those two evict each other and every access takes `pageFor`.
-Giving the stream the pool's page is worth 10.2% on this block. That is a
-second data slot's ceiling here, measured on the way past, and it is a pure-Go
-change — but it is one block, and "Two more shapes of cache that do not get it"
-is what a claim like that has to be checked against before anyone builds it.
+The diagnostic row is not part of the verdict, and it turned into the section
+below. This block reads two literals out of its code page and two bytes out of
+the sprite stream every token; `Memory` keeps instruction fetch on a page of its
+own but has one data page, so those two evict each other and every access takes
+`pageFor`. Giving the stream the pool's page is worth 10.2% here — which is a
+second data slot's ceiling on this block, and looked like the cheap change the
+translator is not.
+
+### The second data slot was built, both ways, and lost
+
+That 10.2% is a ceiling on one block, and the two cache changes above are what a
+number like it has to be checked against. It was built twice and it loses twice,
+which is the third time this document has written that sentence.
+
+**Both slots checked in `mappedPage`.** `mappedPage` exists to be inlined — its
+own comment says reaching the general path costs a Go call and the general path
+then costs two more — and a second slot puts it over the budget:
+
+```
+cannot inline (*Memory).mappedPage: function too complex: cost 88 exceeds budget 80
+```
+
+| interleaved, same session | before | after |
+|---|---|---|
+| the token decoder above | 9.745ns | 9.012ns (**−7.5%**) |
+| `BenchmarkEngineGameShapedLoop` | 7.758ns | 8.012ns (**+3.3%**) |
+| `BenchmarkEngineLoadStoreLoop` | 10.943ns | 11.153ns (+1.9%) |
+
+The block the slot was for gains 7.5% and the shape 97% of a measured title
+executes loses 3.3%. That is the trade refused everywhere else in this section.
+
+**The second slot in `pageAt` only**, leaving the inlined path exactly as it
+was. This one is clean on the benchmarks — `mappedPage` still inlines,
+game-shaped moves −0.2% and load/store −0.2%, and the token decoder gains 5.4%.
+It still loses, and only a real title says so:
+
+| interleaved, both PGO builds | before | after |
+|---|---|---|
+| an LGT Clet in-game, busy | 23,856ms | 23,677ms (−0.75%, inside a 1.6% spread) |
+| a KTF title, a route to a scene | 17.935s | 18.44s (**+2.8%**) |
+
+The Clet's 5.4% on the benchmark arrives as nothing on the title, because the
+decoder is a minority of its interpreted time and the stand-ins already own the
+pixel loops on either side of it. The KTF regression is the consistent number
+of the four runs, not the noisy one: that platform crosses the Java bridge
+constantly and misses both slots, so it pays the second compare, the sixteen
+bytes and the shift on every miss and is never paid back.
+
+**A benchmark built to isolate a block reports that block's ceiling, and a
+ceiling on a block is not a share of a run.** That is the same mistake as
+reading a guest profile for a host one, arriving from the other direction, and
+it is what the real-title A/B is for.
 
 ## Why the browser was seven times slower
 
