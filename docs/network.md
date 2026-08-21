@@ -109,6 +109,17 @@ instead of meeting the loader's "class not found".
 returned, because a game reads those constants while building the request it
 is about to be refused.
 
+**The SKT vendor's own two network names are not declared, and that is a
+decision rather than an omission.** One local title sets a browser network mode
+and a socket's PPP preserve time before it would connect — `com.xce.jam
+.XBrowser.setNetworkMode` and `com.xce.net.Socket.setPPPPreserveTime`. It never
+reaches either here, and not by luck: the call site is behind a check on the
+`m.SK_VM` property, and this runtime answers the value that skips it. Declaring
+the two classes would put a `Socket` in front of a title that cannot have one,
+so what is written down instead is the gate. If that property's answer ever
+changes, these become reachable in the same session; `docs/skvm.md`, "The two
+entries the scan still lists", is where the scan's view of them lives.
+
 ## System properties are not part of the refusal
 
 `internal/wipic/properties.go` answers `RSSILEVEL`, `AIRPLANE_MODE`,

@@ -452,12 +452,60 @@ func definitions() []jvm.ClassDefinition {
 			},
 		},
 		{
+			// The vendor's own text component: the interface a title
+			// implements when it keeps the text itself, and the handler the
+			// platform's input method drives it through. Two classes in one
+			// local title implement the interface, and its members are the
+			// thirteen both of them carry.
+			Name:      TextComponentClass,
+			SuperName: "java/lang/Object",
+			Access:    jvm.AccessPublic | jvm.AccessInterface | jvm.AccessAbstract,
+			Methods: []jvm.MethodDefinition{
+				{Name: "getCaretPosition", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "getConstraints", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "getMaxSize", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "size", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "insert", Descriptor: "(C)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "delete", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "clear", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "replace", Descriptor: "(C)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "moveCursor", Descriptor: "(I)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "setCaretPosition", Descriptor: "(I)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "setCaretVisible", Descriptor: "(Z)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "repaint", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+				{Name: "repaintIM", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+			},
+		},
+		{
+			Name:      TextComponentHandlerClass,
+			SuperName: "java/lang/Object",
+			Access:    jvm.AccessPublic | jvm.AccessFinal,
+			Methods: []jvm.MethodDefinition{
+				// The handler is the platform's, so a title reaches it
+				// through the static rather than by making one.
+				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessPrivate, Body: emptyInit},
+				{Name: "getTextComponentHandler", Descriptor: "()L" + TextComponentHandlerClass + ";", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "setTextComponent", Descriptor: "(L" + TextComponentClass + ";)V", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "getInputMode", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "clear", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "keyPressed", Descriptor: "(I)Z", Access: jvm.AccessPublic | jvm.AccessNative},
+				{Name: "keyReleased", Descriptor: "(I)Z", Access: jvm.AccessPublic | jvm.AccessNative},
+			},
+		},
+		{
 			Name:      "com/xce/lcdui/XTextField",
 			SuperName: "java/lang/Object",
 			Access:    jvm.AccessPublic,
 			Methods: []jvm.MethodDefinition{
 				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessPublic, Body: forwardInit(XTextFieldClass, "init", "()V")},
+				// The four-argument form is the one a title with a name
+				// screen uses: the text it starts with, how many characters
+				// it takes, the constraints a MIDP TextField would take, and
+				// the Canvas it is painted on.
+				{Name: "<init>", Descriptor: "(Ljava/lang/String;IILjavax/microedition/lcdui/Canvas;)V", Access: jvm.AccessPublic,
+					Body: forwardInit(XTextFieldClass, "init", "(Ljava/lang/String;IILjavax/microedition/lcdui/Canvas;)V")},
 				{Name: "init", Descriptor: "()V", Access: jvm.AccessPrivate | jvm.AccessNative},
+				{Name: "init", Descriptor: "(Ljava/lang/String;IILjavax/microedition/lcdui/Canvas;)V", Access: jvm.AccessPrivate | jvm.AccessNative},
 				{Name: "getText", Descriptor: "()Ljava/lang/String;", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setText", Descriptor: "(Ljava/lang/String;)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "getMaxSize", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},

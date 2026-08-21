@@ -435,6 +435,13 @@ The current tests cover these boundaries:
 - runtime-owned Object construction, finite guest Threads, monitor services,
   UTF-16 String/StringBuffer behavior, and CLDC collection operations
 - JAR resource lookup plus big-endian and modified-UTF DataInputStream reads
+- a record written and read back through the `java.io.DataOutput` and
+  `DataInput` interfaces, which lands on the stream that was passed rather than
+  on an interface this runtime never declares
+- `java.util.Timer`: a one-shot and a repeating schedule running on a thread
+  beside the caller, both cancels stopping them, and a refused negative delay
+- the SKVM text component interface typed into through the platform's input
+  method handler, and the four-argument `XTextField` a name screen builds
 - FIFO ordering, pending-event bounds, and self-reposting throughput limits in
   the backend event queue
 - app properties and the start/pause/resume/destroy lifecycle in a newly authored

@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
 // SKVM's fixed-point scale: 1.0 is one billion. Every MathFP value a game
@@ -26,16 +27,24 @@ const (
 // hardware — there is none — but a game that sets a value and reads it back
 // must see what it set.
 type skvmState struct {
-	mu              sync.Mutex
-	backlightColor  int32
-	backlightOn     bool
-	vibrating       bool
-	keyToneOn       bool
-	audioVolume     int32
-	smsListener     *jvm.Object
-	textFieldOwner  *jvm.Object
-	zBufferEnabled  bool
-	backfaceCulling bool
+	mu             sync.Mutex
+	backlightColor int32
+	backlightOn    bool
+	vibrating      bool
+	keyToneOn      bool
+	audioVolume    int32
+	smsListener    *jvm.Object
+	textFieldOwner *jvm.Object
+	// textHandler is the input method's single handler object, and
+	// textInput is what it is editing and how far its cycle has got.
+	// See text_input.go.
+	textHandler *jvm.Object
+	textInput   textInputState
+	// drawImageExReported keeps the vendor blit's report to one line a run.
+	// See reportDrawImageExArguments.
+	drawImageExReported bool
+	zBufferEnabled      bool
+	backfaceCulling     bool
 }
 
 type graphics2DData struct {
@@ -74,10 +83,16 @@ type xFileData struct {
 type xTextFieldData struct {
 	text    []rune
 	maxSize int32
-	focus   bool
-	x, y    int32
-	width   int32
-	height  int32
+	// input is the keypad editor behind the field, made on the first key.
+	input *textinput.State
+	// constraints is what a MIDP TextField would restrict its input to. It is
+	// kept because a title's constructor states it; nothing reads it, because
+	// nothing here composes the characters it would restrict.
+	constraints int32
+	focus       bool
+	x, y        int32
+	width       int32
+	height      int32
 }
 
 type audioClipData struct {
@@ -1207,8 +1222,18 @@ func (runtime *Runtime) presentRefresh() error {
 // alternative on no evidence is to refuse a draw a title is making — and the
 // title that makes it is the one this was written for. What either means is
 // the note in docs/skvm.md rather than a guess in this body.
+//
+// A title that passes either says so in the log, once per run and in both
+// build profiles. Until one did, "this platform says so rather than guessing"
+// was true of the documentation and of nothing that runs: a picture drawn
+// without the mask or the destination its caller asked for looks like a
+// drawing defect, and the one line here is what turns it back into this note.
 func (runtime *Runtime) xDisplayDrawImageEx(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	context, err := graphicsArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	second, err := referenceArgument(arguments, 1)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -1224,9 +1249,11 @@ func (runtime *Runtime) xDisplayDrawImageEx(_ *jvm.VM, arguments []jvm.Value) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if _, err := intArgument(arguments, 9); err != nil {
+	mode, err := intArgument(arguments, 9)
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	runtime.reportDrawImageExArguments(second, mode)
 	pixels := source.snapshot()
 	context.withDestinationWrite(func() {
 		for row := int32(0); row < height; row++ {
@@ -1242,6 +1269,30 @@ func (runtime *Runtime) xDisplayDrawImageEx(_ *jvm.VM, arguments []jvm.Value) (j
 		}
 	})
 	return jvm.VoidValue(), nil
+}
+
+// reportDrawImageExArguments names the two arguments this platform ignores,
+// the first time a title passes one. It is one comparison on a draw that is
+// already copying pixels, and it is the only thing standing between a title
+// that uses them and a bug report about the wrong subsystem.
+func (runtime *Runtime) reportDrawImageExArguments(second *jvm.Object, mode int32) {
+	if second == nil && mode == 0 {
+		return
+	}
+	state := runtime.skvm()
+	state.mu.Lock()
+	reported := state.drawImageExReported
+	state.drawImageExReported = true
+	state.mu.Unlock()
+	if reported || runtime.logger == nil {
+		return
+	}
+	name := "null"
+	if second != nil {
+		name = second.ClassName
+	}
+	runtime.logger.Warn("XDisplay.drawImageEx used an argument this platform ignores",
+		"image", name, "mode", mode)
 }
 
 // xDisplayCopyLCD copies what is on the screen into an image, which is what a

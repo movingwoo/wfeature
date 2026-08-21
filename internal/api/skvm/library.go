@@ -33,6 +33,8 @@ const (
 	ByteToCharConverterClass        = "com/xce/io/ByteToCharConverter"
 	ByteToCharEUCKRClass            = "com/xce/io/ByteToCharEUC_KR"
 	ToolkitClass                    = "com/xce/lcdui/Toolkit"
+	TextComponentClass              = "com/xce/lcdui/TextComponent"
+	TextComponentHandlerClass       = "com/xce/lcdui/TextComponentHandler"
 	XDisplayClass                   = "com/xce/lcdui/XDisplay"
 	XTextFieldClass                 = "com/xce/lcdui/XTextField"
 	RuntimeAudioClipClass           = "net/wfeature/RuntimeAudioClip"

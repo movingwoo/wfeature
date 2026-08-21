@@ -731,7 +731,10 @@ is the right one is theirs to know**; nothing here recovers it from the key.
 None of the four was short of the surface the scan had listed. Each was one
 contract read the wrong way round, and the scan's remaining entries — the two
 `java.io` interfaces, `java.util.Timer`, `TextComponentHandler` — turned out to
-be on paths none of them takes.
+be on paths none of them takes. Three of those four are answered now anyway,
+for the reason "Nothing a local title names is missing" gives; the two
+`java.io` interfaces are the one entry that never needed answering, and the
+same section says why.
 
 - **Three siblings drew their world in magenta blocks**: the transparency mask
   was being applied with its polarity inverted, so every sprite came out as its
@@ -773,6 +776,15 @@ would fail the one title that makes it on evidence that names neither. If a
 title turns up that passes either, this paragraph is where the guess was
 recorded.
 
+**And the title says so when it does.** "This platform says so rather than
+guessing" was true of this paragraph and of nothing that ran: a picture drawn
+without the mask or the destination its caller asked for looks like a drawing
+defect, and the guess was invisible from the frame. `drawImageEx` now writes
+one line naming both arguments the first time a title passes either — once a
+run, at warning level so a release build carries it too, because a call on a
+draw is a call every frame. `TestDrawImageExReportsTheArgumentsItIgnores` pins
+that it is one line and that an ordinary call is silent.
+
 `XDisplay.copyLCD(Graphics, Image, int x, int y, int width, int height)` is the
 neighbouring call and it copies the screen into the caller's image, which is
 what `Graphics2D.captureLCD` does into a new one.
@@ -791,6 +803,140 @@ degraded one. This VM refuses a virtual call on a static method outright —
 `captureLCD` with `invokevirtual` would stop there instead of falling back. No
 local title does, and the message names its own cause, so the fallback stays
 unbuilt until a caller for it turns up.
+
+## Nothing a local title names is missing
+
+The static scan (`internal/tools/apiscan`, and "The diagnostic report" above
+for why it exists) answers one question over the whole corpus: what would a
+title link against that this runtime does not have. Run over the fifteen local
+archives with a live natives report, it now comes back **empty for thirteen of
+them**, and what is left in the other two is not surface to build.
+
+The entries it used to list were each on a path no local run had taken, which
+is why nothing had ever failed on one. That is exactly the state worth closing
+rather than watching: a class this runtime does not have is not a degraded
+feature, it is `class not found` at the moment the title first touches it —
+`internal/platform/skt/connector.go` argues the same thing for the connection
+framework. A title that walks to its name screen after two hours of play should
+not lose the session there.
+
+### Two ways a title takes a name
+
+This vendor has two, and a local title uses each.
+
+**`com.xce.lcdui.TextComponent` is the title's own text buffer**, handed to the
+platform's `TextComponentHandler` — a singleton a title reaches through a
+static and attaches a component to. The interface's members are what settles
+what the handler is: `insert`, `replace`, `delete`, `moveCursor`, `clear`,
+`size`, `getMaxSize`, `getCaretPosition`, and **no way to read a character
+back**. So the handset's input method never held the text. It held the
+composition and sent edits, and the title kept the text — which is why
+`replace` exists at all, and it is the one a multi-tap cycle needs when the
+same key produces the next letter in place.
+
+Two of the title's own classes implement the interface, and they agree on
+thirteen members, so the interface is not inferred from one caller. Its own
+implementations then settle each contract:
+
+- `replace(c)` writes at `caret - 1`. That is the cycle.
+- `clear()` on the *component* empties the field; `clear()` on the *handler* is
+  a different thing, and the title's own `moveCursor` says which: it calls the
+  handler's `clear` right after moving the caret, where a cycle still running
+  would write the next letter over whatever the caret had moved to. So the
+  handler's `clear` ends the composition and leaves the text alone.
+- `moveCursor(int)` takes **a raw key code**, not a direction: the title
+  switches on 142 and 145, which are the two the pad sends. It also inserts a
+  space when the caret is already at the end, which is the component's business
+  and not the platform's.
+
+So the handler runs the shared multi-tap cycle
+([`internal/textinput`](../internal/textinput/textinput.go)) against a
+component it cannot read: a new character is `insert`, the same key inside the
+commit delay is `replace`, `#` and the CLR key are `delete`, `*` changes the
+mode, and the pad's left and right are handed to `moveCursor` as the key codes
+the component expects. Whether another character fits is asked of the component
+— `size` against `getMaxSize` — because the platform cannot count text it never
+sees.
+
+`keyPressed` answers whether the input method took the key, and a key it does
+not take reaches the game: a title routes every key through the handler first
+and its pad has to keep working while a field is on screen. Both local call
+sites discard the answer, which is what a handset's own titles could afford to
+do, so the answer costs nothing there and is still the right one to give.
+
+**`getInputMode` is the one inference in this.** The five modes are a bit each,
+and which bit is which is documented nowhere available here. What settles it is
+the order a title draws them in: its switch maps 16, 1, 2, 8 and 4 onto
+indicators 0 to 4, and the order a Korean handset showed was Hangul, capitals,
+small letters, digits, symbols. So 16 is Hangul and this runtime answers 1, 2
+or 8 — capitals, small letters or digits — matching what the next key press
+will actually produce. If a title's indicator turns out wrong, this paragraph
+is the guess to revisit.
+
+**`XTextField` is the other way**, and there the platform holds the text, so it
+is the shared editor itself rather than a cycle over someone else's buffer —
+the same editor a MIDP `TextBox` on this platform types with. Its
+four-argument constructor is what a name screen uses: the text it starts with,
+the size it stops at, the constraints, and the Canvas it belongs to. The order
+of the three is read off the one local call site, which passes `("", 10, 0)`:
+10 is a plausible name length and not a constraint any of them names.
+
+`Displayable.repaintIM` belongs to the same feature — a repaint that included
+the input method's own area, which a handset drew over the screen. There is no
+such area here, so what is left of it is the repaint the title expects to go
+with it, asked for virtually so a Canvas gets its own.
+
+**One defect was already sitting in the shared path**, and typing through the
+vendor's field is what turned it up: a MIDP `TextBox` on this platform treated
+4 and 6 as caret movement, because those digits are also the pad's left and
+right for a game. In a text field they are letters, and taking them left
+`ghi` and `mno` untypable. The pad moves the caret and only the pad now;
+`TestTextBoxTypesThroughTheKeypad` covers both halves. The other platform's lwc
+fields never had it — `isKeypadKey` there is digits, `*` and `#`, and nothing
+else.
+
+### A timer runs on a thread, because the title keeps drawing
+
+`java.util.Timer` and `java.util.TimerTask` are the profile's rather than the
+configuration's — CLDC has neither — so they are declared in
+`internal/api/midp` and only a VM that installs this profile answers them. One
+local title schedules a task at a fixed rate and keeps redrawing while it runs,
+which is the whole reason the specification puts a task on a background thread:
+invoking it on the caller would stop the frame the schedule was made from.
+
+Each schedule gets a guest thread, the same kind a title's own `new Thread`
+gets — it takes the platform's scheduler if one is installed, it dies with the
+session's step budget, and it appears in a report as a thread rather than as
+something the runtime is doing behind the game's back. The two cancels are
+flags the worker reads before every run, so a cancel from any thread is seen
+without a lock, and a task already running is not interrupted, which is what
+the specification says cancel does and does not do. Fixed-rate and plain
+schedules differ in what the next wait is measured from: the time the run was
+due, or the time it finished.
+
+### The two entries the scan still lists, and why neither is work
+
+**`java.io.DataInput` and `java.io.DataOutput`** are named by a title that
+writes its save through one and reads it back through the other. Neither is
+declared in this runtime and neither has to be: `invokeinterface` dispatches on
+the class of the receiver, and what the title passes is the
+`DataOutputStream` this runtime does have. The scan sees them because an
+interface method reference names its interface; the loader never does.
+`TestInterfaceCallsLandOnTheStreamThatWasPassed` pins the mechanism with a
+fixture that writes and reads a record through the two interfaces. Nothing in
+the corpus does the one thing that would load them — a `checkcast`, an
+`instanceof`, or a class declaring `implements` — and the day one does, the
+CLDC 1.0 forms of both are what to declare, which is the pair without the
+floating-point methods.
+
+**`com.xce.jam.XBrowser.setNetworkMode` and `com.xce.net.Socket.setPPPPreserveTime`**
+are two settings a title applies before it would open a connection. It never
+reaches them here, and not by luck: the call site is behind a check on the
+`m.SK_VM` property, and this runtime answers the value that skips it. There is
+nothing behind them to configure either — `docs/network.md` has why no platform
+here reaches a network — so the pair stays unbuilt and the property that gates
+them is the thing to remember. If that property's answer ever changes, these
+two become reachable in the same session.
 
 ## A heap with addresses in it
 
@@ -945,9 +1091,14 @@ fixture-level tests are `TestHeapMap*` in `internal/platform/skt`.
   are refused. Reporting a delivered message a game can never receive a reply
   to is worse than reporting none. `docs/network.md` carries the same decision
   for the MIDP connection framework and for the other platforms.
-- **`XTextField` has no input method.** It keeps its text, bounds and focus
-  and paints the text; `inputChar` is the only way characters arrive. This is
-  the same gap the MIDP `TextBox` and KTF's lwc text components have.
+- **The input method types Latin and digits, not Hangul.** Both of this
+  vendor's text surfaces now take the keypad — see "Two ways a title takes a
+  name" — with the multi-tap editor every text field in this runtime shares.
+  What a handset also did inside that input method was compose Hangul out of
+  the jamo on the keypad, and nothing here does: a title that wants a Korean
+  name gets Latin letters and digits in the same field. It is the same gap the
+  MIDP `TextBox` and KTF's lwc text components have, because it is the same
+  editor.
 - `BackLight` and `Vibration` keep their state and report it back; there is no
   hardware to drive.
 

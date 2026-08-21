@@ -121,6 +121,12 @@ The classes this runtime owns — CLDC's core, MIDP, SKVM — are declared in Go
 `jvm.ClassDefinition` values and installed with `DefineClass`. There are no
 class files behind them and no JDK in the build.
 
+Which of the three a class belongs to is the profile it came from rather than
+its package name. `java.util.Timer` and `java.util.TimerTask` are the case:
+they are in `java.util` and they are not in CLDC, so they are declared in
+`internal/api/midp` and only a VM that installs that profile answers them —
+see `skvm.md`, "A timer runs on a thread, because the title keeps drawing".
+
 A definition carries what a class file carried: the name, the superclass and
 interfaces a game's `instanceof` reads, the fields and methods it links
 against, the constants it reads straight out of the class, and the checked

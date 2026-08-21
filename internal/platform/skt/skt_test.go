@@ -86,6 +86,33 @@ func TestSKVMTextFieldTruncatesToItsMaxSize(t *testing.T) {
 	}
 }
 
+// The vendor's input method is a handler a title reaches through a static and
+// hands its own text component to. The component holds the text and takes the
+// edits, so what this pins is a whole typed word arriving through an interface
+// this runtime cannot read a character back out of.
+func TestSKVMTextInputTypesThroughTheComponentInterface(t *testing.T) {
+	runtime := startFixture(t, nil)
+	// One handler; '2','2' cycles a→b; '3' inserts d; '#' deletes it; '*'
+	// turns the mode to capitals, which is bit 1 and an 'A' from the next
+	// press; a release is not the input method's. The platform's own field
+	// starts from "ab" and takes a 'p' from key 7.
+	const want = "true|true|false|1|bA|abp"
+	if state := fixtureString(t, runtime, "textInputState"); state != want {
+		t.Fatalf("textInputState() = %q, want %q: %s", state, want, fixtureString(t, runtime, "failure"))
+	}
+}
+
+// A Timer runs its task on a thread of its own, which is why the fixture can
+// wait for it on the thread that scheduled it. A task invoked inline would
+// deadlock this test rather than fail it.
+func TestSKVMTimerRunsATaskBesideTheCaller(t *testing.T) {
+	runtime := startFixture(t, nil)
+	const want = "true|true|true"
+	if state := fixtureString(t, runtime, "timerState"); state != want {
+		t.Fatalf("timerState() = %q, want %q: %s", state, want, fixtureString(t, runtime, "failure"))
+	}
+}
+
 // The shape a handset was actually sent: a zip holding the JAR beside a .msd,
 // with the JAR's own manifest naming no MIDlet. Reading it as a bare JAR finds
 // no main class, so the descriptor has to come from the .msd.

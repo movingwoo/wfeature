@@ -437,3 +437,30 @@ func tickerInit(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) 
 	_, err = call.InvokeSpecial(ticker, TickerClass, "init", "("+stringDescriptor+")V", arguments[1])
 	return jvm.VoidValue(), err
 }
+
+// displayableRepaintIM is one vendor's addition to Displayable: a repaint that
+// includes the input method's own area, which a handset drew over the screen
+// while a text field had focus. One local title calls it from the text
+// component it hands the platform, after every edit that changed what is on
+// screen.
+//
+// There is no input method here to have an area — see the text component
+// handler in the SKVM surface — so what is left of the call is the repaint the
+// title expects to go with it. It is asked for virtually, so a Canvas gets its
+// own; a Displayable that is not one has nothing to repaint and the call is
+// where the title left it.
+func displayableRepaintIM(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+	displayable, err := receiver(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	canvas, err := call.VM().IsSubclassOf(displayable.ClassName, CanvasClass)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if !canvas {
+		return jvm.VoidValue(), nil
+	}
+	_, err = call.InvokeVirtual(displayable, "repaint", "()V")
+	return jvm.VoidValue(), err
+}
