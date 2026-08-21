@@ -684,8 +684,36 @@ WFEATURE_KTF_START_ACCEPTANCE=1 go test -run TestLocalKTFArchivesStartMainClass 
 WFEATURE_KTF_FRAME_ACCEPTANCE=1 go test -run TestLocalKTFArchivesRenderFirstFrame -v ./internal/platform/ktf
 ```
 
-All 33 archives start their main class, and all 33 present a first frame with
-something lit in it.
+All 33 of the JAR-packaged archives start their main class, and **all 34
+present a first frame with something lit in it** — the frame probe's own last
+line reads `34 of 34 JAR-packaged archives (1 earlier-package archives
+skipped)`.
+
+That line used to read `33 of 35`, and neither of the two it left out was a
+title that failed. Both were the probe's own doing, and both are fixed:
+
+- the earlier native package carries no JAR and no main class, so there is
+  nothing here to start. It was skipped inside the loop *after* being counted
+  in the denominator, which made the ratio understate itself by one for every
+  archive of that generation added. It is now counted and reported separately;
+  `TestLocalKTFNativePackageRuns` is what exercises that one.
+- one title reported `no frame (timers=0 flushes=0 drawn=0)` with no error
+  behind it, while the same archive under `runktf` flushed a full 240x320
+  screen on tick 2. What it waits for is a deadline, and the probe's
+  hand-rolled service loop broke out of the first round that ran no timer, no
+  thread and no paint — which is every round before the first one is due.
+
+**The probe now starts a session and ticks it**, the way `runktf` and every
+other Host does: `StartSession`, then `Session.Tick` on a manual clock jumped
+to each next deadline, stopping when the game draws or when a round did nothing
+with nothing left due. Nothing about the loop is the probe's own any more, so
+what it answers for is the path a Host takes — a paint a round skips, a wait
+the client thread declared, a guest that exits — and the whole corpus runs in
+about five seconds instead of hundreds of hand-driven rounds per archive.
+
+The ratio is still not the number that says what plays: that is the support
+matrix ([`support.md`](support.md)), which is filled in from real runs. A first
+frame is a first frame.
 
 SKT has the same shape of probe, and it is the only test in that package that
 runs a real title:

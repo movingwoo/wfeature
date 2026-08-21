@@ -112,8 +112,14 @@ type Server struct {
 	// parked holds games whose page went away, waiting under the token that
 	// page was given; see resume.go. They live on the Server because they have
 	// outlived the goroutine that was driving them.
+	// parkedMu guards both parked and claims: a start that takes over a
+	// parked game touches the two together, and one mutex is what keeps that
+	// from needing an order.
 	parkedMu sync.Mutex
 	parked   map[string]*parkedSession
+	// claims holds the save directory of every game a session has in hand,
+	// parked or playing; see saveclaim.go.
+	claims map[string]*saveClaim
 }
 
 // New validates the options and returns the server.

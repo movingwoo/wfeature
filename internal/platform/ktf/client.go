@@ -94,6 +94,11 @@ type Client struct {
 	runningTimerTasks map[*jvm.Object]*guestWorker
 	workersStopped    bool
 	threadSliceSteps  uint64
+	// unwindBound overrides how long StopThreads waits for one aborted worker
+	// to return; zero means stopUnwindBound. Only a test that stops a worker
+	// which cannot answer sets it, so the bound's own path is exercised
+	// without a test that takes seconds.
+	unwindBound time.Duration
 	// costs is where a tick's time and boundary crossings are tallied, and
 	// timePhases whether the per-phase durations are collected at all. See
 	// hostcost.go.

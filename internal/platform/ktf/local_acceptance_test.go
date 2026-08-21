@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -387,10 +389,19 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 	}
 }
 
-// TestLocalKTFArchivesRenderFirstFrame drives registered timer callbacks
-// after startApp until the client flushes its screen framebuffer, then
-// checks that the presented RGBA frame contains drawn pixels. It reports how
-// many local games reach a first frame; at least one must.
+// TestLocalKTFArchivesRenderFirstFrame starts every JAR-packaged local
+// archive and ticks it the way a Host does until the guest flushes a screen
+// with something lit in it. It reports how many reach a first frame; at least
+// one must.
+//
+// The loop is `Session.Tick` rather than a service loop of its own. An earlier
+// version called ServiceTimers, ServiceThreads and ServicePaint by hand and
+// broke out of the first round that ran none of them, which reported one
+// archive as drawing nothing while the same archive under `runktf` flushed a
+// full screen on its second tick: what that title waits for is a deadline, and
+// a round before the first one is due does nothing at all. Ticking is also the
+// only way the probe answers for the path a Host actually takes — a paint that
+// a round skips, a wait the client thread declared, the guest exit.
 func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 	if os.Getenv("WFEATURE_KTF_FRAME_ACCEPTANCE") != "1" {
 		t.Skip("set WFEATURE_KTF_FRAME_ACCEPTANCE=1 to render ignored local KTF first frames")
@@ -405,8 +416,22 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 		t.Fatalf("read local KTF game directory: %v", err)
 	}
 	only := os.Getenv("WFEATURE_KTF_ONLY")
+	// How many ticks a game needs before it paints anything is set by how much
+	// loading it does first, and that grows as the runtime gains the surfaces a
+	// game was waiting on. The loop stops as soon as a game draws or has
+	// nothing left due, so a ceiling well clear of the slowest costs the
+	// others nothing.
+	ticks := 512
+	if value := os.Getenv("WFEATURE_KTF_FRAME_ROUNDS"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("invalid WFEATURE_KTF_FRAME_ROUNDS %q", value)
+		}
+		ticks = parsed
+	}
 	rendered := 0
 	attempted := 0
+	skipped := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
 			continue
@@ -414,109 +439,61 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 		if only != "" && !strings.Contains(entry.Name(), only) {
 			continue
 		}
-		attempted++
 		name := entry.Name()
 		data, err := os.ReadFile(filepath.Join(gameDirectory, name))
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
+		// The earlier native package carries no JAR and no main class, so it
+		// has nothing for this probe to start; TestLocalKTFNativePackageRuns
+		// is what exercises that generation. Counting it here would leave the
+		// ratio below understating itself by one archive of that shape.
 		if isNativePackageArchive(data) {
+			skipped++
 			continue
 		}
-		archive, err := Open(data)
+		attempted++
+		// A probe measures what the guest computes, not how long it takes, so
+		// it runs a manual clock it jumps to each next deadline: the same
+		// sequence of guest work at no real cost. This is what `runktf` does
+		// without -play.
+		clock := NewManualClock(time.Time{})
+		session, err := StartSession(context.Background(), data, SessionOptions{
+			MaxSteps: localAcceptanceMaxSteps(t),
+			Clock:    clock,
+		})
 		if err != nil {
-			t.Errorf("%s: %v", name, err)
+			t.Errorf("%s start: %v", name, err)
 			continue
 		}
-		client, err := LoadClient(archive.JAR.Client, armcore.CoreOptions{MaxSteps: localAcceptanceMaxSteps(t)})
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
-		client.AttachResources(archive.JAR.Entries)
-		client.AttachFilesystem(archive.GuestFiles())
-		entrySummary, err := client.ExecuteEntry(context.Background(), nil)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		if _, err := client.Initialize(context.Background(), entrySummary.Context.Registers[0]); err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
-		if err != nil {
-			t.Errorf("%s construct: %v", name, err)
-			continue
-		}
-		classAddress, err := client.runtime.ensureJavaClass("[Ljava/lang/String;")
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		metadata, ok := client.JVM().AOTClassAt(classAddress)
-		if !ok {
-			t.Errorf("%s: [Ljava/lang/String; is not registered", name)
-			continue
-		}
-		argumentsAddress, err := client.runtime.allocateAOTArrayObject(metadata, 0)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		argumentsObject, _ := client.JVM().AOTObject(argumentsAddress)
-		if _, err := client.InvokeVirtual(context.Background(), object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(argumentsObject)); err != nil {
-			t.Errorf("%s startApp: %v", name, err)
-			continue
-		}
-		// How many service rounds a game needs before it paints anything is
-		// set by how much loading it does first, and that grows as the runtime
-		// gains the surfaces a game was waiting on: one title needed around a
-		// hundred once its loading timer ran, and the slowest needs about
-		// three hundred and thirty now that it gets as far as reading its
-		// option save. The loop breaks out as soon as a game draws or stops making
-		// progress, so a ceiling well clear of the slowest costs the others
-		// nothing.
-		rounds := 512
-		if value := os.Getenv("WFEATURE_KTF_FRAME_ROUNDS"); value != "" {
-			parsed, err := strconv.Atoi(value)
-			if err != nil || parsed <= 0 {
-				t.Fatalf("invalid WFEATURE_KTF_FRAME_ROUNDS %q", value)
-			}
-			rounds = parsed
-		}
-		var timerErr error
-		serviced := 0
-		for round := 0; round < rounds; round++ {
-			frame, _, _, flushes := client.Frame()
+		ran := 0
+		var tickErr error
+		for ; ran < ticks; ran++ {
+			frame, _, _, flushes := session.Frame()
 			if flushes > 0 && frameHasContent(frame) {
 				break
 			}
-			ranTimers, err := client.ServiceTimers(context.Background(), 4)
-			serviced += ranTimers
+			progressed, err := session.Tick(context.Background())
 			if err != nil {
-				timerErr = err
-			}
-			ranThreads, err := client.ServiceThreads(context.Background(), 1)
-			serviced += ranThreads
-			if err != nil {
-				// A thread hitting the bounded ceiling may still have drawn.
-				timerErr = err
-			}
-			painted, err := client.ServicePaint(context.Background())
-			if painted {
-				serviced++
-			}
-			if err != nil {
-				timerErr = err
-			}
-			if ranTimers == 0 && ranThreads == 0 && !painted {
+				// A game that ended on its own terms is not a failure, and
+				// what it drew before it did still counts.
+				if !errors.Is(err, ErrGuestExited) {
+					tickErr = err
+				}
 				break
 			}
+			session.SkipToNextDeadline()
+			if !progressed {
+				// A round that did nothing is only an idle game when nothing
+				// is due: a title whose loop is one repeating timer spends
+				// every round before the first one is due doing nothing.
+				if _, pending := session.NextDeadline(); !pending {
+					break
+				}
+			}
 		}
-		frame, width, height, flushes := client.Frame()
+		frame, width, height, flushes := session.Frame()
 		drawn := 0
 		for offset := 0; offset+3 < len(frame); offset += 4 {
 			if frame[offset] != 0 || frame[offset+1] != 0 || frame[offset+2] != 0 {
@@ -525,14 +502,15 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 		}
 		if flushes > 0 && drawn > 0 {
 			rendered++
-			t.Logf("%s: %dx%d frame after %d timers, %d flushes, %d lit pixels", name, width, height, serviced, flushes, drawn)
+			t.Logf("%s: %dx%d frame after %d ticks, %d flushes, %d lit pixels", name, width, height, ran, flushes, drawn)
 			if directory := os.Getenv("WFEATURE_KTF_FRAME_DIR"); directory != "" {
 				writeFramePNG(t, filepath.Join(directory, strings.TrimSuffix(name, ".zip")+".png"), frame, width, height)
 			}
 		} else {
-			t.Logf("%s: no frame (timers=%d flushes=%d drawn=%d timerErr=%v)\ncounts:\n%s",
-				name, serviced, flushes, drawn, timerErr, formatDiagnosticCounts(client.runtime.diagnosticCounts(), 60))
+			t.Logf("%s: no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)\ncounts:\n%s",
+				name, ran, flushes, drawn, tickErr, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60))
 		}
+		session.Close()
 	}
 	if attempted == 0 {
 		t.Fatal("no local KTF archives attempted")
@@ -540,7 +518,10 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 	if rendered == 0 && only == "" {
 		t.Fatal("no local KTF game rendered a first frame")
 	}
-	t.Logf("rendered first frames: %d of %d", rendered, attempted)
+	// The denominator is the archives this probe can start. Archives of the
+	// earlier generation are reported beside it rather than inside it.
+	t.Logf("rendered first frames: %d of %d JAR-packaged archives (%d earlier-package archives skipped)",
+		rendered, attempted, skipped)
 }
 
 func frameHasContent(frame []byte) bool {

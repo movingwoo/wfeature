@@ -1117,6 +1117,25 @@ The local corpus has an opt-in probe of its own now —
 300 ticks and requires a frame with something lit in it. All fifteen pass.
 [`testing.md`](testing.md) has what it does and does not claim.
 
+### An SKT A/B has a per-title noise floor, and it is not zero
+
+Driving all fifteen archives through the same script under two builds and
+diffing the captured frames is the regression net for a change to shared code,
+and like the KTF sweep — and unlike LGT's, whose route replays byte-identically
+— it is only readable against a floor measured first. At 300 ticks per archive,
+**eleven of fifteen come back byte-identical and four differ**, and running the
+*same* binary twice gives those four the same differing-pixel counts it gives
+two different builds. The floor is per title, not per corpus: one title
+disagrees with itself over roughly two hundred pixels a frame while another
+sits under a hundred, so the number that matters is the one measured for *that*
+archive, taken base-versus-base, before any of it is read as a finding.
+
+What counts as evidence is what counts on KTF: a title that stops where the
+other build did not, an error text that changes, or a difference far enough
+outside that title's own base-versus-base count to be a layout rather than an
+animation phase. See "An A/B sweep of the local set is half noise" in
+[`ktf.md`](ktf.md) for why a differing frame count carries so little on its own.
+
 There is still **no SKT game archive in this repository**, so nothing here is tested
 against a real title in CI — only against a newly authored fixture
 (`internal/platform/skt/testdata/skvm.jar`) that exercises each surface and

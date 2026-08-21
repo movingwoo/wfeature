@@ -3650,6 +3650,132 @@ run where both recorded zero before. Across the whole KTF corpus the first-frame
 A/B is unchanged: six frames differ and they are the six that differ from
 themselves.
 
+## Guest workers unwound together when the session closed
+
+Guest threads are handed the processor strictly: `ServiceThreads` grants one
+worker a step slice, blocks on that worker's events channel, and only then
+looks at the next one, so during play exactly one goroutine is inside the
+runtime. The comment at the top of `workers.go` says runtime state is never
+touched by two goroutines at once, and for the tick loop that was true. **For
+the close it was not**, and the race detector said so.
+
+```sh
+go run -race -tags debug ./cmd/cli runktf <archive> -play -ticks 200
+```
+
+Over the local corpus that reported a race for **7 of the 35 archives**, three
+or four per run, and every report was printed *after* the run's JSON summary —
+after the last tick, while the workers were being stopped. Both sides of every
+one of them were the same instruction: the deferred restore of `currentThread`
+and `currentContext` at the end of `handleSupervisorCall`, reached from two
+different `guestWorker` goroutines.
+
+The mechanism follows from what stopping did. `StopThreads` closed every
+worker's grant channel at once; each parked worker's `park` then answered
+`errWorkersStopped`, and each unwound its own nested Go-and-guest call stack —
+deferred restores included — with nothing left to order it against the others.
+The tick loop's ordering came from the Host receiving one worker's event before
+granting the next, and at the close the Host was not in the middle any more.
+
+**The cost was not only a detector complaint.** One archive ended twice in about
+twenty runs with a Go stack over exactly that path and no summary line; the
+message above the stack was not captured, and it matters which it was, because
+`guestWorker.run` recovers a panic and turns it into a failed session — so a
+crash that reaches the process is either something `recover` cannot catch, such
+as a concurrent map write, or something outside the recovered call. Where it
+landed was worse than the CLI made it look: `runktf` exits immediately
+afterwards, so a crash there costs an exit code, but `Session.Close` is the
+same call and the server runs it in a process that is holding every other live
+session.
+
+**The fix gives the close the tick loop's ordering.** `StopThreads` now closes
+one worker's grant channel, waits for that worker's goroutine to return, and
+only then touches the next, so the unwinds are as serial as the slices were.
+Each worker closes a `finished` channel on every exit — including the exit of a
+worker that was stopped before it was ever granted a slice, which sends no
+event and would otherwise be waited on for nothing. The wait drains events as
+well: a park that races the abort blocks on a full events channel, and a worker
+blocked there never reaches its own return. It is bounded at five seconds per
+worker, with a warning if one runs out; a guest that somehow swallows the abort
+then costs a session teardown rather than the Host goroutine.
+
+The channel operations are also what the race detector wants, not just an
+ordering in wall-clock time: one worker's writes happen before its `finished`
+close, which happens before the next worker's grant is closed.
+
+Two runs check it. `TestStoppedWorkersUnwindOneAtATime` stands eight parked
+workers in front of a real `StopThreads` and has each write the two runtime
+fields on its way out — with the old close it reports a data race and finds no
+worker finished; `-race` is what makes it worth running. The corpus sweep above
+is the other: **35 of 35 archives, no race reported, no crash**.
+
+The same command reports nothing for an LGT or an SKT title. Their thread
+models are their own and neither shares a field this way, but neither has been
+swept the way this corpus has. LGT's `StopJavaThreads` has the same shape as
+the KTF close did — every grant channel closed in one pass — so if a report
+ever appears there, this section is the fix to copy.
+
+## A third download gate, and the lever that did not open it
+
+A title from a third series opens on a prompt of the same family as the two
+above: it offers to fetch 700KB of extra data — the call charged separately —
+plus a 160KB install, and asks yes or no. Both answers end the same way the
+second gate's did.
+
+- **No** calls `Jlet.notifyDestroyed` from the key handler. The session ends
+  and the Host reports the run as an exit, which is the title behaving
+  correctly rather than a failure (see "A game that ends is not a game that
+  failed" in [`session.md`](session.md)).
+- **Yes** reaches the title's own `네트워크 접속이 실패 하였습니다. 다시
+  시작하세요` notice and stops on it. There is no server to dial and no way
+  back from that screen.
+
+**The archive already carries what it offers to download.** Its JAR holds 173
+entries besides the client image — resource trees named by number, plus two
+tables — and they come to 857KB, comfortably over the 700 plus 160 the prompt
+names. So this is the second gate's shape again: the data is present and the
+title is deciding not to look at it.
+
+**Nothing here is missing, and the diagnostics say so.** Over 1,200 ticks the
+boundary counts name no stub, no unimplemented table entry, no throw and no
+raise. What they do show is the title repainting one card every tick and its
+own resource engine printing `js_commonResInvokeNativeClinit(<address>)` on a
+loop — a title going round its prompt, not one waiting on this platform.
+
+**The lever that opened the second gate does not move this one.** That gate was
+a length test on the subscriber number, so a three- or four-digit
+`WFEATURE_PHONE_NUMBER` walked past it. Here the same short numbers leave the
+prompt pixel-identical, which says the decision is being made from something
+else. What that something is has not been traced yet: the second gate gave
+itself away in the order of what it opened and asked for before it painted, and
+that trace — every database open, every property read, every resource lookup
+before the first flush — is what this one still needs.
+
+## The earlier package's title screen carries a band this runtime cannot explain
+
+The native package's title screen — the generation "An earlier KTF package"
+above describes — draws a horizontal band across the middle of the screen
+whose colours look nothing like the artwork above and below it, and the menu
+draws over the top of it. Two things are established about it and no more:
+
+- **it is not a transition.** Frames captured across a 900-tick run are
+  byte-identical from the moment the logo appears — 0 differing pixels between
+  tick 300, tick 450 and tick 899 — so nothing is mid-animation and nothing is
+  being redrawn wrong on later frames.
+- **the whole screen is quantised to a small palette.** Every channel in and
+  around the band lands on a multiple of about 36 (0, 35, 71, 107, 143, 182,
+  218, 255) and a row inside the band holds between one and nine distinct
+  colours. That is what a low-bit-depth source expanded to eight bits per
+  channel looks like, and it is as true of the parts that read correctly as of
+  the band.
+
+So the band is either the title's own artwork drawn from a palette this small
+or an image decoded against the wrong stride or component order, and the two
+look alike from the framebuffer. Settling it means going to the packaged image
+rather than to the screen: that generation's images arrive through platform
+slot 25 from a `.mif` whose header carries the stride, which is where a
+band-shaped error would come from.
+
 ## Deliberately incomplete
 
 - repairing a guest write to a published instance field rather than reporting
