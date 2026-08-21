@@ -3344,7 +3344,9 @@ title a second press with no release between, which no handset delivers and
 which a title that reads a press as a fresh tap acts on twice. A repeat
 delivers nothing here, and a held key stays held because the title tracks the
 press and the release itself. The generation that does have a repeat event —
-WIPI Java's `keyNotify`, which takes the type — still receives them.
+WIPI Java's `keyNotify`, which takes the type — still receives one, though not
+the browser's: a Host drops that and makes the handset's own "600:250" instead
+(`session.md`, "A held key repeats on the handset's clock").
 (`lgt.md` "A Host repeat is not a second press" has the screens that made this
 visible on the other platform.)
 

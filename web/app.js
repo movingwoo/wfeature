@@ -250,7 +250,7 @@ const sendKey = (eventType, name) => {
   if (code === undefined || !gameRunning) return;
   // Input lands in the log too, so a live watcher can line up what the guest
   // did against what was actually pressed.
-  if (eventType !== "repeat") recordEvent(`key ${eventType} ${name} (${code})`);
+  recordEvent(`key ${eventType} ${name} (${code})`);
   // Nothing waits for an acknowledgement: a key is worth one packet, and a
   // round trip per press would put the network in the input path.
   session?.sendKey(eventType, code);
@@ -386,9 +386,15 @@ const initInput = () => {
     const name = keyboardMap[event.code];
     if (!name) return;
     event.preventDefault();
+    // A keydown the operating system repeated is not a second press, and it
+    // is not the handset's repeat either: that cadence is the user's keyboard
+    // setting rather than a phone's "600:250". The key is already down as far
+    // as the game is concerned, and the server makes the handset's repeat for
+    // the platforms that have the event — so this one goes nowhere.
+    if (event.repeat) return;
     keysDown.set(event.code, name);
     showPressed(name, true);
-    sendKey(event.repeat ? "repeat" : "press", name);
+    sendKey("press", name);
   });
   // A release answers what is held rather than what is bound: a modifier
   // pressed between the two, or a rebinding, would otherwise lose the keyup and

@@ -1006,8 +1006,12 @@ operating system's repeats injected now reproduces the plain run's screen at
 every checkpoint. The earlier KTF package has the same shape — a pressed and a
 released application event and no third one — and dropped a repeat there for
 the same reason (`ktf.md` "The title takes keys as events"). The two platforms
-that do have a repeat event of their own keep receiving them: WIPI Java's
-`keyNotify` takes the type, and a MIDP `Canvas` has `keyRepeated`.
+that do have a repeat event of their own keep receiving one: WIPI Java's
+`keyNotify` takes the type, and a MIDP `Canvas` has `keyRepeated`. **What they
+receive is no longer the Host's**, for the reason the paragraph below measured
+— the operating system's cadence is the wrong one — so the Host drops that too
+and makes the specification's on its own clock (`session.md`, "A held key
+repeats on the handset's clock").
 
 **It was the cadence rather than the repeat.** A press repeated at the
 specification's own timing — the first after 600ms, then one every 250ms —
@@ -1015,7 +1019,8 @@ leaves the title that dashed drawing frames identical to no repeats at all.
 Only the operating system's cadence, thirty a second, reads as a run of taps.
 That is worth knowing because it says what a repeat may cost if one is ever
 needed, and it is why the fix below sends a press at a state change rather than
-on a clock.
+on a clock. It is also the measurement the handset cadence now rests on for the
+two platforms that do take a repeat.
 
 ### A release stops a character the pad has moved on from
 

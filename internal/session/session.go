@@ -25,6 +25,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/filter/hqx"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/keypad"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
@@ -186,6 +187,24 @@ type Session struct {
 	// are advanced by the Host rather than by a clock of their own.
 	startedAt time.Time
 
+	// repeat is the handset's key repeat, which this layer makes rather than
+	// forwards. See repeatDue.
+	repeat keypad.Repeat
+	// held tracks what the WIPI Java path told the guest is down, so a repeat
+	// can name it. That path delivers what the Host reports — the pad rule is
+	// the other two platforms', for the reason `docs/ktf.md` measured — so the
+	// zero value, which passes every key through, is the whole of it here. The
+	// MIDP runtime has a pad of its own and answers for itself.
+	held keypad.Pad
+	// speed is the multiplier the Host last asked for, which the repeat clock
+	// runs at. Zero is the speed the game was written for.
+	speed float64
+	// lastTick is when the repeat clock was last advanced, and now is that
+	// clock — a seam a test moves by hand, because a cadence measured in
+	// hundreds of milliseconds is not something to wait out.
+	lastTick time.Time
+	now      func() time.Time
+
 	// scaler holds the magnification filter's working buffers between frames.
 	// It is here rather than in the filter because a session is what has a
 	// stream of frames, and one is what a Scaler belongs to; frames are taken
@@ -209,7 +228,9 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 	if err != nil {
 		return nil, err
 	}
-	session := &Session{platform: platform, summary: summary, options: options}
+	// The repeat clock takes the speed the same way SetSpeed gives it to it: a
+	// session started at a multiplier is a guest already running at that pace.
+	session := &Session{platform: platform, summary: summary, options: options, speed: options.Speed}
 
 	switch platform {
 	case detect.KTF:
@@ -376,6 +397,9 @@ var ErrUnsupportedArchive = errors.New("session: the archive is not a KTF, LGT o
 // guest code cannot be suspended mid-call, so a tick routinely runs past it by
 // the length of its last round.
 func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, error) {
+	if progress, ended, err := s.repeatDue(ctx); ended || err != nil {
+		return progress, err
+	}
 	switch {
 	case s.ktf != nil:
 		progressed, wait, err := s.ktf.TickFor(ctx, budget)
@@ -455,13 +479,29 @@ var ErrExited = errors.New("session: the game exited")
 // player looking at an error over the last frame of a game that simply
 // finished. Tick has always reported this; the input paths had not.
 func (s *Session) SendKey(ctx context.Context, action string, code int32) error {
+	if action == KeyRepeat {
+		// A Host's repeat is the operating system repeating a held keyboard
+		// key, thirty a second at a cadence the user configured, and no
+		// handset ever sent that. It is dropped on every platform: the two
+		// that have a repeat event of their own are given the handset's
+		// instead, on this session's clock rather than the browser's, and the
+		// page has stopped sending these at all. See repeatDue.
+		if !s.Running() {
+			return ErrNotRunning
+		}
+		return nil
+	}
 	switch {
 	case s.ktf != nil:
 		eventType, ok := ktfKeyEventType(action)
 		if !ok {
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
-		return s.endedOrFailed(s.ktf.SendKey(ctx, eventType, ktfKeyCode(code)))
+		// The repeat clock names the key the guest was given, which is this
+		// one: the WIPI Java path delivers what the Host reports.
+		key := ktfKeyCode(code)
+		s.held.Key(action == KeyPress, key)
+		return s.endedOrFailed(s.ktf.SendKey(ctx, eventType, key))
 	case s.ktfNative != nil:
 		eventType, ok := ktfKeyEventType(action)
 		if !ok {
@@ -486,6 +526,93 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 		return s.runtime.SendKey(skt.KeyEventType(action), code)
 	}
 	return ErrNotRunning
+}
+
+// repeatDue makes the handset's key repeat and delivers the one it owes, which
+// is what a tick does before it runs the guest.
+//
+// **This layer makes the repeat rather than passing one on.** The two runtimes
+// with a repeat event of their own — WIPI Java's `keyNotify` and a MIDP
+// Canvas's `keyRepeated` — used to be handed the browser's, which is the
+// operating system repeating a held keyboard key at whatever cadence the user
+// configured. A handset's is `KEYREPEAT`, "600:250": the first after 600ms,
+// then one every 250ms (`docs/lgt.md`, "A Host repeat is not a second press",
+// which measured what the two cadences do to a title). Making it here also
+// gives the on-screen keypad one, which the page never sent: a thumb holding a
+// button on a touchscreen is a key held down like any other.
+//
+// It returns a Progress and true only where the repeat ended the game, which a
+// key can do on any platform that has a menu with "quit" in it.
+func (s *Session) repeatDue(ctx context.Context) (Progress, bool, error) {
+	elapsed := s.guestSinceLastTick()
+	s.repeat.Holding(s.heldKey())
+	code, due := s.repeat.Due(elapsed)
+	if !due {
+		return Progress{}, false, nil
+	}
+	// Taken before the delivery: a guest that exits inside it leaves nothing
+	// to ask afterwards, and the frame it exited on is the one to draw.
+	flushes := s.Flushes()
+	switch err := s.deliverRepeat(ctx, code); {
+	case err == nil:
+		return Progress{}, false, nil
+	case errors.Is(err, ErrExited):
+		return Progress{Flushes: flushes, Exited: true}, true, nil
+	default:
+		return Progress{Flushes: flushes}, true, err
+	}
+}
+
+// heldKey answers what the guest believes is down, which is the pad's answer
+// rather than the Host's: a thumb that rolled off one direction onto another
+// is holding a key the Host never pressed a second time. The platforms with no
+// repeat event answer false — LGT's Clet events are a press and a release, and
+// so are the earlier KTF package's.
+func (s *Session) heldKey() (int32, bool) {
+	switch {
+	case s.ktf != nil:
+		return s.held.Held()
+	case s.runtime != nil:
+		return s.runtime.HeldKey()
+	}
+	return 0, false
+}
+
+// deliverRepeat hands one repeat to a platform that has the event.
+func (s *Session) deliverRepeat(ctx context.Context, code int32) error {
+	switch {
+	case s.ktf != nil:
+		return s.endedOrFailed(s.ktf.SendKey(ctx, ktf.KeyRepeated, code))
+	case s.runtime != nil:
+		return s.runtime.SendKey(skt.KeyRepeated, code)
+	}
+	return nil
+}
+
+// guestSinceLastTick is how much of the guest's time has passed since the last
+// tick asked. It is the wall's, scaled by the speed the Host set, because that
+// is what a multiplier means everywhere else here: the guest's clock runs at
+// that rate and the waits between its callbacks cost that much less. A handset
+// running twice as fast repeated a held key twice as often.
+func (s *Session) guestSinceLastTick() time.Duration {
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	at := now()
+	if s.lastTick.IsZero() {
+		s.lastTick = at
+		return 0
+	}
+	elapsed := at.Sub(s.lastTick)
+	s.lastTick = at
+	if elapsed <= 0 {
+		return 0
+	}
+	if s.speed > 0 {
+		return time.Duration(float64(elapsed) * s.speed)
+	}
+	return elapsed
 }
 
 // endedOrFailed sorts a guest's ending from a real failure. Both arrive as an
@@ -637,6 +764,9 @@ func (s *Session) magnify(frame []byte, width, height int) ([]byte, int, int, bo
 // though what is underneath differs: a virtual clock the tick moves on LGT, a
 // scaled wall clock on KTF, and the VM's own sleeps on a MIDlet.
 func (s *Session) SetSpeed(multiplier float64) {
+	// The repeat clock is scaled by hand because it is this layer's own; every
+	// platform below scales its clock for itself.
+	s.speed = multiplier
 	if s.ktf != nil {
 		s.ktf.SetSpeed(multiplier)
 	}
@@ -694,6 +824,10 @@ func (s *Session) Close() {
 		_ = s.runtime.Destroy(true)
 		s.runtime = nil
 	}
+	// Nothing is held once there is no game to hold it, and a repeat that
+	// outlived its session would name a key on a platform that is gone.
+	s.repeat.Forget()
+	s.held.Forget()
 	// The captured surface goes with it, so a closed session answers the same
 	// way on every platform: there is no frame, because there is no game. A
 	// Host that wants the last picture on screen already has it — it was sent
@@ -703,14 +837,14 @@ func (s *Session) Close() {
 
 // ktfKeyEventType maps the Host event names shared with the MIDP path to the
 // WIPI keyNotify types.
+// A Host's repeat is not one of them: SendKey drops it before it gets here,
+// and the repeat this platform does deliver is made by repeatDue.
 func ktfKeyEventType(action string) (int32, bool) {
 	switch action {
 	case KeyPress:
 		return ktf.KeyPressed, true
 	case KeyRelease:
 		return ktf.KeyReleased, true
-	case KeyRepeat:
-		return ktf.KeyRepeated, true
 	}
 	return 0, false
 }
@@ -733,8 +867,6 @@ func lgtKeyEvent(action string) (pressed, deliver, ok bool) {
 		return true, true, true
 	case KeyRelease:
 		return false, true, true
-	case KeyRepeat:
-		return false, false, true
 	}
 	return false, false, false
 }

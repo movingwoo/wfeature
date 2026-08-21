@@ -51,7 +51,7 @@ envelope at all.
 | From the page | Means |
 |---|---|
 | `start` | run this archive, named by its `games.json` path, optionally on a named screen size |
-| `key` | one press, release or repeat, with the MIDP-style code the keypad has always sent |
+| `key` | one press or release, with the MIDP-style code the keypad has always sent. A page may still send `repeat`; it is dropped, and the section below says why |
 | `speed`, `scale` | the settings panel's two knobs. `speed` reaches every platform; see "One setting, three clocks" in [`cli.md`](cli.md) for what each one scales |
 | `cheat` | one panel operation, or a text console line |
 | `report` | write the session's diagnostics under `logs/` |
@@ -116,6 +116,65 @@ the second button a key is printed on, which the type-2 and type-3 layouts both
 do — are one press between them, released when the last of them leaves. That
 bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
 can drive it directly; what is under the finger stays `app.js`'s question.
+
+### A held key repeats on the handset's clock, not the keyboard's
+
+A handset repeated a key it was holding, and the specification writes the
+cadence down: `KEYREPEAT`, "600:250" — the first repeat after 600ms, then one
+every 250ms. A browser repeats a held key too, and neither the timing nor the
+meaning is the same: the operating system sends a keydown roughly thirty times
+a second, at a rate the user configured in their own settings, and it is not
+telling the page about a handset at all.
+
+The page used to forward those as a `key` message with the action `repeat`, and
+what became of one depended on the platform underneath. Two of them have no
+repeat event — a Clet's are a press and a release, and so are the earlier KTF
+package's — and there a forwarded repeat became a second press with no release
+between, which is the fault `lgt.md` ("A Host repeat is not a second press")
+measured and closed. The other two do have the event, WIPI Java's `keyNotify`
+type 3 and a MIDP `Canvas`'s `keyRepeated`, and there the repeat was passed
+straight through: the title got the user's keyboard cadence, thirty a second,
+where a handset would have given it four.
+
+**So a repeat is made here rather than forwarded.** The page sends nothing for
+an operating system repeat, and this layer runs the handset's clock instead
+([`internal/keypad`](../internal/keypad/repeat.go), `Session.repeatDue`):
+
+- **What repeats is what the guest believes is down**, which the pad answers
+  (`Pad.Held`) rather than the Host. After a thumb rolls off one direction onto
+  another, the key the Host is holding down is not the one the title was given,
+  and repeating the Host's would name a key the game does not think is pressed.
+  A different key restarts the wait, because pressing one is what a roll is.
+- **At most one repeat per tick, and the overshoot is carried.** A Host that
+  stalled — a long tick, a paused session — owes the missed ones to nobody:
+  delivering the backlog at once is exactly the burst that read as a run of
+  taps. But measuring the next interval from the tick that noticed rounds every
+  one of them up to a tick, and a tick is not free: on the WIPI Java platform,
+  whose rounds are the more expensive, a four-second hold delivered 18 repeats
+  where the handset's number is 22. Carrying the overshoot — up to one interval,
+  after which it is a stall rather than jitter — put it back at 22, and the MIDP
+  platform, whose ticks are a frame, was 14 in four seconds either way.
+- **The clock is the guest's.** The wall's interval is scaled by the speed
+  multiplier, the same as the guest's own clock and the waits between its
+  callbacks: a handset running twice as fast repeated twice as often.
+- **The platforms with no repeat event get nothing**, as before.
+
+Two things come out of doing it here rather than in the page. The on-screen
+keypad now repeats as well — a thumb holding a button on a touchscreen is a key
+held down, and the page never sent a repeat for one — and the cadence no longer
+varies with whose keyboard is in front of the emulator.
+
+What the corpus says about who is waiting for it: five of the fifteen local SKT
+titles override `keyRepeated`, so there are callers there. The WIPI Java side
+cannot be asked the same question — those titles arrive compiled, with their
+method names gone (`ktf.md`, "What the corpus names, and what it never asks
+for") — so what a title does with type 3 is known only by running one.
+
+Both were run. Holding a direction on a local title of each reached the game's
+own class at the handset's cadence: type 3 into the card stack on one, and
+`keyRepeated` on the Canvas subclass of the other, with the release after it.
+What neither run settles is what a title *does* with a repeat, which is the
+title's business and differs between them.
 
 ### The speed belongs to the game, not to the page
 

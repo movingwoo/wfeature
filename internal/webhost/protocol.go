@@ -26,8 +26,12 @@ type clientMessage struct {
 	// Game is the archive path from games.json, for kind "start".
 	Game string `json:"game,omitempty"`
 
-	// Action and Code carry one key event: "press", "release" or "repeat",
-	// and the MIDP-style code the keypad has always sent.
+	// Action and Code carry one key event: "press" or "release", and the
+	// MIDP-style code the keypad has always sent. A page may still send
+	// "repeat" — the operating system's repeat of a held keyboard key — and
+	// the session drops it: the repeat a title gets is the handset's, made on
+	// the session's clock. See `docs/session.md`, "A held key repeats on the
+	// handset's clock".
 	Action string `json:"action,omitempty"`
 	Code   int32  `json:"code,omitempty"`
 
