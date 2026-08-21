@@ -3329,6 +3329,25 @@ the five-way pad is the ring around the 5:
 0xe032 up      0xe034 left    0xe035 select    0xe036 right    0xe038 down
 ```
 
+Neither generation of this platform needs the pad rule the other two carry
+(`lgt.md` "A release stops a character the pad has moved on from"). It was
+measured rather than assumed: two titles were driven into their world and the
+release of a direction they had already moved on from was delivered in one run
+and withheld in the other, with everything else identical. **Every frame came
+out byte-identical both ways** — these titles do not drop a held direction when
+another key goes up, so there is nothing here for a Host to paper over.
+
+There is no third event, which decides what a Host does with a key repeat. A
+browser page forwards the operating system's repeat of a held keyboard key, and
+this package has nothing to put it in: sending it on as a press would hand the
+title a second press with no release between, which no handset delivers and
+which a title that reads a press as a fresh tap acts on twice. A repeat
+delivers nothing here, and a held key stays held because the title tracks the
+press and the release itself. The generation that does have a repeat event —
+WIPI Java's `keyNotify`, which takes the type — still receives them.
+(`lgt.md` "A Host repeat is not a second press" has the screens that made this
+visible on the other platform.)
+
 Sweeping codes and comparing the frame afterwards is what proved it, and it is
 worth saying why the sweep had to be *shaped*: a sweep of 0 to 63 moves
 nothing, because no code in that range is a key. A sweep of `0xe000` upwards

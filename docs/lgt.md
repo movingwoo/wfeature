@@ -980,6 +980,112 @@ So repeats stay unimplemented for the reason anything else here does: there is
 no caller, and a cadence invented for none would be a contract this platform
 would then have to keep.
 
+#### A Host repeat is not a second press, and forwarding it dashed
+
+Not generating repeats is only half of it. **The Host's key vocabulary has
+three actions, not two**: a browser page is told about a held keyboard key by
+the operating system repeating the keydown — every hundredth of a second or so
+once its half-second delay is up, at a cadence the user configures and this
+project does not control — and `web/app.js` forwards those as `repeat`. The
+session layer translated one into a press, because a Clet has no other kind to
+put it in.
+
+That invents an event no handset delivers: **a second press with no release
+between**. Two local titles read a press as a fresh tap and dash on it, so
+holding a direction dashed again on every repeat the operating system sent —
+reported, exactly, as "it dashes over and over like auto-fire". The frames say
+it plainly: replaying an in-game route twice, identical up to the first repeat,
+the two runs differ over more than half the screen four ticks later, and the
+character in the repeated run is drawn mid-dash with the trail of after-images
+the title only draws for one.
+
+So a repeat delivers **nothing** here (`lgtKeyEvent` in `internal/session`).
+A held key is a press and a release, which is what the handset sent and what
+these titles already track for themselves; re-running the same route with the
+operating system's repeats injected now reproduces the plain run's screen at
+every checkpoint. The earlier KTF package has the same shape — a pressed and a
+released application event and no third one — and dropped a repeat there for
+the same reason (`ktf.md` "The title takes keys as events"). The two platforms
+that do have a repeat event of their own keep receiving them: WIPI Java's
+`keyNotify` takes the type, and a MIDP `Canvas` has `keyRepeated`.
+
+**It was the cadence rather than the repeat.** A press repeated at the
+specification's own timing — the first after 600ms, then one every 250ms —
+leaves the title that dashed drawing frames identical to no repeats at all.
+Only the operating system's cadence, thirty a second, reads as a run of taps.
+That is worth knowing because it says what a repeat may cost if one is ever
+needed, and it is why the fix below sends a press at a state change rather than
+on a clock.
+
+### A release stops a character the pad has moved on from
+
+Dropping the repeats uncovered what they had been hiding, reported as "it walks
+and then just stops". The player's own log of the moment named it exactly:
+
+```
+press LEFT
+press DOWN      0.3s later, left still down
+release LEFT    31ms after that
+release DOWN    3.3s later — and the character stood still for all of it
+```
+
+A title here keeps **one direction and drops it when a pad key goes up**. That
+is the right shape for the control these games were written for: a thumb rolls
+off one direction and onto the next, and a pad cannot have two down at once.
+It is the wrong shape for the control they are played with here, where ten
+fingers hold two arrow keys at a time and let go in whichever order they like.
+
+Two measurements say it is the release and only the release:
+
+- **Both directions held, nothing released, and the character keeps walking.**
+  So a second direction arriving is not what stops it.
+- **The attack key stops it with no release at all.** Press a direction, press
+  the attack key and never let go, and the character stops just the same. That
+  one is the title's own doing, not the platform's, and it is why the pad is
+  the only thing treated specially below.
+
+So `Session.SendKey` gives the title the pad rather than the keyboard: a pad
+key that goes up while another is still down delivers **nothing**, because the
+pad is still reporting a direction and nothing has changed for the title. Only
+two things reach the game — a press for the direction that is now under the
+thumb, when the key released was the one it was using, and a release when the
+last pad key comes up, naming the direction the title was actually given. The
+rule itself is in [`internal/keypad`](../internal/keypad/keypad.go), because
+the MIDP runtime needed the same one; what belongs to a platform is only which
+codes are the pad.
+
+**The pad here is eight keys, not four.** The four navigation codes are the
+obvious half; 2, 4, 6 and 8 are the same pad under the digits, which is how
+these titles were played on a keypad and how half the local routes drive them.
+The other digits are not the pad: one title draws its skill shortcuts on 1, 3,
+7, 9 and 0 — the corners the pad does not use — and those are actions, where an
+extra press would be an extra cast.
+
+**The rule that did not work is worth keeping written down**, because it looks
+obvious: re-announce the held direction with a press after *any* key goes up.
+It fixes the stop, and it makes a title dash at random. Rolling around the pad
+presses the next direction and lifts the previous one forty milliseconds later,
+so the re-announcement lands a fraction of a second after that direction's real
+press — which is a double tap, which is a dash. The player found it in a
+minute: "I never dashed once and it dashes while I turn." The version that
+ships adds no press a player did not make.
+
+Two more measurements bound it:
+
+- The specification's repeat kind, 504, delivered at 600/250 while a key was
+  held, produces **byte-identical frames** on both local titles that were
+  reported: neither reads it. A repeat event would have been the tidy answer
+  and it is inert.
+- A run with only one key held is **byte-identical before and after**, on both
+  titles: nothing changes until two pad keys overlap.
+
+What this assumes is that a title keeps one direction rather than a set of
+them, which is exactly what the reported stop proves about the two measured
+here — a title holding a set would have cleared one bit and walked on. A title
+that walks diagonally by holding two pad keys would instead keep the released
+one until the pad empties, and that is the thing to look at first if a
+character ever drifts sideways.
+
 ### A facing is read off the sprite, and it needs magnifying to be read at all
 
 One title was reported turning the wrong way: pressing left and attacking left

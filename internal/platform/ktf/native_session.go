@@ -243,13 +243,35 @@ func (session *NativeSession) SendKey(ctx context.Context, eventType, key int32)
 		// sending it would be indistinguishable from a mapping that is wrong.
 		return nil
 	}
-	switch eventType {
-	case KeyPressed, KeyRepeated:
-		return session.platform.Key(ctx, code, true)
-	case KeyReleased:
-		return session.platform.Key(ctx, code, false)
+	pressed, deliver, ok := nativeKeyEvent(eventType)
+	if !ok {
+		return fmt.Errorf("KTF native key event type %d is not one of pressed, released or repeated", eventType)
 	}
-	return fmt.Errorf("KTF native key event type %d is not one of pressed, released or repeated", eventType)
+	if !deliver {
+		return nil
+	}
+	return session.platform.Key(ctx, code, pressed)
+}
+
+// nativeKeyEvent says what one WIPI key event type becomes here, and deliver is
+// what a repeat needs: nothing is sent for one.
+//
+// A title in this package takes a key as an application event, and it compares
+// against two of them: pressed and released. There is no repeated event to
+// send, and forwarding one as a press would deliver a second press with no
+// release between — which no handset does, and which a title that reads a
+// press as a fresh tap acts on twice. A held key stays held without it,
+// because the title tracks the press and the release itself.
+func nativeKeyEvent(eventType int32) (pressed, deliver, ok bool) {
+	switch eventType {
+	case KeyPressed:
+		return true, true, true
+	case KeyReleased:
+		return false, true, true
+	case KeyRepeated:
+		return false, false, true
+	}
+	return false, false, false
 }
 
 // SetSpeed scales how fast the title runs. It is the same setting and the same

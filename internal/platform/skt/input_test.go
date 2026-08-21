@@ -26,3 +26,18 @@ func TestKeyCodeByNameCoversTheNamesTheCommandLineUses(t *testing.T) {
 		}
 	}
 }
+
+// The pad this runtime hands the shared rule is the four navigation keys and
+// the digits a keypad prints them on: a local side-scroller walks on both.
+func TestThePadIsTheNavigationKeysAndTheDigitsUnderThem(t *testing.T) {
+	for _, code := range []int32{KeyCodeUp, KeyCodeDown, KeyCodeLeft, KeyCodeRight, '2', '4', '6', '8'} {
+		if !isPadKey(code) {
+			t.Errorf("%d is not counted as the pad", code)
+		}
+	}
+	for _, code := range []int32{KeyCodeFire, KeyCodeSoft1, KeyCodeSoft2, KeyCodeClear, '1', '3', '5', '7', '9', '0', '*', '#'} {
+		if isPadKey(code) {
+			t.Errorf("%d is counted as the pad", code)
+		}
+	}
+}

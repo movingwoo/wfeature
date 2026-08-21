@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/keypad"
 )
 
 // Session is the driver a Host runs an LGT game through: start it, tick it,
@@ -30,6 +31,10 @@ type Session struct {
 
 	cheat        *cheat.Session
 	cheatConsole *cheat.Console
+
+	// pad makes a keyboard's overlapping holds look like a thumb on a handset
+	// pad; see SendKey.
+	pad keypad.Pad
 }
 
 // SessionOptions configures a session.
@@ -442,16 +447,40 @@ const (
 	EventKeyRepeated uint32 = 504
 )
 
+// The direction pad, in the WIPI values a Clet compares against. The four
+// navigation keys are the pad a handset has; 2, 4, 6 and 8 are the same pad
+// under the digits, which is how these titles were played on a keypad and how
+// half the local routes drive them. The other digits are not: one title draws
+// its skill shortcuts on 1, 3, 7, 9 and 0, and those are actions.
+func isPadKey(keyCode uint32) bool {
+	switch keyCode {
+	case 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC: // up, down, left, right
+		return true
+	case '2', '4', '6', '8':
+		return true
+	}
+	return false
+}
+
 // SendKey queues one key event for the game.
+//
+// The events are what the pad reports rather than what the keyboard did; see
+// `internal/keypad` for the rule and `docs/lgt.md` "A release stops a
+// character the pad has moved on from" for the screens that produced it.
 func (session *Session) SendKey(pressed bool, keyCode uint32) {
 	if session == nil || session.client == nil {
 		return
 	}
-	kind := EventKeyReleased
-	if pressed {
-		kind = EventKeyPressed
+	if session.pad.IsPad == nil {
+		session.pad.IsPad = func(code int32) bool { return isPadKey(uint32(code)) }
 	}
-	session.client.SendEvent(kind, keyCode, 0)
+	for _, event := range session.pad.Key(pressed, int32(keyCode)) {
+		kind := EventKeyReleased
+		if event.Pressed {
+			kind = EventKeyPressed
+		}
+		session.client.SendEvent(kind, uint32(event.Code), 0)
+	}
 }
 
 // Close ends the game.
