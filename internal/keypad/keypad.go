@@ -35,7 +35,19 @@ type Pad struct {
 	held       []int32
 	underThumb int32
 	pressed    bool
+
+	// downCode is the key the guest was last told is down, and down says
+	// whether it has been told about a release since. It is what a repeat has
+	// to name: after a thumb rolls off one direction and onto another, the key
+	// the Host reports as held is not the one the guest was given.
+	downCode int32
+	down     bool
 }
+
+// Held answers the key the guest currently believes is down, which is the last
+// press it was delivered and not yet released. A repeat names this rather than
+// what the Host reports — see Repeat.
+func (pad *Pad) Held() (int32, bool) { return pad.downCode, pad.down }
 
 // Key answers the events to deliver for one Host key event.
 //
@@ -57,6 +69,10 @@ type Pad struct {
 // When the last pad key comes up, the release names the direction the guest
 // was actually given, which is not always the key the Host is reporting.
 func (pad *Pad) Key(pressed bool, code int32) []Event {
+	return pad.note(pad.key(pressed, code))
+}
+
+func (pad *Pad) key(pressed bool, code int32) []Event {
 	if pad.IsPad == nil || !pad.IsPad(code) {
 		return []Event{{Pressed: pressed, Code: code}}
 	}
@@ -81,11 +97,27 @@ func (pad *Pad) Key(pressed bool, code int32) []Event {
 	return []Event{{Pressed: true, Code: pad.underThumb}}
 }
 
+// note records what the guest is being told, so that Held answers the key it
+// believes is down. A release names a key only when the guest is holding that
+// one: a key released while another is under the thumb changed nothing there.
+func (pad *Pad) note(events []Event) []Event {
+	for _, event := range events {
+		switch {
+		case event.Pressed:
+			pad.downCode, pad.down = event.Code, true
+		case pad.down && event.Code == pad.downCode:
+			pad.downCode, pad.down = 0, false
+		}
+	}
+	return events
+}
+
 // Forget drops what is held. A Host calls it when the guest can no longer be
 // holding anything — a game that ended, a session that was resumed.
 func (pad *Pad) Forget() {
 	pad.held = pad.held[:0]
 	pad.underThumb, pad.pressed = 0, false
+	pad.downCode, pad.down = 0, false
 }
 
 // hold records a pad key as down, most recent last. A key already down is not

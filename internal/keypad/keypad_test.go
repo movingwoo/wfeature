@@ -122,3 +122,68 @@ func TestForgetDropsWhatIsHeld(t *testing.T) {
 		t.Fatalf("after Forget a release delivered %v", got)
 	}
 }
+
+// What a repeat has to name is the key the guest was given, which after a
+// thumb rolls off one direction onto another is not the one the Host is
+// reporting as held.
+func TestTheHeldKeyIsWhatTheGuestWasTold(t *testing.T) {
+	for name, test := range map[string]struct {
+		send []step
+		code int32
+		held bool
+	}{
+		"a press is held": {
+			send: []step{{true, up}},
+			code: up, held: true,
+		},
+		"a release lets go": {
+			send: []step{{true, up}, {false, up}},
+		},
+		"a roll onto the next direction holds that one": {
+			send: []step{{true, left}, {true, up}},
+			code: up, held: true,
+		},
+		"letting go of a direction the guest moved on from holds nothing new": {
+			send: []step{{true, left}, {true, up}, {false, left}},
+			code: up, held: true,
+		},
+		"a roll back names the direction the pad rolled onto": {
+			send: []step{{true, left}, {true, up}, {false, up}},
+			code: left, held: true,
+		},
+		"a key that is not the pad is held like any other": {
+			send: []step{{true, fire}},
+			code: fire, held: true,
+		},
+		"the last key pressed is the one held": {
+			send: []step{{true, fire}, {true, up}},
+			code: up, held: true,
+		},
+		"a release of something else leaves the held key alone": {
+			send: []step{{true, fire}, {true, up}, {false, fire}},
+			code: up, held: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pad := newPad()
+			for _, send := range test.send {
+				pad.Key(send.pressed, send.code)
+			}
+			code, held := pad.Held()
+			if held != test.held || (held && code != test.code) {
+				t.Errorf("held = (%d, %v), want (%d, %v)", code, held, test.code, test.held)
+			}
+		})
+	}
+}
+
+// Forgetting is what a Host does when the guest can no longer be holding
+// anything, and a repeat that outlived it would name a key nobody pressed.
+func TestForgettingLetsGoOfTheHeldKey(t *testing.T) {
+	pad := newPad()
+	pad.Key(true, up)
+	pad.Forget()
+	if _, held := pad.Held(); held {
+		t.Error("a key is still held after Forget")
+	}
+}

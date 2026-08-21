@@ -88,14 +88,21 @@ MIDP navigation codes **and the digits 2, 4, 6 and 8** — the local
 side-scroller walks on both, which is what says the digits belong in it.
 
 A repeat is neither a press nor a release and does not move the pad; it is
-delivered as it arrives, which is what the five titles that override
-`keyRepeated` are waiting for.
+delivered to whatever the pad last reported, which is what the five titles that
+override `keyRepeated` are waiting for. **What arrives is the handset's repeat
+rather than a Host's**: a browser's repeat of a held keyboard key runs at the
+user's own keyboard setting, thirty a second where a handset sent four, so the
+Host layer drops it and makes the specification's "600:250" on the session's
+clock instead — `session.md`, "A held key repeats on the handset's clock". The
+key it names is this pad's answer (`Pad.Held`), because after a thumb rolls
+onto another direction the Host is holding a key the title was never given.
 
 Two things this deliberately does not do. It does not withhold a release for
 any key that is not the pad: those are actions, and a title that never hears
 the release of its attack key is worse off than one that stops walking. And it
-does not invent a repeat: what a held key does between its press and its
-release is the title's business.
+does not invent a repeat of its own: the one it delivers is the Host's clock
+asking for it, and what a held key does between the events is the title's
+business.
 
 ## The frame loop
 

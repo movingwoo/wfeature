@@ -78,6 +78,16 @@ func (runtime *Runtime) SendKey(eventType KeyEventType, keyCode int32) error {
 	return nil
 }
 
+// HeldKey answers the key this runtime last told the guest is down, which is
+// the pad's answer rather than the Host's: after a thumb rolls off one
+// direction onto another, they are not the same key. A Host generating the
+// handset's key repeat asks this for the key to repeat.
+func (runtime *Runtime) HeldKey() (int32, bool) {
+	runtime.padMu.Lock()
+	defer runtime.padMu.Unlock()
+	return runtime.pad.Held()
+}
+
 // isPadKey reports the direction pad: the four navigation keys, and the digits
 // a keypad prints them on. A local side-scroller walks on both, which is what
 // says the digits belong here; the other digits are actions and a title that

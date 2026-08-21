@@ -199,21 +199,29 @@ func TestStartTickAndFrameSpeakOnePlatformNeutralShape(t *testing.T) {
 }
 
 func TestKeyActionsAreAClosedSet(t *testing.T) {
-	for _, action := range []string{KeyPress, KeyRelease, KeyRepeat} {
+	for _, action := range []string{KeyPress, KeyRelease} {
 		if _, ok := ktfKeyEventType(action); !ok {
 			t.Errorf("the Host vocabulary %q is not translated", action)
 		}
+	}
+	// A Host's repeat is not translated on any platform now: it is the
+	// operating system's cadence rather than a handset's, and SendKey drops it
+	// before a platform is asked. The repeat a title does get is made by the
+	// session's own clock.
+	if _, ok := ktfKeyEventType(KeyRepeat); ok {
+		t.Error("a Host repeat was translated for the WIPI Java platform")
 	}
 	if _, ok := ktfKeyEventType("wiggle"); ok {
 		t.Fatal("an unknown key action was translated")
 	}
 }
 
-// A held keyboard key is repeated by the operating system and the page
-// forwards those keydowns. The platforms whose event kinds are a press and a
-// release have nothing to deliver for one, and delivering a press would hand
-// the title a second press with no release between — which is what made two
-// Clet titles dash again on every repeat the operating system sent.
+// A held keyboard key is repeated by the operating system, and what the page
+// used to forward was that cadence — thirty a second, set by the user rather
+// than by any handset. The platforms whose event kinds are a press and a
+// release have nothing to deliver for one either way, and delivering a press
+// would hand the title a second press with no release between, which is what
+// made two Clet titles dash again on every repeat.
 func TestARepeatIsNotASecondPressWhereNothingRepeats(t *testing.T) {
 	for _, test := range []struct {
 		action  string
@@ -222,7 +230,6 @@ func TestARepeatIsNotASecondPressWhereNothingRepeats(t *testing.T) {
 	}{
 		{KeyPress, true, true},
 		{KeyRelease, false, true},
-		{KeyRepeat, false, false},
 	} {
 		pressed, deliver, ok := lgtKeyEvent(test.action)
 		if !ok {
@@ -234,8 +241,114 @@ func TestARepeatIsNotASecondPressWhereNothingRepeats(t *testing.T) {
 				test.action, pressed, deliver, test.pressed, test.deliver)
 		}
 	}
+	if _, _, ok := lgtKeyEvent(KeyRepeat); ok {
+		t.Error("a Host repeat was translated for the Clet platform")
+	}
 	if _, _, ok := lgtKeyEvent("wiggle"); ok {
 		t.Fatal("an unknown key action was translated")
+	}
+}
+
+// The repeat a title does get is the handset's, made here rather than
+// forwarded: nothing for the first 600ms of a hold, then one every 250ms. The
+// fixture repaints on every key event it is given, so the flush counter is
+// what says whether one arrived.
+func TestAHeldKeyRepeatsOnTheHandsetsClock(t *testing.T) {
+	running, err := Start(context.Background(), sktFixture(t), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer running.Close()
+
+	at := time.Now()
+	running.now = func() time.Time { return at }
+
+	tick := func(advance time.Duration) uint64 {
+		t.Helper()
+		at = at.Add(advance)
+		progress, err := running.Tick(context.Background(), 8*time.Millisecond)
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if progress.Exited {
+			t.Fatal("the fixture exited")
+		}
+		return running.Flushes()
+	}
+
+	// The first tick anchors the clock, and the press is a press like any
+	// other: what follows is the only thing under test.
+	tick(0)
+	if err := running.SendKey(context.Background(), KeyPress, 148); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	flushes := tick(0)
+
+	if painted := tick(599 * time.Millisecond); painted != flushes {
+		t.Fatalf("the key repeated %v into the hold", 599*time.Millisecond)
+	}
+	if painted := tick(time.Millisecond); painted == flushes {
+		t.Fatal("no repeat once the handset's delay was up")
+	}
+	flushes = running.Flushes()
+	if painted := tick(249 * time.Millisecond); painted != flushes {
+		t.Fatal("a second repeat inside the handset's interval")
+	}
+	if painted := tick(time.Millisecond); painted == flushes {
+		t.Fatal("no repeat an interval after the first")
+	}
+
+	// Letting go stops it, and a Host's own repeat — which older pages still
+	// send — is not a substitute: it goes nowhere.
+	if err := running.SendKey(context.Background(), KeyRelease, 148); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	flushes = tick(0)
+	if painted := tick(time.Second); painted != flushes {
+		t.Fatal("a key that was let go of went on repeating")
+	}
+	if err := running.SendKey(context.Background(), KeyRepeat, 148); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	if painted := tick(0); painted != flushes {
+		t.Fatal("a Host repeat reached the game")
+	}
+}
+
+// A repeat is the handset repeating, so it runs at the speed the handset is
+// running at: everything else a multiplier touches is scaled the same way.
+func TestTheRepeatClockTakesTheSpeedTheHostSet(t *testing.T) {
+	running, err := Start(context.Background(), sktFixture(t), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer running.Close()
+
+	at := time.Now()
+	running.now = func() time.Time { return at }
+	running.SetSpeed(4)
+
+	tick := func(advance time.Duration) uint64 {
+		t.Helper()
+		at = at.Add(advance)
+		if _, err := running.Tick(context.Background(), 8*time.Millisecond); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		return running.Flushes()
+	}
+
+	tick(0)
+	if err := running.SendKey(context.Background(), KeyPress, 148); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	flushes := tick(0)
+	// A quarter of the handset's delay in wall time, which is the whole of it
+	// in a guest running four times as fast.
+	if painted := tick(149 * time.Millisecond); painted != flushes {
+		t.Fatal("the key repeated before the delay, even scaled")
+	}
+	if painted := tick(time.Millisecond); painted == flushes {
+		t.Fatal("no repeat once the scaled delay was up")
 	}
 }
 
