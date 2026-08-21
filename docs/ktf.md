@@ -3746,12 +3746,58 @@ loop — a title going round its prompt, not one waiting on this platform.
 a length test on the subscriber number, so a three- or four-digit
 `WFEATURE_PHONE_NUMBER` walked past it. Here the same short numbers leave the
 prompt pixel-identical, which says the decision is being made from something
-else. What that something is has not been traced yet: the second gate gave
-itself away in the order of what it opened and asked for before it painted, and
-that trace — every database open, every property read, every resource lookup
-before the first flush — is what this one still needs.
+else.
 
-## The earlier package's title screen carries a band this runtime cannot explain
+**The order before the first flush is now on the record, and it is short.**
+`-diag` on a run that stops at the first lit frame counts every crossing, and
+outside the class loading there are exactly six things in it: the title reads
+its three index tables (`5/ZipTable`, `7/ZipTable`, `9/ZipTable`) out of the
+JAR, asks `HandsetProperty.getSystemProperty("PHONEMODEL")`, compares the
+answer to a string, asks `FileSystem.exists("Config.dat")`, loads its two font
+descriptors, and then loads the form `8/DownloadMenu` and paints it. **No
+database is opened, no subscriber number is read, and no data file is touched.**
+`FileSystem.exists` now names its path and its answer in the trace for that
+reason — a start-up gate is usually a file test, and a test with no path in the
+trace says only that the title asked something.
+
+Each of those three inputs was then answered differently, and none of them
+moves the branch:
+
+- **the record.** With `fs/Config.dat` present the title opens it and reads a
+  fourteen-byte structure — five single bytes, two four-byte fields, one byte — and
+  closes it. Filling those fourteen bytes with `00`, `01` and `ff` leaves the
+  prompt pixel-identical, so no single field in it is the flag;
+- **the data.** The three tables index twelve containers by number
+  (`5/0`–`5/1`, `7/0`–`7/5`, `9/0`–`9/3`, 543KB in total), addressed the way
+  every other resource here is — the directory number, a slash, the index.
+  **None of the twelve is in the archive**, while every tree the tables do not
+  cover is. Adding all twelve as zero-filled entries changes nothing: the title
+  never looks;
+- **the form.** Repointing one entry of the client's string table — the AOT
+  image keeps its constants as a packed UTF-16 pool with a pointer array over
+  it, so the form a call site names can be changed in one word — sends the same
+  call site to `8/StartMenu` instead. The title goes past the prompt, loads
+  that form, and then spends its whole instruction allowance in its own
+  resource engine, which is what a title whose data is not there does.
+
+So the decision is not made from the number, the model, the record or the
+data, and the archive is missing exactly what the prompt offers to fetch. Its
+own descriptor says as much — the `Desc` field in `__adf__` reads "this
+service runs only after the 700kb extra download and the 160kb install" — so
+this is a copy taken before that download rather than a title this platform
+refuses. **The remaining lever is the twelve containers, and nothing on this
+side can produce them.**
+
+**What the detour did produce is four missing runtime methods**, each of which
+stopped the run with its own name once the prompt was out of the way:
+`java/lang/Short`, `java/lang/Byte` and `java/lang/Long` were never published
+to guest AOT code — only `java/lang/Integer` was, because it was the only one a
+title had been seen to name — and `java/lang/String.valueOf([C)` had no body at
+all. A UI form's attributes are parsed one class per attribute type, so a form
+with a coordinate in it asks for `Short.parseShort` and stops. All four are
+implemented, and `TestTheBoxedNumbersAreAllPublished` keeps the set together.
+
+## The earlier package's title screen carries a band, and it is the title's own
 
 The native package's title screen — the generation "An earlier KTF package"
 above describes — draws a horizontal band across the middle of the screen
@@ -3769,12 +3815,37 @@ draws over the top of it. Two things are established about it and no more:
   channel looks like, and it is as true of the parts that read correctly as of
   the band.
 
-So the band is either the title's own artwork drawn from a palette this small
-or an image decoded against the wrong stride or component order, and the two
-look alike from the framebuffer. Settling it means going to the packaged image
-rather than to the screen: that generation's images arrive through platform
-slot 25 from a `.mif` whose header carries the stride, which is where a
-band-shaped error would come from.
+Settling it meant going to the image rather than to the screen, and the image
+is not where the earlier reading looked. **Nothing about it comes from the
+`.mif`.** The title decodes its own graphics archive and hands the platform a
+finished Windows bitmap through slot 25 (see "The sprites are Windows bitmaps"),
+so what a run has to look at is the fourteen bitmaps it builds. Dumping them
+answers it four ways, and they agree:
+
+- **the band is one 32x96 bitmap tiled across the screen.** The band's rows
+  repeat with a period of exactly 32 — the mean per-channel difference at that
+  period is 14.8 against 50 at every other period tried — and each row of the
+  band is byte-identical to a row of that bitmap. So the blit reproduces what
+  the title handed over, pixel for pixel;
+- **there is no stride to get wrong.** That bitmap is eight bits per pixel and
+  32 pixels wide, so its rows are 32 bytes with no padding at all. A row-to-row
+  shift search finds no constant offset either, which is what a stride error
+  would leave behind;
+- **the decoder is not the problem.** The other thirteen bitmaps of the same
+  batch come through the same path at the same depth and are clean artwork —
+  two publisher logos, the carrier's, the title's own wordmark, and a
+  `Powered By 7-Zip` badge legible down to its lettering. A wrong component
+  order would have taken those with it;
+- **the tile is mirror-symmetric on purpose.** 95.9% of its pixel pairs match
+  across its vertical centre line, against 69.9% for the title wordmark that
+  actually looks symmetric. That is a tile drawn to repeat without a seam,
+  which is a decision an artist makes and not a shape a decode error produces.
+
+**So the band is the title's own artwork**: a mirrored sunset strip, dark at
+the top, cloud-coloured through the middle, tiled eight times behind the logo
+and the island sprite in front of it. The palette quantisation above is the
+256-entry palette of an 8-bit bitmap, and it is as true of the parts that read
+correctly as of the band because they are all the same bitmaps.
 
 ## Deliberately incomplete
 
@@ -3782,7 +3853,32 @@ band-shaped error would come from.
   it: see "A published instance field has two storages". The mechanism is
   there and the counter is zero across every local archive, so which side wins
   would be decided without a case to decide it on
-- pause/resume/destroy lifecycle and pointer input
+- **the pause/resume/destroy lifecycle.** Nothing here calls the Jlet's
+  `pauseApp`, `resumeApp` or `destroyApp`; a session that ends stops the guest
+  threads instead. What each local title would do with the calls was measured
+  off its own AOT symbol table: in fourteen of the thirty-four the three
+  methods are sixteen bytes each — a prologue and a return, and nothing to
+  call them for — and the rest have real bodies, one title's `resumeApp`
+  running to eleven kilobytes. So the calls are not theoretical, and the
+  reason they are not made is the teardown rather than the titles: closing a
+  session is where a KTF guest thread is parked inside a nested Go call stack
+  (see "Guest workers unwound together"), and running guest code into that is
+  how a close becomes a hang. Wiring them means a Host-driven pause that
+  happens while the guest is *between* callbacks, which is a lifecycle this
+  side does not have yet
+- **pointer input reaches the platform and stops there.** Ten of the local
+  titles carry a `pointerNotify` body of their own — one dispatches on the
+  event type and posts three codes of its own into the title's private queue
+  — so the surface is real rather than a formality. `Client.SendPointer`
+  drives it by both roads a key takes: a title running its own event loop is
+  handed a queued `POINTER_EVENT`, and everything else is dispatched down the
+  card stack. **The specification is where the numbers came from**, and one of
+  them was wrong here: `POINT_DRAGGED` is 5, not the 3 that follows the press
+  and the release, because 3 and 4 are the key repeat and the typed key. What
+  is missing is only the Host end — no page, no CLI flag and no session call
+  sends one — and `Display.hasPointerEvents` answers false until one does,
+  because a title that is told it has a touchscreen and then never gets a
+  touch is worse off than one that was told the truth
 - the WIPI Java entries listed in `testdata/wipi_java_gaps.txt`, each with its
   reason, and the fixed-value answers inventoried in
   `testdata/wipi_java_stubs.txt`

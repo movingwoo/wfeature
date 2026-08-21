@@ -469,3 +469,45 @@ func listedCount(t *testing.T, client *Client, runtime *initializationRuntime, p
 	count, _ := size.Int32()
 	return count
 }
+
+// A pointer takes the same two roads a key does. Ten of the local titles carry
+// a pointerNotify body of their own, and a title that drives its own event
+// loop has to be handed the event rather than have its card called behind the
+// loop's back.
+func TestSendPointerTakesTheSameTwoRoadsAKeyDoes(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	runtime.guestEventLoop = true
+	if err := client.SendPointer(t.Context(), PointerDragged, 17, 39); err != nil {
+		t.Fatalf("SendPointer() error = %v", err)
+	}
+	want := guestEvent{kind: eventKindPointer, param1: PointerDragged, param2: 17, param3: 39}
+	if len(runtime.events) != 1 || runtime.events[0] != want {
+		t.Fatalf("queued %+v, want one %+v", runtime.events, want)
+	}
+
+	var seen []int32
+	if err := client.JVM().RegisterNative("test/Card", "pointerNotify", "(III)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		for _, argument := range arguments[1:] {
+			value, err := argument.Int32()
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+			seen = append(seen, value)
+		}
+		return jvm.IntValue(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = append(runtime.displayCards, &jvm.Object{ClassName: "test/Card", Fields: make(map[string]jvm.Value)})
+	array := newIntArray(t, client, eventQueueSlots)
+	if err := storeGuestEvent(array, want); err != nil {
+		t.Fatal(err)
+	}
+	queue := runtime.runtimeEventQueueObject()
+	if _, err := runtimeEventQueueDispatchEvent(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(queue), jvm.ReferenceValue(array)}); err != nil {
+		t.Fatalf("dispatchEvent() error = %v", err)
+	}
+	if len(seen) != 3 || seen[0] != PointerDragged || seen[1] != 17 || seen[2] != 39 {
+		t.Fatalf("card received %v, want [%d 17 39]", seen, PointerDragged)
+	}
+}

@@ -211,6 +211,15 @@ they are given** — one local archive branches on the width and asks for a set
 of images its own package does not contain, so on a 240-wide screen it cannot
 run at all. `docs/skvm.md` has that title's own branch.
 
+**A start with no screen in it is not the same as a start that asked for the
+default.** On the MIDP platform the archive gets to answer first: an absent
+`width` and `height` let `skt.PackagedScreen` read the handset out of the
+archive's own resource names, so the title above starts on the phone it was
+built for without anyone knowing to change a setting. A start that carries a
+size is honoured as it always was. The page omits the field when the stored
+size is the default, so choosing 240x320 by hand reads here as "no answer" and
+that title still starts at 176x220 — which is the size it can run at.
+
 Two rules keep the setting honest:
 
 - **The size the server refuses is the size no handset had.** Anything outside

@@ -600,22 +600,26 @@ func (client *Client) ImageBytes() ([]byte, error) {
 	return image, nil
 }
 
-// Pointer event types, which follow the key ones: a press, a release, and the
-// drag between them.
+// Pointer event types, as the specification's EventQueue names them:
+// POINT_PRESSED is 1 and POINT_RELEASED is 2, the same two values a key press
+// and release take, and **POINT_DRAGGED is 5** rather than the 3 that follows
+// them — 3 and 4 belong to the key repeat and the typed key. The value was 3
+// here until the specification was read, which is what reading a constant off
+// its neighbours costs.
 const (
 	PointerPressed  int32 = 1
 	PointerReleased int32 = 2
-	PointerDragged  int32 = 3
+	PointerDragged  int32 = 5
 )
 
 // SendPointer delivers one pointer event to the card stack, the same traversal
 // SendKey uses: the top card first, and downward while a card answers true.
 //
-// It reaches the card directly rather than through the WIPI event queue,
-// because the queue identifies each event by a numeric kind and nothing in the
-// original runtime, the reference implementation, or any of the local archives
-// says what a pointer's kind is. A game running its own event loop therefore
-// still sees no pointer; see docs/ktf.md.
+// It takes the same two roads SendKey does, for the same reason: a title that
+// drives its own getNextEvent loop is given a queued event and everything else
+// is dispatched to the card stack directly. The queue's pointer event is the
+// specification's — POINTER_EVENT is 2, with the type in event[1] and the
+// coordinates in event[2] and event[3]. See docs/ktf.md.
 func (client *Client) SendPointer(ctx context.Context, eventType, x, y int32) error {
 	if client == nil || client.core == nil || client.thread == nil {
 		return fmt.Errorf("KTF client is not initialized")
@@ -629,6 +633,10 @@ func (client *Client) SendPointer(ctx context.Context, eventType, x, y int32) er
 		return fmt.Errorf("KTF client initialization has not completed")
 	}
 	runtime := client.runtime
+	if runtime.guestEventLoop {
+		runtime.postGuestEvent(guestEvent{kind: eventKindPointer, param1: eventType, param2: x, param3: y})
+		return nil
+	}
 	defer client.beginHostService(ctx)()
 	previousThread, previousContext := runtime.currentThread, runtime.currentContext
 	runtime.currentThread, runtime.currentContext = client.thread, ctx

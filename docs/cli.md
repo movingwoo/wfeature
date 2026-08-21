@@ -229,6 +229,12 @@ once per tick. `stub table`, `not implemented`, `throw`, `raise` and `error`
 name what to implement next. [`ktf.md`](ktf.md) reads a real report line by
 line.
 
+Three counters carry their argument rather than only their name, because a
+start-up gate is usually one of them and a gate with no name in the trace says
+only that the title asked something: `stream <resource> found=<bool>` for a
+class-path resource, `exists <path> found=<bool>` for a filesystem test, and
+`sysprop <name>` for a handset property.
+
 A debug run also carries `arena blocks marked on release` and
 `arena blocks checked on reuse`, which are how much of the guest heap the
 use-after-free detector covered, and `arena use after free` if a title wrote
@@ -277,10 +283,16 @@ across the local titles.
 
 `-screen` is here because the screen is not the same handset for every title on
 this vendor. One local archive branches on the width and asks for a 240-wide
-artwork set it does not contain, because it was packaged for a smaller phone;
-at `-screen 176x220` it runs. Nothing detects that — an SKT descriptor declares
-no screen size — so it is a flag rather than a rule, and `docs/skvm.md` has the
-title's own branch.
+artwork set it does not contain, because it was packaged for a smaller phone.
+
+**It no longer needs the flag.** An SKT descriptor declares no screen size —
+every key of every local `.msd` and every manifest was inventoried and none of
+them carries one — but the archive says it another way, in the names of its own
+resources, and that is now read: with no `-screen` the run takes the handset
+the archive was packaged for. `docs/skvm.md` has the title's own branch, the
+rule, and why it is narrower than the equivalent on the other WIPI platform.
+The flag is what remains for the archive the rule does not recognise, and it
+still wins whenever it is given.
 
 `-cheat` attaches the same console the two WIPI paths take, against the
 synthetic address space this platform lays over its object graph

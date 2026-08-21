@@ -3508,6 +3508,36 @@ module to have run.
   `__adf__`" and said nothing about itself. `detect.Archive` had it right all
   along. A test that walks a vendor directory is trusting the directory.
 
+  **A second title opens on a notice of the same family, and it hides its
+  answer in a different place.** Its dialog reads "please run it again for a
+  stable game" over a button labelled `OZ`, and every key was swept against
+  the final frame again with the same nothing to show for it. The frame is the
+  wrong thing to watch: the key it takes is **`fire`** — the label is the
+  button's artwork, not a key this pad has to reach — and what the key does is
+  write one byte into the title's own `fs/p.dat`, from `…01 00` to `…01 01`,
+  **while leaving the notice exactly where it was for the rest of the run**.
+  The notice means what it says: the session it is asking about is the next
+  one. A second run against that tree goes straight past, into two consent
+  screens, the usage notice, the type select and its confirm, and then the
+  opening narration, which `#` skips into the title's own opening scene — a
+  tavern, an NPC carrying a quest mark, and an HP/MP bar over a hotkey row.
+
+  So the shape is the first title's, one screen further along: a first-run
+  step rather than a wall, answered by a key, recorded in the title's own
+  save. What differs is only where the evidence is. The first title quit on
+  its key, so its last frame was the notice either way; this one stays on the
+  notice, so its last frame is the notice either way as well. **Sweep the save
+  tree beside the frame** — twenty-three keys, one file, one byte, and the
+  answer is in the diff. `var/routes/오셔너스-첫실행.route` and
+  `오셔너스-인게임.route` are the two runs.
+
+  **`OZ` on a button is artwork, and a third title proves it.** One more title
+  here opens on a notice that asks for the OZ key in words rather than on a
+  button, and it takes `fire` as well — the same sweep, one key, and its
+  consent screen behind it. Neither title asks for `soft3`, which matters
+  because the page carries no soft key at all (`cli.md`, "Key names"): a title
+  that really wanted one would be unplayable in the browser, and these are not.
+
   **The naming screen is past, and the title plays its opening.** With slot
   `0x321` implemented and the component block refused — the title draws its own
   input screen — the run goes: the usage notice, the consent screen, the

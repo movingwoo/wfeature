@@ -120,6 +120,25 @@ func TestObjectPublishesTheMonitorMethodsAGameWaitsOn(t *testing.T) {
 	}
 }
 
+// A title that reads a UI form asks for one boxed class per attribute type,
+// and an unpublished class fails the guest's method lookup rather than
+// answering wrongly — which is a stopped title with a name in the message and
+// nothing else. java/lang/Integer was published on its own for years because
+// it was the only one a title had been seen to name.
+func TestTheBoxedNumbersAreAllPublished(t *testing.T) {
+	for _, parse := range []struct{ class, name, descriptor string }{
+		{"java/lang/Integer", "parseInt", "(Ljava/lang/String;)I"},
+		{"java/lang/Long", "parseLong", "(Ljava/lang/String;)J"},
+		{"java/lang/Short", "parseShort", "(Ljava/lang/String;)S"},
+		{"java/lang/Byte", "parseByte", "(Ljava/lang/String;)B"},
+	} {
+		method := findRuntimeMethod(t, parse.class, parse.name, parse.descriptor)
+		if method.accessFlags&0x0008 == 0 {
+			t.Errorf("%s.%s%s is published without ACC_STATIC", parse.class, parse.name, parse.descriptor)
+		}
+	}
+}
+
 func TestInputStreamPublishesTheAbstractSingleByteRead(t *testing.T) {
 	method := findRuntimeMethod(t, "java/io/InputStream", "read", "()I")
 	if method.accessFlags&0x0400 == 0 {
