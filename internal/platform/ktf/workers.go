@@ -45,6 +45,10 @@ type guestWorker struct {
 	stackBase  uint32
 	grant      chan struct{}
 	events     chan workerEvent
+	// finished is closed when the worker goroutine returns, whatever ended it.
+	// StopThreads waits on it so one worker has finished unwinding before the
+	// next is woken; see there for why the close needs that order.
+	finished chan struct{}
 	// timerOwner is the java/util/Timer this worker is running a task for, and
 	// nil for a guest Thread. It is what releases that Timer's thread when the
 	// task returns.
@@ -84,6 +88,7 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 		stackBase:  stackBase,
 		grant:      make(chan struct{}),
 		events:     make(chan workerEvent, 1),
+		finished:   make(chan struct{}),
 	}
 	slice := client.threadSliceSteps
 	if slice == 0 {
@@ -106,6 +111,10 @@ func (worker *guestWorker) park() error {
 }
 
 func (worker *guestWorker) run(client *Client) {
+	// Closed on every exit, including the one below where the worker is
+	// stopped before it ever ran: StopThreads waits for this and would wait
+	// out its whole bound on a worker that returned without saying so.
+	defer close(worker.finished)
 	if _, ok := <-worker.grant; !ok {
 		return
 	}
@@ -165,8 +174,24 @@ func (runtime *initializationRuntime) sleepCurrentWorker(wait time.Duration) err
 	return worker.park()
 }
 
+// stopUnwindBound is how long StopThreads waits for one worker to finish
+// unwinding before it gives up on ordering the rest. A worker that parked
+// answers errWorkersStopped and returns through Go frames only, so this is
+// far longer than the close takes; it is here so a guest that somehow swallows
+// the abort costs a session teardown rather than the Host goroutine.
+const stopUnwindBound = 5 * time.Second
+
 // StopThreads aborts every guest worker; parked workers wake, fail their run,
 // and exit. Hosts call it when tearing a session down.
+//
+// The workers are woken **one at a time**, and each is waited out before the
+// next is touched. A worker unwinding its nested Go and guest call stack runs
+// the same deferred restores of the runtime's current thread and context that
+// running guest code does, so waking them together puts two goroutines inside
+// the runtime at once — which the tick loop's strict handoff otherwise never
+// does, and which the race detector reported over a third of the local corpus.
+// Waiting here gives the close the ordering the tick loop gets from receiving
+// one worker's event before granting the next.
 func (client *Client) StopThreads() {
 	if client == nil {
 		return
@@ -177,8 +202,43 @@ func (client *Client) StopThreads() {
 		return
 	}
 	client.workersStopped = true
-	for _, worker := range client.workers {
-		close(worker.grant)
-	}
+	workers := client.workers
 	client.workers = nil
+	for _, worker := range workers {
+		close(worker.grant)
+		client.waitForWorker(worker)
+	}
+}
+
+// waitForWorker blocks until one aborted worker's goroutine has returned.
+// Events sent on the way out are drained rather than ignored: a park that
+// races the abort blocks on a full events channel, and a worker blocked there
+// never reaches its own return.
+func (client *Client) waitForWorker(worker *guestWorker) {
+	if worker.finished == nil {
+		return
+	}
+	bound := client.unwindBound
+	if bound <= 0 {
+		bound = stopUnwindBound
+	}
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	for {
+		select {
+		case <-worker.finished:
+			return
+		case <-worker.events:
+		case <-timer.C:
+			if client.logger != nil {
+				class := ""
+				if worker.javaThread != nil {
+					class = worker.javaThread.ClassName
+				}
+				client.logger.Warn("KTF guest thread did not unwind when the session closed",
+					"class", class, "waited", bound)
+			}
+			return
+		}
+	}
 }

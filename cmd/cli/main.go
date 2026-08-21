@@ -156,6 +156,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	// 120 and 176 wide sets and asks for a 240 one it does not contain, which
 	// is a title packaged for a smaller phone than the default.
 	screenWidth, screenHeight := session.DefaultWidth, session.DefaultHeight
+	screenChosen := false
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "-ticks":
@@ -232,6 +233,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			screenWidth, screenHeight = width, height
+			screenChosen = true
 		case "-hold":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-hold expects a tick count")
@@ -276,6 +278,15 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	// Without -screen the archive decides, the same way a server session lets
+	// it: this vendor's descriptor declares no size and one local title's
+	// resource names do. See skt.PackagedScreen.
+	if !screenChosen {
+		if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(archive); packaged {
+			screenWidth, screenHeight = packagedWidth, packagedHeight
+			logger.Debug("SKT screen taken from the archive", "width", screenWidth, "height", screenHeight)
+		}
 	}
 	framebuffer, err := backend.NewMemoryFramebuffer(screenWidth, screenHeight)
 	if err != nil {

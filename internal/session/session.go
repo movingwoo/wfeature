@@ -278,15 +278,25 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		}
 		session.lgt = started
 	case detect.SKT:
-		surface, err := newCaptureFramebuffer(options.width(), options.height())
-		if err != nil {
-			return nil, err
-		}
-		session.surface = surface
 		opened, err := skt.Open(archive)
 		if err != nil {
 			return nil, err
 		}
+		// The archive is opened before the screen is built, because on this
+		// vendor the archive is the only thing that says which handset it was
+		// packaged for. A Host that asked for a size keeps it; one that did
+		// not is given the archive's own answer. See skt.PackagedScreen.
+		screenWidth, screenHeight := options.width(), options.height()
+		if options.Width == 0 && options.Height == 0 {
+			if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(opened); packaged {
+				screenWidth, screenHeight = packagedWidth, packagedHeight
+			}
+		}
+		surface, err := newCaptureFramebuffer(screenWidth, screenHeight)
+		if err != nil {
+			return nil, err
+		}
+		session.surface = surface
 		runtime, err := skt.Start(opened, skt.Options{
 			JVM:         jvm.Options{Logger: options.Logger},
 			Framebuffer: surface,

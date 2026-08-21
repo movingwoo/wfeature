@@ -183,7 +183,12 @@ func runtimeFileSystemExists(runtime *initializationRuntime, _ *jvm.VM, argument
 	if !ok {
 		return jvm.IntValue(0), nil
 	}
-	if _, exists := runtime.guestFile(name); exists {
+	_, exists := runtime.guestFile(name)
+	// The name and the answer both belong in the trace. A start-up gate is
+	// often a file test, and a test that appears in the trace without its
+	// path says only that the title asked something.
+	runtime.countDiagnostic(fmt.Sprintf("exists %s found=%t", name, exists))
+	if exists {
 		return jvm.IntValue(1), nil
 	}
 	return jvm.IntValue(0), nil

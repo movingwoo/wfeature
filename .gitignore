@@ -34,6 +34,8 @@ coverage.out
 # Scripted ways back to a scene. A route is written against one archive and is
 # usually named after it, so it belongs beside the archives rather than in Git.
 /var/routes/
+# Custom Patch Folder
+/var/custom/
 
 # Secrets, at any depth rather than only the root file that exists today.
 .env

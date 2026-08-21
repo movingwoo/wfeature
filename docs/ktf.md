@@ -3650,13 +3650,235 @@ run where both recorded zero before. Across the whole KTF corpus the first-frame
 A/B is unchanged: six frames differ and they are the six that differ from
 themselves.
 
+## Guest workers unwound together when the session closed
+
+Guest threads are handed the processor strictly: `ServiceThreads` grants one
+worker a step slice, blocks on that worker's events channel, and only then
+looks at the next one, so during play exactly one goroutine is inside the
+runtime. The comment at the top of `workers.go` says runtime state is never
+touched by two goroutines at once, and for the tick loop that was true. **For
+the close it was not**, and the race detector said so.
+
+```sh
+go run -race -tags debug ./cmd/cli runktf <archive> -play -ticks 200
+```
+
+Over the local corpus that reported a race for **7 of the 35 archives**, three
+or four per run, and every report was printed *after* the run's JSON summary —
+after the last tick, while the workers were being stopped. Both sides of every
+one of them were the same instruction: the deferred restore of `currentThread`
+and `currentContext` at the end of `handleSupervisorCall`, reached from two
+different `guestWorker` goroutines.
+
+The mechanism follows from what stopping did. `StopThreads` closed every
+worker's grant channel at once; each parked worker's `park` then answered
+`errWorkersStopped`, and each unwound its own nested Go-and-guest call stack —
+deferred restores included — with nothing left to order it against the others.
+The tick loop's ordering came from the Host receiving one worker's event before
+granting the next, and at the close the Host was not in the middle any more.
+
+**The cost was not only a detector complaint.** One archive ended twice in about
+twenty runs with a Go stack over exactly that path and no summary line; the
+message above the stack was not captured, and it matters which it was, because
+`guestWorker.run` recovers a panic and turns it into a failed session — so a
+crash that reaches the process is either something `recover` cannot catch, such
+as a concurrent map write, or something outside the recovered call. Where it
+landed was worse than the CLI made it look: `runktf` exits immediately
+afterwards, so a crash there costs an exit code, but `Session.Close` is the
+same call and the server runs it in a process that is holding every other live
+session.
+
+**The fix gives the close the tick loop's ordering.** `StopThreads` now closes
+one worker's grant channel, waits for that worker's goroutine to return, and
+only then touches the next, so the unwinds are as serial as the slices were.
+Each worker closes a `finished` channel on every exit — including the exit of a
+worker that was stopped before it was ever granted a slice, which sends no
+event and would otherwise be waited on for nothing. The wait drains events as
+well: a park that races the abort blocks on a full events channel, and a worker
+blocked there never reaches its own return. It is bounded at five seconds per
+worker, with a warning if one runs out; a guest that somehow swallows the abort
+then costs a session teardown rather than the Host goroutine.
+
+The channel operations are also what the race detector wants, not just an
+ordering in wall-clock time: one worker's writes happen before its `finished`
+close, which happens before the next worker's grant is closed.
+
+Two runs check it. `TestStoppedWorkersUnwindOneAtATime` stands eight parked
+workers in front of a real `StopThreads` and has each write the two runtime
+fields on its way out — with the old close it reports a data race and finds no
+worker finished; `-race` is what makes it worth running. The corpus sweep above
+is the other: **35 of 35 archives, no race reported, no crash**.
+
+The same command reports nothing for an LGT or an SKT title. Their thread
+models are their own and neither shares a field this way, but neither has been
+swept the way this corpus has. LGT's `StopJavaThreads` has the same shape as
+the KTF close did — every grant channel closed in one pass — so if a report
+ever appears there, this section is the fix to copy.
+
+## A third download gate, and the lever that did not open it
+
+A title from a third series opens on a prompt of the same family as the two
+above: it offers to fetch 700KB of extra data — the call charged separately —
+plus a 160KB install, and asks yes or no. Both answers end the same way the
+second gate's did.
+
+- **No** calls `Jlet.notifyDestroyed` from the key handler. The session ends
+  and the Host reports the run as an exit, which is the title behaving
+  correctly rather than a failure (see "A game that ends is not a game that
+  failed" in [`session.md`](session.md)).
+- **Yes** reaches the title's own `네트워크 접속이 실패 하였습니다. 다시
+  시작하세요` notice and stops on it. There is no server to dial and no way
+  back from that screen.
+
+**The archive already carries what it offers to download.** Its JAR holds 173
+entries besides the client image — resource trees named by number, plus two
+tables — and they come to 857KB, comfortably over the 700 plus 160 the prompt
+names. So this is the second gate's shape again: the data is present and the
+title is deciding not to look at it.
+
+**Nothing here is missing, and the diagnostics say so.** Over 1,200 ticks the
+boundary counts name no stub, no unimplemented table entry, no throw and no
+raise. What they do show is the title repainting one card every tick and its
+own resource engine printing `js_commonResInvokeNativeClinit(<address>)` on a
+loop — a title going round its prompt, not one waiting on this platform.
+
+**The lever that opened the second gate does not move this one.** That gate was
+a length test on the subscriber number, so a three- or four-digit
+`WFEATURE_PHONE_NUMBER` walked past it. Here the same short numbers leave the
+prompt pixel-identical, which says the decision is being made from something
+else.
+
+**The order before the first flush is now on the record, and it is short.**
+`-diag` on a run that stops at the first lit frame counts every crossing, and
+outside the class loading there are exactly six things in it: the title reads
+its three index tables (`5/ZipTable`, `7/ZipTable`, `9/ZipTable`) out of the
+JAR, asks `HandsetProperty.getSystemProperty("PHONEMODEL")`, compares the
+answer to a string, asks `FileSystem.exists("Config.dat")`, loads its two font
+descriptors, and then loads the form `8/DownloadMenu` and paints it. **No
+database is opened, no subscriber number is read, and no data file is touched.**
+`FileSystem.exists` now names its path and its answer in the trace for that
+reason — a start-up gate is usually a file test, and a test with no path in the
+trace says only that the title asked something.
+
+Each of those three inputs was then answered differently, and none of them
+moves the branch:
+
+- **the record.** With `fs/Config.dat` present the title opens it and reads a
+  fourteen-byte structure — five single bytes, two four-byte fields, one byte — and
+  closes it. Filling those fourteen bytes with `00`, `01` and `ff` leaves the
+  prompt pixel-identical, so no single field in it is the flag;
+- **the data.** The three tables index twelve containers by number
+  (`5/0`–`5/1`, `7/0`–`7/5`, `9/0`–`9/3`, 543KB in total), addressed the way
+  every other resource here is — the directory number, a slash, the index.
+  **None of the twelve is in the archive**, while every tree the tables do not
+  cover is. Adding all twelve as zero-filled entries changes nothing: the title
+  never looks;
+- **the form.** Repointing one entry of the client's string table — the AOT
+  image keeps its constants as a packed UTF-16 pool with a pointer array over
+  it, so the form a call site names can be changed in one word — sends the same
+  call site to `8/StartMenu` instead. The title goes past the prompt, loads
+  that form, and then spends its whole instruction allowance in its own
+  resource engine, which is what a title whose data is not there does.
+
+So the decision is not made from the number, the model, the record or the
+data, and the archive is missing exactly what the prompt offers to fetch. Its
+own descriptor says as much — the `Desc` field in `__adf__` reads "this
+service runs only after the 700kb extra download and the 160kb install" — so
+this is a copy taken before that download rather than a title this platform
+refuses. **The remaining lever is the twelve containers, and nothing on this
+side can produce them.**
+
+**What the detour did produce is four missing runtime methods**, each of which
+stopped the run with its own name once the prompt was out of the way:
+`java/lang/Short`, `java/lang/Byte` and `java/lang/Long` were never published
+to guest AOT code — only `java/lang/Integer` was, because it was the only one a
+title had been seen to name — and `java/lang/String.valueOf([C)` had no body at
+all. A UI form's attributes are parsed one class per attribute type, so a form
+with a coordinate in it asks for `Short.parseShort` and stops. All four are
+implemented, and `TestTheBoxedNumbersAreAllPublished` keeps the set together.
+
+## The earlier package's title screen carries a band, and it is the title's own
+
+The native package's title screen — the generation "An earlier KTF package"
+above describes — draws a horizontal band across the middle of the screen
+whose colours look nothing like the artwork above and below it, and the menu
+draws over the top of it. Two things are established about it and no more:
+
+- **it is not a transition.** Frames captured across a 900-tick run are
+  byte-identical from the moment the logo appears — 0 differing pixels between
+  tick 300, tick 450 and tick 899 — so nothing is mid-animation and nothing is
+  being redrawn wrong on later frames.
+- **the whole screen is quantised to a small palette.** Every channel in and
+  around the band lands on a multiple of about 36 (0, 35, 71, 107, 143, 182,
+  218, 255) and a row inside the band holds between one and nine distinct
+  colours. That is what a low-bit-depth source expanded to eight bits per
+  channel looks like, and it is as true of the parts that read correctly as of
+  the band.
+
+Settling it meant going to the image rather than to the screen, and the image
+is not where the earlier reading looked. **Nothing about it comes from the
+`.mif`.** The title decodes its own graphics archive and hands the platform a
+finished Windows bitmap through slot 25 (see "The sprites are Windows bitmaps"),
+so what a run has to look at is the fourteen bitmaps it builds. Dumping them
+answers it four ways, and they agree:
+
+- **the band is one 32x96 bitmap tiled across the screen.** The band's rows
+  repeat with a period of exactly 32 — the mean per-channel difference at that
+  period is 14.8 against 50 at every other period tried — and each row of the
+  band is byte-identical to a row of that bitmap. So the blit reproduces what
+  the title handed over, pixel for pixel;
+- **there is no stride to get wrong.** That bitmap is eight bits per pixel and
+  32 pixels wide, so its rows are 32 bytes with no padding at all. A row-to-row
+  shift search finds no constant offset either, which is what a stride error
+  would leave behind;
+- **the decoder is not the problem.** The other thirteen bitmaps of the same
+  batch come through the same path at the same depth and are clean artwork —
+  two publisher logos, the carrier's, the title's own wordmark, and a
+  `Powered By 7-Zip` badge legible down to its lettering. A wrong component
+  order would have taken those with it;
+- **the tile is mirror-symmetric on purpose.** 95.9% of its pixel pairs match
+  across its vertical centre line, against 69.9% for the title wordmark that
+  actually looks symmetric. That is a tile drawn to repeat without a seam,
+  which is a decision an artist makes and not a shape a decode error produces.
+
+**So the band is the title's own artwork**: a mirrored sunset strip, dark at
+the top, cloud-coloured through the middle, tiled eight times behind the logo
+and the island sprite in front of it. The palette quantisation above is the
+256-entry palette of an 8-bit bitmap, and it is as true of the parts that read
+correctly as of the band because they are all the same bitmaps.
+
 ## Deliberately incomplete
 
 - repairing a guest write to a published instance field rather than reporting
   it: see "A published instance field has two storages". The mechanism is
   there and the counter is zero across every local archive, so which side wins
   would be decided without a case to decide it on
-- pause/resume/destroy lifecycle and pointer input
+- **the pause/resume/destroy lifecycle.** Nothing here calls the Jlet's
+  `pauseApp`, `resumeApp` or `destroyApp`; a session that ends stops the guest
+  threads instead. What each local title would do with the calls was measured
+  off its own AOT symbol table: in fourteen of the thirty-four the three
+  methods are sixteen bytes each — a prologue and a return, and nothing to
+  call them for — and the rest have real bodies, one title's `resumeApp`
+  running to eleven kilobytes. So the calls are not theoretical, and the
+  reason they are not made is the teardown rather than the titles: closing a
+  session is where a KTF guest thread is parked inside a nested Go call stack
+  (see "Guest workers unwound together"), and running guest code into that is
+  how a close becomes a hang. Wiring them means a Host-driven pause that
+  happens while the guest is *between* callbacks, which is a lifecycle this
+  side does not have yet
+- **pointer input reaches the platform and stops there.** Ten of the local
+  titles carry a `pointerNotify` body of their own — one dispatches on the
+  event type and posts three codes of its own into the title's private queue
+  — so the surface is real rather than a formality. `Client.SendPointer`
+  drives it by both roads a key takes: a title running its own event loop is
+  handed a queued `POINTER_EVENT`, and everything else is dispatched down the
+  card stack. **The specification is where the numbers came from**, and one of
+  them was wrong here: `POINT_DRAGGED` is 5, not the 3 that follows the press
+  and the release, because 3 and 4 are the key repeat and the typed key. What
+  is missing is only the Host end — no page, no CLI flag and no session call
+  sends one — and `Display.hasPointerEvents` answers false until one does,
+  because a title that is told it has a touchscreen and then never gets a
+  touch is worse off than one that was told the truth
 - the WIPI Java entries listed in `testdata/wipi_java_gaps.txt`, each with its
   reason, and the fixed-value answers inventoried in
   `testdata/wipi_java_stubs.txt`

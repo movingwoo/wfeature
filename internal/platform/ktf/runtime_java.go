@@ -345,6 +345,49 @@ func init() {
 				{class: "java/lang/Integer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
+		// The other three boxed numbers, exposed the same way. A title that
+		// parses a UI form's attributes asks for one class per attribute type
+		// — a coordinate through java/lang/Short, a flag through
+		// java/lang/Byte — and an unregistered class stops the form with a
+		// failed method lookup rather than a wrong answer. See "An
+		// unimplemented table call names its call site".
+		"java/lang/Byte": {
+			name:        "java/lang/Byte",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "java/lang/Byte", name: "<init>", descriptor: "(B)V", accessFlags: 0x0001},
+				{class: "java/lang/Byte", name: "parseByte", descriptor: "(Ljava/lang/String;)B", accessFlags: 0x0009},
+				{class: "java/lang/Byte", name: "byteValue", descriptor: "()B", accessFlags: 0x0001},
+				{class: "java/lang/Byte", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Byte", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+			},
+		},
+		"java/lang/Short": {
+			name:        "java/lang/Short",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "java/lang/Short", name: "<init>", descriptor: "(S)V", accessFlags: 0x0001},
+				{class: "java/lang/Short", name: "parseShort", descriptor: "(Ljava/lang/String;)S", accessFlags: 0x0009},
+				{class: "java/lang/Short", name: "shortValue", descriptor: "()S", accessFlags: 0x0001},
+				{class: "java/lang/Short", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Short", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+			},
+		},
+		"java/lang/Long": {
+			name:        "java/lang/Long",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "java/lang/Long", name: "<init>", descriptor: "(J)V", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "parseLong", descriptor: "(Ljava/lang/String;)J", accessFlags: 0x0009},
+				{class: "java/lang/Long", name: "toString", descriptor: "(J)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Long", name: "longValue", descriptor: "()J", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+			},
+		},
 		// java/util/Random exposes the JVM-owned CLDC implementation.
 		"java/util/Random": {
 			name:        "java/util/Random",
@@ -401,6 +444,8 @@ func init() {
 				{class: "java/lang/String", name: "trim", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(C)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/String", name: "valueOf", descriptor: "([C)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/String", name: "valueOf", descriptor: "([CII)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", accessFlags: 0x0009},
 			},

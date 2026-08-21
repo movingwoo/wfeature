@@ -53,16 +53,19 @@ type parkedSession struct {
 	// context and cancel are the game's own lifetime, which outlived the
 	// socket that started it; see sessionRunner.gameCtx for why a game cannot
 	// be ticked under its page's context.
-	context    context.Context
-	cancel     context.CancelFunc
-	label      string
-	platform   string
-	audio      *audioCollector
-	started    startedMessage
-	postMortem string
-	presented  uint64
-	parkedAt   time.Time
-	timer      *time.Timer
+	context  context.Context
+	cancel   context.CancelFunc
+	label    string
+	platform string
+	// saveDirectory is the claim this game still holds while it waits; see
+	// saveclaim.go.
+	saveDirectory string
+	audio         *audioCollector
+	started       startedMessage
+	postMortem    string
+	presented     uint64
+	parkedAt      time.Time
+	timer         *time.Timer
 }
 
 // parkSession takes a running game off a runner that is losing its socket and
@@ -138,6 +141,7 @@ func (s *Server) CloseParkedSessions() {
 func (s *Server) dropLocked(token string, parked *parkedSession, reason string) {
 	parked.timer.Stop()
 	parked.game.Close()
+	s.releaseSaveDirectoryLocked(parked.saveDirectory)
 	if parked.cancel != nil {
 		parked.cancel()
 	}

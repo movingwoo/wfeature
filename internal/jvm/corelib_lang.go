@@ -244,6 +244,32 @@ func byteDefinition() ClassDefinition {
 	}
 }
 
+// shortDefinition is the third boxed number, and it is here for the same
+// reason the other two are: a title parses one. The AOT title that named it
+// reads a UI form's attributes, where a coordinate is a short and a flag is a
+// byte, so the class is asked for from the same loader as java/lang/Byte and
+// missing it stops the form rather than the number.
+func shortDefinition() ClassDefinition {
+	native := AccessPublic | AccessNative
+	staticNative := AccessPublic | AccessStatic | AccessNative
+	return ClassDefinition{
+		Name:      ShortClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessFinal,
+		Fields: []FieldDefinition{
+			{Name: "MIN_VALUE", Descriptor: "S", Access: AccessPublic | AccessStatic | AccessFinal, Constant: IntValue(-32768)},
+			{Name: "MAX_VALUE", Descriptor: "S", Access: AccessPublic | AccessStatic | AccessFinal, Constant: IntValue(32767)},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "(S)V", Access: native},
+			{Name: "shortValue", Descriptor: "()S", Access: native},
+			{Name: "intValue", Descriptor: "()I", Access: native},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "parseShort", Descriptor: "(Ljava/lang/String;)S", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+		},
+	}
+}
+
 // mathDefinition publishes the arithmetic. CLDC 1.1 has the floating-point
 // half as well, and the natives behind these have carried it for as long as
 // the class did not exist to name them through.

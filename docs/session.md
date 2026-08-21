@@ -211,6 +211,15 @@ they are given** — one local archive branches on the width and asks for a set
 of images its own package does not contain, so on a 240-wide screen it cannot
 run at all. `docs/skvm.md` has that title's own branch.
 
+**A start with no screen in it is not the same as a start that asked for the
+default.** On the MIDP platform the archive gets to answer first: an absent
+`width` and `height` let `skt.PackagedScreen` read the handset out of the
+archive's own resource names, so the title above starts on the phone it was
+built for without anyone knowing to change a setting. A start that carries a
+size is honoured as it always was. The page omits the field when the stored
+size is the default, so choosing 240x320 by hand reads here as "no answer" and
+that title still starts at 176x220 — which is the size it can run at.
+
 Two rules keep the setting honest:
 
 - **The size the server refuses is the size no handset had.** Anything outside
@@ -414,6 +423,39 @@ save API use. The page no longer preloads anything before starting a game.
 The save API remains for the CLI's `DirectorySaveStore` layout, which both
 Hosts read.
 
+### One game's saves belong to one session
+
+A save directory is named by the archive, not by the page that opened it, so
+two pages that start the same game get one directory and two emulators writing
+into it. Nothing about the store notices: each session reads the files when the
+guest asks and writes them back whole, so the second writer wins and the first
+player's progress is gone with nothing reported anywhere. It is the ordinary
+case rather than a contrived one — a phone and a desktop against one household
+server, or one browser with the game open in two tabs.
+
+So **a session claims its save directory for as long as it holds the game**,
+and a start that cannot get the claim is refused with a message naming what is
+holding it (`internal/webhost/saveclaim.go`). The claim belongs to the game
+rather than to the connection: it is taken when a game starts, released
+wherever the game is closed, and it travels with a game that is parked, because
+a parked game still owns the files it will write when its page comes back.
+
+Two rules keep that from locking a player out of their own game:
+
+- **A parked holder is taken over rather than defended.** A parked game does
+  not tick and nobody is watching it, while the person starting the game is
+  here now — so the parked one is closed and its token spent. That costs it the
+  rest of its resume window, which is the smaller loss.
+- **A live holder is waited on for two seconds first.** A page that reloads —
+  which the restart button does, and which a phone coming back from the app
+  switcher may — opens its new socket before the server has noticed the old one
+  is gone, so the game it is starting is still held by a session a moment away
+  from parking. Without the grace a page would be refused by itself. A session
+  that is genuinely playing is still playing when the grace runs out.
+
+What this does not arbitrate is the save API and the native CLI, which reach
+the same files by another road.
+
 ## Cheats
 
 The panel's operations are defined in one place: `internal/cheat`'s panel API
@@ -564,12 +606,26 @@ reloads, so restarting still starts the game over.
 
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and
   what that feels like on a real network has not been established.
-- **Two tabs on one game are two sessions** writing the same save directory.
-  Nothing arbitrates between them. Parking does not change that: a token names
-  one parked game, and a second tab starts a second session as it always did.
-- **A parked game is not persisted.** It lives in the server's memory, so
-  stopping the server ends every game waiting for a page, and the page finds
-  its token unknown when the server comes back.
+- **Two tabs on two different games are two sessions**, and nothing bounds how
+  many. The same game twice is arbitrated — see "One game's saves belong to one
+  session" — but a save the CLI or the save API writes while a session is
+  running is still nobody's to referee.
+- **A parked game is not persisted, and will not be.** It lives in the
+  server's memory, so stopping the server ends every game waiting for a page
+  and the page finds its token unknown when the server comes back. Writing one
+  to disk is not a small feature that has been skipped: a KTF guest thread
+  parks *inside* a nested Go call stack — the Host is blocked in a channel
+  receive while the worker sits in `InvokeVirtual` inside a supervisor call —
+  and a Go stack cannot be written to a file. The guest's own ARM memory could
+  be, but the half of the session that is Go — the JVM object graph, open
+  files, image handles, the audio sink, and every one of those parked stacks —
+  could not, and a snapshot of only one half resumes nothing. Making it
+  possible means an execution model where a parked guest holds no Go stack at
+  all, which is a rewrite of the thing that makes a game whose main loop never
+  returns work in the first place. What a restart costs is what a handset
+  losing power costs: everything since the last time the game wrote its save.
+  The page remembers which archive it was playing, so coming back is one click
+  rather than a search.
 - **There is no authentication.** The server binds every interface so a phone
   can reach it, and anything else on that network can reach it too.
 - **Live sessions are not capped.** Parked games are — four, because each one

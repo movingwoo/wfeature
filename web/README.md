@@ -144,17 +144,22 @@ and no save crosses the network. The save API remains for the CLI's layout,
 which both Hosts read.
 
 The service worker caches the app shell for offline launches. It does not cache
-the save API or the game archives.
+the save API or the game archives. The shell list is hand written and nothing at
+runtime complains when it falls behind — a module missing from it is fetched
+over the network like any other file, so the page works everywhere except
+offline, where it comes up and then fails on an import — so
+`service-worker.test.mjs` compares the list against what `index.html` names and
+what the module graph from `app.js` reaches. Two modules had already drifted out
+of it. A change to the list wants the cache name bumped with it.
 
 ## Known gaps
 
-- **LGT titles do not start yet.** The page names them and finds their saves,
-  and they now run their entry point and initializer, but they stop at an
-  import table the runtime does not know. The native `wfeature runlgt` stops in
-  the same place, so this is the platform rather than the browser.
-- **SKT titles start and paint one frame.** All three local archives get that
-  far and then present nothing over the next 200 ticks, so they are running but
-  not yet progressing; whether one plays is unverified.
+- **Which titles run is the support matrix's answer, not this page's.** Every
+  platform starts games here over the same shared layer the CLI uses, and
+  what each archive reaches is recorded in
+  [`../docs/support.md`](../docs/support.md). The page has no per-platform
+  limitation of its own: a title that runs under `wfeature runktf`/`runlgt`/
+  `runskt` runs here.
 - The cheat panel appears on every platform. The two ARM ones search guest
   memory; the MIDP runtime searches a synthetic address space over its object
   graph, where the region labels are class names and the write watch is not

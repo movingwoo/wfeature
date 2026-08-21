@@ -267,7 +267,7 @@ release number is a decision; in CI it comes from the tag, which is the same
 decision written down somewhere durable:
 
 ```sh
-make dist VERSION=0.2.0
+make dist VERSION=0.2.1
 ```
 
 ```text

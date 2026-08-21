@@ -154,6 +154,10 @@ type sessionRunner struct {
 	label     string
 	platform  string
 	presented uint64
+	// saveDirectory is the claim this session holds on the game's saves for
+	// as long as it has the game; see saveclaim.go. Empty for a game with no
+	// saves of its own.
+	saveDirectory string
 
 	// started is what the page was told when the game came up, kept so a page
 	// that reconnects can be told the same thing without the game restarting.
@@ -485,6 +489,16 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		return
 	}
 
+	// Two sessions on one save directory overwrite each other silently, so
+	// the directory is claimed before anything is started; see saveclaim.go.
+	directory := r.server.saveDirectory(summary.Platform, summary.SaveOwner)
+	if claimed, holder := r.server.waitToClaimSaveDirectory(directory, label); !claimed {
+		r.send(serverMessage{Kind: serverError, ID: message.ID,
+			Message: fmt.Sprintf("다른 창에서 이미 실행 중입니다(%s). 그 창에서 게임을 멈추거나 창을 닫은 뒤 다시 시작하세요.", holder)})
+		return
+	}
+	r.saveDirectory = directory
+
 	r.audio = &audioCollector{}
 	// The game's context keeps the request's values and drops its
 	// cancellation: what ends this game is closing it, not the page that
@@ -508,7 +522,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		screenWidth, screenHeight = message.Width, message.Height
 	}
 	started, err := session.Start(r.gameCtx, archive, session.Options{
-		SaveStore: r.server.saveStore(summary.Platform, summary.SaveOwner),
+		SaveStore: r.server.saveStoreIn(directory),
 		AudioSink: r.audio,
 		Logger:    r.server.logger,
 		Scale:     scale,
@@ -521,6 +535,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	if err != nil {
 		r.gameCancel()
 		r.gameCancel = nil
+		r.server.releaseSaveDirectory(r.saveDirectory)
+		r.saveDirectory = ""
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
 		return
 	}
@@ -591,22 +607,29 @@ func (r *sessionRunner) park() {
 	if r.token == "" {
 		// No token was ever issued, so no page could ask for this game back.
 		game.Close()
+		r.server.releaseSaveDirectory(r.saveDirectory)
+		r.saveDirectory = ""
 		r.endGameContext()
 		return
 	}
+	// The game keeps its save directory while it waits, and a start that finds
+	// the claim parked may take it; see saveclaim.go.
+	r.server.markSaveDirectoryParked(r.saveDirectory, true)
 	r.server.parkSession(r.token, &parkedSession{
-		game:       game,
-		context:    r.gameCtx,
-		cancel:     r.gameCancel,
-		label:      r.label,
-		platform:   r.platform,
-		audio:      r.audio,
-		started:    r.started,
-		postMortem: r.postMortem,
-		presented:  r.presented,
+		game:          game,
+		context:       r.gameCtx,
+		cancel:        r.gameCancel,
+		label:         r.label,
+		platform:      r.platform,
+		saveDirectory: r.saveDirectory,
+		audio:         r.audio,
+		started:       r.started,
+		postMortem:    r.postMortem,
+		presented:     r.presented,
 	})
 	// The context went with the game; this runner is not the one that ends it.
 	r.gameCtx, r.gameCancel = nil, nil
+	r.saveDirectory = ""
 }
 
 // resumeGame adopts a game the server has been holding. The page that asks
@@ -626,6 +649,8 @@ func (r *sessionRunner) resumeGame(message clientMessage) {
 	r.stopGame()
 
 	r.game = parked.game
+	r.saveDirectory = parked.saveDirectory
+	r.server.markSaveDirectoryParked(r.saveDirectory, false)
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
 	r.label = parked.label
@@ -651,6 +676,8 @@ func (r *sessionRunner) stopGame() {
 	}
 	r.game.Close()
 	r.game = nil
+	r.server.releaseSaveDirectory(r.saveDirectory)
+	r.saveDirectory = ""
 	r.endGameContext()
 	// The token named this game; a page that reconnects after stopping one is
 	// starting something new rather than resuming.
@@ -1109,19 +1136,29 @@ func (s *Server) readGameArchive(gamePath string) ([]byte, string, error) {
 	return archive, strings.TrimSuffix(name, filepath.Ext(name)), nil
 }
 
-// saveStore roots a game's saves in the same tree the native CLI and the save
-// API use, so a session on the server and a session in the browser boot from
-// one set of saves. On this path they never cross the network at all: the
-// emulator and the files are on the same machine.
-func (s *Server) saveStore(platform, owner string) backend.SaveStore {
+// saveDirectory is where one game's saves live: the same
+// savedata/<profile>/<platform>/<owner> tree the native CLI and the save API
+// use, so a session on the server and a session in the browser boot from one
+// set of saves and nothing crosses the network. It is also this game's
+// identity for the claim a session takes on it; see saveclaim.go. Empty for a
+// game with no saves of its own.
+func (s *Server) saveDirectory(platform, owner string) string {
 	if owner == "" || ownerRejected(owner) {
-		return nil
+		return ""
 	}
 	root := s.saveRoot
 	if platform != "" && platform != "ktf" && platforms[platform] {
 		root = filepath.Join(filepath.Dir(root), platform)
 	}
-	return backend.NewDirectorySaveStore(filepath.Join(root, owner))
+	return filepath.Join(root, owner)
+}
+
+// saveStoreIn opens the store for a directory saveDirectory already named.
+func (s *Server) saveStoreIn(directory string) backend.SaveStore {
+	if directory == "" {
+		return nil
+	}
+	return backend.NewDirectorySaveStore(directory)
 }
 
 // audioCollector is the session's audio sink. The guest plays sound by calling

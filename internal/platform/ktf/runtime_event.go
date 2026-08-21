@@ -30,6 +30,7 @@ const (
 // puts in the guest's int[4]; games compare against their own copies of them.
 const (
 	eventKindKey     int32 = 1
+	eventKindPointer int32 = 2
 	eventKindRepaint int32 = 41
 	eventKindNotify  int32 = 1000
 
@@ -283,6 +284,10 @@ func runtimeEventQueueDispatchEvent(runtime *initializationRuntime, vm *jvm.VM, 
 	switch event.kind {
 	case eventKindKey:
 		return jvm.VoidValue(), runtime.dispatchKeyToCards(event.param1, event.param2)
+	case eventKindPointer:
+		// The specification's table: event[1] is the pointer event type and
+		// event[2] and event[3] are its screen coordinates.
+		return jvm.VoidValue(), runtime.dispatchPointerToCards(event.param1, event.param2, event.param3)
 	case eventKindRepaint:
 		// The redraw request has been taken off the queue, so the dirty flag
 		// the Host-driven path uses is satisfied by this paint.

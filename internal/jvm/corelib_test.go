@@ -439,3 +439,57 @@ func TestInheritedRangedReadStoresSignedBytes(t *testing.T) {
 		t.Errorf("read() at the end = %d, want -1", count)
 	}
 }
+
+// A UI form's attributes are parsed one class per attribute type — a
+// coordinate through java/lang/Short, a flag through java/lang/Byte — so the
+// third boxed number has to be there and has to truncate like its own width.
+func TestShortParsesAndTruncatesToItsOwnWidth(t *testing.T) {
+	vm := New(nil, Options{})
+	value, err := vm.InvokeStatic(ShortClass, "parseShort", "(Ljava/lang/String;)S", ReferenceValue(vm.NewString(" -32768 ")))
+	if err != nil {
+		t.Fatalf("Short.parseShort error = %v", err)
+	}
+	if number, err := value.Int32(); err != nil || number != -32768 {
+		t.Fatalf("Short.parseShort(\" -32768 \") = %v/%v, want -32768", number, err)
+	}
+	if _, err := vm.InvokeStatic(ShortClass, "parseShort", "(Ljava/lang/String;)S", ReferenceValue(vm.NewString("32768"))); err == nil {
+		t.Fatal("Short.parseShort(\"32768\") accepted a value one past the width")
+	}
+	boxed, err := vm.NewObject(ShortClass, "(S)V", IntValue(-1))
+	if err != nil {
+		t.Fatalf("NewObject(Short) error = %v", err)
+	}
+	text, err := vm.InvokeVirtual(boxed, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatalf("Short.toString error = %v", err)
+	}
+	reference, err := text.Reference()
+	if err != nil {
+		t.Fatalf("Short.toString reference error = %v", err)
+	}
+	if content, ok := StringText(reference); !ok || content != "-1" {
+		t.Fatalf("Short.toString() = %q/%v, want \"-1\"", content, ok)
+	}
+}
+
+// String.valueOf(char[]) is the whole-array half of the pair whose ranged
+// form was already here. A guest that builds a string from a character buffer
+// calls whichever one it was compiled against.
+func TestStringValueOfTakesAWholeCharacterArray(t *testing.T) {
+	vm := New(nil, Options{})
+	characters, err := vm.InvokeVirtual(vm.NewString("WIPI"), "toCharArray", "()[C")
+	if err != nil {
+		t.Fatalf("String.toCharArray error = %v", err)
+	}
+	value, err := vm.InvokeStatic(StringClass, "valueOf", "([C)Ljava/lang/String;", characters)
+	if err != nil {
+		t.Fatalf("String.valueOf([C) error = %v", err)
+	}
+	reference, err := value.Reference()
+	if err != nil {
+		t.Fatalf("String.valueOf([C) reference error = %v", err)
+	}
+	if content, ok := StringText(reference); !ok || content != "WIPI" {
+		t.Fatalf("String.valueOf([C) = %q/%v, want \"WIPI\"", content, ok)
+	}
+}

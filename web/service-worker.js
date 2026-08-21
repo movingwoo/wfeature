@@ -1,4 +1,4 @@
-const cacheName = "wfeature-shell-v7";
+const cacheName = "wfeature-shell-v8";
 
 // The shell is what the page needs to come up, which is now only the page: a
 // game runs on the server and this page draws what it sends.
@@ -11,6 +11,8 @@ const shell = [
   "./session.js",
   "./debug-log.js",
   "./audio.js",
+  "./key-holds.js",
+  "./game-speed.js",
   "./manifest.webmanifest",
   "./icon-32.png",
   "./icon-192.png",

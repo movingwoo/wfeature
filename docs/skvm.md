@@ -1082,6 +1082,48 @@ counting up live, `freeze` holds it at 555 across seconds of the game writing
 over it every tick, and `unfreeze` lets the game's own value come back. The
 fixture-level tests are `TestHeapMap*` in `internal/platform/skt`.
 
+## The handset a title was packaged for is in its resource names
+
+One local title will not start on the 240-wide default. It branches on the
+screen and builds its title art from that:
+
+```
+if (width <  176)                     "/title/main_logo_120.png"
+if (width == 240 && height == 160)    "/title/main_logo_120.png"
+if (width <  240)                     "/title/main_logo_176.png"
+else                                  "/title/main_logo_240.png"
+```
+
+The copy that reached this library holds only the `_176` variants, so on the
+default it asks for a `_240` image that is not there, catches its own
+`IOException`, and then draws the null it was left with — the session ends on a
+`NullPointerException` out of `Graphics.drawImage`, which reads like a fault
+here and is the archive being played on the wrong handset.
+
+**The descriptor does not say which handset that is.** Every key of every local
+`.msd` was inventoried — the MIDlet's name, vendor, version, download URL, JAR
+size, install-notify URL, icons, keys, and the `DD-` block the download manager
+reads — and so was every manifest inside every local JAR, of which only seven
+have one at all and none carries more than `Manifest-Version` and `Created-By`.
+There is no screen size anywhere in an SKT descriptor.
+
+**The resource names are the declaration, and they are read now.**
+`skt.PackagedScreen` scans the archive's non-class entries for a name whose
+stem ends in `_<width>`, and answers a handset when **every** such name agrees
+on one width, at least two of them do, and this project offers a handset for
+that width (128, 176, 240, 320). Anything else answers nothing.
+
+That narrowness is the whole of the design, and it is why this is a rule here
+and a flag on the other WIPI platform. KTF's `__adf__` really does carry a
+`DisplaySize`, and thirteen local archives declare `176*220` while twelve of
+them draw across the whole 240x320 screen — so honouring the declaration there
+would shrink twelve working titles to fix one (`ktf.md`, "A band beside a title
+screen was the title's own"). Here the signal is in **one** archive of the
+fifteen, and it is the one that cannot start without it; the other fourteen
+carry no width-suffixed name at all and are untouched. A Host that asks for a
+size still wins — `runskt -screen` and the browser's screen setting both
+override this — so the rule only decides what "no answer" means.
+
 ## Deliberately incomplete
 
 - **`SISImage` does not decode.** The container's frame and object tables are
@@ -1116,6 +1158,25 @@ The local corpus has an opt-in probe of its own now —
 ./internal/platform/skt` — which starts all fifteen archives, ticks each for
 300 ticks and requires a frame with something lit in it. All fifteen pass.
 [`testing.md`](testing.md) has what it does and does not claim.
+
+### An SKT A/B has a per-title noise floor, and it is not zero
+
+Driving all fifteen archives through the same script under two builds and
+diffing the captured frames is the regression net for a change to shared code,
+and like the KTF sweep — and unlike LGT's, whose route replays byte-identically
+— it is only readable against a floor measured first. At 300 ticks per archive,
+**eleven of fifteen come back byte-identical and four differ**, and running the
+*same* binary twice gives those four the same differing-pixel counts it gives
+two different builds. The floor is per title, not per corpus: one title
+disagrees with itself over roughly two hundred pixels a frame while another
+sits under a hundred, so the number that matters is the one measured for *that*
+archive, taken base-versus-base, before any of it is read as a finding.
+
+What counts as evidence is what counts on KTF: a title that stops where the
+other build did not, an error text that changes, or a difference far enough
+outside that title's own base-versus-base count to be a layout rather than an
+animation phase. See "An A/B sweep of the local set is half noise" in
+[`ktf.md`](ktf.md) for why a differing frame count carries so little on its own.
 
 There is still **no SKT game archive in this repository**, so nothing here is tested
 against a real title in CI — only against a newly authored fixture

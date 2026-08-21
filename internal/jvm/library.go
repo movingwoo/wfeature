@@ -15,6 +15,7 @@ const (
 	IntegerClass               = "java/lang/Integer"
 	LongClass                  = "java/lang/Long"
 	ByteClass                  = "java/lang/Byte"
+	ShortClass                 = "java/lang/Short"
 	MathClass                  = "java/lang/Math"
 	RuntimeClass               = "java/lang/Runtime"
 	IOExceptionClass           = "java/io/IOException"

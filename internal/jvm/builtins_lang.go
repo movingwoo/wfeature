@@ -197,6 +197,51 @@ func (vm *VM) registerBoxBuiltins() {
 		return IntValue(int32(value)), nil
 	})
 
+	vm.builtin(ShortClass, "<init>", "(S)V", func(_ *VM, arguments []Value) (Value, error) {
+		object, err := requireObject(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		value, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		object.Native = int32(int16(value))
+		return VoidValue(), nil
+	})
+	vm.builtin(ShortClass, "shortValue", "()S", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return IntValue(int32(int16(value))), nil
+	})
+	vm.builtin(ShortClass, "intValue", "()I", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return IntValue(value), nil
+	})
+	vm.builtin(ShortClass, "toString", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), nil
+	})
+	vm.builtin(ShortClass, "parseShort", "(Ljava/lang/String;)S", func(_ *VM, arguments []Value) (Value, error) {
+		text, err := parsedText(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		value, parseErr := strconv.ParseInt(strings.TrimSpace(text), 10, 16)
+		if parseErr != nil {
+			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		}
+		return IntValue(int32(value)), nil
+	})
+
 	vm.builtin(MathClass, "min", "(JJ)J", func(_ *VM, arguments []Value) (Value, error) {
 		left, right, err := longPair(arguments)
 		if err != nil {
@@ -369,6 +414,21 @@ func (vm *VM) registerStringExtraBuiltins() {
 			}
 		}
 		return ReferenceValue(nativeStringValue(string(utf16.Decode(replaced)))), nil
+	})
+	vm.builtin(StringClass, "valueOf", "([C)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		array, err := nativeReference(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		_, values, err := ArraySnapshot(array)
+		if err != nil {
+			return VoidValue(), err
+		}
+		text, err := charArrayString(array, 0, int32(len(values)))
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(text)), nil
 	})
 	vm.builtin(StringClass, "valueOf", "([CII)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		array, err := nativeReference(arguments, 0)

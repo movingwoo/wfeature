@@ -590,8 +590,8 @@ gap between two scenes, and the gap is what a person feels.
 
 ### The block interpreter, measured before building it again
 
-`TODO.md` left the interpreter's remaining dispatch overhead as "size unknown,
-measure with a small benchmark before starting". Measured, on the game-shaped
+The interpreter's remaining dispatch overhead was carried for a long time as
+"size unknown, measure with a small benchmark before starting". Measured, on the game-shaped
 loop, as the *ideal* a block interpreter could reach — the PC read, the Thumb
 test, the `end` compare, the watch compare and the decode-cache lookup all
 gone, the same handlers behind the same switch, and the PC write kept because
