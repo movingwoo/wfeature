@@ -52,6 +52,47 @@ var (
 // while the MIDlet is not active or when the current Displayable is not a
 // Canvas.
 func (runtime *Runtime) SendKey(eventType KeyEventType, keyCode int32) error {
+	if _, ok := keyCallback(eventType); !ok {
+		return fmt.Errorf("%w: %q", ErrInvalidKeyEvent, eventType)
+	}
+	// A repeat is neither a press nor a release, so it does not move the pad;
+	// it is delivered to whatever the pad last reported.
+	if eventType == KeyRepeated {
+		return runtime.deliverKey(eventType, keyCode)
+	}
+	runtime.padMu.Lock()
+	if runtime.pad.IsPad == nil {
+		runtime.pad.IsPad = isPadKey
+	}
+	events := runtime.pad.Key(eventType == KeyPressed, keyCode)
+	runtime.padMu.Unlock()
+	for _, event := range events {
+		kind := KeyReleased
+		if event.Pressed {
+			kind = KeyPressed
+		}
+		if err := runtime.deliverKey(kind, event.Code); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isPadKey reports the direction pad: the four navigation keys, and the digits
+// a keypad prints them on. A local side-scroller walks on both, which is what
+// says the digits belong here; the other digits are actions and a title that
+// hears one twice acts twice.
+func isPadKey(keyCode int32) bool {
+	switch keyCode {
+	case KeyCodeUp, KeyCodeDown, KeyCodeLeft, KeyCodeRight:
+		return true
+	case '2', '4', '6', '8':
+		return true
+	}
+	return false
+}
+
+func (runtime *Runtime) deliverKey(eventType KeyEventType, keyCode int32) error {
 	callback, ok := keyCallback(eventType)
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrInvalidKeyEvent, eventType)

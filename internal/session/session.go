@@ -470,9 +470,15 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 		return s.endedOrFailed(s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code)))
 	case s.lgt != nil:
 		// A Clet compares against the same key values a KTF game does, so the
-		// translation is shared. A repeat arrives as a fresh press: the Clet
-		// event kinds are pressed and released only.
-		s.lgt.SendKey(action != KeyRelease, uint32(ktfKeyCode(code)))
+		// translation is shared.
+		pressed, deliver, ok := lgtKeyEvent(action)
+		if !ok {
+			return fmt.Errorf("session: unknown key action %q", action)
+		}
+		if !deliver {
+			return nil
+		}
+		s.lgt.SendKey(pressed, uint32(ktfKeyCode(code)))
 		return nil
 	case s.runtime != nil:
 		// The MIDP runtime takes the page's codes unchanged: they are the MIDP
@@ -707,6 +713,30 @@ func ktfKeyEventType(action string) (int32, bool) {
 		return ktf.KeyRepeated, true
 	}
 	return 0, false
+}
+
+// lgtKeyEvent says what one Host key action becomes on the Clet platform, and
+// deliver is what a repeat needs: nothing is sent for one.
+//
+// A held keyboard key is repeated by the operating system, the page forwards
+// those keydowns as repeats, and this platform has no event kind for them —
+// its Clet events are pressed and released, and it generates no
+// `MV_KEY_REPEAT_EVENT` because no title has asked for the cadence
+// (`docs/lgt.md` "Nothing repeats a held key"). Sending one on as a press is
+// therefore not a translation but an invention: a second press with no release
+// between is a thing no handset delivers, and titles read a press as a fresh
+// tap. Two of the local ones dash on that tap, so holding a direction dashed
+// again every time the operating system repeated the key.
+func lgtKeyEvent(action string) (pressed, deliver, ok bool) {
+	switch action {
+	case KeyPress:
+		return true, true, true
+	case KeyRelease:
+		return false, true, true
+	case KeyRepeat:
+		return false, false, true
+	}
+	return false, false, false
 }
 
 // ktfKeyCode converts the browser Host's MIDP-style key codes to the WIPI

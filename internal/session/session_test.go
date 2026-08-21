@@ -209,6 +209,36 @@ func TestKeyActionsAreAClosedSet(t *testing.T) {
 	}
 }
 
+// A held keyboard key is repeated by the operating system and the page
+// forwards those keydowns. The platforms whose event kinds are a press and a
+// release have nothing to deliver for one, and delivering a press would hand
+// the title a second press with no release between — which is what made two
+// Clet titles dash again on every repeat the operating system sent.
+func TestARepeatIsNotASecondPressWhereNothingRepeats(t *testing.T) {
+	for _, test := range []struct {
+		action  string
+		pressed bool
+		deliver bool
+	}{
+		{KeyPress, true, true},
+		{KeyRelease, false, true},
+		{KeyRepeat, false, false},
+	} {
+		pressed, deliver, ok := lgtKeyEvent(test.action)
+		if !ok {
+			t.Errorf("the Host vocabulary %q is not translated", test.action)
+			continue
+		}
+		if deliver != test.deliver || (deliver && pressed != test.pressed) {
+			t.Errorf("%q became pressed=%v deliver=%v, want pressed=%v deliver=%v",
+				test.action, pressed, deliver, test.pressed, test.deliver)
+		}
+	}
+	if _, _, ok := lgtKeyEvent("wiggle"); ok {
+		t.Fatal("an unknown key action was translated")
+	}
+}
+
 func TestKeyCodesTranslateOnlyWhereTheyMust(t *testing.T) {
 	// The browser sends MIDP-style codes. A WIPI game compares against
 	// different numbers for the direction pad and the soft keys, while digits

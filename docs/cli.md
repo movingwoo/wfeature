@@ -240,8 +240,9 @@ watching — a release build is not, and carries none of the three.
 
 ```
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
-                                    [-key tick:name] [-hold N] [-save dir]
-                                    [-diag report.json] [-screen WxH] [-cheat]
+                                    [-key tick:name] [-hold N] [-route script]
+                                    [-save dir] [-diag report.json]
+                                    [-screen WxH] [-cheat]
 ```
 
 | Flag | What it does |
@@ -251,6 +252,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-framedir dir` | write `tick0042.png` into `dir` every time the screen changed |
 | `-key tick:name` | press a key at a tick, e.g. `-key 300:fire`. Repeatable |
 | `-hold N` | how many ticks a `-key` press is held before its release, 1 by default |
+| `-route script` | replay a route script, the same format `runktf` and `runlgt` take. It is the only way to script two keys held at once, which is what a keyboard produces and what `-key` cannot say |
 | `-save dir` | the save tree. Defaults to `var/savedata/<profile>/skt/<owner>` |
 | `-diag report.json` | write what the run used: classes loaded, classes missing, and a call count per registered native |
 | `-screen WxH` | the handset screen, 240x320 by default |

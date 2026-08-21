@@ -13,6 +13,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/keypad"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -46,6 +47,12 @@ type Runtime struct {
 	stateMu    sync.RWMutex
 	state      LifecycleState
 	lastError  error
+
+	// pad makes a keyboard's overlapping holds look like a thumb on a handset
+	// pad. It is guarded because a Host may send keys from a different
+	// goroutine than the one running the event loop.
+	padMu sync.Mutex
+	pad   keypad.Pad
 
 	displayMu           sync.RWMutex
 	displayOwner        *jvm.Object

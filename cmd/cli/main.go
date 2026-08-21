@@ -146,6 +146,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	frameDir := ""
 	saveRoot := ""
 	keyEvents := map[int][]int32{}
+	routePath := ""
 	keyHold := 1
 	diagPath := ""
 	cheatConsole := false
@@ -205,6 +206,13 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			keyEvents[tick] = append(keyEvents[tick], key)
+		case "-route":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-route expects a script path")
+				return 2
+			}
+			index++
+			routePath = args[index]
 		case "-diag":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-diag expects a report path")
@@ -243,6 +251,27 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	}
 
 	logger.Debug("starting SKT title", "profile", backend.BuildProfile(), "path", path)
+	// The script is parsed before the archive is read, so a typo is reported
+	// now rather than after the guest execution it takes to reach the step
+	// holding it.
+	var script *route.Route
+	if routePath != "" {
+		text, err := os.ReadFile(routePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "read route: %v\n", err)
+			return 1
+		}
+		script, err = route.Parse(string(text), skt.KeyCodeByName)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		if !ticksChosen {
+			// A route runs until it arrives rather than to a tick count.
+			ticks = 0
+		}
+	}
+
 	archive, err := openSKT(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -298,32 +327,37 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	keyReleases := map[int][]int32{}
 	ran := 0
 	runErr := error(nil)
+	stopped := false
 	dumpedPresents := uint64(0)
-	for ; ran < ticks; ran++ {
+	// One tick, whatever is driving it. A plain run counts them off against
+	// -ticks and a route asks for them a step at a time, and both dump frames,
+	// deliver scheduled keys and read the cheat console the same way — so the
+	// tick is written once and the two callers differ only in when they ask.
+	advance := func(ctx context.Context) (bool, error) {
 		if ctx.Err() != nil {
-			break
+			stopped = true
+			return false, nil
 		}
 		if frameDir != "" {
 			if frame, presents := framebuffer.Snapshot(); presents != dumpedPresents {
 				dumpedPresents = presents
 				name := filepath.Join(frameDir, fmt.Sprintf("tick%04d.png", ran))
 				if err := writePNG(name, frame.RGBA, frame.Width, frame.Height); err != nil {
-					fmt.Fprintf(stderr, "write frame: %v\n", err)
-					return 1
+					return false, fmt.Errorf("write frame: %w", err)
 				}
 			}
 		}
 		for _, key := range keyEvents[ran] {
 			if err := runtime.SendKey(skt.KeyPressed, key); err != nil {
-				runErr = err
-				break
+				stopped = true
+				return false, err
 			}
 			keyReleases[ran+keyHold] = append(keyReleases[ran+keyHold], key)
 		}
 		for _, key := range keyReleases[ran] {
 			if err := runtime.SendKey(skt.KeyReleased, key); err != nil {
-				runErr = err
-				break
+				stopped = true
+				return false, err
 			}
 		}
 		delete(keyReleases, ran)
@@ -344,20 +378,71 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
-		if runErr == nil {
-			runtime.AdvanceAudio(time.Since(startedAt))
-			runErr = runtime.RunPending()
-		}
-		if runErr != nil {
-			fmt.Fprintf(stderr, "tick %d: %v\n", ran, runErr)
-			break
+		runtime.AdvanceAudio(time.Since(startedAt))
+		if err := runtime.RunPending(); err != nil {
+			stopped = true
+			return false, err
 		}
 		if state := runtime.State(); state == skt.StateDestroyed || state == skt.StateError {
-			break
+			stopped = true
 		}
+		ran++
 		select {
 		case <-ctx.Done():
 		case <-time.After(sktTickInterval):
+		}
+		return true, nil
+	}
+	// A route waits on what the screen is doing, so it needs to identify the
+	// picture; a hash of the pixels is exactly enough.
+	digest := func() uint64 {
+		frame, _ := framebuffer.Snapshot()
+		const offset64, prime64 = uint64(14695981039346656037), uint64(1099511628211)
+		sum := offset64
+		for _, b := range frame.RGBA {
+			sum = (sum ^ uint64(b)) * prime64
+		}
+		return sum
+	}
+	var routeResult route.Result
+	if script != nil {
+		runner := &route.Runner{
+			MaxTicks: ticks,
+			Hold:     keyHold,
+			Digest:   digest,
+			Advance:  advance,
+			SendKey: func(_ context.Context, pressed bool, key int32) error {
+				eventType := skt.KeyPressed
+				if !pressed {
+					eventType = skt.KeyReleased
+				}
+				return runtime.SendKey(eventType, key)
+			},
+			Stalled: func() bool { return stopped },
+			Checkpoint: func(label string, _ int, _ bool) error {
+				if frameDir == "" {
+					return nil
+				}
+				frame, _ := framebuffer.Snapshot()
+				return writePNG(filepath.Join(frameDir, label+".png"), frame.RGBA, frame.Width, frame.Height)
+			},
+		}
+		result, err := runner.Run(ctx, script)
+		routeResult = result
+		if err != nil {
+			runErr = err
+			fmt.Fprintf(stderr, "route: %v\n", err)
+		}
+		if !result.Completed && runErr == nil {
+			fmt.Fprintf(stderr, "route stopped at step %d (%s)\n", result.StoppedAt+1, result.Reason)
+		}
+	} else {
+		for !stopped && ran < ticks {
+			if _, err := advance(ctx); err != nil {
+				runErr = err
+				fmt.Fprintf(stderr, "tick %d: %v\n", ran, err)
+				break
+			}
 		}
 	}
 
@@ -375,7 +460,17 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		// acceptance probes read: a MIDlet that reached its title screen and one
 		// that painted nothing are otherwise the same JSON.
 		Lit int `json:"lit"`
+		// A route that did not arrive is an answer rather than a crash, so
+		// where it stopped is part of the run's result.
+		RouteCompleted bool   `json:"route_completed,omitempty"`
+		RouteStoppedAt int    `json:"route_stopped_at,omitempty"`
+		RouteReason    string `json:"route_reason,omitempty"`
 	}{RuntimeSummary: runtime.Summary(), Ticks: ran, Lit: frameLit(frame.RGBA)}
+	if script != nil {
+		summary.RouteCompleted = routeResult.Completed
+		summary.RouteStoppedAt = routeResult.StoppedAt
+		summary.RouteReason = routeResult.Reason
+	}
 
 	if diagPath != "" {
 		if err := writeSKTDiagnostics(diagPath, runtime); err != nil {
@@ -1474,7 +1569,7 @@ func importSaves(source string, extra []string, stdout, stderr io.Writer) int {
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
-	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-save dir] [-diag report.json]")
+	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json]")
 	fmt.Fprintln(output, "                            [-screen WxH] [-cheat]")
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")

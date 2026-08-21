@@ -58,6 +58,45 @@ with `SRC_COPY`/`AND`/`OR`/`XOR`. The pixel *mask* is the surface's alpha
 channel rather than a separate plane, because these surfaces carry real
 alpha.
 
+## Input
+
+Keys reach a Canvas as `keyPressed`, `keyReleased` and `keyRepeated`, and a
+`GameCanvas` may read `getKeyStates` instead. Which of those the corpus
+actually uses is a static read rather than a guess: across the fifteen local
+archives, **fourteen override `keyReleased`**, five override `keyRepeated`, and
+**none uses `getKeyStates`**. So a release matters to nearly every title here,
+and none of them holds a set of directions the way a `GameCanvas` bitmask
+would.
+
+That is the shape a defect fits into, and one of the titles has it. Holding a
+direction and letting go of a *different* key that is still down — a keyboard
+does this every time two keys overlap — stops the character dead:
+
+- With the release delivered, a side-scroller walking left stops the instant
+  another held key comes up, and the screen does not change again: 0 pixels
+  over the next 120 ticks.
+- Without it, the same route walks on exactly like the control that never
+  touched a second key.
+
+So this runtime sends keys through the same pad the Clet platform does
+([`internal/keypad`](../internal/keypad/keypad.go), and `lgt.md` "A release
+stops a character the pad has moved on from" for how it was found): a pad key
+released while another is still held delivers nothing, the direction now under
+the thumb is announced once when the one in use comes up, and everything that
+is not the pad is delivered exactly as it happens. The pad here is the four
+MIDP navigation codes **and the digits 2, 4, 6 and 8** — the local
+side-scroller walks on both, which is what says the digits belong in it.
+
+A repeat is neither a press nor a release and does not move the pad; it is
+delivered as it arrives, which is what the five titles that override
+`keyRepeated` are waiting for.
+
+Two things this deliberately does not do. It does not withhold a release for
+any key that is not the pad: those are actions, and a title that never hears
+the release of its attack key is worse off than one that stops walking. And it
+does not invent a repeat: what a held key does between its press and its
+release is the title's business.
+
 ## The frame loop
 
 A MIDlet has no tick of its own. It runs on the callbacks the Host makes and on
