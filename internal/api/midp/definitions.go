@@ -9,7 +9,7 @@ import "github.com/movingwoo/wfeature/internal/jvm"
 // platform registers because its answer depends on the Host.
 
 func definitions() []jvm.ClassDefinition {
-	return []jvm.ClassDefinition{
+	classes := []jvm.ClassDefinition{
 		{
 			Name:      "javax/microedition/io/Connection",
 			SuperName: "java/lang/Object",
@@ -397,6 +397,7 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "getTicker", Descriptor: "()Ljavax/microedition/lcdui/Ticker;", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setTicker", Descriptor: "(Ljavax/microedition/lcdui/Ticker;)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "sizeChanged", Descriptor: "(II)V", Access: jvm.AccessProtected, Body: ignore},
+				{Name: "repaintIM", Descriptor: "()V", Access: jvm.AccessPublic, Body: displayableRepaintIM},
 			},
 		},
 		{
@@ -1012,4 +1013,7 @@ func definitions() []jvm.ClassDefinition {
 			},
 		},
 	}
+	// The profile's own java.util pair is declared in timer.go, next to the
+	// reason it is here rather than in the configuration's core library.
+	return append(classes, timerDefinitions()...)
 }

@@ -5,6 +5,8 @@ import com.skt.m.ProgressBar;
 import com.skt.m.Vibration;
 import com.skt.m3d.Object3D;
 import com.xce.io.XFile;
+import com.xce.lcdui.TextComponent;
+import com.xce.lcdui.TextComponentHandler;
 import com.xce.lcdui.Toolkit;
 import com.xce.lcdui.XTextField;
 import javax.microedition.lcdui.Canvas;
@@ -12,6 +14,8 @@ import javax.microedition.lcdui.Display;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
 import javax.microedition.midlet.MIDlet;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /** Exercises the SKVM class surface the SKT platform adds. */
 public final class SKVMMIDlet extends MIDlet {
@@ -205,6 +209,163 @@ public final class SKVMMIDlet extends MIDlet {
         result.append('|');
         result.append(field.hasFocus());
         return result.toString();
+    }
+
+    /**
+     * textInputState checks the vendor's text input: the handler a title
+     * reaches through a static, the component it attaches to it, and the
+     * field built with the four-argument constructor a name screen uses.
+     */
+    public static String textInputState() {
+        TextComponentHandler handler = TextComponentHandler.getTextComponentHandler();
+        boolean same = handler == TextComponentHandler.getTextComponentHandler();
+        Field component = new Field();
+        handler.setTextComponent(component);
+
+        // Two presses of the same key cycle one character; a different key
+        // starts a new one, '#' deletes and '*' changes the mode.
+        boolean took = handler.keyPressed('2');
+        handler.keyPressed('2');
+        handler.keyPressed('3');
+        handler.keyPressed('#');
+        handler.keyPressed('*');
+        int mode = handler.getInputMode();
+        handler.keyPressed('2');
+        boolean release = handler.keyReleased('2');
+        handler.setTextComponent(null);
+        screen.repaintIM();
+
+        // The platform's own field keeps the text itself, and types the same
+        // way. It starts from the constructor a name screen uses.
+        XTextField field = new XTextField("ab", 6, 0, screen);
+        field.setBounds(1, 2, 3, 4);
+        field.keyPressed('7');
+        StringBuffer result = new StringBuffer();
+        result.append(same);
+        result.append('|');
+        result.append(took);
+        result.append('|');
+        result.append(release);
+        result.append('|');
+        result.append(mode);
+        result.append('|');
+        result.append(component.text());
+        result.append('|');
+        result.append(field.getText());
+        return result.toString();
+    }
+
+    /**
+     * timerState schedules a repeating task and waits for it on the thread
+     * that scheduled it, which is what a title's own loop does while a timer
+     * runs beside it.
+     */
+    public static String timerState() {
+        Timer timer = new Timer();
+        Tick tick = new Tick();
+        timer.scheduleAtFixedRate(tick, 1, 1);
+        for (int waited = 0; tick.runs < 2 && waited < 500; waited++) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException interrupted) {
+                break;
+            }
+        }
+        boolean ran = tick.runs >= 2;
+        boolean scheduled = tick.scheduledExecutionTime() > 0;
+        timer.cancel();
+        boolean stopped = tick.cancel();
+        StringBuffer result = new StringBuffer();
+        result.append(ran);
+        result.append('|');
+        result.append(scheduled);
+        result.append('|');
+        result.append(stopped);
+        return result.toString();
+    }
+
+    /** Tick counts what the timer thread came back for. */
+    static final class Tick extends TimerTask {
+        int runs;
+
+        public void run() {
+            runs++;
+        }
+    }
+
+    /** Field is a title's own text buffer, which the input method edits. */
+    static final class Field implements TextComponent {
+        private final char[] buffer = new char[16];
+        private int length;
+        private int caret;
+
+        String text() {
+            StringBuffer out = new StringBuffer();
+            for (int index = 0; index < length; index++) {
+                out.append(buffer[index]);
+            }
+            return out.toString();
+        }
+
+        public int getCaretPosition() {
+            return caret;
+        }
+
+        public int getConstraints() {
+            return 0;
+        }
+
+        public int getMaxSize() {
+            return 8;
+        }
+
+        public int size() {
+            return length;
+        }
+
+        public void insert(char character) {
+            if (length < buffer.length) {
+                buffer[length++] = character;
+                caret = length;
+            }
+        }
+
+        public void delete() {
+            if (length > 0) {
+                length--;
+                caret = length;
+            }
+        }
+
+        public void clear() {
+            length = 0;
+            caret = 0;
+        }
+
+        /** replace writes at caret - 1, which is what a cycling key needs. */
+        public void replace(char character) {
+            if (length > 0) {
+                buffer[length - 1] = character;
+            } else {
+                insert(character);
+            }
+        }
+
+        public void moveCursor(int keyCode) {
+        }
+
+        public void setCaretPosition(int position) {
+            caret = position;
+        }
+
+        public void setCaretVisible(boolean visible) {
+        }
+
+        public void repaint() {
+        }
+
+        public void repaintIM() {
+        }
     }
 
     static final class Screen extends Canvas {

@@ -223,4 +223,13 @@ func TestTextBoxTypesThroughTheKeypad(t *testing.T) {
 	if text := fixtureString(t, runtime, "UIMIDlet", "typedText"); text != "abcj" {
 		t.Fatalf("typedText() = %q, want %q", text, "abcj")
 	}
+
+	// 4 and 6 are the keys a game reads as left and right, and in a field
+	// they are letters: taking them as caret moves left "ghi" and "mno"
+	// untypable.
+	pressKey(t, runtime, '4')
+	pressKey(t, runtime, '6')
+	if text := fixtureString(t, runtime, "UIMIDlet", "typedText"); text != "abcjgm" {
+		t.Fatalf("typedText() = %q, want %q", text, "abcjgm")
+	}
 }

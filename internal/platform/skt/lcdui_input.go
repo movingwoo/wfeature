@@ -75,11 +75,14 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 // method, so a game types the same way here as it does in a KTF lwc field.
 func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, keyCode int32) error {
 	editor := runtime.textEditor(content)
-	switch {
-	case isLeftKey(keyCode):
+	// The pad moves the caret, and only the pad: a digit is a letter here,
+	// so the 4 and 6 a game reads as left and right have to reach the
+	// keypad table instead. Without that neither "ghi" nor "mno" is typable.
+	switch keyCode {
+	case KeyCodeLeft:
 		editor.MoveCaret(-1)
 		return runtime.queueScreenPaint(screen)
-	case isRightKey(keyCode):
+	case KeyCodeRight:
 		editor.MoveCaret(1)
 		return runtime.queueScreenPaint(screen)
 	}

@@ -43,10 +43,14 @@ var keypad = map[rune]string{
 	'0': " 0",
 }
 
-// commitDelay is how long the same key waits before the next press starts a
+// CommitDelay is how long the same key waits before the next press starts a
 // new character instead of cycling the current one. It is guest time, not wall
 // time, so a Host batching ticks types the same text as one running live.
-const commitDelay = 900 * time.Millisecond
+//
+// It is exported because one platform's text component keeps its own text and
+// takes the edits rather than the keys — see the SKVM text component handler,
+// which runs this same cycle against a component it cannot read.
+const CommitDelay = 900 * time.Millisecond
 
 // State is one text field's editing state: the text, where the caret is, and
 // the multi-tap cycle in progress.
@@ -125,14 +129,14 @@ func (state *State) Key(key rune, now time.Time) bool {
 	case '*':
 		// The mode key cycles the character set, which is what the star key
 		// did on a handset.
-		state.mode = (state.mode + 1) % modeCount
+		state.mode = state.mode.Next()
 		state.commit()
 		return false
 	case '#':
 		return state.Backspace()
 	}
 
-	characters, ok := keypad[key]
+	characters, ok := Characters(key)
 	if !ok {
 		return false
 	}
@@ -145,7 +149,7 @@ func (state *State) Key(key rune, now time.Time) bool {
 	// A second press of the same key within the commit delay replaces the
 	// character it just produced; anything else starts a new one. That is
 	// what makes both "c" (2,2,2) and "ab" (2, wait, 2,2) typable.
-	if state.cycleKey == key && now.Sub(state.lastKey) < commitDelay &&
+	if state.cycleKey == key && now.Sub(state.lastKey) < CommitDelay &&
 		state.cycleCaret >= 0 && state.cycleCaret < len(state.text) {
 		state.cyclePos = (state.cyclePos + 1) % len(options)
 		state.text[state.cycleCaret] = state.applyMode(options[state.cyclePos])
@@ -165,10 +169,26 @@ func (state *State) Key(key rune, now time.Time) bool {
 }
 
 func (state *State) applyMode(character rune) rune {
-	if state.mode == ModeUppercase {
+	return state.mode.Apply(character)
+}
+
+// Next cycles to the character set the mode key moves to.
+func (mode Mode) Next() Mode { return (mode + 1) % modeCount }
+
+// Apply is what a key produces in this mode: the letter as the keypad table
+// carries it, or its capital.
+func (mode Mode) Apply(character rune) rune {
+	if mode == ModeUppercase {
 		return []rune(strings.ToUpper(string(character)))[0]
 	}
 	return character
+}
+
+// Characters answers what one keypad key cycles through, in the order a
+// handset produced them, and whether the keypad carries that key at all.
+func Characters(key rune) (string, bool) {
+	characters, ok := keypad[key]
+	return characters, ok
 }
 
 // insert adds one character at the caret, reporting whether it fit.

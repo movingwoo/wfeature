@@ -105,10 +105,15 @@ the same geometry; see `ktf.md`, "The same geometry, on five surfaces".
 
 ## Deliberately incomplete
 
-- **No on-screen text entry.** A `TextBox` or `TextField` reports and renders
-  the text it was given and everything the application does to it
-  programmatically, but there is no input method that edits it from the
-  keypad. This is the same gap KTF's lwc text components have.
+- **Text entry is Latin and digits, not Hangul.** A `TextBox` types through
+  the shared multi-tap input method
+  ([`internal/textinput`](../internal/textinput/textinput.go)), the same one
+  KTF's lwc text components and this vendor's own text component use, so a
+  game types the same way wherever it asks. What none of them composes is
+  Hangul. The pad moves the caret and only the pad: 4 and 6 are a game's left
+  and right elsewhere, but in a field they are `ghi` and `mno`, and taking
+  them as caret moves left both untypable — see `skvm.md`, "Two ways a title
+  takes a name".
 - **`Alert` has no timer.** `getTimeout` reports what was set and
   `getDefaultTimeout` answers a fixed value, but no alert dismisses itself —
   the runtime has no timer thread for screens. An alert stays until the

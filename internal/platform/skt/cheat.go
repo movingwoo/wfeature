@@ -94,7 +94,7 @@ func (runtime *Runtime) platformRoots() []*jvm.Object {
 	}
 	if state := runtime.skvmState; state != nil {
 		state.mu.Lock()
-		for _, object := range []*jvm.Object{state.smsListener, state.textFieldOwner} {
+		for _, object := range []*jvm.Object{state.smsListener, state.textFieldOwner, state.textHandler, state.textInput.component} {
 			if object != nil {
 				roots = append(roots, object)
 			}
