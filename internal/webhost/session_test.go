@@ -92,6 +92,13 @@ func expectFrame(t *testing.T, connection *wsproto.Conn) (width, height int) {
 			t.Fatalf("waiting for a frame: %v", err)
 		}
 		if opcode != wsproto.OpBinary {
+			// An error on the way to a picture is what the picture was
+			// supposed to prove did not happen, so it fails here rather than
+			// being skipped over on the way to the next frame.
+			var message serverMessage
+			if json.Unmarshal(payload, &message) == nil && message.Kind == serverError {
+				t.Fatalf("session reported an error while waiting for a frame: %s", message.Message)
+			}
 			continue
 		}
 		image, err := png.Decode(bytes.NewReader(payload))
@@ -155,6 +162,17 @@ func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 
 	// Input reaches the game: the fixture repaints on a key, so another
 	// picture arriving is the proof.
+	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
+	expectFrame(t, connection)
+
+	// The keypad's Menu button is the handset's left soft key, and it is the
+	// one key the page sends as a negative number. What is checked here is the
+	// protocol rather than the reaction: a MIDlet's soft key runs a command
+	// instead of reaching the Canvas, and this fixture has no commands, so a
+	// picture is not owed. The session has to take it and carry on, which the
+	// next key's picture says and which an error message would now fail.
+	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: -6})
+	send(t, connection, clientMessage{Kind: clientKey, Action: "release", Code: -6})
 	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
 	expectFrame(t, connection)
 }

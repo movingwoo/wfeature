@@ -90,7 +90,7 @@ away.
 
 What a slide runs across is the pad: the two key blocks and the row of `*`, `0`
 and `#` under them, which is `.keypad-main` and `.keypad-footer` in the markup.
-The keypad's top row is deliberately outside it. Opts, the layout toggle, Call
+The keypad's top row is deliberately outside it. Opts, Menu, Call
 and CLR are aimed at one at a time — a slide that woke one of them on its way
 past would be a surprise, and CLR in the middle of a game is an expensive one —
 so a press there holds that one key until the finger lifts, wherever it wanders,
@@ -116,6 +116,42 @@ the second button a key is printed on, which the type-2 and type-3 layouts both
 do — are one press between them, released when the last of them leaves. That
 bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
 can drive it directly; what is under the finger stays `app.js`'s question.
+
+### The keypad carries one soft key, and it is the menu key
+
+A handset drew two labels in the bottom corners of its screen and put a key
+under each. Titles of this era used the left one for their in-game menu, and
+the page had no way to press it: the keypad's twelve keys, the pad, CLR and
+Call are all there is, and `wfeature key soft1` from the command line was the
+only way to send one (`cli.md`, "Key names"). The keypad's top row now carries
+a `Menu` button for it, in the spot the layout toggle used to hold — that
+choice moved into the settings panel, which is where a thing chosen once
+belongs.
+
+**One number serves every platform.** `MH_KEY_SOFT1` is -6 and the MIDP soft
+key a MIDlet of this era compares against is -6, so the page sends -6 and the
+WIPI paths and the MIDP one each take it unchanged; it is the only key on the
+page that needs no translating anywhere. It is also the only negative code the
+page sends, which is why the protocol test drives one.
+
+What a title does with it is the title's own business, and three answers have
+been seen:
+
+- **An LGT Java title opens its in-game menu on it** — 계속하기, 게임방법,
+  환경설정, 메인메뉴, 게임종료, with `EZ:SELECT` in its footer. That is the run
+  that proves the button end to end, and `lgt.md` has the route to it.
+- **A KTF Java title's slot screen leaves the frame unchanged.** These titles
+  put back on CLR and confirm on fire, and draw `BACK:CLR` to say so; the key
+  is delivered and ignored, which is a title's answer rather than a gap.
+- **The earlier KTF package drops it before the guest**, because nothing has
+  established what that handset numbers its soft keys — `ktf.md`, "The keys
+  with no code". The button is inert on those titles and will stay so until a
+  run names the code.
+
+On the MIDP platform the key never reaches a `Canvas`'s `keyPressed`: it runs
+the first command, or opens the command menu when there are three or more. A
+`Canvas` MIDlet that added no commands therefore answers the button with
+nothing — see `lcdui.md`, "Commands, soft keys, and the menu".
 
 ### A held key repeats on the handset's clock, not the keyboard's
 

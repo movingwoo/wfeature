@@ -38,22 +38,25 @@ the token, so the restart button still starts a game over.
   bytes, so a title in the wrong folder still runs.
 - **Screen** — a 240x320 Host framebuffer presented on the canvas, scaled to the
   viewport with a 3:4 wrapper.
-- **Keypad** — `CLR`, `Call`, a direction pad, the twelve phone keys, and a
-  layout toggle that cycles Type1 → Type2 → Type3. Type1 drives the direction
-  pad with `2/4/6/8`, Type2 with the arrow keys plus `OK`, and Type3 is Type1
-  with `1` and `3` moved off the number pad into the direction pad's top row,
-  which is where a game that walks diagonally wants them. `Call` is the
-  handset's send key: a game that answers it usually answers with a quick save,
-  and no other button reaches it.
-  The three soft keys are not here at all, by neither button nor shortcut: a
-  game that wants one — one LGT title hangs its party screen off a soft key and
-  the choice that leaves the screen off `EZ` — is reachable only from the CLI's
-  `key soft1|soft2|ez`.
+- **Keypad** — `CLR`, `Call`, `Menu`, a direction pad and the twelve phone keys.
+  Which of the three keypads is drawn is a setting rather than a button here:
+  Type1 drives the direction pad with `2/4/6/8`, Type2 with the arrow keys plus
+  `OK`, and Type3 is Type1 with `1` and `3` moved off the number pad into the
+  direction pad's top row, which is where a game that walks diagonally wants
+  them. `Call` is the handset's send key: a game that answers it usually
+  answers with a quick save, and no other button reaches it.
+  `Menu` is the handset's left soft key, the one its own screen labelled 메뉴
+  and the one a title of this era puts its in-game menu on. It sends -6, which
+  is what `MH_KEY_SOFT1` and a MIDlet's soft key are both numbered, so it is
+  the one key the page sends that no platform has to translate. The other two
+  soft keys are still not here by button or shortcut — one LGT title hangs the
+  choice that leaves its party screen off `EZ` — and stay reachable only from
+  the CLI's `key soft2|ez`.
   The keyboard mirrors the keypad by default: `1 2 3 / Q W E / A S D`
   for `1`-`9`, `Z X C` for `* 0 #`, `Backspace` for `CLR`, `\` for `Call`,
-  arrows and `Space` for the direction pad. Any of those can be moved from the
-  settings panel; `keybindings.js` holds the table and the one rule it has, and
-  a binding a user changed is remembered.
+  `M` for `Menu`, arrows and `Space` for the direction pad. Any of those can be
+  moved from the settings panel; `keybindings.js` holds the table and the one
+  rule it has, and a binding a user changed is remembered.
   Keys are sent as press/release over the session
   socket; the platform the code is translated for is the engine's business, not
   the page's. A held key lights its button, by pointer and by keyboard alike,
@@ -80,8 +83,12 @@ the token, so the restart button still starts a game over.
   and what is read back afterwards cannot disagree. Wide windows and debug
   builds only.
 - **Settings (`Opts`)** — MIDI and effect volume, the magnification filter, the
-  speed multiplier, the key settings, the cheat panel toggle, the debug report
-  button, and a restart that reloads the page. The key settings appear only
+  speed multiplier, the keypad layout, the key settings, the cheat panel toggle,
+  the debug report button, and a restart that reloads the page. The keypad
+  layout is a list here rather than the cycling button it used to be in the
+  keypad's own top row: that spot went to the menu key, and a choice made once
+  reads better as three named options than as a press that moves to the next.
+  It is remembered, which the button never was. The key settings appear only
   where a key has actually been pressed — a list of keyboard keys is nothing a
   phone can use, and only a keypress proves there is a keyboard to use them
   with. `Opts` is one of the keypad's own buttons,

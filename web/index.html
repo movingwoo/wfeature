@@ -64,9 +64,13 @@
           <!-- The handset's send key. Games used it for things the keypad has
                no other way to reach — a quick save, most often. -->
           <button class="call-button" data-key="CALL" aria-label="통화">Call</button>
-          <button id="keypad-layout-toggle" class="keypad-layout-toggle" aria-label="키패드 배치 전환">
-            Type1
-          </button>
+          <!-- The handset's left soft key, which is the key its own screen
+               labelled 메뉴: a title of this era draws its soft-key hints in
+               the bottom corners and puts its in-game menu on this one. It is
+               the only key on the pad the page had no way to reach, so the
+               keypad's spare spot is spent on it rather than on the layout
+               toggle that used to sit here — that is a setting now, in Opts. -->
+          <button class="menu-button" data-key="MENU" aria-label="메뉴">Menu</button>
           <div class="keypad-main">
             <div class="direction-pad type1-direction-pad">
               <!-- Type3 is Type1 with the two upper diagonals brought over from
@@ -166,6 +170,20 @@
               <option value="1.5">1.5배</option>
               <option value="2">2배</option>
               <option value="4">4배</option>
+            </select>
+          </label>
+          <label>🎮 키패드
+            <!-- Which of the three keypads the page draws. It used to be a
+                 button in the keypad's own top row, cycling the three; the
+                 spot went to the handset's menu key, which a game can ask for
+                 and nothing else on the page could send. A list rather than a
+                 cycle now that it lives behind a panel that has to be opened:
+                 the three are all visible, and the one in use is the one shown
+                 rather than the one a press would move to. -->
+            <select id="keypad-layout" class="game-speed">
+              <option value="type1" selected>Type1</option>
+              <option value="type2">Type2</option>
+              <option value="type3">Type3</option>
             </select>
           </label>
           <!-- Only where there is a keyboard to press: on a phone this is a

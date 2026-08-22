@@ -169,10 +169,22 @@ title can ask for it and a keypad has no other way to reach it. One LGT title's
 party screen asks for it by its label on the handset — "press the EZ key for the
 submenu" — which is why the name has `ez` as an alias.
 
-None of the three are reachable from the browser: the page has no button and no
-keyboard shortcut for a soft key, so `key soft1|soft2|ez` here is the only way
-to press one. `web/keypad.test.mjs` holds them out of the page, and the codes
-this command sends are pinned by `internal/session`'s key translation test.
+`soft1` is the one of the three the browser can send: the keypad's `Menu`
+button is that key, and so is `M` on the keyboard. It is the key a handset's
+own screen labelled 메뉴 and the one a title of this era puts its in-game menu
+on, which is what earned it the button. `soft2` and `soft3` stay this command's
+to send — `key soft2|ez`. That is a gap rather than a decision that nothing
+needs them: one LGT title asks for the EZ key by name, as the paragraph above
+says. The keypad has only so many places a thumb looks, and the menu key is the
+one every kind of title here reaches for.
+
+The page sends `-6` for it, and that number needs no translating anywhere:
+`MH_KEY_SOFT1` and the MIDP soft key a MIDlet of this era compares against are
+both `-6`, so the WIPI platforms and the MIDP one take the same code. The page
+sent a positive `6` when it briefly carried all three soft keys under their own
+names; that value still translates, because a shell served from a phone's cache
+is a page from an older build. `web/keypad.test.mjs` holds the page's end of
+this and `internal/session`'s key translation test holds the server's.
 
 `call` is the handset's send key. It is worth knowing about because a keypad has
 no other way to reach it and a game that answers it usually answers with a quick

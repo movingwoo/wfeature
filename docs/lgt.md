@@ -3095,11 +3095,16 @@ the save is a driving problem, not a platform gap.
 **And it is not in a menu.** Driven into play — the title screen's second entry
 loads the packaged save and walks straight into the village — the in-game menu
 opens on `soft1` and holds five entries: continue, how to play, settings, main
-menu, quit. **There is no save among them.** Leaving to the main menu was
-driven, and so was quitting, and neither writes a byte; the menu's own footer
-offers `EZ:SELECT` while `soft1` is what opens it, which is the kind of detail
-that costs a run to find. So whatever calls `0x79ba0` is a story or a place
-rather than a command the player gives.
+menu, quit. **There is no save among them.** That menu is also what proves the
+browser keypad's `Menu` button, which is this key (`session.md`, "The keypad
+carries one soft key"): the route to it is fifteen lines — the notice takes any
+key, three `fire`s reach the load prompt and `1` answers it — and it is kept in
+`var/routes/` beside the archive, named for this title's in-game menu.
+
+Leaving to the main menu was driven, and so was quitting, and neither writes a
+byte; the menu's own footer offers `EZ:SELECT` while `soft1` is what opens it,
+which is the kind of detail that costs a run to find. So whatever calls
+`0x79ba0` is a story or a place rather than a command the player gives.
 
 The module says how many candidates there are without another run. The loader
 applies no relocation, so a function's address appears in the callers' literal
@@ -3535,8 +3540,9 @@ module to have run.
   here opens on a notice that asks for the OZ key in words rather than on a
   button, and it takes `fire` as well — the same sweep, one key, and its
   consent screen behind it. Neither title asks for `soft3`, which matters
-  because the page carries no soft key at all (`cli.md`, "Key names"): a title
-  that really wanted one would be unplayable in the browser, and these are not.
+  because the page carries one soft key and not three (`cli.md`, "Key names"):
+  the keypad's `Menu` button is `soft1`, and a title that really wanted the
+  other two would be unplayable in the browser. These are not.
 
   **The naming screen is past, and the title plays its opening.** With slot
   `0x321` implemented and the component block refused — the title draws its own
