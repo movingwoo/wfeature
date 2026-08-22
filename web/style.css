@@ -97,8 +97,8 @@ body {
 }
 
 /* Opts keeps this spot for the whole run and wears the browser's own button,
-   like CLR and the layout toggle opposite it: it is one of the keypad's
-   buttons rather than an icon floating over the page. */
+   like CLR opposite it: it is one of the keypad's buttons rather than an icon
+   floating over the page. */
 .settings-toggle {
   position: absolute;
   top: 4px;
@@ -288,10 +288,10 @@ body {
   right: 8px;
 }
 
-/* The top row runs Opts, the layout toggle, Call, CLR. The toggle sits left of
-   centre rather than on it so the send key has the space between the two,
-   which keeps both ends of the row where a thumb already looks for them. */
-.keypad-layout-toggle {
+/* The top row runs Opts, Menu, Call, CLR. Menu sits left of centre rather than
+   on it so the send key has the space between the two, which keeps both ends of
+   the row where a thumb already looks for them. */
+.menu-button {
   position: absolute;
   top: 4px;
   left: 50%;
@@ -490,7 +490,7 @@ body:has(.status-message.visible) .modal-backdrop {
 
   .settings-toggle,
   .clear-button,
-  .keypad-layout-toggle,
+  .menu-button,
   .call-button {
     top: 0;
   }

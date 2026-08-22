@@ -3537,10 +3537,12 @@ would expect rather than what fell out:
   run's table: it marks each slot `served` or `trap`.
 - **The keys with no code.** The two soft keys, send and the volume pair are
   not mapped: nothing establishes what this handset numbers them, and a value
-  sent as itself cannot be told from a mapping that is wrong. What the module
-  compares against is a set per screen — `0xE021`, `0xE02B`, `0xE030` and
-  `0xE03E` all cancel on the screens that take any of them — so there is more
-  than one key here that a Host has no name for.
+  sent as itself cannot be told from a mapping that is wrong. The page's `Menu`
+  button is the left soft key (`session.md`, "The keypad carries one soft key"),
+  so it is inert on this package alone — it is dropped here rather than guessed
+  at. What the module compares against is a set per screen — `0xE021`,
+  `0xE02B`, `0xE030` and `0xE03E` all cancel on the screens that take any of
+  them — so there is more than one key here that a Host has no name for.
 - **The information file's other tagged fields.** The stride is established and
   four fields decode; only the module length is understood. `0x5000` under tag
   5 sits beside it and is not a BSS size, which the run below settles.

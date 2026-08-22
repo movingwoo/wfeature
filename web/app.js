@@ -58,6 +58,12 @@ const keyCodes = new Map([
   // The send key. A game that answers it at all usually answers with a quick
   // save, and no other button on the keypad reaches it.
   ["CALL", 10],
+  // The handset's left soft key, which its own screen labelled 메뉴 and which
+  // a title of this era puts its in-game menu on. It is the one code here that
+  // needs no translating anywhere: WIPI's MH_KEY_SOFT1 and the MIDP value a
+  // MIDlet of this era compares against are the same -6, so the server hands
+  // it to a WIPI game and to a MIDlet unchanged.
+  ["MENU", -6],
   ["UP", 141],
   ["DOWN", 146],
   ["LEFT", 142],
@@ -690,20 +696,47 @@ const initRestart = () => {
   });
 };
 
-// The one button cycles the layouts rather than naming them in a list: there
-// are few enough of them that pressing it again is quicker than opening a menu,
-// and it reads as the layout it is showing, not the one it would move to.
+// The keypad the page draws. It was a button in the keypad's own top row that
+// cycled the three; that spot is the menu key's now, and the choice is a list
+// in the settings panel. Two things follow from the move: the list names all
+// three rather than making the next one be discovered, and the choice is
+// remembered — a cycle one press away could be redone at a glance, and a panel
+// that has to be opened cannot.
 const KEYPAD_LAYOUTS = ["type1", "type2", "type3"];
+const KEYPAD_LAYOUT_KEY = "wfeature:keypadLayout";
+
+const storedKeypadLayout = () => {
+  try {
+    const stored = localStorage.getItem(KEYPAD_LAYOUT_KEY);
+    return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
+  } catch {
+    // Private browsing denies storage; the markup's own layout is the answer.
+    return "";
+  }
+};
 
 const initKeypadLayout = () => {
   const container = document.querySelector(".button-container");
-  const toggle = document.getElementById("keypad-layout-toggle");
+  const select = document.getElementById("keypad-layout");
+  if (!container || !select) return;
 
-  toggle?.addEventListener("click", () => {
-    const next = KEYPAD_LAYOUTS.indexOf(container.dataset.layout) + 1;
-    const layout = KEYPAD_LAYOUTS[next % KEYPAD_LAYOUTS.length];
+  const apply = layout => {
     container.dataset.layout = layout;
-    toggle.textContent = `Type${KEYPAD_LAYOUTS.indexOf(layout) + 1}`;
+    select.value = layout;
+  };
+
+  const declared = KEYPAD_LAYOUTS.includes(container.dataset.layout)
+    ? container.dataset.layout
+    : KEYPAD_LAYOUTS[0];
+  apply(storedKeypadLayout() || declared);
+  select.addEventListener("change", () => {
+    const layout = KEYPAD_LAYOUTS.includes(select.value) ? select.value : KEYPAD_LAYOUTS[0];
+    apply(layout);
+    try {
+      localStorage.setItem(KEYPAD_LAYOUT_KEY, layout);
+    } catch {
+      // The keypad still changed; only remembering it did not.
+    }
   });
 };
 
