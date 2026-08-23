@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/licenses"
@@ -104,7 +105,16 @@ type Server struct {
 	// for its report. The ordered trace is a debug-profile cost, so a release
 	// server keeps only the counted totals.
 	traceLimit int
-	version    string
+	// diagnostics reports whether this build collects run reports at all. It
+	// is the debug profile's answer: a release serves a page with no report
+	// button and no console capture behind it, so the route that receives one
+	// is not served either. See debuglog.go.
+	diagnostics bool
+	// debugLogMu guards debugLogPosts, the times of the reports accepted in
+	// the last window; see allowDebugReport.
+	debugLogMu    sync.Mutex
+	debugLogPosts []time.Time
+	version       string
 	// requestShutdown is Options.RequestShutdown; nil means the route is not
 	// served at all.
 	requestShutdown func()
@@ -139,6 +149,7 @@ func New(options Options) (*Server, error) {
 		logger:          logger,
 		profile:         backend.BuildProfile(),
 		traceLimit:      sessionTraceLimit(),
+		diagnostics:     backend.DebugBuild(),
 		version:         options.Version,
 		requestShutdown: options.RequestShutdown,
 	}, nil

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // SaveStore persists guest save data across sessions. Keys are
@@ -89,15 +90,99 @@ func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
 }
 
 // StoreSave writes one entry, creating the key's directories as needed.
+//
+// The write replaces the file rather than overwriting it: the bytes go to a
+// temporary file beside the target, are flushed to the disk, and then take the
+// name in one step. A save here is always written whole — the guest hands over
+// the entire database every time it commits — so an overwrite that stops
+// halfway, whether the machine lost power or the disk filled, leaves a file
+// that is the front of the new save and the back of the old one. Nothing reads
+// that as damaged: it is the game's own format, so the game loads it and the
+// player finds their progress replaced by something that never existed. The
+// rename is the one operation a file system will not do halfway, so what
+// survives a failure is either the previous save or the new one.
 func (store *DirectorySaveStore) StoreSave(name string, data []byte) error {
 	path, err := store.savePath(name)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// The temporary file is in the target's own directory, because a rename
+	// is only atomic within one file system and a temporary directory
+	// elsewhere may be on another one. The name is dotted so a listing of the
+	// save tree passes over it, and carries the entry's own name so a leftover
+	// from a killed process says which save it was.
+	temporary, err := os.CreateTemp(directory, "."+temporaryPrefix(filepath.Base(path))+".*")
+	if err != nil {
+		return err
+	}
+	written := temporary.Name()
+	// Every failure past this point removes the temporary file. The deferred
+	// close is the same: closing twice reports an error that is not one.
+	committed := false
+	defer func() {
+		if !committed {
+			temporary.Close()
+			os.Remove(written)
+		}
+	}()
+	if _, err := temporary.Write(data); err != nil {
+		return err
+	}
+	// The flush is what makes the rename mean anything: without it the name
+	// can arrive on the disk before the bytes it points at, which is the
+	// truncated save this is here to prevent.
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	// CreateTemp makes the file readable by its owner alone; a save is the
+	// user's data beside the rest of the tree, so it keeps the tree's mode.
+	if err := os.Chmod(written, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(written, path); err != nil {
+		return err
+	}
+	committed = true
+	syncDirectory(directory)
+	return nil
+}
+
+// temporaryPrefix shortens an entry's name for the temporary file that will
+// become it. A key may be longer than a file system's name limit on its own,
+// and the decoration would then be what pushed a save that used to write over
+// it. The cut is on a rune boundary: a name is bytes to the file system, but
+// macOS refuses one that is not valid UTF-8.
+func temporaryPrefix(name string) string {
+	const limit = 64
+	if len(name) <= limit {
+		return name
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut]
+}
+
+// syncDirectory flushes the directory entry the rename created, which is what
+// makes the new name itself survive a power loss rather than only the bytes
+// behind it. It is advisory: Windows has no directory handle to sync and
+// answers with an error, and a file system that refuses says nothing about
+// whether the save is safe, so a failure here is not the caller's to handle.
+func syncDirectory(path string) {
+	directory, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer directory.Close()
+	_ = directory.Sync()
 }
 
 // SaveRecordTombstone marks a deleted slot in an encoded record list. Record

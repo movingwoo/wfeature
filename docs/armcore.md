@@ -1164,8 +1164,25 @@ covers one path is worse than no profile for the paths it does not cover.**
 
 `make pgo` regenerates it. It needs local archives and routes, which are under
 `var/` and are not in the repository, so it runs only on a machine that has
-them; the three it uses are named in the Makefile so that what produced the
-committed file is not a guess. **There is no SKT run in it** — that platform
+them — and it is told which ones on the command line, because the files are one
+person's copies and their names are the games'. All five have to be given:
+
+```sh
+make pgo PGO_LGT_CLET=var/games/lgt/<clet>.zip \
+         PGO_LGT_CLET_ROUTE=var/routes/<clet-in-game>.route \
+         PGO_LGT_JAVA=var/games/lgt/<aot-title>.zip \
+         PGO_LGT_JAVA_ROUTE=var/routes/<aot-title-in-game>.route \
+         PGO_KTF=var/games/ktf/<title>.zip
+```
+
+Each is one of the three paths through the engine described above: a Clet in
+its field, an AOT-compiled LGT Java title in-game, and a KTF title's load. The
+two routes drive the LGT runs to the scene being profiled, so a route that
+stops at a menu profiles a menu. What the committed profile was taken from is
+not written down here, for the same reason the Makefile no longer names it;
+regenerating with three titles of those shapes reproduces it.
+
+**There is no SKT run in it** — that platform
 has no load probe, and its interpreter is `internal/jvm` rather than this one,
 so it is neither covered nor harmed.
 

@@ -959,11 +959,8 @@ func (r *sessionRunner) endGame(cause string, store bool) {
 
 // writeReport puts a report where the debug-log API serves them from.
 func (r *sessionRunner) writeReport(label, report string) (string, error) {
-	if err := os.MkdirAll(r.server.logRoot, 0o755); err != nil {
-		return "", err
-	}
-	path := filepath.Join(r.server.logRoot, DebugLogName(label, time.Now()))
-	if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
+	_, path, err := r.server.storeReport(label, []byte(report), time.Now())
+	if err != nil {
 		return "", err
 	}
 	r.server.logger.Info("stored a session report", "path", path, "bytes", len(report))

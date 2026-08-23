@@ -63,6 +63,42 @@ func TestRuntimeJavaSurfaceCoversReference(t *testing.T) {
 		len(reference), len(reference)-len(missing), len(declaredGaps))
 }
 
+// Every gap is written down with the reason it is one, and the reason is a
+// comment above the entries it covers. When the last entry under a reason is
+// implemented, the line comes out and the reason is left standing over
+// nothing — a paragraph in a tracked file explaining a decision that is no
+// longer taken, which reads as a limitation this runtime still has. The test
+// above cannot see it: it compares entries, and there are none left to
+// compare.
+func TestEveryDeclaredGapReasonStillCoversAnEntry(t *testing.T) {
+	content, err := os.ReadFile(wipiSurfaceGapsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, line := "", 0
+	entries := 0
+	report := func() {
+		if reason != "" && entries == 0 {
+			t.Errorf("%s:%d explains a gap that no longer lists an entry; remove the reason with it: %q",
+				wipiSurfaceGapsPath, line, reason)
+		}
+	}
+	for index, text := range strings.Split(string(content), "\n") {
+		switch {
+		case strings.HasPrefix(text, "#"):
+			// A comment right under an entry list opens the next reason.
+			if reason == "" || entries > 0 {
+				report()
+				reason, line, entries = strings.TrimSpace(strings.TrimPrefix(text, "#")), index+1, 0
+			}
+		case strings.TrimSpace(text) == "":
+		default:
+			entries++
+		}
+	}
+	report()
+}
+
 // TestRegenerateWIPISurfaceReference rewrites the reference file from a local
 // checkout of the original implementation. It is the repeatable half of the gap
 // measurement: run it after pulling the reference sources to see what they

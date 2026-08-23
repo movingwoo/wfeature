@@ -3533,8 +3533,8 @@ module to have run.
   its key, so its last frame was the notice either way; this one stays on the
   notice, so its last frame is the notice either way as well. **Sweep the save
   tree beside the frame** — twenty-three keys, one file, one byte, and the
-  answer is in the diff. `var/routes/오셔너스-첫실행.route` and
-  `오셔너스-인게임.route` are the two runs.
+  answer is in the diff. The two runs are that title's own first-run and
+  in-game routes under `var/routes/`.
 
   **`OZ` on a button is artwork, and a third title proves it.** One more title
   here opens on a notice that asks for the OZ key in words rather than on a

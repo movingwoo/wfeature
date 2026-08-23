@@ -11,9 +11,9 @@ RELEASE_SERVER := build/release/wfeature-server
 # A release is one archive per operating system: the release server binary, a
 # launcher, and the empty games/ tree the binary looks for beside itself. The
 # version is stamped into the binary and into the archive names, and is set by
-# hand — `make dist VERSION=0.2.1` — because a tag is a decision, not a build
+# hand — `make dist VERSION=0.2.2` — because a tag is a decision, not a build
 # artefact.
-VERSION ?= 0.2.1
+VERSION ?= 0.2.2
 DIST := build/dist
 DIST_PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 
@@ -48,21 +48,35 @@ server-release:
 #
 # `make pgo` regenerates it. **It needs local archives and routes**, which are
 # under var/ and are not in the repository, so it runs only on a machine that
-# has them. The three runs below are not arbitrary: they are the three paths
-# through the same engine — a Clet is 99.8% Thumb, an AOT-compiled LGT Java
-# title is 78.9% ARM, and KTF is a third mix — and a profile of any one of them
-# alone leaves the other two at the compiler's guess. Override any of the five
-# variables to profile a different set.
-PGO_LGT_CLET       ?= var/games/lgt/제노니아1_인증우회.zip
-PGO_LGT_CLET_ROUTE ?= var/routes/제노니아1-필드-측정.route
-PGO_LGT_JAVA       ?= var/games/lgt/레전드오브마스터.zip
-PGO_LGT_JAVA_ROUTE ?= var/routes/레전드오브마스터-인게임.route
-PGO_KTF            ?= var/games/ktf/영웅서기2.zip
+# has them — and it is told which ones on the command line rather than here,
+# because the files are one person's copies and their names are the games'.
+# The three runs are not arbitrary: they are the three paths through the same
+# engine — a Clet is 99.8% Thumb, an AOT-compiled LGT Java title is 78.9% ARM,
+# and KTF is a third mix — and a profile of any one of them alone leaves the
+# other two at the compiler's guess. All five have to be given:
+#
+#   make pgo PGO_LGT_CLET=var/games/lgt/<clet>.zip \
+#            PGO_LGT_CLET_ROUTE=var/routes/<clet-in-game>.route \
+#            PGO_LGT_JAVA=var/games/lgt/<aot-title>.zip \
+#            PGO_LGT_JAVA_ROUTE=var/routes/<aot-title-in-game>.route \
+#            PGO_KTF=var/games/ktf/<title>.zip
+#
+# See docs/armcore.md for what each run is for and what the committed profile
+# was taken from.
+PGO_LGT_CLET       ?=
+PGO_LGT_CLET_ROUTE ?=
+PGO_LGT_JAVA       ?=
+PGO_LGT_JAVA_ROUTE ?=
+PGO_KTF            ?=
 PGO_WORK := build/pgo
 
 pgo:
-	@for archive in "$(PGO_LGT_CLET)" "$(PGO_LGT_JAVA)" "$(PGO_KTF)"; do \
-		[ -f "$$archive" ] || { echo "make pgo: $$archive is missing; see docs/armcore.md" >&2; exit 1; }; \
+	@for pair in "PGO_LGT_CLET=$(PGO_LGT_CLET)" "PGO_LGT_CLET_ROUTE=$(PGO_LGT_CLET_ROUTE)" \
+		"PGO_LGT_JAVA=$(PGO_LGT_JAVA)" "PGO_LGT_JAVA_ROUTE=$(PGO_LGT_JAVA_ROUTE)" \
+		"PGO_KTF=$(PGO_KTF)"; do \
+		name=$${pair%%=*}; file=$${pair#*=}; \
+		[ -n "$$file" ] || { echo "make pgo: $$name is not set; see docs/armcore.md" >&2; exit 1; }; \
+		[ -f "$$file" ] || { echo "make pgo: $$file ($$name) is missing; see docs/armcore.md" >&2; exit 1; }; \
 	done
 	rm -rf $(PGO_WORK)
 	mkdir -p $(PGO_WORK)/save1 $(PGO_WORK)/save2
