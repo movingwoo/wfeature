@@ -307,6 +307,10 @@ attached. The per-OS run is the reason for the dependency rather than a copy of
 the test steps: four of the five archives are cross-compiled, and a build that
 succeeds is not a binary that starts.
 
+The release is titled `W-Feature <tag>`, which is the project's own name and
+the tag's — a release page shows its title above the notes, and the tag alone
+says nothing about what it is a version of.
+
 The release notes are that version's section of [`CHANGELOG.md`](../CHANGELOG.md),
 read out of the file by the tag's number. A tag whose version has no section
 fails the release instead of publishing an empty one, which is what keeps the

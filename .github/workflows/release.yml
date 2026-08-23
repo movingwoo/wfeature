@@ -112,12 +112,16 @@ jobs:
           fi
           cat release-notes.md
 
+      # The release is named the way the project is, because the title is what
+      # a download page shows above the notes and "v0.2.2" alone says nothing
+      # about what it is a version of. Every release published so far had to be
+      # renamed by hand afterwards; this is that edit, made once.
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
+            --title "W-Feature $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             build/dist/*.tar.gz build/dist/*.zip build/dist/SHA256SUMS
