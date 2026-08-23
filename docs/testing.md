@@ -28,6 +28,15 @@ vulnerabilities that are *reachable* from this code rather than every advisory
 against a module in `go.sum`. It is in the same workflow as the tests, so a
 tag is gated by it too.
 
+**The workflows build with the newest released Go rather than the one `go.mod`
+names.** The directive there is the floor a checkout has to clear; the
+toolchain CI installs is a decision about what gets shipped, because these are
+the runners that build the release archives. Pinned to the floor, the first run
+of this check reported twenty-seven standard-library vulnerabilities — all of
+them fixed in later patches of the same Go line, all of them in binaries a user
+would have downloaded. That is the check working: the finding was about the
+toolchain, not about this code.
+
 The reason it is worth a step of its own is that a game archive is untrusted
 input and some of what decodes it is not this project's code. The one that
 found this: `golang.org/x/image/bmp` used to decode an 8-bit BMP whose pixels

@@ -41,7 +41,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # The newest released Go rather than the one go.mod names. go.mod's
+          # directive is the floor a checkout has to clear; what CI builds
+          # with is a decision about what gets shipped, and these runners
+          # build the release binaries. Pinned to the floor it was 1.25.0,
+          # whose standard library has holes with fixes already out — which
+          # is what govulncheck reported, correctly, about binaries users
+          # would have downloaded.
+          go-version: stable
           cache: true
 
       # The version is the tag without its v, so the archive names and the
