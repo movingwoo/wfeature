@@ -26,9 +26,13 @@ import "time"
 // player locked out of their own game for five minutes by a tab they already
 // closed.
 //
-// What this does not arbitrate is the save API and the native CLI, which reach
-// the same files by another road; see "What is not solved" in
-// `docs/session.md`.
+// The save API takes the same claim for the length of one write, which is what
+// puts it under this rule rather than beside it: a `PUT` into a directory a
+// game holds is refused instead of landing under a session that will write the
+// whole file back over it, and a game starting while a write is in flight
+// waits the write out inside the grace below. The native CLI is the one road
+// left unarbitrated — it is another process and this claim is in memory; see
+// "What is not solved" in `docs/session.md`.
 
 // claimGrace is how long a start waits for a claim it found held by a live
 // session. It is there for one sequence: a page that reloads — which the
@@ -92,6 +96,28 @@ func (s *Server) claimSaveDirectory(directory, label string) (bool, string) {
 		// A claim with no parked game behind it is a game that was closing as
 		// this start arrived; the directory is free either way.
 		delete(s.claims, directory)
+	}
+	if s.claims == nil {
+		s.claims = make(map[string]*saveClaim)
+	}
+	s.claims[directory] = &saveClaim{label: label}
+	return true, ""
+}
+
+// holdSaveDirectory takes the claim for something that is not a game — the
+// save API writing one entry — and reports whether it got it, naming the
+// holder when it did not. It differs from claimSaveDirectory in the one way
+// that matters: a parked game is a holder here rather than something to take
+// over. Nobody would trade a player's parked game for a tool's write, and the
+// caller has somewhere to put the refusal.
+func (s *Server) holdSaveDirectory(directory, label string) (bool, string) {
+	if directory == "" {
+		return true, ""
+	}
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	if held, ok := s.claims[directory]; ok {
+		return false, held.label
 	}
 	if s.claims == nil {
 		s.claims = make(map[string]*saveClaim)

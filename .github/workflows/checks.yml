@@ -40,6 +40,16 @@ jobs:
 
       - run: go vet ./...
 
+      # A game archive is untrusted input and the decoders it reaches are
+      # third-party, so a known vulnerability in one of them is this project's
+      # to carry: a bitmap that panicked the process would take every other
+      # session in it down. govulncheck reports only what is actually reachable
+      # from this code, so a finding here is one this build can be made to hit.
+      - name: Check for known vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
       # Both profiles, because the debug build tag changes real behaviour.
       - run: make test
       - run: make test-debug

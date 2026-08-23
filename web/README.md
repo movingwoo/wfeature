@@ -100,9 +100,12 @@ the token, so the restart button still starts a game over.
   endianness, the value filters, undo/reset, a freeze list whose values stay
   editable, write watching, and saving or loading a cheat table. Candidate
   values refresh twice a second while the panel is open and the search has
-  narrowed to 1000 or fewer hits. KTF and LGT only — they are the platforms with
-  a flat guest address space to sweep — so the panel is removed for a session on
-  any other.
+  narrowed to 1000 or fewer hits. Every platform has one: the two ARM platforms
+  sweep the guest's own address space, and the MIDP runtime sweeps a synthetic
+  one built over its object graph, where the regions are named by class and the
+  write watch is not offered. Whether a session has a panel is the session's
+  answer rather than the platform's, and the page removes the toggle where the
+  answer is no.
 - **Sound** — the engine's MIDI and PCM events are synthesised in the page from
   oscillators rather than a soundfont; see the head of `audio.js` for why.
 
@@ -142,7 +145,11 @@ built per profile like every other binary here.
   saves. `/api/saves/<platform>/<owner>` reaches another platform's tree.
 - `PUT /api/saves/<owner>/<key>` — persists one entry from the raw request body.
 - `POST /api/debug-log` — the page's own log, written under `-logs`
-  (`var/logs`) beside the session report the server writes itself.
+  (`var/logs`) beside the session report the server writes itself. **Debug
+  builds only**: a release answers 404 here and its page collects nothing to
+  post. What a debug server does keep is bounded by report size, by a rolling
+  rate, and by the age and total size of the directory; see
+  `../docs/architecture.md`, "Debug run logs".
 - `GET /api/session` (WebSocket) — one emulation session per connection. This
   is the path a game runs on and the reason the rest exists.
 
@@ -171,4 +178,6 @@ of it. A change to the list wants the cache name bumped with it.
   memory; the MIDP runtime searches a synthetic address space over its object
   graph, where the region labels are class names and the write watch is not
   offered.
-- There are no soft-key buttons, matching the original layout.
+- The keypad carries one soft key, `Menu`, which is the handset's left one
+  (`-6`). The right and third (`EZ`) soft keys are on no button and no
+  shortcut, and stay reachable only from the CLI's `key soft2|ez`.

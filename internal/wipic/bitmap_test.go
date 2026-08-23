@@ -125,3 +125,44 @@ func TestATransparentPaletteEntryKeepsItsColour(t *testing.T) {
 		t.Fatalf("transparent entry alpha = %d, want 0", entry.A)
 	}
 }
+
+// A game's BMP is untrusted input, and one whose pixels name a palette entry
+// that is not there used to decode without complaint and then panic on the
+// first read — `index out of range [5] with length 2`, raised inside the
+// standard image interface rather than at the decode. A guest that ships such
+// a file could therefore take down whatever was drawing it, which for the
+// server Host is the process the other players' sessions are in as well
+// (GO-2026-5031, fixed in golang.org/x/image v0.41.0). The decoder rejects the
+// file now; what this pins is that the rejection reaches the caller as an
+// error and never as a decoded image whose pixels cannot be read.
+func TestBitmapWhosePixelsNameAMissingPaletteEntryIsRejected(t *testing.T) {
+	// The palette holds two entries; the pixels name entry 5 and entry 200.
+	decoded, err := DecodeBitmap(paletteBitmap(0, 0, []byte{0, 5, 200}))
+	if err == nil {
+		// Not a failure by itself — a decoder that clamped instead of
+		// refusing would be fine too, as long as every pixel is readable.
+		for x := 0; x < 3; x++ {
+			decoded.At(x, 0)
+		}
+		return
+	}
+	if decoded != nil {
+		t.Fatalf("a refused bitmap came back with an image as well: %T", decoded)
+	}
+}
+
+// The same file with the transparency declaration on it, because that path
+// reads the palette itself: a declared index is checked against the palette
+// the decoder returned, so a decode that failed must not be carried past.
+func TestBitmapWithAMissingPaletteEntryAndADeclarationIsRejected(t *testing.T) {
+	decoded, err := DecodeBitmap(paletteBitmap(1, 1, []byte{0, 5, 200}))
+	if err == nil {
+		for x := 0; x < 3; x++ {
+			decoded.At(x, 0)
+		}
+		return
+	}
+	if decoded != nil {
+		t.Fatalf("a refused bitmap came back with an image as well: %T", decoded)
+	}
+}

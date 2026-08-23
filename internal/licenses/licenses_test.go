@@ -37,6 +37,14 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 		{"the fonts' licence", "SIL OPEN FONT LICENSE Version 1.1"},
 		{"the fonts' reserved name clause", "Reserved Font Name"},
 		{"hqx's copyright", "Christopher Serr"},
+		// The Go modules carry one licence text between them, so what proves
+		// a component is still named is its own heading. x/sys is here
+		// because x/image's rasteriser reaches it on the amd64 targets: it
+		// is nobody's import in this repository and is linked into three of
+		// the five release archives all the same.
+		{"the text module's notice", "## golang.org/x/text"},
+		{"the image module's notice", "## golang.org/x/image"},
+		{"the system module's notice", "## golang.org/x/sys"},
 	} {
 		if !strings.Contains(ThirdParty, required.text) {
 			t.Errorf("the notices do not carry %s (looked for %q)", required.component, required.text)

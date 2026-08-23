@@ -203,6 +203,25 @@ run report; release builds transmit no diagnostics at all.
 - Host (CLI): `runktf <zip> -diag report.json` writes the same counts and trace
   next to the run summary.
 
+What a release does instead is nothing, on both sides of the socket. The page
+starts collecting at load — the lines worth having are the ones from before
+anything knows what this is, a module that failed to import or a socket that
+never opened — and the profile arrives with the session's `ready`, so a release
+collects for that moment and then calls `stopLogCapture()`: the console methods
+are put back, the buffer is dropped, and nothing further is retained or posted.
+The server closes the other end, answering `POST /api/debug-log` with a 404
+rather than serving a route its own page never uses. Neither half depends on
+the other being right.
+
+The reports that a debug server does write are bounded, because the route has
+no authentication and the server binds every interface so a phone can reach it:
+one report is at most `maxDebugReport`, at most `debugLogBurst` may arrive in a
+rolling `debugLogWindow`, and every write prunes the directory — reports past
+`debugLogLife` first, then the oldest while the directory is over
+`debugLogBudget`, never the newest and never a file this server did not name.
+The session reports the server composes itself go through the same writer, so
+`var/logs/` is bounded whichever side wrote last.
+
 ## Session transport
 
 The page ran the emulator itself once, compiled to WebAssembly. A phone could

@@ -21,6 +21,27 @@ have is a game: no archive in this repository is real, so every probe below
 runs locally and by hand. See [`running.md`](running.md), "What was verified,
 and where".
 
+## The dependencies a game's bytes reach
+
+Every push also runs `govulncheck ./...`, which reports the known
+vulnerabilities that are *reachable* from this code rather than every advisory
+against a module in `go.sum`. It is in the same workflow as the tests, so a
+tag is gated by it too.
+
+The reason it is worth a step of its own is that a game archive is untrusted
+input and some of what decodes it is not this project's code. The one that
+found this: `golang.org/x/image/bmp` used to decode an 8-bit BMP whose pixels
+name a palette entry that is not there, and then panic on the first read of
+one — `index out of range [5] with length 2`, raised at `At` rather than at
+the decode, so nothing between the archive and the drawing code could have
+caught it by checking the error. In a browser session that panic is in the
+process every other player's session is in as well. It is fixed in v0.41.0
+(GO-2026-5031) and pinned here by
+`TestBitmapWhosePixelsNameAMissingPaletteEntryIsRejected` in
+`internal/wipic`, which passes against either possible upstream answer — a
+refusal or a clamp — and fails on a decoder that hands back an image whose
+pixels cannot be read.
+
 ## Driving a real title, and reading what it says
 
 A local archive is the only thing that finds most defects here, so the CLI

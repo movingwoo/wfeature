@@ -346,6 +346,9 @@ func TestDebugLogNamesFilesWithoutTrustingTheLabel(t *testing.T) {
 }
 
 func TestDebugLogStoresAReportUnderAServerChosenName(t *testing.T) {
+	if !backend.DebugBuild() {
+		t.Skip("a release collects no reports; TestARELeaseServesNoDebugLogRoute is that half")
+	}
 	logRoot := filepath.Join(t.TempDir(), "logs")
 	server := newTestServer(t, Options{LogRoot: logRoot})
 	report := "wfeature debug report\nprofile: debug\n"
@@ -369,16 +372,129 @@ func TestDebugLogStoresAReportUnderAServerChosenName(t *testing.T) {
 }
 
 func TestDebugLogRefusesEverythingButABoundedPost(t *testing.T) {
+	if !backend.DebugBuild() {
+		t.Skip("a release collects no reports; TestARELeaseServesNoDebugLogRoute is that half")
+	}
 	server := newTestServer(t, Options{LogRoot: filepath.Join(t.TempDir(), "logs")})
 	if recorder := get(t, server, "/api/debug-log"); recorder.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status = %d, want 405", recorder.Code)
 	}
-	for _, body := range []io.Reader{strings.NewReader(""), strings.NewReader(strings.Repeat("x", maxRequestBody+1))} {
+	for _, body := range []io.Reader{strings.NewReader(""), strings.NewReader(strings.Repeat("x", maxDebugReport+1))} {
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/debug-log", body))
 		if recorder.Code != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400", recorder.Code)
 		}
+	}
+}
+
+// The route is the debug profile's. A release serves a page with no report
+// button and no console capture behind it, so a post here is not the page it
+// serves and is answered the way an address nobody serves is.
+func TestAReleaseServesNoDebugLogRoute(t *testing.T) {
+	if backend.DebugBuild() {
+		t.Skip("this build collects reports; the tests above are that half")
+	}
+	logRoot := filepath.Join(t.TempDir(), "logs")
+	server := newTestServer(t, Options{LogRoot: logRoot})
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/debug-log",
+		strings.NewReader("wfeature page log\n")))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	if _, err := os.Stat(logRoot); !os.IsNotExist(err) {
+		t.Fatalf("a release created the log directory anyway (%v)", err)
+	}
+}
+
+// Nothing authenticates this route and the server binds every interface, so
+// the reports a caller can leave behind are bounded in number as well as in
+// size. The limit is far above what pressing the button produces.
+func TestDebugLogRefusesReportsOverTheRate(t *testing.T) {
+	if !backend.DebugBuild() {
+		t.Skip("a release collects no reports")
+	}
+	server := newTestServer(t, Options{LogRoot: filepath.Join(t.TempDir(), "logs")})
+	post := func() int {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/debug-log",
+			strings.NewReader("wfeature page log\n")))
+		return recorder.Code
+	}
+	for attempt := 0; attempt < debugLogBurst; attempt++ {
+		if code := post(); code != http.StatusOK {
+			t.Fatalf("report %d answered %d, want 200", attempt, code)
+		}
+	}
+	if code := post(); code != http.StatusTooManyRequests {
+		t.Fatalf("the report over the rate answered %d, want 429", code)
+	}
+	// The window is rolling: what was accepted a window ago does not count
+	// against a report now.
+	server.debugLogMu.Lock()
+	for index := range server.debugLogPosts {
+		server.debugLogPosts[index] = server.debugLogPosts[index].Add(-2 * debugLogWindow)
+	}
+	server.debugLogMu.Unlock()
+	if code := post(); code != http.StatusOK {
+		t.Fatalf("a report after the window answered %d, want 200", code)
+	}
+}
+
+// The directory a server writes reports into is on somebody's machine and the
+// server is left running for weeks, so what it keeps is bounded by age and by
+// size. The newest report survives either bound: it is the one just written.
+func TestReportsArePrunedByAgeAndByBudget(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	write := func(at time.Time, size int) string {
+		name := DebugLogName("", at)
+		if err := os.WriteFile(filepath.Join(root, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	// One report past its life, one inside it, and a file this server did not
+	// name, which is the user's and is never touched.
+	expired := write(now.Add(-debugLogLife-time.Hour), 16)
+	kept := write(now.Add(-time.Hour), 16)
+	newest := write(now, 16)
+	theirs := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(theirs, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if removed := pruneReports(root, now); removed != 1 {
+		t.Fatalf("pruned %d reports, want 1", removed)
+	}
+	if _, err := os.Stat(filepath.Join(root, expired)); !os.IsNotExist(err) {
+		t.Errorf("the expired report is still there (%v)", err)
+	}
+	for _, name := range []string{kept, newest} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Errorf("%s was dropped: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("a file this server did not name was removed: %v", err)
+	}
+
+	// Over budget, the oldest go first and the newest stays whatever the
+	// budget says.
+	big := debugLogBudget/2 + 1
+	first := write(now.Add(-3*time.Minute), big)
+	second := write(now.Add(-2*time.Minute), big)
+	third := write(now.Add(-time.Minute), big)
+	if removed := pruneReports(root, now); removed < 2 {
+		t.Fatalf("pruned %d reports over the budget, want at least 2", removed)
+	}
+	for _, name := range []string{first, second} {
+		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the budget (%v)", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, third)); err != nil {
+		t.Errorf("the newest report was dropped for the budget: %v", err)
 	}
 }
 

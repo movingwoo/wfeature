@@ -1,4 +1,4 @@
-import { clearLog, recordEvent, saveReport, subscribeLog } from "./debug-log.js";
+import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
@@ -1449,7 +1449,9 @@ const main = async () => {
   if (!session) {
     setStatus("서버 세션에 연결하지 못했습니다. 서버가 실행 중인지 확인하고 새로고침하세요.");
     // Nothing said which build this is, so the page keeps the release face:
-    // the developer's parts are only ever shown on a debug server's word.
+    // the developer's parts are only ever shown on a debug server's word, and
+    // the capture behind them stops with them.
+    stopLogCapture();
     initLogView(false);
     initDebugLog(false);
     return;
@@ -1463,6 +1465,10 @@ const main = async () => {
   // rail and the report button belong to a debug run; a release is the same
   // page without them.
   const debugBuild = session.profile === "debug";
+  // A release keeps none of it: no rail to show the lines in, no button to
+  // write them out, and no route on the server to write them to, so the
+  // capture that has been running since load is taken back off here.
+  if (!debugBuild) stopLogCapture();
   initLogView(debugBuild);
   initDebugLog(debugBuild);
   initResumeOnReturn();

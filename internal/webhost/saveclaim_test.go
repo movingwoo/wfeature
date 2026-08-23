@@ -1,6 +1,9 @@
 package webhost
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +132,54 @@ func TestReloadingAPageCanRestartTheSameGame(t *testing.T) {
 	}
 	if server.parkedCount() != 0 {
 		t.Errorf("%d sessions parked, want the reloaded page to have taken the game over", server.parkedCount())
+	}
+}
+
+// The save API reaches the same files by another road, so it is under the same
+// rule: an entry put into a directory a game holds would be gone at that
+// game's next commit, which writes the file back whole.
+func TestTheSaveAPIWillNotWriteUnderAGameThatIsOpen(t *testing.T) {
+	saveRoot := filepath.Join(t.TempDir(), "ktf")
+	server := newTestServer(t, Options{SaveRoot: saveRoot})
+	owner := "0102DD43"
+	put := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut,
+			"/api/saves/"+owner+"/db/slot", strings.NewReader("x")))
+		return recorder
+	}
+
+	// Nothing holds the directory, so the write lands and gives the claim
+	// straight back: a tool holds it for its own write and no longer.
+	if recorder := put(); recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+	if held := server.claimCount(); held != 0 {
+		t.Fatalf("%d claims outlived the write, want none", held)
+	}
+
+	directory := server.saveDirectory("ktf", owner)
+	if claimed, _ := server.claimSaveDirectory(directory, "어떤 게임"); !claimed {
+		t.Fatal("the fixture could not take the claim")
+	}
+	recorder := put()
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "어떤 게임") {
+		t.Errorf("the refusal does not name the holder: %q", recorder.Body.String())
+	}
+
+	// A parked game holds it too. It is taken over by somebody starting the
+	// same game, because that is a player who is here now; it is not taken
+	// over by a tool writing a file.
+	server.markSaveDirectoryParked(directory, true)
+	if recorder := put(); recorder.Code != http.StatusConflict {
+		t.Fatalf("status against a parked holder = %d, want 409", recorder.Code)
+	}
+
+	server.releaseSaveDirectory(directory)
+	if recorder := put(); recorder.Code != http.StatusNoContent {
+		t.Fatalf("status after the game closed = %d, want 204", recorder.Code)
 	}
 }

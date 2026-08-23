@@ -102,6 +102,13 @@ func (s *Server) listSaves(writer http.ResponseWriter, ownerRoot string) {
 		if err != nil || entry.IsDir() {
 			return nil
 		}
+		// A store writes each entry through a dotted temporary file that is
+		// renamed into place, so a dotted name here is either one a killed
+		// process left behind or something that is not a save at all. Listing
+		// it would hand the caller a key no guest ever wrote.
+		if strings.HasPrefix(entry.Name(), ".") {
+			return nil
+		}
 		content, err := os.ReadFile(name)
 		if err != nil {
 			s.logger.Warn("save entry unreadable", "path", name, "error", err)
@@ -136,6 +143,19 @@ func (s *Server) storeSave(writer http.ResponseWriter, request *http.Request, ow
 		writeError(writer, http.StatusBadRequest, "Bad Request")
 		return
 	}
+	// One game's saves belong to one writer. A session reads the files when
+	// the guest asks and writes them back whole, so an entry put here under a
+	// running game is gone at that game's next commit with nothing reported
+	// anywhere — which is the same defect the sessions arbitrate among
+	// themselves, arriving by the other road. See saveclaim.go.
+	held, holder := s.holdSaveDirectory(ownerRoot, "the save API")
+	if !held {
+		s.logger.Warn("refused a save write into a directory a game holds",
+			"owner", filepath.Base(ownerRoot), "key", key, "game", holder)
+		writeError(writer, http.StatusConflict, "the game holding these saves is open: "+holder)
+		return
+	}
+	defer s.releaseSaveDirectory(ownerRoot)
 	if err := backend.NewDirectorySaveStore(ownerRoot).StoreSave(key, body); err != nil {
 		s.logger.Error("save could not be written", "owner", filepath.Base(ownerRoot), "key", key, "error", err)
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")

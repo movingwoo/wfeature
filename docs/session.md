@@ -489,8 +489,30 @@ Two rules keep that from locking a player out of their own game:
   from parking. Without the grace a page would be refused by itself. A session
   that is genuinely playing is still playing when the grace runs out.
 
-What this does not arbitrate is the save API and the native CLI, which reach
-the same files by another road.
+**The save API takes the same claim for the length of one write.** A `PUT
+/api/saves/<owner>/<key>` into a directory a game holds is refused with 409 and
+the holder's name, because a session writes each file back whole at the guest's
+next commit and would erase the entry with nothing reported anywhere. The API
+holds the claim only while it writes, so it neither takes over a parked game —
+a player's parked game is not traded for a tool's write — nor blocks a start
+for longer than the two second grace above absorbs.
+
+The one road left unarbitrated is **the native CLI**, which is another process
+while this claim is in memory. Closing it means a lock on disk, which is a
+different mechanism with its own failure to get right: a lock left behind by a
+process that was killed has to be told from one a running game holds, on five
+operating systems, without a live process check that lies on any of them. The
+CLI is a development and diagnostics tool by design (`AGENTS.md`), so what is
+exposed here is a developer running one game twice against one save tree, on
+purpose. A save the CLI writes under a running session is still the session's
+to overwrite.
+
+Whichever writer gets there, **a save is replaced rather than overwritten**:
+`DirectorySaveStore.StoreSave` writes to a dotted temporary file beside the
+target, flushes it, and renames it into place. A save is written whole every
+time, so an interrupted overwrite would otherwise leave the front of the new
+save on the back of the old one — a file the game reads as a save, not as
+damage.
 
 ## Cheats
 
@@ -643,9 +665,10 @@ reloads, so restarting still starts the game over.
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and
   what that feels like on a real network has not been established.
 - **Two tabs on two different games are two sessions**, and nothing bounds how
-  many. The same game twice is arbitrated — see "One game's saves belong to one
-  session" — but a save the CLI or the save API writes while a session is
-  running is still nobody's to referee.
+  many. The same game twice is arbitrated, and so is the save API — see "One
+  game's saves belong to one session" — but a save the native CLI writes while
+  a server session is running is still nobody's to referee, because the claim
+  is in one process's memory and the CLI is another process.
 - **A parked game is not persisted, and will not be.** It lives in the
   server's memory, so stopping the server ends every game waiting for a page
   and the page finds its token unknown when the server comes back. Writing one

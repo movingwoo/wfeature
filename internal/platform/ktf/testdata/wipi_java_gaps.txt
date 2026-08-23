@@ -25,10 +25,6 @@ org/kwis/msp/lcdui/Font <clinit> ()V
 # on the runtime class would add a vtable slot no guest class inherits.
 org/kwis/msp/lcdui/Card paint (Lorg/kwis/msp/lcdui/Graphics;)V
 
-# File output streams. Guest writes go through File.write, which persists
-# through the Host save store; an output stream would need a runtime-owned
-# stream class that writes back into the file.
-
 # Raw device-format pixel transfers and image encoding. The byte layout and
 # the encoded format are device-specific and unconfirmed; the 0x00RRGGBB
 # transfers (getRGBPixels/setRGBPixels) are implemented instead.
