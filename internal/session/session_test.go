@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
+	"github.com/movingwoo/wfeature/internal/platform/skt"
 )
 
 // sktFixture is the MIDlet that paints into whatever surface it is handed. It
@@ -366,10 +367,11 @@ func TestKeyCodesTranslateOnlyWhereTheyMust(t *testing.T) {
 		{148, ktf.KeyFire, "fire"},
 		// The three soft keys, including the third one a handset carries
 		// beside the two under the screen — one title's submenu is on it and
-		// the choice that leaves the screen is on the third. The keypad in
-		// `web/` sends exactly these three numbers, so what they become is
-		// pinned here rather than merely asserted to be something else:
-		// `web/keypad.test.mjs` holds the other end of the same contract.
+		// the choice that leaves the screen is on the third. These positive
+		// numbers are what the page sent when it carried all three under
+		// their own names. It does not any more, and they stay translated
+		// because a shell served from a phone's cache is a page from an
+		// older build still sending them.
 		{6, ktf.KeyLeftSoft, "left soft"},
 		{7, ktf.KeyRightSoft, "right soft"},
 		{9, ktf.KeyThirdSoft, "third soft"},
@@ -389,7 +391,24 @@ func TestKeyCodesTranslateOnlyWhereTheyMust(t *testing.T) {
 	if got := ktfKeyCode(10); got != ktf.KeyCall {
 		t.Errorf("the send key became %d, want %d", got, ktf.KeyCall)
 	}
+	// The keypad's Menu button is the handset's left soft key, and it is the
+	// one key here that needs no translating at all: `MH_KEY_SOFT1` and the
+	// MIDP soft key a MIDlet of this era compares against are both -6. That is
+	// what lets one number on the page serve every platform — the WIPI paths
+	// take what this returns, and the MIDP one takes the page's code
+	// untouched — so it is pinned on both sides. Sending the page's older
+	// positive 6 instead would arrive at a MIDlet as a code no title has.
+	if got := ktfKeyCode(midpKeyMenu); got != ktf.KeyLeftSoft {
+		t.Errorf("the menu key became %d, want %d", got, ktf.KeyLeftSoft)
+	}
+	if midpKeyMenu != skt.KeyCodeSoft1 {
+		t.Errorf("the page's menu key is %d, but a MIDlet's soft key is %d", midpKeyMenu, skt.KeyCodeSoft1)
+	}
 }
+
+// midpKeyMenu is the code `web/app.js` sends for the keypad's Menu button.
+// `web/keypad.test.mjs` holds the page's end of this.
+const midpKeyMenu int32 = -6
 
 func TestClosingTwiceIsSafe(t *testing.T) {
 	// A game that exits closes the session from inside Tick, and the Host

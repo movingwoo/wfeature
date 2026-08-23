@@ -48,6 +48,15 @@ for itself. This runtime chooses:
 - A `Canvas` gets the soft keys and the menu-free part of this too, but no
   command labels are drawn over it: a `Canvas` owns its pixels.
 
+The browser reaches `KeyCodeSoft1` through the keypad's `Menu` button, which
+sends -6 — the same number `MH_KEY_SOFT1` carries on the WIPI platforms, so one
+button serves every vendor here (`cli.md`, "Key names"). Two consequences are
+worth knowing before reading a run: on this platform the key never reaches a
+`Canvas`'s `keyPressed`, because it is taken here to run a command, so a
+`Canvas` MIDlet with no commands answers the button with nothing at all; and
+what it does answer with is this runtime's choice rather than the title's,
+since the handset it was written for made the same choice for it.
+
 ## Navigating a Screen
 
 - **List**: up/down move the highlight, fire selects. An `IMPLICIT` list

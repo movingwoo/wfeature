@@ -18,7 +18,7 @@ export const keyOrder = [
   "4", "5", "6",
   "7", "8", "9",
   "*", "0", "#",
-  "CLR", "CALL",
+  "CLR", "CALL", "MENU",
   "UP", "LEFT", "RIGHT", "DOWN", "OK",
 ];
 
@@ -39,6 +39,7 @@ export const defaultBindings = {
   "#": "KeyC",
   CLR: "Backspace",
   CALL: "Backslash",
+  MENU: "KeyM",
   UP: "ArrowUp",
   LEFT: "ArrowLeft",
   RIGHT: "ArrowRight",
@@ -51,6 +52,7 @@ export const defaultBindings = {
 const keyNames = {
   CLR: "CLR",
   CALL: "통화",
+  MENU: "메뉴",
   UP: "↑",
   DOWN: "↓",
   LEFT: "←",
