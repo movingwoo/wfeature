@@ -79,28 +79,28 @@ func (client *Client) linkJavaSurface(surface *javaSurface, layout *javaLayout) 
 		return fmt.Errorf("write the java virtual method answers at %#x: %w",
 			surface.VirtualMethodsOut, err)
 	}
-	// The static fields and the non-virtual methods are answered with their own
-	// index. Which array a static field's number indexes, and what a
-	// non-virtual method's stands for, are both still open; an index of its own
-	// per entry is the answer that claims the least.
-	for _, table := range []struct {
-		label string
-		out   uint32
-		pick  func(javaAPIClass) javaRun
-	}{
-		{"static field", surface.StaticFieldsOut, func(class javaAPIClass) javaRun { return class.StaticFields }},
-		{"method", surface.MethodsOut, func(class javaAPIClass) javaRun { return class.Methods }},
-	} {
-		identity := map[uint32]uint32{}
-		for _, class := range surface.Classes {
-			run := table.pick(class)
-			for offset := uint32(0); offset < run.Count; offset++ {
-				identity[run.Start+offset] = run.Start + offset
-			}
+	// A static field is answered with its position in its own class's storage.
+	// The module compiles a read of one as an index past the words a class
+	// object uses for itself, so the number and the size of the block it lands
+	// in are one decision; see layoutPlatformStatics.
+	statics, err := layout.layoutPlatformStatics(surface)
+	if err != nil {
+		return err
+	}
+	if err := client.writeJavaSlots(surface.StaticFieldsOut, statics); err != nil {
+		return fmt.Errorf("write the java static field answers at %#x: %w",
+			surface.StaticFieldsOut, err)
+	}
+	// What a non-virtual method's number stands for is still open, so each
+	// entry is answered with its own index — the answer that claims the least.
+	identity := map[uint32]uint32{}
+	for _, class := range surface.Classes {
+		for offset := uint32(0); offset < class.Methods.Count; offset++ {
+			identity[class.Methods.Start+offset] = class.Methods.Start + offset
 		}
-		if err := client.writeJavaSlots(table.out, identity); err != nil {
-			return fmt.Errorf("write the java %s answers at %#x: %w", table.label, table.out, err)
-		}
+	}
+	if err := client.writeJavaSlots(surface.MethodsOut, identity); err != nil {
+		return fmt.Errorf("write the java method answers at %#x: %w", surface.MethodsOut, err)
 	}
 	return client.writeJavaStaticMethodArray(surface)
 }

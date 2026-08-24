@@ -1,7 +1,6 @@
 package lgt
 
 import (
-	"bytes"
 	stdimage "image"
 	"image/color"
 	_ "image/gif"
@@ -169,7 +168,9 @@ func decodeImage(encoded []byte) (stdimage.Image, error) {
 		// LCD pixels behind a 24-byte header. See wipic.DecodeLBMP.
 		return wipic.DecodeLBMP(encoded)
 	}
-	decoded, _, err := stdimage.Decode(bytes.NewReader(encoded))
+	// Everything the standard library registers, with the one tolerance a
+	// title's own edit of a picture needs. See wipic.DecodeStandard.
+	decoded, _, err := wipic.DecodeStandard(encoded)
 	return decoded, err
 }
 

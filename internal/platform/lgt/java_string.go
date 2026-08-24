@@ -236,7 +236,12 @@ func javaStringSubstring(
 		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
 	}
 	symbols := []rune(held)
-	begin, end := int(int32(arguments[1])), int(int32(arguments[2]))
+	// The one-argument form is the same method with the string's own end for
+	// its second bound, which is how the class library declares the pair.
+	begin, end := int(int32(arguments[1])), len(symbols)
+	if len(arguments) > 2 {
+		end = int(int32(arguments[2]))
+	}
 	if begin < 0 || end < begin || end > len(symbols) {
 		return 0, fmt.Errorf("%d to %d of a string of %d", begin, end, len(symbols))
 	}

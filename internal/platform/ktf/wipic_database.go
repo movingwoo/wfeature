@@ -9,17 +9,31 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
-// runtimeCDatabase keeps one named WIPI C database record in process memory.
-// KTF clients use the stream extension: one record per database, read and
-// written through a per-handle byte cursor. Durable persistence joins with
-// the Host save path.
+// **This file is WIPI C table 7, which is the filesystem.** Every slot in it
+// sits where the specification's `MC_fs*` section prints one — open, read,
+// write, close and seek at 0 to 4, the file attributes at 5, remove at 6,
+// mkdir at 8, the free space at 12, `MC_fsTell` at 15 and `MC_fsIsExist` at 16
+// — and a title's own log names the call it makes here as `MC_fsOpen`. See
+// docs/ktf.md, "The two storage tables".
+//
+// **The names below say database because that is what the table was read as,
+// and they have not been changed yet.** What they name is right either way: a
+// file here is one blob per name addressed by a cursor, which is exactly the
+// store this keeps. Two things would move if the identifiers did — the save
+// keys, which begin `db/` and are a player's own files, and the diagnostic
+// counter names, which a report is read against — so the rename is a change of
+// its own rather than part of the one that found this out. It is in TODO.md.
+//
+// runtimeCDatabase keeps one named file in process memory: read and written
+// through a per-handle byte cursor. Durable persistence joins with the Host
+// save path.
 type runtimeCDatabase struct {
 	name string
 	data []byte
 	// packaged is how many bytes of this store the archive shipped. The
 	// archive's own data is not storage the player consumed — on a handset it
 	// arrives with the program — so it does not count against the save budget
-	// MC_dbListDataBase reports. Without this a title that packages its maps
+	// MC_fsAvailable reports. Without this a title that packages its maps
 	// and its text as databases reads its own content as a full disk: one
 	// here ships 2 MB that way and could not start a new game, because the
 	// budget was gone before the player had saved anything.
@@ -38,7 +52,7 @@ type runtimeCDatabaseHandle struct {
 
 const (
 	maxCDatabaseBytes = 4 << 20
-	// cDatabaseHandleBit tags a stream database handle. It has to stay inside
+	// cDatabaseHandleBit tags a file handle. It has to stay inside
 	// a signed 16-bit value: a handset's handle is small, and a title that
 	// keeps one in a `short` sign-extends what the open returned before it
 	// hands it back. One local title does exactly that — `lsl #16; asr #16` on
@@ -58,19 +72,25 @@ const (
 	wipicDatabaseClose        = 3
 	wipicDatabaseSelectRecord = 4
 	wipicDatabaseStatByName   = 5
-	// MC_dbDeleteDataBase takes the database's name and its mode, not a
-	// handle: the caller closes the database first and then names it. One
-	// title deletes the certificate it could not renew and expects the next
-	// question about it to answer "no such database".
-	wipicDatabaseDelete      = 6
-	wipicDatabaseNumRecords  = 10
-	wipicDatabaseRecordSize  = 11
-	wipicDatabaseList        = 12
-	wipicDatabaseTouchStream = 15
-	wipicDatabaseExists      = 16
+	// MC_fsRemove takes the file's name and its area, not a handle: the caller
+	// closes the file first and then names it. One title deletes the
+	// certificate it could not renew and expects the next question about it to
+	// answer "no such file".
+	wipicDatabaseDelete = 6
+	// MC_fsMkDir takes a name and an access area — 1 is the program's own
+	// directory, which is the only area this platform has. **Nothing here
+	// holds a directory**: a name is a key in one flat store, so making one is
+	// the whole of what a directory is, and a name that has been made is what
+	// says it exists.
+	wipicDatabaseMakeDirectory = 8
+	wipicDatabaseNumRecords    = 10
+	wipicDatabaseRecordSize    = 11
+	wipicDatabaseList          = 12
+	wipicDatabaseTouchStream   = 15
+	wipicDatabaseExists        = 16
 
 	// wipicDatabaseStorageLimit mirrors the reference KTF per-game storage budget;
-	// MC_dbListDataBase reports the space still available.
+	// MC_fsAvailable reports the space still available.
 	wipicDatabaseStorageLimit = 1024 * 1024
 )
 
@@ -111,7 +131,7 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 		}
 		return uint32(len(state.store.data)), nil
 	case wipicDatabaseList:
-		// MC_dbListDataBase reports remaining storage: the budget minus every
+		// MC_fsAvailable reports remaining storage: the budget minus every
 		// open store's bytes, floored at zero like the reference repository usage.
 		used := 0
 		for _, store := range runtime.cDatabases {
@@ -124,23 +144,29 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 		}
 		return uint32(wipicDatabaseStorageLimit - used), nil
 	case wipicDatabaseExists:
-		// MC_dbExists answers 0 on success and M_E_NOENT when missing;
-		// titles branch to their fresh-init path on the error code.
+		// MC_fsIsExist answers 0 on success and M_E_NOENT when missing;
+		// titles branch to their fresh-init path on the error code. A
+		// directory this platform was asked to make counts as something that
+		// exists, because the alternative is telling a title that the
+		// directory it just made is not there.
 		nameAddress, err := thread.Register(0)
 		if err != nil {
 			return 0, err
 		}
 		name, err := runtime.readCString(nameAddress, 512)
 		if err != nil {
-			return 0, fmt.Errorf("read KTF database name: %w", err)
+			return 0, fmt.Errorf("read KTF file name: %w", err)
 		}
 		_, exists := runtime.cDatabases[name]
 		_, seeded := runtime.databaseSeed(name)
-		runtime.countDiagnostic(fmt.Sprintf("cdb exists %s -> %t", name, exists || seeded))
-		if exists || seeded {
+		made := runtime.createdDirectories()[name]
+		runtime.countDiagnostic(fmt.Sprintf("cdb exists %s -> %t", name, exists || seeded || made))
+		if exists || seeded || made {
 			return 0, nil
 		}
 		return wipicErrorNotFound, nil
+	case wipicDatabaseMakeDirectory:
+		return runtime.wipicMakeDirectory(thread)
 	case wipicDatabaseTouchStream:
 		return runtime.wipicDatabaseTouch(thread)
 	default:
@@ -149,12 +175,12 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 		// pointers, so it never appears in the guest's own code, and an
 		// address is the only thing about a missing call that can be
 		// disassembled.
-		return 0, fmt.Errorf("KTF WIPI C database function %d is not implemented%s",
+		return 0, fmt.Errorf("KTF WIPI C filesystem function %d is not implemented%s",
 			function, runtime.callerSite(thread))
 	}
 }
 
-// wipicDatabaseDelete serves MC_dbDeleteDataBase(name, mode). A store may be
+// wipicDatabaseDelete serves MC_fsRemove(name, mode). A store may be
 // in memory, persisted, packaged with the archive, or all three, so the delete
 // has to cover every place the open would look. The persisted copy cannot be
 // unlinked — the save store has no delete — so the name is recorded on a
@@ -189,7 +215,7 @@ func (runtime *initializationRuntime) wipicDatabaseDelete(thread *armcore.Thread
 	return 0, nil
 }
 
-// databaseRemovedKey holds the names MC_dbDeleteDataBase has removed. See
+// databaseRemovedKey holds the names MC_fsRemove has removed. See
 // guestFileRemovedKey for why a delete needs a list of its own.
 const databaseRemovedKey = "db/.removed"
 
@@ -229,6 +255,78 @@ func (runtime *initializationRuntime) markDatabaseRemoved(name string, removed b
 	}
 	sort.Strings(names)
 	runtime.storeSave(databaseRemovedKey, []byte(strings.Join(names, "\n")))
+}
+
+// wipicMakeDirectory serves MC_fsMkDir(dirName, aMode).
+//
+// A directory has no representation here — the store this table reads and
+// writes is one flat map from a name to its bytes — so making one has nothing
+// to create. What it does have is an answer to give, and the specification
+// gives it two: zero for a directory that was made, `M_E_EXIST` for one that
+// was already there. Answering zero every time would tell a title that checks
+// the result that every run is its first, so the names that have been made are
+// written down beside the names that have been deleted, in the same store and
+// for the same reason: a question about storage has to be answered the same way
+// after a restart as before one.
+//
+// The two local titles that reach this call make their own directory at
+// start-up and drop the answer, so neither is what the list is for; a title
+// that reads it is.
+func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread) (uint32, error) {
+	nameAddress, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	name, err := runtime.readCString(nameAddress, 512)
+	if err != nil {
+		return 0, fmt.Errorf("read KTF directory name: %w", err)
+	}
+	if name == "" {
+		return wipicErrorBadParam, nil
+	}
+	if runtime.createdDirectories()[name] {
+		runtime.countDiagnostic(fmt.Sprintf("fs mkdir %s -> exists", name))
+		return wipicErrorExists, nil
+	}
+	runtime.markDirectoryCreated(name)
+	runtime.countDiagnostic(fmt.Sprintf("fs mkdir %s", name))
+	return 0, nil
+}
+
+// directoryListKey holds the directory names MC_fsMkDir has made. See
+// databaseRemovedKey for why a flat store needs a list of its own.
+const directoryListKey = "db/.dirs"
+
+// createdDirectories is the set of made names, read from the store once per
+// session and kept in memory after that.
+func (runtime *initializationRuntime) createdDirectories() map[string]bool {
+	if runtime.madeDirectories != nil {
+		return runtime.madeDirectories
+	}
+	runtime.madeDirectories = make(map[string]bool)
+	if data, exists := runtime.loadSave(directoryListKey); exists {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				runtime.madeDirectories[line] = true
+			}
+		}
+	}
+	return runtime.madeDirectories
+}
+
+// markDirectoryCreated records one name and writes the list back.
+func (runtime *initializationRuntime) markDirectoryCreated(name string) {
+	set := runtime.createdDirectories()
+	if set[name] {
+		return
+	}
+	set[name] = true
+	names := make([]string, 0, len(set))
+	for entry := range set {
+		names = append(names, entry)
+	}
+	sort.Strings(names)
+	runtime.storeSave(directoryListKey, []byte(strings.Join(names, "\n")))
 }
 
 // databaseSeed is what an open would start a store from: the persisted copy

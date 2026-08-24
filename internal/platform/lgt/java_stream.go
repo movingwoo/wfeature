@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"fmt"
+	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -635,6 +636,70 @@ func javaSinkWriteUTF(
 	held = append(held, byte(len(encoded)>>8), byte(len(encoded)))
 	client.javaRuntimeState().sinks[sink] = append(held, encoded...)
 	return 0, nil
+}
+
+// javaStreamReadUTF is `DataInputStream.readUTF()`, slot 32: a two-byte length
+// and then that many bytes of modified UTF-8. It is the read side of the
+// `writeUTF` beside it and decodes with the same encoding, so a name a title
+// stored comes back the way it went in.
+//
+// **The length is in bytes, not in characters**, which is what makes a short
+// stream tell-able from a long name: the count is checked against what is left
+// before any of it is decoded.
+func javaStreamReadUTF(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read+2 > len(stream.Data) {
+		return 0, fmt.Errorf("readUTF past the end of %q, at %d of %d",
+			stream.Name, stream.Read, len(stream.Data))
+	}
+	count := int(stream.Data[stream.Read])<<8 | int(stream.Data[stream.Read+1])
+	if stream.Read+2+count > len(stream.Data) {
+		return 0, fmt.Errorf("readUTF of %d bytes past the end of %q, at %d of %d",
+			count, stream.Name, stream.Read, len(stream.Data))
+	}
+	text, err := decodeModifiedUTF8(stream.Data[stream.Read+2 : stream.Read+2+count])
+	if err != nil {
+		return 0, fmt.Errorf("readUTF from %q: %w", stream.Name, err)
+	}
+	stream.Read += 2 + count
+	return client.newJavaString(text)
+}
+
+// decodeModifiedUTF8 reads what modifiedUTF8 writes. A sequence that is not one
+// of the three forms is reported rather than replaced: the bytes came out of a
+// title's own file, and text that does not decode means the cursor is not where
+// the title thinks it is.
+func decodeModifiedUTF8(data []byte) (string, error) {
+	units := make([]uint16, 0, len(data))
+	for index := 0; index < len(data); {
+		first := data[index]
+		switch {
+		case first&0x80 == 0:
+			units = append(units, uint16(first))
+			index++
+		case first&0xe0 == 0xc0:
+			if index+1 >= len(data) || data[index+1]&0xc0 != 0x80 {
+				return "", fmt.Errorf("a two-byte sequence at %d is cut short", index)
+			}
+			units = append(units, uint16(first&0x1f)<<6|uint16(data[index+1]&0x3f))
+			index += 2
+		case first&0xf0 == 0xe0:
+			if index+2 >= len(data) || data[index+1]&0xc0 != 0x80 || data[index+2]&0xc0 != 0x80 {
+				return "", fmt.Errorf("a three-byte sequence at %d is cut short", index)
+			}
+			units = append(units, uint16(first&0x0f)<<12|
+				uint16(data[index+1]&0x3f)<<6|uint16(data[index+2]&0x3f))
+			index += 3
+		default:
+			return "", fmt.Errorf("byte %#02x at %d begins no sequence", first, index)
+		}
+	}
+	return string(utf16.Decode(units)), nil
 }
 
 // modifiedUTF8 is the encoding a Java stream's UTF methods use.

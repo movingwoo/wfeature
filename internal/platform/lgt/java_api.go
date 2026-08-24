@@ -51,6 +51,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Jlet.<init>()V": {Words: 1, Implementat: javaNoResult},
 	// java/lang/Object's constructor, reached the same way.
 	"java/lang/Object.<init>()V": {Words: 1, Implementat: javaNoResult},
+	// The abstract stream classes' constructors, which a title's own stream
+	// subclass calls first. The specification gives both an empty body, and
+	// what a stream is here is the bytes this platform keeps against the
+	// object rather than anything in the object itself.
+	"java/io/InputStream.<init>()V":  {Words: 1, Implementat: javaNoResult},
+	"java/io/OutputStream.<init>()V": {Words: 1, Implementat: javaNoResult},
 
 	// The widgets a Jlet builds before it shows anything. Their state is the
 	// platform's, and this platform keeps what it has of it on its own side, so
@@ -198,6 +204,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// its own — so the flag chooses nothing and the two forms answer the same
 	// way; the name is still the name.
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileExists},
+	// `isFile` asks the narrower question — a file rather than a file or a
+	// directory — and here the two are the same question. A title's save tree
+	// on this platform holds files and nothing else: no call creates a
+	// directory, so a name that exists is a file's name.
+	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;)Z":  {Words: 1, Implementat: javaFileExists},
+	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileExists},
 	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;)V":  {Words: 1, Implementat: javaFileRemove},
 	// How much room a title has left. Saves live in Host storage without a
 	// handset's quota behind them, so the answer is the same generous constant
@@ -508,6 +520,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// a count with it before it reads the rows.
 		28: {Called: "readInt()I",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
+		// Slot 32 takes the receiver alone and is where this class's run ends:
+		// after `readInt` come `readLong`, `readFloat`, `readDouble` and then
+		// `readUTF()`, the last method of it that is not static. A title reads
+		// a name back here out of a file its own `writeUTF` wrote.
+		32: {Called: "readUTF()Ljava/lang/String;",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUTF}},
 	},
 	// `java/io/InputStreamReader` slot 11 takes the receiver and a `char[]`,
 	// and the run it falls in is the reader hierarchy's own: `read()`,
@@ -569,6 +587,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// that shape.
 		28: {Called: "substring(II)Ljava/lang/String;",
 			Method: javaPlatformMethod{Words: 3, Implementat: javaStringSubstring}},
+		// Slot 27 is the same method with one bound, which this class declares
+		// immediately before the two-bound form: `substring(int)` runs to the
+		// end of the string. Its one local site passes a literal 2 on a string
+		// a title read out of its own data, which is a prefix being dropped.
+		27: {Called: "substring(I)Ljava/lang/String;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringSubstring}},
 		// Slots 11, 14, 16, 19 and 26 fill the gaps of a run already anchored
 		// at both ends: charAt, getBytes with no argument, compareTo, the
 		// one-argument startsWith and the two-argument indexOf. Each one's
@@ -988,20 +1012,7 @@ func javaCurrentTimeMillis(
 func javaPlatformSingleton(name string) func(
 	*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
 	return func(client *Client, _ context.Context, _ *armcore.Thread, _ []uint32) (uint32, error) {
-		runtime := client.javaRuntimeState()
-		if object, ok := runtime.singletons[name]; ok {
-			return object, nil
-		}
-		class, err := client.preparePlatformJavaClass(name)
-		if err != nil {
-			return 0, err
-		}
-		object, err := client.allocateJavaObject(class)
-		if err != nil {
-			return 0, err
-		}
-		runtime.singletons[name] = object
-		return object, nil
+		return client.javaPlatformObject(name)
 	}
 }
 

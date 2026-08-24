@@ -407,3 +407,126 @@ func TestJavaDataStreamReadsNumbersAndFillsAnArray(t *testing.T) {
 		t.Error("readInt past the end answered instead of reporting")
 	}
 }
+
+// `readUTF` reads what `writeUTF` writes, which is the pair a title stores a
+// name with and reads it back with. The two-byte count is bytes rather than
+// characters, and a stream too short for it is a truncated file rather than a
+// short string.
+func TestJavaDataStreamReadsBackWhatWriteUTFWrote(t *testing.T) {
+	client := fixtureClient(t)
+	const text = "가A"
+	encoded := modifiedUTF8(text)
+	resource := append([]byte{byte(len(encoded) >> 8), byte(len(encoded))}, encoded...)
+	client.archive = &Archive{Resources: map[string][]byte{
+		"u.dat": resource,
+		"v.dat": {0x00, 0x40, 'a'}, // a count of 64 with one byte behind it
+	}}
+
+	name, err := client.newJavaString("/u.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := javaGetResourceAsStream(client, nil, nil, []uint32{0, name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := javaStreamReadUTF(client, nil, nil, []uint32{stream})
+	if err != nil {
+		t.Fatalf("readUTF() error = %v", err)
+	}
+	if held, ok := client.javaText(object); !ok || held != text {
+		t.Errorf("readUTF() = %q (held %t), want %q", held, ok, text)
+	}
+	if _, err := javaStreamReadUTF(client, nil, nil, []uint32{stream}); err == nil {
+		t.Error("readUTF past the end answered instead of reporting")
+	}
+
+	short, err := client.newJavaString("/v.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncated, err := javaGetResourceAsStream(client, nil, nil, []uint32{0, short})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaStreamReadUTF(client, nil, nil, []uint32{truncated}); err == nil {
+		t.Error("a count longer than the stream answered instead of reporting")
+	}
+}
+
+// The one-argument `substring` runs to the end of the string, which is the form
+// the class library declares immediately before the two-argument one.
+func TestJavaStringSubstringTakesOneBoundOrTwo(t *testing.T) {
+	client := fixtureClient(t)
+	text := newTestString(t, client, "menu.pzx")
+	tail, err := javaStringSubstring(client, nil, nil, []uint32{text, 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := client.javaText(tail); held != "pzx" {
+		t.Errorf("substring(5) = %q, want %q", held, "pzx")
+	}
+	head, err := javaStringSubstring(client, nil, nil, []uint32{text, 0, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := client.javaText(head); held != "menu" {
+		t.Errorf("substring(0, 4) = %q, want %q", held, "menu")
+	}
+	if _, err := javaStringSubstring(client, nil, nil, []uint32{text, 9}); err == nil {
+		t.Error("a beginning past the end answered instead of reporting")
+	}
+}
+
+// `FileSystem.isFile` asks the narrower question `exists` asks, and here they
+// are the same question: nothing on this platform creates a directory, so a
+// name that resolves is a file's name. Both forms answer it — the flag chooses
+// a directory a title here has only one of.
+func TestJavaFileSystemIsFileAnswersLikeExists(t *testing.T) {
+	client := fixtureClient(t)
+	client.archive = &Archive{Resources: map[string][]byte{"there.dat": {1, 2, 3}}}
+
+	present := newTestString(t, client, "there.dat")
+	absent := newTestString(t, client, "gone.dat")
+	for _, probe := range []struct {
+		name      string
+		key       string
+		arguments []uint32
+		want      uint32
+	}{
+		{"a file that is there", "org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;)Z", []uint32{present}, 1},
+		{"a file that is not", "org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;)Z", []uint32{absent}, 0},
+		{"with the area flag", "org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;I)Z", []uint32{present, 1}, 1},
+	} {
+		method, registered := javaPlatformMethods[probe.key]
+		if !registered {
+			t.Fatalf("%s is not registered", probe.key)
+		}
+		got, err := method.Implementat(client, nil, nil, probe.arguments)
+		if err != nil {
+			t.Fatalf("%s: %v", probe.name, err)
+		}
+		if got != probe.want {
+			t.Errorf("%s answered %d, want %d", probe.name, got, probe.want)
+		}
+	}
+}
+
+// Setting the font is accepted and changes nothing, because there is one face
+// here. What it must not be is a refusal: a title sets the font before it draws
+// its own text, and stopping there costs the screen the text was on.
+func TestJavaGraphicsSetFontIsAccepted(t *testing.T) {
+	client := fixtureClient(t)
+	const key = "org/kwis/msp/lcdui/Graphics.setFont(Lorg/kwis/msp/lcdui/Font;)V"
+	method, registered := javaGraphicsMethods[key]
+	if !registered {
+		t.Fatalf("%s is not registered", key)
+	}
+	font, err := javaPlatformSingleton(javaFontClass)(client, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := method.Implementat(client, nil, nil, []uint32{0, font}); err != nil {
+		t.Errorf("setFont refused: %v", err)
+	}
+}

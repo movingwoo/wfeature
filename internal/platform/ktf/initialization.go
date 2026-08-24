@@ -113,6 +113,7 @@ const (
 	wipicErrorNotFound uint32 = 0xfffffff4 // M_E_NOENT (-12)
 	wipicErrorInvalid  uint32 = 0xfffffff7 // M_E_INVALID (-9)
 	wipicErrorShortBuf uint32 = 0xffffffee // M_E_SHORTBUF (-18)
+	wipicErrorExists   uint32 = 0xfffffffb // M_E_EXIST (-5)
 	wipicErrorBadParam uint32 = 0xffffffea // M_E_BADRECID (-22)
 	wipicErrorGeneric  uint32 = 0xffffffff // -1
 )
@@ -266,9 +267,12 @@ type initializationRuntime struct {
 	// store on first use. See guestFileRemovedKey for why a delete needs a
 	// list of its own.
 	removedFiles map[string]bool
-	// removedCDatabases is the same list for the WIPI C database block. See
+	// removedCDatabases is the same list for the WIPI C filesystem table. See
 	// databaseRemovedKey.
 	removedCDatabases map[string]bool
+	// madeDirectories is the set of names MC_fsMkDir has made, loaded from the
+	// store on first use. See directoryListKey.
+	madeDirectories map[string]bool
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
 	clips map[*jvm.Object]*clipState
@@ -1086,12 +1090,29 @@ func (runtime *initializationRuntime) callerMark(thread *armcore.Thread) string 
 }
 
 // WIPI C interface tables follow the original ordering: table 1 util, 2 misc,
-// 3 graphics, 4 the input method, 5 record database, 7 database, 9 uic,
+// 3 graphics, 4 the input method, 5 record database, 7 the filesystem, 9 uic,
 // 10 media, 11 net.
 //
-// Five and seven are both storage. Seven is the stream database — one blob
-// addressed by a cursor — and five is the record database, a numbered set. A
-// game uses whichever suits what it is storing, and some use both.
+// Five and seven are both storage, and they are two different APIs rather than
+// two flavours of one. Five is the record database of the specification's
+// `MC_db*` section, in that section's own order: open, close, delete, insert,
+// select, update, delete-record, list-records, and then the count, the record
+// size and the database list at 10, 11 and 12.
+//
+// **Seven is the filesystem, and the specification's `MC_fs*` order is what
+// says so.** Every slot a title here has reached sits exactly where that
+// section prints it — open, read, write, close and seek at 0 to 4, the file
+// attributes at 5, remove at 6, mkdir at 8, the free space at 12, `tell` at 15
+// and `isExist` at 16 — and the three at the end are what settle it, because
+// nothing about a database would put "how much room is left", "where is the
+// cursor" and "is there one called this" at those three numbers. What the
+// table stores is still one blob per name addressed by a cursor, which is what
+// a file is; the names below say file rather than database from here on.
+//
+// This was read as a second database table for a long time, and the reading
+// that corrected it is a title's own log: it prints `MC_fsOpen() failed!!!(-12)`
+// for a refusal this table's slot 0 answers, which is the guest naming the call
+// it made.
 //
 // Four sits where it does for the same reason the LGT runtime's input-method
 // block sits after its graphics block: the specification prints the `MC_im*`
@@ -1102,7 +1123,7 @@ const (
 	wipicTableGraphics       = 3
 	wipicTableInputMethod    = 4
 	wipicTableRecordDatabase = 5
-	wipicTableDatabase       = 7
+	wipicTableFilesystem     = 7
 	wipicTableUIC            = 9
 	wipicTableMedia          = 10
 	wipicTableNet            = 11
@@ -1284,7 +1305,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		return runtime.wipicEncodeImage(thread)
 	case table == wipicTableRecordDatabase:
 		return runtime.handleWIPICRecordDatabaseCall(thread, function)
-	case table == wipicTableDatabase:
+	case table == wipicTableFilesystem:
 		return runtime.handleWIPICDatabaseCall(thread, function)
 	case table == wipicTableMedia:
 		return runtime.handleWIPICMediaCall(thread, function)
@@ -1303,7 +1324,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		return 0, nil
 	case table == wipicTableInputMethod:
 		return runtime.handleWIPICInputMethodCall(thread, function)
-	case table >= 4 && table != wipicTableDatabase:
+	case table >= 4 && table != wipicTableFilesystem:
 		// Tables 5-6, 8, and 12-17 are stubbed in the original runtime; calls
 		// are accepted, counted, and answer zero.
 		//

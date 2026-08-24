@@ -831,3 +831,53 @@ func (client *Client) readCString(address uint32) (string, error) {
 	}
 	return "", fmt.Errorf("LGT string at %#x is not terminated within %d bytes", address, limit)
 }
+
+// maxCStringLength bounds a `strlen`. It is far larger than the bound above
+// because the two answer different questions: that one reads a name, and a name
+// that long is a pointer into something that is not one, while this one measures
+// a buffer a title filled itself.
+const maxCStringLength = 1 << 20
+
+// cStringLength answers how many bytes there are before the first zero, without
+// building the string.
+//
+// **A title's own buffer is not a name.** One local title reads a text resource
+// of eight kilobytes into a `calloc` of exactly its size — the file has no zero
+// byte anywhere in it — and then calls `strlen` on it. What a handset answers is
+// the distance to the first zero after the buffer, which is in the heap past the
+// allocation, and this answers the same: the scan runs on past the buffer the
+// way C's does, and stops at the zero the arena left there. Refusing at a
+// name-sized bound stopped that title before its first frame.
+func (client *Client) cStringLength(address uint32) (uint32, error) {
+	if address == 0 {
+		return 0, nil
+	}
+	const chunk = 256
+	buffer := make([]byte, chunk)
+	one := make([]byte, 1)
+	for offset := uint32(0); offset < maxCStringLength; {
+		if err := client.core.Memory().Read(address+offset, buffer); err != nil {
+			// **A whole chunk is not what C reads.** A string that ends inside
+			// the last page of a mapping — a name on the stack is the common
+			// one — has a terminator this would have run past, so the walk
+			// finishes it a byte at a time and only a byte that is not mapped
+			// is a pointer that was never a string.
+			for ; offset < maxCStringLength; offset++ {
+				if err := client.core.Memory().Read(address+offset, one); err != nil {
+					return 0, err
+				}
+				if one[0] == 0 {
+					return offset, nil
+				}
+			}
+			break
+		}
+		for index, value := range buffer {
+			if value == 0 {
+				return offset + uint32(index), nil
+			}
+		}
+		offset += chunk
+	}
+	return 0, fmt.Errorf("LGT string at %#x is not terminated within %d bytes", address, maxCStringLength)
+}

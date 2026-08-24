@@ -1,7 +1,8 @@
-// Package wipic holds the parts of the WIPI C library that are the same
-// wherever they are called from. A platform decides how a call arrives and
-// where its arguments live; what a format string means does not change with
-// the platform, so it lives here rather than in either one.
+// Package wipic holds what the three platforms share below the call boundary. A
+// platform decides how a call arrives and where its arguments live; what a
+// format string means, what a handset bitmap holds, and how far a decoder has to
+// bend for a picture a title edited do not change with the platform, so they
+// live here rather than in each one.
 package wipic
 
 import (

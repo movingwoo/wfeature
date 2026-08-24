@@ -168,3 +168,51 @@ func TestJavaPlatformSuperclassIsMeasuredOnce(t *testing.T) {
 		t.Errorf("the disagreement was reported as %v", err)
 	}
 }
+
+// A static field is a position in its own class's storage. Answering it with
+// the entry's global index is right only while one class declares one static,
+// and reads past the end of a class object's block the moment two classes do.
+func TestPlatformStaticsAreNumberedInsideTheirOwnClass(t *testing.T) {
+	surface := &javaSurface{
+		StaticFields: []javaMemberRef{
+			{Name: "out", Descriptor: "Ljava/io/PrintStream;"},
+			{Name: "err", Descriptor: "Ljava/io/PrintStream;"},
+			{Name: "MIN_VALUE", Descriptor: "I"},
+		},
+		Classes: []javaAPIClass{
+			{Name: "java/lang/System", StaticFields: javaRun{Start: 0, Count: 2}},
+			{Name: "java/lang/Integer", StaticFields: javaRun{Start: 2, Count: 1}},
+		},
+	}
+	layout := newJavaLayout()
+	answers, err := layout.layoutPlatformStatics(surface)
+	if err != nil {
+		t.Fatalf("layoutPlatformStatics() error = %v", err)
+	}
+	for index, want := range map[uint32]uint32{0: 0, 1: 1, 2: 0} {
+		if got := answers[index]; got != want {
+			t.Errorf("static entry %d answered %d, want %d", index, got, want)
+		}
+	}
+	if got := layout.class("java/lang/System").StaticWords; got != 2 {
+		t.Errorf("java/lang/System keeps %d words of statics, want 2", got)
+	}
+	if got := layout.class("java/lang/Integer").StaticWords; got != 1 {
+		t.Errorf("java/lang/Integer keeps %d words of statics, want 1", got)
+	}
+	if got, ok := layout.class("java/lang/System").Statics["outLjava/io/PrintStream;"]; !ok || got != 0 {
+		t.Errorf("System.out is at slot %d (declared %t), want 0", got, ok)
+	}
+}
+
+// A run that names an entry past the end of the table is a misread rather than
+// a class, and it is refused instead of indexing whatever is there.
+func TestPlatformStaticsRefuseARunPastTheTable(t *testing.T) {
+	surface := &javaSurface{
+		StaticFields: []javaMemberRef{{Name: "out", Descriptor: "Ljava/io/PrintStream;"}},
+		Classes:      []javaAPIClass{{Name: "java/lang/System", StaticFields: javaRun{Start: 0, Count: 4}}},
+	}
+	if _, err := newJavaLayout().layoutPlatformStatics(surface); err == nil {
+		t.Fatal("a run past the end of the static table was accepted")
+	}
+}

@@ -3719,6 +3719,177 @@ puts them can be trusted for the ones that are missing. The C library's own
 numbering fails that check — which is why the four above had to be argued from
 their callers — and the WIPI C blocks pass it.
 
+### The fourth round: where a class record says its members are
+
+Five of the eleven titles that were left had the same thing underneath them, and
+it was one word being read from the wrong place.
+
+**A class record's member runs are named by its header, not found at a fixed
+offset from its handle.** The reading this platform had was the shape the first
+records it met happened to have: the field count at `handle+0x0c`, that many
+five-word field records, then the method count, then that many seven-word method
+records. That shape is real and most records have it — but *where each run
+starts* is in the header, at `header+0x3c` for the fields and `header+0x38` for
+the methods, and a class that declares no fields carries a zero field pointer
+and starts its method run where the field count would have been.
+
+The old reading took the first method record's owner word for a field count and
+then walked method records with a field's stride. The walk failed on the second
+member, the whole record was abandoned, and the class came out declaring nothing
+at all. **What a caller then saw was not a parse failure but an empty class**:
+the launcher could find no constructor for a class that has one, a thread class
+declared no `run`, and a title's own methods were invisible to the vtable
+builder. Reading both runs from the header fixes all of it, and it was checked
+against every local module: of the class records in the 94-archive set, the two
+readings agree everywhere except on the twelve records the old one abandoned —
+across eight titles — and there is no record where the old reading succeeded and
+the new one does not. One more record is reached that neither reading had: a
+class whose header carries both a compiler-built dispatch table *and* a method
+run, which the old reader stopped at the pool pointer for.
+
+That one change moved five titles, and what each needed past it was its own.
+What they wanted:
+
+- **A launcher's class name arrives in the source form.** `argv[0]` is a name a
+  person wrote into a descriptor, so a Jlet inside a package arrives as
+  `atdata.JimaeMD` while every class record spells it `atdata/JimaeMD`. A `.` is
+  not a character a class name may contain, so nothing else can be meant.
+- **`Graphics.setFont(Font)` is accepted and changes nothing**, for the same
+  reason `Font.getFont` answers the default face: there is one face here, so the
+  font a title sets is the font it would have drawn with anyway. Refusing it
+  costs the screen the text was on.
+- **`java/lang/String` slot 27 is `substring(int)`** and **`java/io/DataInputStream`
+  slot 32 is `readUTF()`**, both straight out of the declaration order — the
+  first sits immediately before the two-bound `substring` already at 28, and the
+  second is the last non-static method of a run whose `readInt` is already at 28.
+- **`FileSystem.isFile` asks a question this platform cannot answer differently
+  from `exists`.** Nothing here creates a directory, so a name that exists is a
+  file's name.
+
+### A title recolours a picture and does not fix its checksum
+
+One title stopped on a `png: invalid checksum` from a 171-byte picture whose
+every other chunk verified. The pattern behind it is a sprite sheet recoloured at
+run time: the game keeps one encoded picture in a `byte[]`, writes new entries
+over its `PLTE` chunk, and hands the array to `Image.createImage([BII)`. A
+handset's decoder reads the chunk it is given and never checks the CRC-32 beside
+it, so the edit costs nothing there; Go's decoder checks it and refuses the whole
+picture over four bytes the title never meant to be read.
+
+`wipic.DecodeStandard` is where the three platforms' image routers now end, and
+it retries **only after a decode has already failed**, over a PNG whose chunk
+checksums it can recompute. A picture that decodes is decoded with every check
+intact, and damage a checksum is not the whole of stays damage — rewriting a CRC
+does not make a broken deflate stream inflate.
+
+### `System.out` is a static field, and a null one stops the title
+
+A title's own log line is not optional here. The module compiles
+`System.out.println(x)` into a null test, a throw, and a vtable dispatch, so a
+`System.out` that is null does not skip the print: it raises the title's own
+`NullPointerException` inside whatever routine happened to be logging. One local
+title reaches its first `println` from its Jlet's constructor and stopped there,
+having just built the string `INFO! (...)` that says what it was about to say.
+
+Three things had to be true before that call could be served.
+
+- **A static field is a position in its own class's storage, not a table
+  index.** The module compiles a read of one as
+  `classObject.data[javaClassDataWords + answer]`, where `answer` is the
+  int16 this platform writes into the load call's static-field out array. It
+  used to be answered with the entry's own global index, which is right only
+  while the whole module declares one static field and reads past the end of a
+  class object's block as soon as it declares two.
+- **A platform class's class object has to be long enough to hold them.** The
+  block was sized from the module's own record, which a platform class does not
+  have, so the guest's read of `System.out` landed past what the arena handed
+  out. It is sized from the load call's static-field run now, which is the same
+  number the slot above is counted in.
+- **`java/io/PrintStream`'s slots come from the declaration order**, and this
+  one is confirmed by its call site rather than assumed: `OutputStream` declares
+  five methods and takes 10 to 14; `PrintStream` overrides four of them and adds
+  `checkError`, `setError`, nine `print` forms and ten `println` forms in that
+  order, which puts `println(String)` at 34 — the slot the title dispatches with
+  a String in its second register. **`setError` is why it is 34 and not 33**: it
+  is protected rather than public and takes a slot all the same.
+
+Where the line goes is where the guest's other account of itself goes: the debug
+log, beside `printk`. There is no console for a browser page to print into.
+
+### A word that looks like a pixel operation and is not one
+
+One title stops inside what this platform ran as its pixel operation, faulting
+on a read of `0x98` — a small offset from a null base. `readContextPixelOp`
+already refuses a field that is not a Thumb address inside the module, and this
+word passes that test: it is `0xf81f`, which is real code in the title's own
+image.
+
+**It is not a pixel operation.** Disassembled, `0xf81e` is the middle of a large
+routine — it uses `r7` as a structure base, indexes it with byte offsets, and
+calls out through a literal pool. A pixel operation is three or four
+instructions over three registers. What is in the context's operation word is
+whatever the title left there, and the test that address is inside the module
+cannot tell that apart from an operation, because a leftover return address is
+also inside the module.
+
+What would tell them apart is knowing whether the title ever installed one:
+`MC_grpSetContext` names the field it is setting, so a context that has never
+been given field 5 has no operation whatever its word holds. That is not what is
+done here yet — the context is the game's own structure and this platform reads
+it fresh on every call, so there is nowhere a "was it set" would live that a
+title could not defeat by building the structure itself. The title stays on the
+list with what the probe found written down.
+
+### A `strlen` is not a name
+
+One title read an eight-kilobyte text resource into a `calloc` of exactly its
+size and called `strlen` on it. The file has no zero byte anywhere in it, so what
+a handset answers is the distance to the first zero *after* the buffer — in the
+heap, past the allocation — and the title starts from there.
+
+This platform refused it, because `strlen` was reading a guest string with the
+bound that belongs to a name: 4096 bytes, past which a pointer is not a name at
+all. A name and a buffer are different questions. `strlen` measures now, with a
+bound of a megabyte and no string built, and the scan runs past the allocation
+the way C's does and stops at the zero the arena left there.
+
+**A block at a time is not what C reads, and the acceptance probe is what said
+so.** Measuring in 256-byte blocks made the common case fast and broke the
+commonest argument there is: a name a title built on its own stack, which sits
+in the last page of the stack mapping with a terminator a few bytes in. Reading
+a whole block from there runs off the end of what is mapped, and the walk
+refused a string it should have measured in four bytes. It falls back to one
+byte at a time as soon as a block does not read, so only a byte that is not
+mapped is a pointer that was never a string. Every local archive booted before
+the change and after it; the one that did not was the block read, and it is
+`TestLocalLGTArchivesBootAndPaint` that named it.
+
+### What the fourth round moved, measured against itself
+
+The whole 94-archive set was run twice — once on the binary before any of this
+and once on the binary after — from an empty save tree, three thousand ticks
+each, six at a time under a three-hundred-second wall clock.
+
+**Four titles moved from an error to a finished run, and nothing moved the other
+way.** The other 87 rows are identical: the same flush count, the same lit-pixel
+count, the same tick count, on both binaries. One title's flush count differs
+between the two sweeps and it is the title's own noise — running it alone on the
+*unchanged* binary four times gives 941, 942, 943 and 943, which is the same
+spread the third round wrote down.
+
+Seven are left. Two are guest memory faults — the module entry that follows a
+word this platform does not fill in, and the operation word that is not an
+operation. One is the interface function `0x64`. One is the title that now needs
+a `DataInputStream` over a stream of its own. One exceeds the instruction limit,
+one cannot finish three thousand ticks at all, and one finishes every tick and
+paints black. Two more hit the wall clock in the sweep and are not failures: run
+alone, one finishes in 223 seconds and the other finishes inside the limit.
+
+The same A/B was run over the 262-archive set of the other platform, because the
+picture decoder is shared: two titles moved from an error to a first frame, and
+**not one of the 262 rows has a different flush count, lit-pixel count or tick
+count**.
+
 ## Deliberately incomplete
 
 - **LGT Java apps play, and the platform API behind them is partial.** The
@@ -3784,6 +3955,22 @@ their callers — and the WIPI C blocks pass it.
   `a(Lorg/kwis/msp/lcdui/Graphics;)V` in the record. Both came of reading a
   member list without the class hierarchy beside it. What settled it in one run
   was the backtrace under "Where a title is waiting" below.
+- **A title's own `print` goes to the log and nowhere else.** `System.out` and
+  `System.err` are one `PrintStream`, and every `print` and `println` on it
+  renders its argument and writes one debug line — beside `printk`, which is
+  where the C side's account of itself already goes. There is no console for a
+  browser page to print into and no file for a print to reach, and a stream
+  object that answered `write` into bytes nothing reads would be the same thing
+  with more machinery. What a release build does with it is what it does with
+  every other debug line: counts it.
+
+- **Only the two platform statics above are filled in.** A static field this
+  platform owns is storage the module reads straight out of a class object's
+  data block, and the block is sized from the run the load call numbers — so a
+  field nothing here knows about is a zero rather than a fault. That is right
+  for a reference (`null` is a value a title can test) and wrong for a number,
+  and no local title asks for one.
+
 - **No input automaton.** The four input-method calls that describe and select
   a mode are answered as the specification defines them; `MC_imHandleInput`
   composes nothing, so a widget that types through the platform stays empty.

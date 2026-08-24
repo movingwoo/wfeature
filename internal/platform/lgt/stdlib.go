@@ -119,11 +119,14 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		if err != nil {
 			return err
 		}
-		text, err := client.readCString(pointer)
+		// Measured rather than read: what a title calls this on is as often a
+		// buffer it filled as a name, and a buffer has no bound a name's does
+		// anything about. See cStringLength.
+		length, err := client.cStringLength(pointer)
 		if err != nil {
 			return err
 		}
-		return answer(uint32(len(text)))
+		return answer(length)
 
 	case stdlibStrcpy, stdlibStrncpy, stdlibStrcat, stdlibStrncat:
 		return client.stringWrite(thread, slot)
