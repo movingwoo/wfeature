@@ -4199,6 +4199,20 @@ RAR archive, which this emulator does not read". Every loader wraps its zip
 refusal the same way, so a person who drops one in is told which file they
 picked rather than only that it was the wrong one.
 
+**A cause that lives in the archive is not a gap in this emulator, and the
+working list of what to look at next does not carry one.** The RAR and the ALZ
+files are fixed by repackaging them, not here; and one title asks for a sound
+resource its own JAR never shipped — the numbered files run 0 to 12 and then
+skip to 15, and the game opens 13. Neither is something an implementation can
+close, so both are named once, here, and left out of the list of walls. The
+bundle of three episodes is a different case and stays on it: as three archives
+it runs, so what it is waiting for is a Host's decision. **An archive that was
+only half downloaded is the same kind of dead end, and is worth checking for
+rather than assuming**: the descriptor states the size the payload should be.
+A title whose class the module cannot find is *not* that — one here reports its
+main class missing while the compiled module plainly carries the name, which
+makes it this platform's reading rather than the file's contents.
+
 **Eight titles fault in guest memory and four exceed a budget.** The memory
 faults are reads and writes at small absolute addresses — `0x0`, `0x24` and
 `0x48` — which is a null structure pointer being walked rather than a mapping
@@ -4215,6 +4229,21 @@ than a title that stopped: a screen that goes blank after a load is worth
 reading the guest's own printk for before anything else. What the other five are
 waiting for has not been established — one of them never paints a frame at all,
 through both runs and the key script — and a denser key sweep is the next step.
+
+**Two titles stop on WIPI C database function 8, and what its call site sets is
+worth writing down before the next pass reads it.** The site puts a pointer to
+the database's own name in the first register and a literal `1` in the second,
+sets nothing else, and the value it gets back flows straight into the call after
+it as that call's first argument. The stream table's `0`, `4`, `10`, `11` and
+`12` sit exactly where the specification's own list of `MC_db*` puts open,
+select, the record count, the record size and the database list — but `1`, `2`,
+`3` and `6` are this vendor's stream extension and do not, **so the
+specification cannot be used to read `8` off the position alone**. Answering it
+with a plain zero carries one of the two titles to its first frame, which says
+the caller treats zero as success and is a probe rather than a fix: an answer
+this platform has not established is exactly the wrong-slot-answers-silently
+shape. The error now names the address it was called from, for the same reason
+the unimplemented-table error does.
 
 **Thirteen titles are far slower than the handset was, and three do not finish
 four hundred ticks.** Seven of the thirteen are this platform's: four hundred

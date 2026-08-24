@@ -3482,19 +3482,9 @@ seven minutes. **A row the harness cut is a row nobody measured**, and counting
 those as failures is how a list of what is broken starts including what is
 merely slow.
 
-**One slot was left unimplemented on purpose.** A `java/util/Calendar` vtable
-slot 29 is dispatched with a `Date` argument by one title, and the numbering
-puts this class's own run at 10 to 21 — `getTime`, `setTime`, `getTimeInMillis`,
-`setTimeInMillis`, `get`, `set`, `before`, `after`, `setTimeZone`, `getTimeZone`,
-and the two abstract ones the specification ends the class with — with `get` at
-14 and `getTimeZone` at 19 both already confirmed by their own call sites. 29 is
-eight past the end of that run, so either the module was compiled against a
-fuller Calendar than the specification's or the run does not end where it
-appears to, and neither is settled by anything read so far.
-`setTime` is what a title does with a `Date` it has just built, and that is
-exactly why it is not implemented here: it is the plausible answer, not the
-evidenced one, and a wrong slot answers silently. It stops with its class and
-number, which is where the next pass starts.
+**One slot was left unimplemented on purpose, and the next pass answered it.**
+See "The declaration order is the class library's, not the listing's" below for
+what settled it and for the rule the rest of that pass rests on.
 
 **Seven stop on a platform slot with no implementation.** Four are stdlib —
 `0x3f9`, `0x426`, and `0x404` twice — and three are WIPI-C: `0x6f`, `0x19f` and
@@ -3524,6 +3514,122 @@ seconds for four hundred ticks, and **two do not finish four hundred ticks at
 all**: one is killed after five minutes and one
 ends on the three-billion-instruction budget inside `startClet` after four
 minutes.
+
+### The declaration order is the class library's, not the listing's
+
+The rule in `java_api.go` — a class's own methods take the vtable slots from 10
+upward, an override keeps its superclass's slot — was read off slots settled one
+at a time from call sites, and it left one question open: **in what order?** The
+specification's per-class pages list methods alphabetically, and that order does
+not fit a single anchor. The CLDC pages of the same site print each class a
+second time in **declaration order**, and that one fits every anchor there is,
+across six classes at once:
+
+- `java/util/Vector` — `copyInto`, `trimToSize`, `ensureCapacity`, `setSize`,
+  `capacity`, `size`, `isEmpty`, `elements`, `contains`, the two `indexOf`, the
+  two `lastIndexOf`, `elementAt`, `firstElement`, `lastElement`,
+  `setElementAt`, `removeElementAt`, `insertElementAt`, `addElement`,
+  `removeElement`, `removeAllElements` — puts `size` at 15, `contains` at 18,
+  `indexOf` at 19, `elementAt` at 23, `firstElement` at 24, `removeElementAt`
+  at 27, `insertElementAt` at 28 and `addElement` at 29. **Every one of those
+  eight was already settled from its own call site**, and none of them was
+  placed by this order; they are what the order is checked against.
+- `java/lang/String` fits the same way at 11, 14, 16, 19, 26, 28, 29, 33 and 34,
+  `java/io/DataInputStream` at 20, 23, 25 and 28, `java/io/InputStream` at 10 to
+  15, `java/lang/Object` at 1 and 5, and `java/lang/Thread` at 10.
+- **`toString` is why a run can end higher than its method count.** It overrides
+  Object's, so it takes Object's slot rather than one of its own, and Vector's
+  twenty-three declared methods therefore end at 31 rather than 32. That is what
+  puts `java/util/Stack`'s own five — `push`, `pop`, `peek`, `empty`, `search` —
+  at 32 upward, which is where a local title dispatches its push and its pop.
+
+With the order settled, a slot with one anchor stops being a guess and becomes
+arithmetic that the call site then confirms. Nine slots went in that way and
+every one of them was checked against what its own site passes and does with the
+answer: `Thread.setPriority(int)` at 14 (called on `currentThread()` with a
+literal ten, answer dropped — and the only method this class declares that takes
+an argument at all), `Object.wait()` at 9 and `wait(long)` at 7 (dispatched on
+the object the instruction before took the lock of), `Vector.isEmpty` at 16 and
+`removeAllElements` at 31, `String.indexOf(int)` at 21 and `indexOf(int, int)`
+at 22 (the character its site looks for is `U+3000`, the ideographic space),
+`DataInputStream.readFully([B)` at 19, `readBoolean` at 22, `readUnsignedByte`
+at 24 and `readChar` at 27, and `InputStreamReader.read(char[])` at 11 with
+`close` at 18.
+
+**One slot disagrees with the rule, and the site wins.** `java/util/Calendar`
+slot 29 is dispatched with a `Date` by one title, three instructions after that
+title called `Calendar.getInstance()` and built the `Date` — and `setTime` is
+the only method this class declares that takes one. The numbering puts `setTime`
+at 11, eight short of the end of a run that ends at 21, so either that module was
+compiled against a fuller Calendar than the one every other slot here was read
+off or the run does not start where it appears to. Nothing read so far says
+which. It is implemented as `setTime` because the site leaves no second reading,
+and the disagreement is written here rather than smoothed over: a rule that is
+never allowed to be wrong is not evidence.
+
+### What that pass moved, and what it cost
+
+Six titles that stopped now run their three thousand ticks without an error,
+and **five of them draw their own screen** — four with the frame changing under
+them, and one that holds its "press any key" notice and reaches its title
+screen when a key script gives it one. The sixth finishes every tick and paints
+black, which is a different thing from a title that stops and is written down
+below. What the six wanted beyond the slots above:
+
+- **`Display.callSerially(Runnable)`** is how one title hands over its whole
+  game: the last thing its `startApp` does is ask for a Runnable to be called.
+  It is queued and run at the top of the next tick — after the events, before
+  the frame — rather than from inside the call, because running it there would
+  leave start-up on the stack underneath the game loop for the rest of the
+  session. See `ServiceJavaSerialCalls` in `java_frame.go`.
+- **`Object.wait` has to give the lock back.** There is no wait queue here and
+  the language does not need one — a wait may return unnotified and every
+  correct caller re-tests its condition — so this is one turn handed over. What
+  it must not do is keep the monitor: a wait that held it would stop the very
+  thread that changes the condition from entering the body that changes it. The
+  whole depth is released and the same depth retaken, because a `synchronized`
+  method that calls another on the same object waits from inside two.
+- **`closeDataBase` on a database that is already closed is ignored**, which
+  the specification says in as many words. One title closes at the end of its
+  save and again on the way out of the routine that called it. The object stays
+  in the table marked closed rather than being dropped, so a second close is
+  told apart from a call on an object this platform never issued — which is
+  still a stop, because that means the title is holding something else.
+- **`Graphics.getFont`, `reset`, `clipRect` and `setPixel`.** `reset` is not in
+  the specification's listing and does not need to be: it is the same call the
+  titles on this project's two other platforms make of the one Graphics they
+  keep, and it means the same thing here. `clipRect` can only ever narrow, so
+  its intersection starts from the surface's own bounds when no clip has been
+  set.
+- **`java/io/InputStreamReader` and `java/io/ByteArrayInputStream`** are both
+  wrappers in the sense this platform already had one: they stand for the stream
+  underneath rather than holding a second copy of it, so a read through either
+  moves the one cursor. The reader decodes with the handset's own encoding, and
+  its cursor stays in **bytes** — it takes one character's worth at a time
+  rather than decoding the rest of the stream and guessing how far that got.
+- **Two interface functions turned out to be a pair.** `0xfd` takes four
+  registers where the reference store beside it takes three, and the extra one
+  is the high half of a long: its site clears a `long[]` in a loop. `0x5b` is
+  the load that goes with it — an array and an index, the answer in the register
+  pair a long comes back in — and its site is the whole body of a one-line
+  accessor, so what it answers is what the method answers.
+
+**What is still in front of those two.** One title now reaches an interface
+function `0x64` this platform has never seen: it takes an object and a second
+reference read out of what the call before it answered, and gives back something
+whose word at `+4` the caller tests before choosing between the original object
+and null. That is the shape of a type test, but the shape is all there is so
+far, and `0x12` is already the type check with two arguments.
+
+**And one finishes every tick with nothing on the screen.** It flushes three
+thousand frames and every one of them is the same black, while the log says it
+is drawing: a hundred and twenty-eight `drawImage`, two hundred and six
+`drawLine` and five `fillRoundRect` land on the screen Graphics, and its Card is
+its own Runnable — it hands itself back to `callSerially` every frame. Turning
+`clipRect` into a no-op changes nothing, so the clip is not what is swallowing
+them. **A title that finishes its ticks is not a title that works**, and
+counting this one as answered because it stopped failing is the mistake this
+sweep's own rule about cut rows exists to prevent.
 
 ## Deliberately incomplete
 

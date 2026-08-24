@@ -207,6 +207,13 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 	if err := client.PaintClet(ctx); err != nil {
 		return span, err
 	}
+	// Work a Java title asked the platform to do for it comes after the
+	// events, which is where the specification puts it, and before the
+	// threads: what it starts is meant to run in the frame it was asked for.
+	// See java_frame.go.
+	if err := client.ServiceJavaSerialCalls(ctx); err != nil {
+		return span, err
+	}
 	// A Java title's own threads run before its frame is drawn: that is where
 	// its work is done, and painting after it is what shows the result of this
 	// tick rather than the last one. See java_thread.go.

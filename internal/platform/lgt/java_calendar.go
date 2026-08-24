@@ -166,3 +166,21 @@ func javaTimeZoneOffset(
 	_, seconds := time.UnixMilli(client.clock.unixMillis()).Zone()
 	return uint32(int32(seconds) * 1000), nil
 }
+
+// javaCalendarSetTime is `Calendar.setTime(Date)`: the calendar is moved to the
+// instant the Date stands for, and every component read off it afterwards is
+// read from there.
+func javaCalendarSetTime(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	if _, ok := runtime.calendars[arguments[0]]; !ok {
+		return 0, fmt.Errorf("the object at %#x is not a calendar this platform built", arguments[0])
+	}
+	millis, ok := runtime.dates[arguments[1]]
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a date this platform built", arguments[1])
+	}
+	runtime.calendars[arguments[0]] = millis
+	return 0, nil
+}

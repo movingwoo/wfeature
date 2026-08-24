@@ -30,9 +30,10 @@ type javaStream struct {
 }
 
 const (
-	javaInputStreamClass     = "java/io/InputStream"
-	javaDataInputStreamClass = "java/io/DataInputStream"
-	javaImageClass           = "org/kwis/msp/lcdui/Image"
+	javaInputStreamClass       = "java/io/InputStream"
+	javaDataInputStreamClass   = "java/io/DataInputStream"
+	javaInputStreamReaderClass = "java/io/InputStreamReader"
+	javaImageClass             = "org/kwis/msp/lcdui/Image"
 )
 
 // openJavaResourceStream is `Class.getResourceAsStream(String)`. The receiver
@@ -650,4 +651,128 @@ func modifiedUTF8(text string) []byte {
 		}
 	}
 	return encoded
+}
+
+// javaByteStreamConstructor is `ByteArrayInputStream([B)`: a stream whose
+// content is the array it was handed. The bytes are copied rather than read
+// back out of the array on demand, because the specification's stream reads
+// the array as it was when the stream was built and a title is free to reuse
+// the buffer.
+func javaByteStreamConstructor(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	held := make([]byte, len(data))
+	copy(held, data)
+	client.javaRuntimeState().streams[arguments[0]] = &javaStream{
+		Name: fmt.Sprintf("a byte array of %d", len(held)), Data: held}
+	return 0, nil
+}
+
+// javaStreamReadBoolean is `DataInputStream.readBoolean()`, slot 22: one byte,
+// false when it is zero and true otherwise, which is what the specification
+// defines and the byte `writeBoolean` wrote.
+func javaStreamReadBoolean(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read >= len(stream.Data) {
+		return 0, fmt.Errorf("the stream of %s ended before a boolean", stream.Name)
+	}
+	value := stream.Data[stream.Read]
+	stream.Read++
+	if value == 0 {
+		return 0, nil
+	}
+	return 1, nil
+}
+
+// javaReaderRead is `InputStreamReader.read(char[])`: as many characters as
+// the array holds, decoded from the stream the reader was built on, answering
+// how many were read and -1 when the stream had already ended.
+//
+// **The cursor stays in bytes**, because that is what the stream underneath
+// counts, so the loop takes one character's worth of bytes at a time rather
+// than decoding the rest of the stream and guessing how far that got. A
+// character is two bytes when its first one is a lead byte and there is a
+// second to go with it, and one otherwise — the shape of the handset's own
+// encoding.
+func javaReaderRead(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	width, err := client.javaArrayElementBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	if width != 2 {
+		return 0, fmt.Errorf("a reader fills a char array, not one of %d-byte elements", width)
+	}
+	block, length, err := client.javaArrayBlock(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read >= len(stream.Data) {
+		return ^uint32(0), nil
+	}
+	written := uint32(0)
+	for written < length && stream.Read < len(stream.Data) {
+		step := 1
+		if stream.Data[stream.Read] >= 0x81 && stream.Read+1 < len(stream.Data) {
+			step = 2
+		}
+		symbols := []rune(decodeEUCKR(stream.Data[stream.Read : stream.Read+step]))
+		if written+uint32(len(symbols)) > length {
+			break
+		}
+		for _, symbol := range symbols {
+			at := block + javaArrayLengthWords*4 + written*2
+			if err := client.writeHalfword(at, uint16(symbol)); err != nil {
+				return 0, err
+			}
+			written++
+		}
+		stream.Read += step
+	}
+	return written, nil
+}
+
+// javaStreamReadChar is `DataInputStream.readChar()`, slot 27: the same two
+// big-endian bytes `readShort` takes, kept unsigned.
+func javaStreamReadChar(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	value, err := javaStreamReadShort(client, context.Background(), thread, arguments)
+	if err != nil {
+		return 0, err
+	}
+	return value & 0xffff, nil
+}
+
+// javaStreamReadUnsignedByte is `DataInputStream.readUnsignedByte()`, slot 24:
+// the byte `readByte` reads, as 0 to 255. The end of the stream is reported
+// rather than answered with -1, because 255 values are already spoken for.
+func javaStreamReadUnsignedByte(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read >= len(stream.Data) {
+		return 0, fmt.Errorf("readUnsignedByte past the end of %q, at %d of %d",
+			stream.Name, stream.Read, len(stream.Data))
+	}
+	value := uint32(stream.Data[stream.Read])
+	stream.Read++
+	return value, nil
 }

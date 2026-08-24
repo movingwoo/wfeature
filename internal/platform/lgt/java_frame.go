@@ -231,3 +231,52 @@ func javaDockedCard(
 ) (uint32, error) {
 	return client.javaRuntimeState().card, nil
 }
+
+// javaCallSerially is `Display.callSerially(Runnable)`: the specification's
+// own wording is that the platform calls the object's `run` once the events it
+// is holding have been dealt with, which is the next tick here.
+//
+// **It is not run from inside the call.** One local title hands its whole game
+// over this way — the last thing `startApp` does is ask for a Runnable to be
+// called — and running it there would leave the application's start-up on the
+// stack underneath its game loop for the rest of the session. Queuing it costs
+// one tick and puts the run where the specification says it happens: after the
+// events, before the frame those events and this run produced.
+func javaCallSerially(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	runnable := arguments[1]
+	if runnable == 0 {
+		return 0, fmt.Errorf("callSerially with no runnable")
+	}
+	runtime := client.javaRuntimeState()
+	if len(runtime.serial) >= maxJavaSerialCalls {
+		return 0, fmt.Errorf("%d serial calls are already waiting", len(runtime.serial))
+	}
+	runtime.serial = append(runtime.serial, runnable)
+	return 0, nil
+}
+
+// maxJavaSerialCalls bounds the queue. A title asks for one or two of these
+// between frames; a title that has asked for thousands is looping into the
+// call rather than using it.
+const maxJavaSerialCalls = 256
+
+// ServiceJavaSerialCalls runs what `callSerially` has been handed, in the order
+// it was handed over, on the platform's own thread. A run that queues another
+// call leaves it for the next tick rather than extending this one, so a title
+// that re-arms itself every frame — which is what the local one does — cannot
+// hold the tick.
+func (client *Client) ServiceJavaSerialCalls(ctx context.Context) error {
+	if client.javaRun == nil || len(client.javaRun.serial) == 0 {
+		return nil
+	}
+	due := client.javaRun.serial
+	client.javaRun.serial = nil
+	for _, runnable := range due {
+		if err := client.callJavaRunnable(ctx, client.thread, runnable); err != nil {
+			return err
+		}
+	}
+	return nil
+}

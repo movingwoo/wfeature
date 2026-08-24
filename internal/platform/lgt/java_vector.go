@@ -161,3 +161,51 @@ func javaVectorInsertAt(
 	client.javaRuntimeState().vectors[arguments[0]] = grown
 	return 0, nil
 }
+
+// javaVectorEmpty is `isEmpty()`, slot 16: whether the list holds nothing.
+func javaVectorEmpty(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(held) == 0 {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+// javaStackClass is the list reached from one end; see javaPlatformSupers for
+// why its own methods sit above Vector's.
+const javaStackClass = "java/util/Stack"
+
+// javaStackPush is `Stack.push(Object)`, slot 32: the element goes on the end,
+// which is the top, and the call answers what it was handed.
+func javaStackPush(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := javaVectorAdd(client, ctx, thread, arguments); err != nil {
+		return 0, err
+	}
+	return arguments[1], nil
+}
+
+// javaStackPop is `Stack.pop()`, slot 33: the element `push` put on last comes
+// off, which is the end of the list underneath. An empty stack is a failure the
+// language names, and it is reported here rather than answered with null — a
+// null would be dispatched on by the caller and fail somewhere else.
+func javaStackPop(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(held) == 0 {
+		return 0, fmt.Errorf("pop from an empty stack at %#x", arguments[0])
+	}
+	top := held[len(held)-1]
+	client.javaRuntimeState().vectors[arguments[0]] = held[:len(held)-1]
+	return top, nil
+}
