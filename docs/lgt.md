@@ -2399,8 +2399,8 @@ Laid side by side they spell a rule:
 Nothing in the specification says so — the specification's listings are
 alphabetical, which is a *different* order and produces different numbers for
 `StringBuffer` and `Vector` than the ones the call sites gave. What says it is
-that twenty-two independently-settled slots land on it exactly, across seven
-classes and two inheritance chains, six of them in one consecutive run:
+that thirty-four independently-settled slots land on it exactly, across eleven
+classes and three inheritance chains, six of them in one consecutive run:
 
 - `Object` 1/4/5 — `getClass`, `toString`, `notify` at declaration positions 1,
   4 and 5, which is what puts a subclass's first own method at 10;
@@ -2416,6 +2416,28 @@ classes and two inheritance chains, six of them in one consecutive run:
   `Object` takes") and is simply the first own slot;
 - `Vector` 15/29 — fourteen apart, which is exactly what this class's
   declaration order puts between `size` and `addElement`.
+
+A later pass added twelve more without a contradiction, which is what turned the
+rule from a summary of the rows above into something to place a slot *with*.
+Four filled the gaps of runs already anchored at both ends — `String` 11, 14,
+16, 19, 26 and 29, `StringBuffer` 17 and 27, `Vector` 28, `DataInputStream` 20,
+23 and 28 — and three opened runs of classes this platform had nothing of:
+`Calendar` 14 and 19, `ByteArrayOutputStream` 15, 16 and 17, and
+`DataOutputStream`'s ten writes from 15. Every one of them was then checked
+against what its own call site passes, and every one agreed: the `indexOf`
+caller passes a zero where a `fromIndex` goes, the `delete` caller passes a zero
+and a length, the `insertElementAt` caller passes a zero index, the
+`readFully` caller passes an array and the count it has just read, the
+`append(Object)` caller passes the exception it has just caught, and the
+`setSeed` caller passes sixty-four bits in two registers where every other
+method on its class takes none.
+
+`ByteArrayOutputStream` is worth one more line, because it shows the rule
+covering a class through a parent it never calls: the three writes it inherits
+from `OutputStream` land on 10, 11 and 12 and its own `reset`, `toByteArray` and
+`size` follow `OutputStream`'s five at 15, 16 and 17. A title writes a record
+with the first three and takes it away with the second three, and both halves
+were placed before either was seen.
 
 What it is for: **a call site plus the rule is a settled slot, where a call site
 alone often is not.** `Vector` 19 sat unimplemented for a pass because
@@ -3397,6 +3419,82 @@ What the fifteen ask for now is a longer tail rather than one wall:
 and `java/util/Vector` vtable slots — 11, 19 and 26 on String, 28 on Vector —
 that no call site has been read for yet. Two of the fifteen are past the
 platform entirely: one reaches its own `paint`, and one reaches the tick loop.
+
+### Answering that tail, and what a tail looks like when it is being answered
+
+The tail was worked through in one pass, and the shape of the pass is the thing
+worth keeping. **A title that stops on a missing member does not stop once.** It
+stops, is answered, and stops again a few hundred instructions later on the next
+member of the same shape — a title reading its own save file wants `readFully`,
+then `readByte`, then `readInt`, then the sink and the stream that wrap them —
+so the unit of work is a class's run rather than a slot. **Five of them now run
+three thousand ticks without an error, from none before, and six more moved to
+a wall further in** — and each of those six walls is a slot with a name rather
+than a class with none, which is the difference between a title that is stuck
+and a title that is being worked on. The remaining five are unchanged: three
+never had a member missing at all — two the launcher cannot start, one whose
+thread class declares no `run` — and two ask for something this pass did not
+reach.
+
+What went in, all of it placed by the numbering rule above and then checked
+against its call site:
+
+- **`java/lang/String` 11, 14, 16, 19, 26 and 29** — `charAt`, `getBytes()`,
+  `compareTo`, `startsWith(String)`, `indexOf(String, int)` and `concat`.
+  `getBytes` is written against the encoding the String constructor already
+  decodes with, so the pair is one round trip on a handset whose default
+  encoding is not UTF-8.
+- **`java/lang/StringBuffer` 17 and 27** — `append(Object)` and `delete`. The
+  first has no `toString` to call on a guest object and says so: it names the
+  object by its class, which is what the one shape reaching it locally — an
+  exception being written into a line — is for.
+- **`java/util/Vector` 28 and `java/util/Stack`** — `insertElementAt`, and a
+  Stack related to Vector so that its own four methods reach Vector's slots.
+- **`java/io/DataInputStream` 20, 23 and 28** — `readFully([BII)`, `readByte`
+  and `readInt`. `readFully` differs from the `read([BII)` beside it in exactly
+  one way that matters to a caller: it fills the array or reports, where the
+  other answers a short count and leaves a loop to the caller.
+- **`java/io/ByteArrayOutputStream` and `java/io/DataOutputStream`** — the sink
+  a title builds a record in, and the numbers written into it. A wrapper is not
+  a second sink: it holds the handle of the one it was built on, so writing
+  through it and reading the sink's own bytes back agree. `writeUTF` is written
+  against the read side's `readUTF` for the same reason `getBytes` is.
+- **`java/util/Calendar`, `java/util/Date` and `java/util/TimeZone`** — the date
+  a title shows, read off the same clock every other call on this platform
+  reads. A calendar breaks that instant into the components `get(int)` names;
+  there is one zone here, so every calendar answers the same one.
+- **`java/util/Random.<init>(J)` and slot 10** — a generator seeded by hand,
+  which is a title asking for a run it can repeat.
+- **`org/kwis/msp/io/FileSystem.available()` and the two-argument `exists`** —
+  how much room is left, and the form that names which directory to look in.
+  A title here has one directory, so the flag chooses nothing.
+
+Driving the whole set again from a fresh save, against the binary before this
+pass and the one after it, is what says none of that cost anything elsewhere:
+five titles that stopped now finish their three thousand ticks, six moved on,
+and **nothing that finished before stopped**. A sweep that cuts a slow title
+has to cut it the same way in both runs or its slowest rows are noise — and
+even then the cut rows are not results. Of the five this one cut, three finish
+their three thousand ticks when run on their own, in seventy-nine, a hundred
+and eight and two hundred and twenty-one seconds; one reaches the instruction
+budget only when it is given long enough to; and one is still running after
+seven minutes. **A row the harness cut is a row nobody measured**, and counting
+those as failures is how a list of what is broken starts including what is
+merely slow.
+
+**One slot was left unimplemented on purpose.** A `java/util/Calendar` vtable
+slot 29 is dispatched with a `Date` argument by one title, and the numbering
+puts this class's own run at 10 to 21 — `getTime`, `setTime`, `getTimeInMillis`,
+`setTimeInMillis`, `get`, `set`, `before`, `after`, `setTimeZone`, `getTimeZone`,
+and the two abstract ones the specification ends the class with — with `get` at
+14 and `getTimeZone` at 19 both already confirmed by their own call sites. 29 is
+eight past the end of that run, so either the module was compiled against a
+fuller Calendar than the specification's or the run does not end where it
+appears to, and neither is settled by anything read so far.
+`setTime` is what a title does with a `Date` it has just built, and that is
+exactly why it is not implemented here: it is the plausible answer, not the
+evidenced one, and a wrong slot answers silently. It stops with its class and
+number, which is where the next pass starts.
 
 **Seven stop on a platform slot with no implementation.** Four are stdlib —
 `0x3f9`, `0x426`, and `0x404` twice — and three are WIPI-C: `0x6f`, `0x19f` and

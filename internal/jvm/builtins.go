@@ -454,6 +454,28 @@ func (vm *VM) registerUtilityBuiltins() {
 	vm.builtin("java/util/Calendar", "getInstance", "()Ljava/util/Calendar;", func(vm *VM, _ []Value) (Value, error) {
 		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: time.UnixMilli(vm.nowMilliseconds())}}), nil
 	})
+	// The zone form is how a title that stores a stamp reads it back somewhere
+	// other than where the handset stands — a daily reset at GMT midnight, a
+	// scheduled event. The instant is the same one the no-argument form
+	// answers; what the zone decides is which fields get(I) breaks it into,
+	// and Calendar.set already carries a calendar's location forward, so
+	// choosing it here is the whole of it.
+	vm.builtin("java/util/Calendar", "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", func(vm *VM, arguments []Value) (Value, error) {
+		zone, err := arguments[0].Reference()
+		if err != nil {
+			return VoidValue(), err
+		}
+		if zone == nil {
+			return VoidValue(), guestException("java/lang/NullPointerException", "Calendar.getInstance zone")
+		}
+		data, ok := zone.Native.(*timeZoneData)
+		if !ok {
+			return VoidValue(), fmt.Errorf("argument is not a TimeZone")
+		}
+		instant := time.UnixMilli(vm.nowMilliseconds())
+		instant = instant.In(timeZoneLocation(data, instant))
+		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: instant}}), nil
+	})
 	vm.builtin("java/util/Calendar", "get", "(I)I", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
@@ -649,7 +671,10 @@ func (vm *VM) registerUtilityBuiltins() {
 		if !ok {
 			return VoidValue(), fmt.Errorf("argument is not a Date")
 		}
-		calendar.time = time.UnixMilli(milliseconds)
+		// The zone the calendar was made in outlives the instant in it: a
+		// title that asked for GMT and then set a stored date still means
+		// GMT when it reads the fields back.
+		calendar.time = time.UnixMilli(milliseconds).In(calendar.time.Location())
 		return VoidValue(), nil
 	})
 	vm.builtin("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;", func(_ *VM, _ []Value) (Value, error) {
@@ -1684,6 +1709,22 @@ func (vm *VM) guestTimeZone() *timeZoneData {
 		id:     fmt.Sprintf("GMT%s%02d:%02d", sign, minutes/60, minutes%60),
 		offset: int32(seconds) * 1000,
 	}
+}
+
+// timeZoneLocation is the zone a calendar breaks an instant into fields with.
+// The two zones this runtime has are GMT and the guest clock's own, and the
+// second is time.Local at the instant being read — guestTimeZone reads its
+// offset off that clock — so naming it rather than rebuilding it keeps a
+// calendar made from the default zone identical to one made without a zone at
+// all, daylight saving included.
+func timeZoneLocation(data *timeZoneData, instant time.Time) *time.Location {
+	if data == nil || data.offset == 0 {
+		return time.UTC
+	}
+	if _, seconds := instant.Zone(); int32(seconds)*1000 == data.offset {
+		return time.Local
+	}
+	return time.FixedZone(data.id, int(data.offset/1000))
 }
 
 func newTimeZoneObject(data *timeZoneData) Value {

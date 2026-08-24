@@ -29,6 +29,10 @@ func fixedValueImplementations() map[uintptr]string {
 		implementationIdentity(runtimeComponentNoop):  "noop",
 		implementationIdentity(runtimeBackLightNoop):  "noop",
 		implementationIdentity(runtimeNetworkConnect): "refuse",
+		// doModal consults the dialog's type and nothing else, and the answer
+		// it gives is one a person would have given. That makes it the kind of
+		// stub this inventory exists for even though it is not a constant.
+		implementationIdentity(runtimeDialogDoModal): "dialog",
 	}
 }
 

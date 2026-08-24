@@ -108,3 +108,73 @@ func TestCardDoesNotPublishIntoASubclassThatUsesTheBlock(t *testing.T) {
 		t.Fatal("a Card does not reserve its own block")
 	}
 }
+
+// A title reads `buf` off a byte sink rather than calling toByteArray, so a
+// write has to leave the guest array's address in the payload the guest reads.
+func TestByteSinkPublishesItsBuffer(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	classAddress, err := runtime.ensureJavaClass(jvm.ByteArrayOutputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, object, err := runtime.allocateAOTInstance(classAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.JVM().InvokeSpecial(object, jvm.ByteArrayOutputStreamClass, "<init>", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	write := runtimeJavaMethod{class: jvm.ByteArrayOutputStreamClass, name: "write", descriptor: "(I)V"}
+	if err := runtime.publishGuestFields(object, write); err != nil {
+		t.Fatal(err)
+	}
+	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := client.JVM().Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := client.JVM().AOTAddress(buffer)
+	if !ok {
+		t.Fatal("the buffer was not bound to guest memory")
+	}
+	if words[0] != bound {
+		t.Fatalf("published buf = %#x, want the bound array at %#x", words[0], bound)
+	}
+
+	// A write that grows the array puts a different one behind the field, and
+	// the payload has to follow it there.
+	for index := 0; index < 200; index++ {
+		if _, err := client.JVM().InvokeVirtual(object, "write", "(I)V", jvm.IntValue(int32(index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runtime.publishGuestFields(object, write); err != nil {
+		t.Fatal(err)
+	}
+	grown, err := client.JVM().Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := grown.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, ok := client.JVM().AOTAddress(after)
+	if !ok {
+		t.Fatal("the grown buffer was not bound to guest memory")
+	}
+	words, err = runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if words[0] != moved {
+		t.Fatalf("published buf after growth = %#x, want %#x", words[0], moved)
+	}
+}

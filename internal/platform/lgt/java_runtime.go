@@ -101,7 +101,18 @@ type javaRuntime struct {
 	mainThread uint32
 	// vectors is what each java/util/Vector holds; see java_vector.go, and
 	// databases the record stores a title has open; see java_database.go.
-	vectors        map[uint32][]uint32
+	vectors map[uint32][]uint32
+	// calendars is the instant each java/util/Calendar stands for, and sinks
+	// what each java/io/ByteArrayOutputStream has been written; see
+	// java_calendar.go and java_stream.go.
+	calendars map[uint32]int64
+	sinks     map[uint32][]byte
+	// wrapped is what a java/io/DataOutputStream writes through to: the sink
+	// object it was built on. A wrapper stands for the same open sink, so it
+	// holds the other object's handle rather than a second block of bytes.
+	wrapped map[uint32]uint32
+	// dates is the instant each java/util/Date stands for.
+	dates          map[uint32]int64
 	databases      map[uint32]*javaDatabase
 	workers        []*javaWorker
 	threadStacks   int
@@ -133,6 +144,10 @@ func newJavaRuntime() *javaRuntime {
 		threads:    map[uint32]*javaThread{},
 		monitors:   map[uint32]*javaMonitor{},
 		vectors:    map[uint32][]uint32{},
+		calendars:  map[uint32]int64{},
+		sinks:      map[uint32][]byte{},
+		wrapped:    map[uint32]uint32{},
+		dates:      map[uint32]int64{},
 		databases:  map[uint32]*javaDatabase{},
 	}
 }

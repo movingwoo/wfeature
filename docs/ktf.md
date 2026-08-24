@@ -773,10 +773,14 @@ whole.
 Most of what a runtime-owned class holds never reaches guest memory: the guest
 asks for it through a method call and the Go side answers. A **published**
 instance field is the exception — a field the class declares in its KTF
-metadata, at an offset guest code compiles into a load. `java/lang/String` is
-the only class that publishes any, because the client's own helpers read a
-string's characters through `value`, `offset` and `count` rather than calling
-`charAt`.
+metadata, at an offset guest code compiles into a load. Three classes publish
+any, and each is here because something reads the field instead of calling for
+it: `java/lang/String`, whose characters the client's own helpers read through
+`value`, `offset` and `count` rather than calling `charAt`;
+`org/kwis/msp/lcdui/Card`, whose geometry a title reads off its own canvas
+rather than calling `getWidth`; and `java/io/ByteArrayOutputStream`, whose
+`buf` a title reads instead of calling `toByteArray` when it is about to hand
+the bytes straight on rather than keep them.
 
 That leaves the one thing an array and a static field both avoid. An array made
 guest memory its only storage; a static field's value word lives inside its own
@@ -814,6 +818,16 @@ that would name the first title that does it.
 mechanism rather than one class's fix: a class that gains a published instance
 field without saying how it stays in step fails there rather than diverging
 inside a game.
+
+**Publishing one field of a class is not publishing the class.** The byte sink
+publishes `buf` and not `count`, which sit beside each other in the
+specification and are both protected. Nothing in the local set reads `count`, so
+there is no offset for it in the metadata and a title that reaches for one stops
+with the field's name in the message — which is a better failure than a word no
+mutator maintains answering a stale number. The same reasoning is why the
+mutator list is a list: `buf` changes only when the array behind it is replaced,
+so the constructor, a write that outgrows the array and a reset are the three
+calls after which the payload can be wrong.
 
 ## Host integration
 
@@ -3976,6 +3990,116 @@ them on more of the same list: `Player.resume`, `Math.max(JJ)J`,
 draw its title screen is invisible to a probe that stops there**, which is the
 same lesson the java.io half of the list taught and worth stating as a probe
 design rule rather than as a fact about these titles.
+
+### The second round of that list, and the one answer that is a guess
+
+That list was worked through, and every title on it but one runs for a thousand
+ticks now — the exception is below, and it is not this list's. Most of it is
+more metadata over bodies the core library had — `Math.max(JJ)J`
+and `min(JJ)J`, `StringBuffer.setCharAt` and `charAt`, `Player.pause` and
+`resume` against `Clip` as well as `BaseClip`, which the specification declares
+both ways and which `play` and `stop` already had both of.
+
+**Answering one member is how the next one is found**, and two of these titles
+found a second and a third: past `Math.max` one of them allocates a
+`java/util/Stack`, which the runtime published no class for at all, and past
+`ByteArrayInputStream` another walks a vector with `elements()`. Neither shows
+up in the first pass's report, because a title that stops on the first member
+never reaches the second. **A class the table does not name is the worse of the
+two failures**: the loader answers with an empty record rather than refusing,
+so the `new` succeeds and the stop is a field read several calls later with
+nothing in the message about the class that is missing. The one for `Stack` was
+a two-byte read at offset 22 of nothing.
+
+Four needed more than a declaration:
+
+- **`ByteArrayInputStream([B, int, int)` needed the stream to know where it
+  ends.** Every method on it read to the end of the array, which is the same
+  answer only for the constructor that takes the whole of one. A title that
+  keeps several records in one buffer reads each of them by opening a different
+  window on the same array, and a window that ran to the array's end would hand
+  it the next record's bytes.
+- **`Calendar.getInstance(TimeZone)` is the same instant in different fields.**
+  What the zone changes is which components `get` breaks the instant into, not
+  the instant itself, and `Calendar.set` already carried a calendar's location
+  forward — so choosing it at construction is the whole of it. `setTime` had to
+  learn to keep it: a title that asked for GMT and then set a stored date still
+  means GMT when it reads the fields back.
+- **`org/kwis/msf/io/URL.find` refuses rather than answering null.** The
+  specification declares `SchemeNotFoundException` on it, so a title that uses
+  the network at all has a catch for it and an offline path behind that catch,
+  where a null it never expected dies at the first read. One title's own
+  handler then faults on unmapped memory — but it faults at the same
+  instruction whether `find` throws or answers null, so that fault is not this
+  call's and belongs with the guest-memory group below.
+- **`ByteArrayOutputStream` is the third class this runtime publishes an
+  instance field of**, and it publishes exactly one word. A title reads `buf` instead of
+  calling `toByteArray` when it is about to hand the bytes straight on — the
+  copy is the whole cost it is avoiding — so the payload word has to name the
+  guest array the Go buffer is. `count` is deliberately not published: nothing
+  in the set reads it, and a field that is not there fails loudly where a word
+  nobody maintains would be silently stale. The mutators are the three calls
+  that can put a different array behind the field, and the publish compares
+  before it writes, so a write that only fills the array it already had costs
+  one guest read.
+
+**A thread class that does not override `run` had nowhere to inherit one from.**
+One title subclasses `Thread` and hands the work to a `Runnable` through
+`super(r)`, which is the constructor form the runtime already published — but
+`run` itself was not on the runtime's `Thread`, so the lookup walked from the
+subclass to `java/lang/Thread` and found nothing. The core library's body was
+there the whole time and does exactly the right thing: it runs the Runnable the
+thread was built with, and nothing when there was none.
+
+**Two `org/kwis/msp/lwc` members turned into three new classes and six more
+methods on the one they all inherit**, which is what a component hierarchy does
+when a title actually uses one rather than allocating one and drawing itself.
+`ContainerComponent`'s `repaint` is `Component`'s, declared once where every
+component inherits it, and it requests the card's own repaint: nothing here
+paints a component, the toolkit's layout is absent, and the card's paint is the
+one that would have run anyway — so the named rectangle has nothing to honour.
+Behind `DialogComponent`'s constructor came `Component`'s two colours, and then
+`FormComponent` and `ProgressComponent`, each of which keeps the numbers that
+describe a widget this Host does not draw and answers with them. A progress
+bar's numbers are kept the way the specification says they behave — a value
+clamped into the bar and rounded down to a whole number of steps, a maximum at
+or below zero refused — because a title that reads back what it set is the only
+thing that can observe a bar nothing paints.
+
+**And then the dialog asked a question this Host cannot answer.** `doModal`
+shows a dialog and waits for a person to choose. Nothing here paints a
+component, so nobody is ever shown one, and the outcome has to come from the
+dialog's type. For two of the three types the type decides it outright: a
+`TYPE_NONE` dialog has no buttons and ends in `DLG_TIMEOUT` by itself, and a
+`TYPE_OK` dialog has one, so `DLG_OK` is not a choice made on anyone's behalf
+but the only answer that exists. **`TYPE_OK_CANCEL` genuinely has two, and this
+takes the affirmative.** That is a guess, and it is recorded as one — in
+`testdata/wipi_java_stubs.txt`, which exists for answers a game believes, and in
+the run's diagnostics, which count every dialog answered unseen. Two things
+argue for OK over CANCEL: it is the button a dialog opens focused on, so it is
+what pressing the confirm key without reading gets, and a title that offers a
+choice usually offers it once, where refusing every dialog is what leaves one
+asking again. What would end the guess is a Host boundary that puts the dialog
+in front of the person, the way `internal/textinput` already does for a text
+field; until there is one, a title that reaches an OK/Cancel dialog is being
+answered for.
+
+**None of it cost anything elsewhere.** The whole set was driven again from a
+fresh save, against the binary before this pass and the one after it, and no
+title that reached its first frame before stopped reaching it. That is the
+check worth running for a change like this one rather than a check of the
+titles it was aimed at: publishing a field on `ByteArrayOutputStream` moves
+every guest subclass's own fields along by a word, and adding `run` to the
+runtime's `Thread` puts a method in the middle of a vtable every guest thread
+class inherits. Both are the kind of change whose damage would show up
+somewhere nobody was looking.
+
+**One title's first run is not the one to judge it by.** With `buf` published it
+draws twenty-two frames, calls `notifyDestroyed` and leaves — and what those
+frames say is "the game has been installed, please run it again". It is the
+startup gate this document already describes, and the second run against the
+same save tree reaches the title screen. A probe that runs a title once reads
+that as a title that quits.
 
 The nine that do not reach a first frame have new causes, and they are not one
 shape: three fault on guest

@@ -68,6 +68,91 @@ var fieldSyncs = map[string]fieldSync{
 		adopt:    adoptGuestCardBounds,
 		reserved: cardFieldsSize,
 	},
+	// A byte sink publishes the one word that says where its bytes are,
+	// because a title reads buf instead of calling toByteArray when it is
+	// about to hand the bytes on rather than keep them. The mutators are the
+	// three calls that can put a different array behind the field: the
+	// constructor allocates one, a write replaces it when it outgrows it, and
+	// reset starts again. Publishing compares before it writes, so a write
+	// that only fills the array it already had costs one guest read.
+	jvm.ByteArrayOutputStreamClass: {
+		mutators: []string{"<init>", "write", "reset"},
+		publish:  publishGuestByteSinkBuffer,
+		adopt:    adoptGuestByteSinkBuffer,
+		reserved: byteArrayOutputStreamFieldsSize,
+	},
+}
+
+// byteArrayOutputStreamFieldsSize is how many payload bytes the runtime's own
+// ByteArrayOutputStream field records describe: the one buf reference.
+const byteArrayOutputStreamFieldsSize = 4
+
+// publishGuestByteSinkBuffer points the payload word at the guest array the Go
+// buffer is. The array has to be bound for the guest to have anything to read,
+// and binding is what gives it its guest memory in the first place — an array
+// the guest has never seen has no address until something asks for one.
+func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	value, err := runtime.client.vm.Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	if err != nil {
+		return false, err
+	}
+	buffer, err := value.Reference()
+	if err != nil {
+		return false, err
+	}
+	var wanted uint32
+	if buffer != nil {
+		if err := runtime.ensureResultBound(buffer); err != nil {
+			return false, fmt.Errorf("bind KTF byte sink buffer: %w", err)
+		}
+		bound, ok := runtime.client.vm.AOTAddress(buffer)
+		if !ok {
+			return false, fmt.Errorf("KTF byte sink buffer has no guest address")
+		}
+		wanted = bound
+	}
+	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	if err != nil {
+		return false, err
+	}
+	if current[0] == wanted {
+		return false, nil
+	}
+	payload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload, wanted)
+	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+		return false, fmt.Errorf("write KTF byte sink buffer at %#x: %w", address, err)
+	}
+	return true, nil
+}
+
+// adoptGuestByteSinkBuffer reports a sink whose payload word has stopped
+// naming the Go array. The field is protected rather than private, so a
+// subclass could assign it; nothing local has been seen to, and swapping the
+// Go buffer for whatever the word names would be a guess about which side is
+// right.
+func adoptGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	value, err := runtime.client.vm.Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	if err != nil {
+		return false, err
+	}
+	buffer, err := value.Reference()
+	if err != nil {
+		return false, err
+	}
+	var expected uint32
+	if buffer != nil {
+		if bound, ok := runtime.client.vm.AOTAddress(buffer); ok {
+			expected = bound
+		} else {
+			return false, nil
+		}
+	}
+	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	if err != nil {
+		return false, err
+	}
+	return current[0] != expected, nil
 }
 
 // publishGuestFields brings the guest payload of a bound object back in step

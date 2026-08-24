@@ -343,3 +343,311 @@ func javaStreamReadShort(
 	stream.Read += 2
 	return uint32(int32(value)), nil
 }
+
+// javaStreamReadInt is `DataInputStream.readInt()`, slot 28: four bytes,
+// big-endian, which is the order every DataInput method reads in. A stream
+// with fewer than four bytes left is the end of the file rather than a short
+// read, and the language says so by throwing; this reports it, which stops the
+// title where the truncated data is rather than somewhere downstream of a
+// number made out of nothing.
+func javaStreamReadInt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read+4 > len(stream.Data) {
+		return 0, fmt.Errorf("readInt past the end of %q, at %d of %d", stream.Name, stream.Read, len(stream.Data))
+	}
+	value := uint32(stream.Data[stream.Read])<<24 |
+		uint32(stream.Data[stream.Read+1])<<16 |
+		uint32(stream.Data[stream.Read+2])<<8 |
+		uint32(stream.Data[stream.Read+3])
+	stream.Read += 4
+	return value, nil
+}
+
+// javaStreamReadByte is `DataInputStream.readByte()`, slot 23: one byte read
+// as a signed number, which is what separates it from `read()` on the same
+// stream — that one answers 0 to 255 and -1 at the end, this one answers -128
+// to 127 and has no room left for an end marker, so the end is reported.
+func javaStreamReadByte(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read >= len(stream.Data) {
+		return 0, fmt.Errorf("readByte past the end of %q, at %d of %d", stream.Name, stream.Read, len(stream.Data))
+	}
+	value := int8(stream.Data[stream.Read])
+	stream.Read++
+	return uint32(int32(value)), nil
+}
+
+// javaStreamReadFully is `DataInputStream.readFully([BII)`, slot 20: exactly
+// the bytes asked for or none at all. That is the whole difference from
+// `read([BII)` beside it, which answers a short count and leaves the caller to
+// loop; a title that calls this one has sized its array from a count it read
+// first and treats a short read as a corrupt file.
+func javaStreamReadFully(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	block, length, err := client.javaArrayBlock(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	offset, count := uint32(0), length
+	if len(arguments) > 3 {
+		offset, count = arguments[2], arguments[3]
+	}
+	if uint64(offset)+uint64(count) > uint64(length) {
+		return 0, fmt.Errorf("%d bytes at %d is past the end of an array of %d", count, offset, length)
+	}
+	if uint64(count) > uint64(len(stream.Data)-stream.Read) {
+		return 0, fmt.Errorf("readFully of %d bytes past the end of %q, at %d of %d",
+			count, stream.Name, stream.Read, len(stream.Data))
+	}
+	data := stream.Data[stream.Read : stream.Read+int(count)]
+	if err := client.core.Memory().Write(block+javaArrayLengthWords*4+offset, data); err != nil {
+		return 0, err
+	}
+	stream.Read += int(count)
+	return 0, nil
+}
+
+// `java/io/ByteArrayOutputStream`: the sink a title builds a block of bytes in
+// before it hands them somewhere — a record it is about to write, a message it
+// is about to send. What it holds is this platform's, keyed by the object, the
+// same arrangement a String's characters and a Vector's contents have.
+
+const (
+	javaByteSinkClass         = "java/io/ByteArrayOutputStream"
+	javaDataOutputStreamClass = "java/io/DataOutputStream"
+)
+
+// javaByteSinkConstructor is `ByteArrayOutputStream()` and the form that takes
+// a starting capacity. The capacity is a hint about an allocation a caller
+// cannot observe, so both open the same empty sink.
+func javaByteSinkConstructor(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	client.javaRuntimeState().sinks[arguments[0]] = []byte{}
+	return 0, nil
+}
+
+// javaByteSinkOf answers what a sink holds and which object holds it, which
+// are not the same handle when the caller is writing through a wrapper.
+func (client *Client) javaByteSinkOf(object uint32) ([]byte, uint32, error) {
+	runtime := client.javaRuntimeState()
+	if inner, wrapped := runtime.wrapped[object]; wrapped {
+		object = inner
+	}
+	held, ok := runtime.sinks[object]
+	if !ok {
+		return nil, 0, fmt.Errorf("the object at %#x is not a byte sink this platform built", object)
+	}
+	return held, object, nil
+}
+
+// javaByteSinkWrite is `write(int)`, slot 10: one byte, the low eight bits of
+// what it is given, which is what the specification says a caller that hands
+// over a whole int gets.
+func javaByteSinkWrite(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().sinks[sink] = append(held, byte(arguments[1]))
+	return 0, nil
+}
+
+// javaByteSinkWriteRange is `write([BII)`, slot 12: a run of an array.
+func javaByteSinkWriteRange(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	offset, count := arguments[2], arguments[3]
+	if uint64(offset)+uint64(count) > uint64(len(data)) {
+		return 0, fmt.Errorf("%d bytes at %d is past the end of an array of %d", count, offset, len(data))
+	}
+	client.javaRuntimeState().sinks[sink] = append(held, data[offset:offset+count]...)
+	return 0, nil
+}
+
+// javaByteSinkWriteAll is `write([B)`, slot 11: the whole of an array.
+func javaByteSinkWriteAll(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().sinks[sink] = append(held, data...)
+	return 0, nil
+}
+
+// javaByteSinkFlush is `flush()` and `close()`, slots 13 and 14. A sink is
+// bytes in memory: there is nothing held back for a flush to release, and
+// closing one leaves what it holds readable, which the specification says in
+// so many words.
+func javaByteSinkFlush(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	_, _, err := client.javaByteSinkOf(arguments[0])
+	return 0, err
+}
+
+// javaByteSinkReset is `reset()`, slot 15: the sink emptied and used again,
+// which is how a title that writes one record after another avoids building a
+// sink per record.
+func javaByteSinkReset(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	_, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().sinks[sink] = []byte{}
+	return 0, nil
+}
+
+// javaByteSinkBytes is `toByteArray()`, slot 16: a copy of what has been
+// written, as an array the guest owns. It is a copy the way the specification
+// says: a title that keeps the array and writes again must not see its copy
+// change.
+func javaByteSinkBytes(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, _, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return client.newJavaByteArray(append([]byte{}, held...))
+}
+
+// javaByteSinkSize is `size()`, slot 17: how many bytes have been written.
+func javaByteSinkSize(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, _, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(len(held)), nil
+}
+
+// `java/io/DataOutputStream`: numbers written into the sink underneath it,
+// most significant byte first, which is the order every Java stream writes in
+// and the order the read side beside it reads in. The pair is one round trip:
+// a title stores a record with these and reads it back with the
+// DataInputStream methods above.
+
+// javaWrapSink is `DataOutputStream(OutputStream)`. A wrapper is not a second
+// sink; it stands for the one it was built on, so writing through it and
+// reading the sink's own bytes back agree.
+func javaWrapSink(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, _, err := client.javaByteSinkOf(arguments[1]); err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().wrapped[arguments[0]] = arguments[1]
+	return 0, nil
+}
+
+// javaSinkAppend is every fixed-width write on a data stream: the low `width`
+// bytes of the value, most significant first.
+func javaSinkAppend(width int) func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return func(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+		held, sink, err := client.javaByteSinkOf(arguments[0])
+		if err != nil {
+			return 0, err
+		}
+		value := arguments[1]
+		for shift := (width - 1) * 8; shift >= 0; shift -= 8 {
+			held = append(held, byte(value>>uint(shift)))
+		}
+		client.javaRuntimeState().sinks[sink] = held
+		return 0, nil
+	}
+}
+
+// javaSinkWriteLong is `writeLong(long)`: eight bytes, and the one write whose
+// value arrives in two registers.
+func javaSinkWriteLong(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	value := uint64(arguments[2])<<32 | uint64(arguments[1])
+	for shift := 56; shift >= 0; shift -= 8 {
+		held = append(held, byte(value>>uint(shift)))
+	}
+	client.javaRuntimeState().sinks[sink] = held
+	return 0, nil
+}
+
+// javaSinkWriteUTF is `writeUTF(String)`: a two-byte length and then the text
+// in modified UTF-8. It is written against the read side's own encoding rather
+// than against Go's, because the pair is one round trip — a title stores a
+// name with this and reads it back with readUTF — and modified UTF-8 differs
+// from Go's in exactly the two places a name can reach: a null character is
+// two bytes rather than one, and a character outside the basic plane is the
+// two surrogates that stand for it rather than four bytes.
+func javaSinkWriteUTF(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	text, ok := client.javaText(arguments[1])
+	if !ok {
+		return 0, fmt.Errorf("DataOutputStream.writeUTF was given no text at %#x", arguments[1])
+	}
+	encoded := modifiedUTF8(text)
+	if len(encoded) > 0xffff {
+		return 0, fmt.Errorf("writeUTF of %d bytes does not fit its two-byte length", len(encoded))
+	}
+	held = append(held, byte(len(encoded)>>8), byte(len(encoded)))
+	client.javaRuntimeState().sinks[sink] = append(held, encoded...)
+	return 0, nil
+}
+
+// modifiedUTF8 is the encoding a Java stream's UTF methods use.
+func modifiedUTF8(text string) []byte {
+	encoded := make([]byte, 0, len(text))
+	for _, unit := range utf16Units(text) {
+		switch {
+		case unit >= 0x0001 && unit <= 0x007f:
+			encoded = append(encoded, byte(unit))
+		case unit <= 0x07ff:
+			encoded = append(encoded, byte(0xc0|unit>>6), byte(0x80|unit&0x3f))
+		default:
+			encoded = append(encoded, byte(0xe0|unit>>12), byte(0x80|unit>>6&0x3f), byte(0x80|unit&0x3f))
+		}
+	}
+	return encoded
+}
