@@ -643,3 +643,33 @@ func javaStringConcat(
 	}
 	return client.newJavaString(held + other)
 }
+
+// javaStringIndexOfChar is `indexOf(int)` at slot 21 and `indexOf(int, int)` at
+// 22: where a character first appears, or -1. The argument is a code unit
+// rather than a code point, which is what a `char` widened to an int is on this
+// side too.
+func javaStringIndexOfChar(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a string this platform built", arguments[0])
+	}
+	wanted := uint16(arguments[1])
+	from := 0
+	if len(arguments) > 2 {
+		// The two-argument form starts the search where it is told to. A
+		// negative start is the whole string, which is what the language says
+		// of one.
+		if start := int(int32(arguments[2])); start > 0 {
+			from = start
+		}
+	}
+	units := utf16Units(held)
+	for index := from; index < len(units); index++ {
+		if units[index] == wanted {
+			return uint32(int32(index)), nil
+		}
+	}
+	return 0xffffffff, nil
+}

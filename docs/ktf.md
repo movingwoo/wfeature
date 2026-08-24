@@ -4216,6 +4216,21 @@ reading the guest's own printk for before anything else. What the other five are
 waiting for has not been established — one of them never paints a frame at all,
 through both runs and the key script — and a denser key sweep is the next step.
 
+**Two titles stop on WIPI C database function 8, and what its call site sets is
+worth writing down before the next pass reads it.** The site puts a pointer to
+the database's own name in the first register and a literal `1` in the second,
+sets nothing else, and the value it gets back flows straight into the call after
+it as that call's first argument. The stream table's `0`, `4`, `10`, `11` and
+`12` sit exactly where the specification's own list of `MC_db*` puts open,
+select, the record count, the record size and the database list — but `1`, `2`,
+`3` and `6` are this vendor's stream extension and do not, **so the
+specification cannot be used to read `8` off the position alone**. Answering it
+with a plain zero carries one of the two titles to its first frame, which says
+the caller treats zero as success and is a probe rather than a fix: an answer
+this platform has not established is exactly the wrong-slot-answers-silently
+shape. The error now names the address it was called from, for the same reason
+the unimplemented-table error does.
+
 **Thirteen titles are far slower than the handset was, and three do not finish
 four hundred ticks.** Seven of the thirteen are this platform's: four hundred
 ticks at four times the clock cost them twenty to a hundred and three seconds,

@@ -52,6 +52,22 @@ const (
 	// the pair differs by, and that check is the one this platform cannot make
 	// (see java_array.go), so the two do the same thing here.
 	javaSVCStoreReferenceAlso uint32 = 0x61
+	// The store a sixty-four bit element takes. **It is four registers rather
+	// than three**, which is what tells it from the reference store above: the
+	// array, the index, and the value's low and high words in the pair the
+	// rest of this platform's ABI carries a long in. The one call site reached
+	// locally clears a `long[]` in a loop — the array out of a field, the
+	// index a counter incremented on the line after the call, both value
+	// registers set to zero, and the answer dropped — and there is no reading
+	// of that under which the two zeroes are anything but the value.
+	javaSVCStoreWide uint32 = 0xfd
+	// The load that goes with it: an array and an index, and the element back
+	// in the register pair a long is returned in. The site that settled it is
+	// the whole body of a one-line accessor — the array out of a field, the
+	// index straight from the method's own argument, and the frame popped on
+	// the instruction after the call — so what it answers is what the method
+	// answers, and the only thing an eight-byte element can be read into.
+	javaSVCLoadWide uint32 = 0x5b
 	// `synchronized`: the lock a protected body is entered and left through.
 	// See java_thread.go for what says which is which.
 	javaSVCMonitorEnter     uint32 = 0x56
@@ -95,6 +111,8 @@ var javaSVCArguments = map[uint32]int{
 	javaSVCAllocateArrayN:     3,
 	javaSVCStoreReference:     3,
 	javaSVCStoreReferenceAlso: 3,
+	javaSVCStoreWide:          4,
+	javaSVCLoadWide:           2,
 	javaSVCMonitorEnter:       1,
 	javaSVCMonitorExit:        1,
 	javaSVCDefineClass:        12,
@@ -130,6 +148,8 @@ var javaSVCNames = map[uint32]string{
 	javaSVCAllocateArrayN:     "allocate an array of arrays",
 	javaSVCStoreReference:     "store into a reference array",
 	javaSVCStoreReferenceAlso: "store into a reference array",
+	javaSVCStoreWide:          "store into a long array",
+	javaSVCLoadWide:           "read from a long array",
 	javaSVCMonitorEnter:       "take an object's lock",
 	javaSVCMonitorExit:        "give an object's lock back",
 	javaSVCDefineClass:        "lay one application class out",
@@ -367,6 +387,20 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 			return fmt.Errorf("%w (storing into a reference array: %w)", ErrJavaAppUnsupported, err)
 		}
 		return thread.SetRegister(0, 0)
+	case javaSVCStoreWide:
+		if err := client.storeJavaArrayWide(values[0], values[1], values[2], values[3]); err != nil {
+			return fmt.Errorf("%w (storing into a long array: %w)", ErrJavaAppUnsupported, err)
+		}
+		return thread.SetRegister(0, 0)
+	case javaSVCLoadWide:
+		low, high, err := client.loadJavaArrayWide(values[0], values[1])
+		if err != nil {
+			return fmt.Errorf("%w (reading from a long array: %w)", ErrJavaAppUnsupported, err)
+		}
+		if err := thread.SetRegister(1, high); err != nil {
+			return err
+		}
+		return thread.SetRegister(0, low)
 	case javaSVCAllocate:
 		object, err := client.allocateJavaInstance(values[0])
 		if err != nil {

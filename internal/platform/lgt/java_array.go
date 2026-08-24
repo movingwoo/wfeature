@@ -396,3 +396,57 @@ func (client *Client) newJavaStringArray(values []string) (uint32, error) {
 	}
 	return object, nil
 }
+
+// storeJavaArrayWide is the same store for an eight-byte element: the value
+// arrives as two words, low first, the way every long does here. The element
+// width is the array's own rather than assumed, so an array that is not one of
+// eight-byte elements is refused instead of being written past.
+func (client *Client) storeJavaArrayWide(array, index, low, high uint32) error {
+	width, err := client.javaArrayElementBytes(array)
+	if err != nil {
+		return err
+	}
+	if width != 8 {
+		return fmt.Errorf("a wide store into an array of %d-byte elements", width)
+	}
+	block, length, err := client.javaArrayBlock(array)
+	if err != nil {
+		return err
+	}
+	if index >= length {
+		return fmt.Errorf("index %d of an array of %d", index, length)
+	}
+	at := block + javaArrayLengthWords*4 + index*8
+	if err := client.writeWord(at, low); err != nil {
+		return err
+	}
+	return client.writeWord(at+4, high)
+}
+
+// loadJavaArrayWide reads one eight-byte element, low word first.
+func (client *Client) loadJavaArrayWide(array, index uint32) (uint32, uint32, error) {
+	width, err := client.javaArrayElementBytes(array)
+	if err != nil {
+		return 0, 0, err
+	}
+	if width != 8 {
+		return 0, 0, fmt.Errorf("a wide read from an array of %d-byte elements", width)
+	}
+	block, length, err := client.javaArrayBlock(array)
+	if err != nil {
+		return 0, 0, err
+	}
+	if index >= length {
+		return 0, 0, fmt.Errorf("index %d of an array of %d", index, length)
+	}
+	at := block + javaArrayLengthWords*4 + index*8
+	low, err := client.readWord(at)
+	if err != nil {
+		return 0, 0, err
+	}
+	high, err := client.readWord(at + 4)
+	if err != nil {
+		return 0, 0, err
+	}
+	return low, high, nil
+}

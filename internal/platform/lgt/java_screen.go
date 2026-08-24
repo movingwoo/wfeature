@@ -214,6 +214,11 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.fillRect(IIII)V": {Words: 5, Implementat: javaFillRect},
 	"org/kwis/msp/lcdui/Graphics.drawRect(IIII)V": {Words: 5, Implementat: javaDrawRect},
 	"org/kwis/msp/lcdui/Graphics.drawLine(IIII)V": {Words: 5, Implementat: javaDrawLine},
+	// One pixel in the current colour, which is the drawing call with nothing
+	// between it and the surface. It is the write side of the `getPixel` the
+	// specification lists, and it goes through the same clip, translation and
+	// alpha every other call here does.
+	"org/kwis/msp/lcdui/Graphics.setPixel(II)V": {Words: 3, Implementat: javaSetPixel},
 	// The rounded pair take the corner **diameters** as their last two
 	// arguments, and the arc pair take a start angle and an extent with zero
 	// degrees at three o'clock. Both used to be answered with the plain
@@ -226,9 +231,12 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 
 	"org/kwis/msp/lcdui/Graphics.translate(II)V": {Words: 3, Implementat: javaTranslate},
 	"org/kwis/msp/lcdui/Graphics.setClip(IIII)V": {Words: 5, Implementat: javaSetClip},
-	"org/kwis/msp/lcdui/Graphics.setAlpha(I)V":   {Words: 2, Implementat: javaSetAlpha},
-	"org/kwis/msp/lcdui/Graphics.setXORMode(Z)V": {Words: 2, Implementat: javaSetXORMode},
-	"org/kwis/msp/lcdui/Graphics.getColor()I":    {Words: 1, Implementat: javaGetColor},
+	// The specification's own wording for `clipRect` is that the clip becomes
+	// what it and the rectangle have in common, so it can only ever narrow.
+	"org/kwis/msp/lcdui/Graphics.clipRect(IIII)V": {Words: 5, Implementat: javaClipRect},
+	"org/kwis/msp/lcdui/Graphics.setAlpha(I)V":    {Words: 2, Implementat: javaSetAlpha},
+	"org/kwis/msp/lcdui/Graphics.setXORMode(Z)V":  {Words: 2, Implementat: javaSetXORMode},
+	"org/kwis/msp/lcdui/Graphics.getColor()I":     {Words: 1, Implementat: javaGetColor},
 	// The clip a title reads back is the one it set, in its own coordinates.
 	// A Graphics that has had none set is clipped to the whole surface, which
 	// is what these answer then.
@@ -236,6 +244,20 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.getClipY()I":      {Words: 1, Implementat: javaClipValue(1)},
 	"org/kwis/msp/lcdui/Graphics.getClipWidth()I":  {Words: 1, Implementat: javaClipValue(2)},
 	"org/kwis/msp/lcdui/Graphics.getClipHeight()I": {Words: 1, Implementat: javaClipValue(3)},
+
+	// The font this Graphics draws text with. There is one face here — the
+	// same one `getDefaultFont` answers and the same one the C drawing calls
+	// render — so a title that reads the font off a Graphics to measure a
+	// string measures the glyphs it is about to draw.
+	"org/kwis/msp/lcdui/Graphics.getFont()Lorg/kwis/msp/lcdui/Font;": {
+		Words: 1, Implementat: javaPlatformSingleton(javaFontClass)},
+	// Putting a Graphics back to the state a fresh one has. It is not in the
+	// specification's own listing, and it does not have to be: the same call
+	// is what titles on this project's two other platforms make of the one
+	// Graphics they keep for the life of the application, and it means the
+	// same thing here — no translation, the whole surface visible, opaque
+	// black, plain drawing mode.
+	"org/kwis/msp/lcdui/Graphics.reset()V": {Words: 1, Implementat: javaGraphicsReset},
 
 	// A picture a title draws into itself, and the Graphics that draws there.
 	"org/kwis/msp/lcdui/Image.createImage(II)Lorg/kwis/msp/lcdui/Image;": {
@@ -281,6 +303,11 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 		Words: 2, Implementat: javaPushCard},
 	"org/kwis/msp/lcdui/Card.repaint(IIII)V": {Words: 5, Implementat: javaCardRepaint},
 	"org/kwis/msp/lcdui/Card.repaint()V":     {Words: 1, Implementat: javaCardRepaint},
+
+	// Work a title asks the platform to do for it once the events in hand
+	// have been dealt with; see java_frame.go.
+	"org/kwis/msp/lcdui/Display.callSerially(Ljava/lang/Runnable;)V": {
+		Words: 2, Implementat: javaCallSerially},
 }
 
 // javaSetColorTriple is `setColor(r, g, b)`.
@@ -615,4 +642,82 @@ func javaCharsWidth(
 		return 0, err
 	}
 	return uint32(textWidth(text)), nil
+}
+
+// javaGraphicsReset puts a Graphics back to the state a freshly built one has.
+// The surface it draws on is not part of that: a title resets the Graphics it
+// was handed, and one that came back pointing at nothing would stop the next
+// call rather than draw.
+func javaGraphicsReset(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	*state = *newJavaGraphicsState(state.surface)
+	return 0, nil
+}
+
+// javaSetPixel is `setPixel(x, y)`: the current colour at one point.
+func javaSetPixel(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return 0, client.javaDraw(arguments[0], func(context *graphicsContext, state *javaGraphics) error {
+		context.put(
+			int(int32(arguments[1]))+state.translateX,
+			int(int32(arguments[2]))+state.translateY, state.color)
+		return nil
+	})
+}
+
+// javaClipRect is `clipRect(x, y, width, height)`: the clip becomes the
+// intersection of what it was and the rectangle given, in the Graphics' own
+// coordinates. A Graphics with no clip of its own is clipped to its surface, so
+// the intersection starts from the surface's own bounds — and an intersection
+// that comes out empty is kept as empty rather than as a negative size, which
+// the drawing code would read as no clip at all.
+func javaClipRect(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	left, top := 0, 0
+	right, bottom := 0, 0
+	if target := client.framebuffer(state.surface); target != nil {
+		// The surface's own bounds are in surface coordinates and the clip is
+		// in the title's, so the origin moves with the translation.
+		left, top = -state.translateX, -state.translateY
+		right, bottom = left+target.width, top+target.height
+	}
+	if state.clipSet {
+		left, top = state.clipX, state.clipY
+		right, bottom = left+state.clipWidth, top+state.clipHeight
+	}
+	x, y := int(int32(arguments[1])), int(int32(arguments[2]))
+	width, height := int(int32(arguments[3])), int(int32(arguments[4]))
+	if x > left {
+		left = x
+	}
+	if y > top {
+		top = y
+	}
+	if x+width < right {
+		right = x + width
+	}
+	if y+height < bottom {
+		bottom = y + height
+	}
+	if right < left {
+		right = left
+	}
+	if bottom < top {
+		bottom = top
+	}
+	state.clipX, state.clipY = left, top
+	state.clipWidth, state.clipHeight = right-left, bottom-top
+	state.clipSet = true
+	return 0, nil
 }

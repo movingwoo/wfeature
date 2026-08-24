@@ -51,6 +51,9 @@ type javaThread struct {
 	object   uint32
 	runnable uint32
 	worker   *javaWorker
+	// priority is what the title asked for, which nothing here schedules on;
+	// see javaThreadSetPriority.
+	priority int32
 }
 
 type javaWorker struct {
@@ -339,18 +342,22 @@ func (client *Client) runJavaWorker(thread *javaThread, worker *javaWorker) {
 				err = backend.GuestPanic(client.logger, "LGT guest thread", recovered)
 			}
 		}()
-		err = client.enterJavaRunnable(ctx, thread, worker)
+		err = client.callJavaRunnable(ctx, worker.armThread, thread.runnable)
 	}()
 	client.releaseJavaMonitors(worker)
 	worker.events <- javaWorkerEvent{done: true, err: err}
 }
 
-func (client *Client) enterJavaRunnable(
-	ctx context.Context, thread *javaThread, worker *javaWorker,
+// callJavaRunnable enters the `run` of whatever a Runnable reference stands
+// for, on the ARM thread it is given. A thread's own body reaches it through
+// the worker's stack; a Runnable handed to `callSerially` reaches it on the
+// platform's own thread, which is the same call.
+func (client *Client) callJavaRunnable(
+	ctx context.Context, armThread *armcore.Thread, runnable uint32,
 ) error {
-	class, known := client.javaClassOfObject(thread.runnable)
+	class, known := client.javaClassOfObject(runnable)
 	if !known {
-		return fmt.Errorf("the runnable at %#x is not an object this platform issued", thread.runnable)
+		return fmt.Errorf("the runnable at %#x is not an object this platform issued", runnable)
 	}
 	body, owner := uint32(0), class.Name
 	if method, named, ok := client.findJavaMethod(class.Record, javaThreadRunMethod); ok {
@@ -364,7 +371,7 @@ func (client *Client) enterJavaRunnable(
 	if body == 0 {
 		return fmt.Errorf("%s declares no %s", class.Name, javaThreadRunMethod)
 	}
-	if _, err := client.callOn(ctx, worker.armThread, body, []uint32{thread.runnable}); err != nil {
+	if _, err := client.callOn(ctx, armThread, body, []uint32{runnable}); err != nil {
 		return fmt.Errorf("run %s.%s at %#x: %w", owner, javaThreadRunMethod, body, err)
 	}
 	return nil
@@ -648,4 +655,127 @@ func (client *Client) releaseJavaMonitors(worker *javaWorker) {
 		}
 	}
 	worker.monitors = 0
+}
+
+// javaThreadSetPriority is `Thread.setPriority(int)`. The specification gives
+// it no return and no failure, and there is nothing here for it to change: a
+// guest thread on this platform is scheduled by the slice the session grants
+// it, not by a number the title picks, so every thread runs at the same rate
+// whatever it asks for. The value is kept against the thread all the same,
+// because a title that sets a priority is entitled to read the same one back.
+func javaThreadSetPriority(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	thread, known := client.javaRuntimeState().threads[arguments[0]]
+	if !known {
+		return 0, fmt.Errorf("the object at %#x is not a thread this platform issued", arguments[0])
+	}
+	thread.priority = int32(arguments[1])
+	return 0, nil
+}
+
+// javaObjectWait is `Object.wait()`, slot 9: give the object's lock back, let
+// something else run, and take the lock again before returning.
+//
+// **Nothing here holds a wait queue**, and the language does not require one:
+// a wait may return without having been notified, and every correct caller
+// tests its condition again in a loop. So this is one turn handed over rather
+// than a sleep with a wake-up — which is also the only thing that can work
+// beside a `notify` with no queue to move anything out of (java_api.go).
+//
+// What it must do is let go of the lock. A wait that kept it would stop the
+// very thread that is meant to change the condition from entering the body
+// that changes it, and the two would sit there for the rest of the session.
+// The whole depth goes back and the same depth is retaken, because a
+// `synchronized` method calling another one on the same object waits from
+// inside two.
+func javaObjectWait(
+	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return client.waitOnJavaObject(ctx, arguments[0], 0)
+}
+
+// javaObjectWaitTimed is `Object.wait(long)`, slot 7: the same handover, with a
+// deadline. **The deadline is the whole of the difference here.** Without a
+// queue to be woken from, a wait that names a timeout is a wait that ends when
+// the timeout does — which is exactly what a title polling a condition every
+// forty milliseconds asked for, and the only reading under which it does not
+// spin. The long arrives in two words, low first, like every other on this
+// platform.
+func javaObjectWaitTimed(
+	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	milliseconds := uint64(arguments[1]) | uint64(arguments[2])<<32
+	if milliseconds > uint64(time.Hour/time.Millisecond) {
+		return 0, fmt.Errorf("a wait of %d milliseconds", milliseconds)
+	}
+	return client.waitOnJavaObject(ctx, arguments[0], time.Duration(milliseconds)*time.Millisecond)
+}
+
+func (client *Client) waitOnJavaObject(
+	ctx context.Context, object uint32, timeout time.Duration,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	worker := client.activeJavaWorker
+	monitor := runtime.monitors[object]
+	if monitor == nil || monitor.count == 0 ||
+		monitor.owner != worker || monitor.platform != (worker == nil) {
+		return 0, fmt.Errorf("wait on %#x, whose lock the waiting thread does not hold", object)
+	}
+	depth := monitor.count
+	delete(runtime.monitors, object)
+	client.holdJavaMonitor(worker, -depth)
+	if worker != nil {
+		worker.wakeAt, worker.yields = 0, 0
+		if timeout > 0 {
+			worker.wakeAt = client.clock.now() + timeout
+		}
+		if err := worker.park(); err != nil {
+			return 0, err
+		}
+	} else {
+		// The platform's own thread has no slice of its own to end, so the
+		// turn it hands over has to be taken here; a deadline it cannot park
+		// against is charged to the guest clock the way `sleep` charges one.
+		if timeout > 0 {
+			_ = client.clock.advance(timeout)
+		}
+		if err := client.runOtherJavaWorkers(ctx); err != nil {
+			return 0, err
+		}
+	}
+	if err := client.javaMonitorEnter(ctx, object); err != nil {
+		return 0, err
+	}
+	if retaken := runtime.monitors[object]; retaken != nil {
+		retaken.count = depth
+		client.holdJavaMonitor(worker, depth-1)
+	}
+	return 0, nil
+}
+
+// runOtherJavaWorkers gives each live guest thread one slice. It is what the
+// platform's own thread does instead of parking: it has no slice of its own to
+// end, so the turn it hands over has to be taken here and now.
+func (client *Client) runOtherJavaWorkers(ctx context.Context) error {
+	if client.javaRun == nil {
+		return nil
+	}
+	for _, worker := range append([]*javaWorker(nil), client.javaRun.workers...) {
+		if worker.done {
+			continue
+		}
+		event, err := client.grantJavaSlice(ctx, worker)
+		if err != nil {
+			return err
+		}
+		if !event.done {
+			continue
+		}
+		worker.done = true
+		if event.err != nil && !errors.Is(event.err, ErrGuestExited) {
+			return event.err
+		}
+	}
+	return nil
 }

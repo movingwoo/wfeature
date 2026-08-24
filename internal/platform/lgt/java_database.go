@@ -56,6 +56,11 @@ type javaDatabase struct {
 	// identifiers above it do not move.
 	deleted  []bool
 	modified int64
+	// closed marks a database the title has closed. The entry is kept rather
+	// than dropped, because closing one twice is defined and the second close
+	// has to be able to tell a database it already wrote from an object that
+	// was never a database at all. See javaCloseDataBase.
+	closed bool
 }
 
 // javaDatabaseMethods is this class's whole surface. It joins the platform
@@ -161,6 +166,9 @@ func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 	if !ok {
 		return nil, fmt.Errorf("the object at %#x is not an open database", object)
 	}
+	if database.closed {
+		return nil, fmt.Errorf("the database %q is closed", database.name)
+	}
 	return database, nil
 }
 
@@ -235,15 +243,28 @@ func (database *javaDatabase) decode(data []byte) error {
 	return nil
 }
 
+// javaCloseDataBase is `closeDataBase()`: the records are written back and the
+// object stops being usable.
+//
+// **Closing one that is already closed is ignored**, which the specification
+// says in as many words, and one local title depends on it: it closes its
+// database at the end of a save and again on the way out of the routine that
+// called the save. The object stays in the table marked closed rather than
+// being dropped, so the second close is told apart from a call on something
+// that was never opened here — which is still a stop, because it means the
+// title is holding an object this platform did not issue.
 func javaCloseDataBase(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	database, err := client.javaDatabaseOf(arguments[0])
-	if err != nil {
-		return 0, err
+	database, ok := client.javaRuntimeState().databases[arguments[0]]
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a database this platform opened", arguments[0])
+	}
+	if database.closed {
+		return 0, nil
 	}
 	client.storeDatabase(database)
-	delete(client.javaRuntimeState().databases, arguments[0])
+	database.closed = true
 	return 0, nil
 }
 

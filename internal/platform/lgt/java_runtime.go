@@ -126,6 +126,9 @@ type javaRuntime struct {
 	// build, is what keeps the answer readable: one title rebuilds the same
 	// constant every frame.
 	named map[string]bool
+	// serial is what `Display.callSerially` has been handed and not yet run.
+	// See java_frame.go.
+	serial []uint32
 }
 
 func newJavaRuntime() *javaRuntime {

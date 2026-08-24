@@ -164,6 +164,20 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// object stands for the same open resource the stream it is built on does.
 	"java/io/DataInputStream.<init>(Ljava/io/InputStream;)V": {
 		Words: 2, Implementat: javaWrapStream},
+	// A reader is a wrapper too, and for the same reason: it stands for the
+	// stream it was built on, so a read through either moves the one cursor.
+	// **What it decodes with is not settled here** — nothing has been watched
+	// reading characters out of one yet — and it does not have to be for the
+	// wrapping to be right.
+	"java/io/InputStreamReader.<init>(Ljava/io/InputStream;)V": {
+		Words: 2, Implementat: javaWrapStream},
+
+	// A stream over bytes a title already holds, which is how one reads a
+	// record back out of its own save. There is nothing to open: the array is
+	// the stream's whole content, copied because the title may write into the
+	// array afterwards.
+	"java/io/ByteArrayInputStream.<init>([B)V": {
+		Words: 2, Implementat: javaByteStreamConstructor},
 
 	// A title's own save, on the filesystem a Clet writes into; see
 	// java_file.go.
@@ -212,6 +226,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 		}
 		return arguments[1], nil
 	}},
+
+	// The same pair over sixty-four bits. A long is two words, low first, so
+	// the four argument words are the two values and the answer goes back in
+	// the register pair every other long-valued call here uses.
+	"java/lang/Math.max(JJ)J": {Words: 4, Implementat: javaMathLong(false)},
+	"java/lang/Math.min(JJ)J": {Words: 4, Implementat: javaMathLong(true)},
 
 	// Text. What a String or a StringBuffer holds is kept on this platform's
 	// side, keyed by the object the module allocated; see java_string.go.
@@ -293,8 +313,20 @@ func init() {
 	// java_thread.go for what starting one does. It is registered here rather
 	// than in the table above because starting a thread runs guest code, which
 	// reaches this table back.
+	//
+	// Slot 14 takes the receiver and one number, and the number is a literal
+	// ten. Its call site is the first thing a game thread's `run` does: ask
+	// for the running thread, null-check it, and dispatch this slot on it with
+	// ten, dropping the answer. **`setPriority(int)` is the only method this
+	// class declares that takes an argument at all**, so no other reading of
+	// the site is available — and ten is `MAX_PRIORITY`, which is what a game
+	// loop asks for there. The numbering agrees: this class's own run is
+	// `start`, `run`, `interrupt`, `isAlive`, `setPriority`, and `start` at 10
+	// is the anchor above, which puts `setPriority` at exactly 14.
 	javaBakedVirtualSlots[javaThreadClass] = map[uint32]javaBakedSlot{
 		10: {Called: "start()V", Method: javaPlatformMethod{Words: 1, Implementat: javaThreadStart}},
+		14: {Called: "setPriority(I)V",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaThreadSetPriority}},
 	}
 	for _, table := range []map[string]javaPlatformMethod{javaGraphicsMethods, javaDatabaseMethods} {
 		for key, method := range table {
@@ -384,6 +416,19 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// retries on its own (java_thread.go). So the notification has no
 		// queue to move anything out of.
 		5: {Called: "notify()V", Method: javaPlatformMethod{Words: 1, Implementat: javaNoResult}},
+		// Slot 9 takes the receiver alone, drops its answer, and is called on
+		// the very object the instruction before it took the lock of — inside
+		// a `synchronized` body, on the object being synchronized on. Of what
+		// this class declares that is `wait`, and the run agrees: `getClass`
+		// at 1 and `notify` at 5 are four apart, which is what `hashCode`,
+		// `equals` and `toString` fill, and the three `wait` forms follow
+		// `notifyAll` at 6 — the no-argument one last, at 9.
+		9: {Called: "wait()V", Method: javaPlatformMethod{Words: 1, Implementat: javaObjectWait}},
+		// Slot 7 is the same call with a deadline: the receiver and a long,
+		// which the one site here passes as forty milliseconds. It sits two
+		// before the no-argument form, where `wait(long)` and
+		// `wait(long, int)` are declared.
+		7: {Called: "wait(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaObjectWaitTimed}},
 	},
 	// `java/lang/Class` slot 16 takes one argument, a String, and answers an
 	// object the caller null-checks and then reads bytes out of — the resource
@@ -425,12 +470,37 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// out of the file — a read that must fill the array. Slot 23 takes the
 		// receiver alone; the numbering puts `readByte` there, three slots
 		// into this class's own run.
+		// Slot 19 is the same call without bounds — one byte array, filled to
+		// its own length — and it is the first slot of this class's own run,
+		// which is what the four slots settled from call sites put there.
+		19: {Called: "readFully([B)V",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadFully}},
 		20: {Called: "readFully([BII)V",
 			Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
+		// Slot 22 takes the receiver alone — the register beside it still
+		// holds the stream this one was built on, which the site loaded to
+		// reach the receiver and never reloaded — and it sits one before the
+		// `readByte` below. This class's run is `readFully([B)`,
+		// `readFully([BII)`, `skipBytes`, `readBoolean`, `readByte`, and the
+		// four slots settled from their own call sites — 20, 23, 25 and 28 —
+		// pin every place in it. A save that stores a flag reads it back here.
+		22: {Called: "readBoolean()Z",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadBoolean}},
 		23: {Called: "readByte()B",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadByte}},
+		// Slot 24 is the same byte kept unsigned, which is the pair this class
+		// declares one after the other and the run puts here.
+		24: {Called: "readUnsignedByte()I",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUnsignedByte}},
 		25: {Called: "a big-endian halfword",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadShort}},
+		// Slot 27 takes the receiver alone and sits two past the halfword
+		// above, where this class declares `readUnsignedShort` and then
+		// `readChar`. It is the unsigned one either way — a `char` is a
+		// sixteen-bit unsigned value — so the two bytes are not sign-extended
+		// here, which is the whole difference from 25.
+		27: {Called: "readChar()C",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadChar}},
 		// Slot 28 takes the receiver alone. This class's own methods start
 		// after the nine it inherits and overrides from `InputStream`, which
 		// puts `readShort` at 25 — where the halfword above already is — and
@@ -438,6 +508,21 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// a count with it before it reads the rows.
 		28: {Called: "readInt()I",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
+	},
+	// `java/io/InputStreamReader` slot 11 takes the receiver and a `char[]`,
+	// and the run it falls in is the reader hierarchy's own: `read()`,
+	// `read(char[])`, `read(char[], int, int)`, in the order the class library
+	// declares them, from 10. A call that passes one array and no bounds is
+	// the middle one. **The bytes are decoded the way every other text this
+	// platform reads is** — the handset's own encoding — so a reader and a
+	// `String(byte[])` over the same bytes agree.
+	// Slot 18 is the same run's last: `skip`, `ready`, `markSupported`,
+	// `mark`, `reset`, `close`. It takes the receiver alone and its answer is
+	// dropped, and closing the reader closes the stream underneath it, which
+	// is the one both objects stand for.
+	javaInputStreamReaderClass: {
+		11: {Called: "read([C)I", Method: javaPlatformMethod{Words: 2, Implementat: javaReaderRead}},
+		18: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
 	},
 	// `java/lang/StringBuffer`. Slot 18 takes one reference and answers one:
 	// its call sites build a string constant, pass it as the only argument, and
@@ -499,6 +584,21 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 			Method: javaPlatformMethod{Words: 2, Implementat: javaStringComparison}},
 		19: {Called: "startsWith(Ljava/lang/String;)Z",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaStringStartsWith}},
+		// Slot 21 takes the receiver and one number, and the instruction after
+		// the call compares its answer with zero and branches when it is
+		// negative — an index with -1 for "not there". This class declares
+		// four `indexOf`/`lastIndexOf` forms over a character before the two
+		// over a string, and the run puts the first of them here; the number
+		// the one local site passes is `U+3000`, the ideographic space, which
+		// is a character rather than anything else it could be.
+		21: {Called: "indexOf(I)I",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringIndexOfChar}},
+		// Slot 22 is the same search from an index, which this class declares
+		// immediately after. Its site passes `0x26` and a zero — an ampersand
+		// and the start of the string — so the character and the place to
+		// start are the right way round.
+		22: {Called: "indexOf(II)I",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaStringIndexOfChar}},
 		26: {Called: "indexOf(Ljava/lang/String;I)I",
 			Method: javaPlatformMethod{Words: 3, Implementat: javaStringIndexOfTextFrom}},
 		// Slot 29 sits one past substring and takes the receiver and one
@@ -553,6 +653,21 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// `getTimeZone`.
 		19: {Called: "getTimeZone()Ljava/util/TimeZone;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaCalendarZone}},
+		// Slot 29 is where the site wins over the rule, which is the case the
+		// rule was written with. The site is three calls long and leaves
+		// nothing to read into it: `Calendar.getInstance()`, then a
+		// `new Date()` on the line after, then this slot on the calendar with
+		// that Date as its only argument and its answer dropped. **The one
+		// method this class declares that takes a Date is `setTime`**, so
+		// there is no second reading of the call — but the numbering puts
+		// `setTime` at 11, second in this class's own run, and 29 is eight
+		// past where that run ends. Either this module was compiled against a
+		// fuller Calendar than the one the other slots here were read off, or
+		// the run does not start where it appears to; nothing read so far
+		// says which, and the disagreement is the point rather than a detail.
+		// Nothing else in the local set dispatches this slot.
+		29: {Called: "setTime(Ljava/util/Date;)V",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarSetTime}},
 	},
 	// `java/util/Date` and `java/util/TimeZone`, both of whose own runs are
 	// short enough to state whole: a Date declares getTime then setTime, and a
@@ -609,6 +724,11 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// it, and hands the answer straight to `new char[n][]` and
 		// `new int[n][3]` — a count of rows, which `indexOf` answers and a
 		// boolean does not.
+		// Slot 16 takes the receiver alone and its answer is compared with
+		// zero and branched on — a boolean rather than the count `size`
+		// answers one slot below it, which is the pair this class declares in
+		// that order.
+		16: {Called: "isEmpty()Z", Method: javaPlatformMethod{Words: 1, Implementat: javaVectorEmpty}},
 		19: {Called: "indexOf(Ljava/lang/Object;)I",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorIndexOf}},
 		// Slot 23 is where a title's save stops, and two things settle it. The
@@ -650,6 +770,28 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// local up to a field.
 		29: {Called: "addElement(Ljava/lang/Object;)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorAdd}},
+		// Slot 31 takes the receiver alone — the instruction before the
+		// dispatch moves the vector into r0 and sets nothing else — and its
+		// answer is dropped: the site reloads a base register and stores a
+		// zero without reading r0. That is a no-argument void method, and the
+		// numbering that put the eight slots above where their own call sites
+		// found them puts `removeAllElements` at 31 and nothing else there.
+		31: {Called: "removeAllElements()V",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaVectorClear}},
+	},
+	// `java/util/Stack`, whose own methods follow Vector's — 22 of them from
+	// 10, `toString` taking Object's slot rather than one of its own, so this
+	// class's run starts at 32. It declares `push`, `pop`, `peek`, `empty` and
+	// `search` in that order. Slot 32 takes the receiver and one reference,
+	// which is `push`; the specification has it answer the item it was given.
+	javaStackClass: {
+		32: {Called: "push(Ljava/lang/Object;)Ljava/lang/Object;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStackPush}},
+		// Slot 33 takes the receiver alone and its answer is dispatched on,
+		// which is `pop` — the next method this class declares and the one a
+		// title that has just pushed comes back for.
+		33: {Called: "pop()Ljava/lang/Object;",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStackPop}},
 	},
 	javaStringBufferClass: {
 		4: {Called: "toString()Ljava/lang/String;",
@@ -1078,4 +1220,24 @@ func (client *Client) javaArguments(thread *armcore.Thread, words int) ([]uint32
 		values[index] = value
 	}
 	return values, nil
+}
+
+// javaMathLong is `Math.min(long, long)` and `Math.max(long, long)`, which
+// differ only in which way the comparison runs.
+func javaMathLong(smallest bool) func(
+	*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return func(
+		_ *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+	) (uint32, error) {
+		left := int64(uint64(arguments[1])<<32 | uint64(arguments[0]))
+		right := int64(uint64(arguments[3])<<32 | uint64(arguments[2]))
+		answer := left
+		if (right < left) == smallest {
+			answer = right
+		}
+		if err := thread.SetRegister(1, uint32(uint64(answer)>>32)); err != nil {
+			return 0, err
+		}
+		return uint32(uint64(answer)), nil
+	}
 }

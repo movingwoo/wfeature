@@ -144,7 +144,13 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 	case wipicDatabaseTouchStream:
 		return runtime.wipicDatabaseTouch(thread)
 	default:
-		return 0, fmt.Errorf("KTF WIPI C database function %d is not implemented", function)
+		// The call site is named for the same reason the unimplemented-table
+		// error names one: the function number is an index into an array of
+		// pointers, so it never appears in the guest's own code, and an
+		// address is the only thing about a missing call that can be
+		// disassembled.
+		return 0, fmt.Errorf("KTF WIPI C database function %d is not implemented%s",
+			function, runtime.callerSite(thread))
 	}
 }
 
