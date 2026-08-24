@@ -480,10 +480,21 @@ func (client *Client) readJavaClassList(table uint32) ([]javaClass, error) {
 		index[handle] = int(slot)
 	}
 	classes := make([]javaClass, 0, count)
-	for _, handle := range handles {
+	for slot, handle := range handles {
+		// A null slot is a class the module named and never materialized, and
+		// an interface is why: dispatch through one goes by the receiver, so
+		// the module resolves the interface's name without ever loading a
+		// record for it. The slot keeps its place — the string constants
+		// start where the handles end, and that boundary is counted rather
+		// than found — so it is kept as a class with no handle rather than
+		// dropped.
+		if handle == 0 {
+			classes = append(classes, javaClass{})
+			continue
+		}
 		class, err := client.readJavaClass(handle, index)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("class %d of %d at %#x: %w", slot, count, table+8+uint32(slot)*4, err)
 		}
 		classes = append(classes, class)
 	}
@@ -496,7 +507,11 @@ func (client *Client) readJavaClassList(table uint32) ([]javaClass, error) {
 // read but not run is not a title that starts.
 func describeJavaClasses(classes []javaClass) []string {
 	lines := make([]string, 0, len(classes))
-	for _, class := range classes {
+	for slot, class := range classes {
+		if class.Handle == 0 {
+			lines = append(lines, fmt.Sprintf("slot %d not materialized", slot))
+			continue
+		}
 		super := class.Super
 		if class.SuperHandle != 0 {
 			super = fmt.Sprintf("handle %#x", class.SuperHandle)

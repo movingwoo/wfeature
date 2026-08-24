@@ -3849,6 +3849,256 @@ and the island sprite in front of it. The palette quantisation above is the
 256-entry palette of an 8-bit bitmap, and it is as true of the parts that read
 correctly as of the band because they are all the same bitmaps.
 
+## What a sweep of a 262-archive set asked for
+
+A local set of 262 archives of this platform — 259 of the descriptor-and-JAR
+generation and three WIPI 1.1 packages — was driven from a fresh save in five
+passes: a stepped probe to the first lit frame, a two-thousand-tick run at four
+times the guest clock, a key script over every title whose screen had not
+changed, a timed four-hundred-tick run over the ones that had not finished, and
+a second run of the key script — against the save tree the first one wrote —
+over every title whose screen still had not moved. 157 of them reach a screen
+that keeps changing or that answers a key. That is what a probe can say;
+whether a title plays is still the user's to find out. What stops the rest
+sorts into six shapes, and the first is most of them.
+
+**Run it twice before believing a screen has stopped.** That fifth pass moved
+thirteen of the twenty-five stuck screens across both WIPI platforms, and what
+they were holding was the title's own notice — "the game is closing to free
+memory, please start it again" and three wordings of the same thing. It is the
+startup gate this document already describes, and a probe that only ever runs a
+title once reads every one of them as a hang. One of the thirteen faults on its
+second run instead, on a null structure pointer inside a timer callback, which
+is a real stop that the notice had been hiding.
+
+**A class-library member that is not there stops a title outright, and
+thirty-three of them accounted for forty-eight titles.** The AOT bridge resolves
+a library call by name and descriptor, so a member the runtime does not publish
+is not a wrong answer but a stop, with the class and descriptor in the message.
+Publishing them is mostly metadata over bodies the core library already had; the
+ones that needed a body are named below. What the set asked for:
+
+- `java.io`: `OutputStream.write([BII)V` (five titles), `DataInputStream`'s
+  `readFully([B)V` (four), `readChar()C` and `readUnsignedByte()I`,
+  `DataOutputStream.writeUTF`, three titles'
+  `InputStreamReader.<init>(Ljava/io/InputStream;)V`, and
+  `PrintStream.println(Ljava/lang/Object;)V`
+- `java.lang`: `Class.forName` (three), `System.getProperty` (two), `String`'s
+  `<init>([C)V`, `<init>([CII)V`, `indexOf(II)I` and `lastIndexOf(I)I`,
+  `StringBuffer.insert(ILjava/lang/String;)`, `Throwable.printStackTrace`
+- `java.util`: `Hashtable.<init>(I)V` and `keys()`, `Calendar.set(II)V`,
+  `TimeZone.getTimeZone` and `getAvailableIDs`
+- the platform's own: `org/kwis/msp/handset/LED.set(I)V` (two),
+  `org/kwis/msp/lcdui/Image.play`, and three `org/kwis/msp/lwc` components —
+  `ShellComponent.getX`, `AnnunciatorComponent.layout`,
+  `LabelComponent.<init>(Ljava/lang/String;)V`
+- two vendor classes outside the specification: `wec/OEMDevice`'s
+  `enableSleep(Z)Z` and `getSYSTheme()`, and `com/ktf/kfc/GForm.<init>(IIII)V`
+
+**Nineteen of those forty-eight stopped after the title screen rather than
+before it**, and the java.io half of the list is why: fourteen died in a paint or
+a worker and five on the first key press, which is where a title of this era
+writes its save. A member missing from a stream class does not show up until
+something is stored.
+
+Six of them needed more than a declaration, and each is worth knowing about:
+
+- **`writeUTF` had to be written against `readUTF` rather than against Go.**
+  Both are modified UTF-8 with a two-byte length, and the pair is one round
+  trip: a title stores a name with one and reads it back with the other.
+- **A `Reader` decodes without knowing the charset.** It feeds the platform
+  decoder one more byte at a time until the decoder answers with a character
+  rather than a replacement, which makes the same code right for the
+  single-byte and two-byte cases. Reading the stream to its end up front would
+  have been simpler and would have made a reader over a connection wait for the
+  far end to close.
+- **`TimeZone` knows two zones: the one the guest clock runs in, and GMT.**
+  Calendar and Date read that clock as local time, so a zone object that
+  disagreed with them would make a title's own arithmetic wrong. Shipping the
+  IANA table would mean embedding tzdata in a cross-compiled release, and no
+  title here does more with `getAvailableIDs` than hand an element back to
+  `getTimeZone`.
+- **`System.getProperty` answers the same handset table the WIPI C call and
+  `HandsetProperty` do**, plus the configuration and profile names, and answers
+  null rather than empty for a name it does not know — a title that probes for
+  an optional capability reads an empty string as "the handset has it".
+- **`Image.play` and `stop` left the deliberately-unimplemented list rather
+  than joining it.** The specification says both do nothing for an image that is
+  not animated, and no image here is, so a no-op is the contract rather than a
+  guess at the ImageObserver protocol beside them.
+- **`wec/OEMDevice` is a vendor class with no reference behind it**, so it
+  answers what a caller can do least with: sleep is not disabled, and the theme
+  is an object with nothing on it. A title that reads a colour off the theme
+  will stop at that call, which is the point where there would be evidence
+  about what the field is. `com/ktf/kfc/GForm` is the same kind of class and is
+  still absent: its constructor takes a rectangle and the title then draws into
+  the object, and there is nothing to build that object out of yet.
+
+**A field lookup that failed named a handle rather than a class.** Four of the
+forty-eight stopped on `err:Ljava/io/PrintStream;` or a `w:I` reported as "from
+class 0x3000a9e0". A method miss named its class; the field path did not resolve
+the record back to a name, so what a report said could not be searched for. Both
+paths say it the same way now, and doing that first is what named the two
+misses: `java/lang/System.err`, and `org/kwis/msp/lcdui/Card`'s `w`.
+
+**A Card publishes its geometry, and a subclass's own fields move to make room.**
+The specification declares `x`, `y`, `w`, `h` and `bTrans` protected on Card, and
+a title reads `w` off its own canvas rather than calling `getWidth`. Declaring
+them raised a question that turned out to have a reassuring answer: a guest class
+record's field offsets are **not** baked into the image. The client computes them
+when it prepares a class, from the instance size its parent declares — so
+declaring twenty bytes on Card moved every canvas subclass's own first field from
+offset zero to twenty across every archive in the set, without the archives
+changing. That is what makes publishing a field on a runtime class safe at all,
+and `field_sync.go` checks it holds before it writes rather than assuming.
+
+**Seven titles' own `startApp` was not found on the class the descriptor names,
+and an eighth could not find a thread class's own `run`.** All eight were one
+defect. KTF hands the runtime one class at a time — `GetClass` answers the class
+it was asked for, and the guest registers a class as it initializes it — so a
+Jlet that inherits `startApp` from a base class in the same image had nowhere for
+the lookup to walk to: the chain is walked through the registry, and the base
+class had never been in it. The chain was in the image the whole time, because a
+class descriptor holds its parent's record address. Resolving a class now reads
+that chain and registers it, which is metadata only: no guest code runs and no
+class initializer with it, and the guest still registers the parent itself when
+it initializes it. An ancestor whose record will not read stops the walk and is
+logged, because this is enrichment of a lookup that worked without it.
+
+**What the forty-eight became.** Thirty-nine of them start and draw — and
+running a title on past its first frame is a different question, which the
+first-frame probe cannot answer. Driving the whole set for a thousand ticks at
+the game's own pace afterwards found twelve more titles dying later, most of
+them on more of the same list: `Player.resume`, `Math.max(JJ)J`,
+`StringBuffer.setCharAt`, `Calendar.getInstance(TimeZone)`, a
+`ByteArrayInputStream` constructor, two `org/kwis/msp/lwc` members and
+`ByteArrayOutputStream`'s protected `buf`. **A member a title does not need to
+draw its title screen is invisible to a probe that stops there**, which is the
+same lesson the java.io half of the list taught and worth stating as a probe
+design rule rather than as a fact about these titles.
+
+The nine that do not reach a first frame have new causes, and they are not one
+shape: three fault on guest
+memory well inside their own code, two hand a runtime method a reference that is
+not an object this runtime has bound, one raises
+`StringIndexOutOfBoundsException` out of its own `substring`, one nests a
+`Class.forName` that raises through a catch until the platform arena is gone,
+one is the `GForm` class above, and one exceeds the instruction limit. The
+platform-wide count moved with them: of the 259 zip archives in the set, load
+failures went from 56 to 25, and every one of the 25 was already a load failure
+before.
+
+**Three WIPI 1.1 packages died inside the client entry, and the reason is that
+their client image is not code at its first byte.** They carry the same
+`__adf__` and `client.bin<BSS-size>` layout the rest of the generation does, and
+their JARs hold no class files either — the title is the native image, with its
+Java compiled into it, exactly like the newer ones. What is different is the
+file. It is a relocatable module:
+
+	u32 bssSize            what the file name also names
+	u32 relocationCount
+	u32 zero
+	u32 relocations[]      segment offsets of words to rebase
+	u32 zero               terminator
+	...segment...
+
+and the segment opens with nine words of its own before any code:
+
+	seg[0..5]  addresses, one of them the end of the segment
+	seg[6]     0x13580001
+	seg[7]     the module entry, Thumb, so odd before and after rebasing
+	seg[8]     0x13580001
+	seg[9..]   code, beginning with the same helper in all three files
+
+Every relocated word gets the segment's load address added. Three files agree on
+the header, the terminator, the two markers, and the shared helper, which is
+what makes the reading certain rather than plausible — and `parseRelocatableClient`
+requires all of it, because the alternative reading is what every other archive
+here carries.
+
+Two of the relocation entries are still unexplained: each module relocates the
+word at segment offset 0x18, which is the marker rather than an address, and the
+word at 0x24, which is the helper's first instruction pair. Nothing has read
+either of them yet, so the table is applied as it stands rather than with
+exceptions invented for two entries.
+
+With that, all three reach a shared entry function and run the same twenty-odd
+instructions before stopping at the same place: `ldr r3, [r0]` followed by a call
+through what it loaded. **The entry takes a pointer to a table of functions**,
+not the BSS size the newer entry takes — the newer client asks the platform for
+its interface through a supervisor call, and this one is handed one. What that
+table holds, and how many entries it has, is the next thing to find out; it is
+also the reason the failure now reads as a branch to a small address rather than
+as an instruction fault in the header.
+
+**A title draws an image it never got, and the exception is correct.** Three
+titles end on a `NullPointerException` from `Graphics.drawImage`. The null is
+the title's own: it catches what `createImage` raised — an
+`IllegalArgumentException` for an encoding this platform does not decode, or an
+`IOException` for a resource it did not find — leaves the slot in its image
+array null, and paints it later. The stop is honest and the cause is upstream,
+so the fix is to find which encoding or which resource name came back empty, not
+to make the draw tolerate null.
+
+**Six archives were refused before anything ran, and four of the refusals were
+this loader being stricter than the archives are.**
+
+- **A descriptor may carry no PID.** One archive has the key with nothing after
+  it. `SaveOwner` had always said what happens then — the AID stands in — so
+  refusing the archive was the loader contradicting its own fallback.
+- **A folder entry is dropped before its name is checked.** One archive carries
+  a bare `./` folder entry, which cleans to nothing and was refusing the title.
+  Nothing is stored under a folder entry, and the check is about where content
+  lands.
+- **A duplicate entry is refused for its ambiguity, not for being a
+  duplicate.** Two entries under one name are dangerous because which one a
+  reader takes decides what runs. One archive packs its whole image folder
+  twice over, byte for byte, and identical bytes have no ambiguity to exploit.
+  A duplicate that differs is still refused.
+- **The descriptor is what says where the root is.** One archive is a dump of
+  the handset's own application directory: `W/exe_info` beside
+  `W/apps/<AID>/__adf__` and the rest of the title. Removing one shared folder
+  is not enough there — the entries do not share one — and the convention is
+  the platform's own, since the `__env__` file the earlier package carries
+  names its private area `/W/apps/<AID>/P/`. An archive whose descriptor is
+  already at the root is untouched, and one with two descriptors is left alone
+  rather than re-rooted at a guess. Detection matches the marker on the last
+  path element for the same reason: it has to agree with what the loader will
+  do.
+
+Two refusals stand. One archive is three archives zipped together, one per
+episode of the same game, and unpacking one of those for somebody is a Host's
+decision rather than a loader's. The other is a RAR whose extension had been
+changed to `.zip`; three more files in the same set are ALZ archives. **What
+those get now is their format named**: "zip: not a valid zip file: this is a
+RAR archive, which this emulator does not read". Every loader wraps its zip
+refusal the same way, so a person who drops one in is told which file they
+picked rather than only that it was the wrong one.
+
+**Eight titles fault in guest memory and four exceed a budget.** The memory
+faults are reads and writes at small absolute addresses — `0x0`, `0x24` and
+`0x48` — which is a null structure pointer being walked rather than a mapping
+this platform is missing; one of the eight is the title the restart notice was
+hiding. Of the budget stops, three exceed the instruction limit inside
+`startApp` and one exceeds a service call's step allowance from inside `paint`;
+the trace distribution is what tells a spin from a load, and it has not been
+read for these yet.
+
+**Six titles hold a screen through two runs, and one of them names its own
+reason.** Its guest log prints `MC_fsOpen() failed!!!(-12)` and then destroys
+every image it had loaded, which is a file open this platform refused rather
+than a title that stopped: a screen that goes blank after a load is worth
+reading the guest's own printk for before anything else. What the other five are
+waiting for has not been established — one of them never paints a frame at all,
+through both runs and the key script — and a denser key sweep is the next step.
+
+**Thirteen titles are far slower than the handset was, and three do not finish
+four hundred ticks.** Seven of the thirteen are this platform's: four hundred
+ticks at four times the clock cost them twenty to a hundred and three seconds,
+against about one second for a title that keeps up. One title does not finish
+four hundred ticks in five minutes at all. None of them is stopped — every one
+of them is drawing — so this is a profile to read rather than a fault to find.
+
 ## Deliberately incomplete
 
 - repairing a guest write to a published instance field rather than reporting

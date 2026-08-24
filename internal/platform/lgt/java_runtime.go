@@ -99,8 +99,10 @@ type javaRuntime struct {
 	// monitors are the locks `synchronized` takes, by the object each is on.
 	monitors   map[uint32]*javaMonitor
 	mainThread uint32
-	// vectors is what each java/util/Vector holds; see java_vector.go.
+	// vectors is what each java/util/Vector holds; see java_vector.go, and
+	// databases the record stores a title has open; see java_database.go.
 	vectors        map[uint32][]uint32
+	databases      map[uint32]*javaDatabase
 	workers        []*javaWorker
 	threadStacks   int
 	graphics       map[uint32]*javaGraphics
@@ -131,6 +133,7 @@ func newJavaRuntime() *javaRuntime {
 		threads:    map[uint32]*javaThread{},
 		monitors:   map[uint32]*javaMonitor{},
 		vectors:    map[uint32][]uint32{},
+		databases:  map[uint32]*javaDatabase{},
 	}
 }
 

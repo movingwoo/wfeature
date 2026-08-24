@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
+	"github.com/movingwoo/wfeature/internal/platform/detect"
 )
 
 const manifestPath = "META-INF/MANIFEST.MF"
@@ -70,7 +71,7 @@ func OpenWithDescriptor(data []byte, descriptor Descriptor) (*Archive, error) {
 func readJAR(data []byte) (map[string][]byte, error) {
 	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("open SKT JAR: %w", err)
+		return nil, fmt.Errorf("open SKT JAR: %w", detect.ContainerError(data, err))
 	}
 
 	entries := make(map[string][]byte, len(zipReader.File))

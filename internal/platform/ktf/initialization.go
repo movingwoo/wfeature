@@ -280,6 +280,10 @@ type initializationRuntime struct {
 	wipicClipOrder []uint32
 	runtimeObjects map[string]*jvm.Object
 	classAliases   map[uint32]uint32
+	// leds is the indicator-light mask a title last set. This handset has no
+	// lights, so the only thing an LED read can honestly answer with is what
+	// the last write asked for. See runtime_library.go.
+	leds int32
 	// aotCallDepth is nesting per guest call stack, not per runtime. A guest
 	// thread parks with its whole nested stack intact and its depth still
 	// counted, so one shared counter grows with every parked worker and the
@@ -910,7 +914,7 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 		runtime.handleSupervisorCall,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("execute KTF AOT native call at %#x: %w", address, err)
+		return 0, fmt.Errorf("execute KTF AOT native call %s: %w", runtime.describeNativeCall(address), err)
 	}
 	var result [8]byte
 	binary.LittleEndian.PutUint32(result[:4], summary.Context.Registers[0])
@@ -2053,6 +2057,25 @@ func (runtime *initializationRuntime) registerJavaString(thread *armcore.Thread)
 	}
 	runtime.callbacks.RegisteredStrings++
 	return object, nil
+}
+
+// describeNativeCall names the body a native call is entering. Most of these
+// addresses are this runtime's own stubs, and a report that gives the address
+// alone leaves the one question a nested failure raises — which method is
+// re-entering — answerable only by reading the allocator's order.
+func (runtime *initializationRuntime) describeNativeCall(address uint32) string {
+	for key, stub := range runtime.stubs {
+		if stub != address {
+			continue
+		}
+		if uint32(key>>32) != svcCategoryRuntimeJava {
+			continue
+		}
+		if invocation, ok := runtime.nativeMethods[uint32(key)]; ok {
+			return fmt.Sprintf("%s.%s%s at %#x", invocation.method.class, invocation.method.name, invocation.method.descriptor, address)
+		}
+	}
+	return fmt.Sprintf("at %#x", address)
 }
 
 func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) {

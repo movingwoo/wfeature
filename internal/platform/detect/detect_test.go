@@ -213,17 +213,23 @@ func TestArchiveNamesAPlatformThroughAWrappingFolder(t *testing.T) {
 	}
 }
 
-// One folder comes off, not every folder. An archive whose marker is genuinely
-// two levels down is not one this build can read, and saying so is better than
-// digging until something matches.
-func TestArchiveDoesNotDigThroughTwoFolders(t *testing.T) {
-	entries := map[string][]byte{"outer/inner/__adf__": []byte("aid:AI0000\n"), "outer/inner/AI0000.jar": nil}
+// A marker deeper than one folder still names its platform, because the loader
+// roots such an archive at its descriptor: one local copy is a dump of the
+// handset's own application directory, which keeps the title under
+// `W/apps/<AID>/` and nothing at the root but a file beside it. Detection has
+// to agree with what the loader will do.
+func TestArchiveClaimsAMarkerBelowMoreThanOneFolder(t *testing.T) {
+	entries := map[string][]byte{
+		"W/exe_info":               nil,
+		"W/apps/AI0000/__adf__":    []byte("aid:AI0000\n"),
+		"W/apps/AI0000/AI0000.jar": nil,
+	}
 	got, err := detect.Archive(buildZIP(t, entries))
 	if err != nil {
 		t.Fatalf("Archive() error = %v", err)
 	}
-	if got != detect.Unknown {
-		t.Fatalf("Archive() = %q, want %q", got, detect.Unknown)
+	if got != detect.KTF {
+		t.Fatalf("Archive() = %q, want %q", got, detect.KTF)
 	}
 }
 

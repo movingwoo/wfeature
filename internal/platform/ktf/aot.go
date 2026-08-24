@@ -79,6 +79,7 @@ func (runtime *initializationRuntime) registerAOTClass(ctx context.Context, thre
 	if err := runtime.client.vm.RegisterAOTClass(metadata); err != nil {
 		return 0, fmt.Errorf("register KTF AOT class %s: %w", metadata.Name, err)
 	}
+	runtime.registerAOTAncestors(address)
 	runtime.callbacks.RegisteredClasses++
 	if err := runtime.runAOTClassInitializer(ctx, thread, metadata); err != nil {
 		return 0, err
@@ -249,7 +250,80 @@ func (runtime *initializationRuntime) resolveAOTArrayClass(elementType uint32) (
 	return metadata, nil
 }
 
+// aotHierarchyLimit bounds a superclass walk over guest records. A chain this
+// deep is a malformed image rather than a class hierarchy.
+const aotHierarchyLimit = 64
+
 func (runtime *initializationRuntime) resolveAOTClass(address uint32) (jvm.AOTClassMetadata, error) {
+	metadata, err := runtime.registerAOTClassRecord(address)
+	if err != nil {
+		return jvm.AOTClassMetadata{}, err
+	}
+	runtime.registerAOTAncestors(address)
+	return metadata, nil
+}
+
+// registerAOTAncestors registers the superclass chain a class record points at.
+// KTF hands the runtime one class at a time — GetClass answers the class it was
+// asked for, and the guest registers a class as it initializes it — so a method
+// or field a class inherits had nowhere for the lookup to walk to: a title
+// whose Jlet does not override startApp reported its own startApp missing, and
+// a field miss reported the parent record as a bare address because nothing had
+// ever named it.
+//
+// The chain is in the image already. A class descriptor holds its parent's
+// record address, and reading that record is metadata only, with no guest code
+// behind it and no class initializer run — the guest still registers the parent
+// itself when it initializes it, and that registration refreshes what is here.
+//
+// A record that will not read is not fatal. This is enrichment of a lookup that
+// worked before without it, so an unreadable ancestor stops the walk and is
+// logged rather than failing the class that asked.
+func (runtime *initializationRuntime) registerAOTAncestors(address uint32) {
+	visited := map[uint32]bool{address: true}
+	for depth := 0; depth < aotHierarchyLimit; depth++ {
+		parent, err := runtime.aotSuperAddress(address)
+		if err != nil {
+			runtime.client.log("KTF AOT parent record unreadable", "class", fmt.Sprintf("%#x", address), "error", err)
+			return
+		}
+		if parent == 0 || visited[parent] {
+			return
+		}
+		visited[parent] = true
+		if _, ok := runtime.client.vm.AOTClassAt(parent); !ok {
+			if _, err := runtime.registerAOTClassRecord(parent); err != nil {
+				runtime.client.log("KTF AOT parent class not registered", "class", fmt.Sprintf("%#x", address), "parent", fmt.Sprintf("%#x", parent), "error", err)
+				return
+			}
+		}
+		address = parent
+	}
+	runtime.client.log("KTF AOT class hierarchy is deeper than the limit", "class", fmt.Sprintf("%#x", address), "limit", aotHierarchyLimit)
+}
+
+// aotSuperAddress answers the record address of a class record's parent, or
+// zero at the root of the hierarchy.
+func (runtime *initializationRuntime) aotSuperAddress(address uint32) (uint32, error) {
+	if address&3 != 0 {
+		return 0, fmt.Errorf("class address %#x is not word-aligned", address)
+	}
+	class, err := runtime.readAOTBytes(address, javaClassSize, "class")
+	if err != nil {
+		return 0, err
+	}
+	descriptorAddress := binary.LittleEndian.Uint32(class[8:])
+	if descriptorAddress&3 != 0 {
+		return 0, fmt.Errorf("class descriptor address %#x is not word-aligned", descriptorAddress)
+	}
+	descriptor, err := runtime.readAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(descriptor[8:]), nil
+}
+
+func (runtime *initializationRuntime) registerAOTClassRecord(address uint32) (jvm.AOTClassMetadata, error) {
 	if metadata, ok := runtime.client.vm.AOTClassAt(address); ok {
 		return metadata, nil
 	}
@@ -1195,17 +1269,7 @@ func (runtime *initializationRuntime) getAOTMethod(thread *armcore.Thread) (uint
 		return 0, err
 	}
 	if !ok {
-		if class, exists := runtime.client.vm.AOTClassAt(classAddress); exists {
-			return 0, fmt.Errorf("KTF AOT method %s%s was not found from class %s at %#x", name, descriptor, class.Name, classAddress)
-		}
-		// A record the registry has never heard of is still a record, and the
-		// name in it is the whole of what makes the miss actionable: without
-		// it the report is an address, and which class was being called is
-		// exactly the question.
-		if class, readErr := runtime.readAOTClass(classAddress); readErr == nil {
-			return 0, fmt.Errorf("KTF AOT method %s%s was not found from unregistered class %s at %#x", name, descriptor, class.Name, classAddress)
-		}
-		return 0, fmt.Errorf("KTF AOT method %s%s was not found from unregistered class %#x", name, descriptor, classAddress)
+		return 0, fmt.Errorf("KTF AOT method %s%s was not found from %s", name, descriptor, runtime.describeAOTClassAt(classAddress))
 	}
 	return method.Address, nil
 }
@@ -1229,9 +1293,25 @@ func (runtime *initializationRuntime) getAOTField(thread *armcore.Thread) (uint3
 		return 0, err
 	}
 	if !ok {
-		return 0, fmt.Errorf("KTF AOT field %s:%s was not found from class %#x", name, descriptor, classAddress)
+		return 0, fmt.Errorf("KTF AOT field %s:%s was not found from %s", name, descriptor, runtime.describeAOTClassAt(classAddress))
 	}
 	return field.Address, nil
+}
+
+// describeAOTClassAt names the class a failed lookup was made against. A record
+// the registry has never heard of is still a record, and the name in it is the
+// whole of what makes the miss actionable: without it the report is an address,
+// and which class was being asked is exactly the question. Both lookups say it
+// the same way, because a field miss is investigated the same way a method miss
+// is.
+func (runtime *initializationRuntime) describeAOTClassAt(address uint32) string {
+	if class, ok := runtime.client.vm.AOTClassAt(address); ok {
+		return fmt.Sprintf("class %s at %#x", class.Name, address)
+	}
+	if class, err := runtime.readAOTClass(address); err == nil {
+		return fmt.Sprintf("unregistered class %s at %#x", class.Name, address)
+	}
+	return fmt.Sprintf("unregistered class %#x", address)
 }
 
 func (runtime *initializationRuntime) readAOTClass(address uint32) (jvm.AOTClassMetadata, error) {

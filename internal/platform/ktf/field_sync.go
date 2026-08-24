@@ -24,11 +24,11 @@ import (
 // only the guest can have written it.
 //
 // Only a class that publishes instance fields to the guest has anything to
-// synchronize, and today that is java/lang/String alone. Everything else in the
-// runtime Java table keeps its state on the Go side and hands it over through
-// method calls, so it has no second copy to disagree with. The table below is
-// the whole mechanism: a class that gains a published instance field gains an
-// entry, and fieldSyncTableCoversPublishedFields fails the build if it does not.
+// synchronize. Everything else in the runtime Java table keeps its state on the
+// Go side and hands it over through method calls, so it has no second copy to
+// disagree with. The table below is the whole mechanism: a class that gains a
+// published instance field gains an entry, and
+// fieldSyncTableCoversPublishedFields fails the build if it does not.
 type fieldSync struct {
 	// mutators names the methods after which the Go value may no longer be what
 	// the payload holds. Publishing after every call instead would put two
@@ -39,6 +39,11 @@ type fieldSync struct {
 	// publish writes the Go value into the guest payload when they disagree,
 	// and reports whether it wrote.
 	publish func(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error)
+	// reserved is the number of payload bytes this class's own field records
+	// describe. A guest subclass whose own fields start inside that range is
+	// compiled against a runtime where this class published nothing, so its
+	// payload is not this class's to write. Zero means every instance is.
+	reserved uint32
 	// adopt reports whether the guest payload has stopped describing the Go
 	// value. It never writes: no local title has been seen to write one of
 	// these words, and a repair built on no evidence would be a guess about
@@ -53,6 +58,16 @@ var fieldSyncs = map[string]fieldSync{
 		publish:  publishGuestString,
 		adopt:    adoptGuestString,
 	},
+	// A Card publishes the four geometry words and the transparency flag the
+	// specification declares protected, because a title reads `w` off its own
+	// canvas rather than calling getWidth. Which constructor ran decides them
+	// and move and resize change them, so those three are the mutators.
+	runtimeCardClass: {
+		mutators: []string{"<init>", "move", "resize"},
+		publish:  publishGuestCardBounds,
+		adopt:    adoptGuestCardBounds,
+		reserved: cardFieldsSize,
+	},
 }
 
 // publishGuestFields brings the guest payload of a bound object back in step
@@ -61,7 +76,10 @@ func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, met
 	if object == nil {
 		return nil
 	}
-	sync, ok := fieldSyncs[object.ClassName]
+	// The key is the class whose method just ran rather than the object's own
+	// class: a title's canvas is a guest subclass of Card, and it is Card's
+	// constructor that decides Card's words on it.
+	sync, ok := fieldSyncs[method.class]
 	if !ok || sync.publish == nil {
 		return nil
 	}
@@ -79,6 +97,9 @@ func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, met
 	if !bound {
 		// A Go-only object has no payload yet. Whatever it holds is written
 		// when it is bound, which is where every published field starts.
+		return nil
+	}
+	if !runtime.guestReservesRuntimeBlock(object, method.class, sync.reserved) {
 		return nil
 	}
 	written, err := sync.publish(runtime, address, object)
@@ -105,6 +126,9 @@ func (runtime *initializationRuntime) adoptGuestFields(object *jvm.Object) {
 	}
 	address, bound := runtime.client.vm.AOTAddress(object)
 	if !bound {
+		return
+	}
+	if !runtime.guestReservesRuntimeBlock(object, object.ClassName, sync.reserved) {
 		return
 	}
 	diverged, err := sync.adopt(runtime, address, object)
@@ -220,4 +244,115 @@ func adoptGuestString(runtime *initializationRuntime, address uint32, object *jv
 		return false, err
 	}
 	return !slices.Equal(units, utf16.Encode([]rune(text))), nil
+}
+
+// cardFieldsSize is how many payload bytes the runtime's own Card field records
+// describe: the four geometry words and the transparency flag.
+const cardFieldsSize = 20
+
+// guestReservesRuntimeBlock reports whether a bound object's payload leaves its
+// first `size` bytes to the runtime class `owner`.
+//
+// It should always be yes, and the reason is worth writing down: a guest class
+// record's field offsets are not baked into the image. The client computes them
+// when it prepares the class, from the instance size its parent declares — so
+// declaring these bytes on Card moved every canvas subclass's own first field
+// from zero to twenty in every archive here, without the archives changing.
+// That is what makes publishing a field on a runtime class safe at all.
+//
+// The check stays because the consequence of that assumption being wrong
+// somewhere is silent: a publish into a payload whose own fields live there
+// overwrites them, and the title that breaks is one that was working. An
+// unknown chain answers no, which costs a geometry word the guest reads as
+// zero.
+func (runtime *initializationRuntime) guestReservesRuntimeBlock(object *jvm.Object, owner string, size uint32) bool {
+	if size == 0 {
+		return true
+	}
+	if object == nil {
+		return false
+	}
+	name := object.ClassName
+	for depth := 0; depth < aotHierarchyLimit; depth++ {
+		if name == owner {
+			return true
+		}
+		class, ok := runtime.client.vm.AOTClass(name)
+		if !ok {
+			return false
+		}
+		for _, field := range class.Fields {
+			if field.AccessFlags&0x0008 != 0 {
+				continue
+			}
+			if field.Offset < size {
+				return false
+			}
+		}
+		if class.SuperName == "" {
+			return false
+		}
+		name = class.SuperName
+	}
+	return false
+}
+
+// cardBoundsFields are the payload words a Card publishes, in the order their
+// field records give them offsets.
+var cardBoundsFields = []string{"x:I", "y:I", "w:I", "h:I", "transparent:Z"}
+
+// readGuestCardBounds reads the five words a Card publishes.
+func (runtime *initializationRuntime) readGuestCardBounds(address uint32) ([]uint32, error) {
+	return runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, uint32(len(cardBoundsFields)), "card bounds")
+}
+
+// cardBoundsValues answers what the Go side of a Card says its words are.
+func cardBoundsValues(object *jvm.Object) []uint32 {
+	words := make([]uint32, len(cardBoundsFields))
+	for index, name := range cardBoundsFields {
+		value, ok := object.Fields[name]
+		if !ok {
+			continue
+		}
+		number, err := value.Int32()
+		if err != nil {
+			continue
+		}
+		words[index] = uint32(number)
+	}
+	return words
+}
+
+// publishGuestCardBounds writes a Card's geometry into the payload a guest
+// reads it from. A canvas is allocated before its constructor chain runs, so
+// without this the words a title reads describe an empty card.
+func publishGuestCardBounds(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	current, err := runtime.readGuestCardBounds(address)
+	if err != nil {
+		return false, err
+	}
+	wanted := cardBoundsValues(object)
+	if slices.Equal(current, wanted) {
+		return false, nil
+	}
+	payload := make([]byte, len(wanted)*4)
+	for index, word := range wanted {
+		binary.LittleEndian.PutUint32(payload[index*4:], word)
+	}
+	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+		return false, fmt.Errorf("write KTF card bounds at %#x: %w", address, err)
+	}
+	return true, nil
+}
+
+// adoptGuestCardBounds reports a card whose payload has stopped describing the
+// Go value. The specification declares these fields protected, so a subclass
+// may assign them; nothing local has been seen to, and a repair built on no
+// evidence would be a guess about which side is right.
+func adoptGuestCardBounds(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	current, err := runtime.readGuestCardBounds(address)
+	if err != nil {
+		return false, err
+	}
+	return !slices.Equal(current, cardBoundsValues(object)), nil
 }

@@ -3340,6 +3340,93 @@ record announces itself (`[handle + 8] == handle - 0x4c`, and `0xfffffffe` at
 entries whose first words are all names of those records. Neither needs the
 module to have run.
 
+## What a sweep of a 94-archive set asked for
+
+A local set of 94 archives of this platform was driven from a fresh save in the
+same five passes the other WIPI platform's set was: a stepped probe, a
+three-thousand-tick run, a key script over every title whose screen had not
+changed, a timed four-hundred-tick run over the ones that had not finished, and
+a second run of the key script against the save tree the first one wrote.
+55 reach a screen that keeps changing or that answers a key, 24 stop with an
+error, and the rest sit still or run too slowly to say. **Ten of the 55 needed
+that second run**: they hold their own "please start the game again" notice on a
+first run, which reads as a hang from the outside and is not one. What stops
+the 24:
+
+**Fifteen are Java titles, and they stopped in two different places.** Seven
+never got past the class list: `java slot 0x7` refused with "class handle 0x0 is
+not a word-aligned address". **A null slot is a class the module named and never
+materialized, and an interface is why**: dispatch through one goes by the
+receiver, so the module resolves the interface's name without ever loading a
+record for it. The slot keeps its place rather than being dropped — the string
+constants start where the handles end, and that boundary is counted rather than
+found — and with that all seven decode their list and reach the same wall the
+other eight were at.
+
+The other eight got their launcher running and stopped on a slot that was not
+implemented: five on `Display.getDockedCard()Lorg/kwis/msp/lcdui/Card;` at
+vtable slot 12 — dispatched from the launcher itself, so it is the first thing
+five titles ask for — one on `Vector.<init>(II)V`, one on
+`Clip.<init>(Ljava/lang/String;)V`, and one on `DataInputStream` vtable slot 28
+of 64 called with an `InputStream` argument. All but the last are answered now,
+along with what the next round of running asked for: `Font.getFont(III)` and
+`charWidth(C)`, and `StringBuffer.<init>(I)`. The capacity and growth arguments
+are hints about storage this platform grows on demand, and a named face, style
+and size answer the one font there is — refusing a bold face stops a title,
+answering the plain one draws the text it meant to.
+
+**`org/kwis/msp/db/DataBase` is where four of them keep their save**, and being
+without it was four titles that did not start rather than four that lost their
+progress. It is stored as one container per database in the same store a Clet
+writes its files into — the specification puts the records in the platform's
+persistent area, and one save directory per game beats two stores that can
+disagree. The container is this runtime's own, because nothing here has to read
+a handset's: a header naming the record size and the record count, then one
+length-prefixed record each, with a deleted record keeping its slot under a
+length no real record can reach. That is what makes record identifiers stable
+and reused, which is what the specification says they are.
+
+**The store cannot be listed**, which `listDataBases` needs: it is a key-value
+store a browser Host also implements, and asking it for its keys is not part of
+that contract. So the names are kept in one more entry beside the containers,
+rewritten by every create and every delete.
+
+What the fifteen ask for now is a longer tail rather than one wall:
+`java/io/ByteArrayOutputStream` and `java/io/InputStreamReader`,
+`java/util/Calendar.getInstance`, `java/util/Stack`, and four `java/lang/String`
+and `java/util/Vector` vtable slots — 11, 19 and 26 on String, 28 on Vector —
+that no call site has been read for yet. Two of the fifteen are past the
+platform entirely: one reaches its own `paint`, and one reaches the tick loop.
+
+**Seven stop on a platform slot with no implementation.** Four are stdlib —
+`0x3f9`, `0x426`, and `0x404` twice — and three are WIPI-C: `0x6f`, `0x19f` and
+`0x44c`. Two of the three WIPI-C ones are from titles whose whole subject is
+sound, which is where to look first for what those slots are.
+
+**One reads a string that never terminates** — stdlib slot `0x411` walking past
+4096 bytes — and **one faults on unmapped guest memory at `0x8` in the module
+entry point**, before any platform call at all.
+
+**Seven titles draw a screen and then hold it through two runs**, and six of
+the seven say why once the run's log and the frame are read together: one stops
+at tick 201 on an unimplemented WIPI-C slot `0x197`, one faults inside the pixel
+operation slot `0xd3` calls at tick 2, one is a Java title stopping on a
+`java/io/ByteArrayOutputStream` slot, and two hold their own authentication
+screen — 인증중, "authenticating", on the frame and `Connect CB Error [-1]` in
+the log — which is the
+refused-connection shape this document already has one title of. The sixth
+paints its own "the save failed, the game is closing" dialog while its save tree
+holds nothing at all, which makes it a write that never happened rather than a
+screen that stopped. Only the seventh — a black screen with nothing in its log
+— is still a screen with no explanation. **A held screen is a log to read, not
+only a key to press.**
+
+**Six more are far slower than the handset**, taking fourteen to fifty-four
+seconds for four hundred ticks, and **two do not finish four hundred ticks at
+all**: one is killed after five minutes and one
+ends on the three-billion-instruction budget inside `startClet` after four
+minutes.
+
 ## Deliberately incomplete
 
 - **LGT Java apps play, and the platform API behind them is partial.** The

@@ -26,12 +26,15 @@ const (
 	PrintStreamClass           = "java/io/PrintStream"
 	ByteArrayOutputStreamClass = "java/io/ByteArrayOutputStream"
 	DataOutputStreamClass      = "java/io/DataOutputStream"
+	ReaderClass                = "java/io/Reader"
+	InputStreamReaderClass     = "java/io/InputStreamReader"
 	HashtableClass             = "java/util/Hashtable"
 	VectorClass                = "java/util/Vector"
 	RandomClass                = "java/util/Random"
 	CalendarClass              = "java/util/Calendar"
 	DateClass                  = "java/util/Date"
 	EnumerationClass           = "java/util/Enumeration"
+	TimeZoneClass              = "java/util/TimeZone"
 	StackClass                 = "java/util/Stack"
 	// ArrayEnumerationClass is the runtime's own Enumeration over a snapshot
 	// of a collection, which is what Hashtable's two views answer with. It

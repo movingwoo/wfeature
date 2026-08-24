@@ -36,7 +36,10 @@ org/kwis/msp/lcdui/Graphics setPixels (IIII[BII)V
 # unconfirmed — the original emulator stubs these for the same reason, so
 # there is nothing to compare an implementation against. Failing loudly beats
 # inventing a callback contract a game would then branch on.
+#
+# play and stop have left this list. They are not the callback contract: the
+# specification says both do nothing for an image that is not animated, which
+# every image here is, so answering that is the contract rather than a guess.
+# See the stub inventory.
 org/kwis/msp/lcdui/Image loadImage (Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;
-org/kwis/msp/lcdui/Image play (Lorg/kwis/msp/lcdui/ImageObserver;)V
-org/kwis/msp/lcdui/Image stop ()V
 org/kwis/msp/lcdui/Image stopImage (Lorg/kwis/msp/lcdui/ImageObserver;)V

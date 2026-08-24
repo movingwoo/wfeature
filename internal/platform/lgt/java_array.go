@@ -346,3 +346,53 @@ func (client *Client) javaArrayBlock(object uint32) (uint32, uint32, error) {
 	}
 	return block, length, nil
 }
+
+// newJavaByteArray and newJavaStringArray build an array this platform fills
+// and the title reads. A call that answers an array has to allocate one the
+// module can index, which is the same object shape `new` builds.
+func (client *Client) newJavaByteArray(data []byte) (uint32, error) {
+	class, err := client.javaArrayClassByName("[B")
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaArray(class.Object, uint32(len(data)))
+	if err != nil {
+		return 0, err
+	}
+	if len(data) == 0 {
+		return object, nil
+	}
+	block, err := client.readWord(object + 8)
+	if err != nil {
+		return 0, err
+	}
+	if err := client.core.Memory().Write(block+javaArrayLengthWords*4, data); err != nil {
+		return 0, err
+	}
+	return object, nil
+}
+
+func (client *Client) newJavaStringArray(values []string) (uint32, error) {
+	class, err := client.javaArrayClassByName("[Ljava/lang/String;")
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaArray(class.Object, uint32(len(values)))
+	if err != nil {
+		return 0, err
+	}
+	block, err := client.readWord(object + 8)
+	if err != nil {
+		return 0, err
+	}
+	for index, value := range values {
+		text, err := client.newJavaString(value)
+		if err != nil {
+			return 0, err
+		}
+		if err := client.writeWord(block+javaArrayLengthWords*4+uint32(index)*4, text); err != nil {
+			return 0, err
+		}
+	}
+	return object, nil
+}

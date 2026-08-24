@@ -99,6 +99,7 @@ var runtimeClassParents = map[string]string{
 	"java/lang/InterruptedException":            "java/lang/Exception",
 	"java/io/IOException":                       "java/lang/Exception",
 	"java/io/EOFException":                      "java/io/IOException",
+	"java/io/UTFDataFormatException":            "java/io/IOException",
 	"java/io/UnsupportedEncodingException":      "java/io/IOException",
 	"java/lang/ClassNotFoundException":          "java/lang/Exception",
 	"java/lang/Exception":                       "java/lang/Throwable",

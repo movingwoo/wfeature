@@ -17,13 +17,23 @@ org/kwis/msp/lcdui/Display isDoubleBuffered ()Z true
 java/io/PrintStream flush ()V noop
 java/io/PrintStream print (C)V noop
 java/io/PrintStream print (I)V noop
+java/io/PrintStream print (J)V noop
+java/io/PrintStream print (Ljava/lang/Object;)V noop
 java/io/PrintStream print (Ljava/lang/String;)V noop
+java/io/PrintStream print (Z)V noop
 java/io/PrintStream println ()V noop
 java/io/PrintStream println (C)V noop
 java/io/PrintStream println (I)V noop
+java/io/PrintStream println (J)V noop
+java/io/PrintStream println (Ljava/lang/Object;)V noop
 java/io/PrintStream println (Ljava/lang/String;)V noop
+java/io/PrintStream println (Z)V noop
 java/io/PrintStream write (I)V noop
 java/lang/Thread setPriority (I)V noop
+# The stack a trace would print is the guest's own ARM frames, which this
+# runtime does not walk, so printing one discards the call the same way the
+# stream above does.
+java/lang/Throwable printStackTrace ()V noop
 org/kwis/msp/handset/BackLight alwaysOn ()V noop
 org/kwis/msp/handset/BackLight before ()V noop
 org/kwis/msp/handset/BackLight off ()V noop
@@ -70,13 +80,19 @@ org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;I)V noop
 # Component geometry and the container lifecycle. The lwc classes exist so
 # guest hierarchies resolve; no widget toolkit lays them out. The original
 # runtime stubs these too.
+org/kwis/msp/lwc/AnnunciatorComponent layout ()V noop
 org/kwis/msp/lwc/Component <init> ()V noop
 org/kwis/msp/lwc/Component getHeight ()I zero
 org/kwis/msp/lwc/Component getWidth ()I zero
 org/kwis/msp/lwc/ContainerComponent <init> ()V noop
+org/kwis/msp/lwc/ContainerComponent invalidate ()V noop
+org/kwis/msp/lwc/ContainerComponent layout ()V noop
+org/kwis/msp/lwc/ContainerComponent validate ()V noop
+org/kwis/msp/lwc/LabelComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> (IIII)V noop
 org/kwis/msp/lwc/ShellComponent hide ()V noop
+org/kwis/msp/lwc/ShellComponent layout ()V noop
 org/kwis/msp/lwc/ShellComponent show ()V noop
 
 # Same fixed answer the original runtime gives.
@@ -93,6 +109,16 @@ org/kwis/msp/lcdui/Display flush ()V noop
 org/kwis/msf/io/Network connect ()I refuse
 org/kwis/msp/lcdui/Graphics setFont (Lorg/kwis/msp/lcdui/Font;)V noop
 org/kwis/msp/lcdui/Image isAnimated ()Z zero
+# The specification says an image that is not animated ignores both of these,
+# and none of ours is animated.
+org/kwis/msp/lcdui/Image play (Lorg/kwis/msp/lcdui/ImageObserver;)V noop
+org/kwis/msp/lcdui/Image stop ()V noop
+# This handset has no indicator lights, so there are none to count.
+org/kwis/msp/handset/LED getCount ()I zero
+# A vendor class outside the specification. Nothing here can stop the Host
+# sleeping, and refusing is the answer a caller can do least with; see
+# runtime_library.go.
+wec/OEMDevice enableSleep (Z)Z zero
 
 # A constructor with no state of its own, and the abstract body a subclass
 # always overrides. Timer keeps its tasks on the platform's timer service

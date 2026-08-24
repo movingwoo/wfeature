@@ -614,6 +614,10 @@ func hashtableDefinition() ClassDefinition {
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: hashtableInit},
+			// The capacity form is a hint. The two arrays grow on demand, so
+			// what the value has to do is be validated and then ignored, the
+			// same way Vector's is.
+			{Name: "<init>", Descriptor: "(I)V", Access: AccessPublic, Body: hashtableInitCapacity},
 			{Name: "containsKey", Descriptor: "(Ljava/lang/Object;)Z", Access: sync, Body: hashtableContainsKey},
 			{Name: "get", Descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", Access: sync, Body: hashtableGet},
 			{Name: "isEmpty", Descriptor: "()Z", Access: sync, Body: hashtableIsEmpty},
@@ -801,6 +805,17 @@ func hashtableInit(call *Invocation, arguments []Value) (Value, error) {
 		}
 	}
 	return VoidValue(), nil
+}
+
+func hashtableInitCapacity(call *Invocation, arguments []Value) (Value, error) {
+	capacity, err := nativeInt(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if capacity < 0 {
+		return VoidValue(), guestException("java/lang/IllegalArgumentException", "Hashtable capacity")
+	}
+	return hashtableInit(call, arguments)
 }
 
 // hashtableState reads both arrays and the count together, since every method
@@ -1077,6 +1092,7 @@ func calendarDefinition() ClassDefinition {
 		Methods: []MethodDefinition{
 			{Name: "getInstance", Descriptor: "()Ljava/util/Calendar;", Access: AccessPublic | AccessStatic | AccessNative},
 			{Name: "get", Descriptor: "(I)I", Access: native},
+			{Name: "set", Descriptor: "(II)V", Access: native},
 			{Name: "getTime", Descriptor: "()Ljava/util/Date;", Access: AccessPublic | AccessFinal | AccessNative},
 			{Name: "setTime", Descriptor: "(Ljava/util/Date;)V", Access: AccessPublic | AccessFinal | AccessNative},
 		},
@@ -1385,4 +1401,31 @@ func randomNextLong(call *Invocation, arguments []Value) (Value, error) {
 		return VoidValue(), err
 	}
 	return LongValue(int64(high)<<32 + int64(low)), nil
+}
+
+// java/util/TimeZone. This runtime knows exactly two zones: GMT, and the one
+// the guest clock runs in — which is the Host's, because Calendar and Date read
+// that clock as local time and a zone object that disagreed with them would
+// make a title's own arithmetic wrong.
+//
+// So getAvailableIDs answers those two rather than a database. Shipping the
+// IANA table would mean embedding tzdata for a cross-compiled release, and no
+// title seen here does more with the answer than hand an element straight back
+// to getTimeZone. An ID that is neither gets the GMT zone, which is what the
+// specification says an unrecognized ID gets.
+func timeZoneDefinition() ClassDefinition {
+	native := AccessPublic | AccessNative
+	return ClassDefinition{
+		Name:      TimeZoneClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessAbstract,
+		Methods: []MethodDefinition{
+			{Name: "getDefault", Descriptor: "()Ljava/util/TimeZone;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "getTimeZone", Descriptor: "(Ljava/lang/String;)Ljava/util/TimeZone;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "getAvailableIDs", Descriptor: "()[Ljava/lang/String;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "getID", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "getRawOffset", Descriptor: "()I", Access: native},
+			{Name: "useDaylightTime", Descriptor: "()Z", Access: native},
+		},
+	}
 }

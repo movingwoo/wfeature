@@ -78,6 +78,7 @@ func init() {
 				{class: "java/lang/Object", name: "getClass", descriptor: "()Ljava/lang/Class;", accessFlags: 0x0011},
 				{class: "java/lang/Object", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/Object", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Object", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				// The monitor methods are how a game's worker thread parks
 				// until the loader hands it something. Not publishing them
 				// here is what turned a perfectly ordinary wait into a dead
@@ -102,9 +103,18 @@ func init() {
 				{class: "java/lang/System", name: "identityHashCode", descriptor: "(Ljava/lang/Object;)I", accessFlags: 0x0009},
 				{class: "java/lang/System", name: "arraycopy", descriptor: "(Ljava/lang/Object;ILjava/lang/Object;II)V", accessFlags: 0x0009},
 				{class: "java/lang/System", name: "gc", descriptor: "()V", accessFlags: 0x0009},
+				{class: "java/lang/System", name: "getProperty", descriptor: "(Ljava/lang/String;)Ljava/lang/String;", accessFlags: 0x0009, implementation: runtimeSystemGetProperty},
+				{class: "java/lang/System", name: "exit", descriptor: "(I)V", accessFlags: 0x0009},
 			},
 			fields: []runtimeJavaField{
 				{name: "out", descriptor: "Ljava/io/PrintStream;", accessFlags: 0x0019, initializer: func(runtime *initializationRuntime) (uint32, error) {
+					return runtimeSystemOut(runtime)
+				}},
+				// A title that prints a caught exception reaches for err
+				// rather than out, and a field that is not there is a stop
+				// rather than a discarded line. Both answer the same stream,
+				// which discards.
+				{name: "err", descriptor: "Ljava/io/PrintStream;", accessFlags: 0x0019, initializer: func(runtime *initializationRuntime) (uint32, error) {
 					return runtimeSystemOut(runtime)
 				}},
 			},
@@ -123,6 +133,12 @@ func init() {
 				{class: "java/io/PrintStream", name: "println", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "println", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "println", descriptor: "(C)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "println", descriptor: "(J)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "println", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "println", descriptor: "(Ljava/lang/Object;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "print", descriptor: "(J)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "print", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "print", descriptor: "(Ljava/lang/Object;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "write", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "flush", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
@@ -155,6 +171,11 @@ func init() {
 			accessFlags: 0x0031,
 			methods: []runtimeJavaMethod{
 				{class: "java/lang/Class", name: "getName", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeClassGetName},
+				// forName resolves through the JVM builtin, which answers for a
+				// class this runtime knows and raises ClassNotFoundException
+				// otherwise. A title names its own class here, which the AOT
+				// registry holds under the same name the descriptor uses.
+				{class: "java/lang/Class", name: "forName", descriptor: "(Ljava/lang/String;)Ljava/lang/Class;", accessFlags: 0x0009},
 				{class: "java/lang/Class", name: "getResourceAsStream", descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", accessFlags: 0x0001, implementation: runtimeClassGetResourceAsStream},
 			},
 		},
@@ -166,6 +187,8 @@ func init() {
 			methods: []runtimeJavaMethod{
 				{class: "java/io/OutputStream", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/OutputStream", name: "write", descriptor: "([B)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStream", name: "write", descriptor: "([BII)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStream", name: "write", descriptor: "(I)V", accessFlags: 0x0401},
 				{class: "java/io/OutputStream", name: "flush", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/OutputStream", name: "close", descriptor: "()V", accessFlags: 0x0001},
 			},
@@ -198,6 +221,8 @@ func init() {
 				{class: "java/io/DataOutputStream", name: "writeChar", descriptor: "(I)V", accessFlags: 0x0011},
 				{class: "java/io/DataOutputStream", name: "writeInt", descriptor: "(I)V", accessFlags: 0x0011},
 				{class: "java/io/DataOutputStream", name: "writeLong", descriptor: "(J)V", accessFlags: 0x0011},
+				{class: "java/io/DataOutputStream", name: "writeUTF", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0011},
+				{class: "java/io/DataOutputStream", name: "writeChars", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0011},
 				{class: "java/io/DataOutputStream", name: "flush", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/DataOutputStream", name: "close", descriptor: "()V", accessFlags: 0x0001},
 			},
@@ -258,6 +283,10 @@ func init() {
 				{class: "java/io/DataInputStream", name: "readInt", descriptor: "()I", accessFlags: 0x0011},
 				{class: "java/io/DataInputStream", name: "readLong", descriptor: "()J", accessFlags: 0x0011},
 				{class: "java/io/DataInputStream", name: "readUTF", descriptor: "()Ljava/lang/String;", accessFlags: 0x0011},
+				{class: "java/io/DataInputStream", name: "readUnsignedByte", descriptor: "()I", accessFlags: 0x0011},
+				{class: "java/io/DataInputStream", name: "readChar", descriptor: "()C", accessFlags: 0x0011},
+				{class: "java/io/DataInputStream", name: "readFully", descriptor: "([B)V", accessFlags: 0x0011},
+				{class: "java/io/DataInputStream", name: "readFully", descriptor: "([BII)V", accessFlags: 0x0011},
 			},
 		},
 		// java/lang/Math exposes the JVM-owned builtins through KTF metadata.
@@ -271,6 +300,7 @@ func init() {
 			methods: []runtimeJavaMethod{
 				{class: "java/util/Calendar", name: "getInstance", descriptor: "()Ljava/util/Calendar;", accessFlags: 0x0009},
 				{class: "java/util/Calendar", name: "get", descriptor: "(I)I", accessFlags: 0x0001},
+				{class: "java/util/Calendar", name: "set", descriptor: "(II)V", accessFlags: 0x0001},
 				{class: "java/util/Calendar", name: "getTime", descriptor: "()Ljava/util/Date;", accessFlags: 0x0011},
 				{class: "java/util/Calendar", name: "setTime", descriptor: "(Ljava/util/Date;)V", accessFlags: 0x0011},
 			},
@@ -337,6 +367,9 @@ func init() {
 				{class: "java/lang/Integer", name: "parseInt", descriptor: "(Ljava/lang/String;)I", accessFlags: 0x0009},
 				{class: "java/lang/Integer", name: "parseInt", descriptor: "(Ljava/lang/String;I)I", accessFlags: 0x0009},
 				{class: "java/lang/Integer", name: "toString", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Integer", name: "toHexString", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Integer", name: "toBinaryString", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Integer", name: "toOctalString", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/Integer", name: "valueOf", descriptor: "(Ljava/lang/String;)Ljava/lang/Integer;", accessFlags: 0x0009},
 				{class: "java/lang/Integer", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/Integer", name: "byteValue", descriptor: "()B", accessFlags: 0x0001},
@@ -422,6 +455,9 @@ func init() {
 				{class: "java/lang/String", name: "<init>", descriptor: "([B)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "<init>", descriptor: "([BII)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "<init>", descriptor: "([BLjava/lang/String;)V", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "<init>", descriptor: "([BIILjava/lang/String;)V", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "<init>", descriptor: "([C)V", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "<init>", descriptor: "([CII)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "length", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "charAt", descriptor: "(I)C", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
@@ -433,6 +469,9 @@ func init() {
 				{class: "java/lang/String", name: "indexOf", descriptor: "(I)I", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "indexOf", descriptor: "(Ljava/lang/String;)I", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "indexOf", descriptor: "(Ljava/lang/String;I)I", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "indexOf", descriptor: "(II)I", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "lastIndexOf", descriptor: "(I)I", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "lastIndexOf", descriptor: "(II)I", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "startsWith", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "substring", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "substring", descriptor: "(II)Ljava/lang/String;", accessFlags: 0x0001},
@@ -467,9 +506,61 @@ func init() {
 				{class: "java/lang/StringBuffer", name: "append", descriptor: "(J)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "append", descriptor: "(Z)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "delete", descriptor: "(II)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(IC)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(II)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(ILjava/lang/String;)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "length", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "setLength", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+			},
+		},
+		// java/util/TimeZone is what a title asks for before it builds a
+		// calendar. What this runtime has is the zone its clock runs in and
+		// GMT; see the class in the core library for why there is no database
+		// behind it.
+		"java/util/TimeZone": {
+			name:        "java/util/TimeZone",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0421,
+			methods: []runtimeJavaMethod{
+				{class: "java/util/TimeZone", name: "getDefault", descriptor: "()Ljava/util/TimeZone;", accessFlags: 0x0009},
+				{class: "java/util/TimeZone", name: "getTimeZone", descriptor: "(Ljava/lang/String;)Ljava/util/TimeZone;", accessFlags: 0x0009},
+				{class: "java/util/TimeZone", name: "getAvailableIDs", descriptor: "()[Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/util/TimeZone", name: "getID", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				{class: "java/util/TimeZone", name: "getRawOffset", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/util/TimeZone", name: "useDaylightTime", descriptor: "()Z", accessFlags: 0x0001},
+			},
+		},
+		// java/io/Reader and java/io/InputStreamReader are how a title reads a
+		// bundled text resource as characters. The decoding is the core
+		// library's; what is here is the metadata that makes the two classes
+		// resolvable.
+		"java/io/Reader": {
+			name:        "java/io/Reader",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0421,
+			methods: []runtimeJavaMethod{
+				{class: "java/io/Reader", name: "<init>", descriptor: "()V", accessFlags: 0x0004},
+				{class: "java/io/Reader", name: "read", descriptor: "()I", accessFlags: 0x0401},
+				{class: "java/io/Reader", name: "read", descriptor: "([C)I", accessFlags: 0x0001},
+				{class: "java/io/Reader", name: "read", descriptor: "([CII)I", accessFlags: 0x0401},
+				{class: "java/io/Reader", name: "close", descriptor: "()V", accessFlags: 0x0401},
+				{class: "java/io/Reader", name: "ready", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/io/Reader", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/io/Reader", name: "skip", descriptor: "(J)J", accessFlags: 0x0001},
+			},
+		},
+		"java/io/InputStreamReader": {
+			name:        "java/io/InputStreamReader",
+			superName:   "java/io/Reader",
+			accessFlags: 0x0021,
+			methods: []runtimeJavaMethod{
+				{class: "java/io/InputStreamReader", name: "<init>", descriptor: "(Ljava/io/InputStream;)V", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "<init>", descriptor: "(Ljava/io/InputStream;Ljava/lang/String;)V", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "read", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "read", descriptor: "([CII)I", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "close", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "ready", descriptor: "()Z", accessFlags: 0x0001},
 			},
 		},
 		// java/util/Vector and java/util/Hashtable expose the JVM-owned CLDC
@@ -509,11 +600,16 @@ func init() {
 			accessFlags: 0x0021,
 			methods: []runtimeJavaMethod{
 				{class: "java/util/Hashtable", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "<init>", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "containsKey", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "get", descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "put", descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "remove", descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "isEmpty", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "size", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "clear", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "keys", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "elements", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
 			},
 		},
 		// org/kwis/msp/handset/BackLight matches the original runtime's accepted
@@ -556,6 +652,20 @@ func init() {
 			name:        runtimeCardClass,
 			superName:   "java/lang/Object",
 			accessFlags: 0x0421,
+			// The specification declares a Card's geometry and its
+			// transparency flag protected, and a title reads `w` off its own
+			// canvas rather than calling getWidth. See field_sync.go for how
+			// the payload and the Go value are kept in step, and why a
+			// subclass compiled against a runtime that published none of this
+			// is left alone.
+			instanceSize: cardFieldsSize,
+			fields: []runtimeJavaField{
+				{name: "x", descriptor: "I", accessFlags: 0x0004, offset: 0},
+				{name: "y", descriptor: "I", accessFlags: 0x0004, offset: 4},
+				{name: "w", descriptor: "I", accessFlags: 0x0004, offset: 8},
+				{name: "h", descriptor: "I", accessFlags: 0x0004, offset: 12},
+				{name: "bTrans", descriptor: "Z", accessFlags: 0x0004, offset: 16},
+			},
 			methods: []runtimeJavaMethod{
 				{
 					class:          runtimeCardClass,
@@ -690,6 +800,16 @@ func init() {
 				{class: runtimeContainerComponentClass, name: "addComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)I", accessFlags: 0x0001, implementation: runtimeComponentAddComponent},
 				{class: runtimeContainerComponentClass, name: "removeComponent", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentRemoveComponent},
 				{class: runtimeContainerComponentClass, name: "removeComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentRemoveComponent},
+				{class: runtimeContainerComponentClass, name: "removeAllComponents", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentRemoveAllComponents},
+				{class: runtimeContainerComponentClass, name: "getNumberOfComponent", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentCount},
+				{class: runtimeContainerComponentClass, name: "getComponent", descriptor: "(I)Lorg/kwis/msp/lwc/Component;", accessFlags: 0x0001, implementation: runtimeComponentAt},
+				{class: runtimeContainerComponentClass, name: "getIndexOf", descriptor: "(Lorg/kwis/msp/lwc/Component;)I", accessFlags: 0x0001, implementation: runtimeComponentIndexOf},
+				// Laying a container out and validating it are the toolkit's
+				// work, and there is no toolkit here; the children are kept so
+				// a title can walk them, not so anything positions them.
+				{class: runtimeContainerComponentClass, name: "validate", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: runtimeContainerComponentClass, name: "invalidate", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: runtimeContainerComponentClass, name: "layout", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
 		},
 		runtimeShellComponentClass: {
@@ -700,6 +820,9 @@ func init() {
 				{class: runtimeShellComponentClass, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "<init>", descriptor: "(IIII)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "setWorkComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentSetWorkComponent},
+				{class: runtimeShellComponentClass, name: "getX", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("x:I", 0)},
+				{class: runtimeShellComponentClass, name: "getY", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("y:I", 0)},
+				{class: runtimeShellComponentClass, name: "layout", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "hide", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
@@ -725,6 +848,13 @@ func init() {
 				// Animated images are not decoded, so no image reports itself
 				// animated and the playback controls stay unimplemented.
 				{class: "org/kwis/msp/lcdui/Image", name: "isAnimated", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeComponentZero},
+				// The specification says play does nothing for an image that is
+				// not animated, and none of ours is, so the no-op here is the
+				// contract rather than a stand-in. A title that calls it still
+				// has to be able to, and stop is the call the specification
+				// tells it to make afterwards.
+				{class: "org/kwis/msp/lcdui/Image", name: "play", descriptor: "(Lorg/kwis/msp/lcdui/ImageObserver;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "org/kwis/msp/lcdui/Image", name: "stop", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
 		},
 		// org/kwis/msp/lcdui/Graphics currently records its target; drawing
@@ -938,6 +1068,10 @@ func init() {
 					accessFlags:    0x0001,
 					implementation: runtimeAnnunciatorShow,
 				},
+				// The annunciator is drawn by the Host rather than laid out
+				// here, so laying its children out is nothing to do. It is on
+				// the class because a title calls it after showing the bar.
+				{class: runtimeAnnunciatorClass, name: "layout", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
 		},
 		runtimeDisplayClass: {
@@ -990,6 +1124,24 @@ func init() {
 				{class: runtimeDisplayClass, name: "setDockedCard", descriptor: "(Lorg/kwis/msp/lcdui/Card;I)V", accessFlags: 0x0001, implementation: runtimeDisplaySetDockedCard},
 			},
 		},
+		"java/lang/Throwable": runtimeThrowableClassDefinition(),
+		// The runtime's own Enumeration over a snapshot, which is what a
+		// Hashtable's two views are handed back as. A title never names it,
+		// but it calls the interface methods on the object it was given, so
+		// the class the object carries has to publish them.
+		"net/wfeature/ArrayEnumeration": {
+			name:        "net/wfeature/ArrayEnumeration",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "net/wfeature/ArrayEnumeration", name: "hasMoreElements", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "net/wfeature/ArrayEnumeration", name: "nextElement", descriptor: "()Ljava/lang/Object;", accessFlags: 0x0001},
+			},
+		},
+		runtimeLEDClass:                runtimeLEDClassDefinition(),
+		runtimeLabelComponentClass:     runtimeLabelComponentClassDefinition(),
+		runtimeOEMDeviceClass:          runtimeOEMDeviceClassDefinition(),
+		runtimeSYSThemeClass:           runtimeSYSThemeClassDefinition(),
 		runtimeEventQueueClass:         runtimeEventQueueClassDefinition(),
 		runtimeInputMethodHandlerClass: runtimeInputMethodHandlerClassDefinition(),
 		runtimeMainClass:               runtimeMainClassDefinition(),
@@ -1016,6 +1168,11 @@ func init() {
 		runtimeDataFilterClass: runtimeInterfaceClass(runtimeDataFilterClass,
 			runtimeJavaMethod{name: "filter", descriptor: "([B)Z"}),
 		runtimePlayListenerClass: runtimeInterfaceClass(runtimePlayListenerClass),
+		// A Hashtable's two views are handed back as this interface, so a
+		// title that walks one has to be able to resolve it.
+		"java/util/Enumeration": runtimeInterfaceClass("java/util/Enumeration",
+			runtimeJavaMethod{name: "hasMoreElements", descriptor: "()Z"},
+			runtimeJavaMethod{name: "nextElement", descriptor: "()Ljava/lang/Object;"}),
 	}
 }
 
@@ -2128,6 +2285,46 @@ func runtimeGetSystemProperty(runtime *initializationRuntime, _ *jvm.VM, argumen
 		}
 	}
 	return jvm.ReferenceValue(runtime.client.vm.NewString(value)), nil
+}
+
+// runtimeSystemGetProperty answers CLDC's own property call. The configuration
+// and profile name what this class surface implements; everything else is the
+// same handset table HandsetProperty and the WIPI C call answer from, because
+// the question is about the handset rather than about which surface asked.
+//
+// An unknown name is null rather than empty. The specification says so, and a
+// title that probes for an optional capability reads an empty string as "the
+// handset has it and calls it nothing".
+func runtimeSystemGetProperty(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 1 {
+		return jvm.VoidValue(), fmt.Errorf("System.getProperty expected a name, got %d arguments", len(arguments))
+	}
+	name, err := arguments[0].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	text, ok := jvm.StringText(name)
+	if !ok {
+		return jvm.ReferenceValue(nil), nil
+	}
+	runtime.countDiagnostic("sysprop " + text)
+	if value, known := runtimeSystemPropertyTable[text]; known {
+		return jvm.ReferenceValue(vm.NewString(value)), nil
+	}
+	if value, known := wipic.SystemProperties[text]; known {
+		return jvm.ReferenceValue(vm.NewString(value)), nil
+	}
+	return jvm.ReferenceValue(nil), nil
+}
+
+// runtimeSystemPropertyTable is what CLDC guarantees, stated as what this
+// runtime is rather than as a handset it is not.
+var runtimeSystemPropertyTable = map[string]string{
+	"microedition.platform":      "wfeature",
+	"microedition.configuration": "CLDC-1.0",
+	"microedition.profiles":      "",
+	"microedition.encoding":      "EUC-KR",
+	"microedition.locale":        "ko-KR",
 }
 
 func runtimeJletConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

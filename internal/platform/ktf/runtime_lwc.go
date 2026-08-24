@@ -238,3 +238,61 @@ func runtimeComponentBooleanField(key string) runtimeJavaImplementation {
 func runtimeComponentKeyNotify(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	return jvm.IntValue(1), nil
 }
+
+// runtimeComponentRemoveAllComponents empties a container. A title clears a
+// form before it rebuilds it, and a call that is not there ends the session
+// where a redraw was meant to happen.
+func runtimeComponentRemoveAllComponents(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.removeAllComponents", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Native = nil
+	return jvm.VoidValue(), nil
+}
+
+func runtimeComponentChildren(receiver *jvm.Object) []jvm.Value {
+	children, _ := receiver.Native.([]jvm.Value)
+	return children
+}
+
+func runtimeComponentCount(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.getNumberOfComponent", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.IntValue(int32(len(runtimeComponentChildren(receiver)))), nil
+}
+
+func runtimeComponentAt(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.getComponent", arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	index, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	children := runtimeComponentChildren(receiver)
+	if index < 0 || int(index) >= len(children) {
+		return jvm.ReferenceValue(nil), nil
+	}
+	return children[index], nil
+}
+
+func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.getIndexOf", arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	wanted, err := arguments[1].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	for index, child := range runtimeComponentChildren(receiver) {
+		if object, referenceErr := child.Reference(); referenceErr == nil && object == wanted {
+			return jvm.IntValue(int32(index)), nil
+		}
+	}
+	return jvm.IntValue(-1), nil
+}

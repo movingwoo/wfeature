@@ -184,3 +184,26 @@ const (
 	javaFalse uint32 = 0
 	javaTrue  uint32 = 1
 )
+
+// javaClipEmpty is `Clip(String type)` and `Clip(String type, int bufSize)`: a
+// clip of a named type with nothing in it yet. The buffer the second form sizes
+// is this platform's rather than the title's, so both build the same thing —
+// and a clip with no data plays as silence rather than failing, which is what a
+// title that builds one up front and fills it later depends on.
+func javaClipEmpty(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	object, kind := arguments[0], arguments[1]
+	mediaType, ok := client.javaText(kind)
+	if !ok && kind != 0 {
+		return 0, fmt.Errorf("the type at %#x is not a string this platform built", kind)
+	}
+	if client.clips == nil {
+		client.clips = map[uint32]*mediaClip{}
+	}
+	client.clips[object] = &mediaClip{mediaType: mediaType, volume: mediaMaxVolume}
+	if client.logger != nil {
+		client.logger.Debug("LGT java empty clip built", "type", mediaType)
+	}
+	return 0, nil
+}

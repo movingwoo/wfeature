@@ -260,7 +260,14 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// glyphs the C drawing calls render.
 	"org/kwis/msp/lcdui/Font.getDefaultFont()Lorg/kwis/msp/lcdui/Font;": {
 		Implementat: javaPlatformSingleton(javaFontClass)},
-	"org/kwis/msp/lcdui/Font.getHeight()I": {Words: 1, Implementat: javaFontHeight},
+	// A named face, style and size answer the same font, because there is one
+	// face here. It is the default font rather than a refusal: a title that
+	// asks for a bold face and is refused stops, and a title that asks for one
+	// and gets the plain face draws the text it meant to.
+	"org/kwis/msp/lcdui/Font.getFont(III)Lorg/kwis/msp/lcdui/Font;": {
+		Words: 3, Implementat: javaPlatformSingleton(javaFontClass)},
+	"org/kwis/msp/lcdui/Font.getHeight()I":  {Words: 1, Implementat: javaFontHeight},
+	"org/kwis/msp/lcdui/Font.charWidth(C)I": {Words: 2, Implementat: javaCharWidth},
 	"org/kwis/msp/lcdui/Font.stringWidth(Ljava/lang/String;)I": {
 		Words: 2, Implementat: javaStringWidth},
 	"org/kwis/msp/lcdui/Font.substringWidth(Ljava/lang/String;II)I": {
@@ -590,6 +597,14 @@ func javaSubstringWidth(
 		return 0, fmt.Errorf("%d characters from %d is past the end of %d", length, offset, len(symbols))
 	}
 	return uint32(textWidth(string(symbols[offset : offset+length]))), nil
+}
+
+// javaCharWidth is `charWidth(char)`: one character, measured with the same
+// glyphs the drawing calls render.
+func javaCharWidth(
+	_ *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return uint32(textWidth(string(rune(uint16(arguments[1]))))), nil
 }
 
 func javaCharsWidth(
