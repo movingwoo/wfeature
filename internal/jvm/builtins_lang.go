@@ -393,6 +393,32 @@ func (vm *VM) registerStringExtraBuiltins() {
 		}
 		return IntValue(-1), nil
 	})
+	// The bounded form starts at the index the caller names and searches back
+	// from there, which is how a title walks a path backwards one separator at
+	// a time.
+	vm.builtin(StringClass, "lastIndexOf", "(II)I", func(_ *VM, arguments []Value) (Value, error) {
+		units, err := stringUnits(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		character, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		from, err := nativeInt(arguments, 2)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if from >= int32(len(units)) {
+			from = int32(len(units)) - 1
+		}
+		for index := from; index >= 0; index-- {
+			if int32(units[index]) == character {
+				return IntValue(index), nil
+			}
+		}
+		return IntValue(-1), nil
+	})
 	vm.builtin(StringClass, "replace", "(CC)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		units, err := stringUnits(arguments, 0)
 		if err != nil {

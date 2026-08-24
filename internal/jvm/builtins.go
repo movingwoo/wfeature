@@ -5,6 +5,7 @@ import (
 	"math"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,20 @@ func (vm *VM) registerBuiltins() {
 			return VoidValue(), err
 		}
 		return IntValue(int32(vm.objectIdentity(object))), nil
+	})
+	// The root toString. A title reaches it through String.valueOf or a
+	// StringBuffer append on an object whose class does not override it, and
+	// without a body of its own that resolution ended the session on the class
+	// every other class inherits from.
+	vm.builtin("java/lang/Object", "toString", "()Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
+		object, err := nativeReference(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if object == nil {
+			return ReferenceValue(nativeStringValue("null")), nil
+		}
+		return ReferenceValue(nativeStringValue(fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object)))), nil
 	})
 	vm.builtin("java/lang/Object", "equals", "(Ljava/lang/Object;)Z", func(_ *VM, arguments []Value) (Value, error) {
 		left, err := nativeReference(arguments, 0)
@@ -85,6 +100,7 @@ func (vm *VM) registerBuiltins() {
 	vm.registerMonitorBuiltins()
 	vm.registerThreadBuiltins()
 	vm.registerDataInputBuiltins()
+	vm.registerTimeZoneBuiltins()
 	vm.registerUtilityBuiltins()
 	vm.registerLanguageBuiltins()
 }
@@ -254,6 +270,24 @@ func (vm *VM) registerDataInputBuiltins() {
 		}
 		return ReferenceValue(&Object{ClassName: "java/lang/String", Native: text}), nil
 	})
+}
+
+// encodeModifiedUTF8 is the inverse of the decoder below: one to three bytes
+// per UTF-16 unit, with the null character encoded as two bytes so that no zero
+// byte appears inside the text.
+func encodeModifiedUTF8(text string) []byte {
+	encoded := make([]byte, 0, len(text))
+	for _, unit := range utf16.Encode([]rune(text)) {
+		switch {
+		case unit >= 0x0001 && unit <= 0x007f:
+			encoded = append(encoded, byte(unit))
+		case unit <= 0x07ff:
+			encoded = append(encoded, byte(0xc0|unit>>6), byte(0x80|unit&0x3f))
+		default:
+			encoded = append(encoded, byte(0xe0|unit>>12), byte(0x80|unit>>6&0x3f), byte(0x80|unit&0x3f))
+		}
+	}
+	return encoded
 }
 
 func decodeModifiedUTF8(data []byte) (string, error) {
@@ -457,6 +491,57 @@ func (vm *VM) registerUtilityBuiltins() {
 			return VoidValue(), guestException("java/lang/IllegalArgumentException", "unsupported Calendar field")
 		}
 		return IntValue(int32(value)), nil
+	})
+	// Calendar.set moves the instant a Calendar stands for. A title uses it to
+	// build a date rather than to read one — a stamp it writes into a save, or
+	// the day an event opens on — so the field it names has to move the same
+	// component get(I) above reads back.
+	vm.builtin("java/util/Calendar", "set", "(II)V", func(_ *VM, arguments []Value) (Value, error) {
+		object, err := nativeReference(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		calendar, ok := object.Native.(*calendarData)
+		if !ok {
+			return VoidValue(), fmt.Errorf("receiver is not a Calendar")
+		}
+		field, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		value, err := nativeInt(arguments, 2)
+		if err != nil {
+			return VoidValue(), err
+		}
+		current := calendar.time
+		year, month, day := current.Year(), int(current.Month()), current.Day()
+		hour, minute, second := current.Hour(), current.Minute(), current.Second()
+		nanosecond := current.Nanosecond()
+		switch field {
+		case 1:
+			year = int(value)
+		case 2:
+			month = int(value) + 1
+		case 5:
+			day = int(value)
+		case 10:
+			hour = hour/12*12 + int(value)
+		case 11:
+			hour = int(value)
+		case 12:
+			minute = int(value)
+		case 13:
+			second = int(value)
+		case 14:
+			nanosecond = int(value) * int(time.Millisecond)
+		default:
+			return VoidValue(), guestException("java/lang/IllegalArgumentException", "unsupported Calendar field")
+		}
+		// time.Date normalizes out-of-range components the way Calendar's own
+		// lenient mode does, which is what a title relies on when it adds a
+		// day to the end of a month.
+		calendar.time = time.Date(year, time.Month(month), day, hour, minute, second, nanosecond, current.Location())
+		return VoidValue(), nil
 	})
 	// A Date is the millisecond instant it holds, and nothing else: CLDC keeps
 	// four methods on it and one time zone under it, so the object needs no
@@ -1277,6 +1362,55 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		data.mu.Unlock()
 		return ReferenceValue(object), nil
 	})
+	// insert is delete's opposite and the only other way a title of this era
+	// edits a buffer in place: it builds a line and then puts a prefix in front
+	// of it rather than rebuilding the whole string.
+	for _, form := range []struct {
+		descriptor string
+		text       func([]Value) (string, error)
+	}{
+		{"Ljava/lang/String;", func(arguments []Value) (string, error) {
+			object, err := nativeReference(arguments, 2)
+			if err != nil {
+				return "", err
+			}
+			if object == nil {
+				return "null", nil
+			}
+			return nativeString(arguments, 2)
+		}},
+		{"C", func(arguments []Value) (string, error) {
+			value, err := nativeInt(arguments, 2)
+			return string(utf16.Decode([]uint16{uint16(value)})), err
+		}},
+		{"I", func(arguments []Value) (string, error) {
+			value, err := nativeInt(arguments, 2)
+			return strconv.FormatInt(int64(value), 10), err
+		}},
+	} {
+		text := form.text
+		vm.builtin(class, "insert", "(I"+form.descriptor+")"+self, func(_ *VM, arguments []Value) (Value, error) {
+			object, data, err := stringBufferArgument(arguments)
+			if err != nil {
+				return VoidValue(), err
+			}
+			offset, err := nativeInt(arguments, 1)
+			if err != nil {
+				return VoidValue(), err
+			}
+			value, err := text(arguments)
+			if err != nil {
+				return VoidValue(), err
+			}
+			data.mu.Lock()
+			defer data.mu.Unlock()
+			if offset < 0 || int(offset) > len(data.units) {
+				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", "StringBuffer.insert offset")
+			}
+			data.units = slices.Insert(data.units, int(offset), utf16.Encode([]rune(value))...)
+			return ReferenceValue(object), nil
+		})
+	}
 	vm.builtin(class, "setLength", "(I)V", func(_ *VM, arguments []Value) (Value, error) {
 		_, data, err := stringBufferArgument(arguments)
 		if err != nil {
@@ -1521,4 +1655,100 @@ func classObjectName(arguments []Value) (string, error) {
 		return "", fmt.Errorf("receiver is not a Class")
 	}
 	return name, nil
+}
+
+// timeZoneData is a zone's identifier and its offset from GMT in milliseconds.
+// Nothing here observes daylight saving: the two zones this runtime has are GMT
+// and whatever the guest clock's own offset is right now.
+type timeZoneData struct {
+	id     string
+	offset int32
+}
+
+// gmtTimeZoneID is the identifier the specification gives the zero-offset zone
+// and the answer an unrecognized identifier gets.
+const gmtTimeZoneID = "GMT"
+
+// guestTimeZone is the zone the guest clock runs in, named by its offset the
+// way the specification's own custom identifiers are.
+func (vm *VM) guestTimeZone() *timeZoneData {
+	_, seconds := time.UnixMilli(vm.nowMilliseconds()).Zone()
+	if seconds == 0 {
+		return &timeZoneData{id: gmtTimeZoneID}
+	}
+	sign, minutes := "+", seconds/60
+	if minutes < 0 {
+		sign, minutes = "-", -minutes
+	}
+	return &timeZoneData{
+		id:     fmt.Sprintf("GMT%s%02d:%02d", sign, minutes/60, minutes%60),
+		offset: int32(seconds) * 1000,
+	}
+}
+
+func newTimeZoneObject(data *timeZoneData) Value {
+	return ReferenceValue(&Object{ClassName: TimeZoneClass, Native: data})
+}
+
+func (vm *VM) registerTimeZoneBuiltins() {
+	vm.builtin(TimeZoneClass, "getDefault", "()Ljava/util/TimeZone;", func(vm *VM, _ []Value) (Value, error) {
+		return newTimeZoneObject(vm.guestTimeZone()), nil
+	})
+	vm.builtin(TimeZoneClass, "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;", func(vm *VM, arguments []Value) (Value, error) {
+		name, err := nativeString(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if local := vm.guestTimeZone(); name == local.id {
+			return newTimeZoneObject(local), nil
+		}
+		return newTimeZoneObject(&timeZoneData{id: gmtTimeZoneID}), nil
+	})
+	vm.builtin(TimeZoneClass, "getAvailableIDs", "()[Ljava/lang/String;", func(vm *VM, _ []Value) (Value, error) {
+		identifiers := []string{vm.guestTimeZone().id}
+		if identifiers[0] != gmtTimeZoneID {
+			identifiers = append(identifiers, gmtTimeZoneID)
+		}
+		array, err := vm.NewArray(Type{Kind: TypeReference, ClassName: StringClass}, int32(len(identifiers)))
+		if err != nil {
+			return VoidValue(), err
+		}
+		values := make([]Value, len(identifiers))
+		for index, identifier := range identifiers {
+			values[index] = ReferenceValue(vm.NewString(identifier))
+		}
+		if err := SetArrayRange(array, 0, values); err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(array), nil
+	})
+	vm.builtin(TimeZoneClass, "getID", "()Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
+		data, err := timeZoneArgument(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(vm.NewString(data.id)), nil
+	})
+	vm.builtin(TimeZoneClass, "getRawOffset", "()I", func(_ *VM, arguments []Value) (Value, error) {
+		data, err := timeZoneArgument(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return IntValue(data.offset), nil
+	})
+	vm.builtin(TimeZoneClass, "useDaylightTime", "()Z", func(_ *VM, _ []Value) (Value, error) {
+		return IntValue(0), nil
+	})
+}
+
+func timeZoneArgument(arguments []Value) (*timeZoneData, error) {
+	object, err := nativeReference(arguments, 0)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := object.Native.(*timeZoneData)
+	if !ok || data == nil {
+		return nil, fmt.Errorf("receiver is not a TimeZone")
+	}
+	return data, nil
 }

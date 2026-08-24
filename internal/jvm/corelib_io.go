@@ -3,6 +3,7 @@ package jvm
 import (
 	"fmt"
 	"strconv"
+	"unicode/utf16"
 )
 
 // The java/io half of the core library. The streams are the surface a game
@@ -568,7 +569,9 @@ func dataInputStreamDefinition() ClassDefinition {
 			{Name: "readBoolean", Descriptor: "()Z", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadBoolean},
 			{Name: "readByte", Descriptor: "()B", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadByte},
 			{Name: "readShort", Descriptor: "()S", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadShort},
+			{Name: "readUnsignedByte", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadUnsignedByte},
 			{Name: "readUnsignedShort", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadUnsignedShort},
+			{Name: "readChar", Descriptor: "()C", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadChar},
 			{Name: "readInt", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadInt},
 			{Name: "readLong", Descriptor: "()J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadLong},
 			{Name: "readUTF", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative, Throws: []string{"java/io/IOException"}},
@@ -765,6 +768,26 @@ func dataInputReadByte(call *Invocation, arguments []Value) (Value, error) {
 	return IntValue(int32(int8(value))), nil
 }
 
+// dataInputReadUnsignedByte and dataInputReadChar complete the DataInput
+// surface a title of this era reads a record with. A char is two bytes, most
+// significant first, exactly like the short beside it — the difference is only
+// that it is not sign-extended.
+func dataInputReadUnsignedByte(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := dataInputRequired(call, stream)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return IntValue(value), nil
+}
+
+func dataInputReadChar(call *Invocation, arguments []Value) (Value, error) {
+	return dataInputReadUnsignedShort(call, arguments)
+}
+
 func dataInputReadShort(call *Invocation, arguments []Value) (Value, error) {
 	value, err := dataInputReadUnsignedShort(call, arguments)
 	if err != nil {
@@ -853,6 +876,8 @@ func dataOutputStreamDefinition() ClassDefinition {
 			{Name: "writeChar", Descriptor: "(I)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteChar},
 			{Name: "writeInt", Descriptor: "(I)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteInt},
 			{Name: "writeLong", Descriptor: "(J)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteLong},
+			{Name: "writeUTF", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteUTF},
+			{Name: "writeChars", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteChars},
 		},
 	}
 }
@@ -1278,4 +1303,329 @@ func constantInt(result int32) ContextMethod {
 		}
 		return IntValue(result), nil
 	}
+}
+
+// dataOutputWriteUTF writes a string the way readUTF above reads one: a
+// two-byte length in bytes, then modified UTF-8. A save written with this and
+// read back with readUTF is the round trip a title of this era stores a name
+// with, so the two have to agree on the encoding rather than on Go's.
+func dataOutputWriteUTF(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	text, err := nativeString(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	encoded := encodeModifiedUTF8(text)
+	if len(encoded) > 0xffff {
+		return VoidValue(), guestException("java/io/UTFDataFormatException", "encoded string is longer than 65535 bytes")
+	}
+	if err := dataOutputByte(call, stream, int32(len(encoded)>>8)); err != nil {
+		return VoidValue(), err
+	}
+	if err := dataOutputByte(call, stream, int32(len(encoded))); err != nil {
+		return VoidValue(), err
+	}
+	for _, value := range encoded {
+		if err := dataOutputByte(call, stream, int32(value)); err != nil {
+			return VoidValue(), err
+		}
+	}
+	return VoidValue(), nil
+}
+
+// dataOutputWriteChars writes a string as its UTF-16 units with no length in
+// front, which is what DataOutput declares beside writeUTF.
+func dataOutputWriteChars(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	text, err := nativeString(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	for _, unit := range utf16.Encode([]rune(text)) {
+		if err := dataOutputByte(call, stream, int32(unit>>8)); err != nil {
+			return VoidValue(), err
+		}
+		if err := dataOutputByte(call, stream, int32(unit&0xff)); err != nil {
+			return VoidValue(), err
+		}
+	}
+	return VoidValue(), nil
+}
+
+// java/io/Reader and java/io/InputStreamReader are how a title reads a text
+// resource — a dialogue script, a word list — as characters rather than bytes.
+//
+// The decoding is incremental and knows nothing about the charset: it feeds the
+// installed platform decoder one more byte at a time until the decoder answers
+// with a character rather than a replacement, which is what makes the same code
+// right for the single-byte and the two-byte cases without a table of lead
+// bytes here. Reading a whole stream up front would have been simpler and would
+// have made a reader over a connection wait for the far end to close.
+func readerDefinition() ClassDefinition {
+	return ClassDefinition{
+		Name:      ReaderClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessAbstract,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessProtected, Body: doNothing},
+			{Name: "read", Descriptor: "()I", Access: AccessPublic | AccessAbstract, Throws: []string{"java/io/IOException"}},
+			{Name: "read", Descriptor: "([C)I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: readerReadArray},
+			{Name: "read", Descriptor: "([CII)I", Access: AccessPublic | AccessAbstract, Throws: []string{"java/io/IOException"}},
+			{Name: "close", Descriptor: "()V", Access: AccessPublic | AccessAbstract, Throws: []string{"java/io/IOException"}},
+			{Name: "ready", Descriptor: "()Z", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: returnFalse},
+			{Name: "markSupported", Descriptor: "()Z", Access: AccessPublic, Body: returnFalse},
+			{Name: "skip", Descriptor: "(J)J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: readerSkip},
+		},
+	}
+}
+
+func inputStreamReaderDefinition() ClassDefinition {
+	return ClassDefinition{
+		Name:      InputStreamReaderClass,
+		SuperName: ReaderClass,
+		Access:    AccessPublic,
+		Fields: []FieldDefinition{
+			{Name: "in", Descriptor: "Ljava/io/InputStream;", Access: AccessPrivate},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "(Ljava/io/InputStream;)V", Access: AccessPublic, Body: inputStreamReaderInit},
+			// The named-encoding form takes the same path: the name is
+			// validated so an encoding this runtime does not have is refused
+			// rather than silently read with the platform's own.
+			{Name: "<init>", Descriptor: "(Ljava/io/InputStream;Ljava/lang/String;)V", Access: AccessPublic, Throws: []string{"java/io/UnsupportedEncodingException"}, Body: inputStreamReaderInitEncoding},
+			{Name: "read", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderRead},
+			{Name: "read", Descriptor: "([CII)I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderReadRange},
+			{Name: "close", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderClose},
+			{Name: "ready", Descriptor: "()Z", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderReady},
+		},
+	}
+}
+
+func readerReadArray(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := requireObject(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, length, ok := ArrayComponent(array)
+	if !ok {
+		return VoidValue(), fmt.Errorf("Reader.read expected a character array")
+	}
+	return call.InvokeVirtual(reader, "read", "([CII)I", arguments[1], IntValue(0), IntValue(int32(length)))
+}
+
+func readerSkip(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	count, err := nativeLong(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if count < 0 {
+		return VoidValue(), guestException("java/lang/IllegalArgumentException", "Reader.skip count")
+	}
+	skipped := int64(0)
+	for ; skipped < count; skipped++ {
+		result, readErr := call.InvokeVirtual(reader, "read", "()I")
+		if readErr != nil {
+			return VoidValue(), readErr
+		}
+		value, valueErr := result.Int32()
+		if valueErr != nil {
+			return VoidValue(), valueErr
+		}
+		if value < 0 {
+			break
+		}
+	}
+	return LongValue(skipped), nil
+}
+
+func returnFalse(_ *Invocation, _ []Value) (Value, error) {
+	return IntValue(0), nil
+}
+
+// maxDecodedSequence is how many bytes one character may be built from before
+// the decoder is taken at its word and a replacement is emitted. Three covers
+// every sequence the charsets this runtime installs produce.
+const maxDecodedSequence = 4
+
+func inputStreamReaderInit(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := nativeReference(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if source == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "InputStreamReader source")
+	}
+	return VoidValue(), call.vm.SetField(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;", ReferenceValue(source))
+}
+
+func inputStreamReaderInitEncoding(call *Invocation, arguments []Value) (Value, error) {
+	name, err := nativeString(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if charsetOf(name) == charsetUnknown {
+		return VoidValue(), guestException("java/io/UnsupportedEncodingException", name)
+	}
+	return inputStreamReaderInit(call, arguments[:2])
+}
+
+func inputStreamReaderSource(vm *VM, reader *Object) (*Object, error) {
+	value, err := vm.Field(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;")
+	if err != nil {
+		return nil, err
+	}
+	source, err := value.Reference()
+	if err != nil {
+		return nil, err
+	}
+	if source == nil {
+		return nil, guestException(IOExceptionClass, "reader is closed")
+	}
+	return source, nil
+}
+
+// inputStreamReaderRead answers one character, or -1 at the end of the stream.
+func inputStreamReaderRead(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := inputStreamReaderSource(call.vm, reader)
+	if err != nil {
+		return VoidValue(), err
+	}
+	pending := make([]byte, 0, maxDecodedSequence)
+	for len(pending) < maxDecodedSequence {
+		result, readErr := call.InvokeVirtual(source, "read", "()I")
+		if readErr != nil {
+			return VoidValue(), readErr
+		}
+		value, valueErr := result.Int32()
+		if valueErr != nil {
+			return VoidValue(), valueErr
+		}
+		if value < 0 {
+			if len(pending) == 0 {
+				return IntValue(-1), nil
+			}
+			// A sequence the stream ended in the middle of is one character's
+			// worth of unreadable bytes, which is what a replacement is for.
+			return IntValue(0xfffd), nil
+		}
+		pending = append(pending, byte(value))
+		units := utf16.Encode([]rune(call.vm.decodePlatformBytes(pending)))
+		if len(units) == 1 && units[0] != 0xfffd {
+			return IntValue(int32(units[0])), nil
+		}
+	}
+	return IntValue(0xfffd), nil
+}
+
+func inputStreamReaderReadRange(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := requireObject(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	offset, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	length, err := nativeInt(arguments, 3)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, count, ok := ArrayComponent(array)
+	if !ok {
+		return VoidValue(), fmt.Errorf("InputStreamReader.read expected a character array")
+	}
+	size := int32(count)
+	if offset < 0 || length < 0 || offset > size || length > size-offset {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException", "InputStreamReader.read range")
+	}
+	filled := int32(0)
+	for ; filled < length; filled++ {
+		result, readErr := call.InvokeVirtual(reader, "read", "()I")
+		if readErr != nil {
+			return VoidValue(), readErr
+		}
+		value, valueErr := result.Int32()
+		if valueErr != nil {
+			return VoidValue(), valueErr
+		}
+		if value < 0 {
+			break
+		}
+		if setErr := SetArrayRange(array, int(offset+filled), []Value{IntValue(value)}); setErr != nil {
+			return VoidValue(), setErr
+		}
+	}
+	if filled == 0 && length > 0 {
+		return IntValue(-1), nil
+	}
+	return IntValue(filled), nil
+}
+
+func inputStreamReaderReady(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := inputStreamReaderSource(call.vm, reader)
+	if err != nil {
+		return VoidValue(), err
+	}
+	result, err := call.InvokeVirtual(source, "available", "()I")
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := result.Int32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	return booleanValue(value > 0), nil
+}
+
+func inputStreamReaderClose(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := call.vm.Field(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;")
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := value.Reference()
+	if err != nil {
+		return VoidValue(), err
+	}
+	if source == nil {
+		return VoidValue(), nil
+	}
+	if err := call.vm.SetField(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;", ReferenceValue(nil)); err != nil {
+		return VoidValue(), err
+	}
+	_, err = call.InvokeVirtual(source, "close", "()V")
+	return VoidValue(), err
 }

@@ -280,6 +280,10 @@ type initializationRuntime struct {
 	wipicClipOrder []uint32
 	runtimeObjects map[string]*jvm.Object
 	classAliases   map[uint32]uint32
+	// leds is the indicator-light mask a title last set. This handset has no
+	// lights, so the only thing an LED read can honestly answer with is what
+	// the last write asked for. See runtime_library.go.
+	leds int32
 	// aotCallDepth is nesting per guest call stack, not per runtime. A guest
 	// thread parks with its whole nested stack intact and its depth still
 	// counted, so one shared counter grows with every parked worker and the
