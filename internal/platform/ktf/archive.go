@@ -14,8 +14,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/movingwoo/wfeature/internal/zipentry"
 	"unicode/utf8"
+
+	"github.com/movingwoo/wfeature/internal/platform/detect"
+	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
 const (
@@ -221,8 +223,15 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 	if err := validateSimpleName("AID", descriptor.AID); err != nil {
 		return Descriptor{}, err
 	}
-	if err := validateSimpleName("PID", descriptor.PID); err != nil {
-		return Descriptor{}, err
+	// **A descriptor may carry no PID**, and one local archive is the case: the
+	// key is there with nothing after it. SaveOwner has always said what
+	// happens then — the AID stands in — so refusing the archive here was the
+	// loader contradicting its own fallback. What is validated is the value
+	// when there is one.
+	if descriptor.PID != "" {
+		if err := validateSimpleName("PID", descriptor.PID); err != nil {
+			return Descriptor{}, err
+		}
 	}
 	if err := validateClassName(descriptor.MainClass); err != nil {
 		return Descriptor{}, err
@@ -279,7 +288,41 @@ func readOuterZIP(data []byte) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return zipentry.Unwrap(files), nil
+	return rootAtDescriptor(zipentry.Unwrap(files)), nil
+}
+
+// rootAtDescriptor re-roots an archive at the directory its descriptor is in.
+//
+// **The descriptor is what says where the root is**, and one local copy is a
+// dump of the handset's own application directory: `W/exe_info` beside
+// `W/apps/<AID>/__adf__` and the rest of the title. Removing one shared
+// directory is not enough there — the entries do not share one — and the
+// convention behind the shape is the platform's own: the `__env__` file an
+// earlier package carries names its private area as `/W/apps/<AID>/P/`.
+//
+// An archive whose descriptor is already at the root is untouched, and one
+// with more than one descriptor is left alone rather than re-rooted at a guess.
+func rootAtDescriptor(entries map[string][]byte) map[string][]byte {
+	root, found := "", 0
+	for name := range entries {
+		if !strings.EqualFold(path.Base(name), adfPath) {
+			continue
+		}
+		found++
+		root = path.Dir(name)
+	}
+	if found != 1 || root == "." {
+		return entries
+	}
+	rooted := make(map[string][]byte, len(entries))
+	for name, contents := range entries {
+		inside, ok := strings.CutPrefix(name, root+"/")
+		if !ok {
+			continue
+		}
+		rooted[inside] = contents
+	}
+	return rooted
 }
 
 // outerZIPNames lists an archive's entries without decompressing any of them,
@@ -330,7 +373,7 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 	}
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", label, err)
+		return nil, fmt.Errorf("open %s: %w", label, detect.ContainerError(data, err))
 	}
 	if len(reader.File) > maxEntryCount {
 		return nil, fmt.Errorf("%s contains %d entries, limit %d", label, len(reader.File), maxEntryCount)
@@ -343,16 +386,32 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 		if len(file.Name) > maxEntryNameSize {
 			return nil, fmt.Errorf("%s entry name exceeds %d bytes", label, maxEntryNameSize)
 		}
+		// A folder entry is dropped before its name is checked, because
+		// nothing is stored under it and the check is about where content
+		// lands. One local archive carries a bare `./` folder entry, which is
+		// a path that cleans to nothing and was refusing the whole title.
+		if file.FileInfo().IsDir() {
+			continue
+		}
 		name, err := safeEntryName(file.Name)
 		if err != nil {
 			return nil, fmt.Errorf("%s contains unsafe entry: %w", label, err)
 		}
-		if file.FileInfo().IsDir() {
-			continue
-		}
 		folded := strings.ToLower(name)
 		if previous, duplicate := names[folded]; duplicate {
-			return nil, fmt.Errorf("%s contains duplicate entries %q and %q", label, previous, name)
+			// **What a duplicate entry is dangerous for is the ambiguity**:
+			// two entries under one name, and which one a reader takes decides
+			// what runs. Identical bytes have no ambiguity to exploit, and one
+			// local archive packs its whole image folder twice over, byte for
+			// byte. A duplicate that differs is still refused.
+			existing, err := readEntry(file)
+			if err != nil {
+				return nil, fmt.Errorf("read %s entry %q: %w", label, name, err)
+			}
+			if !bytes.Equal(existing, entries[previous]) {
+				return nil, fmt.Errorf("%s contains different entries under one name %q", label, name)
+			}
+			continue
 		}
 		names[folded] = name
 		if file.UncompressedSize64 > maxEntrySize {

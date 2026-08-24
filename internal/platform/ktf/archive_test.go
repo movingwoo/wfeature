@@ -106,7 +106,12 @@ func TestOpenRejectsInvalidKTFContainers(t *testing.T) {
 		{name: "missing adf", data: makeZIP(t, []zipEntry{{name: "fixture.jar", data: validJAR}}), want: "has no __adf__"},
 		{name: "missing aid jar", data: makeZIP(t, []zipEntry{{name: adfPath, data: validADF}}), want: "has no AID JAR"},
 		{name: "unsafe outer path", data: makeZIP(t, []zipEntry{{name: "../escape", data: nil}}), want: "unsafe entry"},
-		{name: "case duplicate", data: makeZIP(t, []zipEntry{{name: "FILE", data: nil}, {name: "file", data: nil}}), want: "duplicate entries"},
+		// Two entries under one name are refused when their contents differ,
+		// which is the ambiguity a duplicate is dangerous for. Identical bytes
+		// have none, and one local archive packs its whole image folder twice
+		// over; see readZIP.
+		{name: "case duplicate", data: makeZIP(t, []zipEntry{{name: "FILE", data: []byte{1}}, {name: "file", data: []byte{2}}}), want: "different entries under one name"},
+		{name: "rar in a zip's clothing", data: []byte("Rar!\x1a\x07\x00rest"), want: "this is a RAR archive"},
 		{name: "missing client", data: makeZIP(t, []zipEntry{{name: adfPath, data: validADF}, {name: "fixture.jar", data: makeZIP(t, []zipEntry{{name: "resource", data: nil}})}}), want: "has no client.bin"},
 		{name: "unsafe jar path", data: makeZIP(t, []zipEntry{{name: adfPath, data: validADF}, {name: "fixture.jar", data: makeZIP(t, []zipEntry{{name: "../client.bin0", data: []byte{1}}})}}), want: "unsafe entry"},
 		{name: "multiple clients", data: makeZIP(t, []zipEntry{{name: adfPath, data: validADF}, {name: "fixture.jar", data: makeZIP(t, []zipEntry{{name: "client.bin0", data: []byte{1}}, {name: "client.bin1", data: []byte{1}}})}}), want: "multiple client.bin"},
@@ -118,6 +123,67 @@ func TestOpenRejectsInvalidKTFContainers(t *testing.T) {
 				t.Fatalf("Open() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// A folder entry contributes nothing, so its name is not checked as a place
+// content lands: one local archive carries a bare `./` folder entry, and
+// refusing that path refused the whole title.
+// One local copy is a dump of the handset's own application directory, whose
+// entries share no single folder: `W/exe_info` sits beside `W/apps/<AID>/`. The
+// descriptor is what says where the root is.
+func TestOpenRootsAnArchiveAtItsDescriptor(t *testing.T) {
+	validADF := []byte("AID:fixture\nPID:P0001\nMClass:fixture.Main\n")
+	validJAR := makeZIP(t, []zipEntry{{name: "client.bin0", data: syntheticClientCode()}})
+	archive, err := Open(makeZIP(t, []zipEntry{
+		{name: "W/exe_info", data: nil},
+		{name: "W/apps/fixture/" + adfPath, data: validADF},
+		{name: "W/apps/fixture/fixture.jar", data: validJAR},
+	}))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if archive.Descriptor.AID != "fixture" || archive.JAR.Client.Name != "client.bin0" {
+		t.Fatalf("archive is %+v", archive.Descriptor)
+	}
+	if _, outside := archive.Files["exe_info"]; outside {
+		t.Fatal("an entry outside the descriptor's directory was kept")
+	}
+}
+
+func TestOpenAcceptsAFolderEntryWhoseNameCleansToNothing(t *testing.T) {
+	validADF := []byte("AID:fixture\nPID:P0001\nMClass:fixture.Main\n")
+	validJAR := makeZIP(t, []zipEntry{{name: "./", data: nil}, {name: "client.bin0", data: syntheticClientCode()}})
+	archive, err := Open(makeZIP(t, []zipEntry{
+		{name: adfPath, data: validADF},
+		{name: "fixture.jar", data: validJAR},
+	}))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if archive.JAR.Client.Name != "client.bin0" {
+		t.Fatalf("client is %q", archive.JAR.Client.Name)
+	}
+}
+
+// A duplicate whose bytes are identical has no ambiguity to exploit, and one
+// local archive packs its whole image folder twice over.
+func TestOpenAcceptsAnIdenticalDuplicateEntry(t *testing.T) {
+	validADF := []byte("AID:fixture\nPID:P0001\nMClass:fixture.Main\n")
+	validJAR := makeZIP(t, []zipEntry{
+		{name: "img/a.png", data: []byte{1, 2, 3}},
+		{name: "img/a.png", data: []byte{1, 2, 3}},
+		{name: "client.bin0", data: syntheticClientCode()},
+	})
+	archive, err := Open(makeZIP(t, []zipEntry{
+		{name: adfPath, data: validADF},
+		{name: "fixture.jar", data: validJAR},
+	}))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if got := archive.JAR.Entries["img/a.png"]; len(got) != 3 {
+		t.Fatalf("the duplicated entry is %v", got)
 	}
 }
 
@@ -175,7 +241,7 @@ func TestParseDescriptorValidatesRequiredNames(t *testing.T) {
 	}{
 		{name: "missing aid", data: "PID:p\nMClass:m\n", want: "has no AID"},
 		{name: "unsafe aid", data: "AID:../x\nPID:p\nMClass:m\n", want: "not a safe file name"},
-		{name: "missing pid", data: "AID:a\nMClass:m\n", want: "has no PID"},
+		{name: "unsafe pid", data: "AID:a\nPID:../x\nMClass:m\n", want: "not a safe file name"},
 		{name: "missing class", data: "AID:a\nPID:p\n", want: "has no MClass"},
 		{name: "invalid class", data: "AID:a\nPID:p\nMClass:a..b\n", want: "MClass"},
 		{name: "duplicate", data: "AID:a\nAID:b\nPID:p\nMClass:m\n", want: "repeats field AID"},
@@ -187,6 +253,18 @@ func TestParseDescriptorValidatesRequiredNames(t *testing.T) {
 				t.Fatalf("ParseDescriptor() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// A descriptor with no PID is one local archive's shape, and SaveOwner has
+// always said what happens then: the AID stands in.
+func TestParseDescriptorAcceptsADescriptorWithNoPID(t *testing.T) {
+	descriptor, err := ParseDescriptor([]byte("AID:a\nMClass:m\n"))
+	if err != nil {
+		t.Fatalf("ParseDescriptor() error = %v", err)
+	}
+	if owner := SaveOwner(descriptor); owner != "a" {
+		t.Fatalf("SaveOwner() = %q, want the AID", owner)
 	}
 }
 

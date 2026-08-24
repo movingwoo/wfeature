@@ -92,7 +92,7 @@ const (
 func Archive(data []byte) (Platform, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return "", fmt.Errorf("read archive: %w", err)
+		return "", fmt.Errorf("read archive: %w", ContainerError(data, err))
 	}
 	// A repacked copy can carry the whole archive inside a folder named after
 	// the game, which leaves every marker one level down from where the
@@ -113,9 +113,15 @@ func Archive(data []byte) (Platform, error) {
 			name = strings.TrimPrefix(name, wrapper+"/")
 		}
 		switch {
-		case strings.EqualFold(name, ktfEntry):
+		// The two named markers are matched on the last element rather than
+		// the whole name, because one local copy is a dump of the handset's
+		// own application directory and keeps the whole title under
+		// `W/apps/<AID>/`. The loader roots such an archive at its descriptor;
+		// this is the same rule at detection, and the names are distinctive
+		// enough that nothing else wears one.
+		case strings.EqualFold(path.Base(name), ktfEntry):
 			return KTF, nil
-		case strings.EqualFold(name, lgtEntry):
+		case strings.EqualFold(path.Base(name), lgtEntry):
 			return LGT, nil
 		case strings.EqualFold(path.Ext(name), sktExtension):
 			return SKT, nil
@@ -195,4 +201,44 @@ func referencesSKVM(reader *zip.Reader) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// containerFormats are the archive formats a person plausibly has a game in
+// that are not the one this reads. A local set of packages holds three ALZ
+// files and one RAR whose extension had been changed to `.zip`, and every one
+// of them came back as "not a valid zip file" — which is true and tells the
+// person nothing about what to do. Naming the format does.
+var containerFormats = []struct {
+	magic []byte
+	name  string
+}{
+	{[]byte("Rar!\x1a\x07"), "a RAR archive"},
+	{[]byte("ALZ\x01"), "an ALZ archive"},
+	{[]byte("7z\xbc\xaf\x27\x1c"), "a 7-Zip archive"},
+	{[]byte("\x1f\x8b"), "a gzip stream"},
+	{[]byte("BZh"), "a bzip2 stream"},
+	{[]byte("\xfd7zXZ\x00"), "an XZ stream"},
+}
+
+// ContainerFormat names the archive format some bytes are in when it is one
+// this emulator does not read, and answers empty otherwise — including for a
+// zip, which every caller is already trying to read as one.
+func ContainerFormat(data []byte) string {
+	for _, format := range containerFormats {
+		if bytes.HasPrefix(data, format.magic) {
+			return format.name
+		}
+	}
+	return ""
+}
+
+// ContainerError turns a zip reader's refusal into one that names the format
+// when the bytes are a different kind of archive. A loader wraps its own
+// refusal with this so the message a person is shown says which file they
+// picked rather than only that it was not the right one.
+func ContainerError(data []byte, err error) error {
+	if format := ContainerFormat(data); format != "" {
+		return fmt.Errorf("%w: this is %s, which this emulator does not read", err, format)
+	}
+	return err
 }

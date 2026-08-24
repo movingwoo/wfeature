@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
@@ -220,7 +221,7 @@ func (archive *Archive) Resource(name string) ([]byte, bool) {
 func readZIP(data []byte, what string) (map[string][]byte, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", what, err)
+		return nil, fmt.Errorf("open %s: %w", what, detect.ContainerError(data, err))
 	}
 	entries := make(map[string][]byte, len(reader.File))
 	for _, file := range reader.File {
