@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"golang.org/x/text/encoding/korean"
 
@@ -431,4 +432,214 @@ func javaStringEquals(
 		return 0, nil
 	}
 	return 1, nil
+}
+
+// The rest of `java/lang/String`, reached through the slots the compiler baked.
+// A String's own methods take the slots from 10 upward in declaration order,
+// and one that overrides `java/lang/Object` takes Object's slot instead — so
+// equals, hashCode and toString are not in the run. That places length at 10,
+// substring(int, int) at 28, trim at 33 and toCharArray at 34, which is where
+// their own call sites had already put them; docs/lgt.md has the rest of the
+// anchors. Each slot below then agrees with what its own call site passes.
+
+// javaStringComparison is `compareTo(String)`, slot 16. Java compares by UTF-16
+// code unit rather than by locale, which is what a title sorting names or
+// searching a sorted table depends on: the order has to be the one the table
+// was built in.
+func javaStringComparison(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, other, err := client.javaTextPair("compareTo", arguments)
+	if err != nil {
+		return 0, err
+	}
+	left, right := utf16Units(held), utf16Units(other)
+	for index := 0; index < len(left) && index < len(right); index++ {
+		if left[index] != right[index] {
+			return uint32(int32(left[index]) - int32(right[index])), nil
+		}
+	}
+	return uint32(int32(len(left)) - int32(len(right))), nil
+}
+
+// javaStringStartsWith is `startsWith(String)`, slot 19.
+func javaStringStartsWith(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, prefix, err := client.javaTextPair("startsWith", arguments)
+	if err != nil {
+		return 0, err
+	}
+	if strings.HasPrefix(held, prefix) {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+// javaStringIndexOfTextFrom is `indexOf(String, int)`, slot 26. The answer is
+// an index in characters counted the way Java counts them, not in bytes, and
+// the search starts at one: a title that walks a delimited line calls this in
+// a loop feeding back the index it last found.
+func javaStringIndexOfTextFrom(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, needle, err := client.javaTextPair("indexOf", arguments)
+	if err != nil {
+		return 0, err
+	}
+	symbols, wanted := utf16Units(held), utf16Units(needle)
+	from := int(int32(arguments[2]))
+	if from < 0 {
+		from = 0
+	}
+	for start := from; start+len(wanted) <= len(symbols); start++ {
+		match := true
+		for offset, unit := range wanted {
+			if symbols[start+offset] != unit {
+				match = false
+				break
+			}
+		}
+		if match {
+			return uint32(int32(start)), nil
+		}
+	}
+	return uint32(0xffffffff), nil
+}
+
+// javaStringBytes is `getBytes()`, slot 14: the text in the platform's own
+// encoding, which on this handset is EUC-KR — the same encoding the String
+// constructor decodes a byte array with, so the pair is one round trip.
+func javaStringBytes(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
+	}
+	return client.newJavaByteArray(encodeEUCKR(held))
+}
+
+// javaTextPair reads a text method's receiver and its one String argument.
+func (client *Client) javaTextPair(method string, arguments []uint32) (string, string, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return "", "", fmt.Errorf("String.%s receiver at %#x holds no text", method, arguments[0])
+	}
+	other, ok := client.javaText(arguments[1])
+	if !ok {
+		if arguments[1] == 0 {
+			return "", "", fmt.Errorf("String.%s was given null", method)
+		}
+		return "", "", fmt.Errorf("String.%s argument at %#x holds no text", method, arguments[1])
+	}
+	return held, other, nil
+}
+
+// utf16Units is the text as the code units a Java index counts, which is what
+// every index a String method takes or answers is in.
+func utf16Units(text string) []uint16 {
+	return utf16.Encode([]rune(text))
+}
+
+// encodeEUCKR is decodeEUCKR's inverse. Text this handset's encoding cannot
+// hold is refused by the encoder rather than replaced, and the UTF-8 bytes are
+// the fallback — a title that gets those back hands them to a String
+// constructor that reads them the same way.
+func encodeEUCKR(text string) []byte {
+	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
+	if err != nil {
+		return []byte(text)
+	}
+	return encoded
+}
+
+// javaStringCharAt is `charAt(int)`, slot 11: one UTF-16 code unit, which is
+// what a Java index into a String counts.
+func javaStringCharAt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
+	}
+	units := utf16Units(held)
+	index := int(int32(arguments[1]))
+	if index < 0 || index >= len(units) {
+		return 0, fmt.Errorf("character %d of a string of %d", index, len(units))
+	}
+	return uint32(units[index]), nil
+}
+
+// javaBufferDelete is `StringBuffer.delete(int, int)`, slot 27. The language
+// clamps the end to the buffer's length rather than refusing it, which is what
+// a title emptying a buffer with delete(0, capacity) depends on. The answer is
+// the buffer, so a chain can carry on from it.
+func javaBufferDelete(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
+	}
+	units := utf16Units(held)
+	start, end := int(int32(arguments[1])), int(int32(arguments[2]))
+	if end > len(units) {
+		end = len(units)
+	}
+	if start < 0 || start > len(units) || start > end {
+		return 0, fmt.Errorf("delete %d to %d of a buffer of %d", start, end, len(units))
+	}
+	client.setJavaText(arguments[0], javaTextOfUnits(append(append([]uint16{}, units[:start]...), units[end:]...)))
+	return arguments[0], nil
+}
+
+// javaBufferAppendObject is `StringBuffer.append(Object)`, slot 17. The
+// language defines it as appending `String.valueOf(obj)`, which is the
+// object's own toString — and this platform has no toString to call on a guest
+// object. What it does have is the object's class, and the one shape this
+// reaches for locally is a caught exception being written into a message,
+// where the class name is the whole of what the line is for. An object of a
+// class this platform does not know is named by its address, which is at least
+// something a reader of the log can follow.
+func javaBufferAppendObject(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", arguments[0])
+	}
+	client.setJavaText(arguments[0], held+client.javaObjectText(arguments[1]))
+	return arguments[0], nil
+}
+
+// javaObjectText is `String.valueOf(Object)` for an object this platform did
+// not build the text of.
+func (client *Client) javaObjectText(object uint32) string {
+	if object == 0 {
+		return "null"
+	}
+	if text, ok := client.javaText(object); ok {
+		return text
+	}
+	if class, known := client.javaClassOfObject(object); known {
+		return fmt.Sprintf("%s@%x", class.Name, object)
+	}
+	return fmt.Sprintf("object@%x", object)
+}
+
+// javaStringConcat is `concat(String)`, slot 29: one string on the end of
+// another. The language answers the receiver unchanged when there is nothing
+// to add, which is one allocation less for a title concatenating in a loop.
+func javaStringConcat(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, other, err := client.javaTextPair("concat", arguments)
+	if err != nil {
+		return 0, err
+	}
+	if other == "" {
+		return arguments[0], nil
+	}
+	return client.newJavaString(held + other)
 }

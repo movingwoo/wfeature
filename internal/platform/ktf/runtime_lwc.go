@@ -232,6 +232,20 @@ func runtimeComponentBooleanField(key string) runtimeJavaImplementation {
 	}
 }
 
+// runtimeComponentSetField records one argument on the receiver under its own
+// name. A component's colours are the case: nothing here paints a component,
+// so what a title can observe of setting one is reading it back.
+func runtimeComponentSetField(method, key string) runtimeJavaImplementation {
+	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		receiver, err := runtimeComponentReceiver(method, arguments, 2)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		receiver.Fields[key] = arguments[1]
+		return jvm.VoidValue(), nil
+	}
+}
+
 // runtimeComponentKeyNotify reports the key as unconsumed, so the card stack
 // below a component keeps receiving it — the original runtime's behavior for a
 // component that installed no key handling of its own.

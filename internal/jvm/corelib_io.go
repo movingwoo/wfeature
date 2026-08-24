@@ -204,9 +204,15 @@ func byteArrayInputStreamDefinition() ClassDefinition {
 		Fields: []FieldDefinition{
 			{Name: "data", Descriptor: "[B", Access: AccessPrivate},
 			{Name: "position", Descriptor: "I", Access: AccessPrivate},
+			// Where the stream ends, which is the array's end only for the
+			// constructor that takes the whole array. A title that keeps
+			// several records in one buffer reads each of them by handing the
+			// same array a different window, so the end has to be per stream.
+			{Name: "limit", Descriptor: "I", Access: AccessPrivate},
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "([B)V", Access: AccessPublic, Body: byteArrayInputStreamInit},
+			{Name: "<init>", Descriptor: "([BII)V", Access: AccessPublic, Body: byteArrayInputStreamInitRange},
 			{Name: "read", Descriptor: "()I", Access: AccessPublic, Body: byteArrayInputStreamRead},
 			{Name: "read", Descriptor: "([BII)I", Access: AccessPublic, Body: byteArrayInputStreamReadRange},
 			{Name: "skip", Descriptor: "(J)J", Access: AccessPublic, Body: byteArrayInputStreamSkip},
@@ -224,28 +230,86 @@ func byteArrayInputStreamInit(call *Invocation, arguments []Value) (Value, error
 	if err != nil {
 		return VoidValue(), err
 	}
-	return VoidValue(), call.vm.SetField(stream, ByteArrayInputStreamClass, "data", "[B", ReferenceValue(data))
+	if err := call.vm.SetField(stream, ByteArrayInputStreamClass, "data", "[B", ReferenceValue(data)); err != nil {
+		return VoidValue(), err
+	}
+	array, err := guestArray(data)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "limit", int32(array.Length()))
 }
 
-// byteArrayInputStreamState reads the two fields every method here starts from.
-func byteArrayInputStreamState(vm *VM, stream *Object) (*Array, int32, error) {
+// byteArrayInputStreamInitRange opens a window on the array rather than the
+// whole of it. The specification clamps the window to what the array holds
+// rather than refusing an over-long one, and a negative offset or length is
+// the caller's own error; both are what a title that reads a record out of a
+// larger buffer depends on.
+func byteArrayInputStreamInitRange(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	data, err := nativeReference(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	offset, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	length, err := nativeInt(arguments, 3)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := guestArray(data)
+	if err != nil {
+		return VoidValue(), err
+	}
+	size := int32(array.Length())
+	if offset < 0 || length < 0 || offset > size {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException", "ByteArrayInputStream range")
+	}
+	limit := offset + length
+	if limit > size || limit < 0 {
+		limit = size
+	}
+	if err := call.vm.SetField(stream, ByteArrayInputStreamClass, "data", "[B", ReferenceValue(data)); err != nil {
+		return VoidValue(), err
+	}
+	if err := setIntField(call.vm, stream, ByteArrayInputStreamClass, "position", offset); err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "limit", limit)
+}
+
+// byteArrayInputStreamState reads the fields every method here starts from:
+// the array, where reading is, and where it stops.
+func byteArrayInputStreamState(vm *VM, stream *Object) (*Array, int32, int32, error) {
 	value, err := vm.Field(stream, ByteArrayInputStreamClass, "data", "[B")
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	object, err := value.Reference()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	array, err := guestArray(object)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	position, err := intField(vm, stream, ByteArrayInputStreamClass, "position")
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	return array, position, nil
+	limit, err := intField(vm, stream, ByteArrayInputStreamClass, "limit")
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if limit > int32(array.Length()) {
+		limit = int32(array.Length())
+	}
+	return array, position, limit, nil
 }
 
 func byteArrayInputStreamRead(call *Invocation, arguments []Value) (Value, error) {
@@ -253,11 +317,11 @@ func byteArrayInputStreamRead(call *Invocation, arguments []Value) (Value, error
 	if err != nil {
 		return VoidValue(), err
 	}
-	data, position, err := byteArrayInputStreamState(call.vm, stream)
+	data, position, limit, err := byteArrayInputStreamState(call.vm, stream)
 	if err != nil {
 		return VoidValue(), err
 	}
-	if position >= int32(data.Length()) {
+	if position >= limit {
 		return IntValue(-1), nil
 	}
 	element, err := data.Load(int(position))
@@ -279,11 +343,11 @@ func byteArrayInputStreamReadRange(call *Invocation, arguments []Value) (Value, 
 	if err != nil {
 		return VoidValue(), err
 	}
-	data, position, err := byteArrayInputStreamState(call.vm, stream)
+	data, position, limit, err := byteArrayInputStreamState(call.vm, stream)
 	if err != nil {
 		return VoidValue(), err
 	}
-	remaining := int32(data.Length()) - position
+	remaining := limit - position
 	if remaining <= 0 {
 		if length == 0 {
 			return IntValue(0), nil
@@ -320,11 +384,11 @@ func byteArrayInputStreamSkip(call *Invocation, arguments []Value) (Value, error
 	if err != nil {
 		return VoidValue(), err
 	}
-	data, position, err := byteArrayInputStreamState(call.vm, stream)
+	_, position, limit, err := byteArrayInputStreamState(call.vm, stream)
 	if err != nil {
 		return VoidValue(), err
 	}
-	available := int64(data.Length()) - int64(position)
+	available := int64(limit) - int64(position)
 	skipped := count
 	if skipped > available {
 		skipped = available
@@ -343,11 +407,11 @@ func byteArrayInputStreamAvailable(call *Invocation, arguments []Value) (Value, 
 	if err != nil {
 		return VoidValue(), err
 	}
-	data, position, err := byteArrayInputStreamState(call.vm, stream)
+	_, position, limit, err := byteArrayInputStreamState(call.vm, stream)
 	if err != nil {
 		return VoidValue(), err
 	}
-	return IntValue(int32(data.Length()) - position), nil
+	return IntValue(limit - position), nil
 }
 
 func byteArrayOutputStreamDefinition() ClassDefinition {

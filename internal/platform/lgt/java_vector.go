@@ -139,3 +139,25 @@ func javaVectorClear(
 	client.javaRuntimeState().vectors[arguments[0]] = []uint32{}
 	return 0, nil
 }
+
+// javaVectorInsertAt is `insertElementAt(Object, int)`: one more reference,
+// pushed in at an index rather than added on the end. The language allows the
+// index to be the size, which appends; anything past it is out of bounds.
+func javaVectorInsertAt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	index := int(int32(arguments[2]))
+	if index < 0 || index > len(held) {
+		return 0, fmt.Errorf("insert at %d of a vector of %d", index, len(held))
+	}
+	grown := make([]uint32, 0, len(held)+1)
+	grown = append(grown, held[:index]...)
+	grown = append(grown, arguments[1])
+	grown = append(grown, held[index:]...)
+	client.javaRuntimeState().vectors[arguments[0]] = grown
+	return 0, nil
+}

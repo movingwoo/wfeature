@@ -41,8 +41,43 @@ func vectorDefinition() ClassDefinition {
 			{Name: "removeAllElements", Descriptor: "()V", Access: sync, Body: vectorRemoveAllElements},
 			{Name: "removeElementAt", Descriptor: "(I)V", Access: sync, Body: vectorRemoveElementAt},
 			{Name: "size", Descriptor: "()I", Access: sync, Body: vectorSize},
+			// A title walks a vector with an Enumeration where a newer one
+			// would use an index — the interface is what CLDC gives it and a
+			// Hashtable already hands out the same view over the same class.
+			{Name: "elements", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: vectorElements},
 		},
 	}
+}
+
+// vectorElements is `elements()`: a view over what the vector holds now. It is
+// a snapshot the way the Hashtable views beside it are — the specification's
+// Enumeration is not required to survive a change to what it came from, and a
+// copy is what makes "not required" into "does not".
+func vectorElements(call *Invocation, arguments []Value) (Value, error) {
+	vector, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, size, err := vectorState(call.vm, vector)
+	if err != nil {
+		return VoidValue(), err
+	}
+	snapshot, err := call.vm.newArray(objectArrayType, size)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, err := array.LoadRange(0, int(size))
+	if err != nil {
+		return VoidValue(), err
+	}
+	if err := SetArrayRange(snapshot, 0, elements); err != nil {
+		return VoidValue(), err
+	}
+	view, err := call.NewObject(ArrayEnumerationClass, "([Ljava/lang/Object;)V", ReferenceValue(snapshot))
+	if err != nil {
+		return VoidValue(), err
+	}
+	return ReferenceValue(view), nil
 }
 
 // objectArrayType is the component type of the two arrays these collections
@@ -1091,6 +1126,7 @@ func calendarDefinition() ClassDefinition {
 		},
 		Methods: []MethodDefinition{
 			{Name: "getInstance", Descriptor: "()Ljava/util/Calendar;", Access: AccessPublic | AccessStatic | AccessNative},
+			{Name: "getInstance", Descriptor: "(Ljava/util/TimeZone;)Ljava/util/Calendar;", Access: AccessPublic | AccessStatic | AccessNative},
 			{Name: "get", Descriptor: "(I)I", Access: native},
 			{Name: "set", Descriptor: "(II)V", Access: native},
 			{Name: "getTime", Descriptor: "()Ljava/util/Date;", Access: AccessPublic | AccessFinal | AccessNative},

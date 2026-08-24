@@ -88,12 +88,26 @@ org/kwis/msp/lwc/ContainerComponent <init> ()V noop
 org/kwis/msp/lwc/ContainerComponent invalidate ()V noop
 org/kwis/msp/lwc/ContainerComponent layout ()V noop
 org/kwis/msp/lwc/ContainerComponent validate ()V noop
+org/kwis/msp/lwc/DialogComponent layout ()V noop
+org/kwis/msp/lwc/FormComponent <init> ()V noop
+org/kwis/msp/lwc/FormComponent layout ()V noop
 org/kwis/msp/lwc/LabelComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> (IIII)V noop
 org/kwis/msp/lwc/ShellComponent hide ()V noop
 org/kwis/msp/lwc/ShellComponent layout ()V noop
 org/kwis/msp/lwc/ShellComponent show ()V noop
+
+# A dialog is never put in front of anyone, so the three calls that would
+# arrange one have nothing to arrange: the button text is drawn by the dialog
+# and nothing draws it, and showing it is the same absence as laying it out.
+# doModal is the one that matters and it is below, with the rest of the
+# answers a game believes.
+org/kwis/msp/lwc/DialogComponent setButtonString (ILjava/lang/String;)V noop
+org/kwis/msp/lwc/DialogComponent show ()V noop
+
+# A progress bar's margin is padding for a bar this Host does not draw.
+org/kwis/msp/lwc/ProgressComponent setMargin (II)V noop
 
 # Same fixed answer the original runtime gives.
 org/kwis/msp/db/DataBase closeDataBase ()V noop
@@ -132,3 +146,12 @@ java/util/TimerTask run ()V noop
 # so there is nothing held back for a flush or a close to release.
 org/kwis/msp/io/FileOutputStream close ()V noop
 org/kwis/msp/io/FileOutputStream flush ()V noop
+
+# The dialog nobody is shown. doModal is asked what a person chose, and this
+# Host has no way to ask one, so it answers from the dialog's type: a
+# TYPE_NONE dialog closes itself and gets DLG_TIMEOUT, a TYPE_OK dialog has one
+# button so DLG_OK is its only outcome, and a TYPE_OK_CANCEL dialog genuinely
+# has two and is told OK. That last one is a guess, which is why this line is
+# here and why the call also counts a diagnostic; see runtime_library.go for
+# what would end it.
+org/kwis/msp/lwc/DialogComponent doModal ()I dialog

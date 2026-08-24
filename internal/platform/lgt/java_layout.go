@@ -60,6 +60,11 @@ var javaPlatformSupers = map[string]string{
 	"java/io/DataOutputStream":      "java/io/OutputStream",
 	"java/io/ByteArrayOutputStream": "java/io/OutputStream",
 
+	// A Stack is a Vector with four more methods, and a title reaches those
+	// four through slots the compiler baked against Vector's own vtable. Left
+	// unrelated the two are separate classes and a push resolves to nothing.
+	"java/util/Stack": "java/util/Vector",
+
 	// The exception hierarchy, which is not about slot placement at all: it is
 	// what the catch test walks. A `catch (Exception e)` around a call that
 	// throws `IOException` is one of the commonest shapes there is, and with

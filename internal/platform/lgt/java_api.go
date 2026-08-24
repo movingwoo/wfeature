@@ -68,6 +68,9 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// from the clock, which is the guest's clock here, so a title that reseeds
 	// gets a different sequence and a title that runs twice does too.
 	"java/util/Random.<init>()V": {Words: 1, Implementat: javaRandomConstructor},
+	// The seeded form, which is the same generator started at a place the
+	// title chose: a run it means to be able to repeat.
+	"java/util/Random.<init>(J)V": {Words: 3, Implementat: javaRandomSetSeed},
 
 	// A growable list; see java_vector.go. The capacity and the growth step are
 	// hints about an array this platform does not keep, so all three forms
@@ -75,6 +78,9 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"java/util/Vector.<init>()V":   {Words: 1, Implementat: javaVectorConstructor},
 	"java/util/Vector.<init>(I)V":  {Words: 2, Implementat: javaVectorConstructor},
 	"java/util/Vector.<init>(II)V": {Words: 3, Implementat: javaVectorConstructor},
+	// A Stack is that same list reached from one end; see javaPlatformSupers
+	// for why its own methods are Vector's slots.
+	"java/util/Stack.<init>()V": {Words: 1, Implementat: javaVectorConstructor},
 
 	// The size of the drawing surface. A Card is the whole screen on this
 	// platform, and so is the display, which is what the two pairs answer with.
@@ -137,6 +143,23 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// answer the WIPI C call gives.
 	"org/kwis/msp/media/Vibrator.on(II)V": {Words: 2, Implementat: javaNoResult},
 
+	// The date, which a title reads rather than the clock; see java_calendar.go.
+	"java/util/Calendar.getInstance()Ljava/util/Calendar;": {Implementat: javaCalendarGetInstance},
+
+	// The instant behind a date, which a title stores as a number; see
+	// java_calendar.go.
+	"java/util/Date.<init>()V":  {Words: 1, Implementat: javaDateNow},
+	"java/util/Date.<init>(J)V": {Words: 3, Implementat: javaDateAt},
+
+	// Numbers written into a sink; see java_stream.go. The wrapper stands for
+	// the sink it was built on rather than holding bytes of its own.
+	"java/io/DataOutputStream.<init>(Ljava/io/OutputStream;)V": {Words: 2, Implementat: javaWrapSink},
+
+	// The sink a title builds a block of bytes in; see java_stream.go. Both of
+	// the specification's constructors open the same empty one.
+	"java/io/ByteArrayOutputStream.<init>()V":  {Words: 1, Implementat: javaByteSinkConstructor},
+	"java/io/ByteArrayOutputStream.<init>(I)V": {Words: 2, Implementat: javaByteSinkConstructor},
+
 	// A stream that reads numbers instead of bytes. It is a wrapper: the
 	// object stands for the same open resource the stream it is built on does.
 	"java/io/DataInputStream.<init>(Ljava/io/InputStream;)V": {
@@ -157,7 +180,16 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/io/File.write(I)I":                         {Words: 2, Implementat: javaFileWriteByte},
 	"org/kwis/msp/io/File.close()V":                          {Words: 1, Implementat: javaFileClose},
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;)Z": {Words: 1, Implementat: javaFileExists},
-	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;)V": {Words: 1, Implementat: javaFileRemove},
+	// The form that names which directory to look in. A title here has one —
+	// its own — so the flag chooses nothing and the two forms answer the same
+	// way; the name is still the name.
+	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileExists},
+	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;)V":  {Words: 1, Implementat: javaFileRemove},
+	// How much room a title has left. Saves live in Host storage without a
+	// handset's quota behind them, so the answer is the same generous constant
+	// a database reports its own free space from — a title asks in order to
+	// decide whether it can save at all, and this platform can.
+	"org/kwis/msp/io/FileSystem.available()I": {Implementat: javaFileSystemAvailable},
 
 	// The clock a title reads. It is the same clock every other LGT call reads,
 	// which is what keeps a Java title's idea of time and a Clet's the same.
@@ -388,8 +420,24 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	// the same sixteen bits — so it is sign-extended, which is what the `short`
 	// array it lands in means.
 	javaDataInputStreamClass: {
+		// Slot 20 takes the receiver, a byte array and two numbers, and the
+		// numbers its caller passes are a zero and the length it has just read
+		// out of the file — a read that must fill the array. Slot 23 takes the
+		// receiver alone; the numbering puts `readByte` there, three slots
+		// into this class's own run.
+		20: {Called: "readFully([BII)V",
+			Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
+		23: {Called: "readByte()B",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadByte}},
 		25: {Called: "a big-endian halfword",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadShort}},
+		// Slot 28 takes the receiver alone. This class's own methods start
+		// after the nine it inherits and overrides from `InputStream`, which
+		// puts `readShort` at 25 — where the halfword above already is — and
+		// `readInt` three further on. A title reading its own table file reads
+		// a count with it before it reads the rows.
+		28: {Called: "readInt()I",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
 	},
 	// `java/lang/StringBuffer`. Slot 18 takes one reference and answers one:
 	// its call sites build a string constant, pass it as the only argument, and
@@ -436,6 +484,27 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// that shape.
 		28: {Called: "substring(II)Ljava/lang/String;",
 			Method: javaPlatformMethod{Words: 3, Implementat: javaStringSubstring}},
+		// Slots 11, 14, 16, 19 and 26 fill the gaps of a run already anchored
+		// at both ends: charAt, getBytes with no argument, compareTo, the
+		// one-argument startsWith and the two-argument indexOf. Each one's
+		// call site agrees with what it is given — the charAt caller passes an
+		// index, the indexOf caller passes a zero where a fromIndex goes, the
+		// compareTo and startsWith callers pass one String, and the getBytes
+		// caller passes nothing at all.
+		11: {Called: "charAt(I)C",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringCharAt}},
+		14: {Called: "getBytes()[B",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaStringBytes}},
+		16: {Called: "compareTo(Ljava/lang/String;)I",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringComparison}},
+		19: {Called: "startsWith(Ljava/lang/String;)Z",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringStartsWith}},
+		26: {Called: "indexOf(Ljava/lang/String;I)I",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaStringIndexOfTextFrom}},
+		// Slot 29 sits one past substring and takes the receiver and one
+		// String, which the declaration order makes `concat`.
+		29: {Called: "concat(Ljava/lang/String;)Ljava/lang/String;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaStringConcat}},
 		33: {Called: "trim()Ljava/lang/String;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStringTrim}},
 		// Slot 34 takes the receiver alone and **what its answer is read as is
@@ -456,8 +525,74 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	// straight into a division, guarded against `INT_MIN / -1` — so it is a
 	// signed int over the whole range, which is `nextInt()`. A bounded
 	// `nextInt(int)` would carry the bound at the call site and need no guard.
+	//
+	// **Where a slot number comes from.** A class's own instance methods take
+	// the slots from 10 upward in the order the specification declares them, a
+	// method that overrides an inherited one takes the slot it inherits, and a
+	// static takes none. That rule was read off the slots settled from their
+	// call sites rather than assumed; docs/lgt.md has the anchors it rests on
+	// and why it is worth more than any one of them. Every slot here is placed
+	// by it **and** checked against what its own call site passes, because the
+	// rule alone would only be an argument.
 	"java/util/Random": {
+		// Slot 10 is the first method the specification declares, and the call
+		// carries a sixty-four bit value in two registers where a caller of
+		// anything else on this class would carry nothing. A title that seeds
+		// its generator by hand is a title whose sequence is meant to repeat.
+		10: {Called: "setSeed(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaRandomSetSeed}},
 		12: {Called: "nextInt()I", Method: javaPlatformMethod{Words: 1, Implementat: javaRandomNext}},
+	},
+	// `java/util/Calendar`. Slot 14 is the fifth method the specification
+	// declares that is not a static and does not override one of Object's, so
+	// it is `get(int)` — the only method on this class a title calls at all,
+	// once per component of the date it shows.
+	javaCalendarClass: {
+		14: {Called: "get(I)I", Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarGet}},
+		// Slot 19 takes the receiver alone and is the tenth of this class's
+		// own run, which the specification's declaration order makes
+		// `getTimeZone`.
+		19: {Called: "getTimeZone()Ljava/util/TimeZone;",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaCalendarZone}},
+	},
+	// `java/util/Date` and `java/util/TimeZone`, both of whose own runs are
+	// short enough to state whole: a Date declares getTime then setTime, and a
+	// TimeZone declares getOffset, getRawOffset, useDaylightTime and getID.
+	javaDateClass: {
+		10: {Called: "getTime()J", Method: javaPlatformMethod{Words: 1, Implementat: javaDateTime}},
+	},
+	javaTimeZoneClass: {
+		11: {Called: "getRawOffset()I", Method: javaPlatformMethod{Words: 1, Implementat: javaTimeZoneOffset}},
+	},
+	// `java/io/ByteArrayOutputStream`. The three writes it inherits from
+	// `java/io/OutputStream` take that class's slots — 10, 11 and 12 — and the
+	// three of its own follow the five OutputStream declares, at 15, 16 and 17
+	// in the order the specification declares them.
+	// `java/io/DataOutputStream`. It overrides four of `java/io/OutputStream`'s
+	// five and takes their slots, so its own ten writes run from 15 in the
+	// order the specification declares them.
+	javaDataOutputStreamClass: {
+		10: {Called: "write(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaByteSinkWrite}},
+		11: {Called: "write([B)V", Method: javaPlatformMethod{Words: 2, Implementat: javaByteSinkWriteAll}},
+		12: {Called: "write([BII)V", Method: javaPlatformMethod{Words: 4, Implementat: javaByteSinkWriteRange}},
+		13: {Called: "flush()V", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkFlush}},
+		14: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkFlush}},
+		15: {Called: "writeBoolean(Z)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkAppend(1)}},
+		16: {Called: "writeByte(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkAppend(1)}},
+		17: {Called: "writeShort(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkAppend(2)}},
+		18: {Called: "writeChar(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkAppend(2)}},
+		19: {Called: "writeInt(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkAppend(4)}},
+		20: {Called: "writeLong(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaSinkWriteLong}},
+		24: {Called: "writeUTF(Ljava/lang/String;)V", Method: javaPlatformMethod{Words: 2, Implementat: javaSinkWriteUTF}},
+	},
+	javaByteSinkClass: {
+		10: {Called: "write(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaByteSinkWrite}},
+		11: {Called: "write([B)V", Method: javaPlatformMethod{Words: 2, Implementat: javaByteSinkWriteAll}},
+		12: {Called: "write([BII)V", Method: javaPlatformMethod{Words: 4, Implementat: javaByteSinkWriteRange}},
+		13: {Called: "flush()V", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkFlush}},
+		14: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkFlush}},
+		15: {Called: "reset()V", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkReset}},
+		16: {Called: "toByteArray()[B", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkBytes}},
+		17: {Called: "size()I", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkSize}},
 	},
 	javaVectorClass: {
 		15: {Called: "size()I", Method: javaPlatformMethod{Words: 1, Implementat: javaVectorSize}},
@@ -498,6 +633,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 			Method: javaPlatformMethod{Words: 1, Implementat: javaVectorFirst}},
 		27: {Called: "removeElementAt(I)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorRemoveAt}},
+		// Slot 28 takes the receiver, one reference and a number, and the
+		// number its caller passes is zero — an element put at the front of a
+		// list rather than on the end, which is `insertElementAt` and is what
+		// a title keeping a most-recent-first list does.
+		28: {Called: "insertElementAt(Ljava/lang/Object;I)V",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaVectorInsertAt}},
 		// Slot 29 takes the receiver and one reference, and **its answer is
 		// dropped**: the instruction after the call reloads the base register
 		// and never reads r0. Of the one-reference methods on this class, the
@@ -513,6 +654,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	javaStringBufferClass: {
 		4: {Called: "toString()Ljava/lang/String;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaBufferToString}},
+		// Slot 17 sits one before the String append and takes one reference
+		// that is not a String: the call site hands it the exception it just
+		// caught, on its way to a line it prints. `append(Object)` is what the
+		// specification declares there.
+		17: {Called: "append(Ljava/lang/Object;)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendObject}},
 		18: {Called: "append(Ljava/lang/String;)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendText}},
 		// Slot 23 takes one word and answers the buffer, the same shape as
@@ -538,6 +685,13 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// a number to render, which is `append(char)`.
 		22: {Called: "append(C)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendChar}},
+		// Slot 27 takes the receiver and two numbers, and the pair its caller
+		// passes is a zero and the buffer's own length: a buffer emptied for
+		// the next line rather than rebuilt. The numbering puts `delete` there
+		// and nothing else on this class takes two numbers and answers the
+		// buffer.
+		27: {Called: "delete(II)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaBufferDelete}},
 		23: {Called: "append(I)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendInt}},
 	},
@@ -583,6 +737,27 @@ func javaRandomNext(
 		return 0, fmt.Errorf("the object at %#x is not a generator this platform built", arguments[0])
 	}
 	return uint32(source.Uint32()), nil
+}
+
+// javaFileSystemAvailable is the room left for a title's own files.
+func javaFileSystemAvailable(
+	_ *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	return databaseCapacity, nil
+}
+
+// javaRandomSetSeed reseeds a generator, which the language defines as putting
+// it back to the sequence that seed names — so a title that reseeds with a
+// number it stored gets the run it had before.
+func javaRandomSetSeed(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	// The constructor arrives here too, on an object that has no generator
+	// yet: seeding one and reseeding one are the same act.
+	runtime := client.javaRuntimeState()
+	seed := int64(arguments[2])<<32 | int64(arguments[1])
+	runtime.random[arguments[0]] = rand.New(rand.NewSource(seed))
+	return 0, nil
 }
 
 // javaRandomConstructor seeds the receiver's own generator. The object is the

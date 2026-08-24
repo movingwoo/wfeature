@@ -163,6 +163,13 @@ func stringBufferDefinition() ClassDefinition {
 			{Name: "insert", Descriptor: "(IC)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(II)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(ILjava/lang/String;)Ljava/lang/StringBuffer;", Access: native},
+			// A title that builds a fixed-width line — a score padded with
+			// spaces, a name overwritten in place — edits the buffer by index
+			// rather than rebuilding it, so these two are how it reads and
+			// writes one character. The bodies were already registered; only
+			// the declaration was missing, which made the call a stop.
+			{Name: "charAt", Descriptor: "(I)C", Access: native},
+			{Name: "setCharAt", Descriptor: "(IC)V", Access: native},
 			{Name: "length", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
 		},

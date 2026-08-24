@@ -154,6 +154,14 @@ func init() {
 				{class: "java/lang/Thread", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/lang/Thread", name: "<init>", descriptor: "(Ljava/lang/Runnable;)V", accessFlags: 0x0001},
 				{class: "java/lang/Thread", name: "start", descriptor: "()V", accessFlags: 0x0001},
+				// run is what start eventually calls, and a title that
+				// subclasses Thread without overriding it inherits this one:
+				// the core library's body runs the Runnable the thread was
+				// constructed with, and does nothing when there was none.
+				// Leaving it undeclared meant the lookup walked from the
+				// subclass to here, found nothing, and ended a session that
+				// was only starting a sound thread.
+				{class: "java/lang/Thread", name: "run", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/lang/Thread", name: "isAlive", descriptor: "()Z", accessFlags: 0x0001},
 				{class: "java/lang/Thread", name: "interrupt", descriptor: "()V", accessFlags: 0x0001},
 				// A guest sleep parks the calling worker for as long as it
@@ -197,6 +205,18 @@ func init() {
 			name:        "java/io/ByteArrayOutputStream",
 			superName:   "java/io/OutputStream",
 			accessFlags: 0x0021,
+			// The specification declares buf protected, and a title reads it
+			// rather than calling toByteArray when what it wants is to hand
+			// the bytes straight on — decoding an image out of the buffer it
+			// just filled, where the copy toByteArray makes is the whole cost.
+			// Publishing it means keeping the payload word in step with the Go
+			// array; see fieldSyncs. count is not published: nothing in the
+			// local set reads it, and a field that is not there fails loudly
+			// where a word nobody maintains would be silently stale.
+			instanceSize: byteArrayOutputStreamFieldsSize,
+			fields: []runtimeJavaField{
+				{name: "buf", descriptor: "[B", accessFlags: 0x0004, offset: 0},
+			},
 			methods: []runtimeJavaMethod{
 				{class: "java/io/ByteArrayOutputStream", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayOutputStream", name: "<init>", descriptor: "(I)V", accessFlags: 0x0001},
@@ -258,6 +278,7 @@ func init() {
 			accessFlags: 0x0021,
 			methods: []runtimeJavaMethod{
 				{class: "java/io/ByteArrayInputStream", name: "<init>", descriptor: "([B)V", accessFlags: 0x0001},
+				{class: "java/io/ByteArrayInputStream", name: "<init>", descriptor: "([BII)V", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "read", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "read", descriptor: "([BII)I", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "available", descriptor: "()I", accessFlags: 0x0001},
@@ -299,6 +320,7 @@ func init() {
 			accessFlags: 0x0421,
 			methods: []runtimeJavaMethod{
 				{class: "java/util/Calendar", name: "getInstance", descriptor: "()Ljava/util/Calendar;", accessFlags: 0x0009},
+				{class: "java/util/Calendar", name: "getInstance", descriptor: "(Ljava/util/TimeZone;)Ljava/util/Calendar;", accessFlags: 0x0009},
 				{class: "java/util/Calendar", name: "get", descriptor: "(I)I", accessFlags: 0x0001},
 				{class: "java/util/Calendar", name: "set", descriptor: "(II)V", accessFlags: 0x0001},
 				{class: "java/util/Calendar", name: "getTime", descriptor: "()Ljava/util/Date;", accessFlags: 0x0011},
@@ -351,6 +373,11 @@ func init() {
 				{class: "java/lang/Math", name: "abs", descriptor: "(D)D", accessFlags: 0x0009},
 				{class: "java/lang/Math", name: "min", descriptor: "(II)I", accessFlags: 0x0009},
 				{class: "java/lang/Math", name: "max", descriptor: "(II)I", accessFlags: 0x0009},
+				// The long forms are what a title uses on a clock difference,
+				// which is the one quantity in a CLDC game that does not fit
+				// an int. The core library already had both bodies.
+				{class: "java/lang/Math", name: "min", descriptor: "(JJ)J", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "max", descriptor: "(JJ)J", accessFlags: 0x0009},
 			},
 		},
 		// java/lang/Integer exposes the JVM-owned CLDC implementation. A class
@@ -509,6 +536,8 @@ func init() {
 				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(IC)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(II)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(ILjava/lang/String;)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "charAt", descriptor: "(I)C", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "setCharAt", descriptor: "(IC)V", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "length", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "setLength", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
@@ -592,6 +621,25 @@ func init() {
 				{class: "java/util/Vector", name: "ensureCapacity", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/util/Vector", name: "setSize", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/util/Vector", name: "trimToSize", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/util/Vector", name: "elements", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
+			},
+		},
+		// java/util/Stack is Vector with the four methods that make it one,
+		// and it is a subclass here as it is in the standard library — a title
+		// that stores into it through the Vector half sees what it expects.
+		// Without the class the loader answered with an empty record, which is
+		// a stop several calls later at a field read rather than at the `new`.
+		"java/util/Stack": {
+			name:        "java/util/Stack",
+			superName:   "java/util/Vector",
+			accessFlags: 0x0021,
+			methods: []runtimeJavaMethod{
+				{class: "java/util/Stack", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/util/Stack", name: "push", descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", accessFlags: 0x0001},
+				{class: "java/util/Stack", name: "pop", descriptor: "()Ljava/lang/Object;", accessFlags: 0x0001},
+				{class: "java/util/Stack", name: "peek", descriptor: "()Ljava/lang/Object;", accessFlags: 0x0001},
+				{class: "java/util/Stack", name: "empty", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/util/Stack", name: "search", descriptor: "(Ljava/lang/Object;)I", accessFlags: 0x0001},
 			},
 		},
 		"java/util/Hashtable": {
@@ -789,6 +837,27 @@ func init() {
 				{class: runtimeComponentClass, name: "showNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("shown:Z")},
 				{class: runtimeComponentClass, name: "configure", descriptor: "(IIIII)V", accessFlags: 0x0001, implementation: runtimeComponentConfigure},
 				{class: runtimeComponentClass, name: "setFocus", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentSetFocus},
+				// A component asking to be redrawn is asking for the card it
+				// sits in, because nothing here paints a component: the
+				// toolkit's layout is absent and the children are kept only so
+				// a title can walk them. Requesting the card's own repaint is
+				// what the title is after — the screen is out of date — and it
+				// draws through the same paint the card would have run anyway,
+				// so the named rectangle adds nothing to honour. The
+				// specification declares both forms on Component and again on
+				// ContainerComponent, and the lookup walks parents, so
+				// declaring them here serves every component in the tree.
+				// The specification gives every component a background and a
+				// foreground colour and no default beyond "it depends on the
+				// component". Nothing here paints one, so the pair is kept and
+				// answered: a title that sets a colour and reads it back sees
+				// what it set, and one that only reads sees black.
+				{class: runtimeComponentClass, name: "setBackground", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("Component.setBackground", "bg:I")},
+				{class: runtimeComponentClass, name: "getBackground", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("bg:I", 0)},
+				{class: runtimeComponentClass, name: "setForeground", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("Component.setForeground", "fg:I")},
+				{class: runtimeComponentClass, name: "getForeground", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("fg:I", 0)},
+				{class: runtimeComponentClass, name: "repaint", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeCardRepaint},
+				{class: runtimeComponentClass, name: "repaint", descriptor: "(IIII)V", accessFlags: 0x0001, implementation: runtimeCardRepaint},
 			},
 		},
 		runtimeContainerComponentClass: {
@@ -989,6 +1058,13 @@ func init() {
 				{class: "org/kwis/msp/media/Player", name: "stop", descriptor: "(Lorg/kwis/msp/media/Clip;)Z", accessFlags: 0x0009, implementation: runtimePlayerStop},
 				{class: "org/kwis/msp/media/Player", name: "pause", descriptor: "(Lorg/kwis/msp/media/BaseClip;)Z", accessFlags: 0x0009, implementation: runtimePlayerPause},
 				{class: "org/kwis/msp/media/Player", name: "resume", descriptor: "(Lorg/kwis/msp/media/BaseClip;)Z", accessFlags: 0x0009, implementation: runtimePlayerResume},
+				// The specification declares the whole of Player against Clip
+				// as well as against BaseClip, and play and stop already had
+				// both. A title that lowers the music for a cut scene and
+				// brings it back uses the pair, so the two that were missing
+				// stopped it at the bring-it-back rather than at the lower.
+				{class: "org/kwis/msp/media/Player", name: "pause", descriptor: "(Lorg/kwis/msp/media/Clip;)Z", accessFlags: 0x0009, implementation: runtimePlayerPause},
+				{class: "org/kwis/msp/media/Player", name: "resume", descriptor: "(Lorg/kwis/msp/media/Clip;)Z", accessFlags: 0x0009, implementation: runtimePlayerResume},
 				// Recording needs a microphone the emulator does not offer, so
 				// it is refused rather than accepted and silently ignored.
 				{class: "org/kwis/msp/media/Player", name: "record", descriptor: "(Lorg/kwis/msp/media/BaseClip;)Z", accessFlags: 0x0009, implementation: runtimeComponentZero},
@@ -1149,7 +1225,11 @@ func init() {
 		runtimeTextFieldComponentClass: runtimeTextFieldComponentClassDefinition(),
 		runtimeTextBoxComponentClass:   runtimeTextBoxComponentClassDefinition(),
 		runtimeVibratorClass:           runtimeVibratorClassDefinition(),
+		runtimeDialogComponentClass:    runtimeDialogComponentClassDefinition(),
+		runtimeFormComponentClass:      runtimeFormComponentClassDefinition(),
+		runtimeProgressComponentClass:  runtimeProgressComponentClassDefinition(),
 		runtimeNetworkClass:            runtimeNetworkClassDefinition(),
+		runtimeURLClass:                runtimeURLClassDefinition(),
 		runtimeDataBaseExceptionClass:  runtimeExceptionClass(runtimeDataBaseExceptionClass, "java/lang/Exception"),
 		runtimeDataBaseRecordClass:     runtimeExceptionClass(runtimeDataBaseRecordClass, runtimeDataBaseExceptionClass),
 		runtimeSchemeExceptionClass:    runtimeExceptionClass(runtimeSchemeExceptionClass, "java/io/IOException"),

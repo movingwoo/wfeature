@@ -328,3 +328,227 @@ func TestObjectToStringNamesItsClass(t *testing.T) {
 		t.Fatalf("toString() = %q, want it to start with %q", text, VectorClass)
 	}
 }
+
+// A stream over part of an array stops at the end of its window rather than at
+// the end of the array. A title that keeps several records in one buffer reads
+// each of them this way, and a window that ran to the array's end would hand
+// it the next record's bytes.
+func TestByteArrayInputStreamReadsOnlyItsWindow(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{0, 1, 2, 3, 4, 5})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([BII)V", ReferenceValue(array), IntValue(2), IntValue(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	available, err := vm.InvokeVirtual(stream, "available", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := available.Int32(); value != 3 {
+		t.Fatalf("available() = %d, want 3", value)
+	}
+	for _, want := range []int32{2, 3, 4, -1} {
+		result, err := vm.InvokeVirtual(stream, "read", "()I")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, _ := result.Int32(); value != want {
+			t.Fatalf("read() = %d, want %d", value, want)
+		}
+	}
+}
+
+// A window longer than the array it is opened on is clamped rather than
+// refused, which is what the specification does and what a title that asks for
+// "the rest of it" with a generous length depends on.
+func TestByteArrayInputStreamClampsAnOverlongWindow(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{7, 8})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([BII)V", ReferenceValue(array), IntValue(1), IntValue(999))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := vm.InvokeVirtual(stream, "skip", "(J)J", LongValue(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := skipped.Int64(); value != 1 {
+		t.Fatalf("skip(100) = %d, want 1", value)
+	}
+}
+
+// The whole-array constructor still reaches the end of the array: the window
+// it opens is the array, and nothing about the field it now sets changes that.
+func TestByteArrayInputStreamOverAWholeArrayIsUnchanged(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{9, 9, 9})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([B)V", ReferenceValue(array))
+	if err != nil {
+		t.Fatal(err)
+	}
+	available, err := vm.InvokeVirtual(stream, "available", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := available.Int32(); value != 3 {
+		t.Fatalf("available() = %d, want 3", value)
+	}
+}
+
+// A calendar asked for GMT breaks the same instant into different fields from
+// one asked for the handset's own zone. The two agree on the instant, which is
+// what getTime answers, and that is the whole of what a zone changes here.
+func TestCalendarInAZoneReadsTheSameInstantDifferently(t *testing.T) {
+	// A fixed clock, so the test does not depend on when it runs. The instant
+	// is chosen away from midnight in both zones so the hour comparison below
+	// cannot land on the same number by accident.
+	const instant = int64(1_600_000_000_000)
+	vm := New(nil, Options{Clock: func() int64 { return instant }})
+	gmt, err := vm.InvokeStatic(TimeZoneClass, "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;",
+		ReferenceValue(vm.NewString("GMT")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoned, err := vm.InvokeStatic("java/util/Calendar", "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", gmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calendar, err := zoned.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moment, err := vm.InvokeVirtual(calendar, "getTime", "()Ljava/util/Date;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	date, err := moment.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	millis, err := vm.InvokeVirtual(date, "getTime", "()J")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := millis.Int64(); value != instant {
+		t.Fatalf("getInstance(GMT).getTime() = %d, want %d", value, instant)
+	}
+	// 2020-09-13T12:26:40Z: the hour in GMT is fixed whatever zone the test
+	// machine runs in, which the no-argument form's hour is not.
+	hour, err := vm.InvokeVirtual(calendar, "get", "(I)I", IntValue(11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := hour.Int32(); value != 12 {
+		t.Fatalf("getInstance(GMT).get(HOUR_OF_DAY) = %d, want 12", value)
+	}
+}
+
+// Setting a stored date on a zoned calendar keeps the zone: a title that asked
+// for GMT still means GMT when it reads the fields of the date it just set.
+func TestCalendarKeepsItsZoneAcrossSetTime(t *testing.T) {
+	const instant = int64(1_600_000_000_000)
+	vm := New(nil, Options{Clock: func() int64 { return 0 }})
+	gmt, err := vm.InvokeStatic(TimeZoneClass, "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;",
+		ReferenceValue(vm.NewString("GMT")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoned, err := vm.InvokeStatic("java/util/Calendar", "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", gmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calendar, _ := zoned.Reference()
+	date, err := vm.NewObject(DateClass, "(J)V", LongValue(instant))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(calendar, "setTime", "(Ljava/util/Date;)V", ReferenceValue(date)); err != nil {
+		t.Fatal(err)
+	}
+	hour, err := vm.InvokeVirtual(calendar, "get", "(I)I", IntValue(11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := hour.Int32(); value != 12 {
+		t.Fatalf("after setTime, get(HOUR_OF_DAY) = %d, want 12", value)
+	}
+}
+
+// A buffer edited one character at a time. The bodies were already here; what
+// was missing was the declaration, so this is a test that the pair is
+// reachable as much as that it is right.
+func TestStringBufferEditsOneCharacter(t *testing.T) {
+	vm := New(nil, Options{})
+	buffer, err := vm.NewObject(StringBufferClass, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("cat")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "setCharAt", "(IC)V", IntValue(1), IntValue('u')); err != nil {
+		t.Fatal(err)
+	}
+	character, err := vm.InvokeVirtual(buffer, "charAt", "(I)C", IntValue(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := character.Int32(); value != 'u' {
+		t.Fatalf("charAt(1) = %d, want %d", value, 'u')
+	}
+	result, err := vm.InvokeVirtual(buffer, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := result.Reference()
+	if text, _ := StringText(object); text != "cut" {
+		t.Fatalf("toString() = %q, want %q", text, "cut")
+	}
+}
+
+// A title walks a vector with the Enumeration CLDC gives it rather than with
+// an index, and the view is a snapshot: adding to the vector afterwards does
+// not change what the walk hands back.
+func TestVectorElementsWalksASnapshot(t *testing.T) {
+	vm := New(nil, Options{})
+	vector, err := vm.NewObject(VectorClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"a", "b"} {
+		if _, err := vm.InvokeVirtual(vector, "addElement", "(Ljava/lang/Object;)V",
+			ReferenceValue(vm.NewString(text))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value, err := vm.InvokeVirtual(vector, "elements", "()Ljava/util/Enumeration;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Adding after the view was taken must not reach it.
+	if _, err := vm.InvokeVirtual(vector, "addElement", "(Ljava/lang/Object;)V",
+		ReferenceValue(vm.NewString("c"))); err != nil {
+		t.Fatal(err)
+	}
+	var walked []string
+	for {
+		more, err := vm.InvokeVirtual(view, "hasMoreElements", "()Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if flag, _ := more.Int32(); flag == 0 {
+			break
+		}
+		next, err := vm.InvokeVirtual(view, "nextElement", "()Ljava/lang/Object;")
+		if err != nil {
+			t.Fatal(err)
+		}
+		object, _ := next.Reference()
+		text, _ := StringText(object)
+		walked = append(walked, text)
+	}
+	if len(walked) != 2 || walked[0] != "a" || walked[1] != "b" {
+		t.Fatalf("the enumeration walked %v, want [a b]", walked)
+	}
+}

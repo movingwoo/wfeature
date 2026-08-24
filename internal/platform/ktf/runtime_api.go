@@ -22,6 +22,7 @@ const (
 	runtimeVibratorClass          = "org/kwis/msp/media/Vibrator"
 	runtimeNetworkClass           = "org/kwis/msf/io/Network"
 	runtimeSchemeExceptionClass   = "org/kwis/msf/io/SchemeNotFoundException"
+	runtimeURLClass               = "org/kwis/msf/io/URL"
 )
 
 // runtimeExceptionClass declares a runtime-owned exception with the two CLDC
@@ -109,6 +110,41 @@ func runtimeNetworkClassDefinition() runtimeJavaClass {
 			{class: class, name: "connect", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeNetworkConnect},
 			{class: class, name: "disconnect", descriptor: "()V", accessFlags: 0x0009, implementation: runtimeNetworkDisconnect},
 		},
+	}
+}
+
+// runtimeURLClassDefinition is the one entry point to a socket: every socket a
+// WIPI title opens comes from URL.find with an RFC 1738 string, and the scheme
+// in that string decides what it gets. There is no network boundary here, so
+// no scheme can be served.
+func runtimeURLClassDefinition() runtimeJavaClass {
+	const class = runtimeURLClass
+	return runtimeJavaClass{
+		name:        class,
+		superName:   "java/lang/Object",
+		accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "find", descriptor: "(Ljava/lang/String;)Lorg/kwis/msf/io/Socket;", accessFlags: 0x0009, implementation: runtimeURLFind},
+		},
+	}
+}
+
+// runtimeURLFind refuses the socket the way the specification says a scheme
+// that cannot be served is refused. Answering null instead would be the worse
+// failure: find declares this exception, so a title that uses the network at
+// all has a catch for it and an offline path behind that catch, where a null
+// it never expected dies at the first read.
+func runtimeURLFind(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	address := ""
+	if len(arguments) >= 1 {
+		if object, err := arguments[0].Reference(); err == nil {
+			address, _ = jvm.StringText(object)
+		}
+	}
+	runtime.countDiagnostic("socket refused " + address)
+	return jvm.VoidValue(), &jvm.GuestException{
+		Object:  &jvm.Object{ClassName: runtimeSchemeExceptionClass, Native: address},
+		Message: fmt.Sprintf("no socket for %q: this emulator has no network", address),
 	}
 }
 
