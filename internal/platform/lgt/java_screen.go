@@ -251,6 +251,13 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// string measures the glyphs it is about to draw.
 	"org/kwis/msp/lcdui/Graphics.getFont()Lorg/kwis/msp/lcdui/Font;": {
 		Words: 1, Implementat: javaPlatformSingleton(javaFontClass)},
+	// Choosing the face is accepted and changes nothing, for the same reason
+	// `Font.getFont` answers the default one: there is a single face here, so
+	// the font a title sets is the font it would have drawn with anyway. What
+	// it must not be is a refusal — a title sets the font before it draws its
+	// own text, and stopping there costs the screen the text was on.
+	"org/kwis/msp/lcdui/Graphics.setFont(Lorg/kwis/msp/lcdui/Font;)V": {
+		Words: 2, Implementat: javaNoResult},
 	// Putting a Graphics back to the state a fresh one has. It is not in the
 	// specification's own listing, and it does not have to be: the same call
 	// is what titles on this project's two other platforms make of the one

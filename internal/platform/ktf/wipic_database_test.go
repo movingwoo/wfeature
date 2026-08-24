@@ -100,3 +100,36 @@ func TestCreatingADeletedDatabaseBringsItBack(t *testing.T) {
 		t.Fatalf("the seed after recreating = %q ok=%t, want the new contents", data, ok)
 	}
 }
+
+// A directory has nothing to create here, so what MC_fsMkDir has to get right
+// is its answer: made once, already there afterwards, and the same after a
+// restart — a title that reads the result to decide whether this is its first
+// run would otherwise be told "first run" every time.
+func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
+	const alreadyThere = int32(-5) // M_E_EXIST, which wipicErrorExists spells unsigned.
+	saves := t.TempDir()
+	_, runtime := newTestRuntime(t)
+	runtime.client.saveStore = NewDirectorySaveStore(saves)
+
+	const name = "ga"
+	if got := int32(databaseCall(t, runtime, wipicDatabaseMakeDirectory, name, 1)); got != 0 {
+		t.Fatalf("the first mkdir = %d, want 0", got)
+	}
+	if got := int32(databaseCall(t, runtime, wipicDatabaseMakeDirectory, name, 1)); got != alreadyThere {
+		t.Fatalf("the second mkdir = %d, want %d", got, alreadyThere)
+	}
+	if got := int32(databaseCall(t, runtime, wipicDatabaseExists, name)); got != 0 {
+		t.Fatalf("a made directory answers exists = %d, want 0", got)
+	}
+
+	// A second session over the same save tree is where the list earns its
+	// keep: nothing is in memory and the store is the only record.
+	_, second := newTestRuntime(t)
+	second.client.saveStore = NewDirectorySaveStore(saves)
+	if got := int32(databaseCall(t, second, wipicDatabaseMakeDirectory, name, 1)); got != alreadyThere {
+		t.Fatalf("mkdir in a second session = %d, want %d", got, alreadyThere)
+	}
+	if got := int32(databaseCall(t, second, wipicDatabaseMakeDirectory, "other", 1)); got != 0 {
+		t.Fatalf("mkdir of a name nothing made = %d, want 0", got)
+	}
+}

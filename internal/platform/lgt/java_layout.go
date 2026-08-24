@@ -59,6 +59,7 @@ var javaPlatformSupers = map[string]string{
 	"java/io/ByteArrayInputStream":  "java/io/InputStream",
 	"java/io/DataOutputStream":      "java/io/OutputStream",
 	"java/io/ByteArrayOutputStream": "java/io/OutputStream",
+	"java/io/PrintStream":           "java/io/OutputStream",
 
 	// A Stack is a Vector with four more methods, and a title reaches those
 	// four through slots the compiler baked against Vector's own vtable. Left
@@ -114,9 +115,19 @@ type javaLayoutClass struct {
 	// declares. A subclass looks through it before allocating a slot of its
 	// own, which is what makes an override share one.
 	Virtual map[string]uint32
+	// Statics is the slot this class gives each static field it declares,
+	// counted from zero inside the class's own storage. **Nothing inherits a
+	// static**, so unlike Virtual this is never looked through from a
+	// subclass: a class's statics are its own, which is what makes the slot a
+	// position in this class's run rather than a global index.
+	Statics map[string]uint32
 	// Application reports whether the module declared the class. The platform's
 	// own are laid out here; the application's are read back out of its records.
 	Application bool
+	// StaticWords is how many words of static storage this class's own fields
+	// need, which is how large its class object's data block has to be past
+	// the words the class object itself uses.
+	StaticWords uint32
 	// Measured reports whether a platform class's vtable size came from a
 	// subclass rather than from counting what it declares. Only the measured
 	// one is the size the compiler assumed, and a second subclass has to agree
@@ -135,6 +146,7 @@ func newJavaLayout() *javaLayout {
 		Name:       "java/lang/Object",
 		VTableSize: javaObjectVTableSize,
 		Virtual:    map[string]uint32{},
+		Statics:    map[string]uint32{},
 	}
 	return layout
 }
@@ -147,7 +159,10 @@ func (layout *javaLayout) class(name string) *javaLayoutClass {
 	if existing, ok := layout.classes[name]; ok {
 		return existing
 	}
-	class := &javaLayoutClass{Name: name, Super: javaPlatformSuper(name), Virtual: map[string]uint32{}}
+	class := &javaLayoutClass{
+		Name: name, Super: javaPlatformSuper(name),
+		Virtual: map[string]uint32{}, Statics: map[string]uint32{},
+	}
 	layout.classes[name] = class
 	return class
 }
@@ -227,6 +242,37 @@ func (layout *javaLayout) layoutPlatformClasses(surface *javaSurface) (map[uint3
 		}
 		if class.VTableSize < next {
 			class.VTableSize = next
+		}
+	}
+	return answers, nil
+}
+
+// layoutPlatformStatics gives every static field the load call names a slot in
+// its own class's storage, and answers the table entry each one is numbered
+// under.
+//
+// **A static field is a position, not an index.** The module reads one as
+// `classObject.data[javaClassDataWords + answer]`, so what goes in the out
+// array has to be counted from the class the field belongs to; a global index
+// happens to be right only while the whole module declares one static field,
+// and reads past the end of a class object's block as soon as it declares two.
+// The block is sized from the same count — see preparePlatformJavaClass — so
+// the read the module compiles lands inside what this platform allocated.
+func (layout *javaLayout) layoutPlatformStatics(surface *javaSurface) (map[uint32]uint32, error) {
+	answers := map[uint32]uint32{}
+	for _, api := range surface.Classes {
+		class := layout.class(api.Name)
+		for offset := uint32(0); offset < api.StaticFields.Count; offset++ {
+			index := api.StaticFields.Start + offset
+			if int(index) >= len(surface.StaticFields) {
+				return nil, fmt.Errorf("platform class %s claims static entry %d of %d",
+					api.Name, index, len(surface.StaticFields))
+			}
+			class.Statics[javaMemberKey(surface.StaticFields[index])] = offset
+			answers[index] = offset
+		}
+		if class.StaticWords < api.StaticFields.Count {
+			class.StaticWords = api.StaticFields.Count
 		}
 	}
 	return answers, nil

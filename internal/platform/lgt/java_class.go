@@ -28,16 +28,36 @@ import (
 // a wrong stride or a wrong count would leave the walk short or long, and it
 // never does.
 //
-// Not every record has this shape, and the header says which do: a class whose
-// header word at javaClassPool is zero carries its members inline as above,
-// and one that points somewhere carries them through that pointer instead.
-// Only the first is read here. See docs/lgt.md.
+// **Where the two runs start is in the header, not at a fixed offset from the
+// handle.** The header carries a pointer to each run — the fields at
+// javaClassFieldRun, the methods at javaClassMethodRun — and reading a run's
+// count from the address the header names is what makes the shape above one
+// case of a record rather than the whole of it. A class that declares no
+// fields carries a zero field pointer and its method run starts where the
+// field count would have been, so a reader that assumes the field count is at
+// handle+0x0c reads the first method record's owner word as a field count and
+// then walks a method record with a field's stride. The walk fails on the
+// second member, the whole record is abandoned, and the class ends up looking
+// as though it declares no methods at all — which is what stopped several
+// local titles at their launcher: it could find no constructor for a class
+// that has one.
+//
+// Not every record carries member runs. A class whose header word at
+// javaClassPool points somewhere is one the compiler laid out itself: that
+// pointer is its dispatch table, and it usually declares no member records at
+// all. The two are read independently, because a record can carry both.
+// See docs/lgt.md.
 const (
 	javaClassHeader = 0x4c
 	javaClassPool   = 0x0c
 	javaStaticWords = 0x48
 	javaFieldWords  = 5
 	javaMethodWords = 7
+	// javaClassMethodRun and javaClassFieldRun are where the header points at
+	// each member run: a count, then that many records of the run's width.
+	// Either may be zero, which means the class declares none of that kind.
+	javaClassMethodRun = 0x38
+	javaClassFieldRun  = 0x3c
 	// maxJavaStaticWords bounds the static run a record can claim. The largest
 	// among the local Java titles is 448 words.
 	maxJavaStaticWords = 1 << 14
@@ -182,18 +202,30 @@ func (client *Client) readJavaClass(handle uint32, handles map[uint32]int) (java
 		return javaClass{}, err
 	}
 	class.VTable = pool
-	if pool != 0 {
-		return class, nil
-	}
-	fields, next, err := client.readJavaMembers(handle, handle+0x0c, javaFieldWords)
+
+	// Each run is read from the address its header word names, and a run that
+	// does not read is dropped without taking the rest of the record with it:
+	// what a class declares is worth having one kind of at a time.
+	fieldRun, err := client.readWord(header + javaClassFieldRun)
 	if err != nil {
 		return class, nil
 	}
-	methods, end, err := client.readJavaMembers(handle, next, javaMethodWords)
+	methodRun, err := client.readWord(header + javaClassMethodRun)
 	if err != nil {
 		return class, nil
 	}
-	class.Fields, class.Methods, class.End, class.Inline = fields, methods, end, true
+	if fieldRun != 0 {
+		fields, end, err := client.readJavaMembers(handle, fieldRun, javaFieldWords)
+		if err == nil {
+			class.Fields, class.End, class.Inline = fields, end, true
+		}
+	}
+	if methodRun != 0 {
+		methods, end, err := client.readJavaMembers(handle, methodRun, javaMethodWords)
+		if err == nil {
+			class.Methods, class.End, class.Inline = methods, end, true
+		}
+	}
 	return class, nil
 }
 
@@ -286,10 +318,18 @@ func (client *Client) isJavaClassHandle(address uint32) bool {
 // launcher class — the one the platform is asked to construct — is exactly the
 // one the module never resolves for itself. See docs/lgt.md, "What "Game"
 // names, and why it is not in the class list".
+//
+// A name is matched in the internal form, with `/` between the package parts,
+// because that is the form a record carries. The launcher's argv is a name a
+// person wrote into a descriptor, so it arrives in the source form with `.`
+// instead — and a title whose Jlet sits in a package is the one where the two
+// differ. Nothing else can be meant by a `.` there: it is not a character a
+// class name may contain.
 func (client *Client) findJavaClassRecord(name string) (uint32, bool) {
 	if client.module == nil || name == "" {
 		return 0, false
 	}
+	name = strings.ReplaceAll(name, ".", "/")
 	// Every section is walked, including the executable one. A module marks
 	// more sections executable than carry code — the section holding the class
 	// records is one of them — so skipping by that flag skips the records

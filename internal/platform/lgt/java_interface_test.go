@@ -36,9 +36,11 @@ func writeJavaInterfaceFixture(t *testing.T, client *Client) {
 		append([]byte(javaRunnableInterface), 0)); err != nil {
 		t.Fatal(err)
 	}
-	// The record: a pool pointer where an inline record carries a zero, and the
-	// interface table the header names.
+	// The record: a pool pointer where a record with member runs carries a
+	// zero, no member runs at all, and the interface table the header names.
 	write(fixtureClassHeader+javaClassPool, fixtureVTable)
+	write(fixtureClassHeader+javaClassMethodRun, 0)
+	write(fixtureClassHeader+javaClassFieldRun, 0)
 	write(fixtureClassHeader+javaClassInterfaces, fixtureInterfaceTable)
 	write(fixtureInterfaceTable, 1, fixtureInterfaceEntry)
 	write(fixtureInterfaceEntry, fixtureRunnableName, fixtureRunnableSlot)
@@ -58,7 +60,7 @@ func TestJavaClassRecordCarriesItsInterfaceTable(t *testing.T) {
 		t.Fatalf("readJavaClass() error = %v", err)
 	}
 	if record.Inline {
-		t.Fatal("a record with a pool pointer was read as carrying members inline")
+		t.Fatal("a laid-out record with no member runs was read as carrying members")
 	}
 	if record.VTable != fixtureVTable {
 		t.Errorf("the record names %#x as its dispatch table, want %#x", record.VTable, fixtureVTable)

@@ -340,7 +340,7 @@ func decodeMIDPImage(data []byte) (*jvm.Object, error) {
 	if _, err := backend.RGBAByteLength(config.Width, config.Height); err != nil {
 		return nil, fmt.Errorf("decode image dimensions: %w", err)
 	}
-	decoded, _, err := stdimage.Decode(bytes.NewReader(data))
+	decoded, _, err := wipic.DecodeStandard(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode image pixels: %w", err)
 	}

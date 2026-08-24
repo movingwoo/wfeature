@@ -58,6 +58,11 @@ type javaRuntimeClass struct {
 	// ElementBytes is how wide one element is, for an array type, and zero for
 	// every other class. See java_array.go.
 	ElementBytes uint32
+	// StaticWords is how many words of storage this class's own static fields
+	// need, past the words the class object itself uses. The module's record
+	// says it for an application class; for a platform class the load call's
+	// static-field table does. See allocateJavaClassObject.
+	StaticWords uint32
 	// Measured reports whether the module's own records said how large this
 	// class is, which is only so for a platform class the application extends.
 	Measured bool
@@ -188,6 +193,7 @@ func (client *Client) prepareJavaClass(
 	class := &javaRuntimeClass{
 		Name: record.Name, Handle: handle, Record: record,
 		Slots: uint32(record.VTableSize), Instance: uint32(record.InstanceSize),
+		StaticWords: record.StaticWords,
 	}
 	if class.Slots > maxJavaVTableSlots || class.Instance > maxJavaInstanceSize {
 		return nil, fmt.Errorf("class %s declares %d vtable slots and %d words",
@@ -257,6 +263,11 @@ func (client *Client) preparePlatformJavaClass(name string) (*javaRuntimeClass, 
 		if laid, ok := client.javaLink.layout.classes[name]; ok {
 			class.Slots = laid.VTableSize
 			class.Instance = laid.InstanceSize
+			// **A platform class's statics are storage the module reads
+			// directly.** Its class object's block has to be long enough for
+			// the run the load call numbered, or the module's own read of one
+			// lands past the end of what the arena handed out.
+			class.StaticWords = laid.StaticWords
 			measured = laid.Measured
 			class.Measured = laid.Measured
 		}
@@ -287,7 +298,81 @@ func (client *Client) preparePlatformJavaClass(name string) (*javaRuntimeClass, 
 	if err := client.buildJavaVTable(class); err != nil {
 		return nil, err
 	}
+	if err := client.initializePlatformStatics(class); err != nil {
+		return nil, err
+	}
 	return class, nil
+}
+
+// javaPlatformStatics is what a platform class's static fields hold. There is
+// one class in it, and what a title reaches for on it is the pair it logs
+// through: `java/lang/System.out` and `err`. Nothing in the module writes
+// either — a static this platform owns is read-only from the guest's side — so
+// they are filled in when the class is laid out, and a field this map has no
+// entry for keeps the zero its block was allocated with.
+//
+// **A null here is a title's own NullPointerException.** The module compiles
+// `System.out.println(...)` to a null test and a throw around a vtable
+// dispatch, so leaving the field empty does not skip the print: it stops the
+// title, inside whatever routine happened to log a line. One local title
+// reaches its first `println` from the constructor of its Jlet.
+var javaPlatformStatics = map[string]map[string]string{
+	// `err` is the same stream as `out` here. There is one place a line can go
+	// and no way to read two of them apart afterwards, so giving them separate
+	// objects would buy nothing and cost a title that logs to both the order
+	// its own lines came in.
+	"java/lang/System": {
+		"outLjava/io/PrintStream;": javaPrintStreamClass,
+		"errLjava/io/PrintStream;": javaPrintStreamClass,
+	},
+}
+
+// initializePlatformStatics fills in the static fields this platform owns on a
+// class it has just laid out.
+func (client *Client) initializePlatformStatics(class *javaRuntimeClass) error {
+	held, known := javaPlatformStatics[class.Name]
+	if !known || client.javaLink == nil || client.javaLink.layout == nil {
+		return nil
+	}
+	laid, ok := client.javaLink.layout.classes[class.Name]
+	if !ok {
+		return nil
+	}
+	for key, standsFor := range held {
+		slot, declared := laid.Statics[key]
+		if !declared || slot >= class.StaticWords {
+			// The module did not ask for this field, so nothing reads it.
+			continue
+		}
+		object, err := client.javaPlatformObject(standsFor)
+		if err != nil {
+			return err
+		}
+		if err := client.writeWord(class.dataBlock+(javaClassDataWords+slot)*4, object); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// javaPlatformObject answers the one instance of a platform class that stands
+// for a facility rather than for data — the same object every time, the way
+// `getDefaultDisplay` and `getDefaultFont` answer theirs.
+func (client *Client) javaPlatformObject(name string) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	if object, ok := runtime.singletons[name]; ok {
+		return object, nil
+	}
+	class, err := client.preparePlatformJavaClass(name)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	runtime.singletons[name] = object
+	return object, nil
 }
 
 // checkJavaClassObject reports a class object whose data pointer has been
@@ -427,7 +512,7 @@ func (client *Client) allocateJavaClassObject(class *javaRuntimeClass) (uint32, 
 	// object's own use is a block the guest writes past — which is exactly what
 	// overwrote a class object in two local titles, at an address the arena had
 	// handed out for something else. See docs/lgt.md.
-	data := make([]uint32, javaClassDataWords+class.Record.StaticWords)
+	data := make([]uint32, javaClassDataWords+class.StaticWords)
 	data[javaClassNameWord] = name
 	block, err := client.allocateWords(data)
 	if err != nil {

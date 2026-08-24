@@ -1,7 +1,6 @@
 package ktf
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	stdimage "image"
@@ -677,7 +676,7 @@ func decodeGuestImage(encoded []byte) (stdimage.Image, error) {
 		}
 		return withOpacity(decoded), nil
 	}
-	decoded, _, err := stdimage.Decode(bytes.NewReader(encoded))
+	decoded, _, err := wipic.DecodeStandard(encoded)
 	if err != nil {
 		return nil, err
 	}

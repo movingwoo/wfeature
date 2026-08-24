@@ -108,3 +108,60 @@ func TestConcatenationSlotsAppendRatherThanOverwrite(t *testing.T) {
 		t.Fatalf("strcat produced %q, want %q", joined, "headabc!")
 	}
 }
+
+// `strlen` is measured, not read. One title loads an eight-kilobyte text
+// resource into an allocation of exactly its size — the file has no zero byte
+// in it — and asks how long it is, which on a handset walks past the buffer to
+// the first zero after it. A bound that belongs to a name stopped that title
+// before its first frame.
+func TestStringLengthWalksPastAnAllocationTheWayCDoes(t *testing.T) {
+	client := fixtureClient(t)
+
+	const size = 8192
+	unterminated := make([]byte, size)
+	for index := range unterminated {
+		unterminated[index] = 'a'
+	}
+	buffer, err := client.allocateBytes(unterminated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	length := callStdlib(t, client, stdlibStrlen, buffer)
+	if length < size {
+		t.Fatalf("strlen of an unterminated buffer of %d = %d, want at least %d",
+			size, length, size)
+	}
+	// The answer is where the first zero after the buffer is, so the byte it
+	// names has to be one.
+	one := make([]byte, 1)
+	if err := client.core.Memory().Read(buffer+length, one); err != nil {
+		t.Fatal(err)
+	}
+	if one[0] != 0 {
+		t.Errorf("strlen answered %d, where the byte is %#x rather than a terminator", length, one[0])
+	}
+
+	// A string that ends inside the last page of a mapping — a name on the
+	// stack is the everyday one — is measured without reading past the end of
+	// what is mapped. Reading a block at a time and nothing else refused one
+	// of these, and it is the shape a real title's `strlen` argument most
+	// often has.
+	near := stackBase + uint32(stackSize) - 8
+	if err := client.core.Memory().Write(near, []byte("abc\x00")); err != nil {
+		t.Fatal(err)
+	}
+	if got := callStdlib(t, client, stdlibStrlen, near); got != 3 {
+		t.Errorf("strlen of a string at the top of the stack = %d, want 3", got)
+	}
+
+	terminated, err := client.allocateBytes(append([]byte("a/b/c"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := callStdlib(t, client, stdlibStrlen, terminated); got != 5 {
+		t.Errorf("strlen of a five-byte string = %d, want 5", got)
+	}
+	if got := callStdlib(t, client, stdlibStrlen, 0); got != 0 {
+		t.Errorf("strlen of a null pointer = %d, want 0", got)
+	}
+}

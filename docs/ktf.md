@@ -595,21 +595,37 @@ database's name, matching packaged save data.
 
 ### The two storage tables
 
-There are two, and a game picks whichever suits what it is storing. Table 7 is
-the **stream database**: one blob, read and written through a cursor, seeded
-from a packaged file of the same name. Table 5 is the **record database**
-(`wipic_record_database.go`): a numbered set of records, opened by name with a
-record size, addressed by a one-based id.
+There are two, and a game picks whichever suits what it is storing. **Table 7 is
+the filesystem** (`wipic_database.go`): one blob per name, read and written
+through a cursor, seeded from a packaged file of the same name — which is what a
+file is. Table 5 is the **record database** (`wipic_record_database.go`): a
+numbered set of records, opened by name with a record size, addressed by a
+one-based id.
 
-**The stream table's slot 6 is `MC_dbDeleteDataBase(name, mode)`** — a name,
-not a handle: the caller closes the database and then names it. Deleting it has
-to cover every place an open would look, and the persisted copy cannot be
-unlinked because the save store has no delete, so the name goes on a removal
-list (`db/.removed`) that every lookup consults, exactly as the guest
-filesystem records one. Opening the name for creation takes it off again;
-without that a title that deleted a database and wrote a new one would have
-every later write hidden. One title deletes the certificate it could not renew
-and expects the next question about it to answer "no such database".
+Both follow the specification's own ordering for their section. Table 5 is the
+`MC_db*` list — open, close, delete, insert, select, update, delete-record,
+list-records, then the count, the record size and the database list at 10, 11
+and 12. Table 7 is the `MC_fs*` list: open, read, write, close, seek at 0 to 4,
+the file attributes at 5, remove at 6, `MC_fsMkDir` at 8, `MC_fsList` at 10, the
+total space at 11, the free space at 12, `MC_fsTell` at 15 and `MC_fsIsExist` at
+16. The Go names in table 7 still say "database" in places, because that is what
+it was read as for a long time; the sweep section below has how the two were
+told apart and what it cost to have them confused.
+
+**Table 7's slot 6 is `MC_fsRemove(name, mode)`** — a name, not a handle: the
+caller closes the file and then names it. Deleting it has to cover every place an
+open would look, and the persisted copy cannot be unlinked because the save store
+has no delete, so the name goes on a removal list (`db/.removed`) that every
+lookup consults, exactly as the guest filesystem records one. Opening the name
+for creation takes it off again; without that a title that deleted a file and
+wrote a new one would have every later write hidden. One title deletes the
+certificate it could not renew and expects the next question about it to answer
+"no such file".
+
+**`MC_fsMkDir` writes its name down and nothing else.** Nothing here holds a
+directory — a name is a key in one flat store — so the whole of what making one
+does is decide what the next question about it is answered with: zero once, then
+`M_E_EXIST`, across restarts, from `db/.dirs`.
 
 Two things about the record table are worth stating because getting either
 wrong is silent.
@@ -3908,6 +3924,7 @@ ones that needed a body are named below. What the set asked for:
   `LabelComponent.<init>(Ljava/lang/String;)V`
 - two vendor classes outside the specification: `wec/OEMDevice`'s
   `enableSleep(Z)Z` and `getSYSTheme()`, and `com/ktf/kfc/GForm.<init>(IIII)V`
+  (which is a whole toolkit rather than a class — see below)
 
 **Nineteen of those forty-eight stopped after the title screen rather than
 before it**, and the java.io half of the list is why: fourteen died in a paint or
@@ -3944,9 +3961,18 @@ Six of them needed more than a declaration, and each is worth knowing about:
   answers what a caller can do least with: sleep is not disabled, and the theme
   is an object with nothing on it. A title that reads a colour off the theme
   will stop at that call, which is the point where there would be evidence
-  about what the field is. `com/ktf/kfc/GForm` is the same kind of class and is
-  still absent: its constructor takes a rectangle and the title then draws into
-  the object, and there is nothing to build that object out of yet.
+  about what the field is. **`com/ktf/kfc/GForm` is the same kind of class and
+  was deliberately left absent**, because declaring it is what showed that it is
+  not one class. A probe that answered its `(IIII)` constructor with a no-op
+  moved the title one call on, to
+  `com/ktf/kfc/GTextField.<init>(Lcom/ktf/kfc/GMenubarForm;Ljava/lang/String;I)V`
+  — and the image's own name table has `getPluginPosition`, `setPluginLayer`,
+  `resize`, `doModal` and `showNotify` beside those three names. That is a
+  vendor widget toolkit the handset composites, with a form, a menu bar and a
+  text field in it, and no reference behind any of it. A chain of empty classes
+  would carry the title into a menu-driven screen that draws nothing, which is
+  the answers-silently shape rather than a title that runs; the probe was
+  reverted and what it found written down here.
 
 **A field lookup that failed named a handle rather than a class.** Four of the
 forty-eight stopped on `err:Ljava/io/PrintStream;` or a `w:I` reported as "from
@@ -4230,20 +4256,76 @@ reading the guest's own printk for before anything else. What the other five are
 waiting for has not been established — one of them never paints a frame at all,
 through both runs and the key script — and a denser key sweep is the next step.
 
-**Two titles stop on WIPI C database function 8, and what its call site sets is
-worth writing down before the next pass reads it.** The site puts a pointer to
-the database's own name in the first register and a literal `1` in the second,
-sets nothing else, and the value it gets back flows straight into the call after
-it as that call's first argument. The stream table's `0`, `4`, `10`, `11` and
-`12` sit exactly where the specification's own list of `MC_db*` puts open,
-select, the record count, the record size and the database list — but `1`, `2`,
-`3` and `6` are this vendor's stream extension and do not, **so the
-specification cannot be used to read `8` off the position alone**. Answering it
-with a plain zero carries one of the two titles to its first frame, which says
-the caller treats zero as success and is a probe rather than a fix: an answer
-this platform has not established is exactly the wrong-slot-answers-silently
-shape. The error now names the address it was called from, for the same reason
-the unimplemented-table error does.
+**Two titles stop on WIPI C table 7 function 8, and reading its call site
+renamed the whole table.** The site puts a pointer to a name in the first
+register and a literal `1` in the second, sets nothing else, and drops the
+answer — both titles, in their own start-up routine, with the names `ga` and
+`res`.
+
+Table 7 had been read as a second database table: one blob per name, addressed
+by a cursor, seeded from a packaged file of the same name. That is what it
+stores, and it is not what it is. **Table 7 is the WIPI C filesystem**, and the
+specification's `MC_fs*` order says so slot for slot: open, read, write, close
+and seek at 0 to 4, the file attributes at 5, remove at 6, mkdir at 8, `MC_fsList`
+at 10, the total space at 11, the free space at 12, `MC_fsTell` at 15 and
+`MC_fsIsExist` at 16. The last three are what settle it — nothing about a
+database would put "how much room is left", "where is the cursor" and "is there
+one called this" at those three numbers — and the second guess about the table's
+slot 15, that it takes a handle and its answer is dropped one instruction before
+a seek resets the cursor, is exactly `MC_fsTell`. **Slot 5 confirms it a third
+time, byte for byte**: it takes a name and a pointer and writes twelve bytes with
+the length at offset 8, and `MH_FileInfo` is `{ attrib, creationTime, size }`.
+Table 5 is the record database of the `MC_db*` section, in that section's own
+order, and always was.
+
+A title's own log had said it all along: the one that prints
+`MC_fsOpen() failed!!!(-12)` is naming the call this table's slot 0 refused, and
+`-12` is the `M_E_NOENT` that slot answers for a read-only open of a name
+nothing has. The two questions were one.
+
+So function 8 is `MC_fsMkDir(dirName, aMode)` — and `1` is
+`MC_DIR_PRIVATE_ACCESS`, the program's own directory, which is the only area
+this platform has. **A directory has no representation here**: the store behind
+this table is one flat map from a name to its bytes, so making one has nothing to
+create. What it has is an answer to give, and the specification gives it two —
+zero for a directory that was made, `M_E_EXIST` for one that was already there.
+Answering zero every time would tell a title that checks the result that every
+run is its first, so the names that have been made are written down beside the
+names that have been deleted, in the same store and for the same reason: a
+question about storage has to be answered the same way after a restart as before
+one. `MC_fsIsExist` consults the list too, because the alternative is telling a
+title that the directory it just made is not there.
+
+Both titles reach their first frame, and the whole 262-archive set was run twice
+to say so — once on the binary before this and once after, four hundred ticks
+each from an empty save tree. **Two rows move from an error to a first frame and
+not one of the other 260 has a different flush count, lit-pixel count or tick
+count.** Neither title reads the mkdir's answer, so neither is what the list of
+made names is for; a title that reads it is.
+
+**The same pass tightened what counts as a first frame, and two more titles fell
+out of the OK column because of it.** A run that finishes its four hundred ticks
+without an error and lights no pixel at all used to be counted as a pass; it is
+not one. Both of those titles do the same thing on the binary from before, so it
+is the judgment that changed and not the emulator.
+
+**What is not done is the other half of a directory.** `MC_fsFileAttribute` on a
+name mkdir made still answers "no such file", because saying otherwise means
+setting `MC_FILE_IS_DIR` in the attribute word and the specification defines that
+bit through the HAL rather than giving its value. A guessed bit is worse than a
+refusal: a title that tests it would branch on a number nothing here established.
+No local title asks.
+
+### A picture a title recoloured, and the four bytes that refused it
+
+A title of the sibling platform keeps one encoded PNG in a byte array, writes new
+entries over its palette chunk at run time, and hands the array to the "make an
+image out of these bytes" call. A handset's decoder never verifies the CRC-32
+beside a chunk; Go's does, and refused the whole picture. `wipic.DecodeStandard`
+is where all three platforms' image routers end now, and it retries **only after
+a decode has already failed**, over a PNG whose chunk checksums it can recompute.
+No picture that decoded before takes a different path, and damage a checksum is
+not the whole of stays damage.
 
 ### The third round: a void call's return register, and a guard the parser ate
 

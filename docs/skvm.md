@@ -674,9 +674,11 @@ early to ask", and this one cannot.
 
 ### The handset bitmap is this vendor's format after all
 
-`Image.createImage` here decodes PNG, JPEG and GIF through the standard
-library, and the handset bitmap through `wipic.DecodeLBMP` (`ktf.md`, "LBMP:
-the handset's own bitmap"). That routing used to carry a note saying no SKT
+`Image.createImage` here decodes PNG, JPEG and GIF through `wipic.DecodeStandard`
+— the standard library's own readers, with one retry over a PNG whose chunk
+checksums a title rewrote (`lgt.md`, "A title recolours a picture and does not fix
+its checksum") — and the handset bitmap through `wipic.DecodeLBMP` (`ktf.md`,
+"LBMP: the handset's own bitmap"). That routing used to carry a note saying no SKT
 archive shipped one and it was here only because the decode was shared. **The
 note was true of three titles and false of the vendor**: the wider corpus
 carries about nine hundred LBMP files, and they are what the SKT titles draw
