@@ -4199,6 +4199,20 @@ RAR archive, which this emulator does not read". Every loader wraps its zip
 refusal the same way, so a person who drops one in is told which file they
 picked rather than only that it was the wrong one.
 
+**A cause that lives in the archive is not a gap in this emulator, and the
+working list of what to look at next does not carry one.** The RAR and the ALZ
+files are fixed by repackaging them, not here; and one title asks for a sound
+resource its own JAR never shipped — the numbered files run 0 to 12 and then
+skip to 15, and the game opens 13. Neither is something an implementation can
+close, so both are named once, here, and left out of the list of walls. The
+bundle of three episodes is a different case and stays on it: as three archives
+it runs, so what it is waiting for is a Host's decision. **An archive that was
+only half downloaded is the same kind of dead end, and is worth checking for
+rather than assuming**: the descriptor states the size the payload should be.
+A title whose class the module cannot find is *not* that — one here reports its
+main class missing while the compiled module plainly carries the name, which
+makes it this platform's reading rather than the file's contents.
+
 **Eight titles fault in guest memory and four exceed a budget.** The memory
 faults are reads and writes at small absolute addresses — `0x0`, `0x24` and
 `0x48` — which is a null structure pointer being walked rather than a mapping
