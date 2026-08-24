@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"sync"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -152,6 +153,11 @@ type Client struct {
 	// caller does not own it, so there is one per client rather than one per
 	// call.
 	tmStorage uint32
+
+	// cRandom is the C library's generator, the one `srand` seeds. It is not
+	// the generator behind a `java/util/Random`: a title may hold both, and
+	// seeding one must not move the other.
+	cRandom *rand.Rand
 
 	// inputMode is the automaton's current mode, an index into inputModes, and
 	// inputModeTableAddress is the string array MC_imGetSupportedModes answers

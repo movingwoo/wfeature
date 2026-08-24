@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,10 @@ import (
 // linking it into the module, which is the other half of what makes an LGT
 // binary smaller than a KTF one. The slots follow the same section numbering
 // as the WIPI blocks: 0x3e8 is the C library's base.
+// cRandomMax is RAND_MAX: ANSI C guarantees at least 32767 and this is the
+// value the C libraries these modules were built against use.
+const cRandomMax = 0x7fff
+
 const (
 	// stdio.h comes before stdlib.h in the C library's own sectioning, and
 	// sprintf is where a title formats the path of the resource it is about to
@@ -21,12 +26,21 @@ const (
 	// same formatter; the two exist separately because the kernel's copy is a
 	// WIPI call and this one is the C library the module did not link in.
 	stdlibSprintf uint32 = 0x3f7
-	stdlibAtoi    uint32 = 0x3fb
-	stdlibStrcpy  uint32 = 0x405
-	stdlibStrncpy uint32 = 0x406
-	stdlibStrcat  uint32 = 0x407
-	stdlibStrcmp  uint32 = 0x409
-	stdlibStrncmp uint32 = 0x40a
+	// stdlibVsprintf is `vsprintf(char *, const char *, va_list)`. A title
+	// reaches it with a destination buffer, a format it has just assembled on
+	// its own stack — a file name — and a third pointer into the stack frame
+	// above it, which is what a `va_list` is on this ABI. The number also sits
+	// where the C library's own sectioning puts it: `sprintf`, `sscanf` and
+	// `vsprintf` are the three of <stdio.h> that a handset keeps once the ones
+	// taking a `FILE *` are dropped, and counting those three off `sprintf`
+	// lands `atof` and `atoi` exactly where the table already had `atoi`.
+	stdlibVsprintf uint32 = 0x3f9
+	stdlibAtoi     uint32 = 0x3fb
+	stdlibStrcpy   uint32 = 0x405
+	stdlibStrncpy  uint32 = 0x406
+	stdlibStrcat   uint32 = 0x407
+	stdlibStrcmp   uint32 = 0x409
+	stdlibStrncmp  uint32 = 0x40a
 
 	// The rest of the specification's string.h list, in its order: strncat
 	// sits between strcat and strcmp, and the other five between strncmp and
@@ -41,6 +55,16 @@ const (
 	stdlibStrspn  uint32 = 0x40d
 	stdlibStrcspn uint32 = 0x40e
 	stdlibStrpbrk uint32 = 0x40f
+
+	// stdlibSrand is where two titles seed the C library's generator, both of
+	// them with `srand(time(NULL))` one call after `time`. stdlibRand is the
+	// slot below it, which the second of those titles reaches once seeding
+	// stops failing: it is called with no arguments set up and its answer goes
+	// straight on into the caller's arithmetic. Naming them is what the pair of
+	// call sites says, not what counting off the specification's list would —
+	// this table has already been seen to depart from that list.
+	stdlibRand  uint32 = 0x403
+	stdlibSrand uint32 = 0x404
 
 	stdlibStrstr    uint32 = 0x410
 	stdlibStrlen    uint32 = 0x411
@@ -60,6 +84,17 @@ const (
 	// It reads like `atexit`, and it is not: see "The slot that runs a function"
 	// in docs/lgt.md for the A/B that settled it.
 	stdlibRunFunction uint32 = 0x424
+
+	// stdlibMalloc is `void *malloc(size_t)`, and what says so is what the
+	// caller does with the answer rather than the number's position. A title
+	// calls it three times with 140, 68 and 17, and each time the next thing it
+	// does is `memset` exactly that many bytes at exactly what came back: hand
+	// the size straight back instead and the memset writes to 140, which is not
+	// mapped. It is served out of the same heap as `MC_knlAlloc` so that a free
+	// through either door reaches the same block, and it does not zero what it
+	// hands out — the caller's own memset is the evidence that the handset's
+	// did not either.
+	stdlibMalloc uint32 = 0x426
 )
 
 // maxStdlibLength bounds one string or block operation, because a length that
@@ -382,6 +417,58 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		}
 		return nil
 
+	case stdlibMalloc:
+		size, err := argument(0)
+		if err != nil {
+			return err
+		}
+		address, ok := client.heap.allocate(uint64(size))
+		if !ok {
+			return answer(0)
+		}
+		return answer(address)
+
+	case stdlibVsprintf:
+		destination, err := argument(0)
+		if err != nil {
+			return err
+		}
+		formatAddress, err := argument(1)
+		if err != nil {
+			return err
+		}
+		list, err := argument(2)
+		if err != nil {
+			return err
+		}
+		format, err := client.readCString(formatAddress)
+		if err != nil {
+			return fmt.Errorf("read LGT vsprintf format: %w", err)
+		}
+		rendered, err := client.wipicFormatFrom([]byte(format), client.wipicListVarargs(list))
+		if err != nil {
+			return fmt.Errorf("format LGT vsprintf %q: %w", format, err)
+		}
+		if err := memory.Write(destination, append(rendered, 0)); err != nil {
+			return fmt.Errorf("write LGT vsprintf output at %#x: %w", destination, err)
+		}
+		return answer(uint32(len(rendered)))
+
+	case stdlibRand:
+		return answer(uint32(client.cRandomValue()))
+
+	case stdlibSrand:
+		seed, err := argument(0)
+		if err != nil {
+			return err
+		}
+		client.seedCRandom(int64(int32(seed)))
+		// `void srand(unsigned)`. Nothing is written to r0, because a void
+		// function's return register is not its caller's to read and the one
+		// value this platform could put there is a decision it has no reason
+		// to make; see the same call's KTF twin in docs/ktf.md.
+		return nil
+
 	case stdlibLocaltime:
 		pointer, err := argument(0)
 		if err != nil {
@@ -582,4 +669,21 @@ func indexByte(block []byte, value byte) int {
 		}
 	}
 	return -1
+}
+
+// seedCRandom starts the C library's generator from the seed a title gave
+// `srand`. The two titles that call it pass `time(NULL)`, which is the guest
+// clock rather than the wall clock, so a run that batches ticks reseeds the
+// same way a run on the wall clock does.
+func (client *Client) seedCRandom(seed int64) {
+	client.cRandom = rand.New(rand.NewSource(seed))
+}
+
+// cRandomValue answers `rand`. A title that never called `srand` still gets a
+// sequence, because ANSI C defines an unseeded generator as one seeded with 1.
+func (client *Client) cRandomValue() int32 {
+	if client.cRandom == nil {
+		client.seedCRandom(1)
+	}
+	return int32(client.cRandom.Int63() & cRandomMax)
 }

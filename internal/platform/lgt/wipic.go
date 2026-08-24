@@ -39,19 +39,28 @@ const (
 	// is a correction made from the numbering rather than from a failure.
 	slotExit            uint32 = 0x68
 	slotGetCurProgramID uint32 = 0x6a
-	slotAlloc           uint32 = 0x75
-	slotCalloc          uint32 = 0x76
-	slotFree            uint32 = 0x77
-	slotTotalMemory     uint32 = 0x78
-	slotFreeMemory      uint32 = 0x79
-	slotDefTimer        uint32 = 0x7a
-	slotSetTimer        uint32 = 0x7b
-	slotUnsetTimer      uint32 = 0x7c
-	slotCurrentTime     uint32 = 0x7d
-	slotGetProperty     uint32 = 0x7e
-	slotSetProperty     uint32 = 0x7f
-	slotGetResourceID   uint32 = 0x80
-	slotGetResource     uint32 = 0x81
+	// slotGetProgramName is MC_knlGetProgramName(nameBuf, bufSize). The
+	// kernel block runs in the specification's own order from MC_knlPrintk at
+	// 0x64 — printk, sprintk, getExecNames, execute, exit, programStop,
+	// getCurProgramID, getParentProgramID, getAppManagerID, getProgramInfo,
+	// getAccessLevel, getProgramName — and every entry this table already had
+	// falls exactly where that counts it, through alloc, calloc, free and the
+	// timers. A title's call site agrees: it zeroes sixteen bytes of its own
+	// stack and passes that buffer with the length beside it.
+	slotGetProgramName uint32 = 0x6f
+	slotAlloc          uint32 = 0x75
+	slotCalloc         uint32 = 0x76
+	slotFree           uint32 = 0x77
+	slotTotalMemory    uint32 = 0x78
+	slotFreeMemory     uint32 = 0x79
+	slotDefTimer       uint32 = 0x7a
+	slotSetTimer       uint32 = 0x7b
+	slotUnsetTimer     uint32 = 0x7c
+	slotCurrentTime    uint32 = 0x7d
+	slotGetProperty    uint32 = 0x7e
+	slotSetProperty    uint32 = 0x7f
+	slotGetResourceID  uint32 = 0x80
+	slotGetResource    uint32 = 0x81
 
 	// slotProgramApplicationID answers the application id of a program, as a
 	// string, given the numeric id MC_knlGetCurProgramID answers with. The
@@ -124,7 +133,16 @@ const (
 	slotFsRmDir         uint32 = 0x199
 	slotFsTotalSpace    uint32 = 0x19b
 	slotFsAvailable     uint32 = 0x19c
-	slotFsIsExist       uint32 = 0x1a0
+	// slotFsTell is MC_fsTell(fd). The file block runs in the specification's
+	// own order from MC_fsOpen at 0x190 — open, read, write, close, seek,
+	// fileAttribute, remove, rename, mkDir, rmDir, list, totalSpace,
+	// available, setMode, getCounts, tell, isExist — and every entry this
+	// table already had falls exactly where that counts it, including isExist
+	// at the far end. A title's call site agrees: it seeks to the end and asks
+	// immediately after, which is how a program that has no size call asks for
+	// a file's size.
+	slotFsTell    uint32 = 0x19f
+	slotFsIsExist uint32 = 0x1a0
 	// The network block starts at MC_netConnect and follows the
 	// specification's order, which the set a title imports confirms: connect,
 	// close, socket connect/write/read/close and the two callback setters are
@@ -149,14 +167,31 @@ const (
 	slotUtilNtohs       uint32 = 0x387
 	slotUtilInetAddrInt uint32 = 0x388
 	slotUtilInetAddrStr uint32 = 0x389
-	slotBackLight       uint32 = 0x578
-	slotVibrator        uint32 = 0x4c1
-	slotClipCreate      uint32 = 0x4b0
-	slotClipFree        uint32 = 0x4b1
-	slotClipPlay        uint32 = 0x4ba
-	slotClipStop        uint32 = 0x4bd
-	slotSetMuteState    uint32 = 0x4d1
-	slotGetMuteState    uint32 = 0x4d2
+
+	// slotDbListDataBases is MC_dbListDataBases(buf, len). A title reaches it
+	// with a four-kilobyte buffer it has just zeroed and a length of 4094, and
+	// what it does with the answer is what names the call: it walks the buffer
+	// as names separated by one NUL and terminated by two, copying each one
+	// out until the double NUL, which is the format the specification gives
+	// for this function and for nothing else in the C API. The number puts the
+	// database block's own base at 0x440, since this is the thirteenth of the
+	// specification's MC_db list.
+	//
+	// **The rest of that block is not implemented**, so no title here has ever
+	// opened a C database and the honest answer is that it has none: zero, and
+	// a buffer holding the empty list's two NULs. That is a real answer rather
+	// than a stub — a program with no databases is a documented success — and
+	// it stops being the whole answer the moment MC_dbOpenDataBase is served.
+	slotDbListDataBases uint32 = 0x44c
+
+	slotBackLight    uint32 = 0x578
+	slotVibrator     uint32 = 0x4c1
+	slotClipCreate   uint32 = 0x4b0
+	slotClipFree     uint32 = 0x4b1
+	slotClipPlay     uint32 = 0x4ba
+	slotClipStop     uint32 = 0x4bd
+	slotSetMuteState uint32 = 0x4d1
+	slotGetMuteState uint32 = 0x4d2
 )
 
 // directColorType is MH_GRP_DIRECT_COLOR_TYPE, the colour type of a display
@@ -167,6 +202,7 @@ const directColorType uint32 = 1 << 0
 const (
 	wipiSuccess     int32 = 0
 	wipiError       int32 = -1
+	wipiInvalid     int32 = -9
 	wipiNoEntry     int32 = -12
 	wipiShortBuffer int32 = -18
 )
@@ -186,7 +222,8 @@ func knownWIPICSlot(slot uint32) bool {
 	switch slot {
 	case slotCletRegister, slotFramebufferPointer, slotFramebufferWidth,
 		slotFramebufferHeight, slotFramebufferBpl, slotFramebufferBpp,
-		slotPrintk, slotSprintk, slotGetCurProgramID, slotExit, slotAlloc, slotCalloc,
+		slotPrintk, slotSprintk, slotGetCurProgramID, slotGetProgramName,
+		slotExit, slotAlloc, slotCalloc,
 		slotFree, slotTotalMemory, slotFreeMemory, slotDefTimer, slotSetTimer,
 		slotUnsetTimer, slotCurrentTime, slotGetProperty, slotSetProperty,
 		slotGetResourceID, slotGetResource, slotProgramApplicationID,
@@ -205,9 +242,11 @@ func knownWIPICSlot(slot uint32) bool {
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
 		slotFsOpen, slotFsRead, slotFsWrite,
 		slotFsClose, slotFsSeek, slotFsFileAttribute, slotFsRemove,
-		slotFsMkDir, slotFsRmDir, slotFsTotalSpace, slotFsAvailable, slotFsIsExist,
+		slotFsMkDir, slotFsRmDir, slotFsTotalSpace, slotFsAvailable, slotFsTell,
+		slotFsIsExist,
 		slotNetConnect, slotNetClose, slotNetSocketConnect, slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
+		slotDbListDataBases,
 		slotUtilHtonl, slotUtilHtons, slotUtilNtohl, slotUtilNtohs,
 		slotUtilInetAddrInt, slotUtilInetAddrStr,
 		slotBackLight, slotVibrator, slotClipCreate, slotClipFree,
@@ -305,6 +344,28 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotGetCurProgramID:
 		return answer(client.programID())
+
+	case slotGetProgramName:
+		buffer, err := argument(0)
+		if err != nil {
+			return err
+		}
+		size, err := argument(1)
+		if err != nil {
+			return err
+		}
+		// The name is the one the descriptor carries, in the handset's own
+		// encoding, and it is often longer than the buffer a title offers.
+		// The specification answers that with M_E_SHORTBUF and says nothing
+		// about the buffer, so the buffer is left as the caller prepared it.
+		name := encodeEUCKR(client.archive.Descriptor.Fields["Name"])
+		if uint64(len(name))+1 > uint64(size) {
+			return answerCode(thread, wipiShortBuffer)
+		}
+		if err := client.core.Memory().Write(buffer, append(name, 0)); err != nil {
+			return fmt.Errorf("write LGT program name at %#x: %w", buffer, err)
+		}
+		return answerCode(thread, wipiSuccess)
 
 	case slotProgramApplicationID:
 		identity, err := argument(0)
@@ -614,7 +675,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotFsOpen, slotFsRead, slotFsWrite, slotFsClose, slotFsSeek,
 		slotFsFileAttribute, slotFsRemove, slotFsMkDir, slotFsRmDir,
-		slotFsTotalSpace, slotFsAvailable, slotFsIsExist:
+		slotFsTotalSpace, slotFsAvailable, slotFsTell, slotFsIsExist:
 		return client.handleFile(thread, slot)
 
 	case slotNetConnect:
@@ -687,6 +748,26 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 			return err
 		}
 		return answerInt(wipiSuccess)
+
+	case slotDbListDataBases:
+		buffer, err := argument(0)
+		if err != nil {
+			return err
+		}
+		length, err := argument(1)
+		if err != nil {
+			return err
+		}
+		if buffer == 0 || int32(length) <= 0 {
+			return answerCode(thread, wipiInvalid)
+		}
+		if length < 2 {
+			return answerCode(thread, wipiShortBuffer)
+		}
+		if err := client.core.Memory().Write(buffer, []byte{0, 0}); err != nil {
+			return fmt.Errorf("write LGT database list at %#x: %w", buffer, err)
+		}
+		return answerCode(thread, wipiSuccess)
 
 	case slotBackLight:
 		return answerInt(wipiSuccess)

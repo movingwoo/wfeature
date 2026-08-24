@@ -297,7 +297,9 @@ func fixtureELF(code, data []byte, entry uint32) []byte {
 func fixtureArchive(t *testing.T) []byte {
 	t.Helper()
 	return zipOf(t, map[string][]byte{
-		"app_info":     []byte("AID=0102ABCD\nPID=PF000001\nMClass=Fixture\n"),
+		// Name is what MC_knlGetProgramName answers with, so the fixture
+		// carries one rather than leaving that slot with nothing to say.
+		"app_info":     []byte("AID=0102ABCD\nPID=PF000001\nMClass=Fixture\nName=Fixture Title\n"),
 		"0102ABCD.jar": fixtureJAR(t),
 	})
 }

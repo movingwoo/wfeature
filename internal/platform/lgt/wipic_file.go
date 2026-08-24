@@ -260,6 +260,17 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		}
 		return answer(client.seekFile(handle, int32(offset), whence))
 
+	case slotFsTell:
+		handle, err := thread.Register(0)
+		if err != nil {
+			return err
+		}
+		file := client.files[handle]
+		if file == nil {
+			return answer(wipiError)
+		}
+		return answer(int32(file.cursor))
+
 	case slotFsTotalSpace, slotFsAvailable:
 		// These two take no argument: they report the storage the program has,
 		// not the remainder of an open file. Reading the first register as a

@@ -4245,6 +4245,97 @@ this platform has not established is exactly the wrong-slot-answers-silently
 shape. The error now names the address it was called from, for the same reason
 the unimplemented-table error does.
 
+### The third round: a void call's return register, and a guard the parser ate
+
+Three of that list's guest-memory faults were one defect, and it was in a
+function the specification says has no return value at all.
+
+**`MC_knlFree` is declared `void`, and what it leaves in `r0` is therefore not
+part of its contract.** No correct caller may read it — which is exactly why
+answering it with a fixed value is a decision rather than an implementation.
+One middleware, shared by three archives in the set, ends an initialization
+step by freeing the buffer it loaded a font through, and its compiler put that
+free in tail position with nothing after it. The caller then tests `r0` for
+zero and treats zero as failure. Writing zero into it therefore turned "the
+font loaded" into "the font failed": the initializer returned early, the words
+it fills stayed at the zeros the image ships, and the title's first `paint`
+dereferenced one of them and faulted on unmapped guest memory at a small
+offset. The report named the fault and not the cause, because the cause was
+six calls and one early return earlier.
+
+Leaving `r0` as the caller set it is what a routine that never touches its
+return register does, and it costs nothing precisely because the value is
+undefined. All three archives now reach their own screens. Nothing else in the
+262-archive set changed: the same 400-tick run over every archive, before and
+after, moves three rows from a tick error to a first frame and leaves every
+other row's flush count, lit-pixel count and tick count identical.
+
+**Two of that round's remaining rows were probed and left alone, and what the
+probe said is worth keeping.** Three titles stop on a reference the JVM has no
+object for, handed to `StringBuffer.append(Ljava/lang/Object;)` or
+`PrintStream.println(Ljava/lang/Object;)`: the words are a Thumb code address
+inside the title's own image, a supervisor-call stub address, and a small
+integer. Binding a synthetic `Object` to them so the call proceeds moves all
+three walls rather than removing them — to a `NullPointerException` raised by
+the title's own code, to `unsupported Calendar field`, and to a guest fault
+holding a `GregorianCalendar` — which says these calls may be a symptom of
+something that already went wrong rather than the fault itself. The
+permissive binding is not in the tree; fabricating an object for an arbitrary
+word is the wrong-answer-silently shape this platform keeps refusing.
+
+**One title's `drawImage` receives null while every `createImage` succeeded.**
+Four hundred and four `Image.createImage([BII)` calls return an image and the
+decode-failure counter stays at zero, so nothing was undecodable; the element
+the title then loads out of its own array is a zero word. The array store it
+uses writes guest memory directly, which makes the store path and the load path
+the two places to line up against each other.
+
+**Finding the third of the three took a guard that Go's precedence had
+quietly deleted.** `MC_knlGetResource` refuses a handle with the sign bit set,
+because a title that does not check what `MC_knlGetResourceID` answered hands
+the error code straight back as the handle — and reading `-12` as an address
+faults the guest instead of failing the call the caller's own error path is
+waiting for. The guard was written `handle&1<<31 != 0`. In Go `&` and `<<`
+share a precedence level and associate left, so that is `(handle&1)<<31`: zero
+for every even handle, which is every error code there is. The guard had never
+rejected anything. It is `handle&(1<<31)` now, and the whole tree has been
+swept for the same shape.
+
+**The three older relocatable modules were being entered eight bytes in.**
+Their header was read one word too late: the relocation table starts at offset
+8, its first entry is a zero that rebases the segment's own first word, and
+there is no terminator. Reading a zero header word at 8 and a zero terminator
+after the table finds the same two `0x13580001` markers around a different
+word, because the entry's neighbourhood is pointers either way — so the wrong
+reading looked as certain as the right one. Its entry landed past
+`push {r4, r5, lr}` and past the first half of the position-independent
+prologue, which left the static base built out of whatever `r3` happened to
+hold. All three modules' entries land exactly on that push under the corrected
+reading, which is what settles it.
+
+**The relocation list stops in front of a table the segment header bounds, and
+that table has to be rebased too.** The last offset the list names sits a few
+words below `seg[6]`, and `seg[6]` is exactly the static base the entry's own
+prologue computes from `pc` in all three modules; `seg[7]` is exactly the
+length of the segment the file carries. Between them is the module's pointer
+table — 334, 331 and 546 words — and every word of it is a segment offset,
+with none outside the segment and its writable tail. The entry reads one of
+those words and hands it on as a string pointer, and only the rebased word
+points at a string, so the load rebases the table wholesale and refuses bounds
+that do not describe one.
+
+**What the entry then asks the platform for now has a name.** It calls the
+first word of the argument it was handed with three arguments — a string, and
+`-1` twice — keeps the answer in a static, and reports success only when the
+answer is not null. The string is the same in all three modules:
+`MNInterface`. So the argument is a table whose first function answers an
+interface by name and version, the version asked for is "any", and everything
+the module does afterwards goes through the interface that call returns. The
+next caller in the module indexes a table with `(word >> 1) * 4` and calls the
+interface's word at `0x40`, so the interface is a flat function table like the
+rest of this platform's. What it holds is still unknown, and all three modules
+still stop on that first call.
+
 **Thirteen titles are far slower than the handset was, and three do not finish
 four hundred ticks.** Seven of the thirteen are this platform's: four hundred
 ticks at four times the clock cost them twenty to a hundred and three seconds,
