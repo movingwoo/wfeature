@@ -74,7 +74,23 @@ func TestCheckTypeDecidesThroughAnUnregisteredGuestSuperclass(t *testing.T) {
 	leaf := writeGuestClass(t, runtime, "game/Leaf", middle, nil, 0x21)
 	unrelated := writeGuestClass(t, runtime, "game/Unrelated", 0, nil, 0x21)
 
-	object, _, err := runtime.allocateAOTInstance(leaf)
+	// The instance is allocated from the leaf's record alone. Resolving a class
+	// the ordinary way registers its whole chain now (see registerAOTAncestors),
+	// and that is exactly the case this test is not about: what it asks is
+	// whether the check still decides correctly when the middle of the
+	// hierarchy is somewhere the registry has never seen.
+	metadata, err := runtime.readAOTClass(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.client.vm.RegisterAOTClass(metadata); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.client.vm.NewAOTInstance(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := runtime.allocateAOTObject(metadata, make([]byte, metadata.InstanceSize), instance)
 	if err != nil {
 		t.Fatal(err)
 	}

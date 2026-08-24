@@ -105,12 +105,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// The manual clock is what a probe wants: the guest's waits cost no real
 	// time, so reaching startApp — and therefore the class table — is as fast
 	// as the guest can be driven.
+	// A start that fails is the case this tool is most often reached for: the
+	// title stopped before it drew anything and the question is which class it
+	// was in. The classes it did register are still in the registry behind the
+	// failed start, so the failure is reported and the dump goes ahead with
+	// whatever the title got to.
 	session, err := ktf.StartSession(context.Background(), data, ktf.SessionOptions{
 		Clock: ktf.NewManualClock(time.Time{}),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "start game: %v\n", err)
-		return 1
+	}
+	if session == nil {
+		if session, err = partialSession(data); err != nil {
+			fmt.Fprintf(stderr, "load client: %v\n", err)
+			return 1
+		}
 	}
 	defer session.Close()
 
@@ -126,6 +136,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, formatClasses(session))
 	}
 	return 0
+}
+
+// partialSession is what is left when a start fails: the client, initialized as
+// far as the runtime goes, with the archive's main class loaded if it can be.
+// It is enough for the class table and the symbols, which is what a stopped
+// title is being asked about.
+func partialSession(archive []byte) (*ktf.Session, error) {
+	opened, err := ktf.Open(archive)
+	if err != nil {
+		return nil, err
+	}
+	client, err := ktf.LoadClient(opened.JAR.Client, armcore.CoreOptions{MaxSteps: 100_000_000})
+	if err != nil {
+		return nil, err
+	}
+	client.SetProgramName(ktf.ProgramNameForAID(opened.Descriptor.AID))
+	client.AttachAppProperties(opened.Descriptor.Properties)
+	client.AttachResources(opened.JAR.Entries)
+	client.AttachFilesystem(opened.GuestFiles())
+	ctx := context.Background()
+	entry, err := client.ExecuteEntry(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("run the relocation entry: %w", err)
+	}
+	if _, err := client.Initialize(ctx, entry.Context.Registers[0]); err != nil {
+		return nil, fmt.Errorf("run initialization: %w", err)
+	}
+	// A main class that will not load is not a reason to give up the table:
+	// what is registered already is what the report is about.
+	_, _ = client.LoadClass(ctx, opened.Descriptor.MainClass)
+	return &ktf.Session{Archive: opened, Client: client}, nil
 }
 
 // dumpImage loads the client and runs its entry function, which is the
@@ -195,6 +236,18 @@ func formatClasses(session *ktf.Session) string {
 				kind = "  [native]"
 			}
 			fmt.Fprintf(&builder, "    %#08x  %s%s%s\n", method.Body&^1, method.Name, method.Descriptor, kind)
+		}
+		// A field record's word is an offset for an instance field and the
+		// value itself for a static one, so the two are labelled rather than
+		// printed the same way. The instance offsets are the class's layout,
+		// which is what a question about a field a title reads directly comes
+		// down to.
+		for _, field := range class.Fields {
+			if field.AccessFlags&0x0008 != 0 {
+				fmt.Fprintf(&builder, "    static    %s:%s = %#x\n", field.Name, field.Descriptor, field.Offset)
+				continue
+			}
+			fmt.Fprintf(&builder, "    at %-6d %s:%s\n", field.Offset, field.Name, field.Descriptor)
 		}
 	}
 	return builder.String()

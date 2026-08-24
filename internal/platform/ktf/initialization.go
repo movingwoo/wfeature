@@ -910,7 +910,7 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 		runtime.handleSupervisorCall,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("execute KTF AOT native call at %#x: %w", address, err)
+		return 0, fmt.Errorf("execute KTF AOT native call %s: %w", runtime.describeNativeCall(address), err)
 	}
 	var result [8]byte
 	binary.LittleEndian.PutUint32(result[:4], summary.Context.Registers[0])
@@ -2053,6 +2053,25 @@ func (runtime *initializationRuntime) registerJavaString(thread *armcore.Thread)
 	}
 	runtime.callbacks.RegisteredStrings++
 	return object, nil
+}
+
+// describeNativeCall names the body a native call is entering. Most of these
+// addresses are this runtime's own stubs, and a report that gives the address
+// alone leaves the one question a nested failure raises — which method is
+// re-entering — answerable only by reading the allocator's order.
+func (runtime *initializationRuntime) describeNativeCall(address uint32) string {
+	for key, stub := range runtime.stubs {
+		if stub != address {
+			continue
+		}
+		if uint32(key>>32) != svcCategoryRuntimeJava {
+			continue
+		}
+		if invocation, ok := runtime.nativeMethods[uint32(key)]; ok {
+			return fmt.Sprintf("%s.%s%s at %#x", invocation.method.class, invocation.method.name, invocation.method.descriptor, address)
+		}
+	}
+	return fmt.Sprintf("at %#x", address)
 }
 
 func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) {
