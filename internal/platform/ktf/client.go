@@ -50,9 +50,17 @@ func svcStub(category, id uint32) []byte {
 }
 
 type Client struct {
-	core                  *armcore.Core
-	thread                *armcore.Thread
-	image                 ClientImage
+	core   *armcore.Core
+	thread *armcore.Thread
+	image  ClientImage
+	// mapped is what the image occupies in guest memory, entry is the address
+	// ExecuteEntry calls, and argument is the single word it is called with.
+	// The current generation of client images enters at its first byte with
+	// the BSS size; the older relocatable modules name their own entry and
+	// take a pointer to their header. See client_relocatable.go.
+	mapped                uint64
+	entry                 uint32
+	argument              uint32
 	vm                    *jvm.VM
 	run                   sync.Mutex
 	initializationStarted bool
@@ -589,7 +597,7 @@ func (client *Client) ImageBytes() ([]byte, error) {
 	if client == nil || client.core == nil {
 		return nil, fmt.Errorf("KTF client is not initialized")
 	}
-	size := client.image.MappedSize()
+	size := client.mapped
 	if size == 0 {
 		return nil, fmt.Errorf("KTF client image is not mapped")
 	}
@@ -739,11 +747,25 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 		return nil, fmt.Errorf("KTF client image %q overlaps the guest stack", image.Name)
 	}
 
+	// An older module is relocated before it is mapped, and names its own
+	// entry rather than starting at one. See client_relocatable.go.
+	loaded, entry, argument := image.Data, EntryAddress, image.BSSSize
+	if module, ok := parseRelocatableClient(image.Data); ok {
+		relocated, relocateErr := module.relocate(image.Data, ImageBase)
+		if relocateErr != nil {
+			return nil, fmt.Errorf("relocate KTF client image %q: %w", image.Name, relocateErr)
+		}
+		// The entry takes a pointer to the module header rather than a size,
+		// and reads the size back out of it: the header's first word is the
+		// BSS the file name also names.
+		loaded, entry, argument = relocated, module.entryAddress(relocated), ImageBase
+	}
+
 	core := armcore.NewCore(options)
 	if err := core.Memory().Map(ImageBase, mappedSize, armcore.PermissionReadWriteExecute); err != nil {
 		return nil, fmt.Errorf("map KTF client image %q: %w", image.Name, err)
 	}
-	if err := core.Memory().Load(ImageBase, image.Data); err != nil {
+	if err := core.Memory().Load(ImageBase, loaded); err != nil {
 		return nil, fmt.Errorf("load KTF client image %q: %w", image.Name, err)
 	}
 	if err := core.Memory().Map(ThreadStackBase, ThreadStackSize, armcore.PermissionReadWrite); err != nil {
@@ -752,9 +774,12 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
 	client := &Client{
-		core:   core,
-		thread: armcore.NewThread(initial),
-		image:  image,
+		core:     core,
+		thread:   armcore.NewThread(initial),
+		image:    image,
+		mapped:   mappedSize,
+		entry:    entry,
+		argument: argument,
 	}
 	// KTF handsets decode byte content as EUC-KR; games index parsed strings
 	// by character position, so the platform charset must match. Guest Java
@@ -828,7 +853,7 @@ func (client *Client) ExecuteEntry(ctx context.Context, handler armcore.Supervis
 	}
 	client.run.Lock()
 	defer client.run.Unlock()
-	result, err := client.core.Call(ctx, client.thread, EntryAddress, ReturnAddress, []uint32{client.image.BSSSize}, handler)
+	result, err := client.core.Call(ctx, client.thread, client.entry, ReturnAddress, []uint32{client.argument}, handler)
 	if err != nil {
 		return result, fmt.Errorf("execute KTF client entry %q: %w", client.image.Name, err)
 	}
