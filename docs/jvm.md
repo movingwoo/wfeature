@@ -36,9 +36,25 @@ file.
   constructor and reads it back at any width
 - runtime-owned `Thread`/`Runnable` metadata backed by Go goroutines, bounded
   guest executions, sleep/yield/interrupt state, and monitor wait/notify
-- runtime-owned byte/data input streams, modified UTF-8 reads, and safe JAR
-  resource lookup through `Class.getResourceAsStream`
-- the game-used `Hashtable`, `Vector`, `Random`, and `Calendar` subset.
+- runtime-owned byte/data input streams, modified UTF-8 reads and writes, and
+  safe JAR resource lookup through `Class.getResourceAsStream`. `writeUTF` is
+  written against `readUTF` rather than against Go's encoder, because the pair
+  is one round trip: a title stores a name with one and reads it back with the
+  other
+- `java.io.Reader` and `java.io.InputStreamReader`, which decode a byte stream
+  into characters **without knowing the charset**: the reader feeds the
+  platform's installed decoder one more byte at a time until the decoder
+  answers with a character rather than a replacement, which makes the same code
+  right for a single-byte and a two-byte encoding. Reading the whole stream up
+  front would have been simpler and would have made a reader over a connection
+  wait for the far end to close
+- the game-used `Hashtable`, `Vector`, `Random`, `Calendar` and `TimeZone`
+  subset. `Calendar.set` moves the same component `get` reads back and
+  normalizes an out-of-range value the way the lenient mode a title relies on
+  does. **`TimeZone` knows two zones**: GMT, and the one the guest clock runs
+  in — Calendar and Date read that clock as local time, so a zone object that
+  disagreed with them would make a title's own arithmetic wrong, and shipping
+  the IANA table would mean embedding tzdata in a cross-compiled release.
   `Vector`'s capacity increment is honoured rather than treated as a hint: a
   vector grows by exactly the increment it was given and doubles only when it
   has none, because `capacity()` is observable and one title walks a vector

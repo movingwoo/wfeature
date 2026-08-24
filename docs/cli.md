@@ -531,7 +531,20 @@ go run ./cmd/ktfdump <game.zip> -symbols out.txt    # every AOT method body addr
 go run ./cmd/ktfdump <game.zip> -classes            # the registered class table
 ```
 
-It runs the relocation entry and nothing else — no game code executes.
+`-image` runs the relocation entry and nothing else. `-symbols` and `-classes`
+need more, because a class is in the table only once the game has asked for it,
+so they start the game and dump what it registered on the way to `startApp`.
+
+**A start that fails still dumps.** That is the case the tool is most often
+reached for — the title stopped before it drew anything, and the question is
+which class it was in — so the failure is reported and the dump goes ahead with
+the classes the title got to.
+
+`-classes` prints each class's instance layout under its methods: `at N` for an
+instance field's byte offset and `static` for a static field's value, which is
+what the one word in a field record means in each case. A field a title reads
+directly off an object — rather than through a getter — is a question about
+that layout.
 
 ## Where the data lives
 
