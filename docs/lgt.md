@@ -3631,6 +3631,94 @@ them. **A title that finishes its ticks is not a title that works**, and
 counting this one as answered because it stopped failing is the mistake this
 sweep's own rule about cut rows exists to prevent.
 
+### Four C library slots, named by what their callers do with them
+
+The four stdlib slots that pass's report left unnamed are named now, and none
+of them was settled by counting off the specification's list. That list is the
+right first question — the C library's own sectioning is what puts `sprintf` at
+`0x3f7` and `strcpy` at `0x405` — but this table has already been seen to
+depart from it, so a number's position is a hypothesis and the call site is the
+evidence.
+
+- **`0x404` is `srand` and `0x403` is `rand`.** Two titles stop on `0x404`, and
+  both reach it one call after `time` with `time`'s own answer in the first
+  register: `srand(time(NULL))` is the idiom, and two independent titles
+  spelling it the same way is what makes it a reading rather than a guess.
+  Seeding then carries the first title through all three thousand ticks and
+  carries the second as far as `0x403`, which it calls with no arguments set up
+  and whose answer goes straight into its arithmetic — `rand`. So the second
+  slot was found by implementing the first, which is the same shape as
+  answering one class member and finding the next.
+- **`0x3f9` is `vsprintf`.** Its caller hands it a destination buffer, a format
+  it has just assembled on its own stack — a file name — and a third pointer
+  into the frame above, which is what a `va_list` is on this ABI. The number
+  agrees: `sprintf`, `sscanf` and `vsprintf` are the three of `<stdio.h>` a
+  handset keeps once the ones taking a `FILE *` are dropped, and counting those
+  off `sprintf` at `0x3f7` lands `atof` and `atoi` exactly where the table
+  already had `atoi`. The renderer is the one `sprintf` already used, with the
+  argument walk changed from registers-then-stack to a cursor through guest
+  memory.
+- **`0x426` is `malloc`.** Its number says nothing — it sits past `localtime`
+  with unnamed slots either side — and its caller says everything. A title
+  calls it three times, with 140, 68 and 17, and each time the next thing it
+  does is `memset` exactly that many bytes at exactly what came back. Hand the
+  size straight back instead and the `memset` writes to address 140, which is
+  not mapped; answer null and the module walks off into its own data and takes
+  a supervisor call that does not exist. Serving it out of the same heap as
+  `MC_knlAlloc` is what keeps a later free through either door reaching the
+  same block, and it does not zero what it hands out — the caller's own
+  `memset` is the evidence that the handset's did not either.
+
+`srand` and `rand` are one title's whole wall each; `vsprintf` and `malloc` are
+one title's each as well. All four titles now finish three thousand ticks and
+draw their own screens: two carrier notice screens, one usage notice that keeps
+animating, and one that reaches its full title art on the second run once its
+save exists. **A title that stops on a C library function is the cheapest kind
+of wall this platform has** — the call site is a handful of instructions, the
+contract is a standard one, and what the caller does next says which standard
+function it is when the number does not.
+
+### Three platform slots the specification's own ordering named
+
+Where the C library's numbering had to be argued from call sites, the WIPI C
+blocks turned out to be in the specification's order exactly, and two of the
+three fell out of checking that rather than out of a disassembly.
+
+- **`0x6f` is `MC_knlGetProgramName(nameBuf, bufSize)`.** Counting the kernel
+  block from `MC_knlPrintk` at `0x64` — printk, sprintk, getExecNames, execute,
+  exit, programStop, getCurProgramID, getParentProgramID, getAppManagerID,
+  getProgramInfo, getAccessLevel, getProgramName — puts every entry this
+  platform already had exactly where it already was, through `exit` at `0x68`,
+  `getCurProgramID` at `0x6a`, `alloc` at `0x75` and the timers at `0x7a`-`0x7c`.
+  The call site agrees: sixteen bytes of the title's own stack, zeroed, passed
+  with the length beside it. The name is the descriptor's, in the handset's
+  encoding, and a buffer too small for it is `M_E_SHORTBUF` with the buffer
+  untouched — which is what the specification says and what a caller that can
+  not tell a truncation from a name needs.
+- **`0x19f` is `MC_fsTell(fd)`.** The same counting works on the file block from
+  `MC_fsOpen` at `0x190`, and it lands `isExist` at `0x1a0` where this platform
+  already had it, fourteen entries later. The call site agrees twice over: the
+  title seeks to the end and asks one instruction afterwards, which is how a
+  program with no size call asks a file how long it is.
+- **`0x44c` is `MC_dbListDataBases(buf, len)`,** and this one was named by the
+  format rather than the number. The caller hands it four kilobytes it has just
+  zeroed, then walks what comes back as names separated by one NUL and
+  terminated by two, copying each out until the double NUL — which is the
+  layout the specification gives for this function and for nothing else in the
+  C API. It puts the database block's base at `0x440`. **The rest of that block
+  is not implemented**, so no title here has ever opened a C database and the
+  honest answer is that it has none: zero, and the empty list's two NULs. That
+  is a real answer and not a stub — a program with no databases is a documented
+  success — and it stops being the whole answer the moment
+  `MC_dbOpenDataBase` is served.
+
+**What the block ordering is worth is not three slots.** It is that a slot's
+number can be checked against the specification before anything is
+disassembled, and that a block whose known entries all land where the count
+puts them can be trusted for the ones that are missing. The C library's own
+numbering fails that check — which is why the four above had to be argued from
+their callers — and the WIPI C blocks pass it.
+
 ## Deliberately incomplete
 
 - **LGT Java apps play, and the platform API behind them is partial.** The

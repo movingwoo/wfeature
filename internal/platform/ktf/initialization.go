@@ -988,7 +988,15 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 			return 0, err
 		}
 		runtime.freeWIPIC(id)
-		return 0, nil
+		// The specification declares MC_knlFree void, so r0 on return is not
+		// part of its contract and no correct caller may read it. Some do
+		// anyway: a title ends an initialization step with `MC_knlFree(buf)`
+		// in tail position and its caller tests the result, so writing zero
+		// into r0 turned "the font loaded" into "the font failed" and stopped
+		// the game before its first frame. Leaving r0 as the caller set it is
+		// what a routine that never touches its return register does, and it
+		// costs nothing precisely because the value is undefined.
+		return id, nil
 	case wipicKernelGetTotalMemory:
 		return uint32(platformDataSize), nil
 	case wipicKernelGetFreeMemory:
@@ -1803,7 +1811,13 @@ func (runtime *initializationRuntime) wipicGetResource(thread *armcore.Thread) (
 	if err != nil {
 		return 0, err
 	}
-	if handle&1<<31 != 0 {
+	// A game that does not check MC_knlGetResourceID hands its error code
+	// straight back as the handle, and a negative handle read as an address
+	// faults the guest rather than failing the call. The parentheses matter:
+	// `&` and `<<` share a precedence level in Go and associate left, so
+	// `handle&1<<31` is `(handle&1)<<31` — zero for every even handle, which
+	// is every error code there is.
+	if handle&(1<<31) != 0 {
 		return wipicErrorGeneric, nil
 	}
 	name, err := runtime.readCString(handle, 512)

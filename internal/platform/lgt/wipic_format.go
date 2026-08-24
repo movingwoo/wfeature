@@ -42,11 +42,35 @@ func (client *Client) wipicVarargs(thread *armcore.Thread, first int) func(int) 
 	}
 }
 
-// wipicFormat renders a guest format string, reading %s arguments out of guest
-// memory. The renderer is shared with the other WIPI platform: a format string
-// means the same thing wherever the call arrived from.
-func (client *Client) wipicFormat(thread *armcore.Thread, format []byte, first int) ([]byte, error) {
-	return wipic.Format(format, client.wipicVarargs(thread, first), func(address uint32, limit int) ([]byte, error) {
+// wipicListVarargs walks the arguments from a `va_list` the caller passed by
+// value, which on this ABI is a pointer into the argument area that advances
+// one word at a time. It is the same walk as wipicVarargs with a different
+// source, so the two share the renderer below.
+func (client *Client) wipicListVarargs(list uint32) func(int) (uint64, error) {
+	cursor := list
+	return func(words int) (uint64, error) {
+		low, err := client.readWord(cursor)
+		if err != nil {
+			return 0, err
+		}
+		cursor += 4
+		if words == 1 {
+			return uint64(low), nil
+		}
+		high, err := client.readWord(cursor)
+		if err != nil {
+			return 0, err
+		}
+		cursor += 4
+		return uint64(high)<<32 | uint64(low), nil
+	}
+}
+
+// wipicFormatFrom renders a guest format string against an argument source, so
+// a caller that has a `va_list` renders the same way as one whose arguments are
+// still in registers.
+func (client *Client) wipicFormatFrom(format []byte, next func(int) (uint64, error)) ([]byte, error) {
+	return wipic.Format(format, next, func(address uint32, limit int) ([]byte, error) {
 		if limit >= 0 {
 			// A precision reads a slice of a buffer, which is why a game uses
 			// one: the bytes it names need not be terminated at all.
@@ -58,6 +82,13 @@ func (client *Client) wipicFormat(thread *armcore.Thread, format []byte, first i
 		}
 		return []byte(text), nil
 	})
+}
+
+// wipicFormat renders a guest format string, reading %s arguments out of guest
+// memory. The renderer is shared with the other WIPI platform: a format string
+// means the same thing wherever the call arrived from.
+func (client *Client) wipicFormat(thread *armcore.Thread, format []byte, first int) ([]byte, error) {
+	return client.wipicFormatFrom(format, client.wipicVarargs(thread, first))
 }
 
 // wipicSprintk formats into the destination buffer and answers the number of
