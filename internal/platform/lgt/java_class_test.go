@@ -165,6 +165,40 @@ func TestJavaClassListReadsEveryHandle(t *testing.T) {
 	}
 }
 
+// A slot the module never materialized keeps its place. Seven local titles have
+// one — an interface, which is dispatched through by the receiver and so never
+// loaded — and refusing it stopped every one of them before anything ran, while
+// dropping it would move the string constants, which start where the handles
+// end and are counted rather than found.
+func TestJavaClassListKeepsThePlaceOfAnUnmaterializedSlot(t *testing.T) {
+	client := fixtureClient(t)
+	writeJavaClassFixture(t, client)
+	table := make([]byte, 20)
+	binary.LittleEndian.PutUint32(table[0:], 3)
+	binary.LittleEndian.PutUint32(table[8:], fixtureClassHandle)
+	binary.LittleEndian.PutUint32(table[12:], 0)
+	binary.LittleEndian.PutUint32(table[16:], fixtureClassHandle)
+	if err := client.core.Memory().Write(fixtureClassTable, table); err != nil {
+		t.Fatal(err)
+	}
+	classes, err := client.readJavaClassList(fixtureClassTable)
+	if err != nil {
+		t.Fatalf("readJavaClassList() error = %v", err)
+	}
+	if len(classes) != 3 {
+		t.Fatalf("read %d classes, want 3", len(classes))
+	}
+	if classes[1].Handle != 0 {
+		t.Fatalf("the null slot read as a class at %#x", classes[1].Handle)
+	}
+	if classes[2].Handle != fixtureClassHandle {
+		t.Fatal("the slot after the null one did not keep its place")
+	}
+	if lines := describeJavaClasses(classes); len(lines) != 3 {
+		t.Fatalf("described %d classes", len(lines))
+	}
+}
+
 // The launcher class is found by walking the image for records rather than by
 // looking in the class list, because the list does not hold it. A record is
 // recognised by two words agreeing — the handle names its header, the header

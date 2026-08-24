@@ -223,3 +223,11 @@ const (
 	javaKeyPressed  = 1
 	javaKeyReleased = 2
 )
+
+// javaDockedCard is `Display.getDockedCard()`: the card the screen is showing,
+// or null when nothing has been pushed yet.
+func javaDockedCard(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	return client.javaRuntimeState().card, nil
+}

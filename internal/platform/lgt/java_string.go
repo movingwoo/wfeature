@@ -280,6 +280,15 @@ func (client *Client) newJavaCharArray(symbols []rune) (uint32, error) {
 
 // javaBufferConstructor is `StringBuffer()` and `StringBuffer(String)`: an
 // empty buffer, or one that starts as a copy of what it is given.
+// javaBufferEmpty builds a buffer whose argument is a capacity rather than
+// text. The capacity is a hint about storage this platform grows on demand.
+func javaBufferEmpty(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	client.setJavaText(arguments[0], "")
+	return 0, nil
+}
+
 func javaBufferConstructor(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {

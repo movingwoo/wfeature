@@ -92,6 +92,8 @@ var javaPlatformSupers = map[string]string{
 	"java/io/UnsupportedEncodingException":              "java/io/IOException",
 	"java/io/UTFDataFormatException":                    "java/io/IOException",
 	"org/kwis/msp/io/FileSystemException":               "java/io/IOException",
+	"org/kwis/msp/db/DataBaseException":                 "java/lang/Exception",
+	"org/kwis/msp/db/DataBaseRecordException":           "org/kwis/msp/db/DataBaseException",
 	"org/kwis/msf/io/SchemeNotFoundException":           "java/io/IOException",
 	"javax/microedition/io/ConnectionNotFoundException": "java/io/IOException",
 }

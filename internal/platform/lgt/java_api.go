@@ -69,9 +69,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// gets a different sequence and a title that runs twice does too.
 	"java/util/Random.<init>()V": {Words: 1, Implementat: javaRandomConstructor},
 
-	// A growable list; see java_vector.go.
-	"java/util/Vector.<init>()V":  {Words: 1, Implementat: javaVectorConstructor},
-	"java/util/Vector.<init>(I)V": {Words: 2, Implementat: javaVectorConstructor},
+	// A growable list; see java_vector.go. The capacity and the growth step are
+	// hints about an array this platform does not keep, so all three forms
+	// build the same empty list.
+	"java/util/Vector.<init>()V":   {Words: 1, Implementat: javaVectorConstructor},
+	"java/util/Vector.<init>(I)V":  {Words: 2, Implementat: javaVectorConstructor},
+	"java/util/Vector.<init>(II)V": {Words: 3, Implementat: javaVectorConstructor},
 
 	// The size of the drawing surface. A Card is the whole screen on this
 	// platform, and so is the display, which is what the two pairs answer with.
@@ -79,6 +82,11 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Card.getHeight()I":    {Words: 1, Implementat: javaScreenHeight},
 	"org/kwis/msp/lcdui/Display.getWidth()I":  {Words: 1, Implementat: javaScreenWidth},
 	"org/kwis/msp/lcdui/Display.getHeight()I": {Words: 1, Implementat: javaScreenHeight},
+	// The card that is on the screen, or null before anything is pushed. A
+	// launcher asks for it first thing, and null is the honest answer there
+	// rather than a stop: the title has not shown anything yet.
+	"org/kwis/msp/lcdui/Display.getDockedCard()Lorg/kwis/msp/lcdui/Card;": {
+		Words: 1, Implementat: javaDockedCard},
 
 	// The handset's backlight. The specification's own description of
 	// alwaysOn is that the light stays on while the application runs, which on
@@ -110,6 +118,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/media/Volume.set(I)V": {Words: 1, Implementat: javaSetVolume},
 	// Sound; see java_sound.go.
 	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;[B)V": {Words: 3, Implementat: javaClipConstructor},
+	// The two forms that name a type and no data. The specification's second
+	// argument is a buffer size, and the buffer is this platform's business
+	// rather than the title's: what both build is an empty clip of that type,
+	// which a title then fills through the data calls or plays as silence.
+	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;)V":  {Words: 2, Implementat: javaClipEmpty},
+	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;I)V": {Words: 3, Implementat: javaClipEmpty},
 	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;Ljava/lang/String;)V": {
 		Words: 3, Implementat: javaClipFromFile},
 	"org/kwis/msp/media/Clip.setVolume(I)Z": {Words: 2, Implementat: javaClipSetVolume},
@@ -175,6 +189,11 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"java/lang/String.<init>([BII)V":                {Words: 4, Implementat: javaStringConstructor},
 	"java/lang/String.<init>([CII)V":                {Words: 4, Implementat: javaStringFromChars},
 	"java/lang/StringBuffer.<init>()V":              {Words: 1, Implementat: javaBufferConstructor},
+	// The capacity form is a hint about a buffer this platform grows on
+	// demand, so it builds the same empty buffer the no-argument form does —
+	// and it takes the no-argument path, because its one argument is a number
+	// rather than the text the other form starts from.
+	"java/lang/StringBuffer.<init>(I)V": {Words: 2, Implementat: javaBufferEmpty},
 	"java/lang/StringBuffer.<init>(Ljava/lang/String;)V": {
 		Words: 2, Implementat: javaBufferConstructor},
 
@@ -245,11 +264,13 @@ func init() {
 	javaBakedVirtualSlots[javaThreadClass] = map[uint32]javaBakedSlot{
 		10: {Called: "start()V", Method: javaPlatformMethod{Words: 1, Implementat: javaThreadStart}},
 	}
-	for key, method := range javaGraphicsMethods {
-		if _, duplicate := javaPlatformMethods[key]; duplicate {
-			panic("LGT java platform method declared twice: " + key)
+	for _, table := range []map[string]javaPlatformMethod{javaGraphicsMethods, javaDatabaseMethods} {
+		for key, method := range table {
+			if _, duplicate := javaPlatformMethods[key]; duplicate {
+				panic("LGT java platform method declared twice: " + key)
+			}
+			javaPlatformMethods[key] = method
 		}
-		javaPlatformMethods[key] = method
 	}
 }
 
