@@ -33,3 +33,41 @@ func TestCharsetNamesAreMatchedAfterNormalizing(t *testing.T) {
 		}
 	}
 }
+
+// A title reaches Class.forName with three kinds of name, and only one of them
+// is a class file. A class the platform compiled ahead of time lives in the AOT
+// registry and never in the loader, so asking the loader alone answered "not
+// found" for a title's own main class — which is what one of them names while
+// it builds its first card. An array type has no class file at all.
+func TestClassForNameResolvesAOTClassesAndArrayTypes(t *testing.T) {
+	vm := New(nil, Options{})
+	if err := vm.RegisterAOTClass(AOTClassMetadata{
+		Address:      0x101000,
+		Name:         "GameMain",
+		SuperName:    "java/lang/Object",
+		AccessFlags:  0x21,
+		InstanceSize: 8,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.DefineClass(ClassDefinition{Name: "game/Loaded", SuperName: "java/lang/Object", Access: 0x21}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"GameMain",     // compiled ahead of time, not in the loader
+		"[LGameMain;",  // an array of it
+		"[[LGameMain;", // and an array of that
+		"[I",           // a primitive element always exists
+		"game/Loaded",  // and the loader's own classes still answer
+		"[Lgame/Loaded;",
+	} {
+		if !vm.classForNameExists(name) {
+			t.Errorf("Class.forName(%q) found nothing", name)
+		}
+	}
+	for _, name := range []string{"GameOther", "[LGameOther;", "[", "[L;"} {
+		if vm.classForNameExists(name) {
+			t.Errorf("Class.forName(%q) answered for a type that does not exist", name)
+		}
+	}
+}

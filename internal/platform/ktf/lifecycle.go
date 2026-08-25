@@ -349,7 +349,7 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 			return result, runs, resultErr
 		}
 		var unwind *aotExceptionUnwind
-		if errors.As(callErr, &unwind) {
+		if errors.As(callErr, &unwind) && runtime.ownsUnwind(thread, unwind) {
 			body = unwind.nextPC
 			arguments = []uint32{unwind.contextBase, unwind.target}
 			continue

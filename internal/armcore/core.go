@@ -99,6 +99,12 @@ type Thread struct {
 	threadLocal *threadLocalState
 	stepBudget  uint64
 	limitHook   func(context.Context) error
+	// entryStack is the stack pointer this thread's run started from. A
+	// derived call inherits the guest stack rather than getting one of its
+	// own, so this is the only way to tell a frame that belongs to the run
+	// from one that belongs to a caller further out.
+	entryStack uint32
+	entryKnown bool
 }
 
 func NewThread(initial Context) *Thread {
@@ -120,6 +126,16 @@ func (thread *Thread) SetStepBudget(budget uint64) {
 // ErrStepLimit. It must be set before the thread runs.
 func (thread *Thread) SetLimitHook(hook func(context.Context) error) {
 	thread.limitHook = hook
+}
+
+// EntryStackPointer reports the stack pointer a derived call started from, and
+// whether this thread is such a call. Guest frames at or below it belong to
+// this run; anything above it belongs to a caller the Host is still inside, so
+// a long jump that lands there cannot be resumed here.
+func (thread *Thread) EntryStackPointer() (uint32, bool) {
+	thread.mu.Lock()
+	defer thread.mu.Unlock()
+	return thread.entryStack, thread.entryKnown
 }
 
 func (thread *Thread) State() ThreadState {
@@ -259,6 +275,8 @@ func (core *Core) Call(
 	}
 	callContext.Registers[RegisterLR] = end
 	derived.context = callContext
+	derived.entryStack = callContext.Registers[RegisterSP]
+	derived.entryKnown = true
 	return core.Run(ctx, derived, end, handler)
 }
 

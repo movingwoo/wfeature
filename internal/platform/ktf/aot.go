@@ -27,9 +27,14 @@ const (
 	javaExceptionHandler = 68
 	// javaExceptionObject is where a matched handler is handed what was
 	// thrown. A catch block reads it from there; see findAOTExceptionHandler.
-	javaExceptionObject  = 16
-	javaExceptionContext = 24
-	javaExceptionHead    = 32
+	javaExceptionObject = 16
+	// javaExceptionCurrentPC is the label a handler record carries for where
+	// in its method execution is. The guest writes it as it moves between
+	// protected regions, and the platform writes it when it resumes a catch
+	// block: see findAOTExceptionHandler.
+	javaExceptionCurrentPC = 12
+	javaExceptionContext   = 24
+	javaExceptionHead      = 32
 	// javaExceptionContextWords is how much room the block param 1 points at
 	// gets. Only the handler head at javaExceptionHead is ours; the rest of
 	// the struct belongs to the module's own runtime, and a middleware two
@@ -40,13 +45,21 @@ const (
 	// allocated after it and turned the pointer to this very block into a
 	// scene number.
 	javaExceptionContextWords = javaExceptionHandler / 4
-	maxExceptionHandlers      = 64
+	// javaExceptionFrameStack is where the saved stack pointer sits inside a
+	// handler record. The restore function reloads r4-r11, ip, sp and lr from
+	// javaExceptionContext, so the tenth of those eleven words is the frame
+	// the catch block runs on.
+	javaExceptionFrameStack = javaExceptionContext + 9*4
+	maxExceptionHandlers    = 64
 )
 
 type aotExceptionUnwind struct {
 	contextBase uint32
 	target      uint32
 	nextPC      uint32
+	// framePointer is the stack pointer the handler's own frame saved. It
+	// says which Host guest call the catch block belongs to.
+	framePointer uint32
 }
 
 // UncaughtAOTException transports a guest-created exception back across the
@@ -69,6 +82,18 @@ func (exception *UncaughtAOTException) Unwrap() error {
 		return nil
 	}
 	return exception.Exception
+}
+
+// resumableFrom reports whether a guest call entered at stackPointer owns the
+// frame the catch block runs on. The guest stack is shared by every nested
+// Host call, so a handler above the entry belongs to a caller the Host has not
+// returned to yet: resuming it here would run that caller's code inside this
+// call, and when it finally returned the run would end while the Go frames
+// that made it were still waiting for a guest stack that no longer exists.
+// What that looked like was a title painting its first card, catching its own
+// exception, and executing at address 0x1a.
+func (unwind *aotExceptionUnwind) resumableFrom(stackPointer uint32) bool {
+	return unwind != nil && unwind.framePointer <= stackPointer
 }
 
 func (unwind *aotExceptionUnwind) Error() string {
@@ -147,7 +172,7 @@ func (runtime *initializationRuntime) runAOTClassInitializer(ctx context.Context
 			return nil
 		}
 		var unwind *aotExceptionUnwind
-		if errors.As(callErr, &unwind) {
+		if errors.As(callErr, &unwind) && runtime.ownsUnwind(thread, unwind) {
 			body = unwind.nextPC
 			arguments = []uint32{unwind.contextBase, unwind.target}
 			continue
@@ -1225,7 +1250,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		}
 		methodAddress := binary.LittleEndian.Uint32(handler[0:])
 		oldHandler := binary.LittleEndian.Uint32(handler[8:])
-		currentPC := binary.LittleEndian.Uint32(handler[12:])
+		currentPC := binary.LittleEndian.Uint32(handler[javaExceptionCurrentPC:])
 		functionsAddress := binary.LittleEndian.Uint32(handler[20:])
 		method, err := runtime.readAOTBytes(methodAddress, javaMethodSize, "Java exception method")
 		if err != nil {
@@ -1279,6 +1304,19 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			if err := runtime.client.core.SetThreadLocalWord(thread, headAddress, handlerAddress); err != nil {
 				return nil, fmt.Errorf("write KTF Java exception handler head: %w", err)
 			}
+			// Entering the catch block leaves the region that was
+			// protected, and the record's own label has to say so before
+			// the block runs. Every entry's target is the first label past
+			// its range, which is what makes writing it here the same thing
+			// as leaving the region. Some catch blocks write the label
+			// themselves and some do not; the one that did not threw inside
+			// its own catch, matched the region it had just left, and jumped
+			// back to the top of the same block for the rest of the run.
+			var resumed [4]byte
+			binary.LittleEndian.PutUint32(resumed[:], target)
+			if err := runtime.client.core.Memory().Write(handlerAddress+javaExceptionCurrentPC, resumed[:]); err != nil {
+				return nil, fmt.Errorf("write KTF Java handler label at %#x: %w", handlerAddress+javaExceptionCurrentPC, err)
+			}
 			// The handler record is where the catch block reads what it
 			// caught. It lives on the guest stack, so the word is whatever
 			// the frame underneath left there until a throw writes it: one
@@ -1291,9 +1329,10 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 				return nil, fmt.Errorf("write KTF Java caught exception at %#x: %w", handlerAddress+javaExceptionObject, err)
 			}
 			return &aotExceptionUnwind{
-				contextBase: handlerAddress + javaExceptionContext,
-				target:      target,
-				nextPC:      nextPC,
+				contextBase:  handlerAddress + javaExceptionContext,
+				target:       target,
+				nextPC:       nextPC,
+				framePointer: binary.LittleEndian.Uint32(handler[javaExceptionFrameStack:]),
 			}, nil
 		}
 		handlerAddress = oldHandler

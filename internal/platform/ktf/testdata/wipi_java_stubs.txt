@@ -12,21 +12,21 @@ org/kwis/msp/lcdui/Display isColor ()Z true
 org/kwis/msp/lcdui/Display isDoubleBuffered ()Z true
 
 # Nothing to drive. There is no backlight, no priority scheduler behind the
-# cooperative guest threads, and guest console output already reaches the Host
-# through the logging boundary rather than a stream object.
+# cooperative guest threads, and the console overloads that carry a whole line
+# are no longer here: what a title writes about itself is the first evidence a
+# stuck run needs, so the String forms log it and only the piecemeal numeric
+# and character forms stay silent.
 java/io/PrintStream flush ()V noop
 java/io/PrintStream print (C)V noop
 java/io/PrintStream print (I)V noop
 java/io/PrintStream print (J)V noop
 java/io/PrintStream print (Ljava/lang/Object;)V noop
-java/io/PrintStream print (Ljava/lang/String;)V noop
 java/io/PrintStream print (Z)V noop
 java/io/PrintStream println ()V noop
 java/io/PrintStream println (C)V noop
 java/io/PrintStream println (I)V noop
 java/io/PrintStream println (J)V noop
 java/io/PrintStream println (Ljava/lang/Object;)V noop
-java/io/PrintStream println (Ljava/lang/String;)V noop
 java/io/PrintStream println (Z)V noop
 java/io/PrintStream write (I)V noop
 java/lang/Thread setPriority (I)V noop

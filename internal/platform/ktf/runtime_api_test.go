@@ -511,3 +511,39 @@ func TestSendPointerTakesTheSameTwoRoadsAKeyDoes(t *testing.T) {
 		t.Fatalf("card received %v, want [%d 17 39]", seen, PointerDragged)
 	}
 }
+
+// The spec is explicit that openDataBase throws DataBaseException when create
+// is false and the database is not there, and that throw is how a title finds
+// out it is running for the first time. Answering with an empty database
+// instead told one title its save existed: it read record zero, caught the
+// record exception that came back, and dereferenced the array the read never
+// produced.
+func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	name := jvm.ReferenceValue(client.JVM().NewString("scores"))
+	open := func(create int32) (jvm.Value, error) {
+		return runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(64), jvm.IntValue(create)})
+	}
+
+	if _, err := open(0); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("openDataBase(create=false) on nothing = %v, want DataBaseException", err)
+	}
+
+	// Creating it makes it exist from that moment, with no record in it yet,
+	// so the next open finds it rather than throwing again — including in a
+	// later session, which reaches it through the save store.
+	if _, err := open(1); err != nil {
+		t.Fatalf("openDataBase(create=true) error = %v", err)
+	}
+	if _, err := open(0); err != nil {
+		t.Fatalf("openDataBase(create=false) after creating it = %v", err)
+	}
+	if _, ok := client.saveStore.LoadSave("jdb/scores"); !ok {
+		t.Fatal("a created database left nothing behind for the next session")
+	}
+	runtime.databases = nil
+	if _, err := open(0); err != nil {
+		t.Fatalf("openDataBase(create=false) on a stored database = %v", err)
+	}
+}

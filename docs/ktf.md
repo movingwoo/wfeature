@@ -520,8 +520,8 @@ and still took input.
 The runtime Java surface now covers the boundaries real constructors and early
 `startApp` bodies cross: `java/lang/String` with the original guest field
 layout (`value`/`offset`/`count` backed by a real `[C` array), `StringBuffer`,
-`System` with a discarding `System.out`, `Thread` construction and queries,
-`Math`, `Integer`, `Random`, `Class.getName`/`getResourceAsStream` over attached archive
+`System` with a `System.out` that logs whole lines beside `printk`, `Thread`
+construction and queries, `Math`, `Integer`, `Random`, `Class.getName`/`getResourceAsStream` over attached archive
 entries, the CLDC IO streams (including newly authored `OutputStream`,
 `ByteArrayOutputStream`, and `DataOutputStream` core classes), an in-memory
 `org/kwis/msp/db/DataBase` with zero-based WIPI record identifiers,
@@ -4616,6 +4616,99 @@ improvement, and both orders are defensible on a handset where the display and
 the game thread are genuinely concurrent. With the block above the right size
 the two titles no longer need the paint to have happened first, so the order
 stays as it is: timers, threads, paint.
+
+### The sixth round: a long jump that outran the Host call it was made in
+
+Four more titles of the 262 reach a first frame. **The same 400-tick run over
+every archive, before and after, moves five rows and leaves the other 257
+identical** — four failures became first frames, and the fifth is a title that
+no longer faults but still paints nothing. The fifteen SKT archives were run on
+both binaries because this round reaches `internal/jvm`; one row's lit-pixel
+count differs and that title alternates between the same two counts on either
+binary, so its noise floor is what moved rather than the change. LGT was not
+re-swept: the only shared code this round touches is one field on an
+`armcore.Thread` that nothing outside this platform reads, and three LGT titles
+run before and after agree on every flush.
+
+**A guest long jump can only be resumed by the Host call that owns the frame it
+lands on.** The guest's `try` is a `setjmp`: a handler record on the guest stack
+holding r4-r11, ip, sp and lr, and a restore routine that `ldm`s them back. When
+this platform matches a handler it resumes that routine — and it was resuming it
+wherever the throw happened to be raised, which is inside whichever nested
+`core.Call` the Host was in at the time. The guest stack is shared by every one
+of those calls, so a handler saved *above* the call's entry belongs to a caller
+the Host has not returned to yet. Resuming it there runs that caller's code
+inside the inner call; when the caller eventually returns, the run reaches
+`ReturnAddress` and ends, and the Go frames that made it carry on believing
+their guest call returned — with a stack pointer into memory that was thrown
+away. One title did exactly that on its first painted card and the report was
+`execute guest memory at 0x1a`.
+
+The fix is a comparison rather than a mechanism. `Core.Call` remembers the stack
+pointer it started from, the unwind carries the stack pointer its handler saved,
+and a resume that would land above the entry returns the unwind instead: it
+leaves that call, and the next Host call out asks the same question of its own
+entry. The outermost guest call owns the whole stack, so the walk always ends.
+The three loops that already restart the guest at a restore routine — a class
+initializer, an AOT method invocation, and the supervisor-call resume — all ask
+it now.
+
+**A catch block leaves the region it was protecting, and the record's own label
+has to say so.** A handler record carries the label of where in its method
+execution is; the guest writes it as it moves between protected regions, and
+every exception entry's target is the first label past its own range. Two of the
+three local titles that hit this write the label themselves at the top of each
+catch block. The third does not, and there is nothing wrong with that — it is
+the platform's job on the way in. Without it, the catch block ran still inside
+the region it had just left, threw a `NullPointerException` of its own, matched
+the same entry, and jumped back to its own first instruction. It did that four
+hundred thousand times and the report was the instruction ceiling. The label is
+now written when a handler is resumed, which is the same thing as leaving the
+region because target and range end are the same number.
+
+**The heap a title is told about is not the arena's.** The platform data arena is
+64MiB, and `MC_knlGetTotalMemory`, `MC_knlGetFreeMemory` and `java/lang/Runtime`
+reported it directly. No handset these archives shipped for had anything like
+that, and a title does its own arithmetic on the figure in 32-bit ints: one of
+them multiplies the free bytes by a hundred for a percentage, which overflows
+above about 21MiB and comes back negative. It printed `-28% FREE`, collected,
+printed `-29% FREE`, and went round again for as long as it was left running —
+a livelock that reads as a slow loader. The reported view is bounded at 16MiB
+now, below that overflow and above any heap a WIPI handset had, and free is the
+bound less what is out rather than the bound itself, so the percentage falls as
+the title allocates. The two views stay one view: a title that decides what it
+can afford from `Runtime` and then frees against `MC_knl*` would otherwise be
+working from two heaps.
+
+**`openDataBase` owes a title the exception the specification names.** Opening
+with `create` false and no database throws `DataBaseException`, and that throw is
+how a title finds out it is running for the first time. This platform ignored the
+flag and answered with an empty database. One title read record zero, caught the
+`DataBaseRecordException` that came back, and dereferenced the array the read
+never produced; another recursed until its guest stack overflowed. Both start
+now. A database opened for creation exists from that moment, with no record in
+it yet, so the next open finds it rather than throwing again — including in a
+later session, which reaches it through the save store.
+
+That one is a reminder rather than a discovery: **a call that cannot fail is a
+call whose failure a title never learns about**, and the two titles it stopped
+were both stopped inside their own first-run path. Answering it correctly also
+broke a third title for the length of one measurement — the one whose catch
+block ran inside its own region, above — which is why the label fix and this one
+belong to the same round.
+
+**What a title writes about itself is evidence, and it was being discarded.**
+`java/io/PrintStream` was a table of no-ops here, on the reasoning that guest
+console output already reached the Host through the logging boundary. It did
+not: that is `MC_knlPrintk`, the WIPI-C call, and a title writing through
+`System.out` said nothing at all. The two overloads that carry a whole line log
+it now, at the same level and in the same place as a printk. It is what named
+three of the four failures in this round — the percentage, the database, and the
+title's own report of what it could not open — and none of them was visible from
+the trace, which showed only that the same three boundaries kept being crossed.
+The numeric and character overloads stay silent: a title writes those a
+character at a time and the line they belong to is the one the String form
+carries.
 
 ## Deliberately incomplete
 

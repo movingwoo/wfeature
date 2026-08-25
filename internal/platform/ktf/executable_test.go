@@ -736,6 +736,17 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 	if summary.Context.Registers[0] != target {
 		t.Fatalf("AOT exception result = %#x, want target %#x", summary.Context.Registers[0], target)
 	}
+	// Entering the catch block leaves the region that was protected, and the
+	// record's label has to say so: a catch block that throws on its own and
+	// finds the region it just left matches the same entry again and jumps
+	// back to its own top for ever.
+	label := readTestBytes(t, client, outerHandler+javaExceptionCurrentPC, 4)
+	if resumed := binary.LittleEndian.Uint32(label); resumed != target {
+		t.Fatalf("handler label = %#x, want the target it resumed at %#x", resumed, target)
+	}
+	if target >= fromPC && target < toPC {
+		t.Fatal("the target is inside the range it leaves, so the label proves nothing")
+	}
 	context := readTestBytes(t, client, outerHandler+javaExceptionContext, 4)
 	if restoredTarget := binary.LittleEndian.Uint32(context); restoredTarget != target {
 		t.Fatalf("restored handler target = %#x, want %#x", restoredTarget, target)
@@ -1004,4 +1015,111 @@ func readTestBytes(t *testing.T, client *Client, address uint32, size int) []byt
 		t.Fatal(err)
 	}
 	return data
+}
+
+// A long jump can only be resumed where the frame the catch block runs on
+// still belongs to the Host call being resumed. The guest stack is shared by
+// every nested call, so a handler saved above this call's entry belongs to a
+// caller the Host has not returned to yet: resuming it here would run that
+// caller's code inside this call, and the run would end — leaving the Go
+// frames that made it waiting for a guest stack that no longer exists. One
+// title reached that state on its first painted card and executed at 0x1a.
+func TestInitializationJavaThrowLeavesACallWhoseHandlerIsOutsideIt(t *testing.T) {
+	data := syntheticExecutableClient()
+	for index, instruction := range []uint16{
+		0x2401, // movs r4, #JavaThrow
+		0x46a4, // mov r12, r4
+		0xdf01, // svc #Init
+		0x4770, // bx lr
+	} {
+		binary.LittleEndian.PutUint16(data[0x20+index*2:], instruction)
+	}
+
+	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: data}, armcore.CoreOptions{MaxSteps: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := newInitializationRuntime(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	exceptionName, err := runtime.allocateBytes([]byte("java/lang/Error\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchingClass, err := runtime.ensureJavaClass("java/lang/Error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		currentPC = uint32(0x105)
+		fromPC    = uint32(0x100)
+		toPC      = uint32(0x110)
+		target    = ImageBase + 0x31
+		restorePC = ImageBase + 0x1b
+	)
+	entry, err := runtime.allocateWords([]uint32{fromPC, toPC, target, matchingClass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := runtime.allocateWords([]uint32{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	methodData := make([]byte, javaMethodSize)
+	binary.LittleEndian.PutUint32(methodData[8:], table)
+	binary.LittleEndian.PutUint16(methodData[16:], 1)
+	method, err := runtime.allocateBytes(methodData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functions, err := runtime.allocateWords([]uint32{0, restorePC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The call below starts one word below the top of the stack, and the
+	// handler saved the frame above it: the catch block belongs to the caller.
+	callEntry := ThreadStackBase + uint32(ThreadStackSize) - 4
+	handlerWords := make([]uint32, javaExceptionHandler/4)
+	handlerWords[0] = method
+	handlerWords[3] = currentPC
+	handlerWords[5] = functions
+	handlerWords[javaExceptionFrameStack/4] = callEntry + 4
+	handler, err := runtime.allocateWords(handlerWords)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parentContext := armcore.NewContext()
+	parentContext.Registers[armcore.RegisterSP] = callEntry
+	parent := armcore.NewThread(parentContext)
+	if err := client.Core().SetThreadLocalWord(parent, runtime.exceptionContext+javaExceptionHead, handler); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Core().Call(
+		context.Background(),
+		parent,
+		ImageBase+0x21,
+		ReturnAddress,
+		[]uint32{exceptionName},
+		runtime.handleSupervisorCall,
+	)
+	var unwind *aotExceptionUnwind
+	if !errors.As(err, &unwind) {
+		t.Fatalf("call error = %v, want the unwind to leave the call", err)
+	}
+	if unwind.target != target || unwind.framePointer != callEntry+4 {
+		t.Fatalf("unwind = %+v, want target %#x on frame %#x", unwind, target, callEntry+4)
+	}
+	// The call one out entered at or above that frame, and there the same
+	// unwind is the one to resume.
+	if unwind.resumableFrom(callEntry) {
+		t.Fatal("a call entered below the frame claimed it")
+	}
+	if !unwind.resumableFrom(callEntry + 4) {
+		t.Fatal("the call the frame belongs to did not claim it")
+	}
 }

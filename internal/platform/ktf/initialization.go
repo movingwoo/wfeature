@@ -987,9 +987,29 @@ func (runtime *initializationRuntime) leaveAOTCall() {
 	delete(runtime.aotCallDepth, thread)
 }
 
+// ownsUnwind reports whether a fresh guest call made on thread would own the
+// frame a long jump lands on. A resumption loop asks this before restarting
+// the guest, because a call it starts inherits thread's stack pointer: a
+// handler above that belongs further out, and the unwind has to keep
+// travelling rather than be answered here.
+func (runtime *initializationRuntime) ownsUnwind(thread *armcore.Thread, unwind *aotExceptionUnwind) bool {
+	stackPointer, err := thread.Register(armcore.RegisterSP)
+	if err != nil {
+		return true
+	}
+	return unwind.resumableFrom(stackPointer)
+}
+
 func (runtime *initializationRuntime) resumeAOTException(thread *armcore.Thread, unwind *aotExceptionUnwind) error {
 	if unwind == nil {
 		return fmt.Errorf("KTF AOT Java exception unwind is nil")
+	}
+	// A long jump that lands outside this call has to leave it. Returning the
+	// unwind hands it to the next Host call out, which asks the same question
+	// of its own entry until one of them owns the frame; the outermost guest
+	// call owns the whole stack, so the walk always ends.
+	if entry, known := thread.EntryStackPointer(); known && !unwind.resumableFrom(entry) {
+		return unwind
 	}
 	if err := thread.SetRegister(0, unwind.contextBase); err != nil {
 		return err
@@ -1041,9 +1061,9 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		// costs nothing precisely because the value is undefined.
 		return id, nil
 	case wipicKernelGetTotalMemory:
-		return uint32(platformDataSize), nil
+		return uint32(runtime.arena.reportedTotal()), nil
 	case wipicKernelGetFreeMemory:
-		return uint32(runtime.arena.available()), nil
+		return uint32(runtime.arena.reportedFree()), nil
 	case wipicKernelPrintk:
 		return runtime.wipicPrintk(thread)
 	case wipicKernelSprintk:
