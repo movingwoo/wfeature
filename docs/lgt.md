@@ -3726,11 +3726,11 @@ of wall this platform has** — the call site is a handful of instructions, the
 contract is a standard one, and what the caller does next says which standard
 function it is when the number does not.
 
-### Three platform slots the specification's own ordering named
+### Four platform slots the specification's own ordering named
 
 Where the C library's numbering had to be argued from call sites, the WIPI C
-blocks turned out to be in the specification's order exactly, and two of the
-three fell out of checking that rather than out of a disassembly.
+blocks turned out to be in the specification's order exactly, and three of the
+four fell out of checking that rather than out of a disassembly.
 
 - **`0x6f` is `MC_knlGetProgramName(nameBuf, bufSize)`.** Counting the kernel
   block from `MC_knlPrintk` at `0x64` — printk, sprintk, getExecNames, execute,
@@ -3748,6 +3748,17 @@ three fell out of checking that rather than out of a disassembly.
   already had it, fourteen entries later. The call site agrees twice over: the
   title seeks to the end and asks one instruction afterwards, which is how a
   program with no size call asks a file how long it is.
+- **`0x197` is `MC_fsRename(oldname, newname, accessLevel)`,** by the same
+  count: it is the seventh entry of the file block, between `MC_fsRemove` at
+  `0x196` and `MC_fsMkDir` at `0x198`, both of which this platform already had
+  where the count puts them. The store behind it has no rename — a path is a
+  save key — so the new name is written with the old one's bytes and the old
+  name is removed. What makes that a rename rather than a copy is the pair of
+  refusals the specification names, and both leave the store untouched: an
+  absent source is `M_E_NOENT`, and a destination that already exists is
+  `M_E_EXIST`. **One title turns on it**: it writes its save to a temporary
+  name and renames it into place, and without the slot it stopped at tick 201
+  on a screen asking the player to restart the handset.
 - **`0x44c` is `MC_dbListDataBases(buf, len)`,** and this one was named by the
   format rather than the number. The caller hands it four kilobytes it has just
   zeroed, then walks what comes back as names separated by one NUL and
@@ -3759,6 +3770,10 @@ three fell out of checking that rather than out of a disassembly.
   is a real answer and not a stub — a program with no databases is a documented
   success — and it stops being the whole answer the moment
   `MC_dbOpenDataBase` is served.
+
+**Nothing in the local set asks for the rest of the database block**, and it
+stays unimplemented on that measurement: see "What a module resolves, and
+when" below for what the measurement is and what it is worth.
 
 **What the block ordering is worth is not three slots.** It is that a slot's
 number can be checked against the specification before anything is
@@ -4271,6 +4286,122 @@ route, and the values are colours (`0x2a75`, `0x23bd`), not operation codes,
 which suggests the field numbering is off by one and 5 is `param1` — the colour
 operand of a blend. That is a question for the specification rather than for
 another guess.
+
+### An operation this platform was never handed is not an operation
+
+The pixel-operation word had one test: a Thumb address inside the loaded
+module. **A return address passes that test**, and one title's context carried
+`0xf81f`, which is the middle of a routine of its own. Run as an operation it
+walked a structure base it had never been given and faulted on a read of
+`0x98`, two ticks in, before the title had drawn anything.
+
+The second test is whether this platform was ever *handed* the address:
+`MC_grpSetContext` records every operation that arrives through it, and a word
+that is not among them is a leftover. The set is kept per client rather than
+per context on purpose — a title that copies a context, saves and restores one,
+or builds a second one beside the first carries the operation's address with it
+and keeps it, and only an address that was never installed anywhere is refused.
+`MC_grpInitContext` zeroes the record, so a context that has never been given
+an operation has none, which is what makes the absence meaningful rather than a
+guess. The title runs three thousand ticks now and holds its own notice screen.
+
+### Where a title's own dialog is the whole answer
+
+Three of the seven titles that were holding a screen were not held by this
+platform at all, and telling which is which took a key and a second run rather
+than a fix.
+
+- **One was waiting for a key.** Its screen is the carrier's "this game costs
+  nothing extra" notice, which ends in "press any key"; pressed, it reaches its
+  own main menu. Nothing was wrong with it.
+- **One is `MC_fsRename`.** It writes its save to a temporary name and renames
+  it into place, and the slot was not implemented, so it stopped at tick 201 on
+  a screen telling the player to restart. With the rename served it writes the
+  file, and a second run — which is what the screen asks for — reaches the
+  title's own dialogs.
+- **One holds its authentication screen, and a successful dial is what moves
+  it.** Refused, it prints `Connect CB Error [-1]` and sits at its 인증중
+  screen — "authenticating" — for as long as it is left running. Answered with
+  a *successful* connect and nothing else changed — every socket call after it
+  still refused — it puts its own question up instead: there is no certificate,
+  shall it connect once to fetch one at the player's expense? Answering no
+  reaches the title screen. **The refusal
+  policy is unchanged** (see docs/network.md for why a connection is refused at
+  all); what this records is that for this title the refusal is the wall, and
+  that the title has an offline path of its own behind a question it never gets
+  to ask. A second title with the same shape reaches its main menu under the
+  refusal, so the two are not one case.
+
+**A title's "the save failed" dialog is not always a save.** One puts up "data
+could not be saved, the game is closing" over an empty save tree, which reads
+as a write that never happened — and the trace says there was never a write to
+happen: across a full run the title calls no filesystem slot, no database slot
+and no free-space call at all. Whatever it decided, it decided without asking
+this platform anything, so the write path is not where the answer is.
+
+### What the sweep costs now, per title
+
+The list of titles that were far slower than the handset was re-measured on the
+current binary, over the sweep's own three thousand ticks rather than the four
+hundred the older figure used. **Nothing fails to finish any more**: the title
+that ran for 420 seconds and then for 27 minutes without reaching three
+thousand ticks now reaches them in 228 seconds of host time, which is what the
+surface copy being gone is worth on the worst case in the set.
+
+Ranked by host busy time over three thousand ticks, the top of the set is 228s,
+140s, 123s, 105s, 92s, 73s, 66s, 56s, 52s, 48s, 47s, 35s, 34s, 33s, 30s and
+25s; twenty-two of the ninety-one titles that finish are above twenty seconds
+and the rest are below it. Those are host seconds for a run that is 3000 guest
+ticks — a title keeping up with its own clock would take a hundred seconds of
+wall time for the same run — so the top four are the ones running slower than
+the handset did and everything below about 100s is faster than real time. That
+is the list to profile from, and the profile is the next step rather than this
+measurement.
+
+### What a module resolves, and when
+
+`internal/tools/apiscan` reads an LGT title's platform surface by running its
+initializer and listing what it resolved, on the reasoning that a module
+resolves every function it might ever call before running any of its own code.
+**That is true of most of these modules and not of all of them**: one resolves
+lazily, asking for `MC_grpSetContext` and `MC_grpDrawImage` one at a time as it
+first reaches them, interleaved with its own work. So a scan that reports no
+unimplemented slot for a title reports what that title resolved *by the end of
+its initializer*, which for an eager module is everything and for a lazy one is
+only what it needed to start.
+
+Run over all ninety-four archives the scan reports no unimplemented WIPI C slot
+at all — the gaps it finds are in the Java and C-library tables — and the same
+sweep run to four hundred ticks adds none. That is the evidence the database
+block (base `0x440`) stays unimplemented on: the honest empty list
+`MC_dbListDataBases` answers is the whole answer for every title here, and
+serving `MC_dbOpenDataBase` would be building a storage surface with no caller
+to shape it. It is a measurement to re-run rather than a conclusion to keep: a
+new archive is what would change it.
+
+### A module that reads its argument block before it fills it
+
+One module faults in its entry point, before any platform call, on a read of
+`0x8`. The first block a module is handed is scratch it fills in with a pointer
+to its init struct, and this one starts by reading word two of that block and
+following it: `[[paramOne + 8] + 8]`. Writing a recognisable value into
+`paramOne + 8` moves the fault to that value plus eight, which is what settles
+that it is the first block and not the second.
+
+**What it does with the word says what the word is.** It walks a table of its
+own — a count halfword followed by 24-byte records — comparing each record's
+first field against what it read, and calls a nine-argument registration
+routine for the record that matches. The fields it compares are pointers into
+the module's own string pool, and the two strings are the title's main class
+name and an obfuscated one-letter class; the arguments the registration takes
+are the addresses of `startApp`, `pauseApp`, `resumeApp` and `destroyApp`. So
+the block carries, at that offset, **the name of the class the runtime wants
+started**, and the module registers whichever of its Jlets matches.
+
+What is not known is where a runtime is supposed to get a pointer that equals
+one of the module's own strings, since the comparison is by address rather than
+by content. The descriptor names `Clet` rather than either class, so it is not
+simply the descriptor's main class. That is where this stops.
 
 ### A screen that comes out grey, and the four platform answers it does not blame
 

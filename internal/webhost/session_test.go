@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"image"
@@ -317,6 +318,53 @@ func TestSessionMagnifiesWhenTheScaleIsRaised(t *testing.T) {
 	width, height := expectFrame(t, connection)
 	if width != 240 || height != 320 {
 		t.Fatalf("a magnified MIDlet frame is %dx%d, want the surface it drew into", width, height)
+	}
+}
+
+// A zip of zips is a bag of games rather than a game, and the page says so in
+// the language the rest of its refusals are in — the person holding the file is
+// the one who has to unpack it.
+func TestSessionNamesABagOfGamesForWhatItIs(t *testing.T) {
+	root := t.TempDir()
+	gameRoot := filepath.Join(root, "games", "skt")
+	if err := os.MkdirAll(gameRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for _, name := range []string{"ep1.zip", "ep2.zip"} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte("PK\x05\x06")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gameRoot, "bag.zip"), buffer.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, Options{
+		GameRoot: filepath.Join(root, "games"),
+		SaveRoot: filepath.Join(root, "savedata", "ktf"),
+		LogRoot:  filepath.Join(root, "logs"),
+	})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
+	if err != nil {
+		t.Fatalf("dial the session: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	expectMessage(t, connection, serverReady)
+
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/bag.zip"})
+	refusal := expectMessage(t, connection, serverError)
+	if !strings.Contains(refusal.Message, "zip") {
+		t.Errorf("refusal = %q, want it to name what the file is", refusal.Message)
 	}
 }
 

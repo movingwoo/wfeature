@@ -215,6 +215,43 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		client.removeFile(name)
 		return answer(wipiSuccess)
 
+	case slotFsRename:
+		// The store has no rename: a path is a save key, so the new name is
+		// written with the old one's bytes and the old one is removed. The
+		// two documented refusals are what make it a rename rather than a
+		// copy — an absent source and an occupied destination both leave the
+		// store untouched, and the specification names a code for each.
+		oldPointer, err := thread.Register(0)
+		if err != nil {
+			return err
+		}
+		newPointer, err := thread.Register(1)
+		if err != nil {
+			return err
+		}
+		oldName, err := client.readCString(oldPointer)
+		if err != nil {
+			return err
+		}
+		newName, err := client.readCString(newPointer)
+		if err != nil {
+			return err
+		}
+		data, ok := client.readFile(oldName)
+		if !ok {
+			return answer(wipiNoEntry)
+		}
+		if canonicalFileName(oldName) != canonicalFileName(newName) {
+			if _, taken := client.readFile(newName); taken {
+				return answer(wipiExists)
+			}
+		}
+		client.writeFile(newName, data)
+		if canonicalFileName(oldName) != canonicalFileName(newName) {
+			client.removeFile(oldName)
+		}
+		return answer(wipiSuccess)
+
 	case slotFsClose:
 		handle, err := thread.Register(0)
 		if err != nil {

@@ -596,7 +596,7 @@ database's name, matching packaged save data.
 ### The two storage tables
 
 There are two, and a game picks whichever suits what it is storing. **Table 7 is
-the filesystem** (`wipic_database.go`): one blob per name, read and written
+the filesystem** (`wipic_filesystem.go`): one blob per name, read and written
 through a cursor, seeded from a packaged file of the same name — which is what a
 file is. Table 5 is the **record database** (`wipic_record_database.go`): a
 numbered set of records, opened by name with a record size, addressed by a
@@ -608,9 +608,13 @@ list-records, then the count, the record size and the database list at 10, 11
 and 12. Table 7 is the `MC_fs*` list: open, read, write, close, seek at 0 to 4,
 the file attributes at 5, remove at 6, `MC_fsMkDir` at 8, `MC_fsList` at 10, the
 total space at 11, the free space at 12, `MC_fsTell` at 15 and `MC_fsIsExist` at
-16. The Go names in table 7 still say "database" in places, because that is what
-it was read as for a long time; the sweep section below has how the two were
-told apart and what it cost to have them confused.
+16. The Go names in table 7 said "database" for as long as that is what the
+table was read as, and they say file now — the sweep section below has how the
+two were told apart and what it cost to have them confused. **Two names kept
+the old spelling on purpose**: the save keys still begin `db/`, because
+renaming them would orphan every save already written, and the diagnostic
+counters still read `cdb`, because a stored report is read against those
+names. Both are records rather than code.
 
 **Table 7's slot 6 is `MC_fsRemove(name, mode)`** — a name, not a handle: the
 caller closes the file and then names it. Deleting it has to cover every place an
@@ -2904,7 +2908,7 @@ DBG read name=char.dat want=44             position=45633 size=45677
 
 That footer check is why the seek call has to answer the **new position**
 rather than a success code: a seek that answers zero makes every packaged file
-look empty, which is the other way into the same prompt. `wipicDatabaseSeek`
+look empty, which is the other way into the same prompt. `wipicFileSeek`
 already answers the position, so once the number stopped naming a subscriber
 nothing else was in the way.
 
@@ -4236,10 +4240,16 @@ this loader being stricter than the archives are.**
   path element for the same reason: it has to agree with what the loader will
   do.
 
-Two refusals stand. One archive is three archives zipped together, one per
-episode of the same game, and unpacking one of those for somebody is a Host's
-decision rather than a loader's. The other is a RAR whose extension had been
-changed to `.zip`; three more files in the same set are ALZ archives. **What
+One refusal stands, and one was decided. The archive that is three archives
+zipped together — one per episode of the same game — **is not a container this
+Host learns to read**: the three inner files are three separate titles that
+somebody put in one bag, so the answer is to unpack the bag and hand each
+episode over as the archive it already is. Unpacked, all three reach a first
+frame and go on to their title screens, which is what makes the decision cheap:
+nothing was waiting on a nested-archive reader. A zip whose only entries are
+zips is refused with its shape named, the same way a RAR is. The remaining
+refusal is that RAR, whose extension had been changed to `.zip`; three more
+files in the same set are ALZ archives. **What
 those get now is their format named**: "zip: not a valid zip file: this is a
 RAR archive, which this emulator does not read". Every loader wraps its zip
 refusal the same way, so a person who drops one in is told which file they
@@ -4251,8 +4261,8 @@ files are fixed by repackaging them, not here; and one title asks for a sound
 resource its own JAR never shipped — the numbered files run 0 to 12 and then
 skip to 15, and the game opens 13. Neither is something an implementation can
 close, so both are named once, here, and left out of the list of walls. The
-bundle of three episodes is a different case and stays on it: as three archives
-it runs, so what it is waiting for is a Host's decision. **An archive that was
+bundle of three episodes left that list by being unpacked: as three archives it
+runs, and three archives is what it is. **An archive that was
 only half downloaded is the same kind of dead end, and is worth checking for
 rather than assuming**: the descriptor states the size the payload should be.
 A title whose class the module cannot find is *not* that — one here reports its
@@ -4709,6 +4719,95 @@ the trace, which showed only that the same three boundaries kept being crossed.
 The numeric and character overloads stay silent: a title writes those a
 character at a time and the line they belong to is the one the String form
 carries.
+
+### The seventh round: three answers a title's own code had already written down
+
+Five more titles of the 264 reach a first frame, and none of the five needed a
+new mechanism: each is a call this platform was already serving and answering
+in a way no title had contradicted yet. **What found four of them was reading
+the title's own code rather than the trace** — the caller of the failing call,
+the string pool of the module, and, once, the line the game prints about the
+exception it caught.
+
+**A null clip array clears the clip.** One title stopped inside
+`MC_grpSetContext` on a read of sixteen bytes at address zero: the clip is an
+array of four integers behind a pointer, and the pointer was null. Its own
+setter is what says what that means. The routine computes the rectangle it
+wants, compares it against the destination surface's width and height, and when
+the two are equal — the whole surface — calls `MC_grpSetContext` with the array
+argument zeroed instead of with an array. A cleared clip is exactly how a
+context that has never been given one reads here, because `MC_grpInitContext`
+zeroes the record and an empty rectangle means "no clip" rather than "draw
+nothing". So the null is answered by writing zeroes into the field, which is
+both what the caller asked for and what this platform already answers to.
+
+**An `MC_GrpImage` names its framebuffer; it does not inline it.** The record
+this platform built began with the five framebuffer fields — width, height,
+bytes per line, depth, pixels — and the image handle therefore doubled as a
+framebuffer handle, which every drawing call here was happy with. A title that
+reads the image through the handset's own macros is not: it follows the image
+handle to its record, reads word zero as a *framebuffer handle*, follows that
+to its record, and switches on the depth field with `(bpp << 24) >> 27` — 2 for
+the sixteen-bit surfaces here, 4 for a thirty-two-bit one. With the fields
+inlined, word zero is the width, and the title dereferenced 74 and faulted.
+The record now names its framebuffer in word zero and its mask in word one, and
+every read of a surface follows that naming: which of the two a handle is is
+decided by whether its first word is an allocation this platform issued, so a
+width and a handle can never be confused. The inner record stays alive with the
+image and goes back with it, and `MC_grpGetImageFrameBuffer` answers the
+framebuffer rather than the image.
+
+**A String constructor disagreed with its own ranged form.** `new
+String(byte[], charset)` accepted UTF-8 and threw `IOException` for everything
+else, while `new String(byte[], int, int, charset)` and `getBytes(charset)`
+next to it both went through the charset table that knows the handset's own
+encoding. A title decoding a record it had written in `EUC_KR` was handed the
+exception, caught it, printed it, and painted an empty screen for as long as it
+was left running: four hundred ticks, eight hundred flushes, not one lit pixel.
+All three constructors read the table now, and the ranged one is *declared*
+beside the other six as well — it had a body and no declaration, so interpreted
+code resolving it found nothing.
+
+**What made that one readable is `printStackTrace`.** It was a no-op here, on
+the reasoning that the stack a trace would print is the guest's own ARM frames
+and this runtime does not walk them. But the exception is the title saying what
+went wrong in a path it recovered from, and the class and the message are the
+first line of a real trace. They go where a `System.out` line goes now, which
+is the same reasoning that stopped discarding those a round earlier — and the
+line it printed is the whole of this finding.
+
+**A widget toolkit that is one text box.** One title asks for `com/ktf/kfc`, the
+vendor's own toolkit, and the reason this was left alone for two rounds is that
+answering one member moved the failure to the next one. **The module's string
+pool answers the whole question in one pass**: an AOT module stores every name
+and descriptor it links against verbatim, so a scan for `com/ktf/kfc/` and the
+entries around it lists the demand as a set rather than a sequence. The set is
+five classes — a form, a form with a menu bar, a message box, a text field and
+the listener that hears the field change — and the members are a modal
+dialog's: `doModal`, `setString`, `getString`, `setMaxLength`,
+`setIMEModes`, `getGTextListener`, and the geometry a form is given. It is not
+a toolkit the title lays a screen out with; it is the box it asks a name in.
+Answered as a dialog that closes at once with the field holding the text it was
+given, the title reaches its own main menu. Two things beside it were what
+the demand actually turned on: `Component.setEventListener` had no body, and
+`getGTextListener` answering null had the title throw its own
+`NullPointerException` inside its constructor — a listener always exists on the
+handset, so one is built the first time it is asked for.
+
+**A picture carries two checksums, and only one of them was being repaired.**
+The chunk CRCs have been rewritten here since a title recoloured a palette in
+place. The pixels inside `IDAT` are a zlib stream whose last four bytes are an
+Adler-32 of the *uncompressed* data, and that is a second thing a handset's
+decoder never looks at: the same title ships a sprite sheet whose stream
+inflates perfectly and whose trailer disagrees. It is repaired the same way and
+for the same reason — inflate, hash, write the trailer the data hashes to — and
+only ever after a decode has already failed, so nothing weakens the path every
+other picture takes. A stream that does not inflate is left alone.
+
+**A fault inside a timer callback now carries the same report as one inside a
+method.** The registers, the stack frames and the objects they name travel with
+an AOT call's fault and did not travel with a timer's, which is exactly the
+title whose whole loop is a timer. It is what named the image record above.
 
 ## Deliberately incomplete
 

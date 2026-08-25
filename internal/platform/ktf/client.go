@@ -487,14 +487,26 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 			serviced++
 			continue
 		}
-		if _, err := client.core.Call(
+		run, err := client.core.Call(
 			ctx,
 			client.thread,
 			timer.callback,
 			ReturnAddress,
 			[]uint32{timer.pointer, timer.param},
 			client.runtime.handleSupervisorCall,
-		); err != nil {
+		)
+		if err != nil {
+			// A fault inside a timer callback gets the same evidence a fault
+			// inside an AOT call gets. The address a fault names is never the
+			// answer on its own, and a title whose whole loop is a timer would
+			// otherwise report less about where it died than one that faults
+			// in a method.
+			if fault, isFault := guestFault(err); isFault {
+				if report := client.runtime.describeGuestFault(run.Context, fault); report != "" {
+					client.runtime.countDiagnostic("guest fault " + report)
+					return serviced, fmt.Errorf("service KTF timer at %#x: %w: %s", timer.callback, err, report)
+				}
+			}
 			return serviced, fmt.Errorf("service KTF timer at %#x: %w", timer.callback, err)
 		}
 		serviced++

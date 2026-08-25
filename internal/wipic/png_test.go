@@ -126,3 +126,57 @@ func impossibleLength(t *testing.T, encoded []byte) []byte {
 	binary.BigEndian.PutUint32(edited[pngHeader:], uint32(len(encoded)))
 	return edited
 }
+
+// The other checksum a picture carries. The pixels inside IDAT are a zlib
+// stream whose last four bytes hash the *uncompressed* data, and one local
+// title ships a sprite sheet whose trailer disagrees: the stream inflates
+// perfectly and only those four bytes are wrong. A handset's decoder never
+// looks at them.
+func TestAPixelStreamWithAWrongTrailerStillDecodes(t *testing.T) {
+	encoded := palettePNG(t)
+	_, checksum := findChunk(t, encoded, "IDAT")
+	edited := make([]byte, len(encoded))
+	copy(edited, encoded)
+	// The trailer is the last four bytes of the IDAT payload, in front of the
+	// chunk's own CRC.
+	trailer := checksum - 4
+	edited[trailer] ^= 0xff
+	// The chunk CRC is corrected, so that what is left is only the Adler-32:
+	// otherwise the repair above would be the one doing the work.
+	repairedCRC, mended := RepairPNGChecksums(edited)
+	if !mended {
+		t.Fatal("editing the payload left the chunk CRC valid, so this proves nothing")
+	}
+	if _, err := png.Decode(bytes.NewReader(repairedCRC)); err == nil {
+		t.Fatal("the edited picture decoded with a wrong trailer, so this proves nothing")
+	}
+
+	repaired, fixed := RepairPNGPixelChecksum(repairedCRC)
+	if !fixed {
+		t.Fatal("RepairPNGPixelChecksum found nothing to repair")
+	}
+	if _, err := png.Decode(bytes.NewReader(repaired)); err != nil {
+		t.Fatalf("the repaired picture did not decode: %v", err)
+	}
+	// And the router gets there on its own, which is what every platform's
+	// image path actually calls.
+	if _, _, err := DecodeStandard(repairedCRC); err != nil {
+		t.Fatalf("DecodeStandard did not repair the trailer: %v", err)
+	}
+
+	// A picture whose trailer is right is left alone, and one whose pixels are
+	// genuinely damaged is not rescued by rewriting a checksum.
+	if _, fixed := RepairPNGPixelChecksum(encoded); fixed {
+		t.Error("an intact picture was reported as repaired")
+	}
+	data, _ := findChunk(t, encoded, "IDAT")
+	broken := make([]byte, len(encoded))
+	copy(broken, encoded)
+	for index := data; index < data+4 && index < len(broken); index++ {
+		broken[index] ^= 0xff
+	}
+	broken, _ = RepairPNGChecksums(broken)
+	if _, fixed := RepairPNGPixelChecksum(broken); fixed {
+		t.Error("a stream that does not inflate was reported as repaired")
+	}
+}

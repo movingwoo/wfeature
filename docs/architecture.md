@@ -57,6 +57,15 @@ archive is wrapped** — all 64 carry their marker at the root — so this is
 written against a shape that has been described rather than one measured here,
 and the tests build it rather than finding it.
 
+**A zip whose entries are all zips is the other shape a person can hand over
+that is not a game**, and it is answered the same way — by what it is rather
+than by what it is missing. Somebody bagged three episodes of the same title
+into one file; each of the three is a whole archive that runs on its own, so
+the Host names the shape and says to unpack it, rather than refusing over the
+descriptor the outer zip has no room for. `detect.ArchiveOfArchives` is the
+test and `session.ErrArchiveOfArchives` is the answer; the page turns it into
+the sentence a person reads.
+
 The SKT loader was already immune and stays untouched, which is the more
 interesting half: it finds its descriptor by extension wherever it sits,
 derives the JAR name from the descriptor's own so the two move together, and

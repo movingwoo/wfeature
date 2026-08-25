@@ -52,6 +52,22 @@ func (op pixelOp) active() bool { return op.function != 0 }
 // counts, because a title that stores something else there — KTF has one that
 // leaves a font handle in the equivalent word — would otherwise have the
 // platform branch to an address that is not code.
+//
+// **Being inside the module is not enough, because a return address is too.**
+// One title's context carried `0xf81f`, which passes that test and is the
+// middle of a large routine of its own: run as an operation it walked a
+// structure base it had never been given and faulted on a read of `0x98`. The
+// second test is therefore whether this platform was ever *handed* that
+// address as an operation — `installPixelOp` records every one that arrives
+// through `MC_grpSetContext`, and a word that is not among them is a leftover
+// rather than a function.
+//
+// The set is per client rather than per context on purpose. A title that
+// copies a context, saves and restores one, or builds a second one beside the
+// first carries the operation's address with it and keeps it; only an address
+// that was never installed anywhere is refused. `MC_grpInitContext` zeroes the
+// record, so a context that has never been given an operation has none, which
+// is what makes the absence meaningful rather than a guess.
 func (client *Client) readContextPixelOp(function, param uint32) pixelOp {
 	if function&1 == 0 {
 		return pixelOp{}
@@ -63,7 +79,50 @@ func (client *Client) readContextPixelOp(function, param uint32) pixelOp {
 	if target := function &^ 1; target < low || target >= high {
 		return pixelOp{}
 	}
+	if !client.installedPixelOps[function] {
+		client.countUninstalledPixelOp(function)
+		return pixelOp{}
+	}
 	return pixelOp{function: function, param: param}
+}
+
+// installPixelOp records an operation this platform was handed through
+// MC_grpSetContext. The bound is the same reasoning as the operation cache's:
+// the address comes from guest memory, and a title writing a new one every
+// frame must not grow this without limit. Reaching the bound stops recording
+// rather than forgetting, so a title that installs a handful keeps them.
+func (client *Client) installPixelOp(function uint32) {
+	if function&1 == 0 {
+		return
+	}
+	if client.installedPixelOps == nil {
+		client.installedPixelOps = make(map[uint32]bool, maxInstalledPixelOps)
+	}
+	if len(client.installedPixelOps) >= maxInstalledPixelOps && !client.installedPixelOps[function] {
+		return
+	}
+	client.installedPixelOps[function] = true
+}
+
+// maxInstalledPixelOps bounds the set above. The titles here install two or
+// three.
+const maxInstalledPixelOps = 32
+
+// countUninstalledPixelOp records a context word that looked like an operation
+// and was not one. It is counted rather than logged per draw: the word is read
+// once per drawing call, and a title with a leftover in the field has one on
+// every call it makes.
+func (client *Client) countUninstalledPixelOp(function uint32) {
+	if client.uninstalledPixelOps == nil {
+		client.uninstalledPixelOps = make(map[uint32]uint64)
+	}
+	if len(client.uninstalledPixelOps) > maxInstalledPixelOps {
+		return
+	}
+	client.uninstalledPixelOps[function]++
+	if client.uninstalledPixelOps[function] == 1 && client.logger != nil {
+		client.logger.Debug("LGT context pixel operation was never installed", "function", function)
+	}
 }
 
 // pixelOpCache remembers what one operation answered, keyed by the pair of

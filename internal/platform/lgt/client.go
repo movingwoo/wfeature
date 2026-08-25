@@ -123,6 +123,11 @@ type Client struct {
 	// operation and its parameter, so a draw asks the guest once per pair of
 	// pixels rather than once per pixel drawn; see pixelop.go.
 	pixelOps map[uint64]*pixelOpCache
+	// installedPixelOps is every operation address this platform has been
+	// handed through MC_grpSetContext, and uninstalledPixelOps counts the
+	// words that looked like one and were not; see readContextPixelOp.
+	installedPixelOps   map[uint32]bool
+	uninstalledPixelOps map[uint32]uint64
 
 	// netConnects are the accepted dials whose refusal has not been reported
 	// yet; see wipic_net.go for why a dial is accepted at all.

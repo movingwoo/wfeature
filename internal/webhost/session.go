@@ -485,6 +485,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	}
 	summary, err := session.Inspect(archive)
 	if err != nil {
+		// A bag of games is the one refusal a person can act on, so it is
+		// said the way the rest of this page speaks to them: what the file
+		// is, and what to do with it.
+		if errors.Is(err, session.ErrArchiveOfArchives) {
+			r.send(serverMessage{Kind: serverError, ID: message.ID,
+				Message: "이 zip 안에는 다른 zip만 들어 있습니다. 게임이 아니라 게임 여러 개를 담은 묶음이니, 압축을 풀어 하나씩 추가하세요."})
+			return
+		}
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
 		return
 	}

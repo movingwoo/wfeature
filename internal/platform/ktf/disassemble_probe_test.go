@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
 // TestLocalDisassembleProbe dumps guest code ranges as hex so they can be run
@@ -32,11 +34,27 @@ func TestLocalDisassembleProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := StartSession(context.Background(), data, SessionOptions{})
+	// A failed start is the usual reason to be reading code at all: the title
+	// died somewhere and the address in the report is what has to be read.
+	// A start that fails returns no session, so the client is loaded directly
+	// and the start is only attempted for what it maps beyond the image — the
+	// failure is logged and the dump goes ahead either way.
+	archive, err := Open(data)
 	if err != nil {
-		t.Fatalf("start: %v", err)
+		t.Fatal(err)
 	}
-	defer session.Close()
+	client, err := LoadClient(archive.JAR.Client, armcore.CoreOptions{MaxSteps: sessionDefaultMaxSteps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, startErr := StartSession(context.Background(), data, SessionOptions{})
+	if startErr != nil {
+		t.Logf("start: %v", startErr)
+	}
+	if session != nil {
+		defer session.Close()
+		client = session.Client
+	}
 	for _, spec := range strings.Split(ranges, ",") {
 		low, high, err := parseProbeRange(spec)
 		if err != nil {
@@ -45,7 +63,7 @@ func TestLocalDisassembleProbe(t *testing.T) {
 		// The tail covers the instruction the profile's last sample started
 		// on, plus enough of what follows to show where the loop returns to.
 		buffer := make([]byte, high-low+16)
-		if err := session.Client.core.Memory().Read(low, buffer); err != nil {
+		if err := client.core.Memory().Read(low, buffer); err != nil {
 			t.Fatalf("read %s: %v", spec, err)
 		}
 		fmt.Printf("%#x %s\n", low, hex.EncodeToString(buffer))

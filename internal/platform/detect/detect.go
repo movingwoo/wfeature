@@ -232,6 +232,39 @@ func ContainerFormat(data []byte) string {
 	return ""
 }
 
+// ArchiveOfArchives reports whether a zip holds nothing but other zips.
+//
+// A person collecting these ends up with one sooner or later: somebody bagged
+// three episodes of the same game into a single file, and each of the three is
+// a whole archive that runs on its own. This is not a container to learn to
+// read — there is no game in the outer zip to run, only a choice of three that
+// belongs to the person rather than to a loader — so what a Host owes them is
+// the shape of what they picked. Without it the refusal is the descriptor's
+// ("no __adf__"), which reads as damage.
+func ArchiveOfArchives(data []byte) bool {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return false
+	}
+	inner := 0
+	for _, file := range reader.File {
+		name := entryName(file.Name)
+		if name == "" || strings.HasSuffix(name, "/") {
+			continue
+		}
+		// A repack carries the packer's own leavings, and they say nothing
+		// about what is in the bag.
+		if base := path.Base(name); base == ".DS_Store" || strings.HasPrefix(name, "__MACOSX/") {
+			continue
+		}
+		if !strings.EqualFold(path.Ext(name), ".zip") {
+			return false
+		}
+		inner++
+	}
+	return inner > 0
+}
+
 // ContainerError turns a zip reader's refusal into one that names the format
 // when the bytes are a different kind of archive. A loader wraps its own
 // refusal with this so the message a person is shown says which file they

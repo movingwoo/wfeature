@@ -214,6 +214,27 @@ have, and it would change the first thing every other local title is told — so
 it is not a change to make on one title's evidence without measuring the other
 sixty. It is recorded here rather than made.
 
+**A second LGT title now says the same thing, and it says it about the
+callback rather than the return.** Its own authentication screen prints
+`Connect CB Error [-1]` and holds 인증중 — "authenticating" — for as long as
+the run lasts.
+Answering the dial's callback with success — and changing nothing else, so
+every socket call after it is still refused — it puts a question of its own up
+instead: there is no certificate, shall it connect once to fetch one at the
+player's expense? Answering *no* reaches the title screen and the game. So the
+title has a complete offline path behind a question the refusal never lets it
+ask.
+
+That is now two titles whose wall is the refusal itself, and it is still not
+enough to move the policy: what a successful connect costs is paid by every
+title that then waits on a socket, and the two measured here are the two that
+were looked at. **The shape of the change, if it is ever made, is what these
+two show**: succeed the dial and refuse everything after it. Measuring that
+means a full sweep on both answers, and the noise floor of one is what would
+have to be told from the effect of the other. A third title with the same
+screen turned out not to be a network case at all — it was waiting for a key —
+which is the reason to measure rather than to reason from the screen.
+
 ## Not implemented
 
 These are recorded rather than served, because nothing in the local archives

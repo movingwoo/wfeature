@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -40,11 +41,33 @@ func runtimeThrowableClassDefinition() runtimeJavaClass {
 			{class: "java/lang/Throwable", name: "getMessage", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeThrowableMessage},
 			{class: "java/lang/Throwable", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeThrowableText},
 			// The stack a trace would print is the guest's own ARM frames,
-			// which this runtime does not walk. Discarding the call is what
-			// the console printing beside it already does.
-			{class: "java/lang/Throwable", name: "printStackTrace", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+			// which this runtime does not walk — but the exception itself is
+			// the title telling us what went wrong in a path it recovered
+			// from, and that is evidence rather than noise. One title catches
+			// an IOException while loading, prints it, and then paints an
+			// empty screen for as long as it is left running; nothing else in
+			// the run says so. The class and message go where a System.out
+			// line goes, which is the same reasoning that stopped discarding
+			// those.
+			{class: "java/lang/Throwable", name: "printStackTrace", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeThrowablePrintStackTrace},
 		},
 	}
+}
+
+// runtimeThrowablePrintStackTrace logs what a title prints about an exception
+// it caught. There is no stack to walk, so what it can say is the class and
+// the message — which is what the first line of a real trace carries.
+func runtimeThrowablePrintStackTrace(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("Throwable.printStackTrace", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	line := strings.ReplaceAll(receiver.ClassName, "/", ".")
+	if text, ok := receiver.Native.(string); ok && text != "" {
+		line += ": " + text
+	}
+	runtime.client.guestPrint(line)
+	return jvm.VoidValue(), nil
 }
 
 func runtimeThrowableMessage(_ *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

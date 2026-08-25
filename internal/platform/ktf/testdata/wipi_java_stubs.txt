@@ -30,10 +30,6 @@ java/io/PrintStream println (Ljava/lang/Object;)V noop
 java/io/PrintStream println (Z)V noop
 java/io/PrintStream write (I)V noop
 java/lang/Thread setPriority (I)V noop
-# The stack a trace would print is the guest's own ARM frames, which this
-# runtime does not walk, so printing one discards the call the same way the
-# stream above does.
-java/lang/Throwable printStackTrace ()V noop
 org/kwis/msp/handset/BackLight alwaysOn ()V noop
 org/kwis/msp/handset/BackLight before ()V noop
 org/kwis/msp/handset/BackLight off ()V noop
@@ -155,3 +151,38 @@ org/kwis/msp/io/FileOutputStream flush ()V noop
 # here and why the call also counts a diagnostic; see runtime_library.go for
 # what would end it.
 org/kwis/msp/lwc/DialogComponent doModal ()I dialog
+
+# The vendor's own widget toolkit, which one title uses for a single text-entry
+# dialog. Nothing draws a form, so the geometry calls have nothing to move or
+# resize and the plugin layer has no layers to order; `doModal` is not here
+# because it answers a dismissal the title acts on rather than a fixed value.
+# See runtime_kfc.go and docs/ktf.md, "A widget toolkit that is one text box".
+com/ktf/kfc/GForm getPluginPosition (I)I zero
+com/ktf/kfc/GForm layout ()V noop
+com/ktf/kfc/GForm move (II)V noop
+com/ktf/kfc/GForm resize (II)V noop
+com/ktf/kfc/GForm setPluginLayer (II)V noop
+com/ktf/kfc/GForm setTransparent (Z)V noop
+com/ktf/kfc/GForm show ()V noop
+com/ktf/kfc/GForm showNotify (Z)V noop
+com/ktf/kfc/GMenubarForm getPluginPosition (I)I zero
+com/ktf/kfc/GMenubarForm layout ()V noop
+com/ktf/kfc/GMenubarForm move (II)V noop
+com/ktf/kfc/GMenubarForm resize (II)V noop
+com/ktf/kfc/GMenubarForm setPluginLayer (II)V noop
+com/ktf/kfc/GMenubarForm setTransparent (Z)V noop
+com/ktf/kfc/GMenubarForm show ()V noop
+com/ktf/kfc/GMenubarForm showNotify (Z)V noop
+com/ktf/kfc/GMsgBox getPluginPosition (I)I zero
+com/ktf/kfc/GMsgBox layout ()V noop
+com/ktf/kfc/GMsgBox move (II)V noop
+com/ktf/kfc/GMsgBox resize (II)V noop
+com/ktf/kfc/GMsgBox setPluginLayer (II)V noop
+com/ktf/kfc/GMsgBox setTransparent (Z)V noop
+com/ktf/kfc/GMsgBox show ()V noop
+com/ktf/kfc/GMsgBox showNotify (Z)V noop
+com/ktf/kfc/GTextField move (II)V noop
+com/ktf/kfc/GTextField resize (II)V noop
+com/ktf/kfc/GTextField showNotify (Z)V noop
+com/ktf/kfc/GTextListener <init> ()V noop
+com/ktf/kfc/GTextListener textChanged (Lcom/ktf/kfc/GTextField;)V noop

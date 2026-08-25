@@ -116,6 +116,12 @@ func stringDefinition() ClassDefinition {
 			{Name: "<init>", Descriptor: "([B)V", Access: AccessPublic},
 			{Name: "<init>", Descriptor: "([BII)V", Access: AccessPublic},
 			{Name: "<init>", Descriptor: "([BLjava/lang/String;)V", Access: AccessPublic, Throws: []string{"java/io/IOException"}},
+			// The ranged form has had a body since a title needed to decode a
+			// record it had read into a longer buffer; it was never declared
+			// beside the other six, so interpreted code resolving it found
+			// nothing. A body with no declaration is reachable from a native
+			// dispatch and from nowhere else.
+			{Name: "<init>", Descriptor: "([BIILjava/lang/String;)V", Access: AccessPublic, Throws: []string{"java/io/IOException"}},
 			{Name: "length", Descriptor: "()I", Access: native},
 			{Name: "charAt", Descriptor: "(I)C", Access: native},
 			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},

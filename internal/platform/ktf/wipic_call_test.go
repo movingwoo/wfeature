@@ -85,31 +85,31 @@ func readFramebufferPixel(t *testing.T, runtime *initializationRuntime, framebuf
 // handle is refused the way the other handle-taking slots refuse one.
 func TestDatabaseSlot15AcceptsAnOpenStream(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	store := &runtimeCDatabase{name: "OptionSave", data: []byte("options")}
-	runtime.cDatabases = map[string]*runtimeCDatabase{store.name: store}
-	runtime.cDatabaseHandles = map[uint32]*runtimeCDatabaseHandle{
-		cDatabaseHandleBit | 1: {store: store, position: 3},
+	store := &runtimeCFile{name: "OptionSave", data: []byte("options")}
+	runtime.cFiles = map[string]*runtimeCFile{store.name: store}
+	runtime.cFileHandles = map[uint32]*runtimeCFileHandle{
+		cFileHandleBit | 1: {store: store, position: 3},
 	}
 	thread := armcore.NewThread(armcore.Context{})
 
-	if err := thread.SetRegister(0, cDatabaseHandleBit|1); err != nil {
+	if err := thread.SetRegister(0, cFileHandleBit|1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.handleWIPICDatabaseCall(thread, wipicDatabaseTouchStream)
+	result, err := runtime.handleWIPICFileCall(thread, wipicFileTouchStream)
 	if err != nil {
 		t.Fatalf("slot 15 error = %v", err)
 	}
 	if result != 0 {
 		t.Fatalf("slot 15 = %#x, want 0", result)
 	}
-	if handle := runtime.cDatabaseHandles[cDatabaseHandleBit|1]; handle.position != 3 || string(handle.store.data) != "options" {
+	if handle := runtime.cFileHandles[cFileHandleBit|1]; handle.position != 3 || string(handle.store.data) != "options" {
 		t.Fatalf("slot 15 disturbed the stream: position %d data %q", handle.position, handle.store.data)
 	}
 
-	if err := thread.SetRegister(0, cDatabaseHandleBit|9); err != nil {
+	if err := thread.SetRegister(0, cFileHandleBit|9); err != nil {
 		t.Fatal(err)
 	}
-	result, err = runtime.handleWIPICDatabaseCall(thread, wipicDatabaseTouchStream)
+	result, err = runtime.handleWIPICFileCall(thread, wipicFileTouchStream)
 	if err != nil {
 		t.Fatalf("slot 15 with an unknown handle error = %v", err)
 	}
