@@ -297,7 +297,7 @@ saying nothing at all about the title.
 How wrong that can be is measured rather than guessed. The title this project's
 throughput work was done against reads
 
-    제노니아1  paints=1500 mode=55ms (100%) guest=1m22.647s host=12.077s ratio=6.85
+    <a Clet>  paints=1500 mode=55ms (100%) guest=1m22.647s host=12.077s ratio=6.85
 
 and the same title, same machine, driven by a route into its field, runs its
 guest clock at **0.51x** — a tick costing 53.8ms against the 27.4ms it stands
@@ -331,6 +331,39 @@ quantum first.** It attributes 65 to 88% of the run to
 `runtime.pthread_cond_signal` under the `Gosched` the engine makes at the end
 of every quantum, which is not work at all; raise `cletQuantum` a thousandfold
 for the profiling run and the ranking becomes the interpreter's own.
+
+That the samples are noise rather than cost is worth re-checking rather than
+assuming, and it is one run: raising the quantum a thousandfold moved a Clet's
+field scene from 20.08s to 19.92s, so the 59% those samples claimed is 0.8% of
+real time.
+
+**On KTF the same trick does not work, and that profiler is simply unusable
+here.** A load probe of the heaviest local KTF archive puts 87% of the run in
+`runtime.pthread_cond_signal` and does not show `Engine.Run` *at all*, while
+retiring 2.9 billion guest instructions in 25 seconds — which is to say the
+interpreter is the whole run and none of it was attributed. Raising the quantum
+changes neither the ranking nor the wall clock, and neither does `GOMAXPROCS`.
+Answer a KTF throughput question with an interleaved A/B of the probe's
+`ns_per_step` instead, and take the host profile on a machine whose profiler
+works.
+
+### A probe does not measure the binary that ships
+
+**`go test` builds the package's test binary, and a test binary has no
+`default.pgo`.** The committed profile sits beside `cmd/cli` and `cmd/server`
+and is picked up because those are main packages; nothing carries it into
+`internal/platform/lgt.test`. So every number these probes report is a *no-PGO*
+number, and the shipped binary is 8% faster than the probe says on a Clet's
+field scene and 7 to 9% faster on a KTF load.
+
+That does not make the probes wrong — an A/B where both sides are built the same
+way answers the question it is asked — but two things follow. A change is worth
+re-checking through `build/release/wfeature`, which is the thing a player runs.
+And a claim *about* the profile has to be measured either there or with
+`go test -pgo=<file>`, which applies one to the whole build; asked without it,
+"no profile, a freshly taken one, the committed one" answered 5.13, 5.14 and
+5.15 nanoseconds a step, which is three ways of saying none of them was ever in
+force.
 
 `ns_per_step` is what a throughput change has to move, and the loop calls
 `Tick` rather than `TickFor` on purpose: `TickFor` answers how long the Host

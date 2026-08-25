@@ -119,14 +119,7 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 	case thumbHighRegister:
 		return nil, executeThumbHighRegister(context, pc, value)
 	case thumbLiteralLoad:
-		rd := value >> 8 & 7
-		address := (pc + 4) &^ 3
-		loaded, err := memory.readData32(address + (value&0xff)*4)
-		if err != nil {
-			return nil, err
-		}
-		context.Registers[rd] = loaded
-		return nil, nil
+		return nil, executeThumbLiteralLoad(context, memory, pc, value)
 	case thumbRegisterTransfer:
 		return nil, executeThumbRegisterTransfer(context, memory, value)
 	case thumbImmediateTransfer:
@@ -164,13 +157,10 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 	case thumbBranch:
 		return nil, executeThumbBranch(context, pc, value)
 	case thumbLongBranchPrefix:
-		offset := int32(value&0x7ff) << 21 >> 9
-		context.Registers[RegisterLR] = uint32(int64(pc+4) + int64(offset))
+		executeThumbLongBranchPrefix(context, pc, value)
 		return nil, nil
 	case thumbLongBranchSuffix:
-		target := context.Registers[RegisterLR] + (value&0x7ff)*2
-		context.Registers[RegisterLR] = (pc + 2) | 1
-		context.setThumbPC(target)
+		executeThumbLongBranchSuffix(context, pc, value)
 		return nil, nil
 	case thumbLongBranchExchangeSuffix:
 		// The other half of the same pair, and the one that leaves Thumb: the
@@ -185,6 +175,37 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 	default:
 		return nil, ErrUndefinedInstruction
 	}
+}
+
+// The forms below are leaf functions for the same reason the branches are: the
+// interpreter loop routes them, and a routed form whose semantics were written
+// out in a case body would be two answers to the same encoding.
+
+// executeThumbLiteralLoad is `ldr rD, [pc, #imm]`, how a Thumb function reaches
+// the constants its compiler put in the pool after it.
+func executeThumbLiteralLoad(context *Context, memory *Memory, pc, instruction uint32) error {
+	rd := instruction >> 8 & 7
+	address := (pc + 4) &^ 3
+	loaded, err := memory.readData32(address + (instruction&0xff)*4)
+	if err != nil {
+		return err
+	}
+	context.Registers[rd] = loaded
+	return nil
+}
+
+// executeThumbLongBranchPrefix puts the high half of a `bl` offset in LR. Only
+// the suffix that follows it says which state the callee is in.
+func executeThumbLongBranchPrefix(context *Context, pc, instruction uint32) {
+	offset := int32(instruction&0x7ff) << 21 >> 9
+	context.Registers[RegisterLR] = uint32(int64(pc+4) + int64(offset))
+}
+
+// executeThumbLongBranchSuffix completes a `bl` to a Thumb callee.
+func executeThumbLongBranchSuffix(context *Context, pc, instruction uint32) {
+	target := context.Registers[RegisterLR] + (instruction&0x7ff)*2
+	context.Registers[RegisterLR] = (pc + 2) | 1
+	context.setThumbPC(target)
 }
 
 // Conditional and unconditional branches are leaf functions rather than case

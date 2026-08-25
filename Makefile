@@ -57,9 +57,11 @@ server-release:
 #
 #   make pgo PGO_LGT_CLET=var/games/lgt/<clet>.zip \
 #            PGO_LGT_CLET_ROUTE=var/routes/<clet-in-game>.route \
+#            PGO_LGT_CLET_SAVE=var/savedata/release/lgt/<PID> \
 #            PGO_LGT_JAVA=var/games/lgt/<aot-title>.zip \
 #            PGO_LGT_JAVA_ROUTE=var/routes/<aot-title-in-game>.route \
-#            PGO_KTF=var/games/ktf/<title>.zip
+#            PGO_LGT_JAVA_SAVE=var/savedata/release/lgt/<PID> \
+#            PGO_KTF=var/games/ktf/<title>.zip PGO_KTF_TICKS=2000
 #
 # See docs/armcore.md for what each run is for and what the committed profile
 # was taken from.
@@ -68,6 +70,20 @@ PGO_LGT_CLET_ROUTE ?=
 PGO_LGT_JAVA       ?=
 PGO_LGT_JAVA_ROUTE ?=
 PGO_KTF            ?=
+# The two save trees are optional and are the difference between profiling a
+# game and profiling a title screen. The scene worth compiling for is inside a
+# save — a field, a battle — and the same route replayed from a fresh boot
+# stops at the title screen having profiled nothing. Each is the directory the
+# title's saves live in (`var/savedata/<profile>/lgt/<PID>`); it is copied into
+# the work tree first, because the run plays and a profile taken against the
+# save it is changing is a different profile every time.
+PGO_LGT_CLET_SAVE  ?=
+PGO_LGT_JAVA_SAVE  ?=
+# How long each run is profiled for. The defaults suit a title that spends most
+# of a run idle; a heavy one reaches the same amount of profile in far fewer
+# ticks, and profiling it for 40,000 would take an hour.
+PGO_LGT_TICKS      ?= 20000
+PGO_KTF_TICKS      ?= 40000
 PGO_WORK := build/pgo
 
 pgo:
@@ -80,17 +96,19 @@ pgo:
 	done
 	rm -rf $(PGO_WORK)
 	mkdir -p $(PGO_WORK)/save1 $(PGO_WORK)/save2
+	@if [ -n "$(PGO_LGT_CLET_SAVE)" ]; then cp -R "$(PGO_LGT_CLET_SAVE)/." $(PGO_WORK)/save1/; fi
+	@if [ -n "$(PGO_LGT_JAVA_SAVE)" ]; then cp -R "$(PGO_LGT_JAVA_SAVE)/." $(PGO_WORK)/save2/; fi
 	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_CLET)" \
 	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_CLET_ROUTE)" \
-	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save1" WFEATURE_LOAD_TICKS=20000 \
+	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save1" WFEATURE_LOAD_TICKS=$(PGO_LGT_TICKS) \
 		go test ./internal/platform/lgt -run LGTLoadCost \
 			-cpuprofile $(PGO_WORK)/lgt-clet.prof -o $(PGO_WORK)/lgt.test -timeout 30m
 	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_JAVA)" \
 	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_JAVA_ROUTE)" \
-	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save2" WFEATURE_LOAD_TICKS=20000 \
+	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save2" WFEATURE_LOAD_TICKS=$(PGO_LGT_TICKS) \
 		go test ./internal/platform/lgt -run LGTLoadCost \
 			-cpuprofile $(PGO_WORK)/lgt-java.prof -timeout 30m
-	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_KTF)" WFEATURE_LOAD_TICKS=40000 \
+	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_KTF)" WFEATURE_LOAD_TICKS=$(PGO_KTF_TICKS) \
 		go test ./internal/platform/ktf -run TestLoadCostProbe \
 			-cpuprofile $(PGO_WORK)/ktf.prof -o $(PGO_WORK)/ktf.test -timeout 30m
 	@# Each profile is symbolised against the binary that produced it before the

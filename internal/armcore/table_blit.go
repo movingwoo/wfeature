@@ -146,7 +146,8 @@ func (memory *Memory) analyseTableBlit(head, branchPC uint32) *tableBlit {
 		return nil
 	}
 
-	loop := &tableBlit{after: branchPC + 2}
+	loop := &memory.tableBlitScratch
+	*loop = tableBlit{after: branchPC + 2}
 	var (
 		scratch       uint32
 		haveIndex     bool // the source byte was read

@@ -1199,6 +1199,23 @@ will assume.
   that function's weight. Re-take it when the engine's shape changes, and read
   the table above as the measurement to repeat rather than a number to trust.
 
+**And nothing measured through `go test` can see it**, because a test binary is
+not a main package and has no `default.pgo` beside it. Every `ns_per_step` in
+the load probes is therefore a no-PGO number; `go test -pgo=<file>` applies one
+for an A/B that is about the profile. `testing.md`, "A probe does not measure
+the binary that ships", is that trap written down where the probes are.
+
+**Re-taken after the four changes below, the profile came back worth the same
+8%, and a freshly taken one was worth no more than the committed one** — 4.716
+against 4.694 nanoseconds a step on a Clet's field scene, and a wash on three
+KTF titles. So the committed profile is kept: it has not aged out, and the
+replacement would have been one taken on a machine whose profiler attributes
+most of a run to `runtime.pthread_cond_signal`. What did change is `make pgo`,
+which now takes a save tree per LGT run and a tick count per platform —
+without a save the routes it is given replay from a fresh boot and it profiles
+a title screen, which is the mistake the paragraph above warns about in the
+form the tooling made easy to commit.
+
 ### Why a translator is not the answer even with unlimited effort
 
 Asked plainly — ignoring how much work each is — a translator still loses, and
@@ -1352,6 +1369,189 @@ bytes and the shift on every miss and is never paid back.
 ceiling on a block is not a share of a run.** That is the same mistake as
 reading a guest profile for a host one, arriving from the other direction, and
 it is what the real-title A/B is for.
+
+### The third shape of that slot is an index, and it wins
+
+The two above searched. One compared a second slot in `mappedPage` and swapped
+the pair on a hit, which put the function over the inline budget; the other
+kept the search out of the inlined path and left the miss as expensive as it
+was. **Indexing removes both problems at once**: the remembered pages become an
+array indexed by the page number's low bits, so `mappedPage` does the same
+three compares it always did, still inlines at every call site, and a way is
+one mask more than before. Nothing is searched and nothing is promoted.
+
+What that is worth was counted before it was built, over one title's field
+scene:
+
+| | |
+|---|---|
+| accesses the single remembered page answered | 242,240,322 (**48%**) |
+| accesses that missed it | 263,600,825 |
+| of those, ones the page remembered *before* it would have answered | 117,044,184 (**44%**) |
+
+Every one of that last row cost a call out of the inlined path and a walk down
+the two-level page table, for an answer that had been in hand one access
+earlier.
+
+Swept on the same scene, host nanoseconds per guest instruction:
+
+| ways | 1 | 4 | 8 | 32 | 64 | 128 | 256 | 1024 |
+|---|---|---|---|---|---|---|---|---|
+| ns a step | 5.68 | 5.56 | 5.47 | 5.31 | 5.30 | 5.28 | 5.29 | 5.28 |
+
+**The count shipped is 256 rather than the 64 that sweep would have settled
+on, and a synthetic benchmark is the reason.** A blit between two surfaces half
+a megabyte apart alternates between page numbers exactly 128 apart, and at 64
+ways that is the same slot every time — the one arrangement where remembering
+more pages remembers nothing. `BenchmarkEngineBlitCrossPage` reads 7.23ns with
+one way, **7.61 with 64**, and **5.23 with 256**, where the two surfaces finally
+land apart. A pair of framebuffers allocated in order is exactly that stride,
+so the table is sized past it.
+
+Folding the next bits up in with an exclusive or fixes the same benchmark
+without the extra ways, and was refused for the reason this document keeps
+refusing things: it costs 1 to 2% on three real titles and 1.3% on
+`BenchmarkEngineGameShapedLoop`, which is the shape most of a run is made of.
+
+The synthetic benchmarks otherwise cost about a percent — the fast path carries
+one more mask and reads its page out of an array — and the real titles are the
+answer to whether that is worth it. **KTF is the platform to read here**,
+because it is the one the second slot regressed by 2.8% and the one the
+framebuffer change below does not touch at all: nothing on this platform keeps
+a second copy of a surface, so what these rows carry is the ways, the byte fast
+path and the routed forms and nothing else.
+
+| ns a guest instruction, five KTF loads, interleaved, PGO on both sides | before | after |
+|---|---|---|
+| the heaviest local archive | 8.51 | **7.64** (−10.2%) |
+| a second | 7.48 | **6.55** (−12.4%) |
+| a third | 13.84 | **12.67** (−8.5%) |
+| a fourth | 11.54 | **10.30** (−10.7%) |
+| a fifth | 23.96 | **22.66** (−5.4%) |
+
+Every one of the five retires the same instruction count it did before. What
+changed is not how many pages are remembered but that finding one costs
+nothing.
+
+A byte load and a byte store take the inlined path too, which they had never
+done — `read8` and `write8` went straight to the general path at every width
+the wider accesses had a fast path for. That is worth 1.9% on the Clet scene on
+its own, and a byte load is what a title's own rasteriser reads its source
+through.
+
+### Bulk halfword transfers, and the copy they were for
+
+`Memory.ReadHalfwords` and `WriteHalfwords` move a run of little-endian
+halfwords in one memmove. They exist because of what the LGT platform does with
+a Clet's surfaces: it keeps the runtime's copy as `[]uint16` and the guest's as
+bytes, and a Clet writes pixels into the guest's directly, so every drawing
+call has to read the surface back before it draws and write it out after
+(`lgt.md`, "A Java title's drawing does not synchronise, and a Clet's has to").
+
+The transfer itself was never the cost. Both directions allocated a 153,600-byte
+scratch buffer per call and then walked it a pixel at a time, rebuilding each
+`uint16` out of two bytes they had just copied. On one title's field scene that
+was **16.6% of the host's time and 8.66 GB of garbage in twenty seconds**, 95%
+of everything the run allocated. Guest memory is little-endian and so is every
+host `make dist` builds for, so the halfwords a caller holds already *are* the
+bytes the guest holds; the loop and the buffer both go, and the reassembling
+form stays for a big-endian host, where it is the slow path rather than the
+wrong answer.
+
+The scene fell from 20.08s to 15.62s — **−22% for four lines** — with all 886
+frames byte-identical and the same 2,735,911,562 guest instructions retired.
+`lgt.md` has the counts and why the copy is cheaper rather than gone.
+
+### The recognisers were allocating a description per attempt
+
+Each stand-in's analysis built its `storeLoop`, `tableBlit`, `byteBlend` or
+`wordModulate` with `new`, and analysis runs on **every backward branch a title
+takes that has not already been refused** — including, on the loops it does
+recognise, again on every execution. That is an allocation per fill: 350 MB
+over a fifteen-second scene, second only to the framebuffer buffers above.
+
+Each recogniser now fills one description held on the `Memory`. It is safe
+because a description never outlives the call that filled it — the stand-in
+reads it and returns, analysis runs under the execution lock, and no two of the
+four are ever live at once.
+
+**It moved the title by nothing measurable**, and it is kept anyway: 448 MB of
+garbage became 103 MB, and what the collector costs is a property of the machine
+the server is on rather than of the one it was measured on. An eight-core
+laptop collects that concurrently for free; the mini PC somebody leaves running
+in a cupboard does not.
+
+### Six more forms routed
+
+`Engine.Run` routed ten Thumb forms straight to their handler and reached the
+rest through `executeThumbForm`, which is a second switch on the same value.
+Counted over a Clet's field scene, the forms taking that second dispatch are
+**8.85% of everything it executes**, and six of them are 97.5% of that: the
+high-register operations and the literal loads at 77 million each, the two
+halves of `bl` at 26 million each, and push and pop.
+
+Routing those six is worth 0.8% on the Clet and 1.2 to 1.6% on two KTF titles.
+Three of them had their semantics written out in `executeThumbForm`'s case body
+rather than in a function, which is the one thing routing cannot live with — a
+routed form written twice is two answers to the same encoding — so they became
+leaf functions first, the way the branches already were.
+
+### What the four together did, across the local library
+
+Nothing in the four changes anything a guest can observe, and the evidence for
+that is the same in every run: identical instruction counts, and identical
+frames wherever frames were captured.
+
+**One title's field scene**, reached by a route from a real save, release build
+with the committed profile on both sides:
+
+| | before | after |
+|---|---|---|
+| host time for the run | 18,371ms | **12,845ms** (−30.1%) |
+| ns a guest instruction | 6.715 | **4.695** |
+| guest instructions retired | 2,735,911,562 | the same |
+| frames the route paints | 886 | all 886 byte-identical |
+
+The same scene **paced the way a Host paces it**, which is the number a player
+feels rather than a throughput number:
+
+| | before | after |
+|---|---|---|
+| host busy over a 52s scene | 21.74s | **18.46s** |
+| tick p90 | 26.69ms | **21.20ms** |
+| tick p99 | 43.94ms | **32.57ms** |
+
+That title's frame is 55ms of guest time, so the tail that matters went from
+11ms of headroom to 22ms. A machine that keeps up either way spends a third of
+a core instead of two fifths; a machine that does not keep up gets the whole
+difference as speed.
+
+**All 34 local LGT archives**, 3,000 ticks each from a fresh save, which is a
+boot and whatever a title settles into:
+
+| how much faster | archives |
+|---|---|
+| −73% to −89% | 5 |
+| −20% to −31% | 6 |
+| −9% to −19% | 19 |
+| about −2% | 3 |
+| slower | 1 |
+
+Every one retires the same instruction count it did before. The five that
+collapse are the titles that draw through `MC_grp` most — the largest went from
+88.4s to 9.4s — and they are what says the framebuffer copy was the whole of
+their cost rather than a share of it. Two of the three flat rows are 49ms runs,
+which is too short to read at all.
+
+**The one that is slower was measured five more times and is kept.** The sweep
+row reads +5%; interleaved at 3,000 ticks it is +2.6%, +3.1% and +0.8%, and at
+1,500 ticks +1%, which is this title's own noise floor — the same archive
+varied by 7% between two runs of the *unchanged* binary. Both of the changes
+that could plausibly cost it were checked separately and both *help* it: one
+way instead of 256 costs it 6%, and removing the byte fast path costs it 2%. So
+what is left is under the floor and was not chased further. It is a Clet at
+17ns a guest instruction, four times the cost of the scene above, which is to
+say almost none of its host time is in the interpreter at all.
 
 ## Why the browser was seven times slower
 

@@ -28,6 +28,24 @@ const (
 	memoryPageMask  = uint32(memoryPageSize - 1)
 	guestAddressEnd = uint64(1) << 32
 	maxMappings     = 4096
+
+	// dataPageWays is how many recently used data pages are remembered. It is
+	// a power of two so the way is a mask of the page number rather than a
+	// search. Swept on one title's field scene, the cost per guest instruction
+	// fell 5.68ns at one way, 5.56 at four, 5.47 at eight, 5.31 at thirty-two
+	// and 5.30 at sixty-four, and stopped moving at 5.28 from 128 upwards.
+	//
+	// **The count is 256 rather than the 64 that sweep would have settled on,
+	// and a synthetic benchmark is why.** A blit between two surfaces half a
+	// megabyte apart alternates between page numbers exactly 128 apart, which
+	// at 64 ways is the same slot every time: `BenchmarkEngineBlitCrossPage`
+	// reads 7.2ns a step with one way, 7.6 with 64, and 5.2 with 256, where
+	// the two surfaces finally land in different slots. That stride is not
+	// unusual — it is what a pair of framebuffers allocated in order looks
+	// like — so the table is sized past it. See the Memory field for what the
+	// ways are for.
+	dataPageWays    = 256
+	dataPageWayMask = dataPageWays - 1
 )
 
 type Permission uint8
@@ -153,12 +171,28 @@ type Memory struct {
 	// so re-checking it first turns the scan into two compares. Any change to
 	// the mapping list clears it.
 	lastMapping memoryMapping
-	// dataPage is the page the previous guest load or store landed in, held
-	// for the same reason and cleared whenever page storage changes. codePage
-	// is the same for instruction fetch, kept separately so that a loop
-	// reading data does not evict the page it is executing from.
-	dataIndex uint32
-	dataPage  *memoryPage
+	// dataPage holds the pages recent guest loads and stores landed in, and is
+	// cleared whenever page storage changes. codePage is the same for
+	// instruction fetch, kept separately so that a loop reading data does not
+	// evict the page it is executing from.
+	//
+	// It is several pages rather than one because a real title's accesses
+	// alternate between regions rather than walking one: counted over a scene
+	// of one local title, a single remembered page answered 48% of the guest's
+	// accesses, and **44% of the misses were the page remembered before it** —
+	// a sprite read against a framebuffer written, a heap buffer against a
+	// module's constants. Each of those cost a call into the general path for
+	// an answer that had been in hand one access earlier.
+	//
+	// **The ways are indexed rather than searched**, which is what makes this
+	// the shape that works where two earlier attempts at a second slot did
+	// not: a hit is the same three compares it always was, `mappedPage` still
+	// inlines at every call site, and a miss pays no extra compare. See
+	// `docs/armcore.md`, "The second data slot was built, both ways, and
+	// lost", for the two that were, and what replacing the search with an
+	// index changed.
+	dataIndex [dataPageWays]uint32
+	dataPage  [dataPageWays]*memoryPage
 	codeIndex uint32
 	codePage  *memoryPage
 	// standInsRefused turns every recogniser off for the life of this memory.
@@ -166,6 +200,20 @@ type Memory struct {
 	// through, so the two sides of an A/B differ in nothing but whether a
 	// stand-in was allowed.
 	standInsRefused bool
+	// Each recogniser builds one description of the loop it is looking at.
+	// These are those descriptions, reused rather than allocated per attempt.
+	// Analysis runs on every backward branch a title takes that has not
+	// already been refused, and on the loops it does recognise it runs again
+	// on every execution — so an allocation per attempt is an allocation per
+	// fill, which on one local title was 350 MB of garbage in a fifteen-second
+	// scene, collected on the machine that is also running the guest. Reuse is
+	// safe because a description never outlives the call that filled it: the
+	// stand-in reads it and returns, analysis runs under the execution lock,
+	// and no two of the four are ever live at once.
+	storeLoopScratch    storeLoop
+	tableBlitScratch    tableBlit
+	byteBlendScratch    byteBlend
+	wordModulateScratch wordModulate
 	// Write watching. watchCount, watchLow, and watchHigh are the span test an
 	// ordinary store pays for; the map and the hits are only reached once a
 	// store falls inside it. executingPC is where the engine currently is,
@@ -285,7 +333,7 @@ func (memory *Memory) Map(address uint32, size uint64, permission Permission) er
 		page.permission = 0
 	})
 	memory.lastMapping = memoryMapping{}
-	memory.dataPage = nil
+	memory.dataPage = [dataPageWays]*memoryPage{}
 	memory.codePage = nil
 	return nil
 }
@@ -678,15 +726,28 @@ func (memory *Memory) mappedPage(address, length uint32, required Permission) *m
 		address <= memory.threadLocalHigh+3 && address+length > memory.threadLocalLow {
 		return nil
 	}
-	page := memory.dataPage
+	index := address >> memoryPageShift
+	way := dataPageWay(index)
+	page := memory.dataPage[way]
 	// The page's own permission stands in for the mapping test: it is what the
 	// mappings allow across the whole page, and an aligned access of at most a
 	// word cannot leave the page it starts in.
-	if page == nil || memory.dataIndex != address>>memoryPageShift || page.data == nil ||
+	if page == nil || memory.dataIndex[way] != index || page.data == nil ||
 		page.permission&required != required {
 		return nil
 	}
 	return page
+}
+
+// dataPageWay is which remembered slot a page number lands in.
+//
+// Folding the next bits up into it with an exclusive or was tried, to spread
+// the pairs a power of two apart that the way count is chosen around. It fixes
+// the same benchmark the count does and costs more than it saves everywhere
+// else: 1 to 2% on three real titles, and 1.3% on the game-shaped loop that is
+// the shape most of a run is made of.
+func dataPageWay(index uint32) uint32 {
+	return index & dataPageWayMask
 }
 
 // rememberPermission fills in a page's copy of what the mappings permit across
@@ -706,6 +767,12 @@ func (memory *Memory) rememberPermission(page *memoryPage, address uint32) {
 }
 
 func (memory *Memory) read8(address uint32) (uint8, error) {
+	// A byte load takes the same inlined fast path the wider ones do. It was
+	// the one width without it, and it is the width a title's own rasteriser
+	// reads its source bytes through.
+	if page := memory.mappedPage(address, 1, PermissionRead); page != nil {
+		return page.data[address&memoryPageMask], nil
+	}
 	page, direct, err := memory.directAccess(address, 1, PermissionRead, "read")
 	if err != nil {
 		return 0, err
@@ -766,6 +833,12 @@ func (memory *Memory) read32(address uint32) (uint32, error) {
 }
 
 func (memory *Memory) write8(address uint32, value uint8) error {
+	if page := memory.mappedPage(address, 1, PermissionWrite); page != nil {
+		page.data[address&memoryPageMask] = value
+		page.discardDecoded()
+		memory.noteStore(address, uint32(value), 1)
+		return nil
+	}
 	page, direct, err := memory.directAccess(address, 1, PermissionWrite, "write")
 	if err != nil {
 		return err
@@ -1024,7 +1097,8 @@ func (memory *Memory) writeGuest(address uint32, data []byte) error {
 // access. The caller holds the memory lock.
 func (memory *Memory) pageAt(address uint32) *memoryPage {
 	index := address >> memoryPageShift
-	if page := memory.dataPage; page != nil && memory.dataIndex == index {
+	way := dataPageWay(index)
+	if page := memory.dataPage[way]; page != nil && memory.dataIndex[way] == index {
 		if page.permission == 0 {
 			memory.rememberPermission(page, address)
 		}
@@ -1033,7 +1107,7 @@ func (memory *Memory) pageAt(address uint32) *memoryPage {
 	page := memory.pageFor(address)
 	if page != nil {
 		memory.rememberPermission(page, address)
-		memory.dataIndex, memory.dataPage = index, page
+		memory.dataIndex[way], memory.dataPage[way] = index, page
 	}
 	return page
 }
@@ -1042,7 +1116,8 @@ func (memory *Memory) pageAt(address uint32) *memoryPage {
 // they are not there yet.
 func (memory *Memory) commitPageAt(address uint32) *memoryPage {
 	index := address >> memoryPageShift
-	if page := memory.dataPage; page != nil && memory.dataIndex == index && page.data != nil {
+	way := dataPageWay(index)
+	if page := memory.dataPage[way]; page != nil && memory.dataIndex[way] == index && page.data != nil {
 		if page.permission == 0 {
 			memory.rememberPermission(page, address)
 		}
@@ -1050,7 +1125,7 @@ func (memory *Memory) commitPageAt(address uint32) *memoryPage {
 	}
 	page := memory.commitPage(address)
 	memory.rememberPermission(page, address)
-	memory.dataIndex, memory.dataPage = index, page
+	memory.dataIndex[way], memory.dataPage[way] = index, page
 	return page
 }
 
