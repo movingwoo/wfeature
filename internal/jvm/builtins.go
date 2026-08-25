@@ -476,6 +476,21 @@ func (vm *VM) registerUtilityBuiltins() {
 		instant = instant.In(timeZoneLocation(data, instant))
 		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: instant}}), nil
 	})
+	// `java/util/GregorianCalendar` is the concrete calendar a title reaches
+	// for when it wants one without going through the factory. CLDC does not
+	// declare it and the handset library does, and a title that constructs one
+	// then calls `Calendar.get` on it is calling the methods above: they key on
+	// what the object holds rather than on its class name, so one instant
+	// serves both. The constructor is the only method of its own — everything
+	// else it answers, it inherits.
+	vm.builtin("java/util/GregorianCalendar", "<init>", "()V", func(vm *VM, arguments []Value) (Value, error) {
+		object, err := nativeReference(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		object.Native = &calendarData{time: time.UnixMilli(vm.nowMilliseconds())}
+		return VoidValue(), nil
+	})
 	vm.builtin("java/util/Calendar", "get", "(I)I", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {

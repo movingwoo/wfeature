@@ -340,6 +340,22 @@ func init() {
 				{class: "java/util/Calendar", name: "setTime", descriptor: "(Ljava/util/Date;)V", accessFlags: 0x0011},
 			},
 		},
+		// java/util/GregorianCalendar is the concrete calendar, and a title
+		// that constructs one directly rather than through the factory needs
+		// it to *extend* Calendar here. The loader's fallback builds a class
+		// that extends `java/lang/Object`, so a `Calendar.get` dispatched on
+		// such an instance indexes Object's vtable at Calendar's slot — past
+		// its end, into the bytes the name string was allocated with, which
+		// the guest then follows as a pointer. One title faults on a read at
+		// the characters of its own class name for exactly that reason.
+		"java/util/GregorianCalendar": {
+			name:        "java/util/GregorianCalendar",
+			superName:   "java/util/Calendar",
+			accessFlags: 0x0021,
+			methods: []runtimeJavaMethod{
+				{class: "java/util/GregorianCalendar", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
+			},
+		},
 		// java/util/Date is the instant behind Calendar, and a title reaches
 		// for it directly when what it wants is a number rather than fields —
 		// a stamp to store, or the two ends of an interval. A class the loader
@@ -2685,7 +2701,18 @@ func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value
 
 // runtimeCardServiceRepaints synchronously services a pending repaint by
 // painting the receiver card into the screen framebuffer and presenting the
-// frame, matching Card.serviceRepaints blocking semantics.
+// frame, matching Card.serviceRepaints blocking semantics — the specification
+// says in as many words that this call enters `paint` itself.
+//
+// **A card the display is not showing is not painted.** The frame loop already
+// refuses one (`repaintQueued`, `paintTopCard`), and this was the one place
+// that did not, so a card built but never pushed could be entered here and
+// nowhere else. One local title loads its resources in stages and calls
+// `repaint` and `serviceRepaints` between them to move its progress bar, on a
+// card it pushes only once the load is done: entering `paint` there ran the
+// title's drawing code against a state it had not built yet, and the title
+// stopped in its own null check. Nothing is lost by skipping it — there is no
+// screen for a card that is not on the display to output to.
 func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 1 {
 		return jvm.VoidValue(), fmt.Errorf("Card.serviceRepaints expected receiver, got %d arguments", len(arguments))
@@ -2696,6 +2723,9 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	}
 	if receiver == nil {
 		return jvm.VoidValue(), fmt.Errorf("Card.serviceRepaints receiver is null")
+	}
+	if !runtime.cardIsShown(receiver) {
+		return jvm.VoidValue(), nil
 	}
 	if !runtime.repaintPending || runtime.repaintServicing {
 		return jvm.VoidValue(), nil

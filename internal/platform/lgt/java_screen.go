@@ -230,7 +230,15 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.drawArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.DrawArc)},
 
 	"org/kwis/msp/lcdui/Graphics.translate(II)V": {Words: 3, Implementat: javaTranslate},
-	"org/kwis/msp/lcdui/Graphics.setClip(IIII)V": {Words: 5, Implementat: javaSetClip},
+	// The origin a title reads back is the one its own `translate` calls moved
+	// it to. A title that draws a panel in its own coordinates and then has to
+	// hand a screen coordinate to something else asks for it rather than
+	// keeping a second copy — and one that never asks is not wrong either,
+	// which is why these went unnoticed until a title's thread stopped on
+	// them.
+	"org/kwis/msp/lcdui/Graphics.getTranslateX()I": {Words: 1, Implementat: javaGetTranslateX},
+	"org/kwis/msp/lcdui/Graphics.getTranslateY()I": {Words: 1, Implementat: javaGetTranslateY},
+	"org/kwis/msp/lcdui/Graphics.setClip(IIII)V":   {Words: 5, Implementat: javaSetClip},
 	// The specification's own wording for `clipRect` is that the clip becomes
 	// what it and the rectangle have in common, so it can only ever narrow.
 	"org/kwis/msp/lcdui/Graphics.clipRect(IIII)V": {Words: 5, Implementat: javaClipRect},
@@ -508,6 +516,27 @@ func javaTranslate(
 	state.translateX += int(int32(arguments[1]))
 	state.translateY += int(int32(arguments[2]))
 	return 0, nil
+}
+
+// javaGetTranslateX and javaGetTranslateY answer where the origin now is.
+func javaGetTranslateX(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(int32(state.translateX)), nil
+}
+
+func javaGetTranslateY(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(int32(state.translateY)), nil
 }
 
 func javaSetClip(

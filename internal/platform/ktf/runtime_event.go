@@ -795,11 +795,18 @@ func runtimeCardIsShown(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if len(runtime.displayCards) == 0 || receiver == nil {
-		return jvm.IntValue(0), nil
-	}
-	if runtime.displayCards[len(runtime.displayCards)-1] == receiver {
+	if runtime.cardIsShown(receiver) {
 		return jvm.IntValue(1), nil
 	}
 	return jvm.IntValue(0), nil
+}
+
+// cardIsShown reports whether a card is the one the display is showing, which
+// is the top of the pushed stack. It is what `Card.isShown` answers and what
+// decides whether a paint of that card would reach the screen.
+func (runtime *initializationRuntime) cardIsShown(card *jvm.Object) bool {
+	if card == nil || len(runtime.displayCards) == 0 {
+		return false
+	}
+	return runtime.displayCards[len(runtime.displayCards)-1] == card
 }

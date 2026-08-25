@@ -95,3 +95,31 @@ func callLong(t *testing.T, vm *VM, class, name, descriptor string, arguments ..
 	}
 	return value
 }
+
+// A title that builds a `GregorianCalendar` itself, rather than asking the
+// factory for one, gets the same instant and the same fields: the calendar
+// methods key on what the object holds, not on its class name.
+func TestAGregorianCalendarIsACalendar(t *testing.T) {
+	const guestNow int64 = 1_700_000_000_000
+	vm := New(mapClassSource{}, Options{Clock: func() int64 { return guestNow }})
+
+	instance := &Object{ClassName: "java/util/GregorianCalendar"}
+	call(t, vm, "java/util/GregorianCalendar", "<init>", "()V", ReferenceValue(instance))
+
+	date, err := call(t, vm, "java/util/Calendar", "getTime", "()Ljava/util/Date;",
+		ReferenceValue(instance)).Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if milliseconds := callLong(t, vm, "java/util/Date", "getTime", "()J", ReferenceValue(date)); milliseconds != guestNow {
+		t.Fatalf("new GregorianCalendar().getTime().getTime() = %d, want %d", milliseconds, guestNow)
+	}
+	year := call(t, vm, "java/util/Calendar", "get", "(I)I", ReferenceValue(instance), IntValue(1))
+	value, err := year.Int32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 2023 {
+		t.Errorf("get(YEAR) = %d, want the year the guest clock stands at", value)
+	}
+}

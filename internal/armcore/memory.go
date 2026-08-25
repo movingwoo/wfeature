@@ -224,7 +224,10 @@ type Memory struct {
 	watches         map[uint32]struct{}
 	watchHits       map[watchKey]*WatchHit
 	watchOverflowed bool
-	executingPC     uint32
+	// watchStores counts every recorded store across every watched address, so
+	// a hit can say where in that order its first and last write fell.
+	watchStores uint64
+	executingPC uint32
 }
 
 func NewMemory() *Memory {

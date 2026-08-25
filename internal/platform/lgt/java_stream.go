@@ -22,12 +22,15 @@ import (
 // Java title and a Clet see one filesystem.
 
 // javaStream is one open resource stream: what it holds and how far a title has
-// read into it.
+// read into it. When Source is set the bytes are not the platform's — Data is
+// a window pulled through the title's own stream, and Read is a cursor into
+// that window rather than into a whole file.
 type javaStream struct {
 	Name   string
 	Data   []byte
 	Read   int
 	Closed bool
+	Source *javaStreamSource
 }
 
 const (
@@ -89,12 +92,30 @@ func (client *Client) javaStreamOf(object uint32) (*javaStream, error) {
 	return stream, nil
 }
 
+// javaStreamNeeding answers the stream an object stands for with at least that
+// many unread bytes in it. For a resource this platform opened that is the
+// lookup alone; for a title's own stream it is where the title's `read` runs.
+// Every reader below goes through it, so a wrapper over either kind reads the
+// same.
+func (client *Client) javaStreamNeeding(
+	ctx context.Context, thread *armcore.Thread, object uint32, want int,
+) (*javaStream, error) {
+	stream, err := client.javaStreamOf(object)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := client.needJavaStream(ctx, thread, stream, want); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
 // javaStreamRead is `InputStream.read()`: one byte as an unsigned value, and
 // -1 at the end, which is why the answer is an int rather than a byte.
 func javaStreamRead(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 1)
 	if err != nil {
 		return 0, err
 	}
@@ -110,7 +131,7 @@ func javaStreamRead(
 // as are left, into the array the caller passes, answering how many were read
 // and -1 when there were none because the stream had ended.
 func javaStreamReadArray(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
@@ -132,7 +153,10 @@ func javaStreamReadArray(
 	if uint64(offset)+uint64(count) > uint64(length) {
 		return 0, fmt.Errorf("%d bytes at %d is past the end of an array of %d", count, offset, length)
 	}
-	left := len(stream.Data) - stream.Read
+	left, err := client.needJavaStream(ctx, thread, stream, int(count))
+	if err != nil {
+		return 0, err
+	}
 	if left <= 0 {
 		// The end of the stream is -1, and it is not the same answer as a read
 		// of nothing: a caller loops until one of them.
@@ -283,11 +307,14 @@ func javaStreamClose(
 // javaStreamAvailable is `InputStream.available()`: how much is left, which for
 // a resource this platform holds whole is exact rather than an estimate.
 func javaStreamAvailable(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
 		return 0, err
+	}
+	if stream.Source != nil {
+		return client.javaGuestStreamAvailable(ctx, thread, stream)
 	}
 	return uint32(len(stream.Data) - stream.Read), nil
 }
@@ -296,13 +323,16 @@ func javaStreamAvailable(
 // answer how far it actually moved — which is less than asked for at the end of
 // the data. The answer comes back as the two words a long takes.
 func javaStreamSkip(
-	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
 		return 0, err
 	}
 	wanted := uint64(arguments[1]) | uint64(arguments[2])<<32
+	if stream.Source != nil {
+		return client.skipJavaGuestStream(ctx, thread, stream, wanted)
+	}
 	left := uint64(len(stream.Data) - stream.Read)
 	if wanted > left {
 		wanted = left
@@ -318,12 +348,23 @@ func javaStreamSkip(
 // `DataInputStream` over the resource stream a title just opened. **Both
 // objects stand for the same open stream**, so a read through either moves the
 // one cursor, which is what wrapping means.
+//
+// **The stream underneath does not have to be one this platform opened.** A
+// title that wrote its own `InputStream` subclass and wraps that is wrapping
+// the abstract class the constructor is declared over, which is legal Java and
+// what one local title does; the wrapper then reads through the title's own
+// `read`. See java_stream_guest.go.
 func javaWrapStream(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[1])
 	if err != nil {
-		return 0, err
+		guest, guestErr := client.openJavaGuestStream(arguments[1])
+		if guestErr != nil {
+			return 0, guestErr
+		}
+		stream = guest
+		client.javaRuntimeState().streams[arguments[1]] = stream
 	}
 	client.javaRuntimeState().streams[arguments[0]] = stream
 	return 0, nil
@@ -332,9 +373,9 @@ func javaWrapStream(
 // javaStreamReadShort reads the two bytes a data stream's halfword takes, most
 // significant first, which is the order every Java stream reads numbers in.
 func javaStreamReadShort(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 2)
 	if err != nil {
 		return 0, err
 	}
@@ -353,9 +394,9 @@ func javaStreamReadShort(
 // title where the truncated data is rather than somewhere downstream of a
 // number made out of nothing.
 func javaStreamReadInt(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 4)
 	if err != nil {
 		return 0, err
 	}
@@ -375,9 +416,9 @@ func javaStreamReadInt(
 // stream — that one answers 0 to 255 and -1 at the end, this one answers -128
 // to 127 and has no room left for an end marker, so the end is reported.
 func javaStreamReadByte(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 1)
 	if err != nil {
 		return 0, err
 	}
@@ -395,7 +436,7 @@ func javaStreamReadByte(
 // loop; a title that calls this one has sized its array from a count it read
 // first and treats a short read as a corrupt file.
 func javaStreamReadFully(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
@@ -411,6 +452,9 @@ func javaStreamReadFully(
 	}
 	if uint64(offset)+uint64(count) > uint64(length) {
 		return 0, fmt.Errorf("%d bytes at %d is past the end of an array of %d", count, offset, length)
+	}
+	if _, err := client.needJavaStream(ctx, thread, stream, int(count)); err != nil {
+		return 0, err
 	}
 	if uint64(count) > uint64(len(stream.Data)-stream.Read) {
 		return 0, fmt.Errorf("readFully of %d bytes past the end of %q, at %d of %d",
@@ -647,9 +691,9 @@ func javaSinkWriteUTF(
 // stream tell-able from a long name: the count is checked against what is left
 // before any of it is decoded.
 func javaStreamReadUTF(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 2)
 	if err != nil {
 		return 0, err
 	}
@@ -658,6 +702,9 @@ func javaStreamReadUTF(
 			stream.Name, stream.Read, len(stream.Data))
 	}
 	count := int(stream.Data[stream.Read])<<8 | int(stream.Data[stream.Read+1])
+	if _, err := client.needJavaStream(ctx, thread, stream, 2+count); err != nil {
+		return 0, err
+	}
 	if stream.Read+2+count > len(stream.Data) {
 		return 0, fmt.Errorf("readUTF of %d bytes past the end of %q, at %d of %d",
 			count, stream.Name, stream.Read, len(stream.Data))
@@ -724,8 +771,17 @@ func modifiedUTF8(text string) []byte {
 // the array as it was when the stream was built and a title is free to reuse
 // the buffer.
 func javaByteStreamConstructor(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	// **A null array is the language's own NullPointerException, not a platform
+	// failure.** The constructor reads the array's length, so the specification
+	// has it throw; reporting instead stops the title where a title that
+	// catches its own nulls would have carried on. One local title logs exactly
+	// that catch a few lines earlier in its own run.
+	if arguments[1] == 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowNullClass,
+			"a null array handed to ByteArrayInputStream")
+	}
 	data, err := client.readJavaArrayBytes(arguments[1])
 	if err != nil {
 		return 0, err
@@ -741,9 +797,9 @@ func javaByteStreamConstructor(
 // false when it is zero and true otherwise, which is what the specification
 // defines and the byte `writeBoolean` wrote.
 func javaStreamReadBoolean(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 1)
 	if err != nil {
 		return 0, err
 	}
@@ -769,9 +825,9 @@ func javaStreamReadBoolean(
 // second to go with it, and one otherwise — the shape of the handset's own
 // encoding.
 func javaReaderRead(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 1)
 	if err != nil {
 		return 0, err
 	}
@@ -784,6 +840,12 @@ func javaReaderRead(
 	}
 	block, length, err := client.javaArrayBlock(arguments[1])
 	if err != nil {
+		return 0, err
+	}
+	// One character is at most two bytes here, so a full array is at most
+	// twice its length: a reader over a title's own stream pulls that much
+	// before it decodes, rather than a block per character.
+	if _, err := client.needJavaStream(ctx, thread, stream, 2*int(length)); err != nil {
 		return 0, err
 	}
 	if stream.Read >= len(stream.Data) {
@@ -814,9 +876,9 @@ func javaReaderRead(
 // javaStreamReadChar is `DataInputStream.readChar()`, slot 27: the same two
 // big-endian bytes `readShort` takes, kept unsigned.
 func javaStreamReadChar(
-	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	value, err := javaStreamReadShort(client, context.Background(), thread, arguments)
+	value, err := javaStreamReadShort(client, ctx, thread, arguments)
 	if err != nil {
 		return 0, err
 	}
@@ -827,9 +889,9 @@ func javaStreamReadChar(
 // the byte `readByte` reads, as 0 to 255. The end of the stream is reported
 // rather than answered with -1, because 255 values are already spoken for.
 func javaStreamReadUnsignedByte(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	stream, err := client.javaStreamOf(arguments[0])
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 1)
 	if err != nil {
 		return 0, err
 	}

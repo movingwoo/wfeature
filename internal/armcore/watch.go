@@ -62,6 +62,11 @@ type WatchHit struct {
 	// Count is how many times this writer wrote this address, which is what
 	// separates the one store that matters from a memset passing through.
 	Count uint64
+	// First and Last are the ordinals of this writer's first and last store,
+	// counted across every watched address. Two writers of one word — a host
+	// write that clears a block and the guest store that fills it — are the
+	// same two facts in either order, and only these say which order it was.
+	First, Last uint64
 }
 
 // maxWatchHits bounds distinct (address, PC) pairs. A game that writes one
@@ -109,6 +114,7 @@ func (core *Core) ClearWatches() {
 	defer memory.mu.Unlock()
 	memory.watches = nil
 	memory.watchHits = nil
+	memory.watchStores = 0
 	memory.refreshWatchSpanLocked()
 }
 
@@ -238,9 +244,11 @@ func (memory *Memory) recordWrite(address uint32, value uint32, size uint8, orig
 // The caller holds the memory lock.
 func (memory *Memory) recordWriteAt(target uint32, value uint32, size uint8, origin WriteOrigin) {
 	key := watchKey{address: target, pc: memory.executingPC, origin: origin}
+	memory.watchStores++
 	if hit, ok := memory.watchHits[key]; ok {
 		hit.Count++
 		hit.Value, hit.Size = value, size
+		hit.Last = memory.watchStores
 		return
 	}
 	if len(memory.watchHits) >= maxWatchHits {
@@ -249,5 +257,6 @@ func (memory *Memory) recordWriteAt(target uint32, value uint32, size uint8, ori
 	}
 	memory.watchHits[key] = &WatchHit{
 		Address: target, PC: memory.executingPC, Origin: origin, Value: value, Size: size, Count: 1,
+		First: memory.watchStores, Last: memory.watchStores,
 	}
 }

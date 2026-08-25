@@ -106,3 +106,53 @@ func TestAYieldOnlyParksWhenSomethingElseCanRun(t *testing.T) {
 		t.Error("a thread whose wait has passed was not seen")
 	}
 }
+
+// A guest thread that has ended is never granted another slice. Its goroutine
+// is gone, so the grant would block for ever and take the session with it — a
+// hang with no error and no last frame. The end is recorded where the slice is
+// granted rather than by the caller, because one of the three callers is a
+// monitor wait, where the thread that ends is not the one the caller had in
+// hand: a title whose `run` threw while holding a lock deadlocked the next tick
+// that way.
+func TestAFinishedGuestThreadIsNotGrantedAnotherSlice(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	worker := &javaWorker{
+		grant:  make(chan context.Context),
+		events: make(chan javaWorkerEvent, 1),
+	}
+	runtime.workers = append(runtime.workers, worker)
+	// The worker's own goroutine: it takes one slice, ends inside it, files its
+	// last event and stops receiving — which is what `runJavaWorker` does when
+	// the guest's `run` returns or throws.
+	go func() {
+		<-worker.grant
+		worker.events <- javaWorkerEvent{done: true}
+	}()
+
+	event, err := client.grantJavaSlice(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("granting a slice to a thread that is ending: %v", err)
+	}
+	if !event.done {
+		t.Fatal("the event that ended the thread was not reported as the end")
+	}
+	if !worker.done {
+		t.Fatal("the thread was not recorded as finished, so it can be granted again")
+	}
+
+	// A second grant must answer rather than block. Nothing is receiving on the
+	// grant channel any more, so without the record above this blocks for ever.
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		if event, err := client.grantJavaSlice(context.Background(), worker); err != nil || !event.done {
+			t.Errorf("a second grant answered %+v (%v)", event, err)
+		}
+	}()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second grant to a finished thread blocked")
+	}
+}
