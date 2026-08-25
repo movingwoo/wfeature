@@ -315,12 +315,12 @@ func (client *Client) syncFromGuest(buffer *framebuffer) error {
 	if buffer == nil || buffer.address == 0 {
 		return nil
 	}
-	raw := make([]byte, len(buffer.pixels)*2)
-	if err := client.core.Memory().Read(buffer.address, raw); err != nil {
+	// A whole screen at a time, with no scratch buffer and no loop that
+	// rebuilds every pixel out of two bytes. This pair is crossed twice per
+	// draw call, so what it costs is most of what a drawing title costs; see
+	// armcore's bulk halfword transfers.
+	if err := client.core.Memory().ReadHalfwords(buffer.address, buffer.pixels); err != nil {
 		return fmt.Errorf("read LGT framebuffer at %#x: %w", buffer.address, err)
-	}
-	for index := range buffer.pixels {
-		buffer.pixels[index] = uint16(raw[index*2]) | uint16(raw[index*2+1])<<8
 	}
 	return nil
 }
@@ -331,12 +331,7 @@ func (client *Client) syncToGuest(buffer *framebuffer) error {
 	if buffer == nil || buffer.address == 0 {
 		return nil
 	}
-	raw := make([]byte, len(buffer.pixels)*2)
-	for index, pixel := range buffer.pixels {
-		raw[index*2] = byte(pixel)
-		raw[index*2+1] = byte(pixel >> 8)
-	}
-	if err := client.core.Memory().Write(buffer.address, raw); err != nil {
+	if err := client.core.Memory().WriteHalfwords(buffer.address, buffer.pixels); err != nil {
 		return fmt.Errorf("write LGT framebuffer at %#x: %w", buffer.address, err)
 	}
 	return nil

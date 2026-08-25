@@ -268,7 +268,8 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 		return nil
 	}
 
-	loop := &storeLoop{after: branchPC + 2}
+	loop := &memory.storeLoopScratch
+	*loop = storeLoop{after: branchPC + 2}
 	// written counts the body's assignments to each low register, and holdsSP
 	// tracks which of them currently hold the stack pointer. A body of this
 	// shape reaches a frame slot by copying the stack pointer into a low

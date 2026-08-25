@@ -167,7 +167,8 @@ func (memory *Memory) analyseWordModulate(head, branchPC uint32) *wordModulate {
 		body[index] = decoded
 	}
 
-	loop := &wordModulate{}
+	loop := &memory.wordModulateScratch
+	*loop = wordModulate{}
 	// The first half's prologue: a word off the first stream, the two masks
 	// out of the loop's own literals, and the factor pointer out of the frame.
 	word, first, ok := thumbWordLoad(body[0])

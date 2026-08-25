@@ -129,6 +129,18 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				err = executeThumbRegisterTransfer(context, memory, value)
 			case thumbStackRelativeTransfer:
 				err = executeThumbStackRelativeTransfer(context, memory, value)
+			case thumbHighRegister:
+				err = executeThumbHighRegister(context, pc, value)
+			case thumbLiteralLoad:
+				err = executeThumbLiteralLoad(context, memory, pc, value)
+			case thumbLongBranchPrefix:
+				executeThumbLongBranchPrefix(context, pc, value)
+			case thumbLongBranchSuffix:
+				executeThumbLongBranchSuffix(context, pc, value)
+			case thumbPop:
+				err = executeThumbPop(context, memory, value)
+			case thumbPush:
+				err = executeThumbPush(context, memory, value)
 			default:
 				supervisorCall, err = executeThumbForm(decoded.form, context, memory, pc, value)
 			}

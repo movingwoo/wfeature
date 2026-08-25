@@ -120,7 +120,8 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 		return nil
 	}
 
-	loop := &byteBlend{}
+	loop := &memory.byteBlendScratch
+	*loop = byteBlend{}
 	var (
 		constant   uint32 // register the subtracted value is loaded into
 		difference uint32 // register holding source byte less the constant

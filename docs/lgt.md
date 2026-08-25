@@ -679,6 +679,54 @@ and from 1.96 times the guest clock to 17.5 — while retiring the same
 byte-identical, 750 and 2,484 of them, which is what says this was a cost being
 paid for nothing rather than a behaviour something relied on.
 
+#### The copy the Clet path keeps was the largest thing left on it
+
+Removing the round trip from the Java path left it in place on the Clet one,
+where the paragraph above says it cannot be dropped — and there it stayed the
+largest single cost outside the interpreter. A host profile of one title's
+field scene, driven there by a route:
+
+| | share of host time |
+|---|---|
+| `armcore.Engine.Run`, everything under it | 68.9% |
+| `syncToGuest` | 8.7% |
+| `syncFromGuest` | 7.9% |
+| `runtime.kevent` and `runtime.madvise` — the collector | 9.5% |
+
+Counted over the same run: **29,631 reads back and 28,727 writes out, 153,600
+bytes each**, and the collector row is the second half of the same fact. Both
+functions allocated their scratch buffer per call, so a twenty-second scene
+allocated **8.66 GB, 95% of it those two buffers**, on the machine that is also
+running the guest.
+
+Neither the buffer nor the loop was ever needed. The runtime's pixels are
+`[]uint16`, guest memory is little-endian halfwords, and every host this
+cross-compiles to is little-endian too — so the two are the same bytes, and the
+transfer is the memmove `Memory.Read` and `Memory.Write` already do. What the
+byte-at-a-time loop in between was doing was rebuilding each of 76,800 pixels
+out of two bytes it had just copied. `armcore.ReadHalfwords` and
+`WriteHalfwords` are that transfer with the loop and the buffer gone
+(`docs/armcore.md`, "Bulk halfword transfers").
+
+| one title's field scene, same route and save, release build | before | after |
+|---|---|---|
+| host time for the run | 20.08s | **15.62s** (−22%) |
+| ns per guest instruction | 7.34 | **5.71** |
+| allocated over the run | 8.66 GB | 448 MB |
+
+All 886 frames the route paints are byte-identical and the run retires the same
+2,735,911,562 guest instructions, which is what says nothing about the surfaces
+changed. After it the pair is **1.2% of the run** and `handleDraw` as a whole is
+1.8%.
+
+**The 14% is the reason it is a cheaper copy rather than no copy.** Instrumented
+over that scene, only 4,173 of the 29,631 read-backs found a pixel the guest had
+changed — but they found 19.6 million pixels between them, so the 86% that find
+nothing cannot be told from the 14% that do without either reading the surface
+or having the core report which pages a guest wrote. The second of those is
+worth building only if this pair ever climbs back up a profile; at 1.2% it is
+not.
+
 ### The field numbers are the specification's, and index 3 is a gap
 
 The identifiers are not a guess and do not need to be inferred from callers.
