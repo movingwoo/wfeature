@@ -973,6 +973,8 @@ func init() {
 				{class: "org/kwis/msp/lcdui/Graphics", name: "copyArea", descriptor: "(IIIIII)V", accessFlags: 0x0001, implementation: runtimeGraphicsCopyArea},
 				{class: "org/kwis/msp/lcdui/Graphics", name: "setPixel", descriptor: "(II)V", accessFlags: 0x0001, implementation: runtimeGraphicsSetPixel},
 				{class: "org/kwis/msp/lcdui/Graphics", name: "getPixel", descriptor: "(II)I", accessFlags: 0x0001, implementation: runtimeGraphicsGetPixel},
+				{class: "org/kwis/msp/lcdui/Graphics", name: "getPixels", descriptor: "(IIII[BII)V", accessFlags: 0x0001, implementation: runtimeGraphicsTransferPixels(false)},
+				{class: "org/kwis/msp/lcdui/Graphics", name: "setPixels", descriptor: "(IIII[BII)V", accessFlags: 0x0001, implementation: runtimeGraphicsTransferPixels(true)},
 				{class: "org/kwis/msp/lcdui/Graphics", name: "getRGBPixels", descriptor: "(IIII[III)V", accessFlags: 0x0001, implementation: runtimeGraphicsTransferRGBPixels(false)},
 				{class: "org/kwis/msp/lcdui/Graphics", name: "setRGBPixels", descriptor: "(IIII[III)V", accessFlags: 0x0001, implementation: runtimeGraphicsTransferRGBPixels(true)},
 				{class: "org/kwis/msp/lcdui/Graphics", name: "drawPolygon", descriptor: "([I[I)V", accessFlags: 0x0001, implementation: runtimeGraphicsDrawPolygon(false)},

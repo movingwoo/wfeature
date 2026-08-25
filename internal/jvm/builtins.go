@@ -499,6 +499,8 @@ func (vm *VM) registerUtilityBuiltins() {
 			value = calendar.time.Day()
 		case 7:
 			value = int(calendar.time.Weekday()) + 1
+		case 9:
+			value = calendar.time.Hour() / 12
 		case 10:
 			value = calendar.time.Hour() % 12
 		case 11:
@@ -510,7 +512,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		case 14:
 			value = calendar.time.Nanosecond() / int(time.Millisecond)
 		default:
-			return VoidValue(), guestException("java/lang/IllegalArgumentException", "unsupported Calendar field")
+			return VoidValue(), guestException("java/lang/IllegalArgumentException", fmt.Sprintf("unsupported Calendar field %d", field))
 		}
 		return IntValue(int32(value)), nil
 	})
@@ -546,6 +548,13 @@ func (vm *VM) registerUtilityBuiltins() {
 			month = int(value) + 1
 		case 5:
 			day = int(value)
+		case 7:
+			// A day of the week names a day inside the week the calendar is
+			// already in, which is what moving by the difference does; the
+			// normalization below carries it into the next or previous month.
+			day += int(value) - 1 - int(current.Weekday())
+		case 9:
+			hour = hour%12 + int(value)*12
 		case 10:
 			hour = hour/12*12 + int(value)
 		case 11:
@@ -557,7 +566,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		case 14:
 			nanosecond = int(value) * int(time.Millisecond)
 		default:
-			return VoidValue(), guestException("java/lang/IllegalArgumentException", "unsupported Calendar field")
+			return VoidValue(), guestException("java/lang/IllegalArgumentException", fmt.Sprintf("unsupported Calendar field %d", field))
 		}
 		// time.Date normalizes out-of-range components the way Calendar's own
 		// lenient mode does, which is what a title relies on when it adds a
@@ -1183,7 +1192,11 @@ func (vm *VM) registerStringBuiltins() {
 				}
 			}
 			if begin < 0 || end < begin || int64(end) > int64(len(units)) {
-				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", "substring range")
+				// The range and the length are in the message because the two
+				// numbers are the whole of what went wrong, and a title that
+				// slices a string it built itself gives no other clue.
+				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException",
+					fmt.Sprintf("substring range %d..%d of a %d character string", begin, end, len(units)))
 			}
 			return ReferenceValue(nativeStringValue(string(utf16.Decode(units[begin:end])))), nil
 		})

@@ -25,12 +25,6 @@ org/kwis/msp/lcdui/Font <clinit> ()V
 # on the runtime class would add a vtable slot no guest class inherits.
 org/kwis/msp/lcdui/Card paint (Lorg/kwis/msp/lcdui/Graphics;)V
 
-# Raw device-format pixel transfers and image encoding. The byte layout and
-# the encoded format are device-specific and unconfirmed; the 0x00RRGGBB
-# transfers (getRGBPixels/setRGBPixels) are implemented instead.
-org/kwis/msp/lcdui/Graphics getPixels (IIII[BII)V
-org/kwis/msp/lcdui/Graphics setPixels (IIII[BII)V
-
 # Animated images. No animated format is decoded, so there is no frame clock
 # to drive, and the ImageObserver completion protocol (its status argument) is
 # unconfirmed — the original emulator stubs these for the same reason, so

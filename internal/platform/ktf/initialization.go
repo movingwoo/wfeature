@@ -601,7 +601,7 @@ func (runtime *initializationRuntime) prepare() ([]uint32, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime.exceptionContext, err = runtime.allocateWords(make([]uint32, 9))
+	runtime.exceptionContext, err = runtime.allocateWords(make([]uint32, javaExceptionContextWords))
 	if err != nil {
 		return nil, err
 	}
@@ -897,6 +897,15 @@ func (runtime *initializationRuntime) callAOTJump(ctx context.Context, thread *a
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF AOT Java jump %#x: %w", id, err)
 	}
+	// A `long` or a `double` comes back in both result registers, and the call
+	// ran on a context of its own, so r1 has to be carried over as well as r0
+	// — a branch-and-link would have left the caller looking at what the
+	// callee wrote. Without it every 64-bit answer arrived truncated to its
+	// low word: a title that stamped System.currentTimeMillis into a string
+	// read a ten-digit number where the handset gives thirteen.
+	if err := thread.SetRegister(1, summary.Context.Registers[1]); err != nil {
+		return 0, err
+	}
 	return summary.Context.Registers[0], nil
 }
 
@@ -941,8 +950,17 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF AOT native call %s: %w", runtime.describeNativeCall(address), err)
 	}
+	// The container is eight bytes because an answer can be sixty-four bits
+	// wide, and only then is the second word the high half: a title that
+	// stamped System.currentTimeMillis into a string read a ten-digit number
+	// where the handset gives thirteen. Every other native leaves it zero,
+	// because r1 after a call that returns one word is whatever the callee
+	// happened to be holding rather than part of its answer.
 	var result [8]byte
 	binary.LittleEndian.PutUint32(result[:4], summary.Context.Registers[0])
+	if runtime.nativeCallIsWide(address) {
+		binary.LittleEndian.PutUint32(result[4:], summary.Context.Registers[1])
+	}
 	if err := runtime.client.core.Memory().Write(dataAddress, result[:]); err != nil {
 		return 0, fmt.Errorf("write KTF AOT native call result at %#x: %w", dataAddress, err)
 	}
@@ -2131,6 +2149,28 @@ func (runtime *initializationRuntime) registerJavaString(thread *armcore.Thread)
 	}
 	runtime.callbacks.RegisteredStrings++
 	return object, nil
+}
+
+// nativeCallIsWide reports that the native at this address is a runtime Java
+// method whose return type occupies two words. Only a method this platform
+// implements can be answered for: a native compiled into the module returns
+// through the module's own convention, and nothing here knows its descriptor.
+func (runtime *initializationRuntime) nativeCallIsWide(address uint32) bool {
+	for key, stub := range runtime.stubs {
+		if stub != address || uint32(key>>32) != svcCategoryRuntimeJava {
+			continue
+		}
+		invocation, ok := runtime.nativeMethods[uint32(key)]
+		if !ok {
+			return false
+		}
+		methodType, err := jvm.ParseMethodDescriptor(invocation.method.descriptor)
+		if err != nil {
+			return false
+		}
+		return methodType.Return.Slots() == 2
+	}
+	return false
 }
 
 // describeNativeCall names the body a native call is entering. Most of these

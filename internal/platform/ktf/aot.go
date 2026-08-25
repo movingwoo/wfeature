@@ -30,7 +30,17 @@ const (
 	javaExceptionObject  = 16
 	javaExceptionContext = 24
 	javaExceptionHead    = 32
-	maxExceptionHandlers = 64
+	// javaExceptionContextWords is how much room the block param 1 points at
+	// gets. Only the handler head at javaExceptionHead is ours; the rest of
+	// the struct belongs to the module's own runtime, and a middleware two
+	// local titles share writes two more words past the head. Sized to the
+	// handler record rather than to the one field we read, because a block
+	// that ends at the last field we know about is a block the next module
+	// writes past — there it landed on the two single-word parameters
+	// allocated after it and turned the pointer to this very block into a
+	// scene number.
+	javaExceptionContextWords = javaExceptionHandler / 4
+	maxExceptionHandlers      = 64
 )
 
 type aotExceptionUnwind struct {

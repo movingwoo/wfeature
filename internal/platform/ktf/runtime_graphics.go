@@ -1089,6 +1089,102 @@ func runtimeGraphicsTransferRGBPixels(write bool) runtimeJavaImplementation {
 	}
 }
 
+// runtimeGraphicsTransferPixels implements getPixels and setPixels: the same
+// rectangle the RGB pair moves, in the target's own pixel format rather than
+// in 0x00RRGGBB words. The specification leaves that format to the handset and
+// only ties it to setPixel; these are 16-bit screens, so a pixel is the two
+// framebuffer bytes as they lie and `bpl` is a byte pitch, which is why the
+// buffer is a byte array here and an int array there.
+func runtimeGraphicsTransferPixels(write bool) runtimeJavaImplementation {
+	return func(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		state, err := runtimeGraphicsStateOf(arguments)
+		if err != nil || state == nil {
+			return jvm.VoidValue(), err
+		}
+		if len(arguments) != 8 {
+			return jvm.VoidValue(), fmt.Errorf("Graphics pixel transfer expected a rectangle, buffer, offset, and pitch, got %d arguments", len(arguments)-1)
+		}
+		bounds, err := runtimeGraphicsInts(arguments, 4)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		buffer, err := arguments[5].Reference()
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		if buffer == nil {
+			return jvm.VoidValue(), fmt.Errorf("Graphics pixel buffer is null")
+		}
+		tail, err := runtimeGraphicsInts(arguments[5:], 2)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		offset, pitch := tail[0], tail[1]
+		width, height := bounds[2], bounds[3]
+		if width <= 0 || height <= 0 {
+			return jvm.VoidValue(), nil
+		}
+		if pitch == 0 {
+			pitch = width * 2
+		}
+		component, length, ok := jvm.ArrayComponent(buffer)
+		if !ok || component.Kind != jvm.TypeByte {
+			return jvm.VoidValue(), fmt.Errorf("Graphics pixel buffer is not a byte array")
+		}
+		last := int64(offset) + int64(height-1)*int64(pitch) + int64(width)*2
+		if offset < 0 || pitch < 0 || last > int64(length) {
+			return jvm.VoidValue(), fmt.Errorf("Graphics pixel range exceeds the %d byte buffer", length)
+		}
+		memory := runtime.client.core.Memory()
+		var source []jvm.Value
+		if write {
+			if _, source, err = jvm.ArraySnapshot(buffer); err != nil {
+				return jvm.VoidValue(), err
+			}
+		}
+		row := make([]jvm.Value, width*2)
+		for line := int32(0); line < height; line++ {
+			y := bounds[1] + state.translateY + line
+			base := int(offset + line*pitch)
+			for column := int32(0); column < width; column++ {
+				x := bounds[0] + state.translateX + column
+				address := state.target.pixels + uint32(y)*state.target.bpl + uint32(x)*2
+				inside := x >= 0 && y >= 0 && uint32(x) < state.target.width && uint32(y) < state.target.height
+				var data [2]byte
+				if !write {
+					if inside {
+						if err := memory.Read(address, data[:]); err != nil {
+							return jvm.VoidValue(), err
+						}
+					}
+					row[column*2] = jvm.IntValue(int32(int8(data[0])))
+					row[column*2+1] = jvm.IntValue(int32(int8(data[1])))
+					continue
+				}
+				if !inside {
+					continue
+				}
+				for half := 0; half < 2; half++ {
+					value, err := source[base+int(column)*2+half].Int32()
+					if err != nil {
+						return jvm.VoidValue(), err
+					}
+					data[half] = byte(value)
+				}
+				if err := memory.Write(address, data[:]); err != nil {
+					return jvm.VoidValue(), err
+				}
+			}
+			if !write {
+				if err := jvm.SetArrayRange(buffer, base, row); err != nil {
+					return jvm.VoidValue(), err
+				}
+			}
+		}
+		return jvm.VoidValue(), nil
+	}
+}
+
 // runtimeGraphicsFillPolygon fills a closed polygon by scanline, and
 // runtimeGraphicsDrawPolygon outlines one. Both take parallel x and y arrays
 // the way the original API does.
