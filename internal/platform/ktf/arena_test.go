@@ -135,3 +135,42 @@ func TestGuestArenaAlignsAllocations(t *testing.T) {
 		t.Fatalf("second allocation at %#x, want %#x", second, first+arenaAlignment)
 	}
 }
+
+// The heap a title is told about is not the arena's own size. A title does its
+// own arithmetic on the figure in 32-bit ints — one multiplies the free bytes
+// by a hundred for a percentage — and 64MiB overflows that: it printed a
+// negative percentage and waited for the heap to recover for the rest of the
+// run. The reported view is bounded, and free falls as the title allocates so
+// the percentage means something.
+func TestGuestArenaReportsABoundedHeapThatFallsAsItIsUsed(t *testing.T) {
+	arena := newGuestArena(0x30000000, 64<<20)
+	total := arena.reportedTotal()
+	if total != reportedHeapCeiling {
+		t.Fatalf("reported total = %d, want the ceiling %d", total, reportedHeapCeiling)
+	}
+	if total*100 > 1<<31-1 {
+		t.Fatalf("reported total %d overflows a title's 32-bit percentage", total)
+	}
+	if free := arena.reportedFree(); free != total {
+		t.Fatalf("free on an empty arena = %d, want the whole reported heap %d", free, total)
+	}
+	if _, ok := arena.allocate(1 << 20); !ok {
+		t.Fatal("allocate() ran out of an empty arena")
+	}
+	if free := arena.reportedFree(); free != total-(1<<20) {
+		t.Fatalf("free after a megabyte = %d, want %d", free, total-(1<<20))
+	}
+
+	// An arena smaller than the ceiling reports itself, and free never claims
+	// more than a further allocation could actually take.
+	small := newGuestArena(0x30000000, 1<<20)
+	if got := small.reportedTotal(); got != 1<<20 {
+		t.Fatalf("small arena reported total = %d, want its own size", got)
+	}
+	if _, ok := small.allocate(1 << 19); !ok {
+		t.Fatal("allocate() ran out of a fresh arena")
+	}
+	if free, available := small.reportedFree(), small.available(); free > available {
+		t.Fatalf("reported free %d is more than the %d left", free, available)
+	}
+}

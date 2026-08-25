@@ -153,3 +153,41 @@ func (arena *guestArena) used() uint64 {
 func (arena *guestArena) available() uint64 {
 	return arena.limit - arena.cursor + arena.freed
 }
+
+// reportedHeapCeiling bounds the heap size a title is told about. The arena is
+// 64MiB, which no handset these archives shipped for ever had, and a title
+// that does its own arithmetic on the figure does it in 32-bit ints: one of
+// them multiplies the free bytes by a hundred to get a percentage, which
+// overflows above about 21MiB and turns into a negative number. It printed
+// "-28% FREE" and waited for the figure to recover for as long as it was left
+// running. The ceiling is set below that overflow with room to spare, and
+// above any heap a WIPI handset had, so nothing that sizes a cache from it
+// gets less than the handset would have given.
+const reportedHeapCeiling uint64 = 16 << 20
+
+// reportedTotal and reportedFree are the heap a title sees, through
+// java/lang/Runtime and through MC_knlGetTotalMemory and MC_knlGetFreeMemory.
+// They are one view rather than two: a title that decides what it can afford
+// from one and then frees against the other would work from two different
+// heaps. Free is the ceiling less what is out, so it falls as the title
+// allocates rather than sitting at the ceiling for ever.
+func (arena *guestArena) reportedTotal() uint64 {
+	total := arena.limit - uint64(arena.base)
+	if total > reportedHeapCeiling {
+		return reportedHeapCeiling
+	}
+	return total
+}
+
+func (arena *guestArena) reportedFree() uint64 {
+	total := arena.reportedTotal()
+	used := arena.used()
+	if used >= total {
+		return 0
+	}
+	free := total - used
+	if available := arena.available(); free > available {
+		return available
+	}
+	return free
+}

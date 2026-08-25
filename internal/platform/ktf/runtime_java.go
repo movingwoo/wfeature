@@ -119,18 +119,18 @@ func init() {
 				}},
 			},
 		},
-		// java/io/PrintStream discards output; debug logging routes through the
+		// java/io/PrintStream keeps what a title writes about itself; see the
 		// Host logging boundary instead of the guest console.
 		"java/io/PrintStream": {
 			name:        "java/io/PrintStream",
 			superName:   "java/io/OutputStream",
 			accessFlags: 0x0021,
 			methods: []runtimeJavaMethod{
-				{class: "java/io/PrintStream", name: "print", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "print", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimePrintStreamText},
 				{class: "java/io/PrintStream", name: "print", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "print", descriptor: "(C)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "println", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
-				{class: "java/io/PrintStream", name: "println", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/io/PrintStream", name: "println", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimePrintStreamText},
 				{class: "java/io/PrintStream", name: "println", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "println", descriptor: "(C)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "println", descriptor: "(J)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
@@ -1488,6 +1488,28 @@ func runtimeComponentNoop(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (j
 	return jvm.VoidValue(), nil
 }
 
+// runtimePrintStreamText keeps the line a title writes to System.out. It is
+// the title's own commentary on what it is doing, which is the first evidence
+// worth having when a run stops making progress, so it goes to the same place
+// and the same level as a WIPI-C printk rather than being discarded. The
+// numeric and character overloads stay silent: a title writes those a
+// character at a time and the line they belong to is the one above.
+func runtimePrintStreamText(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) < 2 {
+		return jvm.VoidValue(), nil
+	}
+	text, err := arguments[1].Reference()
+	if err != nil || text == nil {
+		return jvm.VoidValue(), nil
+	}
+	line, ok := jvm.StringText(text)
+	if !ok {
+		return jvm.VoidValue(), nil
+	}
+	runtime.client.guestPrint(line)
+	return jvm.VoidValue(), nil
+}
+
 const maxPendingThreads = 64
 
 // serialDispatchInterval is how long the event loop waits between serial
@@ -1653,13 +1675,14 @@ func runtimeComponentZero(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (j
 }
 
 // runtimeTotalMemory and runtimeFreeMemory report the platform data arena, the
-// same heap MC_knlGetTotalMemory and MC_knlGetFreeMemory describe.
-func runtimeTotalMemory(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.LongValue(int64(platformDataSize)), nil
+// same heap MC_knlGetTotalMemory and MC_knlGetFreeMemory describe, through the
+// one bounded view in arena.go.
+func runtimeTotalMemory(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.LongValue(int64(runtime.arena.reportedTotal())), nil
 }
 
 func runtimeFreeMemory(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.LongValue(int64(runtime.arena.available())), nil
+	return jvm.LongValue(int64(runtime.arena.reportedFree())), nil
 }
 
 func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2166,6 +2189,20 @@ type runtimeDataBaseStore struct {
 	records [][]byte
 }
 
+// runtimeDataBaseException is what openDataBase owes a title that asked for a
+// database it did not want created. The spec is explicit: opening with create
+// false and no database throws DataBaseException, and that throw is how a
+// title finds out it is running for the first time. Answering with an empty
+// database instead told one title its save existed; it then read record zero,
+// caught the record exception that came back, and dereferenced the array the
+// read never produced.
+func runtimeDataBaseException(message string) error {
+	return &jvm.GuestException{
+		Object:  &jvm.Object{ClassName: runtimeDataBaseExceptionClass, Native: message},
+		Message: message,
+	}
+}
+
 // persist writes the serialized record list through the Host save store.
 func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) {
 	runtime.storeSave("jdb/"+store.name, encodeSaveRecords(store.records))
@@ -2185,10 +2222,15 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase name is not a string")
 	}
+	create, err := arguments[2].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	store := runtime.databases[name]
 	if store == nil {
 		store = &runtimeDataBaseStore{name: name}
-		if saved, ok := runtime.loadSave("jdb/" + name); ok {
+		saved, present := runtime.loadSave("jdb/" + name)
+		if present {
 			records, decodeErr := decodeSaveRecords(saved)
 			if decodeErr != nil {
 				runtime.countDiagnostic(fmt.Sprintf("jdb load error %s: %v", name, decodeErr))
@@ -2196,10 +2238,20 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 				store.records = records
 			}
 		}
+		if !present && create == 0 {
+			runtime.countDiagnostic("jdb absent " + name)
+			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
+		}
 		if runtime.databases == nil {
 			runtime.databases = make(map[string]*runtimeDataBaseStore)
 		}
 		runtime.databases[name] = store
+		// A database opened for creation exists from that moment, even with
+		// no record in it yet, so the next open finds it rather than throwing
+		// again.
+		if !present {
+			store.persist(runtime)
+		}
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",

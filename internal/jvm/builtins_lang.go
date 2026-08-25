@@ -323,19 +323,60 @@ func (vm *VM) registerRuntimeBuiltins() {
 		return LongValue(free), nil
 	})
 	// Class.forName is how one title reaches a class it names in a string. It
-	// answers the class object the loader already has, and the standard
-	// exception when there is none, which the title catches.
+	// answers a class object for every name this VM can resolve, and the
+	// standard exception when there is none, which the title catches.
 	vm.builtin(ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", func(vm *VM, arguments []Value) (Value, error) {
 		name, err := nativeString(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
 		internal := strings.ReplaceAll(name, ".", "/")
-		if _, loadErr := vm.loader.Load(internal); loadErr != nil {
+		if !vm.classForNameExists(internal) {
 			return VoidValue(), guestException("java/lang/ClassNotFoundException", name)
 		}
 		return ReferenceValue(&Object{ClassName: ClassClass, Native: internal}), nil
 	})
+}
+
+// classForNameExists answers Class.forName's only question. A name reaches it
+// three ways: an array descriptor, which has no class file and exists when its
+// element type does; a class the platform compiled ahead of time, which lives
+// in the AOT registry and never in the loader — a title asking for its own
+// main class arrives here, and answering "not found" left one of them
+// repainting an empty card for its whole run; and a class file the loader can
+// read.
+func (vm *VM) classForNameExists(name string) bool {
+	if element, isArray := arrayElementClassName(name); isArray {
+		return element == "" || vm.classForNameExists(element)
+	}
+	if _, registered := vm.AOTClass(name); registered {
+		return true
+	}
+	_, err := vm.loader.Load(name)
+	return err == nil
+}
+
+// arrayElementClassName reports whether a name is an array descriptor and, if
+// it is, the class name of its innermost element. A primitive element gives an
+// empty name: there is nothing to look up, and the type still exists.
+func arrayElementClassName(name string) (string, bool) {
+	if len(name) == 0 || name[0] != '[' {
+		return "", false
+	}
+	typeInfo, err := ParseFieldDescriptor(name)
+	if err != nil {
+		return "", false
+	}
+	for typeInfo.Kind == TypeArray {
+		if typeInfo.Component == nil {
+			return "", false
+		}
+		typeInfo = *typeInfo.Component
+	}
+	if typeInfo.Kind != TypeReference {
+		return "", true
+	}
+	return typeInfo.ClassName, true
 }
 
 const (

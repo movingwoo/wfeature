@@ -252,6 +252,18 @@ who has no other view of what the title computed: the range `10..11 of a 10
 character string` is what identified a truncated `long` in the platform above,
 and the message before it said only that a range was wrong.
 
+**`Class.forName` has three kinds of name to answer, and the loader knows one
+of them.** A title that names its own class reaches a platform's ahead-of-time
+registry rather than a class file, and asking the loader alone answered "not
+found" for the name a title had just been started under. One KTF title asks
+for its own main class on the way into its first card, caught the
+`ClassNotFoundException`, and repainted an empty card for the rest of the run
+— eight hundred flushes with no lit pixel, and nothing in the trace but the
+same three calls. An array type is the third kind: it has no class file at all
+and exists whenever its element type does, with a primitive element always
+existing. All three are one question now, asked in one place, and the exception
+is what is left when none of them answers.
+
 **`System.exit` is a Host decision, so it is a hook.** `Options.Exit` is what
 the call reaches, and a platform installs the teardown its own destroy path
 uses. A MIDlet is not supposed to call it — `notifyDestroyed` is the

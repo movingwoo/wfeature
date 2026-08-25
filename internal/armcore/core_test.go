@@ -910,6 +910,40 @@ func TestCoreCallDerivedThreadInheritsBudgetAndHook(t *testing.T) {
 	}
 }
 
+// A derived call inherits the guest stack rather than getting one of its own,
+// so the stack pointer it started from is the only line between a frame this
+// run created and one that belongs to a caller the Host is still inside. A
+// platform that resumes a guest long jump needs that line: a jump landing
+// above it has to leave the call rather than be resumed in it.
+func TestCoreCallDerivedThreadRemembersItsEntryStack(t *testing.T) {
+	core := NewCore(CoreOptions{MaxSteps: 100})
+	loadARM(t, core.Memory(), 0x1000,
+		0xef000000, // svc #0
+		0xe12fff1e, // bx lr
+	)
+	initial := NewContext()
+	initial.Registers[RegisterSP] = 0x3000
+	parent := NewThread(initial)
+	if _, known := parent.EntryStackPointer(); known {
+		t.Fatal("a thread that was never called from reports an entry stack")
+	}
+	var entry uint32
+	var known bool
+	handler := func(_ context.Context, thread *Thread, _ SupervisorCall) error {
+		entry, known = thread.EntryStackPointer()
+		return nil
+	}
+	if _, err := core.Call(context.Background(), parent, 0x1000, 0x2000, nil, handler); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if !known {
+		t.Fatal("a derived call does not report an entry stack")
+	}
+	if entry != 0x3000 {
+		t.Fatalf("entry stack = %#x, want the parent's %#x", entry, 0x3000)
+	}
+}
+
 // The immediate form of the Thumb-to-ARM call. A Thumb-compiled module reaches
 // its own ARM routines through it, and unlike the register form the target is
 // word aligned rather than halfword aligned: the low two bits of the computed
