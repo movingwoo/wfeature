@@ -209,6 +209,11 @@ func byteArrayInputStreamDefinition() ClassDefinition {
 			// several records in one buffer reads each of them by handing the
 			// same array a different window, so the end has to be per stream.
 			{Name: "limit", Descriptor: "I", Access: AccessPrivate},
+			// Where reset goes back to. A stream over an array is always
+			// markable, and both constructors set this to where reading
+			// starts, so a title that resets without ever marking gets the
+			// beginning of its window rather than an exception.
+			{Name: "mark", Descriptor: "I", Access: AccessPrivate},
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "([B)V", Access: AccessPublic, Body: byteArrayInputStreamInit},
@@ -217,6 +222,9 @@ func byteArrayInputStreamDefinition() ClassDefinition {
 			{Name: "read", Descriptor: "([BII)I", Access: AccessPublic, Body: byteArrayInputStreamReadRange},
 			{Name: "skip", Descriptor: "(J)J", Access: AccessPublic, Body: byteArrayInputStreamSkip},
 			{Name: "available", Descriptor: "()I", Access: AccessPublic, Body: byteArrayInputStreamAvailable},
+			{Name: "mark", Descriptor: "(I)V", Access: AccessPublic, Body: byteArrayInputStreamMark},
+			{Name: "markSupported", Descriptor: "()Z", Access: AccessPublic, Body: constantInt(1)},
+			{Name: "reset", Descriptor: "()V", Access: AccessPublic, Body: byteArrayInputStreamReset},
 		},
 	}
 }
@@ -238,6 +246,39 @@ func byteArrayInputStreamInit(call *Invocation, arguments []Value) (Value, error
 		return VoidValue(), err
 	}
 	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "limit", int32(array.Length()))
+}
+
+// byteArrayInputStreamMark and byteArrayInputStreamReset are the pair a title
+// uses to read the same bytes twice. A stream over an array can always go
+// back, so markSupported is true here and reset never fails — the read-ahead
+// limit the caller passes has nothing to bound, because nothing is buffered.
+//
+// Leaving these to the superclass is what a resource stream used to do, and
+// there reset throws: one title marks nothing, reads a header, resets to take
+// the same bytes again, catches the IOException its own decoder never
+// expected, and paints the image it did not build.
+func byteArrayInputStreamMark(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	position, err := intField(call.vm, stream, ByteArrayInputStreamClass, "position")
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "mark", position)
+}
+
+func byteArrayInputStreamReset(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	mark, err := intField(call.vm, stream, ByteArrayInputStreamClass, "mark")
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "position", mark)
 }
 
 // byteArrayInputStreamInitRange opens a window on the array rather than the
@@ -278,6 +319,14 @@ func byteArrayInputStreamInitRange(call *Invocation, arguments []Value) (Value, 
 		return VoidValue(), err
 	}
 	if err := setIntField(call.vm, stream, ByteArrayInputStreamClass, "position", offset); err != nil {
+		return VoidValue(), err
+	}
+	// The mark starts where reading does. The class documentation describes a
+	// reset on a windowed stream as reaching the whole array, which is the
+	// text every edition of it carries and not what any implementation of it
+	// does; a window that reset widened would let a record reader walk into
+	// the record before it.
+	if err := setIntField(call.vm, stream, ByteArrayInputStreamClass, "mark", offset); err != nil {
 		return VoidValue(), err
 	}
 	return VoidValue(), setIntField(call.vm, stream, ByteArrayInputStreamClass, "limit", limit)
@@ -629,6 +678,15 @@ func dataInputStreamDefinition() ClassDefinition {
 			{Name: "available", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputDelegate("available", "()I")},
 			{Name: "skip", Descriptor: "(J)J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputDelegate("skip", "(J)J")},
 			{Name: "close", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputDelegate("close", "()V")},
+			// The wrapper marks and resets whatever it wraps. Nothing is
+			// buffered here — every read goes straight through — so handing
+			// the three calls on is the whole of the contract, and a title
+			// that resets the stream it is decoding from gets the answer of
+			// the stream underneath rather than the refusal of the abstract
+			// superclass.
+			{Name: "mark", Descriptor: "(I)V", Access: AccessPublic, Body: dataInputDelegate("mark", "(I)V")},
+			{Name: "markSupported", Descriptor: "()Z", Access: AccessPublic, Body: dataInputDelegate("markSupported", "()Z")},
+			{Name: "reset", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputDelegate("reset", "()V")},
 			{Name: "skipBytes", Descriptor: "(I)I", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputSkipBytes},
 			{Name: "readBoolean", Descriptor: "()Z", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadBoolean},
 			{Name: "readByte", Descriptor: "()B", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadByte},

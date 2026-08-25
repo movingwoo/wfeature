@@ -223,9 +223,17 @@ func (client *Client) NextDeadline() (time.Time, bool) {
 		if len(client.runtime.pendingThreads) > 0 {
 			consider(time.Time{})
 		}
-		// A queued serial Runnable is due on the next idle pass, not now.
+		// A queued serial Runnable is due on the next idle pass, not now —
+		// and never before the wait the client thread declared is over,
+		// because that is the thread it runs on. Answering the earlier of the
+		// two reported work as due at an instant the dispatch would refuse, so
+		// a Host on a manual clock never advanced it and the wait never ended.
 		if len(client.runtime.pendingSerial) > 0 {
-			consider(client.runtime.serialDueAt)
+			due := client.runtime.serialDueAt
+			if client.clientWakeAt.After(due) {
+				due = client.clientWakeAt
+			}
+			consider(due)
 		}
 		for _, timer := range client.runtime.pendingTimers {
 			// A Java Timer task has no guest callback address and is due all

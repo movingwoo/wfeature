@@ -895,6 +895,16 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	}
 	session, err := ktf.StartSession(ctx, data, options)
 	if err != nil {
+		// A start that got as far as running guest code carries the trace of
+		// what the game was doing when it stopped, and that is the archive
+		// whose failure most needs reading.
+		if diagPath != "" {
+			if diagnostics, ok := ktf.StartDiagnostics(err); ok {
+				if writeErr := writeKTFDiagnostics(diagPath, diagnostics, map[string]any{"start_error": err.Error()}); writeErr != nil {
+					fmt.Fprintf(stderr, "write diagnostics: %v\n", writeErr)
+				}
+			}
+		}
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -1134,7 +1144,10 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 // summary. The counted totals answer what the game exercised; the ordered
 // trace, present only in debug builds, answers what it was doing last.
 func writeDiagnostics(path string, session *ktf.Session, summary map[string]any) error {
-	diagnostics := session.Diagnostics()
+	return writeKTFDiagnostics(path, session.Diagnostics(), summary)
+}
+
+func writeKTFDiagnostics(path string, diagnostics ktf.Diagnostics, summary map[string]any) error {
 	report := map[string]any{
 		"profile":     backend.BuildProfile(),
 		"summary":     summary,

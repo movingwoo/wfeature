@@ -112,3 +112,17 @@ var runtimeClassParents = map[string]string{
 func runtimeClassParent(className string) string {
 	return runtimeClassParents[className]
 }
+
+// ThrowableParents copies the superclass chain of the exception types this
+// runtime knows without a class file. A platform that publishes its own class
+// records to guest code builds them from this rather than from a list of its
+// own, for the reason the declarations here are built from it: the class a
+// `catch` resolves and the class a `new` resolves cannot be allowed to
+// disagree.
+func ThrowableParents() map[string]string {
+	parents := make(map[string]string, len(runtimeClassParents))
+	for name, parent := range runtimeClassParents {
+		parents[name] = parent
+	}
+	return parents
+}

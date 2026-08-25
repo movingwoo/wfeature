@@ -174,6 +174,46 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	return startSession(ctx, data, options, nil)
 }
 
+// StartFailure is what a start reports once guest code has run. The interesting
+// half of a start that fails is what the game was doing when it stopped, and
+// until this existed that half was thrown away: there is no session to ask, so
+// `-diag` wrote nothing for exactly the archives whose failure is hardest to
+// read. The error is unchanged — every caller that only tests it sees what it
+// always saw — and a Host that wants the trace unwraps this.
+type StartFailure struct {
+	// Err is the failure itself.
+	Err error
+	// Diagnostics is the boundary trace of the run that failed. It is empty
+	// when the failure came before the runtime existed, and when the Host did
+	// not ask for tracing.
+	Diagnostics Diagnostics
+}
+
+func (failure *StartFailure) Error() string {
+	if failure == nil || failure.Err == nil {
+		return "KTF session start failed"
+	}
+	return failure.Err.Error()
+}
+
+func (failure *StartFailure) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
+// StartDiagnostics reports the boundary trace carried by a failed start, if the
+// error is one. A caller that has only an error uses this rather than reaching
+// for the type.
+func StartDiagnostics(err error) (Diagnostics, bool) {
+	var failure *StartFailure
+	if errors.As(err, &failure) && failure != nil {
+		return failure.Diagnostics, true
+	}
+	return Diagnostics{}, false
+}
+
 func startSession(ctx context.Context, data []byte, options SessionOptions, startupHook func(context.Context) error) (*Session, error) {
 	archive, err := Open(data)
 	if err != nil {
@@ -227,29 +267,34 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	} else if options.SaveRoot != "" {
 		client.AttachSaveStore(NewDirectorySaveStore(filepath.Join(options.SaveRoot, SaveOwner(archive.Descriptor))))
 	}
+	// Everything from here on has run guest code, so a failure carries the
+	// trace of what the game was doing when it stopped.
+	failed := func(err error) (*Session, error) {
+		return nil, &StartFailure{Err: err, Diagnostics: (&Session{Client: client}).Diagnostics()}
+	}
 	entrySummary, err := client.ExecuteEntry(ctx, nil)
 	if err != nil {
 		client.log("KTF entry failed", "error", err)
-		return nil, err
+		return failed(err)
 	}
 	client.log("KTF entry executed", "steps", entrySummary.Steps)
 	if _, err := client.Initialize(ctx, entrySummary.Context.Registers[0]); err != nil {
 		client.log("KTF initialization failed", "error", err)
-		return nil, err
+		return failed(err)
 	}
 	client.log("KTF initialized")
 	object, _, err := client.NewObject(ctx, archive.Descriptor.MainClass, "()V")
 	if err != nil {
 		client.log("KTF main class construction failed", "class", archive.Descriptor.MainClass, "error", err)
-		return nil, fmt.Errorf("construct KTF main class %s: %w", archive.Descriptor.MainClass, err)
+		return failed(fmt.Errorf("construct KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
 	arguments, err := client.newStringArrayObject()
 	if err != nil {
-		return nil, err
+		return failed(err)
 	}
 	if _, err := client.InvokeVirtual(ctx, object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(arguments)); err != nil {
 		client.log("KTF startApp failed", "class", archive.Descriptor.MainClass, "error", err)
-		return nil, fmt.Errorf("start KTF main class %s: %w", archive.Descriptor.MainClass, err)
+		return failed(fmt.Errorf("start KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
 	client.log("KTF startApp returned", "class", archive.Descriptor.MainClass)
 	return &Session{Archive: archive, Client: client, options: options}, nil

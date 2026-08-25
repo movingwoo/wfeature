@@ -751,6 +751,14 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 	if !ok || exception.ClassName != "java/lang/Error" {
 		t.Fatalf("pinned caught exception at %#x = %+v/%t", exceptionAddress, exception, ok)
 	}
+	// The catch block reads what it caught out of the handler record, and the
+	// record is on the guest stack: a word left unwritten is whatever the
+	// frame underneath put there. One title re-threw such a word and the
+	// platform could only say it was not an object.
+	caught := readTestBytes(t, client, outerHandler+javaExceptionObject, 4)
+	if handed := binary.LittleEndian.Uint32(caught); handed != exceptionAddress {
+		t.Fatalf("the matched handler was handed %#x, want the exception %#x", handed, exceptionAddress)
+	}
 	if got := parent.Context(); got != parentContext {
 		t.Fatalf("AOT exception changed parent context: got %+v, want %+v", got, parentContext)
 	}

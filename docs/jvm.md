@@ -218,6 +218,24 @@ encoder, because every handset this runtime serves has that default charset;
 anything else is refused rather than guessed at, since decoding text with the
 wrong table produces a screen full of plausible-looking mistakes.
 
+**A stream that can be read twice has to say so.** `InputStream.reset` throws,
+which is right for the abstract class and wrong for both of the streams a title
+actually holds: a stream over a byte array can always go back, and a
+`DataInputStream` can do whatever the stream it wraps can. Neither declared
+`mark`, `markSupported` or `reset`, so both inherited the refusal. What that
+cost is not a missing feature but a wrong answer: one title reads a header out
+of a resource, resets to hand the same bytes to its own decoder, catches the
+`IOException` its decoder never raises, keeps a null image and paints it — and
+the report was a `NullPointerException` in `drawImage`, four hundred successful
+`createImage` calls after the cause. The array stream now keeps a mark where
+reading started, `reset` returns to it, and the wrapper passes all three calls
+on to what it wraps. Three KTF titles reach a first frame on that alone.
+
+The mark of a windowed stream is the start of its window, not the start of the
+array. The class documentation says a reset there reaches the whole array; no
+implementation of it does that, and a title reading one record out of a shared
+buffer would walk into the record before its own.
+
 **`System.exit` is a Host decision, so it is a hook.** `Options.Exit` is what
 the call reaches, and a platform installs the teardown its own destroy path
 uses. A MIDlet is not supposed to call it — `notifyDestroyed` is the

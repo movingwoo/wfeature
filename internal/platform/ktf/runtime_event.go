@@ -411,6 +411,13 @@ func (runtime *initializationRuntime) dispatchPointerToCards(eventType, x, y int
 	return nil
 }
 
+// repaintQueued reports whether the guest has asked for a repaint that this
+// Host still owes it. A serial Runnable defers to one, because on the original
+// event loop the two share a queue and the repaint was posted first.
+func (runtime *initializationRuntime) repaintQueued() bool {
+	return runtime != nil && runtime.repaintPending && len(runtime.displayCards) > 0
+}
+
 // paintTopCard paints the top pushed card into the screen framebuffer and
 // presents the frame. It reports whether a card painted. Re-entrant paints are
 // dropped: a card that repaints while painting would otherwise recurse.
@@ -421,6 +428,11 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if runtime.repaintServicing {
 		return false, nil
 	}
+	// The paint satisfies whatever repaint request is outstanding, whichever
+	// path asked for it. Leaving the flag set would hold the serial queue for
+	// ever, because the only other things that clear it are the guest's own
+	// event drain and serviceRepaints.
+	runtime.repaintPending = false
 	card := runtime.displayCards[len(runtime.displayCards)-1]
 	graphics, err := runtime.newScreenGraphics()
 	if err != nil {
