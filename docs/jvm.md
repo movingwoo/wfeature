@@ -236,6 +236,22 @@ array. The class documentation says a reset there reaches the whole array; no
 implementation of it does that, and a title reading one record out of a shared
 buffer would walk into the record before its own.
 
+**A calendar answers every field CLDC declares.** `AM_PM` and a `set` of
+`DAY_OF_WEEK` were the two the switch did not reach, and a field it does not
+reach is an `IllegalArgumentException` in the middle of a title's startup
+rather than a wrong date. One local title asks for `AM_PM` during its own
+startup and stopped there. Setting a day of the week names a
+day inside the week the calendar is already in, which is what moving by the
+difference from the current weekday does; the same normalization that carries
+an out-of-range day into the next month carries this one.
+
+**Two messages now carry the numbers that explain them.** A refused
+`substring` names the range and the length it was given, and an unsupported
+calendar field names the field. Both are read off a failure report by someone
+who has no other view of what the title computed: the range `10..11 of a 10
+character string` is what identified a truncated `long` in the platform above,
+and the message before it said only that a range was wrong.
+
 **`System.exit` is a Host decision, so it is a hook.** `Options.Exit` is what
 the call reaches, and a platform installs the teardown its own destroy path
 uses. A MIDlet is not supposed to call it — `notifyDestroyed` is the

@@ -2832,6 +2832,26 @@ somewhere unexpected, so a probe that fails is dropped and the rest still
 arrives. `armcore` already carries the failing context out in the run summary,
 so nothing had to be added to the core to get it.
 
+When the report says *what* faulted and not *why the register held that*, the
+next step is to stop before it. `TestLocalBreakpointProbe` in
+`internal/platform/ktf` takes an archive, a list of guest addresses and a list
+of addresses to watch, and prints the registers — with what each one points at
+named — every time execution reaches one:
+
+```sh
+WFEATURE_BREAKPOINT_ARCHIVE=<abs path> WFEATURE_BREAKPOINTS=0x105b0e,0x105b12 \
+WFEATURE_BREAKPOINT_WATCH=0x179198 WFEATURE_BREAKPOINT_CLASSES=fm \
+    go test ./internal/platform/ktf -run TestLocalBreakpointProbe -v
+```
+
+It is the companion to the disassemble probe — that says what an instruction
+does, this says what it was holding — and the class dump beside it is what
+turns an AOT native's address into the method name the archive gave it. Its one
+limit is worth knowing before it wastes an hour: **the debugger attaches after
+the session has started**, so nothing that happens inside `startApp` is
+reachable from it. A native that appears never to run may simply have run
+already.
+
 ## A second download gate, and the answer that opened it
 
 Another title in the same series opens by offering to download 600KB "to play
@@ -4532,6 +4552,70 @@ few bytes below a mapping — which reads like a wild pointer and is not one. On
 title in the set does this; four megabytes of stack instead of one bought it
 two minutes and the same end, so it is recursion rather than a stack that is
 too small, and the two are investigated in opposite directions.
+
+### The fifth round: a block that ended where the last field we read ended
+
+Six titles of the 262 in that set reach a first frame now. **The same 400-tick
+run over every archive, before and after, moves six rows from a failure to a
+first frame and leaves every other row's flush count, lit-pixel count and tick
+count identical** — 262 rows, six changed, all in the same direction. The
+fifteen SKT archives were run on both binaries too, because the change reaches
+`internal/jvm`, and all thirty rows agree. LGT was not re-run: `internal/platform/lgt`
+does not reference `internal/jvm` at all.
+
+**The block param 1 points at was sized to the only field this platform reads,
+and a middleware writes two words past it.** Two titles share it, and both
+died on the same instruction — `str r3, [r2, #0x24]` with `r2` zero — at the
+end of a native the Java half calls every frame. The context that block belongs
+to is the module's own; all this platform knows about it is the exception
+handler head at offset 32, so it was nine words long, and the middleware writes
+at offsets 36 and 40. Those two words landed on the next two allocations, which
+are the single-word parameters 0 and 1 — so the store meant for the middleware's
+own state overwrote *the pointer to the block itself* with a scene number, and
+the next instruction dereferenced the scene number. The block is now as long as
+a handler record. A block that ends at the last field we happen to read is a
+block the next module writes past.
+
+**Both halves of a sixty-four bit answer have to come back.** A Java jump runs
+the callee on a context of its own, and only r0 was carried to the caller
+afterwards; a `bl` would have left both. Every `long` a title got from this
+platform therefore arrived truncated to its low word. One title builds a string
+out of `System.currentTimeMillis` and takes a digit out of it by index, and read
+a ten-character string where a handset gives thirteen — the failure was
+`StringIndexOutOfBoundsException` in the middle of its startup, which says
+nothing about a clock. The message now carries the range and the length, and
+that is what identified it.
+
+The same answer crosses back through a native call's eight-byte result
+container, and there the second word is filled **only when the method's return
+type is two words wide**. For every other native it stays zero: a native
+compiled into the module returns through the module's own convention, and r1
+after a call that answers with one word is whatever the callee was holding.
+
+**`Graphics.getPixels` and `setPixels` are the device-format pair.** A title
+reached them through its annunciator, and the byte layout is not a guess for
+these handsets: the screen is 16-bit, so a pixel is the two framebuffer bytes as
+they lie and `bpl` is a byte pitch. That is what makes the byte-array form a
+different method from `getRGBPixels` rather than a spelling of it.
+
+**The startApp instruction ceiling was cutting off a loader, not a runaway.**
+Two titles spend between fifty and a hundred million instructions inside one
+native call during `startApp`, decompressing what they load before they draw.
+Both finish in under a second of Host time, so the ceiling moved to a hundred
+million rather than the run being called a spin.
+
+**A first paint before the guest threads is not the order, and the measurement
+is what says so.** The two titles above start the native half of themselves
+from the first paint — the annunciator hook calls the module's `start`, and the
+game thread calls the module's per-frame entry — so painting a newly pushed card
+before the threads run was the obvious reading, and it did move both titles.
+It also broke three that had been working: their card's `paint` needs images
+their own thread loads, and one of them raised a `NullPointerException` out of
+`drawImage` on the first frame. Six rows better, three worse is not an
+improvement, and both orders are defensible on a handset where the display and
+the game thread are genuinely concurrent. With the block above the right size
+the two titles no longer need the paint to have happened first, so the order
+stays as it is: timers, threads, paint.
 
 ## Deliberately incomplete
 

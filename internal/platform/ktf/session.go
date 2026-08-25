@@ -80,7 +80,12 @@ type SessionOptions struct {
 }
 
 const (
-	sessionDefaultMaxSteps   = 50_000_000
+	// The ceiling is what a real game's startApp needs, and two local titles
+	// spend between fifty and a hundred million instructions in one native
+	// call there — decompressing what they load before they draw anything.
+	// Both finish in under a second of Host time, so the old fifty million
+	// was not protecting against a runaway; it was cutting off a loader.
+	sessionDefaultMaxSteps   = 100_000_000
 	sessionDefaultTimerLimit = 4
 	// startupSliceSteps bounds guest execution between PendingSession pumps.
 	startupSliceSteps = 8_000_000
