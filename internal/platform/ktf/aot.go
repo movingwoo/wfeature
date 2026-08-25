@@ -25,6 +25,9 @@ const (
 	javaArrayLengthSize  = 4
 	javaExceptionEntry   = 16
 	javaExceptionHandler = 68
+	// javaExceptionObject is where a matched handler is handed what was
+	// thrown. A catch block reads it from there; see findAOTExceptionHandler.
+	javaExceptionObject  = 16
 	javaExceptionContext = 24
 	javaExceptionHead    = 32
 	maxExceptionHandlers = 64
@@ -632,6 +635,19 @@ func (runtime *initializationRuntime) describeGuestFault(faultContext armcore.Co
 	if frames := runtime.symbolizeAOTStack(stack); frames != "" {
 		parts = append(parts, "frames="+frames)
 	}
+	// A guest stack grows down into nothing, so running off the end of one is
+	// reported as an access to unmapped memory a few bytes below a mapping —
+	// which reads like a wild pointer and is not one. Saying so is the whole
+	// difference between "this title dereferences garbage" and "this title
+	// recursed", and the two are investigated in opposite directions.
+	faultAddress := stackPointer
+	var access *armcore.AccessError
+	if errors.As(fault.Cause, &access) {
+		faultAddress = access.Address
+	}
+	if note := runtime.client.describeStackOverflow(faultAddress, stackPointer); note != "" {
+		parts = append(parts, note)
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -1075,11 +1091,60 @@ func (runtime *initializationRuntime) throwAOTException(thread *armcore.Thread) 
 	}
 	runtime.callbacks.Allocations++
 
-	unwind, err := runtime.findAOTExceptionHandler(thread, name)
+	unwind, err := runtime.findAOTExceptionHandler(thread, name, address)
 	if err != nil {
 		return 0, err
 	}
 	if unwind == nil {
+		return 0, &UncaughtAOTException{
+			Address:   address,
+			Exception: &jvm.GuestException{Object: object, Message: site},
+		}
+	}
+	return 0, unwind
+}
+
+// throwAOTExceptionObject is the callbacks table's slot 2: the guest hands over
+// an exception it built itself and asks for it to be thrown. It is what a
+// title's own `throw e` compiles to, and leaving the slot at zero is what a
+// title reads as a method pointer of zero and calls — the failure it produced
+// was "jump target is null" in the middle of the title's own error handling,
+// with nothing to say the platform had refused a throw.
+//
+// The class of the throw is the object's own, so nothing is created here and
+// nothing is looked up by name; the handler search and the uncaught path are
+// the ones every other throw takes.
+func (runtime *initializationRuntime) throwAOTExceptionObject(thread *armcore.Thread) (uint32, error) {
+	address, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	if address == 0 {
+		// Throwing a null is a NullPointerException, which is what the
+		// language says and what a title that lost track of what it caught
+		// depends on.
+		return 0, runtime.raiseGuestException(thread, &jvm.GuestException{
+			Object:  &jvm.Object{ClassName: "java/lang/NullPointerException", Native: "throw of a null exception"},
+			Message: "throw of a null exception",
+		})
+	}
+	object, bound := runtime.client.vm.AOTObject(address)
+	if !bound || object == nil {
+		second, _ := thread.Register(1)
+		return 0, fmt.Errorf("KTF Java throw of %s, which is not bound to a JVM object (second word %s)%s",
+			runtime.describeGuestWord(address), runtime.describeGuestWord(second), runtime.callerSite(thread))
+	}
+	name := object.ClassName
+	runtime.countDiagnostic("throw object " + name + runtime.callerMark(thread))
+	unwind, err := runtime.findAOTExceptionHandler(thread, name, address)
+	if err != nil {
+		return 0, err
+	}
+	if unwind == nil {
+		site := ""
+		if lr, lrErr := thread.Register(armcore.RegisterLR); lrErr == nil {
+			site = fmt.Sprintf("thrown by guest code at %#x", lr)
+		}
 		return 0, &UncaughtAOTException{
 			Address:   address,
 			Exception: &jvm.GuestException{Object: object, Message: site},
@@ -1112,7 +1177,7 @@ func (runtime *initializationRuntime) raiseGuestException(thread *armcore.Thread
 			return fmt.Errorf("allocate KTF exception %s: %w", name, err)
 		}
 	}
-	unwind, err := runtime.findAOTExceptionHandler(thread, name)
+	unwind, err := runtime.findAOTExceptionHandler(thread, name, address)
 	if err != nil {
 		return err
 	}
@@ -1122,7 +1187,7 @@ func (runtime *initializationRuntime) raiseGuestException(thread *armcore.Thread
 	return unwind
 }
 
-func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Thread, exceptionClass string) (*aotExceptionUnwind, error) {
+func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Thread, exceptionClass string, exceptionAddress uint32) (*aotExceptionUnwind, error) {
 	if runtime.exceptionContext == 0 {
 		return nil, fmt.Errorf("KTF JVM exception context is not prepared")
 	}
@@ -1203,6 +1268,17 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			}
 			if err := runtime.client.core.SetThreadLocalWord(thread, headAddress, handlerAddress); err != nil {
 				return nil, fmt.Errorf("write KTF Java exception handler head: %w", err)
+			}
+			// The handler record is where the catch block reads what it
+			// caught. It lives on the guest stack, so the word is whatever
+			// the frame underneath left there until a throw writes it: one
+			// title's `catch (e) { close(); throw e; }` re-threw a Thumb code
+			// address that had been on the stack, and the platform could only
+			// report that the word it was handed was not an object.
+			var caught [4]byte
+			binary.LittleEndian.PutUint32(caught[:], exceptionAddress)
+			if err := runtime.client.core.Memory().Write(handlerAddress+javaExceptionObject, caught[:]); err != nil {
+				return nil, fmt.Errorf("write KTF Java caught exception at %#x: %w", handlerAddress+javaExceptionObject, err)
 			}
 			return &aotExceptionUnwind{
 				contextBase: handlerAddress + javaExceptionContext,

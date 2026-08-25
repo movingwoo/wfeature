@@ -236,6 +236,15 @@ hand-written route found it.
 boundary; `trace` is the most recent crossings in order, and is a debug-profile
 field — a release build counts but does not keep the order.
 
+**A start that fails writes one too.** A title that dies before its first tick
+— inside its own `startApp`, or in the initialization before it — leaves no
+session behind, and for a long time that meant no report for exactly the
+archives whose failure is hardest to read. A failure past the client's entry
+now carries its trace, and the report's `summary` is `start_error` alone. It is
+the fastest way to see what the title was doing: the last twenty lines usually
+name the resource it opened, the class it loaded and the method it resolved
+just before it stopped.
+
 A game that is working repeats `flush lcd`, `Card.repaint` and `Graphics.*`
 once per tick. `stub table`, `not implemented`, `throw`, `raise` and `error`
 name what to implement next. [`ktf.md`](ktf.md) reads a real report line by

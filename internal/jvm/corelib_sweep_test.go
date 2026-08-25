@@ -552,3 +552,115 @@ func TestVectorElementsWalksASnapshot(t *testing.T) {
 		t.Fatalf("the enumeration walked %v, want [a b]", walked)
 	}
 }
+
+// A stream over an array can always be read twice. A title reads a header out
+// of a resource, resets, and hands the same bytes to its own decoder; when the
+// abstract superclass answered the reset the title caught an IOException its
+// decoder never raised, kept a null image, and painted it.
+func TestByteArrayInputStreamResetsToTheMark(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{1, 2, 3, 4})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([B)V", ReferenceValue(array))
+	if err != nil {
+		t.Fatal(err)
+	}
+	supported, err := vm.InvokeVirtual(stream, "markSupported", "()Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := supported.Int32(); value != 1 {
+		t.Fatalf("markSupported() = %d, want 1", value)
+	}
+	if _, err := vm.InvokeVirtual(stream, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	// Reset without a mark goes back to where reading started, which is the
+	// case a title that never marks depends on.
+	if _, err := vm.InvokeVirtual(stream, "reset", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := vm.InvokeVirtual(stream, "read", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := first.Int32(); value != 1 {
+		t.Fatalf("read() after reset = %d, want 1", value)
+	}
+	if _, err := vm.InvokeVirtual(stream, "mark", "(I)V", IntValue(0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(stream, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(stream, "reset", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	marked, err := vm.InvokeVirtual(stream, "read", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := marked.Int32(); value != 2 {
+		t.Fatalf("read() after marked reset = %d, want 2", value)
+	}
+}
+
+// A windowed stream resets to the start of its window, not to the start of the
+// array underneath it. The class documentation says otherwise, and a record
+// reader that believed it would walk into the record before its own.
+func TestByteArrayInputStreamResetsToTheStartOfItsWindow(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{0, 1, 2, 3, 4, 5})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([BII)V", ReferenceValue(array), IntValue(2), IntValue(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(stream, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(stream, "reset", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeVirtual(stream, "read", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := result.Int32(); value != 2 {
+		t.Fatalf("read() after reset = %d, want 2", value)
+	}
+}
+
+// The wrapper hands mark and reset to what it wraps. A title that decodes
+// through the wrapper and resets the same object it decodes with reaches the
+// stream underneath rather than the abstract superclass.
+func TestDataInputStreamResetsThroughToItsSource(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{9, 8, 7})
+	source, err := vm.NewObject(ByteArrayInputStreamClass, "([B)V", ReferenceValue(array))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := vm.NewObject(DataInputStreamClass, "(Ljava/io/InputStream;)V", ReferenceValue(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	supported, err := vm.InvokeVirtual(stream, "markSupported", "()Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := supported.Int32(); value != 1 {
+		t.Fatalf("markSupported() = %d, want 1", value)
+	}
+	if _, err := vm.InvokeVirtual(stream, "readByte", "()B"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(stream, "reset", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeVirtual(stream, "readByte", "()B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := result.Int32(); value != 9 {
+		t.Fatalf("readByte() after reset = %d, want 9", value)
+	}
+}

@@ -283,6 +283,14 @@ func init() {
 				{class: "java/io/ByteArrayInputStream", name: "read", descriptor: "([BII)I", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "available", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "skip", descriptor: "(J)J", accessFlags: 0x0001},
+				// A stream over an array overrides all three of these, and
+				// declaring them here is what puts the override in the
+				// dispatch table: a title calling reset through a variable
+				// typed as the superclass otherwise reaches the abstract
+				// class's own reset, which throws.
+				{class: "java/io/ByteArrayInputStream", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/ByteArrayInputStream", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/io/ByteArrayInputStream", name: "reset", descriptor: "()V", accessFlags: 0x0001},
 			},
 		},
 		"java/io/DataInputStream": {
@@ -308,6 +316,11 @@ func init() {
 				{class: "java/io/DataInputStream", name: "readChar", descriptor: "()C", accessFlags: 0x0011},
 				{class: "java/io/DataInputStream", name: "readFully", descriptor: "([B)V", accessFlags: 0x0011},
 				{class: "java/io/DataInputStream", name: "readFully", descriptor: "([BII)V", accessFlags: 0x0011},
+				// The wrapper passes all three on to what it wraps, and it has
+				// to declare them for the same reason the array stream does.
+				{class: "java/io/DataInputStream", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/DataInputStream", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/io/DataInputStream", name: "reset", descriptor: "()V", accessFlags: 0x0001},
 			},
 		},
 		// java/lang/Math exposes the JVM-owned builtins through KTF metadata.
@@ -1253,6 +1266,21 @@ func init() {
 		"java/util/Enumeration": runtimeInterfaceClass("java/util/Enumeration",
 			runtimeJavaMethod{name: "hasMoreElements", descriptor: "()Z"},
 			runtimeJavaMethod{name: "nextElement", descriptor: "()Ljava/lang/Object;"}),
+	}
+	// The exception hierarchy is published from the chain the JVM already
+	// keeps, rather than a class at a time as titles turn up needing one. A
+	// name that is not here does not fail to resolve — it gets the fallback
+	// record, whose parent is Object and whose methods are Object's — and
+	// that is the trap: `new Exception()` then resolves to `Object.<init>`,
+	// `getMessage` on what a title caught resolves to nothing, and the title
+	// stops inside its own error handling with no sign of what it was
+	// handling. Declaring the chain costs one record each and makes the
+	// records say what the `catch` matching has always said.
+	for name, parent := range jvm.ThrowableParents() {
+		if _, published := runtimeJavaClasses[name]; published {
+			continue
+		}
+		runtimeJavaClasses[name] = runtimeExceptionClass(name, parent)
 	}
 }
 

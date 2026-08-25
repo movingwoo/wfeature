@@ -49,6 +49,15 @@ const (
 	initSVCJavaArrayNew  uint32 = 4
 	initSVCJavaClassLoad uint32 = 5
 	initSVCAlloc         uint32 = 6
+	// initSVCJavaThrowObject is the callbacks table's slot 2. It is the other
+	// half of the throw pair: slot 1 is handed a class name and makes the
+	// exception itself, and this one is handed an exception the guest has
+	// already constructed — which is what a title's own `throw e` compiles to.
+	// Its number continues the run the two callback categories share rather
+	// than filling the gap after initSVCAlloc: the numbers here are unique
+	// across those categories, and a reader should not have to check which
+	// category a repeated one belongs to.
+	initSVCJavaThrowObject uint32 = 19
 
 	javaSVCJump1          uint32 = 7
 	javaSVCJump2          uint32 = 8
@@ -630,6 +639,10 @@ func (runtime *initializationRuntime) makeInitCallbacks() (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	javaThrowObject, err := runtime.stub(svcCategoryInit, initSVCJavaThrowObject)
+	if err != nil {
+		return 0, err
+	}
 	javaCheckType, err := runtime.stub(svcCategoryInit, initSVCJavaCheckType)
 	if err != nil {
 		return 0, err
@@ -653,7 +666,7 @@ func (runtime *initializationRuntime) makeInitCallbacks() (uint32, error) {
 	return runtime.allocateWords([]uint32{
 		getInterface,
 		javaThrow,
-		0,
+		javaThrowObject,
 		0,
 		javaCheckType,
 		javaNew,
@@ -790,6 +803,8 @@ func (runtime *initializationRuntime) handleInitCall(thread *armcore.Thread, id 
 		}
 	case initSVCJavaThrow:
 		return runtime.throwAOTException(thread)
+	case initSVCJavaThrowObject:
+		return runtime.throwAOTExceptionObject(thread)
 	case initSVCJavaCheckType:
 		return runtime.checkAOTType(thread)
 	case initSVCJavaNew:
@@ -858,7 +873,13 @@ func (runtime *initializationRuntime) callAOTJump(ctx context.Context, thread *a
 		return 0, fmt.Errorf("unknown KTF Java jump id %#x", id)
 	}
 	if address == 0 {
-		return 0, fmt.Errorf("KTF Java jump target is null")
+		// The jump number says how many arguments the call carries, and the
+		// call site is what says which call it is: a null target is a method
+		// pointer the guest read out of its own tables, so the answer is in
+		// the code that loaded it rather than here. Naming the receiver's
+		// class narrows it further when there is one.
+		return 0, fmt.Errorf("KTF Java jump %d target is null, receiver %s%s",
+			id-javaSVCJump1+1, runtime.describeGuestWord(registers[0]), runtime.callerSite(thread))
 	}
 	if lr, lrErr := thread.Register(armcore.RegisterLR); lrErr == nil {
 		runtime.recordDiagnostic(diagEvent{
@@ -1068,6 +1089,24 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 
 // callerSite renders the guest call site of the platform stub currently being
 // serviced, for error messages that would otherwise name only a slot number.
+// describeGuestWord names what a word the guest handed the platform is, as far
+// as the runtime can tell: a bound object says its class, and anything else is
+// reported as the number it is. It exists for failure messages, where the
+// difference between "a null" and "a reference to something" is the whole
+// question.
+func (runtime *initializationRuntime) describeGuestWord(word uint32) string {
+	if word == 0 {
+		return "null"
+	}
+	if object, bound := runtime.client.vm.AOTObject(word); bound && object != nil {
+		return fmt.Sprintf("%s at %#x", object.ClassName, word)
+	}
+	if class, ok := runtime.client.vm.AOTClassAt(word); ok {
+		return fmt.Sprintf("class %s at %#x", class.Name, word)
+	}
+	return fmt.Sprintf("%#x", word)
+}
+
 func (runtime *initializationRuntime) callerSite(thread *armcore.Thread) string {
 	lr, err := thread.Register(armcore.RegisterLR)
 	if err != nil {

@@ -34,6 +34,35 @@ const (
 
 var errWorkersStopped = errors.New("KTF guest threads are stopped")
 
+// describeStackOverflow reports whether a faulting access ran off the bottom of
+// a guest stack, and whose. Both the address and the stack pointer are checked
+// because a frame's prologue can fault on either: the push that carries the
+// pointer past the end, or a store through a pointer the push already moved.
+func (client *Client) describeStackOverflow(address, stackPointer uint32) string {
+	if client == nil {
+		return ""
+	}
+	ranOff := func(base uint32) bool {
+		return base != 0 && (justBelow(base, address) || justBelow(base, stackPointer))
+	}
+	if ranOff(ThreadStackBase) {
+		return "(the client thread's guest stack overflowed)"
+	}
+	for index, worker := range client.workers {
+		if worker != nil && ranOff(worker.stackBase) {
+			return fmt.Sprintf("(guest thread %d's stack overflowed)", index)
+		}
+	}
+	return ""
+}
+
+// justBelow reports whether address is under base and within one stack of it.
+// The window is a stack's own size because that is how far a runaway frame
+// chain reaches before the mapping under it, if any, would answer instead.
+func justBelow(base, address uint32) bool {
+	return address < base && uint64(base)-uint64(address) <= ThreadStackSize
+}
+
 type workerEvent struct {
 	done bool
 	err  error

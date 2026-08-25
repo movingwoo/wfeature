@@ -4425,6 +4425,114 @@ against about one second for a title that keeps up. One title does not finish
 four hundred ticks in five minutes at all. None of them is stopped — every one
 of them is drawing — so this is a profile to read rather than a fault to find.
 
+### The fourth round: a stream that could not be read twice, and a loop with nowhere to paint
+
+Ten titles of the 259 in that set reach a first frame now, and not one of the
+ten had a cause of its own. **The same 400-tick run over every archive, before
+and after, moves ten rows from a failure to a first frame and leaves every
+other row's flush count, lit-pixel count and tick count identical** — except
+one row that was already counted as working and drew 215 pixels, and now draws
+its publisher's logo. Three defects account for all ten, and the largest of
+them is one word.
+
+**A resource stream could not be read twice, and the report was four hundred
+successful decodes later.** Three titles stopped on a
+`NullPointerException` out of `drawImage`, which the previous round had already
+read correctly as the title's own null — it catches what `createImage` raised
+and paints the slot it never filled. What raised it was one call above:
+`InputStream.reset` throws, and neither the stream over a byte array nor the
+wrapper a title decodes through declared `mark`, `markSupported` or `reset`, so
+both inherited the refusal. A title that reads a header, resets, and hands the
+same bytes to its own decoder therefore caught an `IOException` its decoder
+never raises. [`jvm.md`](jvm.md) has the fix and the one place the class
+documentation is wrong about it. The third of the three had been counted under
+a different cause entirely — it spent its whole service allowance retrying —
+which is what a symptom four hundred calls downstream of its cause looks like
+in a list grouped by message.
+
+**A frame loop that lives in a `callSerially` Runnable had nowhere to paint.**
+Two titles ran four hundred ticks without an error and without lighting a
+pixel. Their loop is the one the original event thread runs: repaint, re-queue
+itself, sleep. All three of those happen on the client thread, and this Host
+was treating only two of them that way — a wait declared inside the Runnable
+held the paint and the timers, and did not hold the next Runnable. So the
+Runnable was dispatched every sixteen milliseconds while its own sleep pushed
+the paint further away each time, and the paint never came due at all. Three
+things had to agree for the loop to close:
+
+- **A queued Runnable waits like everything else on the client thread.** It
+  runs there, so a wait declared there is a wait on it.
+- **A repaint queued before it goes first.** The original loop takes repaints
+  and Runnables off one queue in the order they were posted; without that, the
+  next Runnable takes the round the paint was finally due in and the sleep
+  starts again.
+- **What a Host is told is parked has to agree with what it will run.** The
+  deadline reported for a queued Runnable was its dispatch interval alone, so a
+  Host on a manual clock was told work was due at an instant the dispatch would
+  refuse — it never advanced the clock, and the wait it was waiting for never
+  ended. The two now answer the same instant.
+
+**A catch block was never handed what it caught, and the word it read instead
+was whatever the frame underneath had left on the stack.** This is the one that
+moved five titles at once. A handler's record carries the exception at a fixed
+offset; the record is built on the guest stack by the try block's prologue, and
+the platform's unwind filled in everything except that word. Nothing here reads
+it, so nothing here noticed — and a catch block reads it every time. The values
+titles were getting were the plausible kind: a Thumb address out of the frame
+below, a small integer, a supervisor-call stub. What each title then did with
+it is what the failure looked like, and the five looked like five different
+faults:
+
+- `catch (e) { close(); throw e; }` re-threw a code address, and the platform
+  could only report that the word it was handed was not an object.
+- `System.err.println(e)` and `new StringBuffer().append(e)` handed the same
+  kind of word to a runtime method, which is the "reference is not bound to a
+  JVM object" this list carried three of.
+- `e.printStackTrace()` and `e.getMessage()` dispatched through the word as an
+  object header, and faulted on a wild address inside the title's own dispatch
+  helper — twice with the same instruction, which is what first suggested one
+  cause rather than five.
+- One title looped on the failure until the instruction limit.
+
+**Which word it is was found by dumping the record rather than guessing at
+it.** The value a title re-threw was in the handler record, four words in, and
+it was there before the throw — so the field is at offset 16 and the platform
+had simply never written it. Writing the pinned exception address there is the
+whole fix.
+
+**A title's own `throw` had no platform slot, and read the empty slot as a
+method pointer.** Slot 2 of the initialization callbacks table was zero. Slot 1
+is the throw that takes a class name and makes the exception; slot 2 is the one
+that takes an exception the guest has already constructed, which is what
+`throw e` compiles to. A title that builds an `Exception` and throws it read
+zero out of the table and jumped to it, and the failure — "Java jump target is
+null" — arrived in the middle of the title's own error handling with nothing to
+say a throw had been refused. That message now names the jump's argument count,
+its receiver's class and its call site, which is what identified the slot.
+
+**The exception hierarchy is published to guest code, not left to the
+fallback.** A class this platform does not declare still resolves: it gets a
+record whose parent is `java/lang/Object` and whose methods are Object's. For
+an exception that is worse than a miss. `new Exception()` resolves to
+`Object.<init>`, `getMessage` on what a title caught resolves to nothing at
+all, and the title stops inside the handler with no sign of what it was
+handling. The records are now generated from the same parent chain the JVM's
+`catch` matching has always used, so the two cannot disagree.
+
+**A start that fails now keeps its trace.** The interesting half of a failed
+start is what the game was doing when it stopped, and there was no session left
+to ask: `-diag` wrote nothing for exactly the archives whose failure is hardest
+to read. A failure past the client's entry now carries the boundary trace with
+it, and the command writes the report. Every finding in this section was read
+off one of those reports.
+
+**Running off a guest stack is now said in those words.** A stack grows down
+into nothing, so exhausting one is reported as an access to unmapped memory a
+few bytes below a mapping — which reads like a wild pointer and is not one. One
+title in the set does this; four megabytes of stack instead of one bought it
+two minutes and the same end, so it is recursion rather than a stack that is
+too small, and the two are investigated in opposite directions.
+
 ## Deliberately incomplete
 
 - repairing a guest write to a published instance field rather than reporting

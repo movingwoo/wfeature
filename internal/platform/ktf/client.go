@@ -325,8 +325,20 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 	// worse than slow: one title queues a Runnable from inside its paint, so
 	// they arrived faster than threads could finish and the run ended on the
 	// thread-stack limit rather than on anything the title did.
+	//
+	// **A Runnable waits like everything else on the client thread, and a
+	// repaint queued before it goes first.** Both follow from where it runs:
+	// the original loop takes repaints and Runnables off one queue in the
+	// order they were posted, and a wait declared inside a Runnable is a wait
+	// on the thread that would have done the next paint. A title whose frame
+	// loop is a Runnable that repaints, re-queues itself and sleeps needs both
+	// — without the wait, the Runnable is dispatched every sixteen
+	// milliseconds while its own sleep pushes the paint further away each
+	// time, and without the ordering the next Runnable takes the round the
+	// paint was finally due in. It ran four hundred frames of its loop and
+	// drew nothing.
 	serialRan := 0
-	if len(runtime.pendingSerial) > 0 &&
+	if len(runtime.pendingSerial) > 0 && client.clientThreadDue() && !runtime.repaintQueued() &&
 		(len(runtime.pendingSerial) > 1 || !client.now().Before(runtime.serialDueAt)) {
 		runnable := runtime.pendingSerial[0]
 		runtime.pendingSerial = runtime.pendingSerial[1:]
