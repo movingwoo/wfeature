@@ -129,10 +129,14 @@ const (
 	slotFsSeek          uint32 = 0x194
 	slotFsFileAttribute uint32 = 0x195
 	slotFsRemove        uint32 = 0x196
-	slotFsMkDir         uint32 = 0x198
-	slotFsRmDir         uint32 = 0x199
-	slotFsTotalSpace    uint32 = 0x19b
-	slotFsAvailable     uint32 = 0x19c
+	// slotFsRename is MC_fsRename(oldname, newname, accessLevel). It sits
+	// between remove and mkdir, which is where the specification's own order
+	// puts it, and that order is what fixed every other number in this block.
+	slotFsRename     uint32 = 0x197
+	slotFsMkDir      uint32 = 0x198
+	slotFsRmDir      uint32 = 0x199
+	slotFsTotalSpace uint32 = 0x19b
+	slotFsAvailable  uint32 = 0x19c
 	// slotFsTell is MC_fsTell(fd). The file block runs in the specification's
 	// own order from MC_fsOpen at 0x190 — open, read, write, close, seek,
 	// fileAttribute, remove, rename, mkDir, rmDir, list, totalSpace,
@@ -202,6 +206,7 @@ const directColorType uint32 = 1 << 0
 const (
 	wipiSuccess     int32 = 0
 	wipiError       int32 = -1
+	wipiExists      int32 = -5
 	wipiInvalid     int32 = -9
 	wipiNoEntry     int32 = -12
 	wipiShortBuffer int32 = -18
@@ -242,7 +247,7 @@ func knownWIPICSlot(slot uint32) bool {
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
 		slotFsOpen, slotFsRead, slotFsWrite,
 		slotFsClose, slotFsSeek, slotFsFileAttribute, slotFsRemove,
-		slotFsMkDir, slotFsRmDir, slotFsTotalSpace, slotFsAvailable, slotFsTell,
+		slotFsRename, slotFsMkDir, slotFsRmDir, slotFsTotalSpace, slotFsAvailable, slotFsTell,
 		slotFsIsExist,
 		slotNetConnect, slotNetClose, slotNetSocketConnect, slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
@@ -674,7 +679,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		return client.handleInputMethod(thread, slot)
 
 	case slotFsOpen, slotFsRead, slotFsWrite, slotFsClose, slotFsSeek,
-		slotFsFileAttribute, slotFsRemove, slotFsMkDir, slotFsRmDir,
+		slotFsFileAttribute, slotFsRemove, slotFsRename, slotFsMkDir, slotFsRmDir,
 		slotFsTotalSpace, slotFsAvailable, slotFsTell, slotFsIsExist:
 		return client.handleFile(thread, slot)
 
@@ -991,6 +996,12 @@ func (client *Client) transferContextField(thread *armcore.Thread, slot uint32) 
 			}
 			if err := client.writeWord(pointer+offset+index*4, source); err != nil {
 				return wipiError
+			}
+			if offset == grpContextPixelOp {
+				// What a draw will run has to have arrived here first; see
+				// readContextPixelOp for the title that left a return address
+				// in the field.
+				client.installPixelOp(source)
 			}
 			continue
 		}

@@ -267,3 +267,59 @@ func TestTheNativePackageShapeStillNamesItWithNoClassesToRead(t *testing.T) {
 		t.Fatalf("Archive() = %q, want %q", platform, detect.KTF)
 	}
 }
+
+// A bag of games is a shape a Host can name, and the shape is "every entry is
+// a zip". What must not happen is a real archive being called one: a KTF
+// package carries a JAR, and a title that ships a zip of its own data beside
+// its descriptor is still a game.
+func TestAZipOfZipsIsNamedAndNothingElseIs(t *testing.T) {
+	episodes := buildZIP(t, map[string][]byte{
+		"ep1.zip": []byte("PK\x05\x06"),
+		"ep2.zip": []byte("PK\x05\x06"),
+		"ep3.zip": []byte("PK\x05\x06"),
+	})
+	if !detect.ArchiveOfArchives(episodes) {
+		t.Fatal("a zip holding three zips was not named as one")
+	}
+	platform, err := detect.Archive(episodes)
+	if err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	if platform != detect.Unknown {
+		t.Fatalf("Archive() = %q, want %q", platform, detect.Unknown)
+	}
+
+	for _, testCase := range []struct {
+		name    string
+		entries map[string][]byte
+	}{
+		{
+			name:    "a game that ships a zip of its own data is a game",
+			entries: map[string][]byte{"__adf__": []byte("aid:AI0000\n"), "data.zip": []byte("PK\x05\x06")},
+		},
+		{
+			name:    "an ordinary archive is not a bag",
+			entries: map[string][]byte{"app_info": []byte("aid=AI0000\n"), "AI0000.jar": nil},
+		},
+		{
+			name:    "an empty zip is not a bag either",
+			entries: map[string][]byte{},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if detect.ArchiveOfArchives(buildZIP(t, testCase.entries)) {
+				t.Fatal("named as a zip of zips")
+			}
+		})
+	}
+
+	// The packer's leavings are not entries a person put there.
+	bagged := buildZIP(t, map[string][]byte{
+		"ep1.zip":            []byte("PK\x05\x06"),
+		"__MACOSX/._ep1.zip": []byte("\x00"),
+		".DS_Store":          []byte("\x00"),
+	})
+	if !detect.ArchiveOfArchives(bagged) {
+		t.Fatal("a bag with the packer's leavings in it was not named")
+	}
+}

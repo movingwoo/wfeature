@@ -16,18 +16,16 @@ import (
 // — and a title's own log names the call it makes here as `MC_fsOpen`. See
 // docs/ktf.md, "The two storage tables".
 //
-// **The names below say database because that is what the table was read as,
-// and they have not been changed yet.** What they name is right either way: a
-// file here is one blob per name addressed by a cursor, which is exactly the
-// store this keeps. Two things would move if the identifiers did — the save
-// keys, which begin `db/` and are a player's own files, and the diagnostic
-// counter names, which a report is read against — so the rename is a change of
-// its own rather than part of the one that found this out. It is in TODO.md.
+// **Two things deliberately kept the older name.** The save keys begin `db/`
+// and are a player's own files, so renaming them would orphan every save
+// already written; and the diagnostic counter names are what a stored report
+// is read against. Both are records rather than code, and the code is what
+// moved.
 //
-// runtimeCDatabase keeps one named file in process memory: read and written
+// runtimeCFile keeps one named file in process memory: read and written
 // through a per-handle byte cursor. Durable persistence joins with the Host
 // save path.
-type runtimeCDatabase struct {
+type runtimeCFile struct {
 	name string
 	data []byte
 	// packaged is how many bytes of this store the archive shipped. The
@@ -41,18 +39,18 @@ type runtimeCDatabase struct {
 }
 
 // persist writes the record through the Host save store when one is attached.
-func (store *runtimeCDatabase) persist(runtime *initializationRuntime) {
+func (store *runtimeCFile) persist(runtime *initializationRuntime) {
 	runtime.storeSave("db/"+store.name, store.data)
 }
 
-type runtimeCDatabaseHandle struct {
-	store    *runtimeCDatabase
+type runtimeCFileHandle struct {
+	store    *runtimeCFile
 	position int
 }
 
 const (
-	maxCDatabaseBytes = 4 << 20
-	// cDatabaseHandleBit tags a file handle. It has to stay inside
+	maxCFileBytes = 4 << 20
+	// cFileHandleBit tags a file handle. It has to stay inside
 	// a signed 16-bit value: a handset's handle is small, and a title that
 	// keeps one in a `short` sign-extends what the open returned before it
 	// hands it back. One local title does exactly that — `lsl #16; asr #16` on
@@ -61,62 +59,62 @@ const (
 	// reads on it were refused, silently, leaving the header buffer untouched;
 	// the title then sized an allocation from the difference of two words that
 	// were never written and asked for four gigabytes.
-	cDatabaseHandleBit  = 0x1000
-	maxCDatabaseHandles = 0x0fff
+	cFileHandleBit  = 0x1000
+	maxCFileHandles = 0x0fff
 )
 
 const (
-	wipicDatabaseOpen         = 0
-	wipicDatabaseStreamRead   = 1
-	wipicDatabaseStreamWrite  = 2
-	wipicDatabaseClose        = 3
-	wipicDatabaseSelectRecord = 4
-	wipicDatabaseStatByName   = 5
+	wipicFileOpen         = 0
+	wipicFileStreamRead   = 1
+	wipicFileStreamWrite  = 2
+	wipicFileClose        = 3
+	wipicFileSelectRecord = 4
+	wipicFileStatByName   = 5
 	// MC_fsRemove takes the file's name and its area, not a handle: the caller
 	// closes the file first and then names it. One title deletes the
 	// certificate it could not renew and expects the next question about it to
 	// answer "no such file".
-	wipicDatabaseDelete = 6
+	wipicFileDelete = 6
 	// MC_fsMkDir takes a name and an access area — 1 is the program's own
 	// directory, which is the only area this platform has. **Nothing here
 	// holds a directory**: a name is a key in one flat store, so making one is
 	// the whole of what a directory is, and a name that has been made is what
 	// says it exists.
-	wipicDatabaseMakeDirectory = 8
-	wipicDatabaseNumRecords    = 10
-	wipicDatabaseRecordSize    = 11
-	wipicDatabaseList          = 12
-	wipicDatabaseTouchStream   = 15
-	wipicDatabaseExists        = 16
+	wipicFileMakeDirectory = 8
+	wipicFileNumRecords    = 10
+	wipicFileRecordSize    = 11
+	wipicFileList          = 12
+	wipicFileTouchStream   = 15
+	wipicFileExists        = 16
 
-	// wipicDatabaseStorageLimit mirrors the reference KTF per-game storage budget;
+	// wipicFileStorageLimit mirrors the reference KTF per-game storage budget;
 	// MC_fsAvailable reports the space still available.
-	wipicDatabaseStorageLimit = 1024 * 1024
+	wipicFileStorageLimit = 1024 * 1024
 )
 
-func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Thread, function uint32) (uint32, error) {
+func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread, function uint32) (uint32, error) {
 	switch function {
-	case wipicDatabaseOpen:
-		return runtime.wipicDatabaseOpen(thread)
-	case wipicDatabaseStreamRead:
-		return runtime.wipicDatabaseStream(thread, false)
-	case wipicDatabaseStreamWrite:
-		return runtime.wipicDatabaseStream(thread, true)
-	case wipicDatabaseClose:
+	case wipicFileOpen:
+		return runtime.wipicFileOpen(thread)
+	case wipicFileStreamRead:
+		return runtime.wipicFileStream(thread, false)
+	case wipicFileStreamWrite:
+		return runtime.wipicFileStream(thread, true)
+	case wipicFileClose:
 		handle, err := thread.Register(0)
 		if err != nil {
 			return 0, err
 		}
-		delete(runtime.cDatabaseHandles, handle)
+		delete(runtime.cFileHandles, handle)
 		return 0, nil
-	case wipicDatabaseSelectRecord:
-		return runtime.wipicDatabaseSeek(thread)
-	case wipicDatabaseDelete:
-		return runtime.wipicDatabaseDelete(thread)
-	case wipicDatabaseStatByName:
-		return runtime.wipicDatabaseStatByName(thread)
-	case wipicDatabaseNumRecords:
-		state, err := runtime.wipicDatabaseHandle(thread)
+	case wipicFileSelectRecord:
+		return runtime.wipicFileSeek(thread)
+	case wipicFileDelete:
+		return runtime.wipicFileDelete(thread)
+	case wipicFileStatByName:
+		return runtime.wipicFileStatByName(thread)
+	case wipicFileNumRecords:
+		state, err := runtime.wipicFileHandle(thread)
 		if err != nil {
 			return wipicErrorInvalid, nil
 		}
@@ -124,26 +122,26 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 			return 0, nil
 		}
 		return 1, nil
-	case wipicDatabaseRecordSize:
-		state, err := runtime.wipicDatabaseHandle(thread)
+	case wipicFileRecordSize:
+		state, err := runtime.wipicFileHandle(thread)
 		if err != nil {
 			return wipicErrorInvalid, nil
 		}
 		return uint32(len(state.store.data)), nil
-	case wipicDatabaseList:
+	case wipicFileList:
 		// MC_fsAvailable reports remaining storage: the budget minus every
 		// open store's bytes, floored at zero like the reference repository usage.
 		used := 0
-		for _, store := range runtime.cDatabases {
+		for _, store := range runtime.cFiles {
 			if grown := len(store.data) - store.packaged; grown > 0 {
 				used += grown
 			}
 		}
-		if used >= wipicDatabaseStorageLimit {
+		if used >= wipicFileStorageLimit {
 			return 0, nil
 		}
-		return uint32(wipicDatabaseStorageLimit - used), nil
-	case wipicDatabaseExists:
+		return uint32(wipicFileStorageLimit - used), nil
+	case wipicFileExists:
 		// MC_fsIsExist answers 0 on success and M_E_NOENT when missing;
 		// titles branch to their fresh-init path on the error code. A
 		// directory this platform was asked to make counts as something that
@@ -157,7 +155,7 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 		if err != nil {
 			return 0, fmt.Errorf("read KTF file name: %w", err)
 		}
-		_, exists := runtime.cDatabases[name]
+		_, exists := runtime.cFiles[name]
 		_, seeded := runtime.databaseSeed(name)
 		made := runtime.createdDirectories()[name]
 		runtime.countDiagnostic(fmt.Sprintf("cdb exists %s -> %t", name, exists || seeded || made))
@@ -165,10 +163,10 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 			return 0, nil
 		}
 		return wipicErrorNotFound, nil
-	case wipicDatabaseMakeDirectory:
+	case wipicFileMakeDirectory:
 		return runtime.wipicMakeDirectory(thread)
-	case wipicDatabaseTouchStream:
-		return runtime.wipicDatabaseTouch(thread)
+	case wipicFileTouchStream:
+		return runtime.wipicFileTouch(thread)
 	default:
 		// The call site is named for the same reason the unimplemented-table
 		// error names one: the function number is an index into an array of
@@ -180,14 +178,14 @@ func (runtime *initializationRuntime) handleWIPICDatabaseCall(thread *armcore.Th
 	}
 }
 
-// wipicDatabaseDelete serves MC_fsRemove(name, mode). A store may be
+// wipicFileDelete serves MC_fsRemove(name, mode). A store may be
 // in memory, persisted, packaged with the archive, or all three, so the delete
 // has to cover every place the open would look. The persisted copy cannot be
 // unlinked — the save store has no delete — so the name is recorded on a
 // removal list the way the guest filesystem records one, and every lookup
 // consults it. Without that the database comes back on the next question, and
 // a title that deleted it to start again is handed what it just threw away.
-func (runtime *initializationRuntime) wipicDatabaseDelete(thread *armcore.Thread) (uint32, error) {
+func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (uint32, error) {
 	nameAddress, err := thread.Register(0)
 	if err != nil {
 		return 0, err
@@ -196,18 +194,18 @@ func (runtime *initializationRuntime) wipicDatabaseDelete(thread *armcore.Thread
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
-	_, live := runtime.cDatabases[name]
+	_, live := runtime.cFiles[name]
 	_, seeded := runtime.databaseSeed(name)
 	runtime.countDiagnostic(fmt.Sprintf("cdb delete %s -> %t", name, live || seeded))
 	if !live && !seeded {
 		return wipicErrorNotFound, nil
 	}
-	delete(runtime.cDatabases, name)
+	delete(runtime.cFiles, name)
 	// Handles onto the store go with it; a caller holding one after the delete
 	// would otherwise keep reading a database nothing else can see.
-	for handle, open := range runtime.cDatabaseHandles {
+	for handle, open := range runtime.cFileHandles {
 		if open.store != nil && open.store.name == name {
-			delete(runtime.cDatabaseHandles, handle)
+			delete(runtime.cFileHandles, handle)
 		}
 	}
 	runtime.markDatabaseRemoved(name, true)
@@ -351,7 +349,7 @@ func (runtime *initializationRuntime) packagedDatabase(name string) ([]byte, boo
 	return runtime.guestFile(name)
 }
 
-func (runtime *initializationRuntime) wipicDatabaseOpen(thread *armcore.Thread) (uint32, error) {
+func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uint32, error) {
 	nameAddress, err := thread.Register(0)
 	if err != nil {
 		return 0, err
@@ -365,22 +363,22 @@ func (runtime *initializationRuntime) wipicDatabaseOpen(thread *armcore.Thread) 
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
-	store, exists := runtime.cDatabases[name]
+	store, exists := runtime.cFiles[name]
 	seed, hasSeed := runtime.databaseSeed(name)
 	_, hasPackaged := runtime.packagedDatabase(name)
 	if !exists {
 		if int32(mode) == 1 && !hasSeed {
 			return wipicErrorNotFound, nil
 		}
-		store = &runtimeCDatabase{name: name}
+		store = &runtimeCFile{name: name}
 		store.data = append([]byte(nil), seed...)
 		if packaged, ok := runtime.packagedDatabase(name); ok {
 			store.packaged = len(packaged)
 		}
-		if runtime.cDatabases == nil {
-			runtime.cDatabases = make(map[string]*runtimeCDatabase)
+		if runtime.cFiles == nil {
+			runtime.cFiles = make(map[string]*runtimeCFile)
 		}
-		runtime.cDatabases[name] = store
+		runtime.cFiles[name] = store
 	}
 	// Create mode wipes prior contents unless the database is backed by
 	// packaged archive data.
@@ -391,32 +389,32 @@ func (runtime *initializationRuntime) wipicDatabaseOpen(thread *armcore.Thread) 
 	// here, and a removal list that still held it would hide the writes the
 	// caller is about to make.
 	runtime.markDatabaseRemoved(name, false)
-	if runtime.cDatabaseHandles == nil {
-		runtime.cDatabaseHandles = make(map[uint32]*runtimeCDatabaseHandle)
+	if runtime.cFileHandles == nil {
+		runtime.cFileHandles = make(map[uint32]*runtimeCFileHandle)
 	}
-	if runtime.nextCDatabaseHandle >= maxCDatabaseHandles {
+	if runtime.nextCDatabaseHandle >= maxCFileHandles {
 		return wipicErrorInvalid, nil
 	}
 	runtime.nextCDatabaseHandle++
-	handle := cDatabaseHandleBit | runtime.nextCDatabaseHandle
-	runtime.cDatabaseHandles[handle] = &runtimeCDatabaseHandle{store: store}
+	handle := cFileHandleBit | runtime.nextCDatabaseHandle
+	runtime.cFileHandles[handle] = &runtimeCFileHandle{store: store}
 	return handle, nil
 }
 
-func (runtime *initializationRuntime) wipicDatabaseHandle(thread *armcore.Thread) (*runtimeCDatabaseHandle, error) {
+func (runtime *initializationRuntime) wipicFileHandle(thread *armcore.Thread) (*runtimeCFileHandle, error) {
 	handle, err := thread.Register(0)
 	if err != nil {
 		return nil, err
 	}
-	state, ok := runtime.cDatabaseHandles[handle]
+	state, ok := runtime.cFileHandles[handle]
 	if !ok {
 		return nil, fmt.Errorf("KTF database handle %#x is not open", handle)
 	}
 	return state, nil
 }
 
-func (runtime *initializationRuntime) wipicDatabaseStream(thread *armcore.Thread, write bool) (uint32, error) {
-	state, err := runtime.wipicDatabaseHandle(thread)
+func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, write bool) (uint32, error) {
+	state, err := runtime.wipicFileHandle(thread)
 	if err != nil {
 		return wipicErrorInvalid, nil
 	}
@@ -428,7 +426,7 @@ func (runtime *initializationRuntime) wipicDatabaseStream(thread *armcore.Thread
 	if err != nil {
 		return 0, err
 	}
-	if int32(length) < 0 || length > maxCDatabaseBytes {
+	if int32(length) < 0 || length > maxCFileBytes {
 		return wipicErrorInvalid, nil
 	}
 	if write {
@@ -437,7 +435,7 @@ func (runtime *initializationRuntime) wipicDatabaseStream(thread *armcore.Thread
 			return 0, fmt.Errorf("read KTF database write buffer: %w", err)
 		}
 		end := state.position + int(length)
-		if end > maxCDatabaseBytes {
+		if end > maxCFileBytes {
 			return wipicErrorInvalid, nil
 		}
 		if end > len(state.store.data) {
@@ -465,10 +463,10 @@ func (runtime *initializationRuntime) wipicDatabaseStream(thread *armcore.Thread
 	return uint32(count), nil
 }
 
-// wipicDatabaseStatByName implements the KTF custom slot 5, db_stat_by_name:
+// wipicFileStatByName implements the KTF custom slot 5, db_stat_by_name:
 // (name, out int32[3], mode). Titles treat a zero result with out[2] above a
 // size threshold as a valid save. Missing databases answer M_E_BADRECID.
-func (runtime *initializationRuntime) wipicDatabaseStatByName(thread *armcore.Thread) (uint32, error) {
+func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread) (uint32, error) {
 	nameAddress, err := thread.Register(0)
 	if err != nil {
 		return 0, err
@@ -482,7 +480,7 @@ func (runtime *initializationRuntime) wipicDatabaseStatByName(thread *armcore.Th
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	size := uint32(0)
-	if store, ok := runtime.cDatabases[name]; ok {
+	if store, ok := runtime.cFiles[name]; ok {
 		size = uint32(len(store.data))
 	} else if saved, ok := runtime.loadSave("db/" + name); ok {
 		size = uint32(len(saved))
@@ -503,7 +501,7 @@ func (runtime *initializationRuntime) wipicDatabaseStatByName(thread *armcore.Th
 	return 0, nil
 }
 
-// wipicDatabaseTouch implements the KTF custom slot 15, which the original
+// wipicFileTouch implements the KTF custom slot 15, which the original
 // runtime's own emulator never named either. One local title calls it, from
 // its save loader:
 //
@@ -518,8 +516,8 @@ func (runtime *initializationRuntime) wipicDatabaseStatByName(thread *armcore.Th
 // performs is unobservable. That leaves an open stream to validate and nothing
 // to do, which is what this answers; an unknown handle is rejected the way the
 // other handle-taking slots reject one.
-func (runtime *initializationRuntime) wipicDatabaseTouch(thread *armcore.Thread) (uint32, error) {
-	state, err := runtime.wipicDatabaseHandle(thread)
+func (runtime *initializationRuntime) wipicFileTouch(thread *armcore.Thread) (uint32, error) {
+	state, err := runtime.wipicFileHandle(thread)
 	if err != nil {
 		return wipicErrorInvalid, nil
 	}
@@ -529,10 +527,10 @@ func (runtime *initializationRuntime) wipicDatabaseTouch(thread *armcore.Thread)
 	return 0, nil
 }
 
-// wipicDatabaseSeek implements the KTF select-record extension, a seek over
+// wipicFileSeek implements the KTF select-record extension, a seek over
 // the open record's byte cursor.
-func (runtime *initializationRuntime) wipicDatabaseSeek(thread *armcore.Thread) (uint32, error) {
-	state, err := runtime.wipicDatabaseHandle(thread)
+func (runtime *initializationRuntime) wipicFileSeek(thread *armcore.Thread) (uint32, error) {
+	state, err := runtime.wipicFileHandle(thread)
 	if err != nil {
 		return wipicErrorInvalid, nil
 	}

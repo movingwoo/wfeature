@@ -102,7 +102,7 @@ func TestClientSaveStoreSeedsCDatabase(t *testing.T) {
 	if !ok || !bytes.Equal(data, []byte{1, 2, 3}) {
 		t.Fatalf("loadSave = %v ok=%t", data, ok)
 	}
-	cdb := &runtimeCDatabase{name: "slot.dat", data: []byte{9}}
+	cdb := &runtimeCFile{name: "slot.dat", data: []byte{9}}
 	cdb.persist(runtime)
 	persisted, ok := store.LoadSave("db/slot.dat")
 	if !ok || !bytes.Equal(persisted, []byte{9}) {

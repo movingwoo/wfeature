@@ -8,7 +8,7 @@ import (
 )
 
 // The record database is the other half of the WIPI C storage interface. Where
-// the stream database in wipic_database.go is one blob read and written through
+// the stream database in wipic_filesystem.go is one blob read and written through
 // a cursor, this one is a numbered set of records, and a game reaches for it
 // when it wants to address entries rather than offsets.
 //
@@ -41,7 +41,7 @@ const (
 	// tag from the stream database's so that a handle passed to the wrong
 	// table is rejected rather than silently addressing another store, and
 	// both stay inside a signed 16-bit value because a title may keep what an
-	// open returned in a `short`. See cDatabaseHandleBit for what a handle
+	// open returned in a `short`. See cFileHandleBit for what a handle
 	// that does not survive that costs.
 	recordDatabaseHandleBit  = 0x2000
 	maxRecordDatabaseHandles = 0x0fff
@@ -124,7 +124,7 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 		// own. The budget is the stream database's, because it is the same
 		// per-game storage.
 		used := 0
-		for _, store := range runtime.cDatabases {
+		for _, store := range runtime.cFiles {
 			used += len(store.data)
 		}
 		for _, store := range runtime.recordDatabases {
@@ -132,10 +132,10 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 				used += len(record)
 			}
 		}
-		if used >= wipicDatabaseStorageLimit {
+		if used >= wipicFileStorageLimit {
 			return 0, nil
 		}
-		return uint32(wipicDatabaseStorageLimit - used), nil
+		return uint32(wipicFileStorageLimit - used), nil
 	default:
 		runtime.countDiagnostic(fmt.Sprintf("wipic record database function %d", function))
 		return wipicErrorInvalid, nil

@@ -310,3 +310,40 @@ func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 	}
 	return jvm.IntValue(-1), nil
 }
+
+// componentEventListenerField and componentEventDataField are the pair
+// Component.setEventListener is given: who to notify and what to hand back
+// with the notification.
+const (
+	componentEventListenerField = "eventListener:Lorg/kwis/msp/lwc/EventListener;"
+	componentEventDataField     = "eventData:Ljava/lang/Object;"
+)
+
+// runtimeComponentSetEventListener keeps both halves. Nothing fires them —
+// no component here is drawn, so none is operated — and keeping them is what
+// lets a title read back whether it has already wired its own dialog.
+func runtimeComponentSetEventListener(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("Component.setEventListener", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentEventListenerField] = arguments[1]
+	receiver.Fields[componentEventDataField] = arguments[2]
+	return jvm.VoidValue(), nil
+}
+
+// runtimeComponentField answers one reference field, or null when it has never
+// been set.
+func runtimeComponentField(key string) runtimeJavaImplementation {
+	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		receiver, err := runtimeComponentReceiver("Component field "+key, arguments, 1)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		value, ok := receiver.Fields[key]
+		if !ok {
+			return jvm.ReferenceValue(nil), nil
+		}
+		return value, nil
+	}
+}

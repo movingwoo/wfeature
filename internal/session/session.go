@@ -118,6 +118,12 @@ func Inspect(archive []byte) (Summary, error) {
 		summary.SaveOwner = skt.SaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MainClass
 	default:
+		// A zip of zips is refused by its own shape rather than by the
+		// descriptor it has no room for: each entry is a whole game and the
+		// choice of which one belongs to the person holding it.
+		if detect.ArchiveOfArchives(archive) {
+			return summary, ErrArchiveOfArchives
+		}
 		return summary, ErrUnsupportedArchive
 	}
 	return summary, nil
@@ -401,6 +407,12 @@ var ErrNotRunning = errors.New("session: no game is running")
 // one of them, and saying so is more use to a Host than trying to run it and
 // failing somewhere further in.
 var ErrUnsupportedArchive = errors.New("session: the archive is not a KTF, LGT or SKT game")
+
+// ErrArchiveOfArchives is returned for a zip whose entries are all zips. It is
+// a separate answer from "no vendor claimed this" because it has a different
+// remedy: there is nothing wrong with the file, it is a bag of games rather
+// than a game, and unpacking it gives the person one archive per game.
+var ErrArchiveOfArchives = errors.New("session: this zip contains only other zips; unpack it and add each game separately")
 
 // Tick advances the game by at most budget of guest execution. The budget
 // bounds how many service rounds are started rather than how long one takes:

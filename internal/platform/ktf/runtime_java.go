@@ -850,6 +850,13 @@ func init() {
 				{class: runtimeComponentClass, name: "showNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("shown:Z")},
 				{class: runtimeComponentClass, name: "configure", descriptor: "(IIIII)V", accessFlags: 0x0001, implementation: runtimeComponentConfigure},
 				{class: runtimeComponentClass, name: "setFocus", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentSetFocus},
+				// A listener and the object it is to be handed back with.
+				// Nothing fires one — no widget here is drawn, so no widget is
+				// operated — but the pair is kept, because a title that sets a
+				// listener reads it back to decide whether it has already
+				// built its dialog.
+				{class: runtimeComponentClass, name: "setEventListener", descriptor: "(Lorg/kwis/msp/lwc/EventListener;Ljava/lang/Object;)V", accessFlags: 0x0001, implementation: runtimeComponentSetEventListener},
+				{class: runtimeComponentClass, name: "getEventListener", descriptor: "()Lorg/kwis/msp/lwc/EventListener;", accessFlags: 0x0001, implementation: runtimeComponentField(componentEventListenerField)},
 				// A component asking to be redrawn is asking for the card it
 				// sits in, because nothing here paints a component: the
 				// toolkit's layout is absent and the children are kept only so
@@ -1243,11 +1250,18 @@ func init() {
 		runtimeDialogComponentClass:    runtimeDialogComponentClassDefinition(),
 		runtimeFormComponentClass:      runtimeFormComponentClassDefinition(),
 		runtimeProgressComponentClass:  runtimeProgressComponentClassDefinition(),
-		runtimeNetworkClass:            runtimeNetworkClassDefinition(),
-		runtimeURLClass:                runtimeURLClassDefinition(),
-		runtimeDataBaseExceptionClass:  runtimeExceptionClass(runtimeDataBaseExceptionClass, "java/lang/Exception"),
-		runtimeDataBaseRecordClass:     runtimeExceptionClass(runtimeDataBaseRecordClass, runtimeDataBaseExceptionClass),
-		runtimeSchemeExceptionClass:    runtimeExceptionClass(runtimeSchemeExceptionClass, "java/io/IOException"),
+		// The vendor's own widget toolkit, which one title uses for a single
+		// text-entry dialog; see runtime_kfc.go.
+		runtimeGFormClass:             runtimeGFormClassDefinition(runtimeGFormClass, runtimeShellComponentClass),
+		runtimeGMenubarFormClass:      runtimeGFormClassDefinition(runtimeGMenubarFormClass, runtimeGFormClass),
+		runtimeGMsgBoxClass:           runtimeGFormClassDefinition(runtimeGMsgBoxClass, runtimeGFormClass),
+		runtimeGTextFieldClass:        runtimeGTextFieldClassDefinition(),
+		runtimeGTextListenerClass:     runtimeGTextListenerClassDefinition(),
+		runtimeNetworkClass:           runtimeNetworkClassDefinition(),
+		runtimeURLClass:               runtimeURLClassDefinition(),
+		runtimeDataBaseExceptionClass: runtimeExceptionClass(runtimeDataBaseExceptionClass, "java/lang/Exception"),
+		runtimeDataBaseRecordClass:    runtimeExceptionClass(runtimeDataBaseRecordClass, runtimeDataBaseExceptionClass),
+		runtimeSchemeExceptionClass:   runtimeExceptionClass(runtimeSchemeExceptionClass, "java/io/IOException"),
 		// The runtime-owned interfaces exist so a guest that implements or
 		// references one resolves it. Their methods dispatch by name on the
 		// receiver, because an AOT class carries no interface list to link

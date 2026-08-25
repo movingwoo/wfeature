@@ -933,7 +933,7 @@ func (vm *VM) registerStringBuiltins() {
 	})
 	for _, descriptor := range []string{"([B)V", "([BII)V", "([BLjava/lang/String;)V"} {
 		descriptor := descriptor
-		vm.builtin(StringClass, "<init>", descriptor, func(_ *VM, arguments []Value) (Value, error) {
+		vm.builtin(StringClass, "<init>", descriptor, func(vm *VM, arguments []Value) (Value, error) {
 			object, err := nativeReference(arguments, 0)
 			if err != nil {
 				return VoidValue(), err
@@ -959,12 +959,22 @@ func (vm *VM) registerStringBuiltins() {
 				if encodingErr != nil {
 					return VoidValue(), encodingErr
 				}
-				normalized := strings.ToLower(strings.ReplaceAll(encoding, "-", ""))
-				if normalized != "utf8" {
-					return VoidValue(), guestException("java/io/IOException", "unsupported character encoding: "+encoding)
+				// The charset a title names is answered the same way here as
+				// in the ranged constructor and in getBytes: those two go
+				// through charsetOf, and this one had its own test that
+				// accepted UTF-8 and nothing else. A title naming the
+				// handset's own charset — `EUC_KR`, which charsetOf already
+				// knows — was handed an IOException it caught, printed and
+				// then drew an empty screen from for as long as it ran.
+				switch charsetOf(encoding) {
+				case charsetUTF8:
+					object.Native = strings.ToValidUTF8(string(data), "\ufffd")
+					return VoidValue(), nil
+				case charsetPlatform:
+					object.Native = vm.decodePlatformBytes(data)
+					return VoidValue(), nil
 				}
-				object.Native = strings.ToValidUTF8(string(data), "\ufffd")
-				return VoidValue(), nil
+				return VoidValue(), guestException("java/io/IOException", "unsupported character encoding: "+encoding)
 			}
 			object.Native = vm.decodePlatformBytes(data)
 			return VoidValue(), nil

@@ -22,7 +22,7 @@ func databaseCall(t *testing.T, runtime *initializationRuntime, function uint32,
 			t.Fatal(err)
 		}
 	}
-	result, err := runtime.handleWIPICDatabaseCall(thread, function)
+	result, err := runtime.handleWIPICFileCall(thread, function)
 	if err != nil {
 		t.Fatalf("database function %d: %v", function, err)
 	}
@@ -41,33 +41,33 @@ func TestDeletedDatabaseStaysDeleted(t *testing.T) {
 
 	const name = "cert.dat"
 	// Open for creation, write through the stream, and persist it.
-	handle := databaseCall(t, runtime, wipicDatabaseOpen, name, 4)
+	handle := databaseCall(t, runtime, wipicFileOpen, name, 4)
 	if int32(handle) < 0 {
 		t.Fatalf("open for creation = %d", int32(handle))
 	}
-	store := runtime.cDatabases[name]
+	store := runtime.cFiles[name]
 	if store == nil {
 		t.Fatal("the open created no store")
 	}
 	store.data = []byte("certificate")
 	store.persist(runtime)
 
-	if got := int32(databaseCall(t, runtime, wipicDatabaseExists, name)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
 		t.Fatalf("exists before the delete = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicDatabaseDelete, name, 1)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicFileDelete, name, 1)); got != 0 {
 		t.Fatalf("delete = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicDatabaseExists, name)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != notFound {
 		t.Fatalf("exists after the delete = %d, want the not-found code", got)
 	}
 	// Opening for reading has to fail too: it is the other question a title
 	// asks, and it seeds from the same persisted copy.
-	if got := int32(databaseCall(t, runtime, wipicDatabaseOpen, name, 1)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicFileOpen, name, 1)); got != notFound {
 		t.Fatalf("read-open after the delete = %d, want the not-found code", got)
 	}
 	// Deleting what is not there is reported rather than accepted.
-	if got := int32(databaseCall(t, runtime, wipicDatabaseDelete, name, 1)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicFileDelete, name, 1)); got != notFound {
 		t.Fatalf("deleting twice = %d, want the not-found code", got)
 	}
 }
@@ -80,20 +80,20 @@ func TestCreatingADeletedDatabaseBringsItBack(t *testing.T) {
 	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
 
 	const name = "slot.dat"
-	databaseCall(t, runtime, wipicDatabaseOpen, name, 4)
-	runtime.cDatabases[name].data = []byte("old")
-	runtime.cDatabases[name].persist(runtime)
-	databaseCall(t, runtime, wipicDatabaseDelete, name, 1)
+	databaseCall(t, runtime, wipicFileOpen, name, 4)
+	runtime.cFiles[name].data = []byte("old")
+	runtime.cFiles[name].persist(runtime)
+	databaseCall(t, runtime, wipicFileDelete, name, 1)
 
-	if handle := int32(databaseCall(t, runtime, wipicDatabaseOpen, name, 4)); handle < 0 {
+	if handle := int32(databaseCall(t, runtime, wipicFileOpen, name, 4)); handle < 0 {
 		t.Fatalf("create after a delete = %d", handle)
 	}
-	if got := len(runtime.cDatabases[name].data); got != 0 {
+	if got := len(runtime.cFiles[name].data); got != 0 {
 		t.Fatalf("the recreated database holds %d bytes of the deleted one", got)
 	}
-	runtime.cDatabases[name].data = []byte("new")
-	runtime.cDatabases[name].persist(runtime)
-	if got := int32(databaseCall(t, runtime, wipicDatabaseExists, name)); got != 0 {
+	runtime.cFiles[name].data = []byte("new")
+	runtime.cFiles[name].persist(runtime)
+	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
 		t.Fatalf("exists after recreating = %d, want 0", got)
 	}
 	if data, ok := runtime.databaseSeed(name); !ok || string(data) != "new" {
@@ -112,13 +112,13 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 	runtime.client.saveStore = NewDirectorySaveStore(saves)
 
 	const name = "ga"
-	if got := int32(databaseCall(t, runtime, wipicDatabaseMakeDirectory, name, 1)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != 0 {
 		t.Fatalf("the first mkdir = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicDatabaseMakeDirectory, name, 1)); got != alreadyThere {
+	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != alreadyThere {
 		t.Fatalf("the second mkdir = %d, want %d", got, alreadyThere)
 	}
-	if got := int32(databaseCall(t, runtime, wipicDatabaseExists, name)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
 		t.Fatalf("a made directory answers exists = %d, want 0", got)
 	}
 
@@ -126,10 +126,10 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 	// keep: nothing is in memory and the store is the only record.
 	_, second := newTestRuntime(t)
 	second.client.saveStore = NewDirectorySaveStore(saves)
-	if got := int32(databaseCall(t, second, wipicDatabaseMakeDirectory, name, 1)); got != alreadyThere {
+	if got := int32(databaseCall(t, second, wipicFileMakeDirectory, name, 1)); got != alreadyThere {
 		t.Fatalf("mkdir in a second session = %d, want %d", got, alreadyThere)
 	}
-	if got := int32(databaseCall(t, second, wipicDatabaseMakeDirectory, "other", 1)); got != 0 {
+	if got := int32(databaseCall(t, second, wipicFileMakeDirectory, "other", 1)); got != 0 {
 		t.Fatalf("mkdir of a name nothing made = %d, want 0", got)
 	}
 }

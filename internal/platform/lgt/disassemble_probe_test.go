@@ -31,11 +31,22 @@ func TestLocalDisassembleProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := StartSession(context.Background(), data, SessionOptions{})
+	// A start that fails is the usual reason to be reading code: the module
+	// died somewhere and the address in the report is what has to be read. The
+	// image is mapped by the load rather than by the start, so the client is
+	// built directly and the start is attempted only for what it maps beyond
+	// the image.
+	archive, err := Open(data)
 	if err != nil {
-		t.Fatalf("start: %v", err)
+		t.Fatal(err)
 	}
-	defer session.Close(context.Background())
+	client, err := Load(archive, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startErr := client.Start(context.Background()); startErr != nil {
+		t.Logf("start: %v", startErr)
+	}
 	for _, spec := range strings.Split(ranges, ",") {
 		low, high, ok := strings.Cut(spec, "-")
 		if !ok {
@@ -50,7 +61,7 @@ func TestLocalDisassembleProbe(t *testing.T) {
 			t.Fatal(err)
 		}
 		buffer := make([]byte, end-start+16)
-		if err := session.client.core.Memory().Read(uint32(start), buffer); err != nil {
+		if err := client.core.Memory().Read(uint32(start), buffer); err != nil {
 			t.Fatalf("read %s: %v", spec, err)
 		}
 		fmt.Printf("%#x %s\n", start, hex.EncodeToString(buffer))

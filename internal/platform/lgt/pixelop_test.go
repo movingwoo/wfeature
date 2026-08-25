@@ -31,6 +31,12 @@ func installThumb(t *testing.T, client *Client, instructions ...uint16) uint32 {
 func TestPixelOperationIsOnlyTakenFromACodeAddress(t *testing.T) {
 	client := fixtureClient(t)
 	low, high := client.module.Span()
+	// Every address below is offered to the reader as if a title had set it,
+	// so that what the test measures is the code-address rule rather than the
+	// installed-operation one beneath it.
+	for _, address := range []uint32{low | 1, low, 1, (low - 0x1000) | 1, high | 1, high + 0x1000} {
+		client.installPixelOp(address)
+	}
 
 	if op := client.readContextPixelOp(low|1, 0x1234); !op.active() {
 		t.Fatal("a Thumb address inside the module was refused")
@@ -172,6 +178,7 @@ func TestClippedPixelsDoNotReachTheOperation(t *testing.T) {
 func TestPixelOperationAnswersAreCachedAndInvalidated(t *testing.T) {
 	client := fixtureClient(t)
 	function := installThumb(t, client, 0x1c08, 0x4770) // adds r0, r1, #0; bx lr
+	client.installPixelOp(function)
 
 	op := client.readContextPixelOp(function, 0)
 	first, err := client.applyPixelOp(context.Background(), client.thread, op, 0x1111, 0x2222)
@@ -223,13 +230,16 @@ func TestPixelOperationAnswersAreCachedAndInvalidated(t *testing.T) {
 // every pixel.
 func TestAlternatingOperationsKeepTheirOwnAnswers(t *testing.T) {
 	client := fixtureClient(t)
-	keepArgumentZero := client.readContextPixelOp(installThumb(t, client, 0x4770), 0)
+	installed := installThumb(t, client, 0x4770)
+	client.installPixelOp(installed)
+	keepArgumentZero := client.readContextPixelOp(installed, 0)
 
 	_, high := client.module.Span()
 	second := (high - 128) &^ 1
 	if err := client.core.Memory().Write(second, []byte{0x08, 0x1c, 0x70, 0x47}); err != nil {
 		t.Fatal(err)
 	}
+	client.installPixelOp(second | 1)
 	keepArgumentOne := client.readContextPixelOp(second|1, 0)
 
 	// Alternate, the way the measured title does.
@@ -307,8 +317,11 @@ func pixelOpFixture(t *testing.T, client *Client, function uint32, colour uint16
 		t.Fatal(err)
 	}
 	if function != 0 {
-		if err := client.writeWord(pointer+grpContextPixelOp, function); err != nil {
-			t.Fatal(err)
+		// Through MC_grpSetContext rather than straight into the word: a draw
+		// only runs an operation this platform was handed, and a fixture that
+		// writes the field itself is a title that never installed one.
+		if code := client.transferContextFieldFor(t, pointer, grpFieldPixelOp, function); code != wipiSuccess {
+			t.Fatalf("setContext(pixel operation) answered %d", code)
 		}
 	}
 	target, err := client.newFramebuffer(4, 4, false)
@@ -322,4 +335,37 @@ func pixelOpFixture(t *testing.T, client *Client, function uint32, colour uint16
 func (client *Client) transferContextFieldFor(t *testing.T, pointer, field, value uint32) int32 {
 	t.Helper()
 	return int32(callSlot(t, client, slotSetContext, pointer, field, value))
+}
+
+// A word that is a code address and was never installed is a leftover, not an
+// operation. One title's context carried the middle of a routine of its own —
+// a return address, which passes the "inside the module" test — and running it
+// as an operation walked a structure base it had never been given and faulted.
+func TestOnlyAnInstalledOperationIsRun(t *testing.T) {
+	client := fixtureClient(t)
+	function := installThumb(t, client, 0x4770)
+
+	if op := client.readContextPixelOp(function, 0); op.active() {
+		t.Fatal("a code address this platform was never handed was run as an operation")
+	}
+	if client.uninstalledPixelOps[function] != 1 {
+		t.Fatalf("the refusal was not counted: %v", client.uninstalledPixelOps)
+	}
+
+	// The same address, once a title installs it anywhere, is an operation
+	// from then on — including through a context this platform never saw
+	// being set, which is what a title copying or restoring one produces.
+	pointer, err := client.allocateBytes(make([]byte, grpContextSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := client.initContext(pointer); code != wipiSuccess {
+		t.Fatalf("initContext answered %d", code)
+	}
+	if code := client.transferContextFieldFor(t, pointer, grpFieldPixelOp, function); code != wipiSuccess {
+		t.Fatalf("setContext(pixel operation) answered %d", code)
+	}
+	if op := client.readContextPixelOp(function, 0); !op.active() {
+		t.Fatal("an installed operation was refused")
+	}
 }

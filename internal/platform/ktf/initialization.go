@@ -241,8 +241,8 @@ type initializationRuntime struct {
 	nextNativeMethod    uint32
 	initializedClasses  map[uint32]bool
 	databases           map[string]*runtimeDataBaseStore
-	cDatabases          map[string]*runtimeCDatabase
-	cDatabaseHandles    map[uint32]*runtimeCDatabaseHandle
+	cFiles              map[string]*runtimeCFile
+	cFileHandles        map[uint32]*runtimeCFileHandle
 	nextCDatabaseHandle uint32
 	// The record databases are the other storage table; see
 	// wipic_record_database.go for why they are kept apart from the streams.
@@ -1259,11 +1259,18 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 			return 0, nil
 		}
 	case table == wipicTableGraphics && function == 1:
-		// MC_grpGetImageFrameBuffer: the image record begins with its
-		// framebuffer fields, so the image handle doubles as one.
+		// MC_grpGetImageFrameBuffer: an image record names its framebuffer in
+		// its first word, so the call answers that handle. A caller that hands
+		// the answer straight back to a drawing call reaches the same pixels
+		// either way — every read of a surface follows the naming — but a
+		// caller reading the framebuffer's own fields through the handset's
+		// macros needs the framebuffer rather than the image.
 		handle, err := thread.Register(0)
 		if err != nil {
 			return 0, err
+		}
+		if inner, isImage := runtime.wipicImageFramebuffer(handle); isImage {
+			return inner, nil
 		}
 		return handle, nil
 	case table == wipicTableGraphics && function == 2:
@@ -1383,7 +1390,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	case table == wipicTableRecordDatabase:
 		return runtime.handleWIPICRecordDatabaseCall(thread, function)
 	case table == wipicTableFilesystem:
-		return runtime.handleWIPICDatabaseCall(thread, function)
+		return runtime.handleWIPICFileCall(thread, function)
 	case table == wipicTableMedia:
 		return runtime.handleWIPICMediaCall(thread, function)
 	case table == wipicTableNet:
@@ -1487,6 +1494,21 @@ func (runtime *initializationRuntime) wipicAccessGraphicsContext(thread *armcore
 	transferInts := func(fieldOffset uint32, count int) error {
 		data := make([]byte, count*2)
 		if set {
+			// **A null array clears the field**, and one title's own code is
+			// what says so. Its clip setter computes the rectangle it wants,
+			// and when that rectangle turns out to be the whole destination
+			// surface it calls this with a null pointer instead of the array
+			// — the same call, with the array argument zeroed. A cleared clip
+			// is exactly how a context that has never been given one reads
+			// here (see wipicClip): an empty rectangle means "no clip" rather
+			// than "draw nothing", because MC_grpInitContext zeroes the record
+			// and no title that never sets a clip could draw otherwise. So
+			// zeroing the field is both what the caller asked for and what
+			// this platform already answers to. The same reading serves the
+			// origin offset, whose zero is the origin.
+			if value == 0 {
+				return memory.Write(contextAddress+fieldOffset, data)
+			}
 			words := make([]byte, count*4)
 			if err := memory.Read(value, words); err != nil {
 				return err
@@ -1533,7 +1555,8 @@ func (runtime *initializationRuntime) wipicAccessGraphicsContext(thread *armcore
 		return 0, nil
 	}
 	if accessErr != nil {
-		return 0, fmt.Errorf("access KTF graphics context field %d at %#x: %w", operation, contextAddress, accessErr)
+		return 0, fmt.Errorf("access KTF graphics context field %d at %#x with value %#x%s: %w",
+			operation, contextAddress, value, runtime.callerSite(thread), accessErr)
 	}
 	return 0, nil
 }

@@ -60,6 +60,14 @@ func (runtime *initializationRuntime) readWIPICDrawSurface(handle uint32, call s
 // readWIPICFramebuffer validates a framebuffer handle far enough that later
 // row writes stay inside the mapped pixel allocation.
 func (runtime *initializationRuntime) readWIPICFramebuffer(handle uint32) (wipicFramebuffer, error) {
+	// An image names its framebuffer, and that framebuffer is a record of its
+	// own; nothing here names a third. The bound is what stops a record the
+	// guest wrote itself — one whose first word is its own handle — from
+	// running this down until the Go stack ends.
+	return runtime.readWIPICSurface(handle, 2)
+}
+
+func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int) (wipicFramebuffer, error) {
 	recordBase, err := runtime.readAOTWords(handle, 1, "framebuffer handle")
 	if err != nil {
 		return wipicFramebuffer{}, err
@@ -67,6 +75,12 @@ func (runtime *initializationRuntime) readWIPICFramebuffer(handle uint32) (wipic
 	fields, err := runtime.readAOTWords(recordBase[0]+8, 5, "framebuffer record")
 	if err != nil {
 		return wipicFramebuffer{}, err
+	}
+	if inner, isImage := runtime.wipicImageFramebuffer(handle); isImage {
+		if depth <= 0 {
+			return wipicFramebuffer{}, fmt.Errorf("KTF image record at %#x names a framebuffer that names another", handle)
+		}
+		return runtime.readWIPICSurface(inner, depth-1)
 	}
 	framebuffer := wipicFramebuffer{
 		width:  fields[0],
@@ -90,6 +104,37 @@ func (runtime *initializationRuntime) readWIPICFramebuffer(handle uint32) (wipic
 	}
 	framebuffer.pixels = bufferBase[0] + 8
 	return framebuffer, nil
+}
+
+// wipicImageFramebuffer answers the framebuffer an MC_GrpImage record names,
+// and reports false for a handle that is a framebuffer record itself.
+//
+// **An MC_GrpImage names its framebuffer rather than inlining it**, and which
+// of the two a handle is is decided by the record's first word: a framebuffer
+// record starts with a width, and an image record starts with a handle this
+// platform issued. The two cannot be confused — a width is at most a couple of
+// thousand and a handle is an arena address — and the test is the allocation
+// table rather than the magnitude, so it is exact rather than a threshold.
+//
+// A title's own code is what settled the layout. It reads its image through
+// the handset's macros: take the image handle, follow it to the record, read
+// word zero as a framebuffer handle, follow *that* to its record and switch on
+// the depth field — `(bpp << 24) >> 27`, which is 2 for the 16-bit surfaces
+// here and 4 for 32-bit. With the framebuffer fields inlined, word zero was
+// the width, and the title dereferenced 74 and faulted on its first frame.
+func (runtime *initializationRuntime) wipicImageFramebuffer(handle uint32) (uint32, bool) {
+	base, err := runtime.readAOTWords(handle, 1, "image handle")
+	if err != nil {
+		return 0, false
+	}
+	fields, err := runtime.readAOTWords(base[0]+8, 1, "image record")
+	if err != nil {
+		return 0, false
+	}
+	if _, issued := runtime.wipicAllocations[fields[0]]; !issued {
+		return 0, false
+	}
+	return fields[0], true
 }
 
 // wipicClip is a graphics context's clipping rectangle, in the destination
@@ -810,6 +855,15 @@ func (runtime *initializationRuntime) destroyWIPICFramebufferRecord(handle uint3
 	if handle == 0 || handle == runtime.screenFramebuffer {
 		return
 	}
+	// An image record names its framebuffer rather than inlining it, so the
+	// record it names goes back with it. Without this every image a title
+	// creates and destroys leaks its framebuffer record and, worse, the pixel
+	// allocation that record names.
+	if inner, isImage := runtime.wipicImageFramebuffer(handle); isImage {
+		runtime.destroyWIPICFramebufferRecord(inner)
+		runtime.releaseWIPICIfOwned(handle)
+		return
+	}
 	framebuffer, err := runtime.readWIPICFramebuffer(handle)
 	if err != nil {
 		runtime.countDiagnostic("destroy of an unreadable framebuffer")
@@ -976,14 +1030,14 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 			return 0, fmt.Errorf("write KTF decoded image row %d: %w", y, err)
 		}
 	}
-	// MC_GrpImage: the image framebuffer fields inline, an all-zero mask
-	// framebuffer, animation state, and the source buffer reference.
-	framebufferFields, err := runtime.readAOTWords(framebuffer+wipicAllocationOverhead, 5, "image framebuffer record")
-	if err != nil {
-		return 0, err
-	}
+	// MC_GrpImage: the image's framebuffer, its mask, animation state, and the
+	// source buffer reference.
 	record := make([]uint32, 17)
-	copy(record, framebufferFields)
+	// Word zero is the image's framebuffer and word one is its mask, both as
+	// handles: see readWIPICFramebuffer for the title whose macros say so. The
+	// mask stays absent, which is what a guest reading MC_GrpImage expects of
+	// an image that has none.
+	record[0] = framebuffer
 	record[13] = dataHandle
 	record[14] = offset
 	record[16] = length
@@ -998,17 +1052,12 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 	if err := memory.Write(image+wipicAllocationOverhead, data); err != nil {
 		return 0, fmt.Errorf("write KTF image record: %w", err)
 	}
-	// The image record inlines those framebuffer fields, so a caller reads it
-	// as a framebuffer through the image handle — and MC_grpDrawImage is
-	// always given the image handle, never the inner one. The transparency has
-	// to answer to both, or every C-side image blit runs fully opaque: one
-	// title's map objects each came out inside a black rectangle that way.
+	// A caller reads the image as a framebuffer through the image handle — and
+	// MC_grpDrawImage is always given the image handle, never the inner one.
+	// The transparency has to answer to both, or every C-side image blit runs
+	// fully opaque: one title's map objects each came out inside a black
+	// rectangle that way.
 	runtime.setFramebufferOpacity(image, imageOpacityOf(decoded))
-	// The inner framebuffer record has been copied word for word into the image
-	// record and nothing reads it again — the pixel allocation it named is what
-	// lives on, now named by the image. Keeping the record would leak twenty
-	// bytes and its header for every image a title ever creates.
-	runtime.releaseWIPICIfOwned(framebuffer)
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], image)
 	if err := memory.Write(targetPointer, word[:]); err != nil {

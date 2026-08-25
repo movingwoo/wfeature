@@ -677,3 +677,67 @@ func TestCurrentTimeAnswersSixtyFourBitsOfEpochMilliseconds(t *testing.T) {
 		}
 	}
 }
+
+// A rename moves the bytes and leaves nothing behind at the old name. The two
+// refusals the specification names are what separate it from a copy, so both
+// are exercised: renaming a file that is not there, and renaming onto a name
+// that is.
+func TestRenameMovesAFileAndRefusesTheTwoDocumentedCases(t *testing.T) {
+	client := fixtureClient(t)
+	client.saveStore = newMemorySaveStore()
+
+	source, err := client.allocateBytes(append([]byte("data/hello.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := client.allocateBytes(append([]byte("data/moved.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := client.allocateBytes(append([]byte("data/absent.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result := callSlot(t, client, slotFsRename, missing, target, 1); int32(result) != wipiNoEntry {
+		t.Fatalf("renaming an absent file answered %d, want %d", int32(result), wipiNoEntry)
+	}
+	if result := callSlot(t, client, slotFsRename, source, target, 1); int32(result) != wipiSuccess {
+		t.Fatalf("rename answered %d", int32(result))
+	}
+	if data, ok := client.readFile("data/moved.txt"); !ok || string(data) != "packaged" {
+		t.Fatalf("the renamed file reads %q (%v), want %q", data, ok, "packaged")
+	}
+	if result := callSlot(t, client, slotFsIsExist, source); int32(result) != wipiNoEntry {
+		t.Fatalf("the old name answered %d after a rename, want %d", int32(result), wipiNoEntry)
+	}
+
+	// The destination is occupied now, and a second rename onto it has to
+	// leave both names as they are.
+	if result := callSlot(t, client, slotFsRename, target, target, 1); int32(result) != wipiSuccess {
+		t.Fatalf("renaming a file onto itself answered %d", int32(result))
+	}
+	writeBack := callSlot(t, client, slotFsOpen, source, fileOpenWriteTruncate)
+	if int32(writeBack) < 0 {
+		t.Fatalf("reopening the old name for writing answered %d", int32(writeBack))
+	}
+	payload, err := client.allocateBytes([]byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written := callSlot(t, client, slotFsWrite, writeBack, payload, 6); int32(written) != 6 {
+		t.Fatalf("write answered %d, want 6", int32(written))
+	}
+	if result := callSlot(t, client, slotFsClose, writeBack); int32(result) != wipiSuccess {
+		t.Fatalf("close answered %d", int32(result))
+	}
+	if result := callSlot(t, client, slotFsRename, source, target, 1); int32(result) != wipiExists {
+		t.Fatalf("renaming onto an existing name answered %d, want %d", int32(result), wipiExists)
+	}
+	if data, ok := client.readFile("data/moved.txt"); !ok || string(data) != "packaged" {
+		t.Fatalf("the refused rename changed the destination to %q (%v)", data, ok)
+	}
+	if data, ok := client.readFile("data/hello.txt"); !ok || string(data) != "second" {
+		t.Fatalf("the refused rename changed the source to %q (%v)", data, ok)
+	}
+}
