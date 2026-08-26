@@ -409,7 +409,7 @@ func (session *Session) Frame() ([]byte, int, int, bool) {
 	if !client.framePending {
 		return append([]byte(nil), client.frameRGBA...), client.screen.width, client.screen.height, false
 	}
-	for index, pixel := range client.screen.pixels {
+	for index, pixel := range client.presented {
 		red, green, blue := unpack565(pixel)
 		client.frameRGBA[index*4] = byte(red)
 		client.frameRGBA[index*4+1] = byte(green)
@@ -423,7 +423,8 @@ func (session *Session) Frame() ([]byte, int, int, bool) {
 // FrameDigest hashes what is on the screen, so a caller can tell a settled
 // screen from an animating one without copying the frame. It reads the LCD
 // itself rather than the converted RGBA, because the conversion only happens
-// when a Host asks for a frame and a route asks far more often than that.
+// when a Host asks for a frame and a route asks far more often than that. What
+// it reads is what the last flush presented, for the reason `presented` gives.
 func (session *Session) FrameDigest() uint64 {
 	if session == nil || session.client == nil {
 		return 0
@@ -434,7 +435,7 @@ func (session *Session) FrameDigest() uint64 {
 	// FNV-1a over the pixels.
 	const offset64, prime64 = uint64(14695981039346656037), uint64(1099511628211)
 	digest := offset64
-	for _, pixel := range client.screen.pixels {
+	for _, pixel := range client.presented {
 		digest = (digest ^ uint64(pixel)) * prime64
 	}
 	return digest

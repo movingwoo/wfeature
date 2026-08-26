@@ -101,6 +101,51 @@ func javaClipSetListener(
 	return 0, nil
 }
 
+// javaClipPutData is `BaseClip.putData(byte[] buf, int off, int len)`: the
+// bytes a title appends to a clip it built empty. It answers how many were
+// taken, which is what the specification's `int` is.
+//
+// **A clip that is already loaded is reloaded on the next play**, because the
+// mixer holds a decode of the bytes as they were: appending to a clip that has
+// played once and leaving the old decode in place would play the old sound.
+func javaClipPutData(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	offset, length := arguments[2], arguments[3]
+	if uint64(offset)+uint64(length) > uint64(len(data)) {
+		return 0, fmt.Errorf("%d bytes from %d is past the end of a %d-byte array",
+			length, offset, len(data))
+	}
+	clip.data = append(clip.data, data[offset:offset+length]...)
+	clip.loaded = false
+	if client.logger != nil {
+		client.logger.Debug("LGT java clip filled",
+			"type", clip.mediaType, "added", length, "bytes", len(clip.data))
+	}
+	return length, nil
+}
+
+// javaClipClearData is `BaseClip.clearData()`, which throws away what a clip
+// holds. The decode goes with it for the same reason `putData` drops it.
+func javaClipClearData(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	clip.data, clip.loaded = nil, false
+	return 0, nil
+}
+
 // javaClipSetVolume is `Clip.setVolume(int)`, which is this clip's own level
 // rather than the handset's.
 func javaClipSetVolume(
@@ -120,6 +165,9 @@ func javaClipSetVolume(
 func javaPlayerPlay(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	if !javaPlayerHasClip(client, arguments[0]) {
+		return javaFalse, nil
+	}
 	clip, err := client.javaClip(arguments[0])
 	if err != nil {
 		return 0, err
@@ -150,6 +198,9 @@ func javaPlayerPlay(
 func javaPlayerStop(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	if !javaPlayerHasClip(client, arguments[0]) {
+		return javaFalse, nil
+	}
 	clip, err := client.javaClip(arguments[0])
 	if err != nil {
 		return 0, err
@@ -168,6 +219,22 @@ func javaPlayerResume(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	return javaPlayerPlay(client, ctx, thread, []uint32{arguments[0], 0})
+}
+
+// javaPlayerHasClip reports whether a `Player` call was handed a clip at all.
+// **A null one is the title's own, and it answers `false` rather than failing**:
+// one title stops the sound for a scene it never started, and the specification
+// gives these calls a boolean for exactly the request that cannot be carried
+// out. Refusing the call instead ends the game on a line the handset shrugged
+// at.
+func javaPlayerHasClip(client *Client, object uint32) bool {
+	if object != 0 {
+		return true
+	}
+	if client.logger != nil {
+		client.logger.Debug("LGT java player call has no clip")
+	}
+	return false
 }
 
 // javaClip answers the clip an object stands for.

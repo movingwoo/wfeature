@@ -139,6 +139,13 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;Ljava/lang/String;)V": {
 		Words: 3, Implementat: javaClipFromFile},
 	"org/kwis/msp/media/Clip.setVolume(I)Z": {Words: 2, Implementat: javaClipSetVolume},
+
+	// The two a `BaseClip` declares: filling a clip built empty, and emptying
+	// it again. A title that reads its own sound resource and hands the bytes
+	// over goes through these rather than through the constructor that takes
+	// an array.
+	"org/kwis/msp/media/BaseClip.putData([BII)I": {Words: 4, Implementat: javaClipPutData},
+	"org/kwis/msp/media/BaseClip.clearData()V":   {Words: 1, Implementat: javaClipClearData},
 	"org/kwis/msp/media/Clip.setListener(Lorg/kwis/msp/media/PlayListener;)V": {
 		Words: 2, Implementat: javaClipSetListener},
 	"org/kwis/msp/media/Player.play(Lorg/kwis/msp/media/Clip;Z)Z": {

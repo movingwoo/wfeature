@@ -469,7 +469,7 @@ in `internal/route` and takes the key table and the four session operations it
 needs (advance, digest, key, stall) as functions, so neither platform's session
 type is in it.
 
-## contactsheet, framediff and zoom
+## contactsheet, framediff, framestats and zoom
 
 Reviewing a `-framedir` run. A scripted run only says something if somebody
 looks at the frames, and a run is a few thousand of them.
@@ -477,6 +477,7 @@ looks at the frames, and a run is a few thousand of them.
 ```sh
 wfeature contactsheet <framedir> <out.png> [-every N] [-columns N] [-shrink N] [-from tick] [-to tick]
 wfeature framediff <dirA> <dirB> [-limit N]
+wfeature framestats <framedir|frame.png> [-limit N]
 wfeature zoom <frame.png> <out.png> [-x N] [-y N] [-width N] [-height N] [-scale N]
 ```
 
@@ -498,6 +499,26 @@ Run the same script against the build before a change and the build after it,
 and the first differing tick says what the change did and where. A screen that
 comes back byte-identical is a screen the change did not touch — worth knowing
 before believing a fix. [`lgt.md`](lgt.md) has how both fit into a session.
+
+`framestats` says what is on each frame — how many distinct colours it holds
+and how many pixels are lit — and **exits nonzero when every frame it was given
+is a single colour**. That status is the point: it is what lets a whole-set
+sweep close the two holes in its own judgment without a person in the loop.
+
+```
+  tick0900.png     colours=317    lit=52190 of 76800
+1 frames, 0 of one colour, 0 with nothing lit
+```
+
+The holes are these. A KTF run is counted as working when any pixel is lit, so
+a title that fills the screen white passes with all 76,800 of them; an LGT run
+is counted as working when it finishes its ticks, so one that draws nothing at
+all passes too. Both were found by looking at a frame by hand. Point this at a
+sweep's captured frames and neither passes again.
+
+A run whose frames are mixed exits zero, because a boot that starts black and
+then draws is a working boot — it is only the run that never drew anything that
+fails.
 
 `zoom` crops a box out of one frame and scales it up pixel for pixel, which is
 the question the other two cannot answer: **which way is the character

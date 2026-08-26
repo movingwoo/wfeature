@@ -22,6 +22,15 @@ const (
 	sectionTypeNoBits = 8
 	sectionFlagExec   = 0x4
 	sectionFlagAlloc  = 0x2
+
+	// raptorSectionName is the toolchain's own record of what it built, and
+	// raptorMagic opens it. It is not loaded — its section address is zero —
+	// so nothing here would read it if the entry in the ELF header could be
+	// trusted. See "A module whose ELF header names the wrong entry".
+	raptorSectionName  = ".raptor"
+	raptorMagic        = "RAPT"
+	raptorEntryOffset  = 12
+	raptorHeaderLength = 16
 )
 
 // Section is one loadable piece of the module.
@@ -134,7 +143,63 @@ func ParseModule(data []byte) (*Module, error) {
 	if len(module.Sections) == 0 {
 		return nil, fmt.Errorf("LGT module has no loadable sections")
 	}
+	if entry, ok := raptorEntry(data, module, header, names, int(count)); ok {
+		module.Entry = entry
+	}
 	return module, nil
+}
+
+// raptorEntry reads the module entry out of the toolchain's own `.raptor`
+// record, which every module here carries. The record's fourth word is the
+// entry as an offset from the image base, with the Thumb bit set.
+//
+// **It is read because one module's ELF header names a different address, and
+// the header is the one that is wrong.** Across the 128 local modules the two
+// agree everywhere except there, and that module's `e_entry` points at its
+// Jlet registration routine — which reads the block a platform is meant to
+// have filled in before the entry ever ran, and faults on the word it finds.
+// Entering where `.raptor` says instead reaches the module's real start.
+//
+// Nothing is forced: a record that is missing, short, unrecognisable, or that
+// names an address outside an executable section leaves the ELF header's entry
+// alone. The check is what keeps this from turning a readable failure into a
+// wild jump.
+func raptorEntry(data []byte, module *Module, header func(int) ([]byte, error), names []byte, count int) (uint32, bool) {
+	var record []byte
+	for index := 0; index < count; index++ {
+		entry, err := header(index)
+		if err != nil {
+			return 0, false
+		}
+		if sectionName(names, binary.LittleEndian.Uint32(entry[0:])) != raptorSectionName {
+			continue
+		}
+		offset := binary.LittleEndian.Uint32(entry[16:])
+		size := binary.LittleEndian.Uint32(entry[20:])
+		if uint64(offset)+uint64(size) > uint64(len(data)) || size < raptorHeaderLength {
+			return 0, false
+		}
+		record = data[offset : uint64(offset)+uint64(size)]
+		break
+	}
+	if len(record) < raptorHeaderLength || string(record[:4]) != raptorMagic {
+		return 0, false
+	}
+	base, _ := module.Span()
+	relative := binary.LittleEndian.Uint32(record[raptorEntryOffset:]) &^ 1
+	if uint64(base)+uint64(relative) > 1<<32 {
+		return 0, false
+	}
+	entry := base + relative
+	for _, section := range module.Sections {
+		if !section.Executable {
+			continue
+		}
+		if entry >= section.Address && uint64(entry) < uint64(section.Address)+uint64(section.Size) {
+			return entry, true
+		}
+	}
+	return 0, false
 }
 
 func sectionName(names []byte, offset uint32) string {

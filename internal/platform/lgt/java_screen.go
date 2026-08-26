@@ -198,6 +198,9 @@ func (client *Client) javaDraw(
 	if err != nil {
 		return err
 	}
+	// From here the runtime's copy of this surface is the only correct one;
+	// syncFromGuest has why that has to be recorded.
+	context.target.drawnHere = true
 	return draw(context, state)
 }
 
@@ -289,6 +292,8 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 		Words: 5, Implementat: javaDrawString},
 	"org/kwis/msp/lcdui/Graphics.drawChar(CIII)V":     {Words: 5, Implementat: javaDrawChar},
 	"org/kwis/msp/lcdui/Graphics.drawChars([CIIIII)V": {Words: 7, Implementat: javaDrawChars},
+	"org/kwis/msp/lcdui/Graphics.drawSubstring(Ljava/lang/String;IIIII)V": {
+		Words: 7, Implementat: javaDrawSubstring},
 
 	"org/kwis/msp/lcdui/Graphics.drawImage(Lorg/kwis/msp/lcdui/Image;III)V": {
 		Words: 5, Implementat: javaDrawImage},
@@ -323,6 +328,77 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// have been dealt with; see java_frame.go.
 	"org/kwis/msp/lcdui/Display.callSerially(Ljava/lang/Runnable;)V": {
 		Words: 2, Implementat: javaCallSerially},
+
+	// What a key means rather than which key it was. A title that handles the
+	// pad through actions asks for this in its own `keyNotify` and branches on
+	// the answer, so an unimplemented one stops it on its first key press.
+	"org/kwis/msp/lcdui/Display.getGameAction(I)I": {Words: 1, Implementat: javaGameAction},
+	"org/kwis/msp/lcdui/Display.getKeyCode(I)I":    {Words: 1, Implementat: javaKeyCode},
+}
+
+// The game actions the platform's own `Display` answers with. They are the
+// table the other two platforms here already carry, and the numbers are the
+// ones a title compares against rather than anything this platform chose.
+const (
+	javaGameActionUp    = 1
+	javaGameActionLeft  = 2
+	javaGameActionRight = 5
+	javaGameActionDown  = 6
+	javaGameActionFire  = 8
+	javaGameActionClear = 99
+)
+
+// The key codes those actions stand for. A handset reports these to
+// `keyNotify`, and `getKeyCode` turns an action back into one.
+const (
+	javaKeyUp    int32 = -1
+	javaKeyDown  int32 = -2
+	javaKeyLeft  int32 = -3
+	javaKeyRight int32 = -4
+	javaKeyFire  int32 = -5
+	javaKeyClear int32 = -16
+)
+
+// javaGameAction is `Display.getGameAction(keyCode)`. A key with no action
+// reports itself, which is what leaves a title's digit and soft keys reaching
+// its own branches.
+func javaGameAction(_ *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	switch int32(arguments[0]) {
+	case javaKeyUp:
+		return javaGameActionUp, nil
+	case javaKeyDown:
+		return javaGameActionDown, nil
+	case javaKeyLeft:
+		return javaGameActionLeft, nil
+	case javaKeyRight:
+		return javaGameActionRight, nil
+	case javaKeyFire:
+		return javaGameActionFire, nil
+	case javaKeyClear:
+		return javaGameActionClear, nil
+	}
+	return arguments[0], nil
+}
+
+// javaKeyCode is `Display.getKeyCode(action)`, the reverse. An action with no
+// key reports zero.
+func javaKeyCode(_ *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	var key int32
+	switch int32(arguments[0]) {
+	case javaGameActionUp:
+		key = javaKeyUp
+	case javaGameActionDown:
+		key = javaKeyDown
+	case javaGameActionLeft:
+		key = javaKeyLeft
+	case javaGameActionRight:
+		key = javaKeyRight
+	case javaGameActionFire:
+		key = javaKeyFire
+	case javaGameActionClear:
+		key = javaKeyClear
+	}
+	return uint32(key), nil
 }
 
 // javaSetColorTriple is `setColor(r, g, b)`.
@@ -594,6 +670,27 @@ func javaDrawChars(
 		return 0, err
 	}
 	return 0, client.javaDrawText(arguments[0], text,
+		int(int32(arguments[4])), int(int32(arguments[5])), int(int32(arguments[6])))
+}
+
+// javaDrawSubstring is `drawSubstring(text, offset, length, x, y, anchor)`. It
+// is the run-of-a-String companion to drawChars, and a title that lays out one
+// buffer of text a line at a time draws through it rather than through
+// drawString.
+func javaDrawSubstring(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	text, ok := client.javaText(arguments[1])
+	if !ok && arguments[1] != 0 {
+		return 0, fmt.Errorf("the object at %#x is not a string this platform built", arguments[1])
+	}
+	units := utf16Units(text)
+	offset, length := arguments[2], arguments[3]
+	if uint64(offset)+uint64(length) > uint64(len(units)) {
+		return 0, fmt.Errorf("%d characters from %d is past the end of a %d-character string",
+			length, offset, len(units))
+	}
+	return 0, client.javaDrawText(arguments[0], javaTextOfUnits(units[offset:offset+length]),
 		int(int32(arguments[4])), int(int32(arguments[5])), int(int32(arguments[6])))
 }
 

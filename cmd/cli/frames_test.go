@@ -59,6 +59,57 @@ func TestFrameFilesReadInTickOrder(t *testing.T) {
 	}
 }
 
+// The two holes in a sweep's automatic judgment are a screen filled with one
+// colour and a screen with nothing on it, and this is what makes both visible:
+// a run whose every frame is one colour is reported as such and exits nonzero,
+// so a script can ask without a person looking.
+func TestFrameStatsFindsAScreenWithNothingOnIt(t *testing.T) {
+	directory := t.TempDir()
+	for _, tick := range []int{1, 2} {
+		writeFrame(t, directory, tick, 0xff, image.Pt(-1, 0))
+	}
+	output, errors := &strings.Builder{}, &strings.Builder{}
+	if code := frameStats([]string{directory}, output, errors); code == 0 {
+		t.Fatalf("a run of single-colour frames exited zero: %s", output)
+	}
+	if !strings.Contains(output.String(), "2 frames, 2 of one colour") {
+		t.Fatalf("stats do not name the solid frames: %s", output)
+	}
+	// A white screen is every pixel lit, which is exactly the frame the KTF
+	// half of the judgment passes.
+	if !strings.Contains(output.String(), "lit=48 of 48") {
+		t.Fatalf("stats do not count a filled screen as lit: %s", output)
+	}
+}
+
+// A frame with something drawn on it exits zero, and one frame among solid
+// ones is enough: a boot that starts black and then draws is a working boot.
+func TestFrameStatsAcceptsARunThatDrawsSomething(t *testing.T) {
+	directory := t.TempDir()
+	writeFrame(t, directory, 1, 0x00, image.Pt(-1, 0))
+	writeFrame(t, directory, 2, 0x00, image.Pt(3, 2))
+	output, errors := &strings.Builder{}, &strings.Builder{}
+	if code := frameStats([]string{directory}, output, errors); code != 0 {
+		t.Fatalf("a run that drew something exited %d: %s", code, errors)
+	}
+	if !strings.Contains(output.String(), "2 frames, 1 of one colour, 1 with nothing lit") {
+		t.Fatalf("stats do not separate the drawn frame from the blank one: %s", output)
+	}
+}
+
+// One PNG is a frame too: `-frame out.png` is how a sweep captures its screen.
+func TestFrameStatsReadsASingleFrame(t *testing.T) {
+	directory := t.TempDir()
+	path := writeFrame(t, directory, 7, 0x20, image.Pt(1, 1))
+	output, errors := &strings.Builder{}, &strings.Builder{}
+	if code := frameStats([]string{path}, output, errors); code != 0 {
+		t.Fatalf("one drawn frame exited %d: %s", code, errors)
+	}
+	if !strings.Contains(output.String(), "colours=2") {
+		t.Fatalf("stats do not count the frame's colours: %s", output)
+	}
+}
+
 // The sheet holds one tile per selected frame at the size the shrink asks for,
 // so a caller can tell from the dimensions that it got the run it wanted.
 func TestContactSheetTilesTheSelectedFrames(t *testing.T) {

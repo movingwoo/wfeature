@@ -108,6 +108,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return contactSheet(args[1:], stdout, stderr)
 	case "framediff":
 		return frameDiff(args[1:], stdout, stderr)
+	case "framestats":
+		return frameStats(args[1:], stdout, stderr)
 	case "zoom":
 		return zoomFrame(args[1:], stdout, stderr)
 	default:
@@ -1607,6 +1609,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  wfeature provision <game.zip> [-save dir] [-number N] [-dry-run]")
 	fmt.Fprintln(output, "  wfeature contactsheet <framedir> <out.png> [-every N] [-columns N] [-shrink N] [-from tick] [-to tick]")
 	fmt.Fprintln(output, "  wfeature framediff <dirA> <dirB> [-limit N]")
+	fmt.Fprintln(output, "  wfeature framestats <framedir|frame.png> [-limit N]")
 	fmt.Fprintln(output, "  wfeature zoom <frame.png> <out.png> [-x N] [-y N] [-width N] [-height N] [-scale N]")
 	fmt.Fprintln(output, "  wfeature licenses")
 }

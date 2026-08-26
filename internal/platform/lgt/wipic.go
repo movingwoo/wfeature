@@ -544,10 +544,32 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		slotDrawArc, slotFillArc:
 		return client.handleDraw(ctx, thread, slot)
 
-	case slotFlushLcd, slotRepaint:
+	case slotFlushLcd:
+		// `MC_grpFlushLcd(lcd, frm, x, y, w, h)`. **The second argument names
+		// the surface to put on the display**, and it is not always the
+		// display's own: one title draws its whole frame into a buffer it
+		// created and flushes that, so a flush that always published the LCD
+		// published a screen nothing had ever drawn into. The region is the
+		// last four arguments, two of them on the stack.
+		handle, err := argument(1)
+		if err != nil {
+			return err
+		}
+		if err := client.flushToScreen(handle); err != nil {
+			return err
+		}
+		client.present()
+		client.framePending = true
+		client.flushes++
+		return answerInt(wipiSuccess)
+
+	case slotRepaint:
+		// `MC_grpRepaint(lcd, x, y, w, h)` names no surface: it asks for what
+		// the display already holds to be shown again.
 		if err := client.syncFromGuest(client.screen); err != nil {
 			return err
 		}
+		client.present()
 		client.framePending = true
 		client.flushes++
 		return answerInt(wipiSuccess)
@@ -621,12 +643,26 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		return answer(uint32(defaultFontHeight() - defaultFontAscent()))
 
 	case slotGetStringWidth:
+		// `MC_grpGetStringWidth(font, str, len)`, with `-1` for a string that
+		// is terminated rather than counted — the same convention the draw
+		// calls take, so it is read the same way.
+		//
+		// **The count is not optional.** Measuring the whole string whatever
+		// was asked for is right for every caller that passes `-1` and wrong
+		// for the one that wraps text: a title that grows a run one character
+		// at a time until it no longer fits was answered the same width every
+		// time, and spent three billion instructions inside a loop that could
+		// never end. It is not a slow title; it is a stuck one.
 		pointer, err := argument(1)
 		if err != nil {
 			return err
 		}
+		length, err := argument(2)
+		if err != nil {
+			return err
+		}
 		// Measured as text, because it is measuring what drawString will draw.
-		text, err := client.readCText(pointer)
+		text, err := client.readString(pointer, int32(length))
 		if err != nil {
 			return err
 		}
