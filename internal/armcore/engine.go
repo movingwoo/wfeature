@@ -22,6 +22,25 @@ type RunResult struct {
 	SupervisorCall SupervisorCall
 }
 
+// FastSupervisorCall answers a supervisor call without leaving the quantum.
+//
+// **It exists because a crossing costs more than the call it carries.** A
+// title that polls the platform clock inside its own loop raises one SVC every
+// few tens of instructions, and every one of them ends the quantum: the memory
+// lock is dropped and retaken, the execute lock with it, the thread is
+// suspended and resumed with a context copy each way, and the handler then
+// reaches its registers through a mutex per register. That is the boundary a
+// call needs when it can block, re-enter the guest, or touch guest memory. A
+// slot that only reads a number the platform already holds needs none of it.
+//
+// The contract the handler runs under, which is also why it is not the general
+// path: it is called with the memory lock and the execute lock held, so it must
+// not read or write guest memory, must not call back into the guest, and must
+// not take a lock either of those can be waiting behind. It answers by writing
+// the context it is handed. Returning false leaves the call to the ordinary
+// handler, which is what every slot that does not meet the contract does.
+type FastSupervisorCall func(context *Context, immediate uint32) bool
+
 // Engine executes bounded instruction quanta. It owns no register or memory
 // state, which lets Core save each cooperative guest thread independently.
 type Engine struct{}
@@ -148,6 +167,9 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: uint32(decoded.instruction), Thumb: true, Cause: err}
 			}
 			if supervisorCall != nil {
+				if memory.fastSupervisor != nil && memory.fastSupervisor(context, supervisorCall.Immediate) {
+					continue
+				}
 				return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: *supervisorCall}, nil
 			}
 			continue
@@ -163,6 +185,9 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: instruction, Cause: err}
 		}
 		if supervisorCall != nil {
+			if memory.fastSupervisor != nil && memory.fastSupervisor(context, supervisorCall.Immediate) {
+				continue
+			}
 			return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: *supervisorCall}, nil
 		}
 	}

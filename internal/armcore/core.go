@@ -77,6 +77,13 @@ func NewCore(options CoreOptions) *Core {
 	}
 }
 
+// SetFastSupervisorCall installs a handler for supervisor calls that can be
+// answered inside the quantum. See FastSupervisorCall for the contract it runs
+// under. It must be set before the core runs; nil removes it.
+func (core *Core) SetFastSupervisorCall(handler FastSupervisorCall) {
+	core.memory.fastSupervisor = handler
+}
+
 func (core *Core) Memory() *Memory {
 	return core.memory
 }

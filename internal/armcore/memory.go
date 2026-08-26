@@ -228,6 +228,12 @@ type Memory struct {
 	// a hit can say where in that order its first and last write fell.
 	watchStores uint64
 	executingPC uint32
+	// fastSupervisor answers the supervisor calls that can be served inside
+	// the quantum. It lives here rather than on Engine because Engine has to
+	// stay a zero-size struct: giving it one field made the interpreter's own
+	// loop 3% to 13% slower on the local titles, which is more than the
+	// boundary it was there to remove. See FastSupervisorCall, and armcore.md.
+	fastSupervisor FastSupervisorCall
 }
 
 func NewMemory() *Memory {
