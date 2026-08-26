@@ -28,6 +28,13 @@ type framebuffer struct {
 	// is not a decoded image. RGB565 has no alpha channel to carry it. See
 	// wipic_image.go.
 	opaque []bool
+	// drawnHere marks a surface an AOT Java `Graphics` has drawn into, which
+	// makes the runtime's copy the only correct one. A Java title never
+	// receives a surface's address and never writes a pixel through guest
+	// memory, so re-reading one is not a refresh — it is a wipe with whatever
+	// the guest happens to hold, which for a picture the title built and drew
+	// into is zeros. See syncFromGuest.
+	drawnHere bool
 }
 
 // bytesPerLine is what MC_grpGetFrameBufferBpl reports: RGB565 is two bytes a
@@ -315,6 +322,16 @@ func (client *Client) syncFromGuest(buffer *framebuffer) error {
 	if buffer == nil || buffer.address == 0 {
 		return nil
 	}
+	// **A surface a Java title drew into is not read back.** One title paints
+	// its whole frame into a picture it created and blits that picture to the
+	// screen, and the blit read the picture out of guest memory first: the
+	// title had never written a pixel there, so every frame it drew was
+	// replaced by zeros on its way to the screen and the run ended three
+	// thousand ticks of black. See javaDraw for why the Java path keeps its
+	// pixels here rather than in the guest's memory.
+	if buffer.drawnHere {
+		return nil
+	}
 	// A whole screen at a time, with no scratch buffer and no loop that
 	// rebuilds every pixel out of two bytes. This pair is crossed twice per
 	// draw call, so what it costs is most of what a drawing title costs; see
@@ -323,6 +340,51 @@ func (client *Client) syncFromGuest(buffer *framebuffer) error {
 		return fmt.Errorf("read LGT framebuffer at %#x: %w", buffer.address, err)
 	}
 	return nil
+}
+
+// flushToScreen puts the surface a flush names on the display. The usual case
+// is the display's own framebuffer, and then the flush is the read-back a Clet
+// needs because it wrote its pixels through the pointer it was handed. A title
+// that names a surface of its own is double-buffering, and then the flush is a
+// copy: read that surface back the same way, then put it on the screen.
+//
+// A handle this platform does not hold falls back to the display, because that
+// is what a flush means when the surface cannot be named — and refusing one
+// would end a title over the argument rather than over the frame.
+func (client *Client) flushToScreen(handle uint32) error {
+	source := client.framebuffer(handle)
+	if source == nil || source == client.screen || source.screen {
+		return client.syncFromGuest(client.screen)
+	}
+	if err := client.syncFromGuest(source); err != nil {
+		return err
+	}
+	if err := client.syncFromGuest(client.screen); err != nil {
+		return err
+	}
+	width, height := min(source.width, client.screen.width), min(source.height, client.screen.height)
+	for row := 0; row < height; row++ {
+		copy(client.screen.pixels[row*client.screen.width:row*client.screen.width+width],
+			source.pixels[row*source.width:row*source.width+width])
+	}
+	// The display's own memory has to agree with what was just put on it: a
+	// title that flushes a buffer of its own and then draws on the display
+	// directly would otherwise draw over the frame it never saw.
+	return client.syncToGuest(client.screen)
+}
+
+// present takes the copy of the display a Host reads. It is called wherever a
+// frame is published — the two flush slots and the Java paint — because what a
+// Host shows is what was last put on the panel rather than what the framebuffer
+// holds at the moment it asks. See `presented` in client.go.
+func (client *Client) present() {
+	if client.screen == nil {
+		return
+	}
+	if len(client.presented) != len(client.screen.pixels) {
+		client.presented = make([]uint16, len(client.screen.pixels))
+	}
+	copy(client.presented, client.screen.pixels)
 }
 
 // syncToGuest writes the runtime's pixels back, which is what a draw call

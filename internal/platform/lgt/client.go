@@ -114,6 +114,14 @@ type Client struct {
 	framePending bool
 	frameRGBA    []byte
 	flushes      uint64
+	// presented is what the last flush put on the display, which is not the
+	// same thing as what the framebuffer holds now. A handset's `MC_grpFlushLcd`
+	// copies a surface to the panel; what the title draws into that surface
+	// afterwards is invisible until it flushes again. Reading the framebuffer
+	// when the Host asks instead shows a title's next frame half-drawn — and
+	// for one title that fills the screen white, flushes, and immediately fills
+	// it black again, it showed nothing at all for three thousand ticks.
+	presented []uint16
 
 	framebuffers map[uint32]*framebuffer
 	timers       map[uint32]*timer
@@ -370,6 +378,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		// is the only thing that tells it apart from them.
 		screen: true,
 	}
+	client.presented = make([]uint16, width*height)
 	client.frameRGBA = make([]byte, width*height*4)
 	for index := 3; index < len(client.frameRGBA); index += 4 {
 		client.frameRGBA[index] = 0xff

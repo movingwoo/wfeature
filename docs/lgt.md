@@ -3989,9 +3989,34 @@ with the receiver.** That is what the earlier reading of these instructions —
 "it chooses between the original object and null" — missed: the choice is
 between two *functions*, and the object is only the argument to whichever wins.
 So `0x64` is a **method lookup**, not the type check its shape suggested, and
-the fallback is what a lookup that finds nothing runs. Its second argument comes
-from two loads off the previous call's answer, so a name for that chain is what
-remains.
+the fallback is what a lookup that finds nothing runs.
+
+**What it looks the method up by is an interface name, and one line of a report
+said so.** The chain the second argument comes from is a class object — the
+module routine before it is the accessor that checks the initialised halfword
+at `+0x10`, and word 2 of a class object's data is its name. The report could
+not say that while it only named arguments it recognised as objects; it now
+follows a word that is not one, as text and then as the words it points at, and
+the same call comes back reading `argument 1 is the text "IEventHandler"`. That
+is `invokeinterface`: a receiver, and the interface the call site is making the
+call through.
+
+**The answer is where that interface's methods start in the receiver's own
+dispatch table.** A class record's interface table already carries the pairing —
+each entry is an interface and a number — and the call site reads `+4` out of
+the answer for the interface's first method, so the answer is the table biased
+so that `+4 + 4n` lands on method `n`. That is the same `vtable + 4 + 4n` a
+virtual call site uses, shifted to count from the interface's first method
+instead of the class's.
+
+**The entry's second word is one of two things, and the value says which.** For
+`java/lang/Runnable` it is a slot — 10, a position inside the class's own
+vtable, which is what the thread path has been reading it as. For the interface
+this title dispatches through it is `0x87f80`, an address in the module's own
+text, and the words after it in the entry are five more of the same: the entry
+*is* the interface's method table. A slot is smaller than the class's vtable and
+an address is not, so the two are told apart by the number rather than by a
+flag, and each is answered with what its call site expects to read.
 
 ### A stream a title wrote itself
 
@@ -4082,6 +4107,80 @@ this worth the section: every other kind of failure names a slot, an address or
 a class, and the sweep's own judgement catches it. This one produced a row that
 read "timed out", which reads as a title being slow — and the title was not
 slow. It had stopped.
+
+### A frame drawn into a picture, wiped on its way to the screen
+
+One title finished three thousand ticks with no error and no lit pixel, and it
+was drawing the whole time: 334 drawing calls a frame, then one `drawImage` onto
+the screen. It is double-buffered — it creates a 240x320 picture, keeps that
+picture's `Graphics` in a field, paints the frame into it, and blits the picture
+to the screen in `paint`.
+
+**The blit read the picture out of guest memory first.** Every source surface is
+re-read before it is used, because a Clet writes pixels straight through the
+framebuffer pointer it was given and the runtime's copy is only correct if it
+re-reads. A Java title is the other shape entirely — it never receives a
+surface's address and never writes a pixel through guest memory — so for the
+picture it had just painted, the re-read was not a refresh. It was a wipe with
+the zeros the guest still held, once per frame, on the way to the screen.
+
+So a surface an AOT `Graphics` has drawn into is marked, and a marked surface is
+not read back. The mark is set where the drawing context is built, which is the
+one place every Java drawing call passes through.
+
+**The judgement passed it.** An LGT row counts as working when it finishes its
+ticks, and this one finished all of them; a black screen is only visible in a
+frame. `framestats` is what makes that visible without a person — see
+[`cli.md`](cli.md).
+
+### A flush names the surface to show, and the screen is not always it
+
+`MC_grpFlushLcd(lcd, frm, x, y, w, h)` takes the framebuffer to put on the
+display as its **second** argument, and this platform was ignoring it: every
+flush published the LCD's own surface. That is right for the titles that draw
+on the LCD directly, which is most of them, and wrong for the one that
+double-buffers in C — it asks for the screen framebuffer, never draws on it,
+creates a surface of its own, draws its whole frame there and flushes *that*.
+Nothing it drew ever reached the panel.
+
+A flush now copies the surface it names onto the display when that surface is
+not the display, and reads the display back when it is. The read-back is what a
+Clet needs: it wrote its pixels through the pointer it was handed rather than
+through any call this platform saw.
+
+### What a Host shows is what the last flush put on the panel
+
+The frame a Host takes used to be the framebuffer converted at the moment it
+asked. On a handset those are different things — `MC_grpFlushLcd` copies a
+surface to the panel, and what the title draws into that surface afterwards is
+invisible until it flushes again — and the difference is a whole title.
+
+One title fills the screen white, flushes, and immediately fills it black to
+start the next frame. Every flush left the screen white and every frame a Host
+took was black, for three thousand ticks: the guest had gone on drawing between
+the flush and the ask. It reads as a title that never draws anything, and it is
+a title whose every frame was thrown away.
+
+The display is a copy taken at each flush now — both C flush slots and the Java
+paint — and `Frame` and `FrameDigest` read that copy. **This changes what every
+title's frames are**, so it was measured the same way everything else here is:
+the whole 94-archive set before and after.
+
+### A width that ignored the count it was given
+
+`MC_grpGetStringWidth(font, str, len)` was measuring the whole string whatever
+`len` said. That is right for every caller that passes `-1`, which is what the
+specification's "or -1 for null-terminated" is for, and wrong for the one caller
+that matters: a title wrapping text grows a run one character at a time and asks
+how wide it is until it no longer fits. Answered the same width every time, the
+loop cannot end.
+
+That title had been in the list as "instruction limit exceeded", which reads as
+a title doing too much work. **The trace's tail is what told the two apart**: a
+title that is loading crosses a mix of boundaries, and this one's last forty
+crossings were the same call with the same arguments and the same answer. It was
+not slow. It was stuck, the same distinction the hang two sections above turned
+on, and the same tool found it.
 
 ## Deliberately incomplete
 
@@ -4509,7 +4608,56 @@ serving `MC_dbOpenDataBase` would be building a storage surface with no caller
 to shape it. It is a measurement to re-run rather than a conclusion to keep: a
 new archive is what would change it.
 
+### A module whose ELF header names the wrong entry
+
+The section below reads a module's fault as a question about the block it was
+handed. **It was the wrong question**: the module was not being entered where it
+begins. Its `e_entry` is `0x1000` and the routine there is its Jlet
+registration, which reads a class name out of a block the platform is meant to
+have filled in first — so the fault is real, and it is a symptom of arriving at
+the wrong door.
+
+**The toolchain writes the entry down a second time and the two disagree only
+here.** Every module carries a `.raptor` section — magic `RAPT`, a version, its
+own length, then the entry as an offset from the image base with the Thumb bit
+set, and further on the list of libraries the module wants (`kernel dlet cldc
+wipijava lgte`). Across the 128 local modules that word plus the image base is
+the ELF header's entry exactly, in 127 of them. In the one it is not, it names
+`0x3baec`, and entering there runs the module's real start: it fills its init
+struct, its initializer runs, the platform's launcher enters the application's
+Jlet, and the title reaches its own notice screen and then its opening.
+
+So the entry is read from `.raptor` when the section is there and names an
+address inside an executable section, and from the ELF header otherwise. The
+check matters more than the preference: an unchecked offset would turn a
+readable failure into a wild jump.
+
+**What the module then asked for was four small things**, each of which stopped
+it at the next tick: `Graphics.drawSubstring`, which is the run-of-a-String
+companion to `drawChars`; `Display.getGameAction` and its reverse `getKeyCode`,
+which a title that handles the pad through actions asks for in its own
+`keyNotify`; and the two `BaseClip` methods below.
+
+**A `Clip` is a `BaseClip`, and this module says so itself.** Its class list
+gives `BaseClip` the virtual methods `putData([BII)I` and `clearData()V` and
+gives `Clip` only `setVolume(I)Z` — and then dispatches `clearData` on a `Clip`.
+Rooted separately at `java/lang/Object` the two vtables overlap: this platform
+numbers `BaseClip.clearData` at the slot nothing of `Clip`'s occupies, and the
+call arrives where the receiver's own class has never filled anything in.
+Relating the two puts every slot back where the module's own numbering expects
+it. The two methods are the fill-and-empty pair for a clip built without bytes,
+and both drop the mixer's decode: appending to a clip that has already played
+and leaving the old decode in place plays the old sound.
+
+**A `Player` call handed a null clip answers `false` rather than failing.** The
+same title stops the sound for a scene it never started, and the specification
+gives these calls a boolean for exactly the request that cannot be carried out.
+
 ### A module that reads its argument block before it fills it
+
+**This is the fault the section above explains.** What follows is what it looked
+like before the entry was found, and it is kept because the reading of the
+registration routine is right and is what identified the door as the wrong one.
 
 One module faults in its entry point, before any platform call, on a read of
 `0x8`. The first block a module is handed is scratch it fills in with a pointer

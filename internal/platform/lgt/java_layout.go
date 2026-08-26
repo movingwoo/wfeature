@@ -66,6 +66,14 @@ var javaPlatformSupers = map[string]string{
 	// unrelated the two are separate classes and a push resolves to nothing.
 	"java/util/Stack": "java/util/Vector",
 
+	// A `Clip` is a `BaseClip`, and one module says so itself: its class list
+	// gives `BaseClip` the two virtual methods `putData` and `clearData` and
+	// `Clip` only `setVolume`, then dispatches `clearData` on a `Clip`. Rooted
+	// separately at Object the two vtables overlap — this platform numbers
+	// `BaseClip.clearData` and nothing of `Clip`'s at the same slot — and the
+	// call arrives at a slot the receiver's own class has never filled.
+	"org/kwis/msp/media/Clip": "org/kwis/msp/media/BaseClip",
+
 	// The exception hierarchy, which is not about slot placement at all: it is
 	// what the catch test walks. A `catch (Exception e)` around a call that
 	// throws `IOException` is one of the commonest shapes there is, and with

@@ -9,12 +9,14 @@ import "testing"
 func TestFrameBelongsToTheCaller(t *testing.T) {
 	client := &Client{
 		screen:       &framebuffer{width: 2, height: 1, pixels: make([]uint16, 2), screen: true},
+		presented:    make([]uint16, 2),
 		frameRGBA:    make([]byte, 2*1*4),
 		framePending: true,
 	}
 	session := &Session{client: client}
 
 	client.screen.pixels[0] = 0xf800 // red
+	client.present()
 	first, _, _, ok := session.Frame()
 	if !ok {
 		t.Fatal("a pending frame was not answered")
@@ -24,6 +26,7 @@ func TestFrameBelongsToTheCaller(t *testing.T) {
 	}
 
 	client.screen.pixels[0] = 0x001f // blue
+	client.present()
 	client.framePending = true
 	second, _, _, _ := session.Frame()
 

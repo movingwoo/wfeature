@@ -4936,6 +4936,28 @@ itself, and telling those apart needs a rule, not a switch.
 The `MC_fsOpen() failed!!!(-12)` line this title was previously filed under is
 its own save not existing yet on a first run, and it is printed and passed.
 
+**The rule the two paths needed is "who published the last frame".** A flush
+made from outside the card paint is the title putting a frame up itself, and a
+title that has just done that keeps the screen for that round: `paintTopCard`
+skips a round it was not asked for when the guest flushed on its own since the
+last one. The flag is cleared as it skips rather than left standing, so nothing
+is classified in advance — a title that publishes every frame is skipped every
+round, and one that flushed once during its start loses one paint and gets the
+next. A repaint the title actually asked for always paints.
+
+**A whole-set A/B says what it cost, and it cost one flush.** Over the 261
+archives, sixty rows change and fifty-seven of them change only in the flush
+count, by one or two, with the same tick and the same lit-pixel count: that is
+the redundant paint no longer happening. Three rows change their picture. Two
+are the same title packaged twice, and both go from a black screen with only
+the handset's status bar to the publisher's logo screen the title was drawing
+all along. The third stops one flush earlier on a frame that has not yet drawn
+its status bar, and a `-play` run of the same archive on both builds reaches the
+same title screen **byte for byte** — so it is an earlier moment rather than a
+different one. The title this was for draws its own screen under `-play` now,
+menu and all, where it used to show a uniform fill for as long as it was left
+running.
+
 **The fault report is what read as a thread problem and was not.** The stack
 named an image array and a `paint`, so the first reading was a loading thread
 racing the frame loop. The boundary trace says otherwise in one pass: every

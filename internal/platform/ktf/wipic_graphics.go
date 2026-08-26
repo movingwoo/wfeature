@@ -1322,6 +1322,12 @@ func (runtime *initializationRuntime) presentScreen() error {
 	}
 	runtime.client.framePending = true
 	runtime.client.flushCount++
+	// A flush from outside the card paint is the title publishing a frame of
+	// its own. Which of the two paths owns the screen is decided in
+	// paintTopCard, and this is the half of the evidence it cannot see.
+	if !runtime.repaintServicing {
+		runtime.guestFlushedOwnFrame = true
+	}
 	runtime.countDiagnostic("flush lcd")
 	return nil
 }

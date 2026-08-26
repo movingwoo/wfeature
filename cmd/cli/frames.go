@@ -291,6 +291,111 @@ func frameDiff(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// frameStats reports what is actually on each frame: how many distinct colours
+// it holds and how many pixels are lit. It exists because the two automatic
+// judgments a whole-set sweep makes both have a hole a frame would close.
+//
+// **A sweep judges a run by its tick count and its lit-pixel count, and both
+// pass a screen with nothing on it.** A KTF run is counted as working when any
+// pixel is lit — so a title that fills the screen white passes with all 76,800
+// of them — and an LGT run is counted as working when it finishes its ticks,
+// so one that draws nothing at all passes too. Neither is visible without
+// looking at a frame, and both were found by looking at one by hand. This is
+// that look, as a number a script can read: one colour is a screen with
+// nothing drawn on it, and no lit pixel is a black one.
+//
+// The exit status is the point: it is nonzero when **every** frame given is a
+// single colour, so a sweep can ask this about a run's frames and get an
+// answer without a person in the loop. A run whose frames are mixed exits
+// zero, because a boot that starts black and then draws is a working boot.
+func frameStats(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "usage: wfeature framestats <framedir|frame.png> [-limit N]")
+		return 2
+	}
+	limit := 40
+	for index := 1; index < len(args); index++ {
+		if args[index] != "-limit" || index+1 >= len(args) {
+			fmt.Fprintf(stderr, "unknown framestats option %q\n", args[index])
+			return 2
+		}
+		value, err := strconv.Atoi(args[index+1])
+		if err != nil || value < 0 {
+			fmt.Fprintf(stderr, "invalid -limit %q\n", args[index+1])
+			return 2
+		}
+		limit = value
+		index++
+	}
+	frames, err := statFrameFiles(args[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	solid, blank, reported := 0, 0, 0
+	for _, frame := range frames {
+		picture, err := readPNG(frame.path)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		colours, lit, total := frameColours(picture)
+		if colours <= 1 {
+			solid++
+		}
+		if lit == 0 {
+			blank++
+		}
+		if limit == 0 || reported < limit {
+			reported++
+			fmt.Fprintf(stdout, "  %-16s colours=%-6d lit=%d of %d\n",
+				filepath.Base(frame.path), colours, lit, total)
+		}
+	}
+	fmt.Fprintf(stdout, "%d frames, %d of one colour, %d with nothing lit\n",
+		len(frames), solid, blank)
+	if solid == len(frames) {
+		fmt.Fprintln(stderr, "every frame is a single colour")
+		return 1
+	}
+	return 0
+}
+
+// statFrameFiles takes either a directory of `tickNNNN.png` frames or one PNG,
+// because the two ways a run captures frames are `-framedir` and `-frame` and
+// a question about what is on the screen is the same question for both.
+func statFrameFiles(path string) ([]frameFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return frameFiles(path)
+	}
+	return []frameFile{{path: path}}, nil
+}
+
+// frameColours counts a frame's distinct colours and its lit pixels. Alpha is
+// left out of both: every frame this writes is opaque, and a colour that
+// differs only in an alpha nothing varies would count a screen as two-coloured
+// when it is one.
+func frameColours(picture image.Image) (int, int, int) {
+	bounds := picture.Bounds()
+	colours := make(map[uint32]struct{}, 256)
+	lit := 0
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			red, green, blue, _ := picture.At(x, y).RGBA()
+			packed := red>>8<<16 | green>>8<<8 | blue>>8
+			colours[packed] = struct{}{}
+			if packed != 0 {
+				lit++
+			}
+		}
+	}
+	return len(colours), lit, bounds.Dx() * bounds.Dy()
+}
+
 // differenceBounds is the smallest rectangle holding every differing pixel,
 // which is what says whether a change touched the dialogue box or the whole
 // screen. Two frames of different sizes differ everywhere.

@@ -59,7 +59,10 @@ what follows is how to read a run.
 
 **Play, capture, look.** `runktf`/`runlgt`/`runskt` take `-key tick:name` for a
 key script and `-framedir` for a frame per tick, and `contactsheet` folds those
-into one image. That is what "the title reaches its world" is decided on. Two
+into one image. That is what "the title reaches its world" is decided on.
+`framestats` is the same question asked without a person: it counts a frame's
+colours and its lit pixels and exits nonzero when every frame is one colour,
+which is what a sweep needs to stop passing a screen with nothing on it. Two
 habits are worth keeping:
 
 - **A stuck screen is not a defect until a key has been pressed at it.** One

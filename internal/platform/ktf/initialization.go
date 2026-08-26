@@ -263,6 +263,12 @@ type initializationRuntime struct {
 	serialDueAt      time.Time
 	repaintPending   bool
 	repaintServicing bool
+	// guestFlushedOwnFrame records that the guest put a frame on the screen
+	// from its own code rather than from inside the card paint this platform
+	// drives. See paintTopCard: a title that draws its frame and flushes it
+	// itself owns the screen for that round, and painting its card on top of
+	// it is what wiped one title's picture once a frame.
+	guestFlushedOwnFrame bool
 	// events is the WIPI event queue a game drains itself with
 	// EventQueue.getNextEvent; guestEventLoop records that it does, which moves
 	// key delivery from the Host's direct card dispatch to the queue.

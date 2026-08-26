@@ -414,6 +414,65 @@ func (client *Client) javaInterfaceMethod(
 	return 0, false
 }
 
+// javaInterfaceTable answers where in a receiver's own dispatch table the
+// methods of one interface begin, which is what `invokeinterface` needs and
+// what nothing else on this platform can work out: a class's vtable numbers a
+// method by where the *class* declares it, and an interface call site knows
+// only the interface and the method's position within it.
+//
+// The class record's interface table is what closes the gap — each entry names
+// an interface and the vtable slot its methods start at — and the answer is
+// the receiver's vtable biased by that slot, because the call site reads the
+// method out of `answer + 4` and the interface's later methods out of `+8` and
+// `+0xc`. That is the same `vtable + 4 + 4n` a virtual call site uses, shifted
+// so that `n` counts from the interface's first method instead of the class's.
+//
+// **An interface a superclass implements counts**, so the walk goes up the
+// chain; a class that implements the interface nowhere is a failure rather
+// than a zero, because a zero is an address the call site would then read.
+func (client *Client) javaInterfaceTable(receiver, namePointer uint32) (uint32, error) {
+	if receiver == 0 {
+		return 0, fmt.Errorf("an interface call has no receiver")
+	}
+	class, known := client.javaClassOfObject(receiver)
+	if !known {
+		return 0, fmt.Errorf("the receiver at %#x is not an object issued here", receiver)
+	}
+	name, ok := client.readPrintableString(namePointer)
+	if !ok {
+		return 0, fmt.Errorf("the interface at %#x has no name", namePointer)
+	}
+	for owner := class; owner != nil; owner = owner.Super {
+		for _, implemented := range owner.Record.Interfaces {
+			if implemented.Name != name {
+				continue
+			}
+			// **The entry carries one of two things and the value says
+			// which.** A slot is a position in the class's own dispatch table
+			// and is smaller than that table; anything larger is the first of
+			// the run of method addresses the entry itself holds, and then the
+			// entry is already what the call site wants to read from.
+			if implemented.Slot < class.Slots && class.VTable != 0 {
+				if client.logger != nil {
+					client.logger.Debug("LGT java interface table resolved",
+						"class", class.Name, "interface", name, "slot", implemented.Slot)
+				}
+				return class.VTable + implemented.Slot*4, nil
+			}
+			if implemented.Entry == 0 {
+				return 0, fmt.Errorf("%s implements %s at slot %d of a %d-slot table",
+					class.Name, name, implemented.Slot, class.Slots)
+			}
+			if client.logger != nil {
+				client.logger.Debug("LGT java interface table resolved",
+					"class", class.Name, "interface", name, "entry", implemented.Entry)
+			}
+			return implemented.Entry, nil
+		}
+	}
+	return 0, fmt.Errorf("%s does not name %s among the interfaces it implements", class.Name, name)
+}
+
 // park reports the thread as still running and blocks until the session grants
 // the next slice. A closed grant channel aborts the run.
 func (worker *javaWorker) park() error {

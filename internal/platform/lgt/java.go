@@ -42,7 +42,14 @@ const (
 	javaSVCLoadClasses     uint32 = 0x14
 	javaSVCThrowNull       uint32 = 0x22
 	javaSVCThrowArrayIndex uint32 = 0x23
-	javaSVCStoreReference  uint32 = 0xfa
+	// javaSVCInterfaceTable is `invokeinterface`'s half of a dispatch: it is
+	// handed a receiver and the name of an interface, and answers where in the
+	// receiver's own dispatch table that interface's methods begin. The call
+	// site reads `+4` out of the answer and calls it with the receiver — and
+	// `+8`, `+0xc` for the interface's later methods — so the answer is the
+	// vtable biased by the slot the class record's interface table gives.
+	javaSVCInterfaceTable uint32 = 0x64
+	javaSVCStoreReference uint32 = 0xfa
 	// The second reference store. **Nothing at any call site tells it from
 	// `0xfa`**: both take an array, an index and a reference in the same three
 	// registers, both drop the answer, and one module uses each of them dozens
@@ -119,6 +126,7 @@ var javaSVCArguments = map[uint32]int{
 	javaSVCLoadClasses:        11,
 	javaSVCThrowNull:          1,
 	javaSVCThrowArrayIndex:    2,
+	javaSVCInterfaceTable:     2,
 	javaSVCEnterTry:           1,
 	javaSVCLeaveTry:           1,
 	javaSVCThrow:              1,
@@ -156,6 +164,7 @@ var javaSVCNames = map[uint32]string{
 	javaSVCLoadClasses:        "load the platform classes",
 	javaSVCThrowNull:          "throw NullPointerException",
 	javaSVCThrowArrayIndex:    "throw ArrayIndexOutOfBoundsException",
+	javaSVCInterfaceTable:     "where an interface's methods start",
 	javaSVCEnterTry:           "enter a try region",
 	javaSVCLeaveTry:           "leave a try region",
 	javaSVCThrow:              "throw",
@@ -458,6 +467,12 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 	case javaSVCThrowArithmetic:
 		return javaThrowDelivered(
 			client.throwJavaPlatform(thread, javaThrowArithmeticClass, ": division by zero"))
+	case javaSVCInterfaceTable:
+		answer, err := client.javaInterfaceTable(values[0], values[1])
+		if err != nil {
+			return fmt.Errorf("%w (%w%s)", ErrJavaAppUnsupported, err, client.describeJavaCallSite(thread))
+		}
+		return thread.SetRegister(0, answer)
 	case javaSVCInvokeStaticMain:
 		// The module asks for the platform's Jlet launcher and hands it the
 		// name of the application's own Jlet. What that takes is in
@@ -535,16 +550,48 @@ func registerWords(thread *armcore.Thread, count int) []uint32 {
 func (client *Client) describeJavaWords(values []uint32) string {
 	parts := make([]string, 0, len(values))
 	for index, value := range values {
-		class, known := client.javaClassOfObject(value)
-		if !known {
-			continue
+		if described, ok := client.describeJavaWord(value); ok {
+			parts = append(parts, fmt.Sprintf("argument %d is %s", index, described))
 		}
-		parts = append(parts, fmt.Sprintf("argument %d is a %s", index, class.Name))
 	}
 	if len(parts) == 0 {
 		return "none of the arguments is an object issued here"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// describeJavaWord says what one argument word is. **An argument with no name
+// is what leaves an unimplemented slot unreadable**, and the words a reference
+// points at are usually enough to name it: a slot handed a class record is a
+// different call from one handed a string, and a report that says only "not an
+// object issued here" cannot tell them apart. So a word that is not a bound
+// object is followed — as text, and otherwise as the first few words it points
+// at, with those named the same way one level down.
+func (client *Client) describeJavaWord(value uint32) (string, bool) {
+	if class, known := client.javaClassOfObject(value); known {
+		return "a " + class.Name, true
+	}
+	if text, ok := client.readPrintableString(value); ok {
+		return fmt.Sprintf("the text %q", text), true
+	}
+	words := make([]string, 0, 4)
+	for offset := uint32(0); offset < 4; offset++ {
+		word, err := client.readWord(value + offset*4)
+		if err != nil {
+			break
+		}
+		described := fmt.Sprintf("%#x", word)
+		if text, ok := client.readPrintableString(word); ok {
+			described = fmt.Sprintf("%#x->%q", word, text)
+		} else if class, known := client.javaClassOfObject(word); known {
+			described = fmt.Sprintf("%#x->a %s", word, class.Name)
+		}
+		words = append(words, described)
+	}
+	if len(words) == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("a reference to [%s]", strings.Join(words, " ")), true
 }
 
 func formatWords(values []uint32) string {

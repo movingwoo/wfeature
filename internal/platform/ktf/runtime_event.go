@@ -428,6 +428,23 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if runtime.repaintServicing {
 		return false, nil
 	}
+	// **A title that published its own frame keeps it for that round.** One
+	// title draws its screen from its own loop — three pictures and a flush —
+	// and its `paintClet` does nothing but fill and flush, which is what a
+	// handset would run only when something asked for a repaint. Painting its
+	// card every tick regardless put that fill over the picture once a frame,
+	// and the title showed a uniform screen for as long as it was left running.
+	//
+	// The flag is cleared here rather than left standing, so this skips the one
+	// round after a flush the title made rather than deciding for the rest of
+	// the run. A title that publishes every frame is skipped every round; a
+	// title that flushed once during its start loses one paint and gets the
+	// next. Nothing has to be classified in advance, which is what makes this a
+	// rule rather than a switch.
+	if !runtime.repaintPending && runtime.guestFlushedOwnFrame {
+		runtime.guestFlushedOwnFrame = false
+		return false, nil
+	}
 	// The paint satisfies whatever repaint request is outstanding, whichever
 	// path asked for it. Leaving the flag set would hold the serial queue for
 	// ever, because the only other things that clear it are the guest's own

@@ -132,6 +132,14 @@ type javaInterface struct {
 	Name   string
 	Handle uint32
 	Slot   uint32
+	// Entry is where the record's own entry sits. **The word after the name is
+	// not always a slot**: in one module it is the first of a run of code
+	// addresses, one per method the interface declares, and a call site that
+	// dispatches through an interface reads them straight out of the entry.
+	// Which of the two a record carries is told apart by the value — a slot is
+	// smaller than the class's vtable, an address is inside the image — so the
+	// entry has to be kept as well as the word.
+	Entry uint32
 }
 
 // readJavaClass reads one application class record from its handle.
@@ -271,7 +279,7 @@ func (client *Client) readJavaInterfaces(header uint32) ([]javaInterface, error)
 		if err != nil {
 			return interfaces, err
 		}
-		one := javaInterface{Slot: slot}
+		one := javaInterface{Slot: slot, Entry: entry}
 		if client.isJavaClassHandle(named) {
 			one.Handle = named
 			if name, err := client.readWord(named - javaClassHeader + 8); err == nil {

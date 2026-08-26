@@ -27,7 +27,7 @@ func TestStringWidthDecodesEUCKR(t *testing.T) {
 		t.Fatalf("allocate the string: %v", err)
 	}
 
-	got := callSlot(t, client, slotGetStringWidth, 0, pointer)
+	got := callSlot(t, client, slotGetStringWidth, 0, pointer, ^uint32(0))
 	if want := uint32(textWidth(text)); got != want {
 		t.Fatalf("the width of %q is %d, want %d — the bytes were measured undecoded", text, got, want)
 	}
@@ -35,6 +35,36 @@ func TestStringWidthDecodesEUCKR(t *testing.T) {
 	// different number: the test is only worth having if the two disagree.
 	if raw := uint32(textWidth(string(encoded))); raw == got {
 		t.Fatalf("decoded and undecoded both measure %d, so this proves nothing", got)
+	}
+}
+
+// The count is the third argument, and honouring it is what stops a title that
+// wraps text: it grows a run one character at a time until the width no longer
+// fits, so an answer that ignores the count is the same every time and the loop
+// never ends. One title spent its whole instruction budget in one.
+func TestStringWidthMeasuresOnlyTheCountItIsGiven(t *testing.T) {
+	client := fixtureClient(t)
+
+	text := "확인"
+	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
+	if err != nil {
+		t.Fatalf("encode the fixture text: %v", err)
+	}
+	pointer, err := client.allocateBytes(append(encoded, 0))
+	if err != nil {
+		t.Fatalf("allocate the string: %v", err)
+	}
+
+	whole := callSlot(t, client, slotGetStringWidth, 0, pointer, ^uint32(0))
+	half := callSlot(t, client, slotGetStringWidth, 0, pointer, uint32(len(encoded)/2))
+	if half >= whole {
+		t.Fatalf("half of %q measures %d and the whole of it %d", text, half, whole)
+	}
+	if want := uint32(textWidth(string([]rune(text)[:1]))); half != want {
+		t.Fatalf("the first syllable of %q measures %d, want %d", text, half, want)
+	}
+	if none := callSlot(t, client, slotGetStringWidth, 0, pointer, 0); none != 0 {
+		t.Fatalf("a count of zero measures %d, want 0", none)
 	}
 }
 

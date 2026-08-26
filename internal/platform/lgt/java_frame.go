@@ -123,6 +123,7 @@ func (client *Client) paintJavaCard(ctx context.Context, thread *armcore.Thread)
 		return err
 	}
 	client.mu.Lock()
+	client.present()
 	client.framePending = true
 	client.flushes++
 	client.mu.Unlock()
