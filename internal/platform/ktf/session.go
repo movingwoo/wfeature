@@ -77,6 +77,13 @@ type SessionOptions struct {
 	// title packaged for a smaller phone wants. It is what the guest is told
 	// rather than how large the Host draws the result; see Client.SetScreen.
 	Width, Height int
+	// Debug is handed the ARM core once it exists and before any guest code
+	// has run. It is for the local investigation probes, and what it is for is
+	// the horizon: a debugger attached to a finished session cannot see the
+	// client's own initialization or `startApp`, which is exactly where a
+	// title that never reaches a session fails. Breakpoints and watches armed
+	// here do see them. No Host sets it.
+	Debug func(*armcore.Core)
 }
 
 const (
@@ -231,6 +238,12 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	client, err := LoadClient(archive.JAR.Client, armcore.CoreOptions{MaxSteps: maxSteps})
 	if err != nil {
 		return nil, err
+	}
+	// Before the clock, the screen or a single guest instruction: a watch on an
+	// address a title writes once during initialization has to be armed before
+	// that initialization, or it reports no writer at all.
+	if options.Debug != nil {
+		options.Debug(client.core)
 	}
 	// The clock has to be in place before anything guest-visible runs: the
 	// runtime anchors the guest's timeline to it when initialization builds

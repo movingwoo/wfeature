@@ -335,6 +335,106 @@ func init() {
 	// loop asks for there. The numbering agrees: this class's own run is
 	// `start`, `run`, `interrupt`, `isAlive`, `setPriority`, and `start` at 10
 	// is the anchor above, which puts `setPriority` at exactly 14.
+	// The stream classes are registered here rather than in the table above
+	// for the same reason: a stream a title wrote itself is read by running the
+	// title's own `read`, and running guest code reaches this table back.
+	for name, slots := range map[string]map[uint32]javaBakedSlot{
+		// `java/io/InputStream` slot 10 takes nothing and answers a byte the
+		// callers shift together into a halfword, which is `read`.
+		// Slots 11 and 12 take an array, and 12 takes an offset and a count with
+		// it, which is the `read` pair either side of `read()`.
+		javaInputStreamClass: {
+			10: {Called: "read()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamRead}},
+			11: {Called: "read([B)I", Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadArray}},
+			12: {Called: "read([BII)I", Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadArray}},
+			// Slot 15 takes the receiver alone, its answer is dropped, and the
+			// caller nulls its own reference to the stream straight after: `close`.
+			// Slot 14 takes the receiver alone and its answer is the length of the
+			// array the caller allocates next, then reads the whole stream into:
+			// `available`.
+			// Slot 13 sets **two** argument registers, 0x26 and 0, and its answer
+			// is dropped: a long, in a loop that reads fixed-size records out of a
+			// resource. That is `skip`, whose count is a long and whose answer a
+			// title stepping over a record has no use for.
+			13: {Called: "skip(J)J", Method: javaPlatformMethod{Words: 3, Implementat: javaStreamSkip}},
+			14: {Called: "available()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamAvailable}},
+			15: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
+		},
+		// `java/io/DataInputStream` slot 25 takes the receiver alone and its answer
+		// is stored into an array the compiled code strides two bytes through, so
+		// it reads a big-endian halfword. **Whether it is `readShort` or
+		// `readUnsignedShort` cannot be told here** — the store truncates either to
+		// the same sixteen bits — so it is sign-extended, which is what the `short`
+		// array it lands in means.
+		javaDataInputStreamClass: {
+			// Slot 20 takes the receiver, a byte array and two numbers, and the
+			// numbers its caller passes are a zero and the length it has just read
+			// out of the file — a read that must fill the array. Slot 23 takes the
+			// receiver alone; the numbering puts `readByte` there, three slots
+			// into this class's own run.
+			// Slot 19 is the same call without bounds — one byte array, filled to
+			// its own length — and it is the first slot of this class's own run,
+			// which is what the four slots settled from call sites put there.
+			19: {Called: "readFully([B)V",
+				Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadFully}},
+			20: {Called: "readFully([BII)V",
+				Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
+			// Slot 22 takes the receiver alone — the register beside it still
+			// holds the stream this one was built on, which the site loaded to
+			// reach the receiver and never reloaded — and it sits one before the
+			// `readByte` below. This class's run is `readFully([B)`,
+			// `readFully([BII)`, `skipBytes`, `readBoolean`, `readByte`, and the
+			// four slots settled from their own call sites — 20, 23, 25 and 28 —
+			// pin every place in it. A save that stores a flag reads it back here.
+			22: {Called: "readBoolean()Z",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadBoolean}},
+			23: {Called: "readByte()B",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadByte}},
+			// Slot 24 is the same byte kept unsigned, which is the pair this class
+			// declares one after the other and the run puts here.
+			24: {Called: "readUnsignedByte()I",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUnsignedByte}},
+			25: {Called: "a big-endian halfword",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadShort}},
+			// Slot 27 takes the receiver alone and sits two past the halfword
+			// above, where this class declares `readUnsignedShort` and then
+			// `readChar`. It is the unsigned one either way — a `char` is a
+			// sixteen-bit unsigned value — so the two bytes are not sign-extended
+			// here, which is the whole difference from 25.
+			27: {Called: "readChar()C",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadChar}},
+			// Slot 28 takes the receiver alone. This class's own methods start
+			// after the nine it inherits and overrides from `InputStream`, which
+			// puts `readShort` at 25 — where the halfword above already is — and
+			// `readInt` three further on. A title reading its own table file reads
+			// a count with it before it reads the rows.
+			28: {Called: "readInt()I",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
+			// Slot 32 takes the receiver alone and is where this class's run ends:
+			// after `readInt` come `readLong`, `readFloat`, `readDouble` and then
+			// `readUTF()`, the last method of it that is not static. A title reads
+			// a name back here out of a file its own `writeUTF` wrote.
+			32: {Called: "readUTF()Ljava/lang/String;",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUTF}},
+		},
+		// `java/io/InputStreamReader` slot 11 takes the receiver and a `char[]`,
+		// and the run it falls in is the reader hierarchy's own: `read()`,
+		// `read(char[])`, `read(char[], int, int)`, in the order the class library
+		// declares them, from 10. A call that passes one array and no bounds is
+		// the middle one. **The bytes are decoded the way every other text this
+		// platform reads is** — the handset's own encoding — so a reader and a
+		// `String(byte[])` over the same bytes agree.
+		// Slot 18 is the same run's last: `skip`, `ready`, `markSupported`,
+		// `mark`, `reset`, `close`. It takes the receiver alone and its answer is
+		// dropped, and closing the reader closes the stream underneath it, which
+		// is the one both objects stand for.
+		javaInputStreamReaderClass: {
+			11: {Called: "read([C)I", Method: javaPlatformMethod{Words: 2, Implementat: javaReaderRead}},
+			18: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
+		},
+	} {
+		javaBakedVirtualSlots[name] = slots
+	}
 	javaBakedVirtualSlots[javaThreadClass] = map[uint32]javaBakedSlot{
 		10: {Called: "start()V", Method: javaPlatformMethod{Words: 1, Implementat: javaThreadStart}},
 		14: {Called: "setPriority(I)V",
@@ -448,99 +548,6 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	javaClassClass: {
 		16: {Called: "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaGetResourceAsStream}},
-	},
-	// `java/io/InputStream` slot 10 takes nothing and answers a byte the
-	// callers shift together into a halfword, which is `read`.
-	// Slots 11 and 12 take an array, and 12 takes an offset and a count with
-	// it, which is the `read` pair either side of `read()`.
-	javaInputStreamClass: {
-		10: {Called: "read()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamRead}},
-		11: {Called: "read([B)I", Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadArray}},
-		12: {Called: "read([BII)I", Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadArray}},
-		// Slot 15 takes the receiver alone, its answer is dropped, and the
-		// caller nulls its own reference to the stream straight after: `close`.
-		// Slot 14 takes the receiver alone and its answer is the length of the
-		// array the caller allocates next, then reads the whole stream into:
-		// `available`.
-		// Slot 13 sets **two** argument registers, 0x26 and 0, and its answer
-		// is dropped: a long, in a loop that reads fixed-size records out of a
-		// resource. That is `skip`, whose count is a long and whose answer a
-		// title stepping over a record has no use for.
-		13: {Called: "skip(J)J", Method: javaPlatformMethod{Words: 3, Implementat: javaStreamSkip}},
-		14: {Called: "available()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamAvailable}},
-		15: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
-	},
-	// `java/io/DataInputStream` slot 25 takes the receiver alone and its answer
-	// is stored into an array the compiled code strides two bytes through, so
-	// it reads a big-endian halfword. **Whether it is `readShort` or
-	// `readUnsignedShort` cannot be told here** — the store truncates either to
-	// the same sixteen bits — so it is sign-extended, which is what the `short`
-	// array it lands in means.
-	javaDataInputStreamClass: {
-		// Slot 20 takes the receiver, a byte array and two numbers, and the
-		// numbers its caller passes are a zero and the length it has just read
-		// out of the file — a read that must fill the array. Slot 23 takes the
-		// receiver alone; the numbering puts `readByte` there, three slots
-		// into this class's own run.
-		// Slot 19 is the same call without bounds — one byte array, filled to
-		// its own length — and it is the first slot of this class's own run,
-		// which is what the four slots settled from call sites put there.
-		19: {Called: "readFully([B)V",
-			Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadFully}},
-		20: {Called: "readFully([BII)V",
-			Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
-		// Slot 22 takes the receiver alone — the register beside it still
-		// holds the stream this one was built on, which the site loaded to
-		// reach the receiver and never reloaded — and it sits one before the
-		// `readByte` below. This class's run is `readFully([B)`,
-		// `readFully([BII)`, `skipBytes`, `readBoolean`, `readByte`, and the
-		// four slots settled from their own call sites — 20, 23, 25 and 28 —
-		// pin every place in it. A save that stores a flag reads it back here.
-		22: {Called: "readBoolean()Z",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadBoolean}},
-		23: {Called: "readByte()B",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadByte}},
-		// Slot 24 is the same byte kept unsigned, which is the pair this class
-		// declares one after the other and the run puts here.
-		24: {Called: "readUnsignedByte()I",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUnsignedByte}},
-		25: {Called: "a big-endian halfword",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadShort}},
-		// Slot 27 takes the receiver alone and sits two past the halfword
-		// above, where this class declares `readUnsignedShort` and then
-		// `readChar`. It is the unsigned one either way — a `char` is a
-		// sixteen-bit unsigned value — so the two bytes are not sign-extended
-		// here, which is the whole difference from 25.
-		27: {Called: "readChar()C",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadChar}},
-		// Slot 28 takes the receiver alone. This class's own methods start
-		// after the nine it inherits and overrides from `InputStream`, which
-		// puts `readShort` at 25 — where the halfword above already is — and
-		// `readInt` three further on. A title reading its own table file reads
-		// a count with it before it reads the rows.
-		28: {Called: "readInt()I",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
-		// Slot 32 takes the receiver alone and is where this class's run ends:
-		// after `readInt` come `readLong`, `readFloat`, `readDouble` and then
-		// `readUTF()`, the last method of it that is not static. A title reads
-		// a name back here out of a file its own `writeUTF` wrote.
-		32: {Called: "readUTF()Ljava/lang/String;",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadUTF}},
-	},
-	// `java/io/InputStreamReader` slot 11 takes the receiver and a `char[]`,
-	// and the run it falls in is the reader hierarchy's own: `read()`,
-	// `read(char[])`, `read(char[], int, int)`, in the order the class library
-	// declares them, from 10. A call that passes one array and no bounds is
-	// the middle one. **The bytes are decoded the way every other text this
-	// platform reads is** — the handset's own encoding — so a reader and a
-	// `String(byte[])` over the same bytes agree.
-	// Slot 18 is the same run's last: `skip`, `ready`, `markSupported`,
-	// `mark`, `reset`, `close`. It takes the receiver alone and its answer is
-	// dropped, and closing the reader closes the stream underneath it, which
-	// is the one both objects stand for.
-	javaInputStreamReaderClass: {
-		11: {Called: "read([C)I", Method: javaPlatformMethod{Words: 2, Implementat: javaReaderRead}},
-		18: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
 	},
 	// `java/lang/StringBuffer`. Slot 18 takes one reference and answers one:
 	// its call sites build a string constant, pass it as the only argument, and

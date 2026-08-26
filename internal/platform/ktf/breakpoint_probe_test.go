@@ -29,14 +29,14 @@ import (
 // The class dump is what turns an AOT native's address into the name the
 // archive gave it, and the watch list names every writer of an address.
 //
-// **The debugger attaches after the session has started**, so nothing inside
-// the client's own initialization or startApp is reachable from it: a native
-// that appears never to run may simply have run already. Watches have the same
-// horizon, which is why an address written once during startup comes back with
-// no writer at all.
+// **Everything is armed before the first guest instruction**, through the
+// session's `Debug` hook, so the client's own initialization and `startApp` are
+// inside the horizon — which is where a title that never reaches a session
+// fails. A start that fails is not the end of the run either: the breakpoint
+// and watch output is printed for it as well, because that is the case this is
+// most often reached for.
 func TestLocalBreakpointProbe(t *testing.T) {
 	path := os.Getenv("WFEATURE_BREAKPOINT_ARCHIVE")
-	list := os.Getenv("WFEATURE_BREAKPOINTS")
 	if path == "" {
 		t.Skip("set WFEATURE_BREAKPOINT_ARCHIVE")
 	}
@@ -44,12 +44,6 @@ func TestLocalBreakpointProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := StartSession(context.Background(), data, SessionOptions{})
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	defer session.Close()
-	core := session.Client.core
 	hits := 0
 	limit := 40
 	if value := os.Getenv("WFEATURE_BREAKPOINT_LIMIT"); value != "" {
@@ -57,21 +51,66 @@ func TestLocalBreakpointProbe(t *testing.T) {
 			limit = parsed
 		}
 	}
+	var core *armcore.Core
+	var client *Client
+	options := SessionOptions{TraceLimit: 4096}
+	options.Debug = func(attached *armcore.Core) {
+		core = attached
+		armProbe(t, core, &hits, limit, &client)
+	}
+	session, err := StartSession(context.Background(), data, options)
+	if err != nil {
+		t.Logf("start: %v", err)
+	}
+	if session != nil {
+		client = session.Client
+		defer session.Close()
+	}
+	if core == nil {
+		t.Fatalf("the core was never handed over")
+	}
+	defer func() {
+		for _, hit := range core.WatchHits() {
+			fmt.Printf("watch %#x written from %#x (%s) %d times, last %#x, stores %d..%d\n",
+				hit.Address, hit.PC, hit.Origin, hit.Count, hit.Value, hit.First, hit.Last)
+		}
+	}()
+	if session == nil {
+		return
+	}
+	dumpProbeState(t, session)
+	for round := 0; round < 400; round++ {
+		if _, err := session.Tick(context.Background()); err != nil {
+			t.Logf("tick %d: %v", round, err)
+			break
+		}
+	}
+	t.Logf("breakpoint hits: %d", hits)
+}
+
+// armProbe sets the breakpoints, the watches and the debugger the environment
+// asked for, on a core no guest instruction has run on yet.
+func armProbe(t *testing.T, core *armcore.Core, hits *int, limit int, client **Client) {
+	list := os.Getenv("WFEATURE_BREAKPOINTS")
 	core.AttachDebugger(func(ctx context.Context, core *armcore.Core, thread *armcore.Thread, stop armcore.DebugStop) error {
 		if stop != armcore.DebugStopBreakpoint {
 			return nil
 		}
-		hits++
-		if hits > limit {
+		*hits++
+		if *hits > limit {
 			return nil
 		}
 		pc, _ := thread.Register(armcore.RegisterPC)
 		lr, _ := thread.Register(armcore.RegisterLR)
 		var line strings.Builder
-		fmt.Fprintf(&line, "hit %d pc=%#x lr=%#x", hits, pc, lr)
+		fmt.Fprintf(&line, "hit %d pc=%#x lr=%#x", *hits, pc, lr)
 		for register := 0; register < 13; register++ {
 			value, _ := thread.Register(register)
-			fmt.Fprintf(&line, "\n    r%-2d = %#010x  %s", register, value, session.Client.runtime.describeGuestWord(value))
+			described := ""
+			if *client != nil {
+				described = (*client).runtime.describeGuestWord(value)
+			}
+			fmt.Fprintf(&line, "\n    r%-2d = %#010x  %s", register, value, described)
 			var word [4]byte
 			if err := core.Memory().Read(value&^3, word[:]); err == nil {
 				fmt.Fprintf(&line, "  -> %02x%02x%02x%02x", word[3], word[2], word[1], word[0])
@@ -91,6 +130,23 @@ func TestLocalBreakpointProbe(t *testing.T) {
 		}
 		core.SetBreakpoint(uint32(address))
 	}
+	for _, spec := range strings.Split(os.Getenv("WFEATURE_BREAKPOINT_WATCH"), ",") {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		address, err := strconv.ParseUint(strings.TrimPrefix(spec, "0x"), 16, 32)
+		if err != nil {
+			t.Fatalf("watch %q: %v", spec, err)
+		}
+		core.Watch(uint32(address))
+	}
+}
+
+// dumpProbeState prints the memory range and the classes the environment asked
+// about, once the session exists to name them.
+func dumpProbeState(t *testing.T, session *Session) {
+	core := session.Client.core
 	if spec := os.Getenv("WFEATURE_BREAKPOINT_DUMP"); spec != "" {
 		low, high, err := parseProbeRange(spec)
 		if err != nil {
@@ -124,27 +180,4 @@ func TestLocalBreakpointProbe(t *testing.T) {
 				method.Name, method.Descriptor, method.Address, method.Body, method.NativeBody, method.AccessFlags, method.VTableIndex)
 		}
 	}
-	for _, spec := range strings.Split(os.Getenv("WFEATURE_BREAKPOINT_WATCH"), ",") {
-		spec = strings.TrimSpace(spec)
-		if spec == "" {
-			continue
-		}
-		address, err := strconv.ParseUint(strings.TrimPrefix(spec, "0x"), 16, 32)
-		if err != nil {
-			t.Fatalf("watch %q: %v", spec, err)
-		}
-		core.Watch(uint32(address))
-	}
-	defer func() {
-		for _, hit := range core.WatchHits() {
-			fmt.Printf("watch %#x written from %#x (%s) %d times, last %#x\n", hit.Address, hit.PC, hit.Origin, hit.Count, hit.Value)
-		}
-	}()
-	for round := 0; round < 400; round++ {
-		if _, err := session.Tick(context.Background()); err != nil {
-			t.Logf("tick %d: %v", round, err)
-			break
-		}
-	}
-	t.Logf("breakpoint hits: %d", hits)
 }

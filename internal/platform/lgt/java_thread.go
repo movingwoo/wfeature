@@ -345,6 +345,9 @@ func (client *Client) runJavaWorker(thread *javaThread, worker *javaWorker) {
 		err = client.callJavaRunnable(ctx, worker.armThread, thread.runnable)
 	}()
 	client.releaseJavaMonitors(worker)
+	if client.logger != nil {
+		client.logger.Debug("LGT java worker finished", "worker", fmt.Sprintf("%p", worker), "error", err)
+	}
 	worker.events <- javaWorkerEvent{done: true, err: err}
 }
 
@@ -518,6 +521,17 @@ func (client *Client) grantJavaSlice(
 	if client.javaThreadsStopped {
 		return javaWorkerEvent{}, errJavaThreadsStopped
 	}
+	// **A thread that has ended is never granted another slice.** Its goroutine
+	// is gone, so the send below would block for ever and take the session with
+	// it — a hang with no error and no last frame, which is the worst failure
+	// this package can produce. The end is recorded here rather than left to
+	// the caller because there are three callers and one of them is a monitor
+	// wait, where the thread that ends is not the one the caller was looking
+	// at: a title whose `run` threw while holding a lock deadlocked the whole
+	// session on the next tick that way.
+	if worker.done {
+		return javaWorkerEvent{done: true}, nil
+	}
 	previous := client.activeJavaWorker
 	client.activeJavaWorker = worker
 	defer func() { client.activeJavaWorker = previous }()
@@ -527,8 +541,16 @@ func (client *Client) grantJavaSlice(
 	// as the thread went without sleeping again — the guest clock would stop.
 	// A thread sets it again from inside the slice if it sleeps.
 	worker.wakeAt = 0
+	if client.logger != nil {
+		client.logger.Debug("LGT java slice granted", "worker", fmt.Sprintf("%p", worker),
+			"workers", len(client.javaRun.workers))
+	}
 	worker.grant <- ctx
-	return <-worker.events, nil
+	event := <-worker.events
+	if event.done {
+		worker.done = true
+	}
+	return event, nil
 }
 
 // StopJavaThreads aborts every guest thread; parked ones wake, fail their run

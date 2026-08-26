@@ -2850,11 +2850,36 @@ WFEATURE_BREAKPOINT_WATCH=0x179198 WFEATURE_BREAKPOINT_CLASSES=fm \
 
 It is the companion to the disassemble probe — that says what an instruction
 does, this says what it was holding — and the class dump beside it is what
-turns an AOT native's address into the method name the archive gave it. Its one
-limit is worth knowing before it wastes an hour: **the debugger attaches after
-the session has started**, so nothing that happens inside `startApp` is
-reachable from it. A native that appears never to run may simply have run
-already.
+turns an AOT native's address into the method name the archive gave it.
+
+**Everything it arms is armed before the first guest instruction**, through
+`SessionOptions.Debug`, which is handed the ARM core as soon as the core exists
+and before the clock, the screen or the client's own entry point. That horizon
+is the whole point: the debugger used to attach to a finished session, so
+nothing inside the client's initialization or `startApp` was reachable, a
+native that appeared never to run had simply run already, and an address
+written once during startup came back with no writer at all. Those are exactly
+the runs this is reached for — a title that never reaches a session leaves no
+session to attach to — so a start that fails now prints its breakpoints and its
+watches as well and only skips the class dump, which needs a session to name
+anything.
+
+**A watch says when as well as who.** Each hit carries the ordinal of its
+writer's first and last store, counted across every watched address, because
+the two writers of one word are the same two facts in either order: a host
+write that clears a freshly allocated block and the guest store that fills it
+are a field the guest owns when the guest wrote last, and a field this platform
+is wiping under the guest when it wrote last. Without the ordinals the two read
+identically.
+
+That reaches a class of question nothing else here answers. One title divides
+by zero in its own `paint` twice a frame and paints nothing; the divisor is an
+`int` field of its own object, and a watch armed before the first instruction
+reports **one writer, the host, zeroing the block at allocation** — nothing in
+the title ever stores to it. The field beside it, which had looked like the
+divisor from the fault registers alone, is written by the title's own code and
+holds an object. So the question is not "who cleared it" but "which branch of
+its own start would have set it", and that is a different search.
 
 ## A second download gate, and the answer that opened it
 
@@ -4690,6 +4715,13 @@ the title allocates. The two views stay one view: a title that decides what it
 can afford from `Runtime` and then frees against `MC_knl*` would otherwise be
 working from two heaps.
 
+**What is known about the figure a title actually does with it**: one local
+title prints it verbatim in its own initialization log — `Total Memory :
+16777216`, `Free Memory : 16610188` — which is a title reading the number
+straight through and reporting it. No local title has been seen sizing anything
+from it. The bound is therefore a figure titles are known to *read* and not
+known to *depend on*, and 16MiB is where it stays until one does.
+
 **`openDataBase` owes a title the exception the specification names.** Opening
 with `create` false and no database throws `DataBaseException`, and that throw is
 how a title finds out it is running for the first time. This platform ignored the
@@ -4808,6 +4840,110 @@ other picture takes. A stream that does not inflate is left alone.
 method.** The registers, the stack frames and the objects they name travel with
 an AOT call's fault and did not travel with a timer's, which is exactly the
 title whose whole loop is a timer. It is what named the image record above.
+
+### The eighth round: a card the display was not showing
+
+**`Card.serviceRepaints` was the one place here that painted a card the display
+was not showing.** The frame loop has always refused one — `repaintQueued` and
+`paintTopCard` both require a pushed card — and `Card.isShown` has always
+answered against the top of the pushed stack, so this call was the only path by
+which a title's `paint` could be entered for a card that had never been on the
+screen.
+
+One title of the 264 loads its resources in stages inside `startApp` and calls
+`repaint` and then `serviceRepaints` between the stages, to move a progress
+bar; it pushes its card only once the load is finished. Entering `paint` there
+ran the title's own drawing code against a state it had not built yet, and the
+title stopped in its own compiled null check — a static object reference it
+reads and dispatches on, which the branch it had not reached yet would have
+set. Answered as the rest of the runtime already answers, the title reaches its
+first frame.
+
+**Two other titles paint the same picture one tick later, and nothing else in
+264 rows moves.** Both do what the one above does — `repaint`, then
+`serviceRepaints`, then `pushCard` — so their first frame used to come out of
+`startApp` and now comes out of the tick after it. The frames are byte-identical
+on both binaries; only the tick number the probe stops at differs, from 0 to 1.
+That is the whole cost of the rule, measured.
+
+The specification is not what settles this. It says `serviceRepaints` enters
+`paint` itself — "이 함수 내에서 직접 paint 함수를 부릅니다" — and says nothing
+about a card that is not shown, which is a case a handset has no reason to
+describe. What settles it is that the rest of this runtime had already decided:
+a card that is not on the display has no screen to output to, and three other
+places here say so.
+
+**A concrete calendar that did not extend the abstract one.** Another title
+faults in its own `paint` on a read at `0x69747544`, which is the ASCII `Duti`,
+and the two calls before it in the trace are `new java/util/GregorianCalendar`
+and a resolve of `java/util/Calendar.get(I)I`. The class loader's fallback —
+what a class with no entry in the runtime table gets — builds a record that
+extends `java/lang/Object` and inherits Object's vtable, and then allocates the
+name string immediately after that table. A virtual dispatch indexes the
+*receiver's* vtable at the slot the *declaring* class numbered, so `Calendar`'s
+slot on an Object-sized table is past its end and lands in the characters of
+`java/util/GregorianCalendar`; the guest followed them as a pointer. The
+register beside the fault holds `0x6974752f`, which is `/uti` — the same string
+four bytes in, and the whole of the diagnosis.
+
+So the class is declared, extending `java/util/Calendar`, with the one method of
+its own that it has. The calendar methods key on what the object holds rather
+than on its class name, so a title that builds one directly gets the same
+instant and the same fields as one that asks the factory. **The general shape is
+worth more than the class**: any concrete class whose superclass this platform
+implements, and which reaches the fallback instead, is a vtable that ends where
+its callers do not expect it to.
+
+**A step-limit failure that is a clock spin, and the title behind it plays.**
+One title of the 264 draws two frames and then spends its whole service
+allowance inside a timer. The trace distribution is the whole diagnosis: the
+last three thousand entries are one boundary repeated — `wipic 0x1c`, the
+current-time call — which is the shape this document already names for a title
+that busy-waits on the clock. A stepped run holds the guest clock still for the
+length of a Host service call, so the deadline the title is waiting for never
+arrives; run with `-play` it reaches its copyright screen in six hundred ticks
+and an in-game record screen in three thousand. **It is not a failing title; it
+is a title the sweep's stepped judgement cannot pass**, and the same is true of
+any title that waits inside a callback. The general answer is the work clock the
+other platform has — see `lgt.md`, "The guest clock advances with work, not only
+with ticks" — which is a change to every title's timing here and is not made on
+one title's evidence.
+
+**A screen wiped by the second of two paint paths.** Another title loads
+everything it names — three textures, five pictures, a sound clip — prints its
+own initialization log, and then paints a uniform fill for as long as it is left
+running. The boundary trace shows two paint paths alternating, and only one of
+them draws:
+
+```
+access context, fill rect, draw image ×3, flush lcd     <- the title's own
+Clet$CletCard.paint -> paintClet(x, y, w, h)
+access context, fill rect,               flush lcd      <- this platform's frame
+```
+
+The title's own path draws its screen and flushes it; the card paint that
+follows fills and flushes again, and the fill is what the screen ends up
+holding. So the picture is being drawn and then covered, once per frame, and the
+question is which of the two paths a handset runs — not why nothing is drawn.
+
+**The second path is entirely this Host's.** The title never calls
+`MC_grpRepaint` — the slot's count is zero across the run — so nothing it does
+asks for that paint; it is the per-tick `ServicePaint` of the top pushed card,
+which every other local title of this generation depends on. That is what makes
+this narrow rather than obvious: the paint is right for the titles that draw
+from their card and wrong for one that draws from its own loop and flushes for
+itself, and telling those apart needs a rule, not a switch.
+The `MC_fsOpen() failed!!!(-12)` line this title was previously filed under is
+its own save not existing yet on a first run, and it is printed and passed.
+
+**The fault report is what read as a thread problem and was not.** The stack
+named an image array and a `paint`, so the first reading was a loading thread
+racing the frame loop. The boundary trace says otherwise in one pass: every
+`createImage` completes and every array store lands, the whole chain from
+`startApp` down to `paint` is one call stack with no thread in it, and the two
+calls immediately before the fault are `Card.repaint` and
+`Card.serviceRepaints`. A trace that shows the call that caused the paint is
+worth more than a stack that shows where it ended up.
 
 ## Deliberately incomplete
 

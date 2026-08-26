@@ -3953,6 +3953,136 @@ picture decoder is shared: two titles moved from an error to a first frame, and
 **not one of the 262 rows has a different flush count, lit-pixel count or tick
 count**.
 
+### What interface function `0x64` is, read off its call site
+
+One title stops at tick 5 on AOT interface function `0x64`, and the report's own
+register dump is misleading in the way this document has warned about before:
+`argument 3` is `0x1403278`, which is not an argument at all — it is the stub
+the call site loaded from its literal pool and branched to. The call takes the
+receiver and one more reference.
+
+The instructions either side settle what it answers:
+
+```
+    ldr  r3, [pc, #0x48]      ; a module routine
+    mov  lr, pc
+    bx   r3                   ; -> r0
+    ldr  r3, [r0, #8]
+    mov  r0, r4               ; the receiver, an application object
+    ldr  r1, [r3, #8]
+    ldr  r3, [pc, #0x34]      ; the 0x64 stub
+    mov  lr, pc
+    bx   r3                   ; -> r0
+    ldr  r3, [r0, #4]         ; <- the answer's second word
+    cmp  r3, #0
+    movne r0, r4              ; present: the receiver
+    bne  call
+    mov  r0, r3               ; absent: null
+    ldr  r3, [pc, #0xa0]      ;         and a fixed routine instead
+call:
+    mov  lr, pc
+    bx   r3
+```
+
+**The word at `+4` of the answer is a function pointer, and the caller calls it
+with the receiver.** That is what the earlier reading of these instructions —
+"it chooses between the original object and null" — missed: the choice is
+between two *functions*, and the object is only the argument to whichever wins.
+So `0x64` is a **method lookup**, not the type check its shape suggested, and
+the fallback is what a lookup that finds nothing runs. Its second argument comes
+from two loads off the previous call's answer, so a name for that chain is what
+remains.
+
+### A stream a title wrote itself
+
+`DataInputStream` and `InputStreamReader` are declared over the abstract
+`java/io/InputStream`, not over a resource this platform opened, and one title
+of the 94 hands the first of them a stream of its own. The wrapper here stood
+for the same open resource the stream under it did — which is right, and is why
+a read through either moves one cursor — and had nowhere to go when the thing
+under it was an object the title had compiled. It refused, and the title stopped
+in its `<init>`.
+
+Such a stream is read the way the title's own callers would read it: a virtual
+call into its `read`, a block at a time, into the same buffer a resource stream
+fills. Every reader above it — `readInt`, `readUTF`, `readFully`, the reader's
+character decode — asks for the bytes it needs before it looks at them, and
+asking costs nothing for a stream this platform holds whole, so one code path
+serves both kinds. The window is only what has not been read yet: nothing here
+seeks backwards, so the bytes behind the cursor are dropped on each pull and a
+long stream costs a block rather than its length.
+
+**The methods are in the object's vtable, not in its class record.** This was the
+whole difficulty. A class the compiler laid out itself declares no member
+records at all — its dispatch table is in the image — so looking `read` up by
+name and descriptor finds nothing on exactly the classes this is for. The slots
+are `java/io/InputStream`'s own, which this platform numbers, and a subclass's
+override sits at the number it inherits: 10 for `read()`, 12 for `read([BII)`,
+14 for `available`. Whether a slot is an override is decided by comparing the
+subclass's entry against the platform class's own — equal means the title did
+not override it, and that entry leads straight back here.
+
+`read([BII)` is preferred and `read()` is the fallback, because the class
+library defines the first in terms of the second and a subclass must override at
+least the second; a class that overrode neither is not a stream and is refused
+by name. A byte at a time is a guest call each, so the fallback is asked for
+exactly what the reader wants rather than for a block. `available` is the one
+question the window cannot answer — what has been pulled says nothing about what
+the title's stream still holds — so the title's own `available` is called when
+it overrode one, and the window is the answer when it did not, which is the
+specification's own floor.
+
+A stream whose `read` reads back through the wrapper built on it would recurse
+until the host stack ended, so a pull in flight is refused rather than entered
+twice, and the refusal names the class.
+
+**Past that wall were three more, and the first of them was the worst kind.**
+The title stopped failing and then stopped *entirely*: three minutes of wall
+clock for four hundredths of a second of CPU, no error, no last frame. A
+goroutine dump named it in one pass — the session goroutine blocked sending a
+slice to a thread whose goroutine had already ended — and it is written up under
+"A thread that has ended is never granted another slice" below. The two after it
+were ordinary: `new ByteArrayInputStream(null)` reported a platform failure
+where the language throws, which stopped a title that catches its own nulls and
+logs them a few lines earlier in the same run; and `Graphics.getTranslateX` and
+`getTranslateY` had no implementation although the state they answer has been
+kept all along. With those the title paints its own notice screen.
+
+**Closing the wrapper does not close the title's stream.** Both objects stand
+for one open stream here, so a close marks it closed and a read afterwards says
+so; what it does not do is enter the title's own `close`, because nothing has
+been seen needing it and a close this platform invents is guest code running at
+a moment the title did not choose. A title that closes both — which is what the
+language's own idiom does — closes its own either way.
+
+### A thread that has ended is never granted another slice
+
+The session hands each guest thread a slice and waits out the whole of it:
+`worker.grant <- ctx` and then `<-worker.events`, against a worker goroutine
+that receives the grant, runs, and sends back either a park or its end. **A
+grant to a worker whose goroutine has already returned blocks for ever**, and it
+takes the session with it — no error, no last frame, no CPU. The only sign is a
+process that is asleep.
+
+The end was recorded by the *callers*, and there are three of them: the tick's
+own `ServiceJavaThreads`, the platform thread's `runOtherJavaWorkers`, and a
+monitor wait. The monitor wait is the one that got it wrong, and the reason is
+structural rather than careless: it grants a slice to **the thread that holds
+the lock**, which is not the thread it was called about, so the end it receives
+belongs to a worker it has no reason to be tracking. It checked the error and
+dropped the event. One title's guest thread threw out of its `run` while holding
+a lock, ended inside exactly that grant, and was granted again on the next tick.
+
+So the end is recorded where the slice is granted instead, and a worker already
+known to be finished is answered rather than sent to. All three callers are then
+right by construction, and a fourth would be too.
+
+**A hang is the worst failure this package can produce**, which is what makes
+this worth the section: every other kind of failure names a slot, an address or
+a class, and the sweep's own judgement catches it. This one produced a row that
+read "timed out", which reads as a title being slow — and the title was not
+slow. It had stopped.
+
 ## Deliberately incomplete
 
 - **LGT Java apps play, and the platform API behind them is partial.** The
@@ -4980,6 +5110,14 @@ of reasoning about who could have overwritten a class object ruled out three
 plausible causes and found none of them; one run with a watch on the word named
 the instruction, and the answer followed from disassembling it. Reach for it
 first, not last.
+
+Each hit also carries the ordinal of its writer's first and last store, counted
+across every watched address, so **"who wrote last" is a question it answers**.
+A host write that clears a freshly allocated block and a guest store that fills
+it are the same two facts in either order, and without the ordinals they read
+identically — a field the guest owns and a field this platform is wiping under
+the guest look the same. See `ktf.md`, where that separated a field nothing ever
+wrote from one that only looked like it.
 
 ## Cheats
 
