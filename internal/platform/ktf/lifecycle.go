@@ -45,7 +45,24 @@ func (client *Client) LoadClass(ctx context.Context, name string) (ClassLoadSumm
 }
 
 func (client *Client) loadClassLocked(ctx context.Context, name string) (ClassLoadSummary, error) {
-	if client.runtime == nil || client.executable.Interface.Functions.GetClass == 0 {
+	if client.runtime == nil {
+		return ClassLoadSummary{}, fmt.Errorf("KTF client initialization has not completed")
+	}
+	// An older module publishes its classes rather than answering for them,
+	// so the table this side already linked is the answer and there is no
+	// guest function to call. See module_link.go.
+	if client.module {
+		address := client.runtime.moduleClassByName[name]
+		if address == 0 {
+			return ClassLoadSummary{}, fmt.Errorf("KTF AOT class not found: %s", name)
+		}
+		metadata, ok := client.vm.AOTClassAt(address)
+		if !ok {
+			return ClassLoadSummary{}, fmt.Errorf("KTF module class %s at %#x is not registered", name, address)
+		}
+		return ClassLoadSummary{Metadata: metadata, Callbacks: client.runtime.callbacks}, nil
+	}
+	if client.executable.Interface.Functions.GetClass == 0 {
 		return ClassLoadSummary{}, fmt.Errorf("KTF client initialization has not completed")
 	}
 	if address := client.runtime.loadedClasses[name]; address != 0 {
@@ -319,7 +336,7 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 	}
 	defer runtime.leaveAOTCall()
 
-	headAddress := runtime.exceptionContext + javaExceptionHead
+	headAddress := runtime.exceptionHead()
 	entryHandler, err := runtime.client.core.ThreadLocalWord(thread, headAddress)
 	if err != nil {
 		return jvm.VoidValue(), runs, fmt.Errorf("read KTF AOT entry exception handler: %w", err)

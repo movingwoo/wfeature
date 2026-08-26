@@ -231,7 +231,12 @@ func runtimeFileState(arguments []jvm.Value) (*jvm.Object, *runtimeGuestFile, er
 	}
 	state, ok := receiver.Native.(*runtimeGuestFile)
 	if !ok {
-		return nil, nil, fmt.Errorf("File receiver is not open")
+		// A title that caught the constructor's own IOException still has the
+		// object it was constructing, and one local title goes on to call
+		// through it. A handset answers that with the exception the method
+		// declares rather than with a runtime error, and a title that catches
+		// one catches the other.
+		return nil, nil, newGuestIOException("File is not open")
 	}
 	return receiver, state, nil
 }

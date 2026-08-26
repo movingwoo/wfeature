@@ -6,9 +6,12 @@ import "fmt"
 
 const (
 	RegisterCount = 16
-	RegisterSP    = 13
-	RegisterLR    = 14
-	RegisterPC    = 15
+	// RegisterFP is r11. It is named because one guest generation keeps its
+	// whole runtime context there and expects a caller to hold it.
+	RegisterFP = 11
+	RegisterSP = 13
+	RegisterLR = 14
+	RegisterPC = 15
 )
 
 const (

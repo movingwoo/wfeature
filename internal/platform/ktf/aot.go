@@ -60,6 +60,12 @@ type aotExceptionUnwind struct {
 	// framePointer is the stack pointer the handler's own frame saved. It
 	// says which Host guest call the catch block belongs to.
 	framePointer uint32
+	// strict is set for the older modules, whose handler record sits inside
+	// the frame that pushed it rather than below it. A nested call made from
+	// that frame enters on exactly the saved stack pointer, so a Host call
+	// that owns the frame has to be the one that entered *above* it — the
+	// equal case belongs to the nested call, not to this one.
+	strict bool
 }
 
 // UncaughtAOTException transports a guest-created exception back across the
@@ -93,7 +99,13 @@ func (exception *UncaughtAOTException) Unwrap() error {
 // What that looked like was a title painting its first card, catching its own
 // exception, and executing at address 0x1a.
 func (unwind *aotExceptionUnwind) resumableFrom(stackPointer uint32) bool {
-	return unwind != nil && unwind.framePointer <= stackPointer
+	if unwind == nil {
+		return false
+	}
+	if unwind.strict {
+		return unwind.framePointer < stackPointer
+	}
+	return unwind.framePointer <= stackPointer
 }
 
 func (unwind *aotExceptionUnwind) Error() string {
@@ -530,7 +542,7 @@ func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetad
 		}
 		runtime.classAliases[metadata.Address] = alias
 	}
-	if alias <= runtime.jvmContext {
+	if alias < runtime.jvmContext {
 		return 0, fmt.Errorf("KTF dispatch alias %#x precedes the JVM context", alias)
 	}
 	offset := alias - runtime.jvmContext
@@ -1223,10 +1235,10 @@ func (runtime *initializationRuntime) raiseGuestException(thread *armcore.Thread
 }
 
 func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Thread, exceptionClass string, exceptionAddress uint32) (*aotExceptionUnwind, error) {
-	if runtime.exceptionContext == 0 {
+	if runtime.exceptionHead() == 0 {
 		return nil, fmt.Errorf("KTF JVM exception context is not prepared")
 	}
-	headAddress := runtime.exceptionContext + javaExceptionHead
+	headAddress := runtime.exceptionHead()
 	handlerAddress, err := runtime.client.core.ThreadLocalWord(thread, headAddress)
 	if err != nil {
 		return nil, fmt.Errorf("read KTF Java exception handler head: %w", err)
@@ -1250,7 +1262,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		}
 		methodAddress := binary.LittleEndian.Uint32(handler[0:])
 		oldHandler := binary.LittleEndian.Uint32(handler[8:])
-		currentPC := binary.LittleEndian.Uint32(handler[javaExceptionCurrentPC:])
+		currentPC := binary.LittleEndian.Uint32(handler[runtime.exceptionLabel():])
 		functionsAddress := binary.LittleEndian.Uint32(handler[20:])
 		method, err := runtime.readAOTBytes(methodAddress, javaMethodSize, "Java exception method")
 		if err != nil {
@@ -1314,8 +1326,8 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			// back to the top of the same block for the rest of the run.
 			var resumed [4]byte
 			binary.LittleEndian.PutUint32(resumed[:], target)
-			if err := runtime.client.core.Memory().Write(handlerAddress+javaExceptionCurrentPC, resumed[:]); err != nil {
-				return nil, fmt.Errorf("write KTF Java handler label at %#x: %w", handlerAddress+javaExceptionCurrentPC, err)
+			if err := runtime.client.core.Memory().Write(handlerAddress+runtime.exceptionLabel(), resumed[:]); err != nil {
+				return nil, fmt.Errorf("write KTF Java handler label at %#x: %w", handlerAddress+runtime.exceptionLabel(), err)
 			}
 			// The handler record is where the catch block reads what it
 			// caught. It lives on the guest stack, so the word is whatever
@@ -1325,14 +1337,15 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			// report that the word it was handed was not an object.
 			var caught [4]byte
 			binary.LittleEndian.PutUint32(caught[:], exceptionAddress)
-			if err := runtime.client.core.Memory().Write(handlerAddress+javaExceptionObject, caught[:]); err != nil {
-				return nil, fmt.Errorf("write KTF Java caught exception at %#x: %w", handlerAddress+javaExceptionObject, err)
+			if err := runtime.client.core.Memory().Write(handlerAddress+runtime.exceptionObject(), caught[:]); err != nil {
+				return nil, fmt.Errorf("write KTF Java caught exception at %#x: %w", handlerAddress+runtime.exceptionObject(), err)
 			}
 			return &aotExceptionUnwind{
 				contextBase:  handlerAddress + javaExceptionContext,
 				target:       target,
 				nextPC:       nextPC,
-				framePointer: binary.LittleEndian.Uint32(handler[javaExceptionFrameStack:]),
+				framePointer: binary.LittleEndian.Uint32(handler[runtime.exceptionFrameStack():]),
+				strict:       runtime.client.module,
 			}, nil
 		}
 		handlerAddress = oldHandler
@@ -1343,6 +1356,21 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 func (runtime *initializationRuntime) aotExceptionMatches(exceptionClass string, catchAddress uint32) (bool, error) {
 	if catchAddress == 0 {
 		return true, nil
+	}
+	// A module's exception table names its catch class the way it names every
+	// other class it has not linked yet: a reference cell rather than a
+	// pointer. Nothing resolves it on the way here, because nothing runs
+	// between the throw and the search.
+	if runtime.client.module && catchAddress&moduleUnresolved != 0 {
+		name, err := runtime.moduleName(catchAddress)
+		if err != nil {
+			return false, fmt.Errorf("read KTF module catch class %#x: %w", catchAddress, err)
+		}
+		resolved, err := runtime.resolveModuleClass(name, 0)
+		if err != nil {
+			return false, fmt.Errorf("resolve KTF module catch class %q: %w", name, err)
+		}
+		catchAddress = resolved
 	}
 	catchClass, err := runtime.resolveAOTClass(catchAddress)
 	if err != nil {

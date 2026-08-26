@@ -225,15 +225,41 @@ player's expense? Answering *no* reaches the title screen and the game. So the
 title has a complete offline path behind a question the refusal never lets it
 ask.
 
-That is now two titles whose wall is the refusal itself, and it is still not
-enough to move the policy: what a successful connect costs is paid by every
-title that then waits on a socket, and the two measured here are the two that
-were looked at. **The shape of the change, if it is ever made, is what these
-two show**: succeed the dial and refuse everything after it. Measuring that
-means a full sweep on both answers, and the noise floor of one is what would
-have to be told from the effect of the other. A third title with the same
-screen turned out not to be a network case at all — it was waiting for a key —
-which is the reason to measure rather than to reason from the screen.
+That is now two titles whose wall is the refusal itself. **The shape of the
+change, if it is ever made, is what these two show**: succeed the dial and
+refuse everything after it. A third title with the same screen turned out not
+to be a network case at all — it was waiting for a key — which is the reason to
+measure rather than to reason from the screen.
+
+### The sweep that measured it, and what it found
+
+The change was built and run: the dial's callback answered success instead of
+`M_E_ERROR`, and nothing else touched, over all ninety-four local archives at
+fifteen hundred ticks each, against the same binary with the refusal in place.
+Timing fields are dropped from the comparison, because the callback's own delay
+moves the guest clock a little and that is not the effect being looked for.
+
+**Two rows of the ninety-four move, and one of them is a title that works
+now.** The other is noise of exactly the shape just described: forty
+milliseconds of guest time and forty-seven instructions apart, the same flush
+count, the same picture.
+
+The title that moves is the one whose own dialog says the connection failed —
+a handled path, reached and dismissable. Told the dial succeeded, it goes on to
+the socket block as the design expects, and dies there at tick twenty on
+**slot `0x7d0`**, which is not the socket block at all: it is above every block
+base this platform knows and is unimplemented, so the run ends rather than the
+call failing. Fifteen hundred ticks of a title reporting its own error become
+twenty ticks and no session.
+
+**So the policy stays, and the measurement says what would have to come
+first.** "Refuse everything after the dial" is only true of the calls that are
+served; the path a successful connect opens reaches at least one that is not,
+and an unimplemented slot is fatal where a refusal is not. Serving that path —
+`0x7d0` and whatever follows it — is the prerequisite, not the dial's answer.
+The title with the offline path behind its question is also not reached by a
+plain run: it needs a route past its menus, so it was not in this sweep and
+would have to be driven by hand to be counted at all.
 
 ## Not implemented
 

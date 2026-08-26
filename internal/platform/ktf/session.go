@@ -290,17 +290,31 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	failed := func(err error) (*Session, error) {
 		return nil, &StartFailure{Err: err, Diagnostics: (&Session{Client: client}).Diagnostics()}
 	}
-	entrySummary, err := client.ExecuteEntry(ctx, nil)
-	if err != nil {
-		client.log("KTF entry failed", "error", err)
-		return failed(err)
+	// The two generations reach the same runtime by different routes. An
+	// older module is handed the platform's callback table and publishes its
+	// classes for this side to link; the current one relocates itself, hands
+	// back an executable descriptor and registers its own. Everything after
+	// this point is shared. See module_link.go.
+	if client.IsModule() {
+		entrySummary, err := client.ExecuteModuleEntry(ctx)
+		if err != nil {
+			client.log("KTF module entry failed", "error", err)
+			return failed(err)
+		}
+		client.log("KTF module started", "steps", entrySummary.Steps)
+	} else {
+		entrySummary, err := client.ExecuteEntry(ctx, nil)
+		if err != nil {
+			client.log("KTF entry failed", "error", err)
+			return failed(err)
+		}
+		client.log("KTF entry executed", "steps", entrySummary.Steps)
+		if _, err := client.Initialize(ctx, entrySummary.Context.Registers[0]); err != nil {
+			client.log("KTF initialization failed", "error", err)
+			return failed(err)
+		}
+		client.log("KTF initialized")
 	}
-	client.log("KTF entry executed", "steps", entrySummary.Steps)
-	if _, err := client.Initialize(ctx, entrySummary.Context.Registers[0]); err != nil {
-		client.log("KTF initialization failed", "error", err)
-		return failed(err)
-	}
-	client.log("KTF initialized")
 	object, _, err := client.NewObject(ctx, archive.Descriptor.MainClass, "()V")
 	if err != nil {
 		client.log("KTF main class construction failed", "class", archive.Descriptor.MainClass, "error", err)

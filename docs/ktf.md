@@ -4909,6 +4909,18 @@ other platform has — see `lgt.md`, "The guest clock advances with work, not on
 with ticks" — which is a change to every title's timing here and is not made on
 one title's evidence.
 
+**What that would and would not reach here is worth writing down, because it is
+not what it is on the other platform.** A `ManualClock` is only ever installed
+by this command's stepped probe; a session served to a browser, and this
+command under `-play`, both run on the wall clock, where the guest's clock
+already moves during a Host service call and a spin ends on its own. So a work
+clock here would change what the probe measures and nothing a player sees —
+the opposite of the other platform, whose clock is virtual end to end. That
+makes it a smaller change than it looks and a smaller gain: it would move one
+local title from "the probe cannot pass it" to "the probe passes it", against
+re-baselining every stepped measurement in this repository. It stays undone
+until a second title needs it, and `-play` is the answer for the one that does.
+
 **A screen wiped by the second of two paint paths.** Another title loads
 everything it names — three textures, five pictures, a sound clip — prints its
 own initialization log, and then paints a uniform fill for as long as it is left
@@ -4967,7 +4979,175 @@ calls immediately before the fault are `Card.repaint` and
 `Card.serviceRepaints`. A trace that shows the call that caused the paint is
 worth more than a stack that shows where it ended up.
 
+### The ninth round: a card that was never told it was on the screen
+
+**One title of the 264 divided by zero twice in every frame it drew, and the
+field it divided by is filled in `showNotify`.** Its `paint` ran, drew its
+pictures and threw where it needed the number; the trace named the method, and
+the method's own code named the field — a `getfield` whose zero the compiler
+checks for and throws `ArithmeticException` on, exactly as `x / f` compiles.
+Following the field to its one writer is what turned it into a platform
+question rather than a title's: the field is written by a single method of the
+title's, that method is reached from three call sites, and the first of them is
+its card's `showNotify(boolean)`.
+
+Nothing here called it. `Card.showNotify` existed only as the no-op a title's
+own call would land on, and the card stack — `pushCard`, `popCard`,
+`removeCard`, `removeAllCards` — appended and truncated a slice without telling
+anyone. The specification puts the call exactly there: "카드가 `pushCard`,
+`popCard`에 의해서 보여지거나, 보이지 않게되는 경우에 `showNotify`라는 함수가
+불립니다."
+
+**Which card counts as shown is not a new rule.** The top of the pushed stack is
+what `Card.isShown` answers, what `repaintQueued` requires and what
+`paintTopCard` paints, so `showNotify` follows the same one: a change of top
+hides the card that was there and shows the card that is there now, and a push
+of the card already on top notifies nobody. That keeps the four stack
+operations answering one question instead of four.
+
+**A whole-set A/B says it cost nothing.** Over 264 archives run for four
+hundred stepped ticks, two rows change. One is the title above, from four
+hundred ticks of a black screen to its publisher's logo at tick one and its
+title screen and menu under `-play`. The other reaches its first lit frame one
+tick earlier — the same picture, the same pixel count, the same colour count —
+because its `startApp` pushes its card and the notification now runs there
+rather than in the tick after. Nothing else moves.
+
+### The older modules run under the platform, and all three of them play
+
+**Three archives of the local set carry the older relocatable module, and all
+three used to call the size they were handed as a function.** The loader passed
+the module's own header as the entry's single argument, on the reading that the
+entry took a pointer to it and read the BSS size back out. It does not. It
+reads the *first word* of what it is handed and calls it with three arguments —
+a string and `-1` twice — which is `getInterface(name, major, minor)`, the same
+call the current generation of images makes through the last of the five
+parameters its initialization function takes. Handed the header, the first word
+is the BSS size, so all three jumped to `0x28`, `0x40` and `0x24` — their own
+sizes, and the whole of the old symptom.
+
+So the entry of a module runs *under* the platform rather than in front of it,
+and that is a load order rather than a call: the arena, the callback stubs and
+the interface tables have to exist before the entry, where the current
+generation only meets them in `Initialize`. `prepareInitialization` is that
+split, memoized so the two paths build the same thing once.
+
+**Everything past the entry is the metadata this platform already reads.** The
+class records are the twenty-byte records with the self-identifying first word,
+the methods are twenty-eight bytes with their vtable slot in them, the fields
+are sixteen, the object layout is the same and so is the virtual dispatch —
+`[[obj] >> 5]` added to a base, then the vtable at `+0xc`. A module even
+numbers its slots the same way a current image does: `startApp` is 15 in both,
+which is `java/lang/Object`'s ten and `Jlet`'s five. What differs is who links
+it and where the runtime's own state lives.
+
+**A module publishes its classes; it does not register them.** `seg[0]` points
+at a descriptor — a class table, how many of its buckets are filled, how many
+there are, and its own address — and nothing in the module's code reads it: the
+only two words that point at it are `seg[0]` and its own self-reference. So it
+is for this side to read, and this side links what it finds. A superclass, and
+an array class's element class, arrive as reference cells rather than pointers;
+the vtable word is zero. Linking is resolving the two cells by name and laying
+out the table the method records already number.
+
+**The rest of the runtime's state is one block, reached through `fp`.** Five
+words of it are ever read, and the module's own glue names each one: `+0x24`
+parks the caller's stack pointer while a helper runs, `+0x2c` heads the chain
+of handler records, `+0x30` is the restore-function table every record copies,
+`+0x34` is the stack the glue switches to before calling anything of its own,
+and `+0x38` is the base a virtual call adds the object header's shifted alias
+to — the JVM context by another name. The block is this side's to build and to
+hold in `r11`, on the frame loop's thread and on every guest worker; three of
+its words are per-thread and registered as such, so the class table and the
+restore routine stay shared while a chain and a scratch stack do not.
+
+**Compiled code also reaches that block without a register**, through a word in
+the segment header — `[[seg + 0x20] + 0x2c] = head` is how a protected region
+puts the chain back. That word is one of the two the loader reads as markers,
+and the only one anything points at; it carries the module's constant until
+this side writes the block's address over it.
+
+**A module's constants name three classes by fixed offsets from the dispatch
+base.** Every one of the 208 character arrays in one module carries header 0,
+every one of the 208 strings over them carries `0x280`, and all 58 class
+records carry `0x500` — which are offsets 0, 20 and 40 once the shift is
+undone, twenty bytes apart because a class record is twenty bytes. So the base
+is an array of them, and `[C`, `java/lang/String` and `java/lang/Class` have to
+be laid out where the image already expects them. The strings themselves are
+built at compile time rather than registered at run time, so this side walks
+the image once and binds what it finds; without that the first resource a title
+opens is a name nothing can read.
+
+**Fourteen interface slots, and every one of them is a call this platform
+already answers.** A static sweep for the veneer every interface call goes
+through finds them all at once, and the instruction two before it names the
+slot: throw by class name, a failed-allocation report, new instance, new array,
+new array of a primitive, load class, class of an object, type check, find
+field, initialize class, find method, array class of an element class, and a
+multi-dimensional new. Two needed a translation rather than a forward. A
+module names a primitive by the *byte offset* into the eight characters
+`ZCFDBSIJ` that the current generation is handed as an initialization
+parameter, so `0x28` is `I`; and the multi-dimensional allocator takes a
+pointer to its lengths rather than a count, because the helper in front of it
+spills the ones its caller passed in registers and hands on the stack pointer.
+
+**Six more routines are tail-jumped to through a table the segment header
+names**, and `seg[5]` is where the module leaves six zero words for them. Two
+are the calling forms this platform already runs a method in — the helper
+checks the method record's `ACC_NATIVE` bit itself and picks between them — and
+they are reached with the method record in `r0`, the receiver in `r1` and the
+caller's `r2` and `r3` pushed on the guest stack, so the arguments come from
+three places. Two are the monitor pair. One is a poll: 258 call sites, entered
+with nothing set up and nothing read back, which is what a guest checking in
+between iterations of its own loop looks like. The last is `wait`, reached
+twice and only from a sound thread's `run`.
+
+**A protected region here is a `setjmp`, and that changes two things.** The
+region entry is a call that answers zero on the way in and a *label* on the way
+back, and the method switches on the answer; the labels are what the exception
+table's ranges are written in. So the platform's own restore — which the
+current generation's modules carry and a module does not — has to be
+synthesized: restore the register block in the module's own order, put the
+label in `r0`, and return to where the region was entered. And the two words
+this platform reads out of a handler record are the other way round from the
+current generation's: a module keeps the label at `+16` and what it caught at
+`+12`.
+
+**The last of it was which Host call owns a long jump.** A module's handler
+record sits *inside* the frame that pushed it, at `sp + 8`, so a nested call
+made from that frame enters on exactly the stack pointer the record saved —
+and the rule that picks the owning call, "the handler's frame is at or below
+this call's entry", answered yes for the innermost call as well as for the
+right one. The catch block then ran inside the wrong Host call and the title
+carried on as though the call that threw had returned normally: it caught the
+IOException its save file's absence raised, and then read from the file
+anyway. The equal case belongs to the nested call, so for a module the test is
+strict — and the invoke jump drops the pair the helper spilled *after* its call
+returns rather than before, so that it does not enter above the frame it is
+calling out of.
+
+**All three modules now reach a first frame in eight ticks or fewer**, and
+under `-play` they run their opening: two publisher logos and a story screen,
+a title screen over its own artwork, and a title screen into an in-game
+display. Over the 264 archives run for four hundred stepped ticks, those three
+rows are the only ones that change.
+
 ## Deliberately incomplete
+
+- **showing what the last flush put on the panel, rather than reading the
+  framebuffer when a Host asks.** The other platform changed to that and three
+  of its titles came back — see [`lgt.md`](lgt.md), "What a Host shows is what
+  the last flush put on the panel" — and the same hole exists here in
+  principle: a title that flushes a picture and then blackens the framebuffer
+  before the Host collects would show the black. What is missing is a title
+  that does it. Both local candidates turned out to be something else — one was
+  a card never told it was shown, the other does not reproduce at all — and
+  `framestats` over the whole set finds no third. The cost is not the same
+  either: a flush there publishes a surface, while a flush here would have to
+  read the whole screen out of guest memory, and these titles flush hundreds of
+  times a second (`presentScreen` is where the deferral and its measurement
+  are). So this waits for a case, and the sweep now has the tool that would
+  find one.
 
 - repairing a guest write to a published instance field rather than reporting
   it: see "A published instance field has two storages". The mechanism is

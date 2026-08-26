@@ -57,18 +57,34 @@ type Client struct {
 	// ExecuteEntry calls, and argument is the single word it is called with.
 	// The current generation of client images enters at its first byte with
 	// the BSS size; the older relocatable modules name their own entry and
-	// take a pointer to their header. See client_relocatable.go.
-	mapped                uint64
-	entry                 uint32
-	argument              uint32
+	// take the platform's callback table, which ExecuteModuleEntry fills in.
+	// See client_relocatable.go.
+	mapped   uint64
+	entry    uint32
+	argument uint32
+	// module is set for the older relocatable images. Their entry is handed
+	// the platform's own callback table rather than a size, so the runtime
+	// that owns that table has to exist before the entry runs. See
+	// client_relocatable.go and ExecuteModuleEntry. moduleSegment is where
+	// the relocated segment begins, which is what its own header's offsets
+	// are relative to.
+	module                bool
+	moduleSegment         uint32
 	vm                    *jvm.VM
 	run                   sync.Mutex
 	initializationStarted bool
 	runtime               *initializationRuntime
-	executable            Executable
-	resources             map[string][]byte
-	files                 map[string][]byte
-	saveStore             SaveStore
+	// prepared is the runtime once its arena, stubs and interface tables
+	// exist, which is before it becomes the client's live runtime. The two
+	// differ only for the older modules, whose entry needs the callback table
+	// prepare builds. initParameters are the five words the client's own
+	// initialization function takes.
+	prepared       *initializationRuntime
+	initParameters []uint32
+	executable     Executable
+	resources      map[string][]byte
+	files          map[string][]byte
+	saveStore      SaveStore
 
 	// The lwc text component that currently has the keypad, and the editor
 	// driving it. See runtime_lwc_input.go.
@@ -774,15 +790,18 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 	// An older module is relocated before it is mapped, and names its own
 	// entry rather than starting at one. See client_relocatable.go.
 	loaded, entry, argument := image.Data, EntryAddress, image.BSSSize
+	relocatable, segmentBase := false, uint32(0)
 	if module, ok := parseRelocatableClient(image.Data); ok {
 		relocated, relocateErr := module.relocate(image.Data, ImageBase)
 		if relocateErr != nil {
 			return nil, fmt.Errorf("relocate KTF client image %q: %w", image.Name, relocateErr)
 		}
-		// The entry takes a pointer to the module header rather than a size,
-		// and reads the size back out of it: the header's first word is the
-		// BSS the file name also names.
-		loaded, entry, argument = relocated, module.entryAddress(relocated), ImageBase
+		// The entry takes the platform's callback table rather than a size:
+		// it reads that table's first word and calls it to resolve an
+		// interface by name. The argument is filled in by ExecuteModuleEntry,
+		// which is the only caller that has a table to hand it.
+		loaded, entry, argument, relocatable = relocated, module.entryAddress(relocated), 0, true
+		segmentBase = ImageBase + uint32(module.segmentStart)
 	}
 
 	core := armcore.NewCore(options)
@@ -804,6 +823,9 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 		mapped:   mappedSize,
 		entry:    entry,
 		argument: argument,
+		module:   relocatable,
+
+		moduleSegment: segmentBase,
 	}
 	// KTF handsets decode byte content as EUC-KR; games index parsed strings
 	// by character position, so the platform charset must match. Guest Java
@@ -880,6 +902,71 @@ func (client *Client) ExecuteEntry(ctx context.Context, handler armcore.Supervis
 	result, err := client.core.Call(ctx, client.thread, client.entry, ReturnAddress, []uint32{client.argument}, handler)
 	if err != nil {
 		return result, fmt.Errorf("execute KTF client entry %q: %w", client.image.Name, err)
+	}
+	return result, nil
+}
+
+// IsModule reports whether this image is one of the older relocatable modules,
+// whose entry takes the platform's callback table rather than a size.
+func (client *Client) IsModule() bool {
+	return client != nil && client.module
+}
+
+// ExecuteModuleEntry runs an older module's entry with the platform callback
+// table it expects. The runtime that owns that table has to exist first, which
+// is the whole difference from ExecuteEntry: the current generation relocates
+// itself with no platform underneath it and only meets one in Initialize.
+func (client *Client) ExecuteModuleEntry(ctx context.Context) (armcore.RunSummary, error) {
+	if client == nil || client.core == nil || client.thread == nil {
+		return armcore.RunSummary{}, fmt.Errorf("KTF client is not initialized")
+	}
+	if !client.module {
+		return armcore.RunSummary{}, fmt.Errorf("KTF client image %q is not a relocatable module", client.image.Name)
+	}
+	client.run.Lock()
+	defer client.run.Unlock()
+	if client.initializationStarted {
+		return armcore.RunSummary{}, fmt.Errorf("KTF client initialization already started")
+	}
+	client.initializationStarted = true
+	runtime, parameters, err := client.prepareInitialization()
+	if err != nil {
+		return armcore.RunSummary{}, err
+	}
+	client.runtime = runtime
+	// The module's runtime glue reaches its context through `fp` and expects
+	// a caller to be holding it, so it is installed before any of the
+	// module's code runs. See module_link.go.
+	if _, err := runtime.prepareModuleContext(); err != nil {
+		return armcore.RunSummary{}, err
+	}
+	if err := runtime.placeModuleAliases(); err != nil {
+		return armcore.RunSummary{}, err
+	}
+	if err := runtime.indexModuleClasses(); err != nil {
+		return armcore.RunSummary{}, err
+	}
+	if err := runtime.installModuleJumps(); err != nil {
+		return armcore.RunSummary{}, err
+	}
+	// The callback table is the last of the five words the current
+	// generation's initialization function takes, and its first word is the
+	// `getInterface` this entry calls.
+	client.argument = parameters[len(parameters)-1]
+	result, err := client.core.Call(ctx, client.thread, client.entry, ReturnAddress, []uint32{client.argument}, runtime.handleSupervisorCall)
+	if err != nil {
+		return result, fmt.Errorf("execute KTF module entry %q: %w", client.image.Name, err)
+	}
+	if answer := result.Context.Registers[0]; answer != 0 {
+		return result, fmt.Errorf("KTF module entry %q returned %#x", client.image.Name, answer)
+	}
+	// The module publishes its classes rather than registering them, so this
+	// side links and registers them once the interface it asked for exists.
+	if err := runtime.linkModuleClasses(); err != nil {
+		return result, fmt.Errorf("link KTF module %q: %w", client.image.Name, err)
+	}
+	if err := runtime.bindModuleStrings(); err != nil {
+		return result, fmt.Errorf("bind KTF module %q strings: %w", client.image.Name, err)
 	}
 	return result, nil
 }
