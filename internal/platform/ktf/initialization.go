@@ -41,6 +41,14 @@ const (
 	// svcCategoryBinaryHook answers a C runtime routine recognized in the
 	// guest image and replaced with a native one. See binary_hooks.go.
 	svcCategoryBinaryHook uint32 = 5
+	// svcCategoryModuleInterface answers the interface the older relocatable
+	// modules resolve by name before they do anything else. See
+	// module_interface.go.
+	svcCategoryModuleInterface uint32 = 6
+	// svcCategoryModuleJump answers the six routines an older module tail-
+	// jumps to through the table its segment header names. See
+	// module_link.go.
+	svcCategoryModuleJump uint32 = 7
 
 	initSVCGetInterface  uint32 = 0
 	initSVCJavaThrow     uint32 = 1
@@ -145,6 +153,34 @@ type InitializationSummary struct {
 	Callbacks InitializationCallbacks
 }
 
+// prepareInitialization builds the platform side of the client contract: the
+// arena, the callback stubs, the interface tables and the five words the
+// client's own initialization function is called with. It is memoized because
+// the older relocatable modules need the callback table before their entry
+// runs — their entry is handed it — while the current generation is handed a
+// size and only reaches it through Initialize.
+func (client *Client) prepareInitialization() (*initializationRuntime, []uint32, error) {
+	if client.prepared != nil {
+		return client.prepared, client.initParameters, nil
+	}
+	runtime, err := newInitializationRuntime(client)
+	if err != nil {
+		return nil, nil, err
+	}
+	parameters, err := runtime.prepare()
+	if err != nil {
+		return nil, nil, err
+	}
+	// The image is scanned as it now sits in guest memory rather than as it
+	// arrived, so the entry's self-relocation is already accounted for and the
+	// addresses hooked are the ones that will execute.
+	if _, err := runtime.installImageHooks(); err != nil {
+		return nil, nil, err
+	}
+	client.prepared, client.initParameters = runtime, parameters
+	return runtime, parameters, nil
+}
+
 // Initialize calls the validated interface and WIPI initialization functions.
 // The current callback surface is intentionally limited to startup and normal
 // AOT calls. Raw class metadata, native strings, and object/array allocations
@@ -165,18 +201,8 @@ func (client *Client) Initialize(ctx context.Context, executableAddress uint32) 
 	if err != nil {
 		return InitializationSummary{}, err
 	}
-	runtime, err := newInitializationRuntime(client)
+	runtime, parameters, err := client.prepareInitialization()
 	if err != nil {
-		return InitializationSummary{}, err
-	}
-	parameters, err := runtime.prepare()
-	if err != nil {
-		return InitializationSummary{}, err
-	}
-	// The image is scanned as it now sits in guest memory rather than as it
-	// arrived, so the entry's self-relocation is already accounted for and the
-	// addresses hooked are the ones that will execute.
-	if _, err := runtime.installImageHooks(); err != nil {
 		return InitializationSummary{}, err
 	}
 
@@ -320,12 +346,20 @@ type initializationRuntime struct {
 	kernelInterface   uint32
 	javaInterface     uint32
 	wipicInterface    uint32
-	jvmContext        uint32
-	exceptionContext  uint32
-	screenFramebuffer uint32
-	callbacks         InitializationCallbacks
-	callCounts        map[diagEvent]uint32
-	trace             traceRing
+	moduleInterface   uint32
+	// moduleContext is the block `fp` points at while an older module runs,
+	// and moduleClassByName / linkedModuleClasses are what its published
+	// class table becomes. See module_link.go.
+	moduleContext       uint32
+	moduleJumpTable     uint32
+	moduleClassByName   map[string]uint32
+	linkedModuleClasses map[uint32]bool
+	jvmContext          uint32
+	exceptionContext    uint32
+	screenFramebuffer   uint32
+	callbacks           InitializationCallbacks
+	callCounts          map[diagEvent]uint32
+	trace               traceRing
 	// objects tracks live guest object allocations for the collector, and
 	// collectAt is the arena size that triggers the next cycle.
 	objects   map[uint32]objectRecord
@@ -611,8 +645,12 @@ func (runtime *initializationRuntime) prepare() ([]uint32, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := runtime.client.core.RegisterThreadLocalWord(runtime.exceptionContext + javaExceptionHead); err != nil {
-		return nil, fmt.Errorf("register KTF Java exception handler head: %w", err)
+	// A module's handler head is a field of a context that does not exist
+	// yet, so it registers its own; see prepareModuleContext.
+	if !runtime.client.module {
+		if err := runtime.client.core.RegisterThreadLocalWord(runtime.exceptionHead()); err != nil {
+			return nil, fmt.Errorf("register KTF Java exception handler head: %w", err)
+		}
 	}
 	param0, err := runtime.allocateWords([]uint32{0})
 	if err != nil {
@@ -773,6 +811,22 @@ func (runtime *initializationRuntime) handleSupervisorCall(ctx context.Context, 
 		result, err = runtime.handleWIPICCall(thread, id)
 	case svcCategoryBinaryHook:
 		result, err = runtime.handleBinaryHookCall(thread, id)
+	case svcCategoryModuleInterface:
+		result, err = runtime.handleModuleInterfaceCall(ctx, thread, id)
+		var unwind *aotExceptionUnwind
+		if errors.As(err, &unwind) {
+			return runtime.resumeAOTException(thread, unwind)
+		}
+	case svcCategoryModuleJump:
+		// A module's own call is a Host call like any other, so an exception
+		// thrown under one has to be able to leave it: without this a long
+		// jump out of a nested module method stopped at the frame that made
+		// the call instead of at the frame that caught it.
+		result, err = runtime.handleModuleJumpCall(ctx, thread, id)
+		var jumpUnwind *aotExceptionUnwind
+		if errors.As(err, &jumpUnwind) {
+			return runtime.resumeAOTException(thread, jumpUnwind)
+		}
 	case svcCategoryRuntimeJava:
 		result, err = runtime.handleRuntimeJavaCall(thread, id)
 		var unwind *aotExceptionUnwind
@@ -804,6 +858,8 @@ func (runtime *initializationRuntime) handleInitCall(thread *armcore.Thread, id 
 			return runtime.kernelInterface, nil
 		case "WIPI_JBInterface":
 			return runtime.javaInterface, nil
+		case moduleInterfaceName:
+			return runtime.makeModuleInterface()
 		default:
 			return 0, nil
 		}

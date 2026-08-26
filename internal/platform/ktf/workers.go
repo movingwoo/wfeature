@@ -111,6 +111,12 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 	}
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = stackBase + uint32(ThreadStackSize)
+	// An older module's runtime glue reaches everything through `fp`, so a
+	// worker that starts without it faults on its first helper call. See
+	// module_link.go.
+	if client.module && client.runtime != nil {
+		initial.Registers[armcore.RegisterFP] = client.runtime.moduleContext
+	}
 	worker := &guestWorker{
 		javaThread: javaThread,
 		armThread:  armcore.NewThread(initial),
@@ -125,6 +131,11 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 	}
 	worker.armThread.SetStepBudget(slice)
 	worker.armThread.SetLimitHook(func(context.Context) error { return worker.park() })
+	if client.module && client.runtime != nil {
+		if err := client.runtime.prepareModuleThread(worker.armThread); err != nil {
+			return nil, err
+		}
+	}
 	go worker.run(client)
 	return worker, nil
 }

@@ -398,6 +398,17 @@ control: run the same binary twice first and see how much differs on its own.
 Two titles once looked like a 200-frame regression that way and were pure
 timing noise.
 
+**A batch is part of the wall clock too, and it moves the summary and not only
+the frames.** Six runs at once starve each other, so a `-play` run's flush
+count and lit-pixel count depend on what else was running: one local title
+answered 2,243 lit pixels on one build and 4,024 on the other inside a
+six-way sweep, and run on its own both builds answered **4,252** — the same
+number, twice each. Two more titles behaved the same way. So a `-play` row that
+differs in a sweep is a row to re-run alone before it is a finding, and a title
+the sweep reports as drawing nothing is one of those rows: the last black
+screen on this project's list turned out to be a batch that never got the
+title past its loading phase.
+
 The control has been measured across the whole local KTF set, so the number is
 here rather than in the next investigation's head: the same script under the
 same binary, at `-play -speed 20`, differs on **16 of 32 titles and 24 of 128

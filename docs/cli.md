@@ -565,6 +565,11 @@ go run ./cmd/ktfdump <game.zip> -classes            # the registered class table
 need more, because a class is in the table only once the game has asked for it,
 so they start the game and dump what it registered on the way to `startApp`.
 
+**An older relocatable module needs no entry run for `-image`**: the loader
+relocates those rather than the guest, so what it writes out is the image as it
+will execute without any guest instruction having run. See [`ktf.md`](ktf.md),
+"The older modules run under the platform".
+
 **A start that fails still dumps.** That is the case the tool is most often
 reached for — the title stopped before it drew anything, and the question is
 which class it was in — so the failure is reported and the dump goes ahead with

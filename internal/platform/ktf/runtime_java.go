@@ -1471,8 +1471,9 @@ func runtimeDisplayPushCard(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if card == nil {
 		return jvm.VoidValue(), fmt.Errorf("Display.pushCard card is null")
 	}
+	previous := runtime.topCard()
 	runtime.displayCards = append(runtime.displayCards, card)
-	return jvm.VoidValue(), nil
+	return jvm.VoidValue(), runtime.notifyCardShown(previous, card)
 }
 
 func runtimeDisplayPopCard(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
@@ -1481,7 +1482,58 @@ func runtimeDisplayPopCard(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Va
 	}
 	card := runtime.displayCards[len(runtime.displayCards)-1]
 	runtime.displayCards = runtime.displayCards[:len(runtime.displayCards)-1]
-	return jvm.ReferenceValue(card), nil
+	return jvm.ReferenceValue(card), runtime.notifyCardShown(card, runtime.topCard())
+}
+
+// topCard is the card the display is showing, which on this platform is the
+// top of the pushed stack: `Card.isShown`, `repaintQueued` and `paintTopCard`
+// all already answer against it.
+func (runtime *initializationRuntime) topCard() *jvm.Object {
+	if len(runtime.displayCards) == 0 {
+		return nil
+	}
+	return runtime.displayCards[len(runtime.displayCards)-1]
+}
+
+// notifyCardShown tells the cards on either side of a change of top what
+// happened. The specification puts it on the stack operations rather than on
+// the paint — "카드가 pushCard, popCard에 의해서 보여지거나, 보이지 않게되는
+// 경우에 showNotify라는 함수가 불립니다" — and one local title does all of its
+// own initialization there. Its card's `showNotify(true)` is the only caller
+// of the method that fills a field every one of its frames divides by, so
+// without this it threw an `ArithmeticException` twice per frame inside
+// `paint` and drew a black screen for as long as it was left running. See
+// docs/ktf.md, "The ninth round: a card that was never told it was on the
+// screen".
+//
+// Which card counts as shown is this runtime's existing rule rather than a new
+// one: the top of the pushed stack, the same answer `Card.isShown` gives. So a
+// card that is covered is hidden and a card that is uncovered is shown, and a
+// push onto the card already on top notifies nobody.
+func (runtime *initializationRuntime) notifyCardShown(hidden, shown *jvm.Object) error {
+	if hidden == shown {
+		return nil
+	}
+	if hidden != nil {
+		if err := runtime.invokeShowNotify(hidden, false); err != nil {
+			return err
+		}
+	}
+	if shown != nil {
+		return runtime.invokeShowNotify(shown, true)
+	}
+	return nil
+}
+
+func (runtime *initializationRuntime) invokeShowNotify(card *jvm.Object, shown bool) error {
+	value := int32(0)
+	if shown {
+		value = 1
+	}
+	if _, err := runtime.client.vm.InvokeVirtual(card, "showNotify", "(Z)V", jvm.IntValue(value)); err != nil {
+		return fmt.Errorf("KTF card %s showNotify(%t): %w", card.ClassName, shown, err)
+	}
+	return nil
 }
 
 func runtimeDisplayRemoveCard(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -1494,8 +1546,9 @@ func runtimeDisplayRemoveCard(runtime *initializationRuntime, _ *jvm.VM, argumen
 	}
 	for index, current := range runtime.displayCards {
 		if current == card {
+			previous := runtime.topCard()
 			runtime.displayCards = append(runtime.displayCards[:index], runtime.displayCards[index+1:]...)
-			return jvm.IntValue(1), nil
+			return jvm.IntValue(1), runtime.notifyCardShown(previous, runtime.topCard())
 		}
 	}
 	return jvm.IntValue(0), nil
@@ -1506,8 +1559,9 @@ func runtimeDisplayCountCard(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.
 }
 
 func runtimeDisplayRemoveAllCards(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	previous := runtime.topCard()
 	runtime.displayCards = nil
-	return jvm.VoidValue(), nil
+	return jvm.VoidValue(), runtime.notifyCardShown(previous, nil)
 }
 
 func runtimeBackLightNoop(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {

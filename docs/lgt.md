@@ -4568,24 +4568,78 @@ happen: across a full run the title calls no filesystem slot, no database slot
 and no free-space call at all. Whatever it decided, it decided without asking
 this platform anything, so the write path is not where the answer is.
 
-### What the sweep costs now, per title
+### What the sweep costs now, per title, and what the profile says about it
 
 The list of titles that were far slower than the handset was re-measured on the
 current binary, over the sweep's own three thousand ticks rather than the four
 hundred the older figure used. **Nothing fails to finish any more**: the title
 that ran for 420 seconds and then for 27 minutes without reaching three
-thousand ticks now reaches them in 228 seconds of host time, which is what the
-surface copy being gone is worth on the worst case in the set.
+thousand ticks now reaches them.
 
-Ranked by host busy time over three thousand ticks, the top of the set is 228s,
-140s, 123s, 105s, 92s, 73s, 66s, 56s, 52s, 48s, 47s, 35s, 34s, 33s, 30s and
-25s; twenty-two of the ninety-one titles that finish are above twenty seconds
-and the rest are below it. Those are host seconds for a run that is 3000 guest
-ticks — a title keeping up with its own clock would take a hundred seconds of
-wall time for the same run — so the top four are the ones running slower than
-the handset did and everything below about 100s is faster than real time. That
-is the list to profile from, and the profile is the next step rather than this
-measurement.
+Ranked by host busy time, each run on its own with a fresh save, the top of the
+set is:
+
+| host busy | guest instructions | ns/instruction | guest time |
+|---|---|---|---|
+| 207.6s | 8.98G | 23.1 | 150.0s |
+| 128.9s | 5.92G | 21.8 | 75.1s |
+| 96.7s | 13.04G | 7.4 | 116.1s |
+| 90.2s | 11.19G | 8.1 | 73.1s |
+| 81.4s | 10.65G | 7.6 | 104.4s |
+
+**The column that matters is the last two together.** Guest time is what the
+title thinks passed, so a title keeping up with the handset takes that much
+wall time; three of these five run *faster* than the handset did, and only the
+first two are slower — by 1.4x and 1.7x. The host cost per guest instruction is
+what separates them: 23 and 22 nanoseconds against 7 to 8. Three of the five
+retire more instructions than the two slow ones and cost less doing it, so the
+instruction count is not the cost. **What a guest instruction costs is.**
+
+**A whole-run call trace names the difference for the slowest, and it is one
+slot.** `-trace-live ""` over forty ticks records 3,171,517 platform calls, and
+3,096,685 of them are `MC_knlCurrentTime` — seventy-seven thousand clock reads
+per tick, against a few hundred of everything else. The guest profile agrees
+from the other side: 57.7% of the title's instructions are in one 180-byte loop
+and another 19.7% are in the platform stubs that loop calls, and the stub the
+hottest stacks name is that slot's. It is a busy-wait, and it is expensive here
+in a way it was not on the handset because every read of the clock is a
+supervisor call out to the Host and back.
+
+That also says what the [work clock](#the-guest-clock-advances-with-work-not-only-with-ticks)
+costs when a title leans on it. The clock does end the spin — the title
+finishes, where the same loop on a tick-only clock would never see its deadline
+— but it ends it after the guest has retired the instructions the rate charges
+for, and this title pays for them one Host crossing at a time.
+
+**The other four are their own code.** None of them calls any slot more than a
+few tens of thousands of times over forty ticks, their traces are ordinary —
+`memcpy`, `strcmp`, framebuffer queries, fills — and each one's profile is the
+shape this document already describes: 67% to 92% of the instructions inside a
+single loop of a few hundred bytes.
+
+**The second of the two slow ones was read, and it is a software rasteriser.**
+Its two hot ranges are 93% of everything it executes, and both are pure guest
+arithmetic with no platform call in them:
+
+- **71%** is a per-pixel channel transform over an RGB565 surface. It splits
+  each pixel with `lsr #11`, `and #0x7e0` and `and #0x1f`, looks each of the
+  three channels up in a byte table, recombines them with `lsl #11` and
+  `lsl #6`, and stores the halfword back — about twenty-five instructions per
+  pixel, over a region bounded by two words of a structure it carries, once a
+  frame.
+- **22%** is a run-length decoder with a 16.16 fixed-point scaler: read a run
+  byte, `mla` the step into an accumulator, take the integer part with
+  `asr #16`, keep the fraction with the signed `asr #31 / lsr #16 / lsl #16 /
+  rsb` idiom, and index a sixteen-bit palette with the next byte. That is a
+  stretched sprite blit.
+
+So there is nothing on this side to point at for it. It is 1.7x slower than the
+handset because it rasterises in its own code and this platform interprets
+every instruction of that; the levers are the ARM core itself, or recognising
+the routine and answering it natively — which is the shape KTF's binary hooks
+have and LGT has nothing like. Neither is a change to make for one title.
+[`cli.md`](cli.md) has the disassemble probe that takes the address ranges a
+profile prints.
 
 ### What a module resolves, and when
 

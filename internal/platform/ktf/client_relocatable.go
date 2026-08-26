@@ -20,7 +20,11 @@ import (
 //
 // and the segment opens with eleven words of its own before any code:
 //
-//	seg[0..5]  addresses
+//	seg[0]     the module descriptor: its class table, class count, table size
+//	seg[1]     zero in all three
+//	seg[2]     the end of the writable tail
+//	seg[3..4]  the read-only data, ending at the module's own name table
+//	seg[5]     a thunk
 //	seg[6]     the static base, where the module's own pointer table starts
 //	seg[7]     the end of the bytes the file carries
 //	seg[8]     0x13580001
@@ -29,8 +33,10 @@ import (
 //	seg[11..]  code, beginning with the same helper in all three files
 //
 // Every relocated word gets the segment's load address added. The header stays
-// mapped in front of the segment because the entry is handed a pointer to it,
-// which is where the entry reads the BSS size back from.
+// mapped in front of the segment because the segment's own offsets are
+// relative to it, and the file names the BSS size in two places — the header's
+// first word and the image name's decimal suffix — which is what makes the
+// header recognizable. The entry is not handed it; see ExecuteModuleEntry.
 //
 // **The two words that decide where the segment begins are the markers, and
 // they were read one word too late.** An earlier reading took the relocation
@@ -63,14 +69,16 @@ import (
 // well-formed: it reads a word out of that table and hands it on as a string
 // pointer, and only the rebased word points at a string.
 //
-// **This still gets all three to the same place and no further.** The entry
-// runs its prologue, reads that string, and calls the first word of what it was
-// handed with it — so the argument is a table of functions rather than the
-// header alone, and its first function answers an interface by name. The name
-// is the same in all three modules and the version it asks for is `(-1, -1)`;
-// the module keeps the answer in a static and returns success only when it is
-// not null. What the interface behind that name holds is not known; see
-// docs/ktf.md.
+// **What the entry is handed is the platform's own callback table.** It runs
+// its prologue, reads a string out of the rebased pointer table, and calls the
+// first word of its argument with it — the same `getInterface(name, major,
+// minor)` the current generation of images reaches through its initialization
+// parameters. The name is the same in all three modules and the version asked
+// for is `(-1, -1)`; the module keeps the answer in a static and returns
+// success only when it is not null. So the entry runs under the platform
+// rather than in front of it: see ExecuteModuleEntry, module_interface.go for
+// the interface it asks for, and module_link.go for the classes it publishes
+// and the context its whole runtime is reached through.
 type relocatableClient struct {
 	// segmentStart is where the segment begins in the file, and relocations
 	// are the segment offsets of the words to rebase.
@@ -80,7 +88,7 @@ type relocatableClient struct {
 
 const (
 	// relocatableHeaderWords is the fixed part of the header: the BSS size the
-	// entry reads back through its argument, and the relocation count. The
+	// image name's suffix also carries, and the relocation count. The
 	// relocation table follows immediately.
 	relocatableHeaderWords = 2
 	// relocatableEntryOffset is where the segment's own eleven-word header
@@ -144,9 +152,9 @@ func parseRelocatableClient(data []byte) (relocatableClient, bool) {
 }
 
 // relocate rebases a copy of the whole file for a load at base. The header
-// stays in front of the segment because the entry is handed a pointer to it and
-// reads the BSS size back out of its first word, so what moves is only what the
-// relocation table names — and those offsets are the segment's, not the file's.
+// stays in front of the segment so that the segment lands where its own
+// offsets say, so what moves is only what the relocation table names — and
+// those offsets are the segment's, not the file's.
 //
 // A relocation that names a word outside the segment is refused rather than
 // skipped: the table is the module's own account of itself, and one entry that

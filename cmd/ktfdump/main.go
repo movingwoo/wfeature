@@ -171,6 +171,11 @@ func partialSession(archive []byte) (*ktf.Session, error) {
 
 // dumpImage loads the client and runs its entry function, which is the
 // self-relocation, then reads back the window it relocated into.
+//
+// An older relocatable module is already relocated by the time it is loaded —
+// the loader does it rather than the guest — so its entry is not run here. It
+// is not a relocation at all there, and running it needs the platform its
+// first call goes to.
 func dumpImage(archive []byte) ([]byte, error) {
 	opened, err := ktf.Open(archive)
 	if err != nil {
@@ -180,8 +185,10 @@ func dumpImage(archive []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := client.ExecuteEntry(context.Background(), nil); err != nil {
-		return nil, fmt.Errorf("run the relocation entry: %w", err)
+	if !client.IsModule() {
+		if _, err := client.ExecuteEntry(context.Background(), nil); err != nil {
+			return nil, fmt.Errorf("run the relocation entry: %w", err)
+		}
 	}
 	return client.ImageBytes()
 }
