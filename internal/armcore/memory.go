@@ -23,11 +23,13 @@ const (
 
 	memoryPageShift = 12
 	// decodedPerPage is one cache entry per halfword of a page.
-	decodedPerPage  = 1 << (memoryPageShift - 1)
-	memoryPageSize  = uint64(1 << memoryPageShift)
-	memoryPageMask  = uint32(memoryPageSize - 1)
-	guestAddressEnd = uint64(1) << 32
-	maxMappings     = 4096
+	decodedPerPage = 1 << (memoryPageShift - 1)
+	// armDecodedPerPage is one cache entry per word of a page.
+	armDecodedPerPage = 1 << (memoryPageShift - 2)
+	memoryPageSize    = uint64(1 << memoryPageShift)
+	memoryPageMask    = uint32(memoryPageSize - 1)
+	guestAddressEnd   = uint64(1) << 32
+	maxMappings       = 4096
 
 	// dataPageWays is how many recently used data pages are remembered. It is
 	// a power of two so the way is a mask of the page number rather than a
@@ -91,6 +93,17 @@ type memoryPage struct {
 	// slice costs a length load and a bounds check on every instruction for a
 	// bound the type already carries.
 	decoded *[decodedPerPage]decodedThumb
+	// decodedARM is the same cache for ARM state, one entry per word.
+	//
+	// It holds the form alone where the Thumb entry also holds the encoding,
+	// and the difference is not an oversight. A Thumb entry that carries its
+	// halfword saves assembling one from two bytes; an ARM instruction is a
+	// word the page already holds in the order the host wants it, so caching a
+	// copy would buy nothing and cost the entry four more bytes. At one byte
+	// per word this table is a quarter of the page it describes, where the
+	// Thumb one is twice its page — which matters because an ARM module is a
+	// megabyte of code where a Clet is a kilobyte of hot loop.
+	decodedARM *[armDecodedPerPage]armForm
 }
 
 // decodedThumb is a classified instruction. A zero value means "not decoded
@@ -117,6 +130,9 @@ type decodedThumb struct {
 func (page *memoryPage) discardDecoded() {
 	if page.decoded != nil {
 		page.decoded = nil
+	}
+	if page.decodedARM != nil {
+		page.decodedARM = nil
 	}
 }
 
@@ -195,6 +211,14 @@ type Memory struct {
 	dataPage  [dataPageWays]*memoryPage
 	codeIndex uint32
 	codePage  *memoryPage
+	// armSteps counts the instructions retired in ARM state. Only the ARM
+	// branch increments it, so the Thumb path — which is every instruction on
+	// most titles — pays nothing, and Thumb steps are the core's total minus
+	// this. It exists because "which titles are ARM" is the first question any
+	// ARM throughput change has to answer, and answering it with a throwaway
+	// patch each time is how the split in armcore.md came to be a number
+	// nobody could re-take. Written under the quantum lock.
+	armSteps uint64
 	// standInsRefused turns every recogniser off for the life of this memory.
 	// It is the seam the recogniser tests interpret their reference run
 	// through, so the two sides of an A/B differ in nothing but whether a
@@ -542,25 +566,44 @@ var decodeCacheEnabled atomic.Bool
 
 func init() { decodeCacheEnabled.Store(true) }
 
-// SetDecodeCacheEnabled turns the per-page Thumb decode cache on or off.
+// SetDecodeCacheEnabled turns the per-page decode caches — both states' — on
+// or off.
 func SetDecodeCacheEnabled(enabled bool) { decodeCacheEnabled.Store(enabled) }
 
 // DecodeCacheEnabled reports whether decoded instructions are being cached.
 func DecodeCacheEnabled() bool { return decodeCacheEnabled.Load() }
 
-// DecodeCacheStats reports how many pages hold a committed decode cache and
-// what those caches cost in bytes. It answers the question a wider cache entry
-// asks first: the entry is one array per code page, so its cost is not the
-// working set but every page the guest has ever executed from.
-func (memory *Memory) DecodeCacheStats() (pages int, bytes int) {
+// ARMSteps reports how many instructions this memory's engine has retired in
+// ARM state. The core's total step count minus this is the Thumb half. See the
+// field for why only one of the two is counted.
+func (memory *Memory) ARMSteps() uint64 {
+	memory.mu.RLock()
+	defer memory.mu.RUnlock()
+	return memory.armSteps
+}
+
+// DecodeCacheStats reports how many decode tables are committed and what they
+// cost in bytes. It answers the question a wider cache entry asks first: a
+// table is one array per code page, so its cost is not the working set but
+// every page the guest has ever executed from.
+//
+// A page executed in both states holds two tables and is counted twice, which
+// is the honest answer to "how much is this costing" and the reason the count
+// is of tables rather than of pages.
+func (memory *Memory) DecodeCacheStats() (tables int, bytes int) {
 	memory.mu.RLock()
 	defer memory.mu.RUnlock()
 	memory.eachPage(func(_ uint32, page *memoryPage) {
 		if page.decoded != nil {
-			pages++
+			tables++
+			bytes += int(unsafe.Sizeof([decodedPerPage]decodedThumb{}))
+		}
+		if page.decodedARM != nil {
+			tables++
+			bytes += int(unsafe.Sizeof([armDecodedPerPage]armForm{}))
 		}
 	})
-	return pages, pages * int(unsafe.Sizeof([decodedPerPage]decodedThumb{}))
+	return tables, bytes
 }
 
 // decodeThumb answers the classified instruction at address, decoding and
@@ -625,6 +668,84 @@ func (memory *Memory) decodeThumb(address uint32) (decodedThumb, error) {
 		*slot = decodedThumb{form: form, instruction: instruction}
 	}
 	return *slot, nil
+}
+
+// decodeARM answers the classified instruction at address, decoding and
+// caching it on first use. The caller holds the memory lock. It is the ARM
+// counterpart of decodeThumb and follows the same rules for what may be
+// cached; see there.
+//
+// It returns the encoding alongside the form because every ARM handler needs
+// the word, and the page already holds it: the cache stores the classification
+// only.
+func (memory *Memory) decodeARM(address uint32) (armForm, uint32, error) {
+	if address&3 != 0 {
+		return armUndecoded, 0, &AccessError{Operation: "execute", Address: address, Size: 4, Cause: ErrUnaligned}
+	}
+	uncached := func() (armForm, uint32, error) {
+		instruction, err := memory.fetch32(address)
+		if err != nil {
+			return armUndecoded, 0, err
+		}
+		return classifyARM(instruction), instruction, nil
+	}
+	if !decodeCacheEnabled.Load() {
+		return uncached()
+	}
+	index := address >> memoryPageShift
+	page := memory.codePage
+	if page == nil || memory.codeIndex != index {
+		page = memory.pageFor(address)
+		if page == nil || page.data == nil {
+			return uncached()
+		}
+		memory.codeIndex, memory.codePage = index, page
+	}
+	if page.decodedARM == nil {
+		if err := memory.validateLocked(address, 4, PermissionExecute, "execute"); err != nil {
+			return armUndecoded, 0, err
+		}
+		// A cached page answers later addresses without re-checking, so it may
+		// only be cached when the whole page is executable. A mapping that
+		// ends inside this page would otherwise let the tail of it execute as
+		// if it were code.
+		pageStart := address &^ memoryPageMask
+		if memory.validateLocked(pageStart, memoryPageSize, PermissionExecute, "execute") != nil {
+			return uncached()
+		}
+		page.decodedARM = new([armDecodedPerPage]armForm)
+	}
+	offset := address & memoryPageMask
+	instruction := binary.LittleEndian.Uint32(page.data[offset:])
+	slot := &page.decodedARM[offset>>2]
+	if *slot == armUndecoded {
+		form := classifyARM(instruction)
+		if form == armUndefined || form == armUnconditionalUndefined {
+			// Leave the slot undecoded so the fault is reported every time
+			// rather than cached as a form.
+			return form, instruction, nil
+		}
+		*slot = form
+	}
+	return *slot, instruction, nil
+}
+
+// decodedARMFast answers an already-cached ARM decode without a call into the
+// general path, and reports whether it could. It exists for the same reason
+// decodedThumbFast does: to be inlined into the interpreter loop. Every
+// condition it checks is one decodeARM checks too, so a false answer only
+// means "ask decodeARM".
+func (memory *Memory) decodedARMFast(address uint32) (armForm, uint32, bool) {
+	page := memory.codePage
+	if page == nil || memory.codeIndex != address>>memoryPageShift || page.decodedARM == nil || address&3 != 0 {
+		return armUndecoded, 0, false
+	}
+	offset := address & memoryPageMask
+	form := page.decodedARM[offset>>2]
+	if form == armUndecoded {
+		return armUndecoded, 0, false
+	}
+	return form, binary.LittleEndian.Uint32(page.data[offset:]), true
 }
 
 // decodedThumbFast answers an already-cached decode without a call into the

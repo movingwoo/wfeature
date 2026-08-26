@@ -339,9 +339,15 @@ func TestLoadCostProbe(t *testing.T) {
 
 	// See the LGT probe: the decode cache costs one array per code page, so a
 	// wider entry multiplies this rather than the working set.
-	cachePages, cacheBytes := session.Client.core.Memory().DecodeCacheStats()
-	t.Logf("decode_cache_pages=%d decode_cache_bytes=%d (%.1f MiB)",
-		cachePages, cacheBytes, float64(cacheBytes)/(1<<20))
+	cacheTables, cacheBytes := session.Client.core.Memory().DecodeCacheStats()
+	t.Logf("decode_cache_tables=%d decode_cache_bytes=%d (%.1f MiB)",
+		cacheTables, cacheBytes, float64(cacheBytes)/(1<<20))
+	// See the LGT probe: the cache above is Thumb-only, so the ARM share says
+	// whether an ARM change can move this title at all.
+	armSteps := session.Client.core.Memory().ARMSteps()
+	t.Logf("arm_steps=%d thumb_steps=%d arm_share=%.1f%%",
+		armSteps, profile.Steps-min(armSteps, profile.Steps),
+		100*float64(armSteps)/float64(max(profile.Steps, 1)))
 	t.Logf("startup=%v host=%v guest=%v ticks=%d instructions=%d host_per_guest=%.2f ns_per_step=%.2f",
 		startup.Round(time.Millisecond), host.Round(time.Millisecond), guest,
 		ticks, profile.Steps, host.Seconds()/max(guest.Seconds(), 1e-9),

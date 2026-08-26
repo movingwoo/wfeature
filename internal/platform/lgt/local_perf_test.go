@@ -216,9 +216,18 @@ func TestLGTLoadCostProbe(t *testing.T) {
 	// The decode cache's cost is per code page, not per hot loop, so widening
 	// its entry multiplies this number rather than the working set. It is
 	// reported here so the two halves of that trade are measured in one run.
-	cachePages, cacheBytes := session.client.core.Memory().DecodeCacheStats()
-	t.Logf("decode_cache_pages=%d decode_cache_bytes=%d (%.1f MiB)",
-		cachePages, cacheBytes, float64(cacheBytes)/(1<<20))
+	cacheTables, cacheBytes := session.client.core.Memory().DecodeCacheStats()
+	t.Logf("decode_cache_tables=%d decode_cache_bytes=%d (%.1f MiB)",
+		cacheTables, cacheBytes, float64(cacheBytes)/(1<<20))
+	// Which instruction set the run is made of decides whether an ARM change
+	// can move it at all, and the two caches above are per state: a title that
+	// is almost all ARM is untouched by anything done to the Thumb one, and a
+	// title that is almost all Thumb is the regression guard for changing the
+	// ARM one.
+	armSteps := session.client.core.Memory().ARMSteps()
+	t.Logf("arm_steps=%d thumb_steps=%d arm_share=%.1f%%",
+		armSteps, steps-min(armSteps, steps),
+		100*float64(armSteps)/float64(max(steps, 1)))
 	t.Logf("busy=%v tick_p50=%v tick_p90=%v tick_p99=%v",
 		busy.Round(time.Millisecond), percentile(0.50).Round(time.Microsecond),
 		percentile(0.90).Round(time.Microsecond), percentile(0.99).Round(time.Microsecond))

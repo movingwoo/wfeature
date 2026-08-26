@@ -5,70 +5,146 @@ import (
 	"math/bits"
 )
 
-func executeARM(context *Context, memory *Memory, pc, instruction uint32) (*SupervisorCall, error) {
-	condition := instruction >> 28
-	if condition == 0xf {
+// An ARM instruction is classified once and executed many times, the same way
+// a Thumb one is. classifyARM answers which form an encoding takes and Memory
+// caches that answer per address (see decodeARM), so the match chain below is
+// walked once per instruction in the program rather than once per execution.
+//
+// The chain is thirteen mask-and-compare tests deep and the forms games spend
+// their time in — data processing, single transfer — are at the bottom of it.
+// On the one local title that is 100% ARM that was the whole cost of a step
+// after the fetch; see docs/armcore.md.
+type armForm uint8
+
+const (
+	// armUndecoded is the zero value, so a fresh cache slot reads as "not
+	// decoded yet" without anything having to clear it.
+	armUndecoded armForm = iota
+	// armUndefined is a conditional encoding this engine does not implement:
+	// it faults, but only if its condition passes. armUnconditionalUndefined
+	// is one of the 1111 encodings, which are not conditional at all and
+	// therefore fault whatever the flags say. Neither is ever cached — the
+	// slot is left undecoded so the fault is reported every time rather than
+	// remembered as a form — but both are named because the dispatcher has to
+	// tell them apart.
+	armUndefined
+	armUnconditionalUndefined
+	armBLXImmediate
+	armBranchExchange
+	armSwap
+	armStatusTransfer
+	armLongMultiply
+	armMultiply
+	armHalfwordSignedTransfer
+	armBranch
+	armSupervisorCall
+	armSingleTransfer
+	armBlockTransfer
+	armDataProcessing
+	armCacheMaintenance
+)
+
+// classifyARM answers the form of an encoding. The order of the tests is the
+// architecture's own and is not free to change: several of the masks overlap,
+// and a multiply only reads as a multiply because the transfer tests below it
+// have not been asked yet.
+func classifyARM(instruction uint32) armForm {
+	if instruction>>28 == 0xf {
 		// The 1111 encodings are unconditional rather than never-executed, and
 		// the only one a game here uses is BLX immediate: the ARM-to-Thumb call
 		// a Thumb-compiled module makes into its own code. LGT modules are
 		// built that way, so every LGT title stops at the first one.
-		if instruction&0x0e000000 == 0x0a000000 { // BLX immediate
-			offset := int32(instruction<<8) >> 6
-			// The H bit is the odd halfword: a BLX target is halfword-aligned
-			// where a BL target is word-aligned.
-			halfword := instruction >> 24 & 1
-			context.Registers[RegisterLR] = pc + 4
-			context.setThumbPC(uint32(int64(pc+8)+int64(offset)) + halfword*2)
-			return nil, nil
+		if instruction&0x0e000000 == 0x0a000000 {
+			return armBLXImmediate
 		}
+		return armUnconditionalUndefined
+	}
+	switch {
+	case instruction&0x0ffffff0 == 0x012fff10: // BX Rm
+		return armBranchExchange
+	case instruction&0x0fb00ff0 == 0x01000090: // SWP/SWPB
+		return armSwap
+	case instruction&0x0fb00000 == 0x03200000, // MSR immediate
+		instruction&0x0f900ff0 == 0x01000000: // MRS/MSR register
+		return armStatusTransfer
+	case instruction&0x0f8000f0 == 0x00800090: // UMULL/UMLAL/SMULL/SMLAL
+		return armLongMultiply
+	case instruction&0x0fc000f0 == 0x00000090: // MUL/MLA
+		return armMultiply
+	case instruction&0x0e400f90 == 0x00000090, // halfword/signed, register offset
+		instruction&0x0e400090 == 0x00400090: // halfword/signed, immediate offset
+		return armHalfwordSignedTransfer
+	case instruction&0x0e000000 == 0x0a000000: // B/BL
+		return armBranch
+	case instruction&0x0f000000 == 0x0f000000: // SVC/SWI
+		return armSupervisorCall
+	case instruction&0x0c000000 == 0x04000000: // LDR/STR
+		return armSingleTransfer
+	case instruction&0x0e000000 == 0x08000000: // LDM/STM
+		return armBlockTransfer
+	case instruction&0x0c000000 == 0: // data processing
+		return armDataProcessing
+	case isCacheMaintenance(instruction):
+		return armCacheMaintenance
+	}
+	return armUndefined
+}
+
+// executeARM classifies and executes one instruction. It is the uncached path:
+// the engine reaches the same handlers through executeARMForm with a form the
+// decode cache already holds, and the two cannot answer differently because
+// this one is that one with a classify in front.
+func executeARM(context *Context, memory *Memory, pc, instruction uint32) (*SupervisorCall, error) {
+	return executeARMForm(classifyARM(instruction), context, memory, pc, instruction)
+}
+
+// executeARMForm executes an already-classified instruction.
+//
+// The condition test lives here rather than in the classifier because it reads
+// flags, which change under an encoding that does not: a cached form says what
+// an instruction *is*, never whether this execution of it runs.
+func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruction uint32) (*SupervisorCall, error) {
+	switch form {
+	case armBLXImmediate:
+		offset := int32(instruction<<8) >> 6
+		// The H bit is the odd halfword: a BLX target is halfword-aligned
+		// where a BL target is word-aligned.
+		halfword := instruction >> 24 & 1
+		context.Registers[RegisterLR] = pc + 4
+		context.setThumbPC(uint32(int64(pc+8)+int64(offset)) + halfword*2)
+		return nil, nil
+	case armUnconditionalUndefined:
 		return nil, ErrUndefinedInstruction
 	}
-	if !conditionPassed(context.CPSR, condition) {
+	if !conditionPassed(context.CPSR, instruction>>28) {
 		return nil, nil
 	}
-
-	if instruction&0x0ffffff0 == 0x012fff10 { // BX Rm
-		context.branchExchange(armRegisterValue(context, pc, instruction&0xf))
-		return nil, nil
-	}
-	if instruction&0x0fb00ff0 == 0x01000090 { // SWP/SWPB
-		return nil, executeARMSwap(context, memory, instruction)
-	}
-	if instruction&0x0fb00000 == 0x03200000 || // MSR immediate
-		instruction&0x0f900ff0 == 0x01000000 { // MRS/MSR register
-		return nil, executeARMProgramStatusTransfer(context, instruction)
-	}
-	if instruction&0x0f8000f0 == 0x00800090 { // UMULL/UMLAL/SMULL/SMLAL
-		return nil, executeARMLongMultiply(context, instruction)
-	}
-	if instruction&0x0fc000f0 == 0x00000090 { // MUL/MLA
-		return nil, executeARMMultiply(context, pc, instruction)
-	}
-	if instruction&0x0e400f90 == 0x00000090 || // halfword/signed, register offset
-		instruction&0x0e400090 == 0x00400090 { // halfword/signed, immediate offset
-		return nil, executeARMHalfwordSignedTransfer(context, memory, pc, instruction)
-	}
-	if instruction&0x0e000000 == 0x0a000000 { // B/BL
-		offset := int32(instruction<<8) >> 6
-		if instruction&(1<<24) != 0 {
-			context.Registers[RegisterLR] = pc + 4
-		}
-		context.setARMPC(uint32(int64(pc+8) + int64(offset)))
-		return nil, nil
-	}
-	if instruction&0x0f000000 == 0x0f000000 { // SVC/SWI
-		return &SupervisorCall{Immediate: instruction & 0x00ffffff, Address: pc, ResumePC: pc + 4}, nil
-	}
-	if instruction&0x0c000000 == 0x04000000 { // LDR/STR
-		return nil, executeARMSingleTransfer(context, memory, pc, instruction)
-	}
-	if instruction&0x0e000000 == 0x08000000 { // LDM/STM
-		return nil, executeARMBlockTransfer(context, memory, pc, instruction)
-	}
-	if instruction&0x0c000000 == 0 { // data processing
+	switch form {
+	case armDataProcessing:
 		return nil, executeARMDataProcessing(context, pc, instruction)
-	}
-	if isCacheMaintenance(instruction) {
+	case armSingleTransfer:
+		return nil, executeARMSingleTransfer(context, memory, pc, instruction)
+	case armBranch:
+		executeARMBranch(context, pc, instruction)
+		return nil, nil
+	case armBlockTransfer:
+		return nil, executeARMBlockTransfer(context, memory, pc, instruction)
+	case armBranchExchange:
+		executeARMBranchExchange(context, pc, instruction)
+		return nil, nil
+	case armHalfwordSignedTransfer:
+		return nil, executeARMHalfwordSignedTransfer(context, memory, pc, instruction)
+	case armMultiply:
+		return nil, executeARMMultiply(context, pc, instruction)
+	case armLongMultiply:
+		return nil, executeARMLongMultiply(context, instruction)
+	case armSupervisorCall:
+		return &SupervisorCall{Immediate: instruction & 0x00ffffff, Address: pc, ResumePC: pc + 4}, nil
+	case armStatusTransfer:
+		return nil, executeARMProgramStatusTransfer(context, instruction)
+	case armSwap:
+		return nil, executeARMSwap(context, memory, instruction)
+	case armCacheMaintenance:
 		// A write to CP15 c7 is cache or write-buffer maintenance, which is
 		// nothing here: there is no cache to flush, and every path that
 		// changes a page's bytes already drops that page's decode cache, so
@@ -78,6 +154,24 @@ func executeARM(context *Context, memory *Memory, pc, instruction uint32) (*Supe
 		return nil, nil
 	}
 	return nil, ErrUndefinedInstruction
+}
+
+// executeARMBranch is B and BL. It is a function rather than an arm of the
+// dispatcher above because the engine routes it directly, and the two must not
+// be two copies of the semantics.
+func executeARMBranch(context *Context, pc, instruction uint32) {
+	offset := int32(instruction<<8) >> 6
+	if instruction&(1<<24) != 0 {
+		context.Registers[RegisterLR] = pc + 4
+	}
+	context.setARMPC(uint32(int64(pc+8) + int64(offset)))
+}
+
+// executeARMBranchExchange is BX Rm, which in ARM code is mostly the return
+// from a call: a module built for interworking leaves every function through
+// one, so it is a seventh of the instructions the local ARM title retires.
+func executeARMBranchExchange(context *Context, pc, instruction uint32) {
+	context.branchExchange(armRegisterValue(context, pc, instruction&0xf))
 }
 
 // isCacheMaintenance reports whether an instruction is an MCR to CP15 c7.

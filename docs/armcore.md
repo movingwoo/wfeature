@@ -1003,6 +1003,10 @@ handler; ARM calls `fetch32` and then walks `executeARM`'s chain of mask-and-
 compare tests from the top, on **every instruction, every time**. There is no
 ARM decode cache at all.
 
+(There is now. "The ARM cache was built, and it halved an ARM step", below,
+is what came of everything this section and the two after it work out — read
+those first, and that one for what actually happened.)
+
 Which path a title takes is not a detail. Counting steps by instruction set
 over a real run of three local LGT archives:
 
@@ -1014,7 +1018,9 @@ over a real run of three local LGT archives:
 
 **A Clet is Thumb and an ahead-of-time-compiled Java title is ARM**, which is
 the missing half of "a Java title is the other shape, and it is the slow one"
-(`lgt.md`). The Clets that run at five to six times the guest clock are the
+(`lgt.md`). **It is a tendency and not a rule**, and the title that turned out
+to be the slowest of all is the counterexample: it reports `mclass: Clet` and
+runs 100% ARM. Read the share off `arm_share` rather than off the class. The Clets that run at five to six times the guest clock are the
 ones every optimisation above was measured on; the title that manages twice the
 clock spends four fifths of its instructions on the path none of them touched.
 
@@ -1147,6 +1153,121 @@ platform and every local title keeping up.
 
 The order to measure in is unchanged, and the guard in step 2 matters more than
 before: the titles that must not move are now 99.9% Thumb rather than 99.8%.
+
+### The ARM cache was built, and it halved an ARM step
+
+Built in the order the two sections above set out, and every number below is an
+interleaved A/B of the same probe against the build before it, five rounds a
+side, on `WFEATURE_LOAD_TICKS=300`.
+
+**The footprint question answered itself, and the megabyte never arrived.** The
+100%-ARM title executes from **31 code pages** — 124 KiB of code — over a run
+that retires 328 million instructions, and the table it commits for each is a
+quarter of the page rather than twice it. Its whole decode cache is **47 KiB**,
+ARM and Thumb together. The fear the earlier section recorded — an ARM module
+is a megabyte where a Clet is a kilobyte of hot code — is about how much code a
+module *contains*, and what a table costs is how much of it the guest ever
+*runs*.
+
+**The ARM entry holds the form alone, where the Thumb entry also holds its
+encoding**, and that is what made the footprint a quarter rather than double.
+A Thumb entry that carries its halfword saves assembling one out of two bytes;
+an ARM instruction is a word the page already holds in the byte order the host
+wants, so a copy in the entry buys nothing. One byte of form per four bytes of
+code.
+
+That was measured rather than argued, because the Thumb precedent says the
+opposite — there the cache pays for itself precisely by *removing the fetch*.
+The eight-byte entry was built and run beside the one-byte one on the same
+title: **9.65 nanoseconds a step against 9.65**, a dead heat, for **264 KiB of
+tables against 47**. A tie is a loss for the wider entry, and this is the third
+time in this document that widening a decode entry has failed to pay — the
+other two are in "A wider decode cache entry was built and lost, twice over".
+
+Why the fetch is gone anyway: what `fetch32` cost was never the four bytes, it
+was the validation and mapping walk around them. A cached page is one the
+engine has already proved wholly executable, so the word is read straight out
+of `page.data` — and the eight bytes an entry could have held instead are eight
+bytes of cache line not spent on the next instruction.
+
+| | ns per step | |
+|---|---|---|
+| before | 17.37 | |
+| decode cache | 9.83 | **−43.4%** |
+| and the routed switch | 9.39 | **−45.9%** |
+
+(Over three thousand ticks rather than three hundred it settles at 9.42.)
+
+Through `build/release/wfeature`, which is the binary a player runs and the one
+that carries the committed profile, the same three thousand ticks are **15.09
+nanoseconds a step before and 8.95 after**.
+
+`BenchmarkEngineARMALULoop` says the same thing without a game around it:
+**17.84 to 8.91 nanoseconds**.
+
+The projection two sections up said ~5, and the difference is the fetch: it
+assumed an ARM entry would remove the word read the way the Thumb entry does,
+and the measurement below says an entry that does costs the same and eight
+times the memory. Of the 8.91, 4.65 is the operation itself and the remaining
+4.26 is a page-relative word read plus a switch. **The projection's conclusion
+survives its arithmetic being wrong** — an ARM step lands beside a Thumb one,
+just not for the reason given.
+
+The routed switch is the second half, and it is worth measuring separately
+because it is small: routing the two commonest forms out of the dispatcher and
+into the engine's own loop was −3.0%, and adding the next two −1.2% more. What
+the four are was counted rather than guessed, over 328 million instructions of
+the one title that is all ARM:
+
+| form | share |
+|---|---|
+| data processing | 49.6% |
+| single transfer | 19.7% |
+| `B`/`BL` | 14.1% |
+| `BX` | **13.3%** |
+| multiply | 2.0% |
+| halfword/signed transfer | 1.3% |
+| everything else | under 0.1% |
+
+**`BX` being a seventh of the run is the shape of ARM code rather than an
+oddity**: a module built for interworking leaves every function through one, so
+the 14.1% of branches and the 13.3% of `BX` are the same calls counted going out
+and coming back. It is the reason the routed set is four forms and not two —
+in Thumb, returns are `POP {..., pc}` and land in a form that was already
+routed.
+
+**The regression guard held.** The titles that must not move are the Clets, and
+across the four heaviest local ones — 1.4 billion, 1.1 billion, 383 million and
+163 million steps, all 0.0–0.1% ARM — the change is between −0.7% and +0.6%,
+which is the noise floor of this probe. Three KTF titles, which are Thumb too,
+are flat.
+
+Correctness was checked the way the boot sweeps check it rather than by the
+unit tests alone. **128 LGT archives — the 34 local ones and the 94-archive
+test corpus — run 400 ticks under both builds with `-framedir`, and `framediff`
+reports every frame of every one of them byte-identical.** The 43 local KTF
+archives were compared by first lit frame and its JSON summary, the way
+`NOT-WORKING.md` describes: all identical but one, and that one differs from
+*itself* between two runs of the same build, which is this platform's noise
+floor rather than a regression.
+
+Two things this did not need, both of which the sections above had argued for
+and against at length. It did not need a wider entry — the entry got *narrower*
+than Thumb's, and the extraction that lost twice on Thumb was never attempted
+here. And it did not need a translator: the interpreter with a cached form is
+inside the range the third translator shape was measured to reach, at none of
+its cost.
+
+Three thousand ticks of it from a fresh boot now cost **24.9 seconds of host
+time against 62 seconds of guest time — 2.49x faster than the handset**, where
+the same run on the build before was 44.9 against the same 62, or 1.38x.
+
+**That is not the run the section above measured**, and the difference is worth
+stating rather than papering over: its 106.5s against 75.1s is 5.9 billion steps
+where a fresh boot retires 2.6 billion in the same three thousand ticks, so it
+was a deeper scene than this probe reaches on its own. This title has no route
+committed, so the deeper scene has not been re-measured; what has been measured
+is the cost of a step, and that is the number both runs are made of.
 
 ### The host profile's next answer was a build flag, and it was 12%
 

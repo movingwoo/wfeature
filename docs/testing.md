@@ -368,6 +368,21 @@ And a claim *about* the profile has to be measured either there or with
 5.15 nanoseconds a step, which is three ways of saying none of them was ever in
 force.
 
+**`arm_share` says whether the change under test can move this title at all.**
+Both load probes report it beside `ns_per_step`, because the engine has two
+halves with separate decode caches and separate routed switches, and a title
+runs almost wholly in one of them: the local library is Clets at 0.0–2.8% ARM
+and one title at 100%. A Thumb change measured on the ARM title, or the other
+way round, measures the probe's noise floor. Pick the guard the same way — the
+regression risk of an ARM change is on the titles with the *fewest* ARM steps,
+and they are the ones with the most steps overall.
+
+`decode_cache_tables` and `decode_cache_bytes` beside it are what those caches
+cost, counted per table rather than per page: a page executed in both states
+holds two. It is the first number to ask for before widening a cache entry,
+because a table is committed for every page a title has ever executed from
+rather than for its working set.
+
 `ns_per_step` is what a throughput change has to move, and the loop calls
 `Tick` rather than `TickFor` on purpose: `TickFor` answers how long the Host
 should *wait* before the next tick, so a probe that reads it as a cost measures
