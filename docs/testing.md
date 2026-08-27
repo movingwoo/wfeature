@@ -103,20 +103,20 @@ which is what a sweep needs to stop passing a screen with nothing on it. Two
 habits are worth keeping:
 
 - **A stuck screen is not a defect until a key has been pressed at it.** One
-  title sat in the support list as "needs an authentication server" for several
+  title was written down as "needs an authentication server" for several
   sessions; its dialog simply wanted its confirm key, and behind it the game
   runs to its ending credits.
-- **A shallow row in the support matrix ([`support.md`](support.md)) is a
-  to-do, not a limitation.** Three sibling titles once sat at the shallowest
-  depth in that table, which looked like one shared platform gap worth
+- **A title nobody has driven deeply is a to-do, not a limitation.** Three
+  sibling titles once sat at the shallowest depth on a list of how far each had
+  been taken, which looked like one shared platform gap worth
   investigating — and it was worth
   investigating, but the answer was that nobody had pressed confirm enough
   times. All three reach a play screen with nine presses over three thousand
   ticks and produce no `tick_error`, no `stub table`, no `not implemented`.
-  Read the shallow rows as untested rather than as evidence of anything, and
+  Read a shallow title as untested rather than as evidence of anything, and
   **chase a cluster of siblings at the same depth regardless of which way you
-  expect it to go**: either it is one defect explaining several rows, which is
-  the cheapest kind of defect to find, or it clears several rows at once. Both
+  expect it to go**: either it is one defect explaining several of them, which
+  is the cheapest kind of defect to find, or it clears several at once. Both
   outcomes are worth the pass.
 - **The frame usually names the key, in a corner.** These titles render their
   own soft-key hints: `BACK:CLR` on a slot screen, `#:SKIP` over an opening,
@@ -128,8 +128,8 @@ habits are worth keeping:
 - **A skip prompt means the opening has not ended.** A frame can show a level,
   a character and scenery and still be a cutscene: if `#:SKIP` is on it, the
   game is telling you it is still playing something *at* you. A depth of
-  "reached the play screen" needs a frame with no skip prompt on it, or the row
-  belongs at the opening depth the table already has a label for.
+  "reached the play screen" needs a frame with no skip prompt on it; anything
+  else has got as far as the opening and no further.
 - **The prompt going away is not the opening ending.** The absence of a skip
   hint is weak evidence: one title drops its `CLR:SKIP` corner partway through a
   long multi-character cutscene and keeps playing the same dialogue at the
@@ -840,9 +840,9 @@ what it answers for is the path a Host takes — a paint a round skips, a wait
 the client thread declared, a guest that exits — and the whole corpus runs in
 about five seconds instead of hundreds of hand-driven rounds per archive.
 
-The ratio is still not the number that says what plays: that is the support
-matrix ([`support.md`](support.md)), which is filled in from real runs. A first
-frame is a first frame.
+The ratio is still not the number that says what plays. Nothing here is: what
+plays is found by driving a title with keys and looking at the frames, one
+title at a time. A first frame is a first frame.
 
 SKT has the same shape of probe, and it is the only test in that package that
 runs a real title:

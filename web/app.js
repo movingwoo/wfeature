@@ -368,10 +368,13 @@ const initInput = () => {
   window.addEventListener(
     "pointermove",
     event => {
-      if (touch.holding()) {
-        touch.move(event.pointerId, touchPoint(event));
-        return;
-      }
+      // Only the finger that owns the touch belongs to the canvas, and the
+      // stream says so: `move` answers false for any other pointer. Taking
+      // the window over for as long as a touch was held stopped the *other*
+      // finger's keypad slide — one thumb resting on the screen and the pad
+      // went back to press-only, which is exactly the gesture a slide exists
+      // to be. A move the stream did not take falls through to the pad.
+      if (touch.holding() && touch.move(event.pointerId, touchPoint(event))) return;
       if (!holds.tracking(event.pointerId)) return;
       holds.moveTo(event.pointerId, keyUnder(event));
     },

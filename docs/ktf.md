@@ -4,9 +4,10 @@ This platform validates a KTF archive, locates its native image, maps it into
 the pure-Go ARM core and runs it: the client relocates itself, initializes, is
 asked for its main class, and from there the title plays — its own Java through
 the AOT bridge, its drawing through the WIPI C surface, its saves through the
-shared save store. How far each title gets is tracked per title in the support
-matrix ([`support.md`](support.md)); this file is how the platform works and
-what it cost to find out.
+shared save store. How far each title gets is not published anywhere and is not
+kept here either; the sweep sections below record what a whole local set did on
+the day it was driven, and this file is how the platform works and what it cost
+to find out.
 
 ## Input path
 
@@ -1913,18 +1914,12 @@ fails loudly; a stub silently answers a fixed value the game then believes.
 `testdata/wipi_java_stubs.txt` inventories every method bound to a fixed-value
 implementation together with what it answers, and
 `TestFixedValueStubInventory` fails when a stub appears that is not recorded
-or when a recorded one stops being a stub. The audit already moved
-`Display.hasPointerEvents`/`hasPointerMotionEvents` from `true` to `false`:
-no Host delivers pointer events yet, and claiming otherwise invites a game to
-wait for touches that never arrive.
-
-Half of pointer input does exist — `Client.SendPointer` dispatches down the
-card stack the way a key does. What is missing is the other half and it is a
-number nobody has: the WIPI event queue tells events apart by a numeric kind,
-and **the pointer's kind appears in no original, no reference implementation
-and no local archive.** A game that runs its own event loop would therefore
-wait on an event that never arrives, which is why the two queries stay false
-until that number turns up.
+or when a recorded one stops being a stub. The audit once moved
+`Display.hasPointerEvents`/`hasPointerMotionEvents` from `true` to `false`,
+because no Host delivered pointer events then and claiming otherwise invites a
+game to wait for touches that never arrive. Both answer `true` again now that
+one does — "An implemented surface nobody could reach" below has the wiring and
+what flipping them was measured to cost.
 
 The event queue is the second input path. A game may drive its own loop of
 `EventQueue.getNextEvent`/`dispatchEvent` instead of letting the platform call
@@ -5241,6 +5236,36 @@ still sends nothing after its press, because a resting finger emits a stream of
 A finger going down on the canvas is still the start of a keypad slide on every
 title that takes no touch — that gesture predates this and titles depend on it
 — so only a game that answers `can_touch` claims one.
+
+**`can_touch` is the title's answer, not the platform's**, and it was the
+platform's for one release cycle: `session.Session.HasPointer` read "is this a
+WIPI Java session?", which claimed a touch for every KTF title in the library.
+That is not a harmless overclaim. The page spends the gesture to make the claim
+good — a finger landing on the picture is captured for the game rather than
+starting a slide — so the titles that ignore a touch paid for the ones that
+take one.
+
+What decides now is `ktf.Client.HasPointer`: does any class the module
+registered carry a `pointerNotify(III)Z` body of its own? A native body does not
+count, because that is this platform's own registration, answering false and
+doing nothing, and it is exactly what a title that wrote nothing inherits.
+
+**The library says how thin this surface is.** Over the local 264, 27 archives
+answer true and 259 false (5 do not load), and the runtime answer agrees with a
+static `ktfdump -symbols` scan on every archive that reads. Every one of those
+27 bodies is the same middleware base card — `Clet$CletCard.pointerNotify`, in
+two builds of it at 104 and 112 bytes — which splits on the pointer type and
+forwards to three methods on another object. **Not one title in the set wrote a
+pointer handler under its own name.** Driven with `-touch`, one of them visibly
+answers: a dialog highlights its `OK` when the press lands on it, 98 pixels
+across two runs each way. Another changes not a pixel.
+
+What the check cannot see is a title that reads pointer events out of its own
+`EventQueue` loop instead of overriding the method — a queue kind is a number
+compared at runtime, and nothing static tells such a title apart. None is known
+here. `SendPointer` therefore still delivers wherever it is called, so
+`runktf -touch` remains the way to find one; a probe the Host had already
+decided against would find nothing.
 
 **`hasPointerEvents` answers true now, and it cost nothing.** Flipping it is
 the part of this that reaches all 264 KTF titles rather than only the ones

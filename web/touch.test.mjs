@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createTouchStream, guestPoint } from "./touch.js";
@@ -166,4 +167,25 @@ test("the stream says while a touch is in progress", () => {
   assert.equal(stream.holding(), true);
   stream.up(1, { x: 1, y: 2 });
   assert.equal(stream.holding(), false);
+});
+
+// The rules above are the stream's; what follows is the page's use of them.
+// app.js reaches the DOM as it loads and cannot be imported here, so it is read
+// as text the way keypad.test.mjs reads it. The one thing worth pinning is
+// which of the two questions the window's pointermove asks: a handler that asks
+// only whether a touch is *in progress* answers every finger's move to the
+// canvas, and the other finger's keypad slide stops for as long as a thumb
+// rests on the screen. Asking the stream to take the move instead lets it
+// answer false for a pointer it does not own, and that move falls through to
+// the pad.
+test("a move the touch does not own falls through to the keypad", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const start = app.indexOf('"pointermove"');
+  assert.ok(start > 0, "app.js no longer binds pointermove");
+  const handler = app.slice(start, app.indexOf("{ passive: true }", start));
+  assert.match(handler, /if \(touch\.holding\(\) && touch\.move\(event\.pointerId, touchPoint\(event\)\)\) return;/);
+  assert.ok(
+    !/if \(touch\.holding\(\)\)\s*\{/.test(handler),
+    "the handler returns for every pointer while a touch is held",
+  );
 });
