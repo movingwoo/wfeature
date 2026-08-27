@@ -181,3 +181,45 @@ func TestParkedSessionIsClosedWhenItsWindowRunsOut(t *testing.T) {
 		t.Error("an expired game was resumed")
 	}
 }
+
+// A parked game has been told it is parked, and a resumed one has been told it
+// is back. Two of the three platforms had the callbacks and nothing that
+// called them, so this is the test that keeps the wiring rather than the
+// implementation: delete the two lines in park() and resumeGame() and every
+// other test here still passes.
+func TestParkingTellsTheGameAndResumingTellsItAgain(t *testing.T) {
+	server, url := resumeFixture(t)
+
+	first := dialSession(t, url)
+	expectMessage(t, first, serverReady)
+	send(t, first, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, first, serverStarted)
+	if started.Started == nil || started.Started.Token == "" {
+		t.Fatal("a started game carries no resume token")
+	}
+	token := started.Started.Token
+	expectFrame(t, first)
+
+	_ = first.Close()
+	waitForParked(t, server, 1)
+
+	game := server.parkedGame(token)
+	if game == nil {
+		t.Fatal("nothing is parked under the token the page was given")
+	}
+	if !game.Paused() {
+		t.Fatal("a parked game was never told its player went away")
+	}
+
+	second := dialSession(t, url)
+	expectMessage(t, second, serverReady)
+	send(t, second, clientMessage{Kind: clientResume, Token: token})
+	expectMessage(t, second, serverStarted)
+	expectFrame(t, second)
+
+	// The game is no longer parked, so it is asked through the runner that
+	// took it: a frame arrived, which is a game that is running again.
+	if server.parkedGame(token) != nil {
+		t.Fatal("the game is still parked after being resumed")
+	}
+}

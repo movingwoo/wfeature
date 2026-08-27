@@ -602,3 +602,30 @@ func TestStartedSaysWhetherThePlatformCanWatchWrites(t *testing.T) {
 		t.Errorf("a session that has watched nothing reported %d writers", len(answer.Cheat.Hits.Items))
 	}
 }
+
+// The page is told whether a touch would reach the game before it sends one,
+// and a touch sent to a game that takes none is dropped rather than answered
+// with an error. The fixture here is a MIDlet, which is exactly that case: a
+// thumb resting on the canvas must not fill the page's error rail.
+func TestATouchIsAnsweredOnlyWhereThereIsSomethingToTouch(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil {
+		t.Fatal("the started message carries no description")
+	}
+	if started.Started.CanTouch {
+		t.Fatal("a MIDlet session says it takes a touch")
+	}
+	expectFrame(t, connection)
+
+	// Sent anyway, the way a page that ignored the answer would. The session
+	// takes it, says nothing, and carries on — which the next key's picture
+	// says and which an error message would now fail.
+	send(t, connection, clientMessage{Kind: clientPointer, Action: "press", X: 120, Y: 160})
+	send(t, connection, clientMessage{Kind: clientPointer, Action: "drag", X: 121, Y: 161})
+	send(t, connection, clientMessage{Kind: clientPointer, Action: "release", X: 121, Y: 161})
+	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
+	expectFrame(t, connection)
+}

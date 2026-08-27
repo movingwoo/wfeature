@@ -158,6 +158,17 @@ func (s *Server) parkedCount() int {
 	return len(s.parked)
 }
 
+// parkedGame answers the game waiting under a token, for a test that needs to
+// ask the game itself rather than the bookkeeping around it.
+func (s *Server) parkedGame(token string) *session.Session {
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	if parked, ok := s.parked[token]; ok {
+		return parked.game
+	}
+	return nil
+}
+
 // newResumeToken is the name a parked game waits under. It is a secret in the
 // only sense that matters here: it is the one thing that hands a running game
 // to a socket, so it is random rather than a counter something else could

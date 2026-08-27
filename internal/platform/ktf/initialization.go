@@ -550,6 +550,27 @@ func newInitializationRuntime(client *Client) (*initializationRuntime, error) {
 // invokeAOTFromJVM runs a guest AOT method on behalf of interpreted bytecode.
 // It nests on the guest thread suspended at the current supervisor call, so
 // it is only reachable while a supervisor call is being handled.
+// hasAOTMethod reports whether a class carries a method, by the same two-step
+// lookup invokeAOTFromJVM uses: the registry first, then the guest's own class
+// records, which reach further because the registry stops at the first
+// superclass the title has not registered yet.
+//
+// It exists for the optional calls — a Jlet's lifecycle callbacks — where a
+// method that is not there is nothing to call rather than a failure, and
+// "method not found" would otherwise have to be recognised from an error
+// string.
+func (runtime *initializationRuntime) hasAOTMethod(className, name, descriptor string) bool {
+	metadata, ok := runtime.client.vm.AOTClass(className)
+	if !ok {
+		return false
+	}
+	if _, found, err := runtime.client.vm.FindAOTMethod(metadata.Address, name, descriptor); err == nil && found {
+		return true
+	}
+	_, found, err := runtime.aotMethodFromGuestRecords(metadata.Address, name, descriptor)
+	return err == nil && found
+}
+
 func (runtime *initializationRuntime) invokeAOTFromJVM(className, name, descriptor string, arguments []jvm.Value) (jvm.Value, error) {
 	thread, ctx := runtime.currentThread, runtime.currentContext
 	if thread == nil || ctx == nil {

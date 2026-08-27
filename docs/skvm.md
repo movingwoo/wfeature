@@ -1152,6 +1152,19 @@ override this — so the rule only decides what "no answer" means.
   editor.
 - `BackLight` and `Vibration` keep their state and report it back; there is no
   hardware to drive.
+- **A MIDlet takes no touch.** `pointerPressed` and its siblings are a `Canvas`
+  surface this runtime does not offer, so a `pointer` message from a Host is
+  answered with `ErrNoPointer` and dropped. The MIDP path is a keypad path.
+
+Two things that were incomplete here are not any more, and both were the same
+shape: the runtime had the mechanism and no Host called it.
+
+- **`Runtime.Pause` and `Runtime.Resume` are driven now.** They existed with a
+  full `StatePaused` transition and `notifyPaused` behind them, and nothing
+  above ever called either — so a MIDlet whose page went away was frozen
+  without being told, and came back to a clock that had moved. A server parks
+  on a dropped socket and runs the pair around it; see
+  [`session.md`](session.md), "The game is told it was parked".
 
 ## Validation
 

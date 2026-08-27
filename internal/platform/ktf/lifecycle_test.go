@@ -186,6 +186,11 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 		{fullName: "(D)D+echoDouble", body: ImageBase + 0x199, flags: 0x0009},
 		{fullName: "(IIJ)J+spillLong", body: ImageBase + 0x1a1, flags: 0x0009},
 		{fullName: "()V+boom", body: ImageBase + 0x1b1, flags: 0x0001},
+		// The Jlet lifecycle. Each writes what it was told into the receiver's
+		// own first word, which is all a test needs to see: the platform
+		// either ran the body in the class's method table or it did not.
+		{fullName: "()V+pauseApp", body: ImageBase + 0x1c1, flags: 0x0001},
+		{fullName: "()V+resumeApp", body: ImageBase + 0x1c9, flags: 0x0001},
 	}
 	methodPointers := make([]uint32, 0, len(methodSpecs)+1)
 	for _, spec := range methodSpecs {
@@ -275,6 +280,27 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 	// JavaThrow callback stub — the same route a real client's athrow takes.
 	writeThumb(0x1b0, 0x4801, 0x4b02, 0x4718, 0x0000)
 	writeTestWords(t, client, ImageBase+0x1b8, []uint32{exceptionName, throwStub})
+	// pauseApp and resumeApp: store a marker in the receiver's first field.
+	// An instance method takes its receiver in r1, and an object's fields
+	// start after its two header words and its vtable header — see
+	// allocateAOTObject — so the class's one field is at +12.
+	writeThumb(0x1c0, 0x2002, 0x60c8, 0x4770) // movs r0,#2; str r0,[r1,#12]; bx lr
+	writeThumb(0x1c8, 0x2003, 0x60c8, 0x4770) // movs r0,#3; str r0,[r1,#12]; bx lr
 	client.executable.Interface.Functions.GetClass = ImageBase + 0x151
 	return client
+}
+
+// lifecycleMarker reads the word the fixture's callbacks write into their
+// receiver.
+func lifecycleMarker(t *testing.T, client *Client, object *jvm.Object) uint32 {
+	t.Helper()
+	address, ok := client.JVM().AOTAddress(object)
+	if !ok || address == 0 {
+		t.Fatalf("the object is not bound to guest memory (%#x/%t)", address, ok)
+	}
+	var word [4]byte
+	if err := client.Core().Memory().Read(address+javaInstanceSize+javaInstanceHeader, word[:]); err != nil {
+		t.Fatalf("read the lifecycle marker: %v", err)
+	}
+	return binary.LittleEndian.Uint32(word[:])
 }

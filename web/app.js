@@ -3,6 +3,8 @@ import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
+import { local as localStore, session as sessionStore } from "./storage.js";
+import { createTouchStream, guestPoint } from "./touch.js";
 import {
   assign,
   bindable,
@@ -80,10 +82,11 @@ const KEY_BINDINGS_KEY = "wfeature:keyBindings";
 
 const storedBindings = () => {
   try {
-    return JSON.parse(localStorage.getItem(KEY_BINDINGS_KEY) ?? "null");
+    return JSON.parse(localStore.getItem(KEY_BINDINGS_KEY) ?? "null");
   } catch {
-    // Private browsing denies storage and a half-written entry parses as
-    // nothing. Either way the defaults are the answer.
+    // Storage itself cannot throw here — storage.js answers rather than
+    // raising — but a half-written entry still parses as nothing, and the
+    // defaults are the answer for that too.
     return null;
   }
 };
@@ -138,12 +141,7 @@ const screenKey = path => `${SCREEN_KEY_PREFIX}${path}`;
 // value that is not two numbers is treated as absent rather than sent on: it
 // can only come from an older page or from somebody editing storage.
 const storedScreen = path => {
-  let stored = DEFAULT_SCREEN;
-  try {
-    stored = localStorage.getItem(screenKey(path)) ?? DEFAULT_SCREEN;
-  } catch {
-    // Private browsing denies storage; the default is the answer.
-  }
+  const stored = localStore.getItem(screenKey(path)) ?? DEFAULT_SCREEN;
   const [width, height] = String(stored).split("x").map(Number);
   const inRange = value =>
     Number.isInteger(value) && value >= MIN_SCREEN && value <= MAX_SCREEN;
@@ -155,32 +153,16 @@ const storedScreen = path => {
 
 const rememberScreen = (path, value) => {
   if (!path) return;
-  try {
-    localStorage.setItem(screenKey(path), value);
-  } catch {
-    // Private browsing denies storage; the setting then lasts one session.
-  }
+  localStore.setItem(screenKey(path), value);
 };
 
 // chosenGame is the game the screen setting is about: whatever the list is
 // showing, and the last game played once the list is gone.
 const chosenGame = () => document.getElementById("game-select")?.value || lastGame() || "";
 
-const rememberGame = path => {
-  try {
-    localStorage.setItem(LAST_GAME_KEY, path);
-  } catch {
-    // Private browsing denies storage; preselecting is a convenience only.
-  }
-};
+const rememberGame = path => localStore.setItem(LAST_GAME_KEY, path);
 
-const lastGame = () => {
-  try {
-    return localStorage.getItem(LAST_GAME_KEY);
-  } catch {
-    return null;
-  }
-};
+const lastGame = () => localStore.getItem(LAST_GAME_KEY);
 
 // The gear and its panel keep their places for the whole run, so starting a
 // game only takes the picker off the canvas.
@@ -203,6 +185,14 @@ let currentPlatform = "";
 // every interval, the error reached the page, and the candidate refresh behind
 // it never ran — the whole panel read as broken over a feature it never had.
 let canWatchWrites = false;
+
+// Whether a touch on the canvas would reach the running game, and the screen
+// the game believes it has. Both come from the server's `started`: only one
+// platform takes a touch at all, and a page that forwarded every thumb to the
+// others would be sending messages nothing reads. The screen size is what the
+// canvas geometry is undone back to; see touch.js.
+let canTouch = false;
+let guestScreen = { width: 0, height: 0 };
 
 // The cheat panel is wired once and re-read per game. What it may offer is a
 // property of the session — which platform, and whether that platform can
@@ -231,25 +221,14 @@ const RESUME_ATTEMPTS = 120;
 let reconnecting = false;
 
 const rememberResumeToken = token => {
-  try {
-    if (token) sessionStorage.setItem(RESUME_TOKEN_KEY, token);
-    else sessionStorage.removeItem(RESUME_TOKEN_KEY);
-  } catch {
-    // Private browsing denies storage. Resuming then works for as long as the
-    // page itself lives, which is every case except the page being discarded.
-    inMemoryResumeToken = token ?? "";
-  }
+  // A browser that denies storage keeps the token in the store's own shadow,
+  // so resuming works for as long as the page itself lives — every case except
+  // the page being discarded, which is the one it cannot help.
+  if (token) sessionStore.setItem(RESUME_TOKEN_KEY, token);
+  else sessionStore.removeItem(RESUME_TOKEN_KEY);
 };
 
-let inMemoryResumeToken = "";
-
-const storedResumeToken = () => {
-  try {
-    return sessionStorage.getItem(RESUME_TOKEN_KEY) ?? "";
-  } catch {
-    return inMemoryResumeToken;
-  }
-};
+const storedResumeToken = () => sessionStore.getItem(RESUME_TOKEN_KEY) ?? "";
 
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
@@ -321,11 +300,49 @@ const initInput = () => {
     !target.closest("button") &&
     !target.matches(".button-container");
 
+  // A touch on the game's screen, for the one platform that has one. The
+  // stream holds the press/drag/release rules and touch.js turns a client
+  // point into the game's own pixels; what is left here is the DOM.
+  const touch = createTouchStream({
+    press: (x, y) => session?.sendPointer("press", x, y),
+    drag: (x, y) => session?.sendPointer("drag", x, y),
+    release: (x, y) => session?.sendPointer("release", x, y),
+  });
+
+  // touchPoint answers where on the game's screen an event landed, or null for
+  // the bezel beside the picture. The canvas's backing store is the magnified
+  // frame the server sent; guestScreen is the screen the game thinks it has.
+  const touchPoint = event =>
+    guestPoint({
+      rect: canvas.getBoundingClientRect(),
+      frameWidth: canvas.width,
+      frameHeight: canvas.height,
+      screenWidth: guestScreen.width,
+      screenHeight: guestScreen.height,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+  // Whether this finger is touching the game rather than reaching for a key.
+  // Only a game that takes a touch claims one: on every other title a finger
+  // going down on the screen is still the start of a keypad slide, which is a
+  // gesture that predates this and that those titles depend on.
+  const touchesTheGame = target =>
+    canTouch && gameRunning && target instanceof Element && target.closest("#canvas");
+
   // The keys are not bound one by one, because a slide has to be able to begin
   // where there is no key: pressing the pad is one gesture and the finger that
   // arrives from the screen or the margin is the same finger.
   document.addEventListener("pointerdown", event => {
     const target = event.target instanceof Element ? event.target : null;
+    if (touchesTheGame(target) && touch.down(event.pointerId, touchPoint(event))) {
+      // The canvas keeps the moves and the release once the finger leaves it,
+      // for the same reason a key button does — and without it a drag off the
+      // screen would simply stop arriving.
+      event.preventDefault();
+      canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const button = target?.closest("button[data-key]");
     if (button) {
       event.preventDefault();
@@ -351,13 +368,23 @@ const initInput = () => {
   window.addEventListener(
     "pointermove",
     event => {
+      if (touch.holding()) {
+        touch.move(event.pointerId, touchPoint(event));
+        return;
+      }
       if (!holds.tracking(event.pointerId)) return;
       holds.moveTo(event.pointerId, keyUnder(event));
     },
     { passive: true },
   );
 
-  const release = event => holds.lift(event.pointerId);
+  const release = event => {
+    // A cancel is a finger the browser took away — a system gesture, a call
+    // arriving — and the guest is owed the release either way, or it is left
+    // holding a touch nothing will ever lift.
+    if (touch.holding() && touch.up(event.pointerId, touchPoint(event))) return;
+    holds.lift(event.pointerId);
+  };
   window.addEventListener("pointerup", release);
   window.addEventListener("pointercancel", release);
 
@@ -618,6 +645,8 @@ const startServerGame = async (path, scale) => {
 const sessionStarted = info => {
   gameRunning = true;
   canWatchWrites = info.can_watch === true;
+  canTouch = info.can_touch === true;
+  guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
   setStatus("");
   initCheat();
@@ -672,7 +701,7 @@ const initGameSelect = async () => {
         currentGameLabel = select.options[select.selectedIndex]?.textContent ?? "";
         recordEvent(`starting ${path} on the server`);
         setStatus("게임을 시작하는 중입니다. 수십 초 걸릴 수 있습니다.");
-        await startServerGame(path, Number(localStorage.getItem(FRAME_SCALE_KEY) ?? "1"));
+        await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
       } catch (error) {
         reportError(error);
         select.disabled = false;
@@ -706,13 +735,8 @@ const KEYPAD_LAYOUTS = ["type1", "type2", "type3"];
 const KEYPAD_LAYOUT_KEY = "wfeature:keypadLayout";
 
 const storedKeypadLayout = () => {
-  try {
-    const stored = localStorage.getItem(KEYPAD_LAYOUT_KEY);
-    return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
-  } catch {
-    // Private browsing denies storage; the markup's own layout is the answer.
-    return "";
-  }
+  const stored = localStore.getItem(KEYPAD_LAYOUT_KEY);
+  return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
 };
 
 const initKeypadLayout = () => {
@@ -732,11 +756,7 @@ const initKeypadLayout = () => {
   select.addEventListener("change", () => {
     const layout = KEYPAD_LAYOUTS.includes(select.value) ? select.value : KEYPAD_LAYOUTS[0];
     apply(layout);
-    try {
-      localStorage.setItem(KEYPAD_LAYOUT_KEY, layout);
-    } catch {
-      // The keypad still changed; only remembering it did not.
-    }
+    localStore.setItem(KEYPAD_LAYOUT_KEY, layout);
   });
 };
 
@@ -885,10 +905,10 @@ const initSettings = () => {
     // the socket is open, so an early change is stored and carried into the
     // session by the scale that start sends.
     session?.setScale(Number(value));
-    localStorage.setItem(FRAME_SCALE_KEY, String(value));
+    localStore.setItem(FRAME_SCALE_KEY, String(value));
   };
   if (scale) {
-    scale.value = localStorage.getItem(FRAME_SCALE_KEY) ?? "1";
+    scale.value = localStore.getItem(FRAME_SCALE_KEY) ?? "1";
     scale.addEventListener("change", () => applyScale(scale.value));
   }
 
@@ -952,13 +972,7 @@ const initSettings = () => {
 const KEYBOARD_SEEN_KEY = "wfeature:keyboardSeen";
 const keyboardLikely = window.matchMedia("(hover: hover) and (pointer: fine)");
 
-const keyboardSeen = () => {
-  try {
-    return localStorage.getItem(KEYBOARD_SEEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
+const keyboardSeen = () => localStore.getItem(KEYBOARD_SEEN_KEY) === "1";
 
 let keyboardNoticed = false;
 // Assigned by initKeyBindings; a page without the section still counts presses.
@@ -967,12 +981,7 @@ let revealKeyBindings = () => {};
 const noticeKeyboard = () => {
   if (keyboardNoticed) return;
   keyboardNoticed = true;
-  try {
-    localStorage.setItem(KEYBOARD_SEEN_KEY, "1");
-  } catch {
-    // Private browsing denies storage; the section then has to be earned once
-    // per visit, which is one keypress.
-  }
+  localStore.setItem(KEYBOARD_SEEN_KEY, "1");
   revealKeyBindings();
 };
 
@@ -997,11 +1006,7 @@ const initKeyBindings = () => {
   const apply = next => {
     keyBindings = next;
     keyboardMap = codeLookup(keyBindings);
-    try {
-      localStorage.setItem(KEY_BINDINGS_KEY, JSON.stringify(keyBindings));
-    } catch {
-      // Private browsing denies storage; the change then lasts one session.
-    }
+    localStore.setItem(KEY_BINDINGS_KEY, JSON.stringify(keyBindings));
     render();
   };
 
@@ -1437,6 +1442,12 @@ const initCheat = () => {
 };
 
 const main = async () => {
+  // A page whose settings never stick is otherwise invisible: every control
+  // works, nothing is remembered, and the reason is a browser setting rather
+  // than this page. The report is where that has to be readable.
+  if (!localStore.available()) {
+    recordEvent("browser storage is unavailable; settings last for this page only");
+  }
   initStatus();
   initInput();
   initKeypadLayout();

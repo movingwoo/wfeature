@@ -51,6 +51,43 @@ process every other player's session is in as well. It is fixed in v0.41.0
 refusal or a clamp — and fails on a decoder that hands back an image whose
 pixels cannot be read.
 
+## What a hostile archive may not do
+
+An archive is a file somebody downloaded. Everything that reads one before a
+game has proved to be a game is fuzzed, and each fuzz target holds the same two
+rules: it may not panic, and what it accepts has to be usable rather than
+merely non-crashing — an opener that answers no error and a nil module has
+moved the crash into its caller.
+
+| target | what it reads |
+|---|---|
+| `internal/platform/detect.FuzzArchiveNeverPanics` | detection, before any loader: the zip directory, the marker names, and the class-file scan that decompresses |
+| `internal/platform/ktf.FuzzOpenNeverPanics` | the KTF archive and its nested JAR |
+| `internal/platform/skt.FuzzOpenNeverPanics` | the SKT archive and its manifest |
+| `internal/platform/lgt.FuzzOpenNeverPanics` | the LGT archive, its descriptor and its nested JAR |
+| `internal/platform/lgt.FuzzParseModuleNeverPanics` | the ELF, whose section headers are offsets and sizes a crafted file points anywhere |
+| `internal/platform/lgt.FuzzParseDescriptorNeverPanics` | `app_info`, parsed before anything has said it is text |
+| `internal/jvm/classfile.FuzzParseNeverPanics` | a class file |
+
+```sh
+go test ./internal/platform/lgt -run FuzzOpen                      # the seeds, in the usual run
+go test ./internal/platform/lgt -fuzz FuzzOpenNeverPanics -fuzztime 60s
+```
+
+The seeds matter more than the time. A fuzzer starting from noise spends its
+whole budget discovering that a zip begins with `PK`, so each target seeds one
+archive of every shape its loader has a branch for — a descriptor with no JAR,
+a JAR with no module, a wrapping folder, a zip of zips — and starts inside the
+parser.
+
+**Every loader bounds four things**, because bounding one is not bounding any:
+the input it will open at all, how many entries a zip may declare, how large
+one entry may be, and what the whole archive expands to. A per-entry limit
+alone lets a zip declare eight thousand entries just under it. The LGT loader
+had only the per-entry limit until this was written down; it takes its bounds
+as a value now (`archiveLimits`) so `TestAnArchiveIsBoundedFourWays` can reach
+the far side of each one without building half a gigabyte to get there.
+
 ## Driving a real title, and reading what it says
 
 A local archive is the only thing that finds most defects here, so the CLI

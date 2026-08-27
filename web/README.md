@@ -108,6 +108,19 @@ the token, so the restart button still starts a game over.
   answer is no.
 - **Sound** — the engine's MIDI and PCM events are synthesised in the page from
   oscillators rather than a soundfont; see the head of `audio.js` for why.
+- **What is remembered, and where** — every setting the page keeps goes through
+  `storage.js`, which is `localStorage` and `sessionStorage` behind a boundary
+  that cannot throw. The boundary is not tidiness: a browser told to block site
+  data throws on the *property*, so `globalThis.localStorage` raises before any
+  key is named, and a browser that allows storage still throws
+  `QuotaExceededError` on a write once the origin is full. Both used to reach
+  the page — one of the unguarded reads sat inside the block that starts a
+  game, so a denied browser answered the start button with an error instead of
+  a game. A value the browser refuses is kept in memory for the life of the
+  page, so the control still works and only its memory is lost, and the run log
+  says so once at load. `localStorage` holds the last game, the per-game screen
+  size and speed, the magnification, the keypad type and the key bindings;
+  `sessionStorage` holds the resume token, which belongs to one tab.
 
 The run log and the report button are the developer's half of the page, and a
 release build shows neither: the session's `ready` message says which profile

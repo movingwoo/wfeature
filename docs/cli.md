@@ -47,6 +47,43 @@ wfeature licenses                               print the project and third-part
 archive's main class and prints what it returned, which is how a class file's
 behaviour is checked without a game around it.
 
+## What a run exits with
+
+A run is read two ways: by a person, from the JSON summary, and by a batch
+driving hundreds of archives, from the exit code. The summary was always the
+complete answer and the code was not — `runktf` and `runlgt` reported a failed
+tick in the summary and still exited zero, so a sweep counted a title that died
+on its second tick as a title that ran.
+
+| code | what it means |
+|---|---|
+| 0 | the run finished. No tick failed, or the guest ended itself |
+| 1 | the run failed, or the tool did |
+| 2 | the arguments were wrong |
+
+The two kinds of 1 are told apart by whether a summary was printed. A run that
+failed inside the guest prints its summary first — a failed run is exactly the
+one worth reading, and its `tick_error` says what stopped it — and a run the
+tool could not finish stops before it, having written the reason to stderr.
+
+Four things deliberately exit **zero**:
+
+- **a guest that exited on its own.** A title closing itself is what the Jlet
+  or the Clet asked for, and the whole point of some runs is to reach it.
+- **a run somebody interrupted.** Ctrl-C cancels the context rather than
+  killing the process, so it reaches the exit code as the reason a tick
+  stopped; the person who sent it does not need it reported back.
+- **a route that did not arrive.** `route_stopped_at` and `route_reason` are in
+  the summary, on stderr, and are an answer rather than a failure: a route is a
+  way back to a scene, and its budget running out says the scene moved, not
+  that the emulator broke.
+- **a run that drew nothing.** Whether a frame is blank is a question about
+  pixels, and `framestats` is the command that answers it — see below. A run
+  that ticked its whole count without failing did what it was asked.
+
+`checkgames` and `framestats` are the other two commands whose exit code is an
+answer rather than a status; both are documented with the answer they give.
+
 ## One setting, three clocks
 
 A person moving the browser's speed control is asking one question, and every
@@ -77,6 +114,7 @@ faster.
 ```
 wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
                            [-play] [-speed N] [-key tick:name] [-hold N] [-route script]
+                           [-touch tick:action:x,y] [-park tick[:ms]]
                            [-cheat] [-gdb host:port] [-screen WxH]
                            [-diag report.json] [-audio out] [-scale N]
                            [-profile report.txt] [-profile-folded stacks.txt]
@@ -92,6 +130,8 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-play` | run on the wall clock at the game's own pace instead of stepping ticks |
 | `-speed N` | multiply the guest clock; implies `-play` |
 | `-key tick:name` | press a key at a tick, e.g. `-key 300:fire`. Repeatable; implies `-play` |
+| `-touch tick:action:x,y` | one touch at a tick, e.g. `-touch 300:press:120,160`. The action is `press`, `drag` or `release`; the coordinates are the guest's own screen. Repeatable; implies `-play` |
+| `-park tick[:ms]` | park the game at a tick the way a server does when the page goes away, and resume it. `-park 40` runs the Jlet's `pauseApp` and `resumeApp` back to back; `-park 40:5000` leaves it parked for five seconds first, which under `-play` is five seconds of guest clock the title is about to discover it lost. It is the only way to drive the lifecycle from a terminal — see [`ktf.md`](ktf.md), "The park the guest is told about" |
 | `-hold N` | how many ticks a `-key` press — or a route's `key` step — is held before its release, 1 by default |
 | `-route script` | replay a scripted way back to a scene (below); works on both generations of package |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted, on both generations of package |

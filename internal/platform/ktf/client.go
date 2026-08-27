@@ -694,6 +694,77 @@ func (client *Client) SendPointer(ctx context.Context, eventType, x, y int32) er
 	return runtime.dispatchPointerToCards(eventType, x, y)
 }
 
+// Jlet lifecycle methods. A handset called these when something took the
+// screen away from the application — a call arriving, the user switching to
+// the menu — and gave it back afterwards. A Host that parks a game whose page
+// has gone away is in exactly that position.
+const (
+	jletPauseApp  = "pauseApp"
+	jletResumeApp = "resumeApp"
+)
+
+// PauseApp and ResumeApp run the Jlet's own lifecycle callbacks.
+//
+// **They are entered the way a key is**, and that is the whole design. Guest
+// code cannot be entered on top of a parked worker's nested Go stack — see
+// "Guest workers unwound together" in docs/ktf.md for what that costs — so
+// what these needed was a moment when the Host holds no guest stack at all.
+// That moment already existed and already had two callers: SendKey and
+// SendPointer enter guest code from the Host between ticks, taking the run
+// lock and standing the client thread up as the current thread. A Host drives
+// its session from one goroutine, so "between ticks" is every moment it is not
+// inside Tick, and a park happens there by construction.
+//
+// This is therefore not the teardown problem. A close stops the workers and
+// unwinds them; a pause leaves every one of them exactly where it is, parked
+// with its stack intact, and runs one short method on the client thread. The
+// game is still running afterwards, which is the point.
+//
+// A title that declares no such method is not an error. The callback is
+// optional — half the local titles compile theirs to a prologue and a return,
+// which says the same thing more expensively — so a missing method is nothing
+// to call rather than something to report.
+func (client *Client) PauseApp(ctx context.Context) error {
+	return client.invokeJletLifecycle(ctx, jletPauseApp)
+}
+
+func (client *Client) ResumeApp(ctx context.Context) error {
+	return client.invokeJletLifecycle(ctx, jletResumeApp)
+}
+
+func (client *Client) invokeJletLifecycle(ctx context.Context, name string) error {
+	if client == nil || client.core == nil || client.thread == nil {
+		return fmt.Errorf("KTF client is not initialized")
+	}
+	client.run.Lock()
+	defer client.run.Unlock()
+	if client.runtime == nil {
+		return fmt.Errorf("KTF client initialization has not completed")
+	}
+	runtime := client.runtime
+	if client.workersStopped {
+		// The session is being torn down. Whatever this was going to tell the
+		// application, the application is about to stop existing.
+		return nil
+	}
+	jlet := runtime.activeJlet
+	if jlet == nil || jlet.ClassName == "" {
+		// Nothing constructed a Jlet, so there is nothing with a lifecycle.
+		return nil
+	}
+	defer client.beginHostService(ctx)()
+	previousThread, previousContext := runtime.currentThread, runtime.currentContext
+	runtime.currentThread, runtime.currentContext = client.thread, ctx
+	defer func() {
+		runtime.currentThread, runtime.currentContext = previousThread, previousContext
+	}()
+	if !runtime.hasAOTMethod(jlet.ClassName, name, "()V") {
+		return nil
+	}
+	_, err := runtime.invokeAOTFromJVM(jlet.ClassName, name, "()V", []jvm.Value{jvm.ReferenceValue(jlet)})
+	return err
+}
+
 // AttachSaveStore supplies the persistence boundary DataBase, the WIPI C
 // database, and File writes use. Without one, saves stay in memory.
 func (client *Client) AttachSaveStore(store SaveStore) {
