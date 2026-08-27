@@ -575,6 +575,52 @@ func (session *Session) GuestElapsed() time.Duration {
 	return session.Client.runtime.guestElapsed()
 }
 
+// Pause and Resume are the Jlet lifecycle a Host drives when the page that was
+// watching goes away and comes back. See Client.PauseApp for why running guest
+// code here is safe and the teardown's problem is not this one.
+//
+// **A callback that fails does not end the game.** This is the one rule that
+// had to be measured rather than reasoned: driving the pair across the local
+// 266-archive set killed five titles that had run perfectly well without it —
+// two threw NullPointerException inside their own resumeApp, one reached a
+// kernel slot this platform does not implement, and two asked for a sound file
+// their archive does not carry. Every one of them was a title that had been
+// running fine, and the callback is a courtesy the Host pays rather than
+// something the game asked for. So a failure here is logged and counted and
+// the session carries on exactly as it did before the calls existed. The
+// alternative is a phone that ends somebody's game every time it backgrounds
+// the page.
+//
+// A guest that *exits* inside one is different: that is the title deciding to
+// end, and it reaches the Host as it does from anywhere else.
+func (session *Session) Pause(ctx context.Context) error {
+	if session == nil || session.Client == nil {
+		return nil
+	}
+	return session.lifecycleResult(session.Client.PauseApp(ctx), "pauseApp")
+}
+
+func (session *Session) Resume(ctx context.Context) error {
+	if session == nil || session.Client == nil {
+		return nil
+	}
+	return session.lifecycleResult(session.Client.ResumeApp(ctx), "resumeApp")
+}
+
+func (session *Session) lifecycleResult(err error, callback string) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrGuestExited):
+		return err
+	}
+	session.Client.log("KTF lifecycle callback failed", "callback", callback, "error", err)
+	if runtime := session.Client.runtime; runtime != nil {
+		runtime.countDiagnostic("lifecycle callback failed")
+	}
+	return nil
+}
+
 // SendPointer delivers a pointer event to the card stack. See
 // Client.SendPointer for why this does not go through the event queue.
 func (session *Session) SendPointer(ctx context.Context, eventType, x, y int32) error {

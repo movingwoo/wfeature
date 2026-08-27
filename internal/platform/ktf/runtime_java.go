@@ -723,6 +723,17 @@ func init() {
 				{class: runtimeJletClass, name: "getEventQueue", descriptor: "()Lorg/kwis/msp/lcdui/EventQueue;", accessFlags: 0x0001, implementation: runtimeJletGetEventQueue},
 				{class: runtimeJletClass, name: "getAppProperty", descriptor: "(Ljava/lang/String;)Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeJletGetAppProperty},
 				{class: runtimeJletClass, name: "notifyDestroyed", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeJletNotifyDestroyed},
+				// The lifecycle callbacks the base class declares. A title
+				// overrides the ones it cares about and its override opens by
+				// calling super, which is what these are for — three local
+				// titles died in their own pauseApp or resumeApp reporting
+				// this class had no such method, the moment a Host started
+				// making the calls at all. The base body does nothing, which
+				// is what the specification says it does.
+				{class: runtimeJletClass, name: "startApp", descriptor: "([Ljava/lang/String;)V", accessFlags: 0x0004, implementation: runtimeComponentNoop},
+				{class: runtimeJletClass, name: jletPauseApp, descriptor: "()V", accessFlags: 0x0004, implementation: runtimeComponentNoop},
+				{class: runtimeJletClass, name: jletResumeApp, descriptor: "()V", accessFlags: 0x0004, implementation: runtimeComponentNoop},
+				{class: runtimeJletClass, name: "destroyApp", descriptor: "(Z)V", accessFlags: 0x0004, implementation: runtimeComponentNoop},
 			},
 		},
 		runtimeCardClass: {
@@ -1212,11 +1223,20 @@ func init() {
 				{class: runtimeDisplayClass, name: "isDoubleBuffered", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeDisplayTrue},
 				{class: runtimeDisplayClass, name: "isColor", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeDisplayTrue},
 				{class: runtimeDisplayClass, name: "numColors", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeDisplayNumColors},
-				// Pointer events have no delivery path in this runtime yet, so the
-				// honest answer is that the device has none; a game told
-				// otherwise waits for touches that never arrive.
-				{class: runtimeDisplayClass, name: "hasPointerEvents", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeComponentZero},
-				{class: runtimeDisplayClass, name: "hasPointerMotionEvents", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeComponentZero},
+				// A touch reaches the guest now: a Host sends one, the session
+				// carries it, and Client.SendPointer dispatches it down the card
+				// stack or into the title's own event queue. Until it did, the
+				// honest answer here was false — a game told it has a
+				// touchscreen and then never given a touch is worse off than
+				// one told the truth — and the answer changed with the delivery
+				// rather than before it.
+				//
+				// Motion is answered the same way because the same call
+				// carries it: POINT_DRAGGED is one of the three event types
+				// SendPointer takes, so a title that asks whether it may
+				// follow a finger is being told something true.
+				{class: runtimeDisplayClass, name: "hasPointerEvents", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeDisplayTrue},
+				{class: runtimeDisplayClass, name: "hasPointerMotionEvents", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeDisplayTrue},
 				{class: runtimeDisplayClass, name: "hasRepeatEvents", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeDisplayTrue},
 				{class: runtimeDisplayClass, name: "getBitsPerPixel", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeDisplayBitsPerPixel},
 				{class: runtimeDisplayClass, name: "getDockedCard", descriptor: "()Lorg/kwis/msp/lcdui/Card;", accessFlags: 0x0001, implementation: runtimeDisplayDockedCard},

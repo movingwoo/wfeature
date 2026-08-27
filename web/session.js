@@ -194,6 +194,12 @@ export class GameSession {
     this.#send({ kind: "key", action, code });
   }
 
+  // The coordinates are the game's own screen. Undoing the canvas geometry is
+  // the page's job because the geometry is the page's; see web/touch.js.
+  sendPointer(action, x, y) {
+    this.#send({ kind: "pointer", action, x, y });
+  }
+
   setSpeed(multiplier) {
     this.#send({ kind: "speed", value: multiplier });
   }

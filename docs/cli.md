@@ -114,6 +114,7 @@ faster.
 ```
 wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
                            [-play] [-speed N] [-key tick:name] [-hold N] [-route script]
+                           [-touch tick:action:x,y] [-park tick[:ms]]
                            [-cheat] [-gdb host:port] [-screen WxH]
                            [-diag report.json] [-audio out] [-scale N]
                            [-profile report.txt] [-profile-folded stacks.txt]
@@ -129,6 +130,8 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-play` | run on the wall clock at the game's own pace instead of stepping ticks |
 | `-speed N` | multiply the guest clock; implies `-play` |
 | `-key tick:name` | press a key at a tick, e.g. `-key 300:fire`. Repeatable; implies `-play` |
+| `-touch tick:action:x,y` | one touch at a tick, e.g. `-touch 300:press:120,160`. The action is `press`, `drag` or `release`; the coordinates are the guest's own screen. Repeatable; implies `-play` |
+| `-park tick[:ms]` | park the game at a tick the way a server does when the page goes away, and resume it. `-park 40` runs the Jlet's `pauseApp` and `resumeApp` back to back; `-park 40:5000` leaves it parked for five seconds first, which under `-play` is five seconds of guest clock the title is about to discover it lost. It is the only way to drive the lifecycle from a terminal — see [`ktf.md`](ktf.md), "The park the guest is told about" |
 | `-hold N` | how many ticks a `-key` press — or a route's `key` step — is held before its release, 1 by default |
 | `-route script` | replay a scripted way back to a scene (below); works on both generations of package |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted, on both generations of package |

@@ -5132,6 +5132,125 @@ a title screen over its own artwork, and a title screen into an in-game
 display. Over the 264 archives run for four hundred stepped ticks, those three
 rows are the only ones that change.
 
+## The park the guest is told about
+
+A Host parks a game whose page has gone away rather than closing it: the game
+keeps its memory and stops being ticked for up to five minutes, and a page that
+comes back gets it — [`session.md`](session.md), "A game outlives its socket".
+A handset did the same thing when a call arrived, and it called the
+application's `pauseApp` on the way out and `resumeApp` on the way back. This
+side had the first half and none of the second, so a title came back to a clock
+that had moved several minutes with nothing having told it why.
+
+**The teardown argument did not apply.** The reason given for not making these
+calls was that a KTF guest thread parks inside a nested Go call stack and
+running guest code into it is how a close becomes a hang — which is true, and
+is about *closing*. A pause is not a close: the workers stay exactly where they
+are, parked with their stacks intact, and one short method runs on the client
+thread. The moment to run it on already existed and already had two callers —
+`SendKey` and `SendPointer` enter guest code from the Host between ticks,
+taking the run lock and standing the client thread up as the current thread.
+A Host drives its session from one goroutine, so "between ticks" is every
+moment it is not inside `Tick`, and a park happens there by construction.
+`Client.PauseApp` is that same entry.
+
+`destroyApp` is still not called, and that one *is* the teardown: by the time a
+session closes, `StopThreads` has begun unwinding the workers.
+
+### What driving it across 266 archives cost
+
+Everything below was found by the sweep rather than by reading, and none of it
+would have been found without one. `runktf -park <tick>[:<ms>]` is the
+instrument ([`cli.md`](cli.md)): it pauses where a server would, holds the game
+parked for as long as asked, and resumes.
+
+The first pass **killed eight titles that had been running perfectly well.**
+
+- **Three died inside their own callback reporting that
+  `org/kwis/msp/lcdui/Jlet` had no such method.** A title overrides `pauseApp`
+  and its override opens by calling `super.pauseApp()`, and the base class here
+  declared no lifecycle methods at all — nothing had ever called one, so
+  nothing had ever needed them. The four base bodies are registered now and do
+  nothing, which is what the specification says they do.
+- **Two threw `NullPointerException` inside their own `resumeApp`**, one of
+  them on a `java/lang/Thread` that is null at that point.
+- **One reached a kernel slot this platform does not implement** (`0x9`) from
+  inside its `pauseApp`.
+- **Two asked for a sound file their own archive does not carry**, because
+  their `resumeApp` restarts the music.
+
+**So a failed lifecycle callback does not end the game.** That is the rule the
+sweep bought. Every one of those five was a title that ran fine without the
+call, and the call is a courtesy the Host pays rather than something the game
+asked for — so a failure is logged, counted in the diagnostics as `lifecycle
+callback failed`, and the session carries on exactly as it did before the calls
+existed. The alternative is a phone that ends somebody's game every time it
+backgrounds the page. A guest that *exits* inside a callback is different: that
+is the title deciding to end, and it reaches the Host as it does from anywhere
+else.
+
+With those two changes the sweep is **266 archives, zero regressions** against
+the same set run without a park: the same 256 pass and the same 10 fail for
+reasons that have nothing to do with parking. One title's tick count moves
+between 12 and 13, which it also does across two control runs.
+
+### The clock the game lost, and why it is not frozen
+
+A parked game does not tick, but its clock is the wall clock and keeps moving,
+so a resumed title sees the time it was away as one long wait. That is
+deliberate and it is what a suspended handset produced — but a handset produced
+it *together with* the pause and resume calls, and this side had the jump
+without the notification. That was the actual gap, and it is what the callbacks
+above close.
+
+Freezing the clock across a park was considered and is **not** done, because
+the measurement gives it nothing to fix: the whole 266 run parked for five
+seconds mid-run regresses nothing, and five titles chosen because their
+`resumeApp` had already proved eventful survive a full minute parked and go on
+drawing. Freezing would also be a divergence from the handset invented to solve
+a problem no archive here has.
+
+What that does not cover: the park is at tick 40 of 120 rather than deep in a
+level, and a minute is not the five the window allows. A title that steps its
+own physics by elapsed time would be the case to look for, and none of the 266
+is visibly it.
+
+## A touch reaches the game
+
+Pointer input used to reach the platform and stop there: `Client.SendPointer`
+dispatched a touch down the card stack, and nothing above it ever sent one.
+`Display.hasPointerEvents` answered false to match — a title told it has a
+touchscreen and then never given a touch is worse off than one told the truth.
+
+The Host end is wired now, by the same three seams a key travels: a `pointer`
+message on the session socket, `session.Session.SendPointer`, and
+`runktf -touch <tick>:<action>:<x>,<y>` from a terminal. The page carries the
+geometry, because the geometry is the page's: the canvas is laid out by the
+stylesheet at whatever size the viewport left, the frame inside it is *fitted*
+rather than stretched so a screen of another shape leaves bezel, and the frame
+arrives magnified because the filter runs on the server. `web/touch.js` undoes
+all three and sends the guest's own pixels; the server would have to be told
+the canvas geometry every frame to do it instead.
+
+**A finger that leaves the picture keeps the point it left from.** A handset's
+touch panel *is* the screen, so there is nowhere beside it to drag onto, and a
+release out in the bezel released where the finger last was. A thumb sitting
+still sends nothing after its press, because a resting finger emits a stream of
+`pointermove` events at the same guest pixel.
+
+A finger going down on the canvas is still the start of a keypad slide on every
+title that takes no touch — that gesture predates this and titles depend on it
+— so only a game that answers `can_touch` claims one.
+
+**`hasPointerEvents` answers true now, and it cost nothing.** Flipping it is
+the part of this that reaches all 264 KTF titles rather than only the ones
+being touched, so it was measured both ways: 266 archives run under two
+binaries produce byte-identical summaries and byte-identical frames, and the
+static reason is plainer than the sweep — **not one archive in the set
+references `hasPointerEvents` or `hasPointerMotionEvents` at all.** 260 carry
+the string `pointerNotify`, which is the base-class method name every `Card`
+subclass links against whether or not it overrides it, and 6 do not read.
+
 ## Deliberately incomplete
 
 - **showing what the last flush put on the panel, rather than reading the
@@ -5153,32 +5272,11 @@ rows are the only ones that change.
   it: see "A published instance field has two storages". The mechanism is
   there and the counter is zero across every local archive, so which side wins
   would be decided without a case to decide it on
-- **the pause/resume/destroy lifecycle.** Nothing here calls the Jlet's
-  `pauseApp`, `resumeApp` or `destroyApp`; a session that ends stops the guest
-  threads instead. What each local title would do with the calls was measured
-  off its own AOT symbol table: in fourteen of the thirty-four the three
-  methods are sixteen bytes each — a prologue and a return, and nothing to
-  call them for — and the rest have real bodies, one title's `resumeApp`
-  running to eleven kilobytes. So the calls are not theoretical, and the
-  reason they are not made is the teardown rather than the titles: closing a
-  session is where a KTF guest thread is parked inside a nested Go call stack
-  (see "Guest workers unwound together"), and running guest code into that is
-  how a close becomes a hang. Wiring them means a Host-driven pause that
-  happens while the guest is *between* callbacks, which is a lifecycle this
-  side does not have yet
-- **pointer input reaches the platform and stops there.** Ten of the local
-  titles carry a `pointerNotify` body of their own — one dispatches on the
-  event type and posts three codes of its own into the title's private queue
-  — so the surface is real rather than a formality. `Client.SendPointer`
-  drives it by both roads a key takes: a title running its own event loop is
-  handed a queued `POINTER_EVENT`, and everything else is dispatched down the
-  card stack. **The specification is where the numbers came from**, and one of
-  them was wrong here: `POINT_DRAGGED` is 5, not the 3 that follows the press
-  and the release, because 3 and 4 are the key repeat and the typed key. What
-  is missing is only the Host end — no page, no CLI flag and no session call
-  sends one — and `Display.hasPointerEvents` answers false until one does,
-  because a title that is told it has a touchscreen and then never gets a
-  touch is worse off than one that was told the truth
+- **`destroyApp`.** `pauseApp` and `resumeApp` are driven now — see "The park
+  the guest is told about" — and `destroyApp` is not, because closing is the
+  one moment the argument against it actually holds: `StopThreads` has already
+  begun unwinding the workers, and that is the stack guest code must not be
+  entered on top of
 - the WIPI Java entries listed in `testdata/wipi_java_gaps.txt`, each with its
   reason, and the fixed-value answers inventoried in
   `testdata/wipi_java_stubs.txt`

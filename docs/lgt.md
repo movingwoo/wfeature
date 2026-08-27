@@ -5201,6 +5201,24 @@ offset in a disassembly is the commonest dead end this ABI produces:
    instruction after each says load or store, which sorts readers from writers
    in one pass.
 
+## The Clet is told when its page goes away
+
+`MC_cletRegister` takes a table of six entry points and two of them are
+`pauseClet` and `resumeClet`. They were implemented here, with a comment saying
+they are the lifecycle a Host uses when the page is hidden — and **nothing
+called either of them**, because the Host that would had not been written.
+
+It is written now: a server parks a game whose socket dropped rather than
+closing it, and parking runs `pauseClet` on the way out and `resumeClet` on the
+way back. See [`session.md`](session.md), "The game is told it was parked", for
+what the three platforms share.
+
+A module that leaves either entry at zero in its table is not an error — that
+is the module saying it has nothing to do, and the platform answers nil. The
+fixture in `fixture_test.go` declares both and writes what it was told into one
+word, which is what `TestParkingACletTellsIt` reads back out of guest memory:
+the platform either called the entry in the table or it did not.
+
 ## Playing a title from the command line
 
 The trace says what a title was told; these say what it did with it.

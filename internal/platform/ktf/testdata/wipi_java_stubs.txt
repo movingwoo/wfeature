@@ -49,15 +49,28 @@ org/kwis/msp/media/Volume set (I)V noop
 org/kwis/msp/media/Volume setDefaultVolume (II)Z zero
 org/kwis/msp/media/Volume setMute (IZ)V noop
 
-# Pointer input reaches the card stack (Client.SendPointer), but only by
-# direct dispatch: the WIPI event queue identifies each event by a numeric kind
-# and nothing states what a pointer's is, so a game running its own event loop
-# would wait for pointer events that never arrive. Claiming the device has a
-# pointer is what would make such a game hang, so it still answers no. The Card
-# default is the base-class body a game overrides.
+# Pointer input reaches the guest by both roads a key takes: a title running
+# its own event loop is handed a queued POINTER_EVENT and everything else is
+# dispatched down the card stack (Client.SendPointer). A Host sends one, so the
+# device answers that it has a pointer — this said no for as long as there was
+# no Host end, because a game told it has a touchscreen and then never given a
+# touch is worse off than one told the truth. Motion is the same call: dragging
+# is one of the three event types it takes. The Card default is the base-class
+# body a game overrides.
 org/kwis/msp/lcdui/Card pointerNotify (III)Z zero
-org/kwis/msp/lcdui/Display hasPointerEvents ()Z zero
-org/kwis/msp/lcdui/Display hasPointerMotionEvents ()Z zero
+org/kwis/msp/lcdui/Display hasPointerEvents ()Z true
+org/kwis/msp/lcdui/Display hasPointerMotionEvents ()Z true
+
+# The Jlet's lifecycle callbacks, as the base class declares them. A title
+# overrides what it cares about, and its override opens by calling super — so
+# these are what a super call lands in. Three local titles died inside their own
+# pauseApp or resumeApp reporting this class had no such method, the moment a
+# Host started making the calls. The base body does nothing, which is what the
+# specification says it does.
+org/kwis/msp/lcdui/Jlet startApp ([Ljava/lang/String;)V noop
+org/kwis/msp/lcdui/Jlet pauseApp ()V noop
+org/kwis/msp/lcdui/Jlet resumeApp ()V noop
+org/kwis/msp/lcdui/Jlet destroyApp (Z)V noop
 
 # The guest filesystem is a flat name table composed from archive entries and
 # in-memory writes: nothing in it is a directory, directories cannot be made

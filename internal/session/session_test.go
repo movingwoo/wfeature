@@ -593,3 +593,71 @@ func TestSpeedIsOneSettingAcrossEveryPlatform(t *testing.T) {
 		}
 	}
 }
+
+// Parking a game is the Host telling it that nobody is watching, and resuming
+// is telling it they are back. Every platform has to answer the pair, because
+// the Host that drives them does not know which platform it has — and two of
+// the three had the callbacks implemented and unreachable until this layer
+// existed to call them.
+func TestParkingAndResumingReachEveryPlatform(t *testing.T) {
+	ctx := context.Background()
+	running, err := Start(ctx, sktFixture(t), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer running.Close()
+
+	if running.Paused() {
+		t.Fatal("a game nobody parked reports itself paused")
+	}
+	if err := running.Pause(ctx); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if !running.Paused() {
+		t.Fatal("a parked game does not report itself paused")
+	}
+	// A socket can drop while a park is already under way, so the pair has to
+	// be safe to call twice. The second call is the one that would reach a
+	// platform whose lifecycle refuses a pause it is already in.
+	if err := running.Pause(ctx); err != nil {
+		t.Fatalf("Pause twice: %v", err)
+	}
+	// A parked game does not run. Ticking one would be the Host contradicting
+	// what it just told the guest, and it is what makes a forgotten resume
+	// visible instead of silent.
+	if _, err := running.Tick(ctx, 8*time.Millisecond); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Tick on a parked game = %v, want ErrPaused", err)
+	}
+	if err := running.Resume(ctx); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if running.Paused() {
+		t.Fatal("a resumed game still reports itself paused")
+	}
+	if err := running.Resume(ctx); err != nil {
+		t.Fatalf("Resume twice: %v", err)
+	}
+	// A game that was parked and came back is a game that still ticks. The
+	// whole point of parking is that the session survives it.
+	if _, err := running.Tick(ctx, 8*time.Millisecond); err != nil {
+		t.Fatalf("Tick after a park and a resume: %v", err)
+	}
+}
+
+// A Host may call either half on a session whose game has already gone — a
+// socket closing and a guest exiting race each other — and the answer is the
+// one every other call here gives rather than a panic.
+func TestParkingASessionWithNoGameSaysThereIsNone(t *testing.T) {
+	ctx := context.Background()
+	running, err := Start(ctx, sktFixture(t), Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	running.Close()
+	if err := running.Pause(ctx); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Pause on a closed session = %v, want ErrNotRunning", err)
+	}
+	if err := running.Resume(ctx); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Resume on a closed session = %v, want ErrNotRunning", err)
+	}
+}

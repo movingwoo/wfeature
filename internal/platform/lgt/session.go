@@ -491,6 +491,34 @@ func (session *Session) SendKey(pressed bool, keyCode uint32) {
 	}
 }
 
+// Pause and Resume tell the Clet its player has gone away and come back. A
+// Host parks a game whose page has left rather than closing it, and a handset
+// did the same thing when a call arrived — so this is the lifecycle a title
+// was written against, and the one that lets it stop its own animation and
+// re-read the clock on the way back.
+//
+// A title that declares neither entry point is not an error: the module's
+// table simply has a zero there, and Client.PauseClet answers nil.
+func (session *Session) Pause(ctx context.Context) error {
+	if session == nil || session.client == nil {
+		return nil
+	}
+	if err := session.client.PauseClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
+		return err
+	}
+	return nil
+}
+
+func (session *Session) Resume(ctx context.Context) error {
+	if session == nil || session.client == nil {
+		return nil
+	}
+	if err := session.client.ResumeClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
+		return err
+	}
+	return nil
+}
+
 // Close ends the game.
 func (session *Session) Close(ctx context.Context) error {
 	if session == nil || session.client == nil {

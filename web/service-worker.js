@@ -14,6 +14,7 @@ const shell = [
   "./key-holds.js",
   "./game-speed.js",
   "./storage.js",
+  "./touch.js",
   "./manifest.webmanifest",
   "./icon-32.png",
   "./icon-192.png",

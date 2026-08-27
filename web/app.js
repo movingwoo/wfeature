@@ -4,6 +4,7 @@ import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
+import { createTouchStream, guestPoint } from "./touch.js";
 import {
   assign,
   bindable,
@@ -184,6 +185,15 @@ let currentPlatform = "";
 // every interval, the error reached the page, and the candidate refresh behind
 // it never ran — the whole panel read as broken over a feature it never had.
 let canWatchWrites = false;
+
+// Whether a touch on the canvas would reach the running game, and the screen
+// the game believes it has. Both come from the server's `started`: only one
+// platform takes a touch at all, and a page that forwarded every thumb to the
+// others would be sending messages nothing reads. The screen size is what the
+// canvas geometry is undone back to; see touch.js.
+let canTouch = false;
+let guestScreen = { width: 0, height: 0 };
+
 // The cheat panel is wired once and re-read per game. What it may offer is a
 // property of the session — which platform, and whether that platform can
 // watch writes — but the listeners and the poll belong to the page. Running
@@ -290,11 +300,49 @@ const initInput = () => {
     !target.closest("button") &&
     !target.matches(".button-container");
 
+  // A touch on the game's screen, for the one platform that has one. The
+  // stream holds the press/drag/release rules and touch.js turns a client
+  // point into the game's own pixels; what is left here is the DOM.
+  const touch = createTouchStream({
+    press: (x, y) => session?.sendPointer("press", x, y),
+    drag: (x, y) => session?.sendPointer("drag", x, y),
+    release: (x, y) => session?.sendPointer("release", x, y),
+  });
+
+  // touchPoint answers where on the game's screen an event landed, or null for
+  // the bezel beside the picture. The canvas's backing store is the magnified
+  // frame the server sent; guestScreen is the screen the game thinks it has.
+  const touchPoint = event =>
+    guestPoint({
+      rect: canvas.getBoundingClientRect(),
+      frameWidth: canvas.width,
+      frameHeight: canvas.height,
+      screenWidth: guestScreen.width,
+      screenHeight: guestScreen.height,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+  // Whether this finger is touching the game rather than reaching for a key.
+  // Only a game that takes a touch claims one: on every other title a finger
+  // going down on the screen is still the start of a keypad slide, which is a
+  // gesture that predates this and that those titles depend on.
+  const touchesTheGame = target =>
+    canTouch && gameRunning && target instanceof Element && target.closest("#canvas");
+
   // The keys are not bound one by one, because a slide has to be able to begin
   // where there is no key: pressing the pad is one gesture and the finger that
   // arrives from the screen or the margin is the same finger.
   document.addEventListener("pointerdown", event => {
     const target = event.target instanceof Element ? event.target : null;
+    if (touchesTheGame(target) && touch.down(event.pointerId, touchPoint(event))) {
+      // The canvas keeps the moves and the release once the finger leaves it,
+      // for the same reason a key button does — and without it a drag off the
+      // screen would simply stop arriving.
+      event.preventDefault();
+      canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const button = target?.closest("button[data-key]");
     if (button) {
       event.preventDefault();
@@ -320,13 +368,23 @@ const initInput = () => {
   window.addEventListener(
     "pointermove",
     event => {
+      if (touch.holding()) {
+        touch.move(event.pointerId, touchPoint(event));
+        return;
+      }
       if (!holds.tracking(event.pointerId)) return;
       holds.moveTo(event.pointerId, keyUnder(event));
     },
     { passive: true },
   );
 
-  const release = event => holds.lift(event.pointerId);
+  const release = event => {
+    // A cancel is a finger the browser took away — a system gesture, a call
+    // arriving — and the guest is owed the release either way, or it is left
+    // holding a touch nothing will ever lift.
+    if (touch.holding() && touch.up(event.pointerId, touchPoint(event))) return;
+    holds.lift(event.pointerId);
+  };
   window.addEventListener("pointerup", release);
   window.addEventListener("pointercancel", release);
 
@@ -587,6 +645,8 @@ const startServerGame = async (path, scale) => {
 const sessionStarted = info => {
   gameRunning = true;
   canWatchWrites = info.can_watch === true;
+  canTouch = info.can_touch === true;
+  guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
   setStatus("");
   initCheat();

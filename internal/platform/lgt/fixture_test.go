@@ -26,6 +26,16 @@ const (
 	fixtureLastEvent      = fixtureDataBase + 0xc0
 	fixtureScreenHandle   = fixtureDataBase + 0xc4
 	fixtureFrameBuffer    = fixtureDataBase + 0xc8
+	// fixtureLifecycle holds what the Clet was last told about its own life:
+	// 2 once it has started or resumed, 3 once it has been paused. The numbers
+	// are the MIDP fixture's, so the two platforms' lifecycle tests read the
+	// same way.
+	fixtureLifecycle = fixtureDataBase + 0xcc
+)
+
+const (
+	fixtureLifecycleRunning = 2
+	fixtureLifecyclePaused  = 3
 )
 
 // The order the fixture resolves its imports in, which is also the order the
@@ -128,7 +138,7 @@ func (a *assembler) finish() []byte {
 
 // fixtureModule assembles the module's code section and reports the addresses
 // of the entry points the data section names.
-func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent uint32) {
+func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent, pauseClet, resumeClet uint32) {
 	a := &assembler{base: fixtureTextBase}
 
 	// entry(param1, param2): resolve every platform function the module uses,
@@ -194,6 +204,9 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent u
 	a.emit(armLdr(4, 4, 0))
 	a.emit(armMovImm(0, 0))
 	a.call(4)
+	a.literal(4, fixtureLifecycle)
+	a.emit(armMovImm(0, fixtureLifecycleRunning))
+	a.emit(armStr(0, 4, 0))
 	a.emit(armMovImm(0, 0))
 	a.emit(armPopPC)
 
@@ -209,12 +222,33 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent u
 	a.emit(armMovImm(0, 0))
 	a.emit(armPopPC)
 
-	return a.finish(), entry, initFunction, startClet, handleEvent
+	// pauseClet() and resumeClet(): the lifecycle a Host drives when the page
+	// watching the game goes away and comes back. Each writes what it was told
+	// into one word, which is the whole of what a test needs to see: the
+	// platform either called the entry point in the Clet's table or it did
+	// not.
+	pauseClet = a.here()
+	a.emit(armPushLR)
+	a.literal(4, fixtureLifecycle)
+	a.emit(armMovImm(0, fixtureLifecyclePaused))
+	a.emit(armStr(0, 4, 0))
+	a.emit(armMovImm(0, 0))
+	a.emit(armPopPC)
+
+	resumeClet = a.here()
+	a.emit(armPushLR)
+	a.literal(4, fixtureLifecycle)
+	a.emit(armMovImm(0, fixtureLifecycleRunning))
+	a.emit(armStr(0, 4, 0))
+	a.emit(armMovImm(0, 0))
+	a.emit(armPopPC)
+
+	return a.finish(), entry, initFunction, startClet, handleEvent, pauseClet, resumeClet
 }
 
 // fixtureData builds the module's data section: the Clet table, the init
 // struct, and the import requests the entry point walks.
-func fixtureData(initFunction, startClet, handleEvent uint32) []byte {
+func fixtureData(initFunction, startClet, handleEvent, pauseClet, resumeClet uint32) []byte {
 	// The section is larger than the module itself needs, because the Java
 	// fixtures plant class records and member tables further into it and a scan
 	// for records walks the sections a module declares. A record that lands
@@ -225,9 +259,12 @@ func fixtureData(initFunction, startClet, handleEvent uint32) []byte {
 		binary.LittleEndian.PutUint32(data[address-fixtureDataBase:], value)
 	}
 	// The Clet table: start, pause, resume, destroy, paint, handleEvent. The
-	// fixture leaves pause/resume/destroy/paint at zero, which the platform
-	// treats as "not provided".
+	// fixture leaves destroy and paint at zero, which the platform treats as
+	// "not provided" — and half the local titles leave the lifecycle entries
+	// that way too, so both cases are real.
 	put(fixtureCletFunctions+0, startClet)
+	put(fixtureCletFunctions+4, pauseClet)
+	put(fixtureCletFunctions+8, resumeClet)
 	put(fixtureCletFunctions+20, handleEvent)
 	// InitStruct is { unk, fn_init, name }.
 	put(fixtureInitStruct+4, initFunction)
@@ -308,8 +345,8 @@ func fixtureArchive(t testing.TB) []byte {
 // package it beside files of its own choosing.
 func fixtureJAR(t testing.TB) []byte {
 	t.Helper()
-	code, entry, initFunction, startClet, handleEvent := fixtureModule()
-	module := fixtureELF(code, fixtureData(initFunction, startClet, handleEvent), entry)
+	code, entry, initFunction, startClet, handleEvent, pauseClet, resumeClet := fixtureModule()
+	module := fixtureELF(code, fixtureData(initFunction, startClet, handleEvent, pauseClet, resumeClet), entry)
 	return zipOf(t, map[string][]byte{
 		binaryModuleName: module,
 		"data/hello.txt": []byte("packaged"),

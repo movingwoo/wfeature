@@ -625,6 +625,10 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	routePath := ""
 	audioPrefix := ""
 	keyEvents := map[int][]int32{}
+	touchEvents := map[int][]touchEvent{}
+	// parkAt is the tick a park happens at, counted from one so that zero
+	// means no park. parkHold is how long the game stays parked.
+	parkAt, parkHold := 0, time.Duration(0)
 	keyHold := 1
 	saveRoot := defaultSaveRoot()
 	gdbAddress := ""
@@ -777,6 +781,31 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			keyEvents[tick] = append(keyEvents[tick], key)
+			play = true
+			index++
+		case "-park":
+			if index+1 >= len(extra) {
+				fmt.Fprintln(stderr, "-park expects <tick> or <tick>:<ms>")
+				return 2
+			}
+			tick, hold, err := parseParkEvent(extra[index+1])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			parkAt, parkHold = tick, hold
+			index++
+		case "-touch":
+			if index+1 >= len(extra) {
+				fmt.Fprintln(stderr, "-touch expects <tick>:<action>:<x>,<y>")
+				return 2
+			}
+			tick, event, err := parseTouchEvent(extra[index+1])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			touchEvents[tick] = append(touchEvents[tick], event)
 			play = true
 			index++
 		case "-hold":
@@ -1023,6 +1052,43 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			}
 		}
 		delete(keyReleases, ran)
+		// A touch is delivered where it was scripted, in the guest's own
+		// coordinates. Unlike a key it has no hold to schedule: a press, its
+		// drags and its release are each written out by whoever wrote the
+		// script, because where the finger went between them is the whole of
+		// what a drag says.
+		if tickError == nil {
+			for _, touch := range touchEvents[ran] {
+				if err := session.SendPointer(ctx, touch.eventType, touch.x, touch.y); err != nil {
+					tickError = err
+					break
+				}
+			}
+		}
+		delete(touchEvents, ran)
+		// A park, where a server would do one: the page went away, the game
+		// is told, nothing ticks for a while, and then the page comes back.
+		// It is the only way to drive the lifecycle from a terminal, and the
+		// only way to see what a title does with the time it was away — the
+		// guest's clock is the wall clock under -play, so the hold is real
+		// time the game is about to discover it lost.
+		if parkAt > 0 && ran == parkAt-1 {
+			if err := session.Pause(ctx); err != nil {
+				tickError = err
+				break
+			}
+			if parkHold > 0 {
+				select {
+				case <-ctx.Done():
+				case <-time.After(parkHold):
+				}
+			}
+			if err := session.Resume(ctx); err != nil {
+				tickError = err
+				break
+			}
+			fmt.Fprintf(stderr, "parked at tick %d for %v\n", ran, parkHold)
+		}
 		if tickError != nil {
 			break
 		}
@@ -1320,6 +1386,92 @@ func pace(ctx context.Context, session *ktf.Session, probeClock *ktf.ManualClock
 		case <-time.After(wait):
 		}
 	}
+}
+
+// parseParkEvent reads "<tick>" or "<tick>:<ms>" — the tick a park happens at
+// and how long the game is left parked. A bare tick pauses and resumes back to
+// back, which exercises the callbacks; a hold is what makes the time the game
+// was away real.
+func parseParkEvent(spec string) (int, time.Duration, error) {
+	tickText, holdText, hasHold := strings.Cut(spec, ":")
+	tick, err := strconv.Atoi(tickText)
+	if err != nil || tick < 1 {
+		return 0, 0, fmt.Errorf("invalid park tick %q, expected a tick of 1 or more", tickText)
+	}
+	if !hasHold {
+		return tick, 0, nil
+	}
+	milliseconds, err := strconv.Atoi(holdText)
+	if err != nil || milliseconds < 0 {
+		return 0, 0, fmt.Errorf("invalid park hold %q, expected milliseconds", holdText)
+	}
+	return tick, time.Duration(milliseconds) * time.Millisecond, nil
+}
+
+// touchEvent is one scripted touch: what to do and where. The coordinates are
+// the guest's own screen, because that is the only coordinate system a game
+// has — a Host with a magnified canvas is the one that has to undo its own
+// scaling before it gets here.
+type touchEvent struct {
+	// eventType is the WIPI value, resolved while the flag is parsed so a bad
+	// action is refused before the archive is even read.
+	eventType int32
+	x, y      int32
+}
+
+// parseTouchEvent reads "<tick>:<action>:<x>,<y>" — 40:press:120,160. The
+// action is the Host's own vocabulary rather than the WIPI numbering, for the
+// same reason -key takes a name: a script written against the numbers would
+// have been written against the wrong one, since POINT_DRAGGED is 5 and not
+// the 3 that follows a press and a release.
+func parseTouchEvent(spec string) (int, touchEvent, error) {
+	invalid := func() (int, touchEvent, error) {
+		return 0, touchEvent{}, fmt.Errorf("invalid touch event %q, expected <tick>:<action>:<x>,<y>", spec)
+	}
+	tickText, rest, found := strings.Cut(spec, ":")
+	if !found {
+		return invalid()
+	}
+	action, point, found := strings.Cut(rest, ":")
+	if !found {
+		return invalid()
+	}
+	tick, err := strconv.Atoi(tickText)
+	if err != nil || tick < 0 {
+		return 0, touchEvent{}, fmt.Errorf("invalid touch event tick %q", tickText)
+	}
+	eventType, ok := ktfPointerEventType(action)
+	if !ok {
+		return 0, touchEvent{}, fmt.Errorf("unknown touch action %q, want press, drag or release", action)
+	}
+	xText, yText, found := strings.Cut(point, ",")
+	if !found {
+		return invalid()
+	}
+	x, err := strconv.Atoi(strings.TrimSpace(xText))
+	if err != nil {
+		return 0, touchEvent{}, fmt.Errorf("invalid touch x %q", xText)
+	}
+	y, err := strconv.Atoi(strings.TrimSpace(yText))
+	if err != nil {
+		return 0, touchEvent{}, fmt.Errorf("invalid touch y %q", yText)
+	}
+	return tick, touchEvent{eventType: eventType, x: int32(x), y: int32(y)}, nil
+}
+
+// ktfPointerEventType maps the Host's touch vocabulary onto the WIPI values.
+// The names are the ones internal/session gives a Host, so a CLI script and a
+// page speak the same three words.
+func ktfPointerEventType(action string) (int32, bool) {
+	switch action {
+	case session.PointerPress:
+		return ktf.PointerPressed, true
+	case session.PointerDrag:
+		return ktf.PointerDragged, true
+	case session.PointerRelease:
+		return ktf.PointerReleased, true
+	}
+	return 0, false
 }
 
 func parseKeyEvent(spec string) (int, int32, error) {

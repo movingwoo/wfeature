@@ -57,11 +57,12 @@ envelope at all.
 | `report` | write the session's diagnostics under `logs/` |
 | `stop` | end the game without closing the connection |
 | `resume` | take back the game the server parked when the last socket closed, named by its token |
+| `pointer` | one touch — `press`, `drag` or `release` with `x` and `y` in the guest's own screen. The page undoes its own canvas geometry first; only it knows what it put between the finger and the game |
 
 | From the server | Means |
 |---|---|
 | `ready` | the session will take a game, and which build profile is running |
-| `started` | the game is up, with its identity and the screen it is actually drawing |
+| `started` | the game is up, with its identity, the screen it is actually drawing, and whether a touch would reach it (`can_touch`) |
 | binary | one finished frame, PNG |
 | `audio` | a batch of sink calls in the order the guest made them |
 | `stats` | frames sent, frames dropped, average tick cost, average frame size |
@@ -666,8 +667,52 @@ refuses storage would otherwise take the reconnection with it, and the boundary
 keeps the token in memory instead — so resuming works for everything except the
 one case a denied browser cannot help, the page itself being discarded.
 
+### The game is told it was parked
+
+A parked game does not tick, and it now knows why. Parking calls
+`session.Session.Pause` on the way out and `Resume` on the way back, and each
+platform answers with the lifecycle its titles were written against: a Clet's
+`pauseClet`/`resumeClet`, a MIDlet's `pauseApp`/`resumeApp`, and the WIPI
+Java Jlet's. **Two of the three had the platform half implemented and nothing
+that called it** — the calls sat there with a comment saying they were the
+lifecycle a Host uses when the page is hidden, waiting for a Host that had not
+been written.
+
+It matters because of the clock. A parked game's clock is the wall clock and
+keeps moving, so a title comes back to time it did not spend — which is what a
+suspended handset produced too, and the handset produced it *together with*
+these calls. The jump without the notification was the gap; the jump with it is
+what the title was built for. [`ktf.md`](ktf.md), "The clock the game lost",
+has the measurement that says freezing the clock instead would be a divergence
+with nothing to fix.
+
+Three rules hold across the platforms:
+
+- **A title with nothing to say is not an error.** Half the local WIPI titles
+  compile their pause body to a prologue and a return, and a Clet may leave the
+  entry in its table at zero. Both mean "nothing to do".
+- **A failed callback does not end the game.** Driving these across a
+  266-archive set killed five titles that had run perfectly well without them;
+  the failure is logged and the session carries on. See `ktf.md` for what each
+  one was.
+- **A parked game refuses to tick.** `Tick` answers `ErrPaused` rather than
+  running a game it has just told to stop, which is also what makes a forgotten
+  resume loud instead of silent.
+
 ## What is not solved
 
+- **A touch reaches only one platform.** A `pointer` message carries a press,
+  drag or release in the guest's own screen coordinates, and `started` says
+  `can_touch` so a page knows before it sends one. The WIPI Java platform
+  dispatches it; a Clet's event kinds are keys, the earlier KTF package takes
+  one event callback with no pointer in it, and a MIDlet's `pointerPressed` is
+  a surface this runtime does not offer. Those three answer `ErrNoPointer`,
+  which the server drops rather than reporting — a thumb resting on the canvas
+  must not fill the page's error rail.
+- **`destroyApp` is not called on any platform's close.** Closing is where a
+  KTF guest thread is being unwound, which is the one moment guest code must
+  not be entered; the MIDP runtime does run its own `destroyApp`, from inside
+  the runtime rather than from here.
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and
   what that feels like on a real network has not been established.
 - **Two tabs on two different games are two sessions**, and nothing bounds how

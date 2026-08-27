@@ -202,6 +202,13 @@ type Session struct {
 	// zero value, which passes every key through, is the whole of it here. The
 	// MIDP runtime has a pad of its own and answers for itself.
 	held keypad.Pad
+	// paused is whether the Host has told the guest that nobody is watching.
+	// It is kept here rather than asked of the platform because the three
+	// platforms answer it three different ways — one has a lifecycle state,
+	// one has a pair of entry points and no state at all — and because it is
+	// what makes the pair safe to call twice: a Host parks on a socket that
+	// dropped, and a socket can drop while a park is already under way.
+	paused bool
 	// speed is the multiplier the Host last asked for, which the repeat clock
 	// runs at. Zero is the speed the game was written for.
 	speed float64
@@ -402,6 +409,12 @@ type Progress struct {
 // ErrNotRunning is returned once the session has ended.
 var ErrNotRunning = errors.New("session: no game is running")
 
+// ErrPaused is returned by a tick on a game that has been parked. It is not a
+// failure: it says the Host asked a game to run that it had already told to
+// stop, which is a Host that has lost track of its own session rather than a
+// game that has gone wrong.
+var ErrPaused = errors.New("session: the game is paused")
+
 // ErrUnsupportedArchive is returned for an archive no vendor claimed. The
 // vendors are KTF, LGT and SKT; a bare MIDlet with no carrier behind it is not
 // one of them, and saying so is more use to a Host than trying to run it and
@@ -419,6 +432,14 @@ var ErrArchiveOfArchives = errors.New("session: this zip contains only other zip
 // guest code cannot be suspended mid-call, so a tick routinely runs past it by
 // the length of its last round.
 func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, error) {
+	// A parked game does not run. It was told nobody is watching and a title
+	// that answered by stopping its own animation is entitled to be left
+	// alone until it is told otherwise — and ticking one would be the Host
+	// contradicting what it just said. It is also what makes the pair worth
+	// having: without this, forgetting to resume is invisible.
+	if s.paused {
+		return Progress{}, ErrPaused
+	}
 	if progress, ended, err := s.repeatDue(ctx); ended || err != nil {
 		return progress, err
 	}
@@ -487,6 +508,22 @@ const (
 	KeyRepeat  = "repeat"
 )
 
+// Pointer actions. A touch is a press, any number of drags and a release, and
+// the names are the Host's rather than any platform's numbering — the WIPI
+// values are 1, 2 and 5, and 5 rather than 3 for a reason the specification
+// has and no caller here needs to know.
+const (
+	PointerPress   = "press"
+	PointerDrag    = "drag"
+	PointerRelease = "release"
+)
+
+// ErrNoPointer is returned by a platform with no touch surface. It is not a
+// failure: a Host that sends a touch to a game that cannot take one has done
+// nothing wrong, and the answer says which it is so a Host can stop sending
+// rather than treat the session as broken.
+var ErrNoPointer = errors.New("session: this platform takes no pointer input")
+
 // ErrExited reports that the game ended while a Host call was running it. It
 // is not a failure: a guest exits when the player picks the option that quits,
 // and the key that picked it is the call that carries the news.
@@ -548,6 +585,53 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 		return s.runtime.SendKey(skt.KeyEventType(action), code)
 	}
 	return ErrNotRunning
+}
+
+// SendPointer delivers one touch to the game, in the guest's own screen
+// coordinates: the Host has already undone whatever magnification and letter-
+// boxing it put between the player's finger and the game's screen, because
+// only the Host knows what it did.
+//
+// **A touch is not a key.** The platform that takes one dispatches it down the
+// card stack the way it dispatches a key, so a title can end inside one — the
+// same ErrExited a key carries.
+//
+// Only the WIPI Java platform answers. The earlier KTF package's module takes
+// one event callback with no pointer in it, a Clet's event kinds are keys, and
+// a MIDlet's pointerPressed is a surface this runtime does not offer; each of
+// those is ErrNoPointer rather than a failure, so a Host learns to stop asking
+// instead of concluding the session is broken.
+func (s *Session) SendPointer(ctx context.Context, action string, x, y int32) error {
+	eventType, ok := ktfPointerEventType(action)
+	if !ok {
+		return fmt.Errorf("session: unknown pointer action %q", action)
+	}
+	switch {
+	case s.ktf != nil:
+		return s.endedOrFailed(s.ktf.SendPointer(ctx, eventType, x, y))
+	case s.ktfNative != nil, s.lgt != nil, s.runtime != nil:
+		return ErrNoPointer
+	}
+	return ErrNotRunning
+}
+
+// HasPointer reports whether a touch would reach the game. A Host asks before
+// it starts sending: a page that draws its own touch layer over the canvas has
+// no reason to draw one for a game that cannot be touched, and the answer is a
+// property of the running session rather than of the page.
+func (s *Session) HasPointer() bool { return s.ktf != nil }
+
+// ktfPointerEventType maps the Host's touch vocabulary onto the WIPI values.
+func ktfPointerEventType(action string) (int32, bool) {
+	switch action {
+	case PointerPress:
+		return ktf.PointerPressed, true
+	case PointerDrag:
+		return ktf.PointerDragged, true
+	case PointerRelease:
+		return ktf.PointerReleased, true
+	}
+	return 0, false
 }
 
 // repeatDue makes the handset's key repeat and delivers the one it owes, which
@@ -827,6 +911,75 @@ func (s *Session) Running() bool {
 	return s.ktf != nil || s.ktfNative != nil || s.lgt != nil || s.runtime != nil
 }
 
+// Paused reports whether the guest has been told that nobody is watching. A
+// parked game is not ticked, so this is the Host's own record rather than
+// something the guest could contradict.
+func (s *Session) Paused() bool { return s.paused }
+
+// Pause tells the guest that its player has gone away, and Resume that they
+// are back. A Host parks a game whose page has left instead of closing it, and
+// this is what makes that parking something the game knows about.
+//
+// **A handset did exactly this**, and it is why the callbacks exist at all: a
+// call arriving suspended the application and the platform called its pause
+// entry point, then its resume one when the call ended. The Host had the first
+// half of that — a parked game stops being ticked — and none of the second, so
+// a title came back to a clock that had moved several minutes with nothing
+// having told it why. A title that stops its own animation on pause and
+// re-reads the clock on resume could not, because it was never asked.
+//
+// It is not an error for a platform or a title to have nothing to run here.
+// Half the local titles declare a pause entry point that is a prologue and a
+// return, which is the title saying it has nothing to do — and the platforms
+// answer nil for a title that declares none at all.
+//
+// Both are driven from the Host's single session goroutine, like every other
+// call here, and both run guest code: a Host must not park a game while a tick
+// is in flight.
+func (s *Session) Pause(ctx context.Context) error {
+	if !s.Running() {
+		return ErrNotRunning
+	}
+	if s.paused {
+		return nil
+	}
+	s.paused = true
+	switch {
+	case s.ktf != nil:
+		return s.endedOrFailed(s.ktf.Pause(ctx))
+	case s.lgt != nil:
+		return s.endedOrFailed(s.lgt.Pause(ctx))
+	case s.runtime != nil:
+		return s.endedOrFailed(s.runtime.Pause())
+	case s.ktfNative != nil:
+		// The earlier KTF package has no lifecycle to call: its module is
+		// entered through one event callback and declares no pause entry.
+		return nil
+	}
+	return ErrNotRunning
+}
+
+func (s *Session) Resume(ctx context.Context) error {
+	if !s.Running() {
+		return ErrNotRunning
+	}
+	if !s.paused {
+		return nil
+	}
+	s.paused = false
+	switch {
+	case s.ktf != nil:
+		return s.endedOrFailed(s.ktf.Resume(ctx))
+	case s.lgt != nil:
+		return s.endedOrFailed(s.lgt.Resume(ctx))
+	case s.runtime != nil:
+		return s.endedOrFailed(s.runtime.Resume())
+	case s.ktfNative != nil:
+		return nil
+	}
+	return ErrNotRunning
+}
+
 // Close ends the session. It is safe to call more than once, and safe to call
 // on a session whose game already exited.
 func (s *Session) Close() {
@@ -848,6 +1001,7 @@ func (s *Session) Close() {
 	}
 	// Nothing is held once there is no game to hold it, and a repeat that
 	// outlived its session would name a key on a platform that is gone.
+	s.paused = false
 	s.repeat.Forget()
 	s.held.Forget()
 	// The captured surface goes with it, so a closed session answers the same

@@ -81,3 +81,49 @@ func TestACommandOverAWorkingArchiveExitsZero(t *testing.T) {
 		t.Fatalf("run() = %d over a working archive; stderr:\n%s", code, stderr.String())
 	}
 }
+
+// A touch is written the way a person would write one, and every way of
+// writing it wrongly is refused while the flag is parsed rather than at the
+// tick it was scripted for.
+func TestATouchIsReadFromItsSpelling(t *testing.T) {
+	for _, test := range []struct {
+		spec string
+		tick int
+		want touchEvent
+	}{
+		{"0:press:0,0", 0, touchEvent{eventType: ktf.PointerPressed}},
+		{"300:press:120,160", 300, touchEvent{eventType: ktf.PointerPressed, x: 120, y: 160}},
+		{"301:drag:121,161", 301, touchEvent{eventType: ktf.PointerDragged, x: 121, y: 161}},
+		{"302:release:121,161", 302, touchEvent{eventType: ktf.PointerReleased, x: 121, y: 161}},
+		// A game drawn on a screen it was not written for is asked about
+		// coordinates outside it; that is the guest's question, not the
+		// parser's.
+		{"5:press:-1,9999", 5, touchEvent{eventType: ktf.PointerPressed, x: -1, y: 9999}},
+		{"6:press: 12 , 34 ", 6, touchEvent{eventType: ktf.PointerPressed, x: 12, y: 34}},
+	} {
+		t.Run(test.spec, func(t *testing.T) {
+			tick, event, err := parseTouchEvent(test.spec)
+			if err != nil {
+				t.Fatalf("parseTouchEvent(%q) error = %v", test.spec, err)
+			}
+			if tick != test.tick || event != test.want {
+				t.Fatalf("parseTouchEvent(%q) = %d, %+v, want %d, %+v", test.spec, tick, event, test.tick, test.want)
+			}
+		})
+	}
+	for _, spec := range []string{
+		"", "300", "300:press", "300:press:120", "press:120,160",
+		// The WIPI numbering is deliberately not accepted: a script written
+		// against it would have been written against 3 for a drag, which is
+		// the key repeat.
+		"300:1:120,160",
+		"300:tap:120,160", "-1:press:0,0", "x:press:0,0",
+		"300:press:x,160", "300:press:120,y",
+	} {
+		t.Run("refuses "+spec, func(t *testing.T) {
+			if _, _, err := parseTouchEvent(spec); err == nil {
+				t.Fatalf("parseTouchEvent(%q) was accepted", spec)
+			}
+		})
+	}
+}

@@ -35,6 +35,19 @@ type clientMessage struct {
 	Action string `json:"action,omitempty"`
 	Code   int32  `json:"code,omitempty"`
 
+	// X and Y carry one touch, for kind "pointer", in the guest's own screen
+	// coordinates. The page undoes its own magnification and letterboxing
+	// before it sends one, because only the page knows what it put between
+	// the finger and the game — the server would have to be told the canvas
+	// geometry every frame to work it out, and it is the page's geometry.
+	//
+	// Action is the same field a key uses and carries "press", "drag" or
+	// "release". A touch on the top-left pixel sends no coordinate at all,
+	// which decodes to the zero it meant — this struct is only ever decoded
+	// on the way in.
+	X int32 `json:"x,omitempty"`
+	Y int32 `json:"y,omitempty"`
+
 	// Value carries the single number of the settings messages: the speed
 	// multiplier for "speed" and the magnification for "scale".
 	Value float64 `json:"value,omitempty"`
@@ -74,14 +87,15 @@ type clientMessage struct {
 
 // Message kinds the page may send.
 const (
-	clientStart  = "start"
-	clientResume = "resume"
-	clientKey    = "key"
-	clientSpeed  = "speed"
-	clientScale  = "scale"
-	clientCheat  = "cheat"
-	clientReport = "report"
-	clientStop   = "stop"
+	clientStart   = "start"
+	clientResume  = "resume"
+	clientKey     = "key"
+	clientPointer = "pointer"
+	clientSpeed   = "speed"
+	clientScale   = "scale"
+	clientCheat   = "cheat"
+	clientReport  = "report"
+	clientStop    = "stop"
 )
 
 // serverMessage is anything the server sends in a text frame. A frame image
@@ -192,6 +206,11 @@ type startedMessage struct {
 	// platform that cannot record them gets an error every interval, and the
 	// refresh that shares the poll never runs.
 	CanWatch bool `json:"can_watch"`
+	// CanTouch says a touch on the canvas would reach the game. Like CanWatch
+	// it is a property of the platform rather than of the game, and the page
+	// asks before it starts sending: a canvas that forwards every thumb to a
+	// game that cannot take one is a stream of messages nothing reads.
+	CanTouch bool `json:"can_touch"`
 }
 
 // statsMessage is how the page knows whether the server is keeping up. It is

@@ -437,6 +437,23 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}
+	case clientPointer:
+		if r.game == nil {
+			return
+		}
+		switch err := r.game.SendPointer(r.gameCtx, message.Action, message.X, message.Y); {
+		case err == nil:
+		case errors.Is(err, session.ErrNoPointer):
+			// The page was told at the start whether this game takes a touch,
+			// so one arriving here is a page that ignored the answer. It is
+			// dropped rather than reported: the alternative is an error rail
+			// filling up because somebody rested a thumb on the canvas.
+		case errors.Is(err, session.ErrExited):
+			r.endGame("the game exited", true)
+			r.send(serverMessage{Kind: serverExited})
+		default:
+			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+		}
 	case clientSpeed:
 		if r.game != nil {
 			r.game.SetSpeed(message.Value)
@@ -588,6 +605,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		Height:    startedHeight,
 		Token:     r.token,
 		CanWatch:  started.Cheat() != nil && started.Cheat().CanWatch(),
+		CanTouch:  started.HasPointer(),
 	}
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
@@ -612,6 +630,22 @@ func (r *sessionRunner) endGameContext() {
 func (r *sessionRunner) park() {
 	game := r.game
 	r.game = nil
+	// The game is told before it is handed over. A handset suspended an
+	// application when a call arrived and called its pause entry point, and
+	// this is the same moment: nobody is watching, the game stops being
+	// ticked, and a title that wants to stop its own animation or note the
+	// time is only able to because it was asked. A title with nothing to do
+	// answers immediately, and a platform with no lifecycle answers nil.
+	//
+	// A failure here is not a reason to lose the game. The page may still come
+	// back for it, and a title that failed its pause is one to report rather
+	// than one to throw away — the resume that follows is what will find out
+	// whether the game is still alive.
+	if r.gameCtx != nil {
+		if err := game.Pause(r.gameCtx); err != nil {
+			r.server.logger.Warn("pausing the game before parking failed", "game", r.label, "error", err)
+		}
+	}
 	if r.token == "" {
 		// No token was ever issued, so no page could ask for this game back.
 		game.Close()
@@ -669,6 +703,16 @@ func (r *sessionRunner) resumeGame(message clientMessage) {
 	r.presented = parked.presented
 	r.token = message.Token
 
+	// The other half of the pause above, and the half that matters most: the
+	// clock moved while the game was parked, the same way it moves for a
+	// handset that was suspended, and this is the call that lets a title
+	// notice. It runs before the page is answered, so the picture that follows
+	// is the one the resumed game has.
+	if r.gameCtx != nil {
+		if err := r.game.Resume(r.gameCtx); err != nil {
+			r.server.logger.Warn("resuming the game failed", "game", r.label, "error", err)
+		}
+	}
 	r.server.logger.Info("session resumed", "game", r.label)
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
