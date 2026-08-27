@@ -660,6 +660,12 @@ point where a loop may not run at all: the event that says the phone is back is
 worth more than any interval. The restart button clears the token before it
 reloads, so restarting still starts the game over.
 
+It reaches `sessionStorage` through `web/storage.js`, the page's fail-safe
+boundary, which matters here more than it does for a setting: a browser that
+refuses storage would otherwise take the reconnection with it, and the boundary
+keeps the token in memory instead — so resuming works for everything except the
+one case a denied browser cannot help, the page itself being discarded.
+
 ## What is not solved
 
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and

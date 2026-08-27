@@ -294,7 +294,7 @@ func fixtureELF(code, data []byte, entry uint32) []byte {
 
 // fixtureArchive packages the module the way a handset ships one: app_info
 // beside a JAR that contains binary.mod.
-func fixtureArchive(t *testing.T) []byte {
+func fixtureArchive(t testing.TB) []byte {
 	t.Helper()
 	return zipOf(t, map[string][]byte{
 		// Name is what MC_knlGetProgramName answers with, so the fixture
@@ -306,7 +306,7 @@ func fixtureArchive(t *testing.T) []byte {
 
 // fixtureJAR is the application half of the archive on its own, so a test can
 // package it beside files of its own choosing.
-func fixtureJAR(t *testing.T) []byte {
+func fixtureJAR(t testing.TB) []byte {
 	t.Helper()
 	code, entry, initFunction, startClet, handleEvent := fixtureModule()
 	module := fixtureELF(code, fixtureData(initFunction, startClet, handleEvent), entry)
@@ -319,7 +319,7 @@ func fixtureJAR(t *testing.T) []byte {
 	})
 }
 
-func zipOf(t *testing.T, entries map[string][]byte) []byte {
+func zipOf(t testing.TB, entries map[string][]byte) []byte {
 	t.Helper()
 	buffer := &bytes.Buffer{}
 	writer := zip.NewWriter(buffer)

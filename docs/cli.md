@@ -47,6 +47,43 @@ wfeature licenses                               print the project and third-part
 archive's main class and prints what it returned, which is how a class file's
 behaviour is checked without a game around it.
 
+## What a run exits with
+
+A run is read two ways: by a person, from the JSON summary, and by a batch
+driving hundreds of archives, from the exit code. The summary was always the
+complete answer and the code was not — `runktf` and `runlgt` reported a failed
+tick in the summary and still exited zero, so a sweep counted a title that died
+on its second tick as a title that ran.
+
+| code | what it means |
+|---|---|
+| 0 | the run finished. No tick failed, or the guest ended itself |
+| 1 | the run failed, or the tool did |
+| 2 | the arguments were wrong |
+
+The two kinds of 1 are told apart by whether a summary was printed. A run that
+failed inside the guest prints its summary first — a failed run is exactly the
+one worth reading, and its `tick_error` says what stopped it — and a run the
+tool could not finish stops before it, having written the reason to stderr.
+
+Four things deliberately exit **zero**:
+
+- **a guest that exited on its own.** A title closing itself is what the Jlet
+  or the Clet asked for, and the whole point of some runs is to reach it.
+- **a run somebody interrupted.** Ctrl-C cancels the context rather than
+  killing the process, so it reaches the exit code as the reason a tick
+  stopped; the person who sent it does not need it reported back.
+- **a route that did not arrive.** `route_stopped_at` and `route_reason` are in
+  the summary, on stderr, and are an answer rather than a failure: a route is a
+  way back to a scene, and its budget running out says the scene moved, not
+  that the emulator broke.
+- **a run that drew nothing.** Whether a frame is blank is a question about
+  pixels, and `framestats` is the command that answers it — see below. A run
+  that ticked its whole count without failing did what it was asked.
+
+`checkgames` and `framestats` are the other two commands whose exit code is an
+answer rather than a status; both are documented with the answer they give.
+
 ## One setting, three clocks
 
 A person moving the browser's speed control is asking one question, and every

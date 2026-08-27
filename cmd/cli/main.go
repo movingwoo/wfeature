@@ -498,10 +498,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "write result: %v\n", err)
 		return 1
 	}
-	if runErr != nil {
-		return 1
-	}
-	return 0
+	return exitForRun(runErr, nil)
 }
 
 // parseSKTKeyEvent splits "<tick>:<name>" the way parseKeyEvent does, against
@@ -1139,7 +1136,39 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "write result: %v\n", err)
 		return 1
 	}
-	return 0
+	// The summary is printed either way, because a failed run is exactly the
+	// one worth reading. What the exit code adds is a batch answer: a sweep
+	// driving hundreds of archives cannot parse every summary to find out
+	// whether the run it just did ended on a guest failure.
+	return exitForRun(tickError, ktf.ErrGuestExited)
+}
+
+// exitForRun is what a run that already printed its summary exits with. Zero
+// means the run finished: no tick failed, or the guest ended itself, which is
+// what a title closing does and not an error. Anything else that stopped a
+// tick is a failed run.
+//
+// It exists because the three run commands all answer a batch driver rather
+// than a person — a sweep over hundreds of archives cannot read every summary
+// to find out whether the run it just did worked — and a rule spelled out
+// three times is a rule that ends up spelled differently.
+//
+// A run somebody interrupted is a normal end too. Ctrl-C cancels the context
+// rather than killing the process, so it arrives here as the reason a tick
+// stopped — and a route already declines to print it as an error, because the
+// person who sent it knows what they did.
+//
+// The tool's own failures keep exit 1 as well and are told apart by the
+// summary: a run that failed inside the guest has printed one, and a run the
+// tool could not finish stops before it.
+func exitForRun(err, normalExit error) int {
+	switch {
+	case err == nil, errors.Is(err, context.Canceled):
+		return 0
+	case normalExit != nil && errors.Is(err, normalExit):
+		return 0
+	}
+	return 1
 }
 
 // writeDiagnostics saves the session's runtime boundary report next to the run
@@ -1897,6 +1926,12 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		session.EnableProfile(0)
 	}
 	stopped := false
+	// The tick failure that ended the run, if one did. A failed tick is not
+	// returned to the caller — the route runner and the plain loop both treat
+	// it as the end of the run rather than as their own error — so it is kept
+	// here for the exit code, which is the only place a batch sweep can read
+	// it without parsing the summary.
+	var runErr error
 	// One tick, whatever is driving it. A plain run counts them off against
 	// -ticks and a route asks for them a step at a time, and both have to dump
 	// frames, deliver scheduled keys and read the cheat console the same way —
@@ -1964,6 +1999,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 			if errors.Is(tickErr, lgt.ErrGuestExited) {
 				return false, nil
 			}
+			runErr = tickErr
 			fmt.Fprintf(stderr, "tick %d: %v\n", ran-1, tickErr)
 			if trace := session.SVCTrace(); len(trace) > 0 {
 				fmt.Fprintf(stderr, "\nlast %d platform calls before the failure:\n%s",
@@ -2069,6 +2105,11 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		// time against frames is what says the rate a title is being given.
 		"guest_ms": session.GuestElapsed().Milliseconds(),
 	}
+	// The failure is on stderr already, but a run is read from its summary as
+	// often as from its output, and the two commands answer with the same key.
+	if runErr != nil {
+		summary["tick_error"] = runErr.Error()
+	}
 	if script != nil {
 		summary["route_completed"] = routeResult.Completed
 		summary["route_marks"] = routeResult.Marks
@@ -2113,7 +2154,9 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "write result: %v\n", err)
 		return 1
 	}
-	return 0
+	// A failed tick is the run's answer rather than the tool's, so the summary
+	// is printed first and the exit code carries the failure — see runKTF.
+	return exitForRun(runErr, lgt.ErrGuestExited)
 }
 
 // provision writes the certificate one title will not start without.

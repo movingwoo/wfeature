@@ -156,7 +156,7 @@ func TestArchiveRejectsWhatIsNotAnArchive(t *testing.T) {
 	}
 }
 
-func buildZIP(t *testing.T, entries map[string][]byte) []byte {
+func buildZIP(t testing.TB, entries map[string][]byte) []byte {
 	t.Helper()
 	buffer := &bytes.Buffer{}
 	writer := zip.NewWriter(buffer)

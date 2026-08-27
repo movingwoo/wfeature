@@ -3,6 +3,7 @@ import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
+import { local as localStore, session as sessionStore } from "./storage.js";
 import {
   assign,
   bindable,
@@ -80,10 +81,11 @@ const KEY_BINDINGS_KEY = "wfeature:keyBindings";
 
 const storedBindings = () => {
   try {
-    return JSON.parse(localStorage.getItem(KEY_BINDINGS_KEY) ?? "null");
+    return JSON.parse(localStore.getItem(KEY_BINDINGS_KEY) ?? "null");
   } catch {
-    // Private browsing denies storage and a half-written entry parses as
-    // nothing. Either way the defaults are the answer.
+    // Storage itself cannot throw here — storage.js answers rather than
+    // raising — but a half-written entry still parses as nothing, and the
+    // defaults are the answer for that too.
     return null;
   }
 };
@@ -138,12 +140,7 @@ const screenKey = path => `${SCREEN_KEY_PREFIX}${path}`;
 // value that is not two numbers is treated as absent rather than sent on: it
 // can only come from an older page or from somebody editing storage.
 const storedScreen = path => {
-  let stored = DEFAULT_SCREEN;
-  try {
-    stored = localStorage.getItem(screenKey(path)) ?? DEFAULT_SCREEN;
-  } catch {
-    // Private browsing denies storage; the default is the answer.
-  }
+  const stored = localStore.getItem(screenKey(path)) ?? DEFAULT_SCREEN;
   const [width, height] = String(stored).split("x").map(Number);
   const inRange = value =>
     Number.isInteger(value) && value >= MIN_SCREEN && value <= MAX_SCREEN;
@@ -155,32 +152,16 @@ const storedScreen = path => {
 
 const rememberScreen = (path, value) => {
   if (!path) return;
-  try {
-    localStorage.setItem(screenKey(path), value);
-  } catch {
-    // Private browsing denies storage; the setting then lasts one session.
-  }
+  localStore.setItem(screenKey(path), value);
 };
 
 // chosenGame is the game the screen setting is about: whatever the list is
 // showing, and the last game played once the list is gone.
 const chosenGame = () => document.getElementById("game-select")?.value || lastGame() || "";
 
-const rememberGame = path => {
-  try {
-    localStorage.setItem(LAST_GAME_KEY, path);
-  } catch {
-    // Private browsing denies storage; preselecting is a convenience only.
-  }
-};
+const rememberGame = path => localStore.setItem(LAST_GAME_KEY, path);
 
-const lastGame = () => {
-  try {
-    return localStorage.getItem(LAST_GAME_KEY);
-  } catch {
-    return null;
-  }
-};
+const lastGame = () => localStore.getItem(LAST_GAME_KEY);
 
 // The gear and its panel keep their places for the whole run, so starting a
 // game only takes the picker off the canvas.
@@ -203,7 +184,6 @@ let currentPlatform = "";
 // every interval, the error reached the page, and the candidate refresh behind
 // it never ran — the whole panel read as broken over a feature it never had.
 let canWatchWrites = false;
-
 // The cheat panel is wired once and re-read per game. What it may offer is a
 // property of the session — which platform, and whether that platform can
 // watch writes — but the listeners and the poll belong to the page. Running
@@ -231,25 +211,14 @@ const RESUME_ATTEMPTS = 120;
 let reconnecting = false;
 
 const rememberResumeToken = token => {
-  try {
-    if (token) sessionStorage.setItem(RESUME_TOKEN_KEY, token);
-    else sessionStorage.removeItem(RESUME_TOKEN_KEY);
-  } catch {
-    // Private browsing denies storage. Resuming then works for as long as the
-    // page itself lives, which is every case except the page being discarded.
-    inMemoryResumeToken = token ?? "";
-  }
+  // A browser that denies storage keeps the token in the store's own shadow,
+  // so resuming works for as long as the page itself lives — every case except
+  // the page being discarded, which is the one it cannot help.
+  if (token) sessionStore.setItem(RESUME_TOKEN_KEY, token);
+  else sessionStore.removeItem(RESUME_TOKEN_KEY);
 };
 
-let inMemoryResumeToken = "";
-
-const storedResumeToken = () => {
-  try {
-    return sessionStorage.getItem(RESUME_TOKEN_KEY) ?? "";
-  } catch {
-    return inMemoryResumeToken;
-  }
-};
+const storedResumeToken = () => sessionStore.getItem(RESUME_TOKEN_KEY) ?? "";
 
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
@@ -672,7 +641,7 @@ const initGameSelect = async () => {
         currentGameLabel = select.options[select.selectedIndex]?.textContent ?? "";
         recordEvent(`starting ${path} on the server`);
         setStatus("게임을 시작하는 중입니다. 수십 초 걸릴 수 있습니다.");
-        await startServerGame(path, Number(localStorage.getItem(FRAME_SCALE_KEY) ?? "1"));
+        await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
       } catch (error) {
         reportError(error);
         select.disabled = false;
@@ -706,13 +675,8 @@ const KEYPAD_LAYOUTS = ["type1", "type2", "type3"];
 const KEYPAD_LAYOUT_KEY = "wfeature:keypadLayout";
 
 const storedKeypadLayout = () => {
-  try {
-    const stored = localStorage.getItem(KEYPAD_LAYOUT_KEY);
-    return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
-  } catch {
-    // Private browsing denies storage; the markup's own layout is the answer.
-    return "";
-  }
+  const stored = localStore.getItem(KEYPAD_LAYOUT_KEY);
+  return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
 };
 
 const initKeypadLayout = () => {
@@ -732,11 +696,7 @@ const initKeypadLayout = () => {
   select.addEventListener("change", () => {
     const layout = KEYPAD_LAYOUTS.includes(select.value) ? select.value : KEYPAD_LAYOUTS[0];
     apply(layout);
-    try {
-      localStorage.setItem(KEYPAD_LAYOUT_KEY, layout);
-    } catch {
-      // The keypad still changed; only remembering it did not.
-    }
+    localStore.setItem(KEYPAD_LAYOUT_KEY, layout);
   });
 };
 
@@ -885,10 +845,10 @@ const initSettings = () => {
     // the socket is open, so an early change is stored and carried into the
     // session by the scale that start sends.
     session?.setScale(Number(value));
-    localStorage.setItem(FRAME_SCALE_KEY, String(value));
+    localStore.setItem(FRAME_SCALE_KEY, String(value));
   };
   if (scale) {
-    scale.value = localStorage.getItem(FRAME_SCALE_KEY) ?? "1";
+    scale.value = localStore.getItem(FRAME_SCALE_KEY) ?? "1";
     scale.addEventListener("change", () => applyScale(scale.value));
   }
 
@@ -952,13 +912,7 @@ const initSettings = () => {
 const KEYBOARD_SEEN_KEY = "wfeature:keyboardSeen";
 const keyboardLikely = window.matchMedia("(hover: hover) and (pointer: fine)");
 
-const keyboardSeen = () => {
-  try {
-    return localStorage.getItem(KEYBOARD_SEEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
+const keyboardSeen = () => localStore.getItem(KEYBOARD_SEEN_KEY) === "1";
 
 let keyboardNoticed = false;
 // Assigned by initKeyBindings; a page without the section still counts presses.
@@ -967,12 +921,7 @@ let revealKeyBindings = () => {};
 const noticeKeyboard = () => {
   if (keyboardNoticed) return;
   keyboardNoticed = true;
-  try {
-    localStorage.setItem(KEYBOARD_SEEN_KEY, "1");
-  } catch {
-    // Private browsing denies storage; the section then has to be earned once
-    // per visit, which is one keypress.
-  }
+  localStore.setItem(KEYBOARD_SEEN_KEY, "1");
   revealKeyBindings();
 };
 
@@ -997,11 +946,7 @@ const initKeyBindings = () => {
   const apply = next => {
     keyBindings = next;
     keyboardMap = codeLookup(keyBindings);
-    try {
-      localStorage.setItem(KEY_BINDINGS_KEY, JSON.stringify(keyBindings));
-    } catch {
-      // Private browsing denies storage; the change then lasts one session.
-    }
+    localStore.setItem(KEY_BINDINGS_KEY, JSON.stringify(keyBindings));
     render();
   };
 
@@ -1437,6 +1382,12 @@ const initCheat = () => {
 };
 
 const main = async () => {
+  // A page whose settings never stick is otherwise invisible: every control
+  // works, nothing is remembered, and the reason is a browser setting rather
+  // than this page. The report is where that has to be readable.
+  if (!localStore.available()) {
+    recordEvent("browser storage is unavailable; settings last for this page only");
+  }
   initStatus();
   initInput();
   initKeypadLayout();

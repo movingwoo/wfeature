@@ -16,9 +16,29 @@ import (
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
-// maxArchiveEntry bounds one file read out of an archive so a crafted zip
-// cannot make the loader allocate without limit.
-const maxArchiveEntry = 64 << 20
+// What a loader will accept from an archive it has not seen before. An LGT
+// title is a few megabytes, so every one of these is far above anything real
+// and is a bound rather than a policy: an archive is untrusted input, and the
+// only thing these decide is whether a crafted one can make the loader
+// allocate without limit before it finds out the archive is wrong.
+//
+// The per-entry bound alone was not enough. It bounds one file, and a zip that
+// declares eight thousand of them is eight thousand times that — so the input,
+// the entry count and what the whole thing expands to are all bounded too, the
+// way the other two platforms already bound them.
+type archiveLimits struct {
+	input uint64 // the archive itself
+	entry uint64 // one file read out of it
+	total uint64 // everything read out of it
+	count int    // how many files it may declare
+}
+
+var defaultArchiveLimits = archiveLimits{
+	input: 128 << 20,
+	entry: 64 << 20,
+	total: 512 << 20,
+	count: 8192,
+}
 
 // binaryModuleName is the ELF executable inside the JAR.
 const binaryModuleName = "binary.mod"
@@ -219,11 +239,27 @@ func (archive *Archive) Resource(name string) ([]byte, bool) {
 }
 
 func readZIP(data []byte, what string) (map[string][]byte, error) {
+	return readZIPWithin(data, what, defaultArchiveLimits)
+}
+
+// readZIPWithin is readZIP with its bounds named, so a test can reach the
+// far side of each one without building half a gigabyte to get there.
+func readZIPWithin(data []byte, what string, limits archiveLimits) (map[string][]byte, error) {
+	if uint64(len(data)) > limits.input {
+		return nil, fmt.Errorf("%s exceeds %d input bytes", what, limits.input)
+	}
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", what, detect.ContainerError(data, err))
 	}
+	// The count is checked before anything is read, because the answer is in
+	// the directory the reader has already parsed and reading is the expensive
+	// half.
+	if len(reader.File) > limits.count {
+		return nil, fmt.Errorf("%s contains %d entries, limit %d", what, len(reader.File), limits.count)
+	}
 	entries := make(map[string][]byte, len(reader.File))
+	expanded := uint64(0)
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
 			continue
@@ -232,21 +268,28 @@ func readZIP(data []byte, what string) (map[string][]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", what, err)
 		}
-		if file.UncompressedSize64 > maxArchiveEntry {
+		if file.UncompressedSize64 > limits.entry {
 			return nil, fmt.Errorf("%s entry %q is %d bytes", what, name, file.UncompressedSize64)
 		}
 		opened, err := file.Open()
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %q: %w", what, name, err)
 		}
-		content, err := io.ReadAll(io.LimitReader(opened, maxArchiveEntry+1))
+		content, err := io.ReadAll(io.LimitReader(opened, int64(limits.entry)+1))
 		opened.Close()
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %q: %w", what, name, err)
 		}
-		if len(content) > maxArchiveEntry {
-			return nil, fmt.Errorf("%s entry %q exceeds %d bytes", what, name, maxArchiveEntry)
+		if uint64(len(content)) > limits.entry {
+			return nil, fmt.Errorf("%s entry %q exceeds %d bytes", what, name, limits.entry)
 		}
+		// The declared size is not the read size — a zip may lie about either
+		// — so the running total counts what was actually read, and the
+		// subtraction is the way round that cannot overflow.
+		if uint64(len(content)) > limits.total-expanded {
+			return nil, fmt.Errorf("%s expands beyond %d bytes", what, limits.total)
+		}
+		expanded += uint64(len(content))
 		entries[name] = content
 	}
 	return entries, nil

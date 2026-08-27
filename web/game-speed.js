@@ -15,6 +15,8 @@
 // one browser API that throws in normal use: private browsing denies it, and a
 // setting nobody can save is not a page that may not run.
 
+import { local } from "./storage.js";
+
 const SPEED_KEY_PREFIX = "wfeature:speed:";
 
 // An earlier page kept one speed for every game, under "wfeature:speed". That
@@ -40,15 +42,23 @@ const positive = value => {
 };
 
 // createGameSpeed answers the pair app.js uses, over whatever storage it is
-// given. The storage is a parameter so a test can hand it a map, and so a
-// browser that throws on every access is one `catch` rather than one per site.
-export const createGameSpeed = (storage = globalThis.localStorage) => {
+// given. The storage is a parameter so a test can hand it a map; the default
+// is the page's own fail-safe store, which never throws and keeps a value it
+// could not save for the life of the page.
+//
+// The default is `local` rather than `globalThis.localStorage` for a reason
+// that has nothing to do with tidiness: a default argument is evaluated at the
+// call, and in a browser told to block site data *reading the property* throws
+// — so the old default raised before this function's body, and its `catch`
+// could not have caught it.
+export const createGameSpeed = (storage = local) => {
   const read = key => {
     try {
       return storage?.getItem(key) ?? null;
     } catch {
-      // Private browsing denies storage; every game is then the default and
-      // whatever is chosen lasts one session.
+      // A storage handed in by a caller may still throw; the page's own does
+      // not. Every game is then the default and whatever is chosen lasts one
+      // session.
       return null;
     }
   };
@@ -65,8 +75,10 @@ export const createGameSpeed = (storage = globalThis.localStorage) => {
     remember: (path, value) => {
       if (!path || !positive(value) || !storage) return false;
       try {
-        storage.setItem(speedKey(path), String(value));
-        return true;
+        // The page's own store answers whether the value reached the browser
+        // and keeps what it could not save; a plain storage object answers
+        // nothing, and a call that did not throw is a write that happened.
+        return storage.setItem(speedKey(path), String(value)) !== false;
       } catch {
         return false;
       }
