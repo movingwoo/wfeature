@@ -175,12 +175,37 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			continue
 		}
 
-		instruction, err := memory.fetch32(pc)
-		if err != nil {
-			return RunResult{Steps: steps}, err
+		form, instruction, cached := memory.decodedARMFast(pc)
+		if !cached {
+			var err error
+			if form, instruction, err = memory.decodeARM(pc); err != nil {
+				return RunResult{Steps: steps}, err
+			}
 		}
+		memory.armSteps++
 		context.Registers[RegisterPC] = pc + 4
-		supervisorCall, err := executeARM(context, memory, pc, instruction)
+		var supervisorCall *SupervisorCall
+		var err error
+		switch form {
+		case armDataProcessing:
+			if conditionPassed(context.CPSR, instruction>>28) {
+				err = executeARMDataProcessing(context, pc, instruction)
+			}
+		case armSingleTransfer:
+			if conditionPassed(context.CPSR, instruction>>28) {
+				err = executeARMSingleTransfer(context, memory, pc, instruction)
+			}
+		case armBranch:
+			if conditionPassed(context.CPSR, instruction>>28) {
+				executeARMBranch(context, pc, instruction)
+			}
+		case armBranchExchange:
+			if conditionPassed(context.CPSR, instruction>>28) {
+				executeARMBranchExchange(context, pc, instruction)
+			}
+		default:
+			supervisorCall, err = executeARMForm(form, context, memory, pc, instruction)
+		}
 		if err != nil {
 			return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: instruction, Cause: err}
 		}

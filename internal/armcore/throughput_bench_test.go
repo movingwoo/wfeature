@@ -276,12 +276,15 @@ func BenchmarkEngineBlitCrossPage(b *testing.B) { benchmarkBlit(b, 512, 512*1024
 
 // armALULoopMemory is the ALU loop above in ARM rather than Thumb: `adds r0,
 // r0, #1` ending in a backward branch. The pair exists because **the two
-// instruction sets take different paths through the engine** — Thumb reaches a
-// decode cache and a routed switch, ARM is fetched and matched from scratch
-// every time — and the local titles are split between them: an LGT Clet runs
-// almost entirely Thumb, and an LGT Java title, compiled ahead of time, runs
-// mostly ARM. Optimising one path says nothing about the other, and until this
-// benchmark existed only the Thumb one could be measured at all.
+// instruction sets take different paths through the engine** — each state has
+// its own decode cache and its own routed switch, over tables of different
+// widths — and the local titles are split between them: an LGT Clet runs
+// almost entirely Thumb, and one local LGT title runs 100% ARM. Optimising one
+// path says nothing about the other, and until this benchmark existed only the
+// Thumb one could be measured at all.
+//
+// It is the benchmark the ARM decode cache was projected against and then
+// measured on: 17.84 to 8.91 nanoseconds a step.
 func armALULoopMemory(t testing.TB, instructions int) (*Memory, uint32) {
 	const base = uint32(0x10000)
 	memory := NewMemory()
@@ -357,8 +360,10 @@ func BenchmarkARMFetchOnly(b *testing.B) {
 // BenchmarkARMDataProcessingOnly is the operation with the match chain taken
 // off: `executeARM` reaches data processing after about ten mask-and-compare
 // tests, and this calls the handler directly. The gap between this and
-// BenchmarkARMExecuteOnly is what a cached form would remove — the ARM half of
-// what the Thumb path's routed switch already does.
+// BenchmarkARMExecuteOnly is what the cached form removes, and the engine no
+// longer pays it — `executeARM` is now classify-then-dispatch and is kept for
+// the callers that hand it a raw encoding, which is these benchmarks and the
+// tests. Measuring it still says what a decode-cache miss costs.
 func BenchmarkARMDataProcessingOnly(b *testing.B) {
 	memory, base := armALULoopMemory(b, 64)
 	context := NewContext()
