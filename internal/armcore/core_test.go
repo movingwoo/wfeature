@@ -1084,3 +1084,61 @@ func TestCoreRefusesThumbIfThen(t *testing.T) {
 		t.Fatalf("Run() error = %v, want %v", err, ErrUndefinedInstruction)
 	}
 }
+
+// A fast supervisor call answers without ending the quantum, and one that
+// declines leaves the call to the ordinary handler. Both halves matter: the
+// first is the whole point, and the second is what every slot that touches
+// guest memory or re-enters the guest relies on.
+func TestAFastSupervisorCallAnswersInsideTheQuantum(t *testing.T) {
+	memory, base := svcLoopMemory(t, 2)
+	core := NewCore(CoreOptions{MaxSteps: 1 << 20})
+	core.memory = memory
+	initial := NewContext()
+	if err := initial.SetPC(base | 1); err != nil {
+		t.Fatal(err)
+	}
+	initial.Registers[RegisterSP] = 0x28000
+	thread := NewThread(initial)
+
+	const halt = uint32(0x11100)
+	fast, slow, seen := 0, 0, 0
+	core.SetFastSupervisorCall(func(context *Context, immediate uint32) bool {
+		if immediate != 2 {
+			return false
+		}
+		seen++
+		// The third call declines, so the ordinary handler serves that one and
+		// the run can see that both paths were reached.
+		if seen == 3 {
+			return false
+		}
+		fast++
+		context.Registers[0] = context.Registers[12]
+		if fast >= 8 {
+			context.setThumbPC(halt)
+		}
+		return true
+	})
+	handler := func(_ context.Context, thread *Thread, call SupervisorCall) error {
+		slow++
+		return thread.SetRegister(0, call.Immediate)
+	}
+	summary, err := core.Run(context.Background(), thread, halt, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fast != 8 {
+		t.Fatalf("%d calls were answered inside the quantum, want 8", fast)
+	}
+	if slow != 1 {
+		t.Fatalf("%d calls reached the ordinary handler, want the one that declined", slow)
+	}
+	if summary.Context.Registers[0] != 0x7d {
+		t.Fatalf("r0 = %#x, want the slot the fast answer wrote", summary.Context.Registers[0])
+	}
+	// The instructions the run retired are counted the same either way: a
+	// supervisor call is one step whichever path serves it.
+	if summary.Steps != core.Steps() {
+		t.Fatalf("the summary counted %d steps and the core %d", summary.Steps, core.Steps())
+	}
+}

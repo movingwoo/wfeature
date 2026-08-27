@@ -1116,6 +1116,38 @@ What to measure, in order, before believing any of it:
 3. only then the routed switch for ARM's ten commonest forms, which is the
    second half of what Thumb has and worth its own A/B.
 
+### Asked again after the copy was gone, and the ARM cache is now the answer
+
+The section above is right about the order to ask in and about what that title
+needed. **What it is not is a standing verdict on the ARM cache**, because the
+4.2% was a share of a run that was mostly a copy. Two changes since — the clock
+served inside the quantum, and a draw syncing only the rows it can touch
+(`lgt.md`) — took the heaviest local Clet from 19.8 to 8.4 nanoseconds a step,
+and what is left of that run is the interpreter: a host profile of it now has
+`Engine.Run` as the whole of the real work, with `handleWIPICSVC` at 2.7% and
+`memmove` off the list entirely.
+
+**The slowest local title is now a different one, and it is 100% ARM.** Counted
+by instruction set over 400 ticks of each of the five heaviest:
+
+| title | ARM | Thumb |
+|---|---|---|
+| the new slowest | **800,084,285 (100.0%)** | 84,548 |
+| the old slowest | 77,355,423 (6.6%) | 1,099,025,863 |
+| three others | under 0.1% each | the rest |
+
+It makes 627 platform calls in forty ticks — it is not waiting on this platform
+for anything — and it runs at **17.97ns a step**, which is `BenchmarkEngineARMALULoop`'s
+17.03 with the rest of a real run on top. Over three thousand ticks it spends
+106.5s of host time against 75.1s of guest time: **1.42x slower than the
+handset**, and the only title on this platform that is. The projection above —
+an ARM step landing near a Thumb one — is the difference between that and
+comfortably under 1x, and it is now the whole of what stands between this
+platform and every local title keeping up.
+
+The order to measure in is unchanged, and the guard in step 2 matters more than
+before: the titles that must not move are now 99.9% Thumb rather than 99.8%.
+
 ### The host profile's next answer was a build flag, and it was 12%
 
 The section above says to ask for a host profile before any throughput
@@ -1552,6 +1584,62 @@ way instead of 256 costs it 6%, and removing the byte fast path costs it 2%. So
 what is left is under the floor and was not chased further. It is a Clet at
 17ns a guest instruction, four times the cost of the scene above, which is to
 say almost none of its host time is in the interpreter at all.
+
+## The supervisor-call boundary, and the slots that do not need it
+
+A supervisor call ends the quantum. That is what makes the boundary safe: the
+memory lock is released so the handler can read and write guest memory, the
+execute lock with it so another guest thread can run, and the calling thread is
+suspended so the handler reaches its registers through the same mutex a Host
+does. A handler that blocks on a browser event, calls back into the guest, or
+allocates a page all need every part of it.
+
+**A slot that reads a number the platform already holds needs none of it, and a
+title that polls one pays for all of it.** One LGT title's own loop reads the
+platform clock seventy-seven thousand times per tick — 3,096,685 of the
+3,171,517 platform calls in forty ticks — so nearly every quantum on that run
+was a few tens of instructions long, and the run's cost was the boundary rather
+than the call.
+
+`Core.SetFastSupervisorCall` installs a handler the engine consults *inside*
+the quantum. Returning false leaves the call to the ordinary path, so a
+platform opts one slot in at a time and everything else is unchanged.
+`BenchmarkCoreSupervisorLoop` and `BenchmarkCoreFastSupervisorLoop` run the
+loop the case is about — a few ALU instructions, a stub that raises SVC, and a
+branch back — at two call densities, so the crossing separates from the
+instructions around it:
+
+| guest instructions between calls | ordinary | inside the quantum |
+|---|---|---|
+| 13 | 258.5ns | **97.1ns** |
+| 41 | 357.3ns | **249.2ns** |
+
+Which is about **210ns of boundary against about 25ns**. What the handler must
+not do is the price: it runs with the memory lock and the execute lock held, so
+it cannot touch guest memory, cannot re-enter the guest, and cannot take a lock
+either of those can be waiting behind. It answers by writing the `Context` it
+is handed.
+
+### The hook cannot live on Engine, and the reason is worth keeping
+
+The obvious home for it is a field on `Engine`, which is the type whose loop
+consults it. **That made every title slower**: `Engine` is a zero-size struct
+today, and giving it one function-pointer field costs the interpreter's own
+loop, on the local LGT archives at 400 ticks, best of three against a 1% noise
+floor:
+
+| | with the field on Engine | with it on Memory |
+|---|---|---|
+| a drawing title | +15.4% | −0.9% |
+| a second one | +4.4% | +1.9% |
+| a third | +6.9% | +1.2% |
+| the clock-polling title | +2.0% | **−24.3%** |
+
+The field is on `Memory` instead, which the engine already holds as a pointer
+and dereferences every instruction. `BenchmarkEngineGameShapedLoop` sees the
+same thing at a tenth of the cost of finding it — 184.8 MIPS against 174.6, a
+5.5% drop — while `BenchmarkEngineALULoop` is flat, which is the reminder the
+throughput section above already gives: **benchmark the shape of code that runs**.
 
 ## Why the browser was seven times slower
 

@@ -678,6 +678,43 @@ func TestCurrentTimeAnswersSixtyFourBitsOfEpochMilliseconds(t *testing.T) {
 	}
 }
 
+// The clock is answered inside the quantum, and the fast answer has to be the
+// slow one. Two things separate them and both are behaviour a title reads: the
+// fast path writes the context it is handed rather than the thread, and it
+// stands down while a trace is recording, because a run recording its platform
+// calls has to record the call that dominates it.
+func TestTheFastClockAnswersWhatTheSlotAnswersAndStandsDownForATrace(t *testing.T) {
+	client := fixtureClient(t)
+	client.clock.advance(2 * time.Second)
+
+	guest := armcore.NewContext()
+	guest.Registers[12] = slotCurrentTime
+	guest.Registers[1] = 0xdeadbeef
+	if !client.fastSupervisorCall(&guest, svcCategoryWIPIC) {
+		t.Fatal("the clock slot was not answered inside the quantum")
+	}
+	answered := int64(uint64(guest.Registers[1])<<32 | uint64(guest.Registers[0]))
+	want := client.clock.unixMillis()
+	if answered != want {
+		t.Fatalf("the fast clock answered %d, want the epoch milliseconds %d", answered, want)
+	}
+
+	// Every other slot, and every other table, is the ordinary handler's.
+	guest.Registers[12] = slotFreeMemory
+	if client.fastSupervisorCall(&guest, svcCategoryWIPIC) {
+		t.Fatal("a slot with no fast answer was answered inside the quantum")
+	}
+	guest.Registers[12] = slotCurrentTime
+	if client.fastSupervisorCall(&guest, svcCategoryStdlib) {
+		t.Fatal("a slot number from another table was read as the clock")
+	}
+
+	client.trace = newSVCTrace(4)
+	if client.fastSupervisorCall(&guest, svcCategoryWIPIC) {
+		t.Fatal("the fast path answered while a trace was recording, which loses the call")
+	}
+}
+
 // A rename moves the bytes and leaves nothing behind at the old name. The two
 // refusals the specification names are what separate it from a copy, so both
 // are exercised: renaming a file that is not there, and renaming onto a name

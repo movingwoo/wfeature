@@ -54,9 +54,11 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 	if err != nil {
 		return err
 	}
-	// A Clet may have written the surface directly since the last call, so
-	// the runtime's copy is refreshed before it draws and written back after.
-	if err := client.syncFromGuest(target); err != nil {
+	// A Clet may have written the surface directly since the last call, so the
+	// runtime's copy is refreshed before it draws and written back after — over
+	// the rows this call can reach and no more. See rowBand.
+	band := drawBand(slot, drawContext, values)
+	if err := client.syncRowsFromGuest(target, band); err != nil {
 		return err
 	}
 
@@ -129,10 +131,45 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 	if drawContext.err != nil {
 		return drawContext.err
 	}
-	if err := client.syncToGuest(target); err != nil {
+	if err := client.syncRowsToGuest(target, band); err != nil {
 		return err
 	}
 	return answerCode(thread, wipiSuccess)
+}
+
+// drawBand is the rows one draw call can touch on its destination.
+//
+// The clip is the answer for every slot, because put refuses a pixel outside
+// it; the switch only narrows that further where a slot's own arguments say
+// so. A slot left out of the switch gets the clip, which is why leaving one
+// out is safe and why a new slot does not have to be added here to be correct.
+//
+// `values` is the slot's arguments with the destination surface first, so
+// values[1] is the first coordinate. The two compound slots read one rectangle
+// and write another, and the band has to cover both: the source they read is
+// this same surface's own pixels for a copy inside it, and a separate surface
+// for a blit, which narrows itself where it syncs.
+func drawBand(slot uint32, context *graphicsContext, values []int32) rowBand {
+	clip := rowsAt(context.clipY, context.clipHeight)
+	switch slot {
+	case slotPutPixel:
+		return clip.meet(rowsAt(int(values[2]), 1))
+	case slotDrawLine:
+		return clip.meet(rowsBetween(int(values[2]), int(values[4])))
+	case slotDrawRect, slotFillRect, slotDrawArc, slotFillArc,
+		slotGetRGBPixels, slotSetRGBPixels, slotDrawImage:
+		return clip.meet(rowsAt(int(values[2]), int(values[4])))
+	case slotCopyArea:
+		// `MC_grpCopyArea(dst, x, y, w, h, sx, sy, pgc)` reads one rectangle of
+		// this same surface and writes another. The write is clipped and the
+		// read is not, so the band is the clipped destination joined with the
+		// whole source.
+		return clip.meet(rowsAt(int(values[2]), int(values[4]))).
+			join(rowsAt(int(values[6]), int(values[4])))
+	case slotCopyFramebuffer:
+		return clip.meet(rowsAt(int(values[2]), int(values[4])))
+	}
+	return clip
 }
 
 // drawArgumentCount is how many arguments a draw slot takes, the destination
@@ -283,7 +320,7 @@ func (client *Client) copyFramebuffer(context *graphicsContext, values []int32) 
 	if source == nil || width <= 0 || height <= 0 {
 		return nil
 	}
-	if err := client.syncFromGuest(source); err != nil {
+	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
 		return err
 	}
 	for row := 0; row < height; row++ {

@@ -315,10 +315,84 @@ func (client *Client) takeHandle() uint32 {
 	return handle
 }
 
+// rowBand is the band of a surface's rows one call reads and writes. It is a
+// band rather than a rectangle because a surface is row-major with its width
+// as the stride, so a band is one contiguous run of memory and a rectangle is
+// one call per row.
+//
+// **It is what a draw costs.** The pair below is crossed twice per MC_grp
+// call, and over the whole surface that is two screens of copying to set one
+// pixel — which is what one title asking for 73,000 `MC_grpPutPixel` calls in
+// forty ticks actually spent its time on. A band narrows it to the rows the
+// call can touch, and what makes that safe is that every one of these
+// operations writes through graphicsContext.put, which refuses a pixel outside
+// the clip and outside the surface. So the clip is always a correct band, and
+// an operation that knows its own rectangle names a smaller one.
+type rowBand struct {
+	top    int
+	bottom int // exclusive
+}
+
+// rowsAt is the band a rectangle of `height` rows starting at `y` covers. A
+// height of zero or less covers nothing, which is what every draw slot does
+// with one.
+func rowsAt(y, height int) rowBand {
+	if height <= 0 {
+		return rowBand{}
+	}
+	return rowBand{top: y, bottom: y + height}
+}
+
+// rowsBetween is the band two row coordinates span, in either order, both ends
+// included — a line's endpoints.
+func rowsBetween(first, second int) rowBand {
+	return rowBand{top: min(first, second), bottom: max(first, second) + 1}
+}
+
+func wholeSurface(buffer *framebuffer) rowBand {
+	if buffer == nil {
+		return rowBand{}
+	}
+	return rowBand{top: 0, bottom: buffer.height}
+}
+
+// join is the band covering both, which is what an operation reading one
+// rectangle and writing another needs.
+func (band rowBand) join(other rowBand) rowBand {
+	if band.empty() {
+		return other
+	}
+	if other.empty() {
+		return band
+	}
+	return rowBand{top: min(band.top, other.top), bottom: max(band.bottom, other.bottom)}
+}
+
+// meet is the band inside both, which is how the clip narrows an operation's
+// own rectangle.
+func (band rowBand) meet(other rowBand) rowBand {
+	return rowBand{top: max(band.top, other.top), bottom: min(band.bottom, other.bottom)}
+}
+
+func (band rowBand) clamp(buffer *framebuffer) rowBand {
+	return band.meet(wholeSurface(buffer))
+}
+
+func (band rowBand) empty() bool { return band.bottom <= band.top }
+
 // syncFromGuest reads a surface's pixels back out of guest memory. A Clet that
 // drew straight into the framebuffer has bypassed every MC_grp call, so the
 // runtime's copy is only correct if it re-reads before it uses them.
 func (client *Client) syncFromGuest(buffer *framebuffer) error {
+	return client.syncRowsFromGuest(buffer, wholeSurface(buffer))
+}
+
+// syncRowsFromGuest is syncFromGuest over one band. Rows outside it keep
+// whatever the runtime's copy already held, which is correct exactly while the
+// caller writes back the same band: guest memory outside it is never touched,
+// and the two places that read a whole surface — a flush and a present — take
+// the whole surface here first.
+func (client *Client) syncRowsFromGuest(buffer *framebuffer, band rowBand) error {
 	if buffer == nil || buffer.address == 0 {
 		return nil
 	}
@@ -332,12 +406,17 @@ func (client *Client) syncFromGuest(buffer *framebuffer) error {
 	if buffer.drawnHere {
 		return nil
 	}
-	// A whole screen at a time, with no scratch buffer and no loop that
-	// rebuilds every pixel out of two bytes. This pair is crossed twice per
-	// draw call, so what it costs is most of what a drawing title costs; see
-	// armcore's bulk halfword transfers.
-	if err := client.core.Memory().ReadHalfwords(buffer.address, buffer.pixels); err != nil {
-		return fmt.Errorf("read LGT framebuffer at %#x: %w", buffer.address, err)
+	// A band at a time, with no scratch buffer and no loop that rebuilds every
+	// pixel out of two bytes; see armcore's bulk halfword transfers.
+	band = band.clamp(buffer)
+	if band.empty() {
+		return nil
+	}
+	stride := buffer.width
+	address := buffer.address + uint32(band.top*stride*2)
+	if err := client.core.Memory().ReadHalfwords(
+		address, buffer.pixels[band.top*stride:band.bottom*stride]); err != nil {
+		return fmt.Errorf("read LGT framebuffer at %#x: %w", address, err)
 	}
 	return nil
 }
@@ -390,11 +469,26 @@ func (client *Client) present() {
 // syncToGuest writes the runtime's pixels back, which is what a draw call
 // done here has to do so the guest sees its own surface change.
 func (client *Client) syncToGuest(buffer *framebuffer) error {
+	return client.syncRowsToGuest(buffer, wholeSurface(buffer))
+}
+
+// syncRowsToGuest is syncToGuest over one band. It has to be a band the call
+// could not have drawn outside of: writing back less than was drawn leaves the
+// guest a stale pixel, and writing back more hands it back a row the runtime's
+// copy never refreshed.
+func (client *Client) syncRowsToGuest(buffer *framebuffer, band rowBand) error {
 	if buffer == nil || buffer.address == 0 {
 		return nil
 	}
-	if err := client.core.Memory().WriteHalfwords(buffer.address, buffer.pixels); err != nil {
-		return fmt.Errorf("write LGT framebuffer at %#x: %w", buffer.address, err)
+	band = band.clamp(buffer)
+	if band.empty() {
+		return nil
+	}
+	stride := buffer.width
+	address := buffer.address + uint32(band.top*stride*2)
+	if err := client.core.Memory().WriteHalfwords(
+		address, buffer.pixels[band.top*stride:band.bottom*stride]); err != nil {
+		return fmt.Errorf("write LGT framebuffer at %#x: %w", address, err)
 	}
 	return nil
 }

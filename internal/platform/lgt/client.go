@@ -378,6 +378,8 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		// is the only thing that tells it apart from them.
 		screen: true,
 	}
+	// The clock is answered inside the quantum: see fastSupervisorCall.
+	core.SetFastSupervisorCall(client.fastSupervisorCall)
 	client.presented = make([]uint16, width*height)
 	client.frameRGBA = make([]byte, width*height*4)
 	for index := 3; index < len(client.frameRGBA); index += 4 {
@@ -594,6 +596,32 @@ func (client *Client) callOn(
 		return 0, err
 	}
 	return summary.Context.Registers[0], nil
+}
+
+// fastSupervisorCall answers the slots that are a read of a number this
+// platform already holds, without leaving the quantum. See
+// armcore.FastSupervisorCall for the contract; it must not touch guest memory,
+// call the guest, or take a lock the execution path can be holding.
+//
+// **The one slot here earns it on its own.** A title's own loop polls the
+// platform clock tens of thousands of times per tick, which is most of every
+// platform call this platform serves for it, and each one of those was a
+// quantum boundary. The clock read itself is two atomic loads and an add.
+//
+// A trace is what turns it off: a run recording its platform calls has to
+// record this one too, and the trace is exactly the diagnostic that would
+// otherwise stop naming the call that dominates the run.
+func (client *Client) fastSupervisorCall(context *armcore.Context, immediate uint32) bool {
+	if immediate != svcCategoryWIPIC || client.trace != nil {
+		return false
+	}
+	if context.Registers[12] != slotCurrentTime {
+		return false
+	}
+	value := uint64(client.clock.unixMillis())
+	context.Registers[0] = uint32(value)
+	context.Registers[1] = uint32(value >> 32)
+	return true
 }
 
 // handleSupervisorCall routes one SVC to the table its category names.

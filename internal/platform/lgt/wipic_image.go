@@ -242,8 +242,9 @@ func (client *Client) drawImage(context *graphicsContext, values []int32) error 
 		return nil
 	}
 	// An image the guest wrote through its own framebuffer pointer is read
-	// back first, the same as any other source surface.
-	if err := client.syncFromGuest(source); err != nil {
+	// back first, the same as any other source surface — over the rows this
+	// blit reads, which is what the destination's own band already does.
+	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
 		return err
 	}
 	for row := 0; row < height; row++ {

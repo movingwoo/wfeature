@@ -4293,6 +4293,13 @@ on, and the same tool found it.
   s: what it timed was recorded as a world load rather than as a title and a
   scene, so how much of the difference is the change and how much is a
   different load is not something this measurement can say.
+- **A draw still copies the rows it touches, twice.** The runtime keeps its own
+  copy of every surface, so a draw reads the band it can reach out of guest
+  memory before it draws and writes that band back after — because a Clet may
+  have written those pixels through the pointer it was handed and will read them
+  the same way. The band is what made this cheap (above); what would make it
+  free is a draw that reaches the guest's own bytes rather than a copy of them,
+  and nothing local is waiting on it now.
 - **No network.** The block reports failure: a game's own state machine handles
   that, while claiming a connection would make it wait for data that never
   arrives. It is the *whole* block rather than only the connect call, because a
@@ -4610,6 +4617,67 @@ costs when a title leans on it. The clock does end the spin — the title
 finishes, where the same loop on a tick-only clock would never see its deadline
 — but it ends it after the guest has retired the instructions the rate charges
 for, and this title pays for them one Host crossing at a time.
+
+**The spin is served inside the quantum now, and the title keeps up.** The
+clock is the one slot on this platform that reads a number the platform already
+holds: no guest memory, no callback, nothing that can block. It is answered
+through `armcore.Core.SetFastSupervisorCall` — see `armcore.md`, "The
+supervisor-call boundary, and the slots that do not need it" — which leaves the
+quantum running rather than ending it, and the whole difference is the
+boundary. Over three thousand ticks from a fresh save:
+
+| | host busy | guest time | ns a guest instruction |
+|---|---|---|---|
+| before | 177.5s | 150.0s | 19.8 |
+| after | **147.6s** | 150.0s | **16.4** |
+
+So the title that was **1.18x slower than the handset now runs at 0.98x**. A
+second title that polls the same slot — 13.6M reads in forty ticks, more than
+this one, on a run that was never slow enough to be in the table — is 40%
+cheaper. Across all ninety-four local archives at 400 ticks the total is −3.6%
+and **not one frame differs**, which is what says the change is the crossing and
+not the answer: the guest reads the same clock, only the granularity moves, from
+one update per call to one per quantum of 16,384 instructions — a tenth of a
+millisecond on a clock whose unit is the millisecond.
+
+**A trace turns it off**, because a run recording its platform calls has to
+record the call that dominates it. That is also why `-trace` costs this title
+what it does.
+
+**What the slowest title spent its time on after that was drawing, and it was
+one call.** With the clock served, the profile was 34% `runtime.memmove`, all of
+it `syncFromGuest` and `syncToGuest`. Every `MC_grp` call read the whole
+destination surface out of guest memory before it drew and wrote the whole
+surface back after, and the histogram says what that meant: of the 73,700 draw
+calls this title makes in forty ticks, **72,929 are `MC_grpPutPixel`**. It is a
+software rasteriser too, only one that rasterises through the platform, and it
+was paying two screens of copying — 307KB — to set one pixel.
+
+**A draw now syncs the rows it can touch.** The band is the context's clip,
+narrowed by the slot's own rectangle where it has one, and what makes it safe is
+that every one of these operations draws through the `put` that refuses a pixel
+outside the clip — so the clip is always a correct band, and a slot the switch
+does not name still gets one. `rowBand` in `graphics.go` and `drawBand` in
+`wipic_draw.go`; the pair is rows rather than a rectangle because a surface is
+row-major with its width as the stride, so a band is one contiguous run and a
+rectangle would be one call per row.
+
+Over three thousand ticks, the two changes together on that title:
+
+| | host busy | guest time | ns a guest instruction |
+|---|---|---|---|
+| before | 177.5s | 150.0s | 19.8 |
+| the clock served | 147.6s | 150.0s | 16.4 |
+| and the band | **75.5s** | 150.0s | **8.4** |
+
+So it went from **1.18x slower than the handset to 0.50x** — twice the handset's
+speed — on the same 8,978,757,686 instructions. Across all ninety-four local
+archives at 400 ticks the total is **−10.8%** with **no frame differing
+anywhere**, and ten titles fall by 14% to 68%: the band is worth most to the
+titles that draw through `MC_grp` rather than into their own buffer, and nothing
+at all to the ones that do not. What looked like three regressions in the
+single-shot sweep were all inside the noise floor when taken best-of-three
+(+2.0%, −0.6%, −1.1% on runs of about a second).
 
 **The other four are their own code.** None of them calls any slot more than a
 few tens of thousands of times over forty ticks, their traces are ordinary —
