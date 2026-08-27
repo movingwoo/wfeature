@@ -257,7 +257,6 @@ make test          # go test + Node 테스트
 | [`docs/audio.md`](docs/audio.md) | 소리 |
 | [`docs/hqx.md`](docs/hqx.md) | hqx 화면 확대 |
 | [`docs/testing.md`](docs/testing.md) | 테스트 전략과 로컬 검증 |
-| [`docs/support.md`](docs/support.md) | 지원 게임 목록 — 타이틀별 구동·테스트 상태 |
 
 작업 규칙은 [`AGENTS.md`](AGENTS.md)에 있습니다.
 
