@@ -1981,6 +1981,6 @@ normally from `startApp` against the current KTF runtime surface.
 Games are played through this subset now rather than only started through it —
 display, input, timers and persistence all sit on top of it — so what the
 subset lacks is no longer answered by a probe but by a title stopping
-somewhere, which is tracked per title in the support matrix
-([`support.md`](support.md)) rather than here. The list above is what stays
-deliberately absent regardless.
+somewhere, which a sweep of a whole local set finds rather than this list — see
+[`testing.md`](testing.md). The list above is what stays deliberately absent
+regardless.

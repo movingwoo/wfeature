@@ -181,12 +181,10 @@ of it. A change to the list wants the cache name bumped with it.
 
 ## Known gaps
 
-- **Which titles run is the support matrix's answer, not this page's.** Every
-  platform starts games here over the same shared layer the CLI uses, and
-  what each archive reaches is recorded in
-  [`../docs/support.md`](../docs/support.md). The page has no per-platform
+- **Which titles run is not this page's question.** Every platform starts games
+  here over the same shared layer the CLI uses, so the page has no per-platform
   limitation of its own: a title that runs under `wfeature runktf`/`runlgt`/
-  `runskt` runs here.
+  `runskt` runs here, and one that does not, does not.
 - The cheat panel appears on every platform. The two ARM ones search guest
   memory; the MIDP runtime searches a synthetic address space over its object
   graph, where the region labels are class names and the write watch is not

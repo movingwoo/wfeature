@@ -304,3 +304,56 @@ func lifecycleMarker(t *testing.T, client *Client, object *jvm.Object) uint32 {
 	}
 	return binary.LittleEndian.Uint32(word[:])
 }
+
+// A touch is offered to a title that wrote somewhere for it to land, and to no
+// other. The rule reads class metadata, so it is checked against metadata: the
+// platform's own registration of `Card.pointerNotify` is a native body and is
+// exactly what a title that wrote nothing inherits, which is why it may not
+// count as the title having a pointer.
+func TestOnlyATitleThatOverridesPointerNotifyIsOfferedATouch(t *testing.T) {
+	cases := []struct {
+		name    string
+		classes []jvm.AOTClassMetadata
+		want    bool
+	}{
+		{name: "a title with no pointerNotify at all", classes: []jvm.AOTClassMetadata{
+			{Name: "Clet", Methods: []jvm.AOTMethodMetadata{
+				{Name: "startApp", Descriptor: "([Ljava/lang/String;)V", Body: ImageBase + 0x100},
+				{Name: "keyNotify", Descriptor: "(II)Z", Body: ImageBase + 0x200},
+			}},
+		}, want: false},
+		{name: "the platform's own body standing in for the title's", classes: []jvm.AOTClassMetadata{
+			{Name: "org/kwis/msp/lcdui/Card", Methods: []jvm.AOTMethodMetadata{
+				{Name: "pointerNotify", Descriptor: "(III)Z", NativeBody: ImageBase + 0x300},
+			}},
+		}, want: false},
+		{name: "a body of the title's own", classes: []jvm.AOTClassMetadata{
+			{Name: "Clet$CletCard", Methods: []jvm.AOTMethodMetadata{
+				{Name: "pointerNotify", Descriptor: "(III)Z", Body: ImageBase + 0x400},
+			}},
+		}, want: true},
+		{name: "the name without the descriptor is another method", classes: []jvm.AOTClassMetadata{
+			{Name: "Clet$CletCard", Methods: []jvm.AOTMethodMetadata{
+				{Name: "pointerNotify", Descriptor: "(II)Z", Body: ImageBase + 0x500},
+			}},
+		}, want: false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := aotDeclaresPointerNotify(test.classes); got != test.want {
+				t.Errorf("a touch offered: %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// A client with no title loaded answers no rather than crashing: the Host asks
+// this on the way into a session and on the way out of a failed one.
+func TestAClientWithNothingLoadedIsNotOfferedATouch(t *testing.T) {
+	if (*Client)(nil).HasPointer() {
+		t.Error("a client that is not there says it takes a touch")
+	}
+	if (*Session)(nil).HasPointer() {
+		t.Error("a session that is not there says it takes a touch")
+	}
+}

@@ -694,6 +694,52 @@ func (client *Client) SendPointer(ctx context.Context, eventType, x, y int32) er
 	return runtime.dispatchPointerToCards(eventType, x, y)
 }
 
+// HasPointer reports whether a touch would reach code the title wrote, which is
+// a different question from whether this platform has pointer events at all.
+//
+// WIPI carries them because the last handsets of the era had a panel, and the
+// local library shows what that was worth: of 264 archives, 27 carry a
+// `pointerNotify` body and every one of those bodies belongs to the same
+// middleware base card, in two builds of it. The other 237 never override the
+// method, so a touch resolves to the platform's own body — `runtimeComponentZero`,
+// which answers false and does nothing.
+//
+// **A Host has to know the difference, because offering a touch is not free.**
+// The page turns the canvas into a touch surface when this is true, and the
+// finger it takes is the one that was starting a keypad slide. Answering true
+// everywhere would spend that gesture on 237 titles and hand back nothing.
+//
+// What this cannot see is a title that reads pointer events out of its own
+// `EventQueue` loop rather than overriding the method. None is known here, and
+// nothing static tells them apart — a queue kind is a number the title compares
+// at runtime. `SendPointer` therefore still delivers wherever it is called:
+// `runktf -touch` is how such a title would be found, and a probe that the Host
+// had already decided against would find nothing.
+func (client *Client) HasPointer() bool {
+	if client == nil || client.vm == nil {
+		return false
+	}
+	return aotDeclaresPointerNotify(client.vm.AOTClasses())
+}
+
+// aotDeclaresPointerNotify answers the question above over class metadata alone,
+// so the rule is testable without a module around it. A native body does not
+// count: that is the platform's own registration standing in the same table,
+// and it is exactly what a title inherits when it wrote nothing.
+func aotDeclaresPointerNotify(classes []jvm.AOTClassMetadata) bool {
+	for _, class := range classes {
+		for _, method := range class.Methods {
+			if method.Name != "pointerNotify" || method.Descriptor != "(III)Z" {
+				continue
+			}
+			if method.Body != 0 && method.NativeBody == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Jlet lifecycle methods. A handset called these when something took the
 // screen away from the application — a call arriving, the user switching to
 // the menu — and gave it back afterwards. A Host that parks a game whose page

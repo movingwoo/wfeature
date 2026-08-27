@@ -267,7 +267,7 @@ release number is a decision; in CI it comes from the tag, which is the same
 decision written down somewhere durable:
 
 ```sh
-make dist VERSION=0.2.2
+make dist VERSION=0.3.0
 ```
 
 ```text
@@ -391,14 +391,17 @@ nothing in the Go tree is platform-specific enough to fail to compile or to trip
 written for all three.
 
 What CI does not open is the archives themselves, so that is done by hand
-before a release. The 0.2.2 set was built on macOS and all five extracted and
+before a release. The 0.3.0 set was built on macOS and all five extracted and
 read: each holds the server, its three launchers, both READMEs, the licence and
 the notices, and the empty `games/{ktf,lgt,skt}` tree. The Windows archive's
 five text files are CRLF throughout, the two Korean READMEs open with a UTF-8
 BOM and the three `.bat` launchers do not; the Unix archives carry no CR at all
 and their launchers and binary keep their executable bit. Every binary is
-stamped with the version — the native one answers `wfeature-server 0.2.2
-(release)` — and `SHA256SUMS` checks out against the five files beside it.
+stamped with the version — the native one answers `wfeature-server 0.3.0
+(release)` — and `SHA256SUMS` checks out against the five files beside it. The
+native one was also run out of the extracted folder: it serves the page from
+the client it carries, answers `/api/status` with the stamped version, and
+drains on `/api/shutdown`.
 
 The gap that leaves is what `.github/workflows/checks.yml` is for. Its `smoke`
 job runs on Ubuntu, Windows and macOS runners and, on each, builds the release

@@ -621,6 +621,15 @@ func (session *Session) lifecycleResult(err error, callback string) error {
 	return nil
 }
 
+// HasPointer reports whether this title wrote anything a touch would reach;
+// see Client.HasPointer for why a Host is told rather than left to guess.
+func (session *Session) HasPointer() bool {
+	if session == nil || session.Client == nil {
+		return false
+	}
+	return session.Client.HasPointer()
+}
+
 // SendPointer delivers a pointer event to the card stack. See
 // Client.SendPointer for why this does not go through the event queue.
 func (session *Session) SendPointer(ctx context.Context, eventType, x, y int32) error {

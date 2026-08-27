@@ -11,9 +11,9 @@ RELEASE_SERVER := build/release/wfeature-server
 # A release is one archive per operating system: the release server binary, a
 # launcher, and the empty games/ tree the binary looks for beside itself. The
 # version is stamped into the binary and into the archive names, and is set by
-# hand — `make dist VERSION=0.2.2` — because a tag is a decision, not a build
+# hand — `make dist VERSION=0.3.0` — because a tag is a decision, not a build
 # artefact.
-VERSION ?= 0.2.2
+VERSION ?= 0.3.0
 DIST := build/dist
 DIST_PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 

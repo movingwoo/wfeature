@@ -619,7 +619,14 @@ func (s *Session) SendPointer(ctx context.Context, action string, x, y int32) er
 // it starts sending: a page that draws its own touch layer over the canvas has
 // no reason to draw one for a game that cannot be touched, and the answer is a
 // property of the running session rather than of the page.
-func (s *Session) HasPointer() bool { return s.ktf != nil }
+//
+// **It is the title's answer and not the platform's.** One platform here has
+// pointer events at all, and inside it most titles never override the method
+// they arrive at — so asking "is this KTF?" would claim a touch for hundreds of
+// games that ignore one, and the page pays for the claim by taking the finger
+// away from the gesture it uses to slide onto the keypad. `ktf.Client.HasPointer`
+// is what decides, out of the title's own class table.
+func (s *Session) HasPointer() bool { return s.ktf != nil && s.ktf.HasPointer() }
 
 // ktfPointerEventType maps the Host's touch vocabulary onto the WIPI values.
 func ktfPointerEventType(action string) (int32, bool) {

@@ -181,9 +181,10 @@ Two consequences worth knowing:
 Some titles gate on an authentication server and have no offline path at all.
 They stop on their own network screen and report their own error. Refusing
 more gracefully cannot move them: there is nothing wrong with the refusal, and
-the server they want no longer exists. Which titles those are, and which ones
-turned out to be handled paths rather than missing servers, is tracked per
-title in the support matrix ([`support.md`](support.md)).
+the server they want no longer exists. How few they are is the part worth
+keeping: of three that looked like this in one sweep, one was waiting for a
+key, one wanted a file operation that was missing, and only the third really
+wanted a server.
 
 ### One title does not report its own error, it parks
 
