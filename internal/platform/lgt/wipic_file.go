@@ -347,6 +347,16 @@ func (client *Client) openFile(name string, flag uint32) int32 {
 			return wipiNoEntry
 		}
 		data = nil
+		// **The create happens at open, not at the first write.** A handset
+		// has the file the moment the open returns, so everything that asks
+		// about a path — MC_fsFileAttribute, MC_fsIsExist, a second open —
+		// answers about a file of length zero from here on. Leaving the
+		// creation until something is written keeps the handle usable but
+		// hides the file from those calls, and a title that opens its save and
+		// immediately stats it is told there is no such file. One reads that
+		// as a filesystem it cannot save to and quits with a message saying
+		// so, before any of its own screens.
+		client.writeFile(name, nil)
 	}
 	cursor := 0
 	switch {

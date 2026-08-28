@@ -133,6 +133,49 @@ func javaClipPutData(
 	return length, nil
 }
 
+// javaClipSetBuffer is `Clip.setBuffer(byte[] buf, int dataSize)`: the buffer a
+// clip built without one is given, once. It pairs with the constructor the
+// specification describes as "the same as `Clip(String, int)` but without
+// creating the internal buffer — for when the size is not known at
+// construction"; a title that takes that route hands its bytes over here
+// instead of through the constructor.
+//
+// **It is not `putData`.** `putData` appends into a buffer that exists and
+// answers how many bytes it took; this sets the buffer and answers whether it
+// was allowed to — `false` means one was already set, which is the
+// specification's only failure and is a refusal rather than an error.
+//
+// `dataSize` is how much of the array is data, so a title reusing a large
+// read buffer for a short sound is taken at its word rather than at the array's
+// length.
+func javaClipSetBuffer(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(clip.data) > 0 {
+		return javaFalse, nil
+	}
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	size := arguments[2]
+	if uint64(size) > uint64(len(data)) {
+		return 0, fmt.Errorf("a data size of %d is past the end of a %d-byte array", size, len(data))
+	}
+	// The bytes are copied rather than aliased: the array is the title's and it
+	// reuses one buffer for every sound it loads.
+	clip.data = append([]byte(nil), data[:size]...)
+	clip.loaded = false
+	if client.logger != nil {
+		client.logger.Debug("LGT java clip buffer set", "type", clip.mediaType, "bytes", len(clip.data))
+	}
+	return javaTrue, nil
+}
+
 // javaClipClearData is `BaseClip.clearData()`, which throws away what a clip
 // holds. The decode goes with it for the same reason `putData` drops it.
 func javaClipClearData(

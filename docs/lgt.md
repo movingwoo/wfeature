@@ -1523,7 +1523,28 @@ read (1), write (2, which appends), write-and-truncate (4) and read-write (8);
 anything but the first is an open with write intent, and a file that is not
 there yet is created by it. Treating a single bit as "writable" refused the flag
 a title actually opens its save with, and the title then retried forever against
-a handset it read as full.
+a handset it read as full. The specification says this by omission: `M_E_NOENT`
+is listed as a failure of `MC_fsOpen` **only** for a read-only open.
+
+**The create happens at the open, not at the first write.** A handset has the
+file the moment the open returns, so everything else that asks about the path —
+`MC_fsFileAttribute`, `MC_fsIsExist`, a second open — answers about a file of
+length zero from then on. Deferring the creation until something was written
+left the handle perfectly usable and hid the file from all three, and the shape
+that walks into it is:
+
+```c
+fd = MC_fsOpen("SAVsetup", MC_FILE_OPEN_RDWR, MC_DIR_PRIVATE_ACCESS);
+MC_fsFileAttribute("SAVsetup", &info, MC_DIR_PRIVATE_ACCESS);  // M_E_NOENT
+```
+
+The title reads that as a filesystem it cannot save to, paints "saving failed,
+quitting" over its own splash, and calls `MC_knlExit` — before its first screen,
+every run, with an empty error log. Note also that `M_E_NOENT` is **not** among
+`MC_fsFileAttribute`'s documented failures, which is the second half of why the
+answer was never expected. One title in the corpus died here on every launch;
+nothing else in the 94-title LGT corpus changed behaviour when the creation
+moved, measured at 800 ticks with keys against the binary before it.
 
 **An empty save tree is not a neutral starting point.** One title's boot reads
 its settings file, and when the open fails it writes the defaults out, clears
@@ -1549,8 +1570,46 @@ had, and it refused to start a game because the handset was full. The number
 they report is this platform's own — comfortably larger than any save here and
 small enough to stay an ordinary integer.
 
+**`String.valueOf(Object)` answers `Object.toString()`'s form even for a class
+that overrides `toString`.** The language defines it as `"null"` for null and
+`obj.toString()` otherwise, and what this platform answers is the text
+`StringBuffer.append(Object)` already appends: the object's own characters when
+it has them, `Class@address` when it does not. Getting an override right means
+calling back into the guest's own method from inside a platform call — a nested
+guest call rather than a lookup — and nothing has needed it yet. **A title that
+puts the answer on the screen will show `Class@1f0c` where it meant a name**,
+which is a wrong label rather than a stopped title, and is written down here so
+whoever sees one knows where it came from.
+
 `MC_fsMkDir` and `MC_fsRmDir` report success without doing anything, because a
 path is a save key and there are no directories to make.
+
+**`org/kwis/msp/io/File.openOutputStream` hands back a byte sink bound to the
+file.** The specification offers the four stream openers as the faster way to
+move bytes than `read`/`write` on the File itself, and what a title does with
+one is write a block and flush. A `ByteArrayOutputStream` is an `OutputStream`,
+so returning one makes every write, flush and close slot already implemented
+here work unchanged; the binding is the whole of the addition, and it is what
+makes the bytes land in the file rather than in memory. They drain at the file's
+own cursor on flush, on the stream's close, and **before the File itself
+closes** — a title that writes through the stream and closes only the File would
+otherwise lose everything it wrote. The sink is emptied as it drains, so a flush
+followed by a close does not write the same block twice. The specification's two
+failures — a file that is not open, and a second stream on one file — are both
+`IOException`. `openInputStream` is the read half and answers the same stream
+object a resource read hands back, over what is left of the file from its
+current position; the file's position then follows what the stream consumed, so
+a title reading a header through the stream and the rest through `File.read`
+sees one file rather than two views of it.
+
+**The two are a pair in a way that is easy to be caught out by: implementing the
+write half is what makes the read half reachable.** A title with no save has
+never taken its load path, so the first working `openOutputStream` writes a save
+that the *next* launch reads — and that launch fails earlier in wall-clock time
+than the one before it, in a different method, having skipped everything the
+new-game path used to do. That is a door opening rather than a regression, and
+the way to tell them apart is the save tree's timestamps and which direction the
+failing call reads.
 
 ## Sound
 
@@ -2405,6 +2464,23 @@ without reconstructing the original platform's vtables. The second kind is a
 piece of reverse engineering of its own, and the way into it is the call site:
 how many arguments it sets, and what it does with the answer.
 
+**Where a call site cannot choose between two receiver-only methods, answering
+it both ways can.** A slot returning a boolean and a slot returning nothing are
+indistinguishable from the arguments alone, but a title branching on the answer
+takes two different paths — so building the platform twice, once answering 0 and
+once answering 1, and comparing where each run stops says whether the answer is
+read at all. `Thread` 13 was settled that way in one pass: the two answers ended
+in different methods, which ruled out the `void` candidates the rule had already
+ordered behind it.
+
+**A slot is reported under the class a lookup would use**, which is the class it
+was numbered under rather than the class dispatching on it, with the dispatching
+class named beside it when the two differ. The distinction is not cosmetic: this
+platform splits some library classes the way the original runtime did — a call
+on `Clip` is numbered under `BaseClip` and answers to that name — so a report
+naming the dispatching class sends whoever implements the method to register it
+under a name nothing will ever ask for.
+
 A platform class whose size nothing measures gets a **larger vtable than it
 needs** rather than an exact one, because a slot past the end of the table is a
 branch into whatever follows it. That is why an unimplemented method reports
@@ -2434,6 +2510,7 @@ class and number rather than guessed at:
 | `InputStream` 15 | `close()` | receiver only, and the caller nulls its reference after |
 | `DataInputStream` 25 | `readShort()` | receiver only, stored two bytes wide; the numbering says which of the two shorts |
 | `Class` 16 | `getResourceAsStream(String)` | a String in, a stream out, null-checked |
+| `Thread` 13 | `isAlive()Z` | the numbering below, and a site that takes the receiver alone and **branches** on the answer |
 
 #### The numbers are not arbitrary, and the rule is worth more than any one of them
 
@@ -2463,7 +2540,13 @@ classes and three inheritance chains, six of them in one consecutive run:
   `String.length` at 10, which had read as an oddity ("inside the eleven
   `Object` takes") and is simply the first own slot;
 - `Vector` 15/29 — fourteen apart, which is exactly what this class's
-  declaration order puts between `size` and `addElement`.
+  declaration order puts between `size` and `addElement`;
+- `Thread` 10/13/14 — `start`, `run`, `interrupt`, `isAlive`, `setPriority` are
+  the class's first five own methods in declaration order once the three
+  statics in front of them are skipped, and `start` at 10 and `setPriority` at
+  14 were already here from their own call sites. **The rule placed 13 between
+  two anchors it did not choose**, which is the cheapest kind of placement this
+  table gets.
 
 A later pass added twelve more without a contradiction, which is what turned the
 rule from a summary of the rows above into something to place a slot *with*.

@@ -106,6 +106,9 @@ type Client struct {
 	stubs     map[uint64]uint32
 	clet      CletFunctions
 	exited    bool
+	// exitedFrom is the guest address MC_knlExit was called from, kept so the
+	// ending can be placed the way a failure is.
+	exitedFrom uint32
 
 	// screen is the LCD the game draws into, and frame is what the Host
 	// takes. A Clet may draw straight into the framebuffer memory, so the
@@ -566,6 +569,17 @@ func (client *Client) call(ctx context.Context, address uint32, arguments []uint
 	return client.callOn(ctx, client.thread, address, arguments)
 }
 
+// exitError is the ending, as an error, with the call site the guest left from
+// attached. Every layer above matches on the sentinel with errors.Is, so the
+// wrapping costs them nothing and gives whoever reads the report an address
+// instead of a bare "the game exited".
+func (client *Client) exitError() error {
+	if client.exitedFrom == 0 {
+		return ErrGuestExited
+	}
+	return fmt.Errorf("MC_knlExit from %#x: %w", client.exitedFrom, ErrGuestExited)
+}
+
 // callOn runs one guest function to completion below a thread's current frame.
 //
 // **Which thread matters.** A call made while the guest is inside a platform
@@ -580,7 +594,7 @@ func (client *Client) callOn(
 	ctx context.Context, thread *armcore.Thread, address uint32, arguments []uint32,
 ) (uint32, error) {
 	if client.exited {
-		return 0, ErrGuestExited
+		return 0, client.exitError()
 	}
 	// A try region belongs to the call that opened it: see dropJavaTryFrames.
 	client.javaCallDepth++
@@ -588,11 +602,11 @@ func (client *Client) callOn(
 		client.javaCallDepth--
 		client.dropJavaTryFrames(client.javaCallDepth)
 	}()
+	// An exit arrives as an error like any other, and it already says where it
+	// came from: replacing it here with the bare sentinel is what threw that
+	// away, and left a Host with an ending it could not place.
 	summary, err := client.core.Call(ctx, thread, address, returnAddress, arguments, client.handleSupervisorCall)
 	if err != nil {
-		if client.exited {
-			return 0, ErrGuestExited
-		}
 		return 0, err
 	}
 	return summary.Context.Registers[0], nil

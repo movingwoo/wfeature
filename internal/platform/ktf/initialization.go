@@ -1195,9 +1195,16 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		return runtime.wipicGetResource(thread)
 	case wipicKernelExit:
 		// MC_knlExit ends the program; the Host observes ErrGuestExited and
-		// tears the session down instead of treating it as a failure.
+		// tears the session down instead of treating it as a failure. The
+		// caller is named for the same reason a failure names one: an ending
+		// nothing can locate reads as a broken game rather than a finished
+		// one. The stub returns with `bx lr`, so LR is still the caller.
 		runtime.countDiagnostic("kernel exit")
-		return 0, ErrGuestExited
+		link, err := thread.Register(armcore.RegisterLR)
+		if err != nil {
+			return 0, ErrGuestExited
+		}
+		return 0, fmt.Errorf("MC_knlExit from %#x: %w", link, ErrGuestExited)
 	case wipicKernelGetDLLInterface:
 		return runtime.wipicGetDLLInterface(thread)
 	default:

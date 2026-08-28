@@ -183,3 +183,119 @@ func TestJavaStreamSkipMovesTheCursor(t *testing.T) {
 		t.Errorf("skipping past the end moved %d, want the one byte left", moved)
 	}
 }
+
+// A stream opened on a File writes into the file rather than into memory, and
+// the bytes are there by the time the flush returns. This is the difference
+// between `openOutputStream` and the `ByteArrayOutputStream` it is built on: a
+// title that writes a save through the stream and then reads it back has to
+// find it, and one that only closes the File must not lose what it wrote.
+func TestFileOutputStreamWritesReachTheFile(t *testing.T) {
+	client := fixtureClient(t)
+	client.saveStore = newMemorySaveStore()
+
+	name, err := client.newJavaString("save.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := uint32(0x1000)
+	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, fileOpenReadWrite, 1}); err != nil {
+		t.Fatalf("File() error = %v", err)
+	}
+	stream, err := javaFileOpenOutputStream(client, nil, nil, []uint32{file})
+	if err != nil {
+		t.Fatalf("openOutputStream() error = %v", err)
+	}
+	if stream == 0 {
+		t.Fatal("openOutputStream answered null on an open file")
+	}
+	// A second stream on the same file is the specification's other failure,
+	// and it must not quietly hand out a second sink writing over the first.
+	if _, err := javaFileOpenOutputStream(client, nil, nil, []uint32{file}); err == nil {
+		t.Error("a second output stream on one file was allowed")
+	}
+
+	for _, value := range []uint32{7, 8, 9} {
+		if _, err := javaByteSinkWrite(client, nil, nil, []uint32{stream, value}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handle := client.javaRuntimeState().files[file]
+	if held := client.files[handle]; len(held.data) != 0 {
+		t.Errorf("the file holds %d bytes before the flush, want 0", len(held.data))
+	}
+	if _, err := javaByteSinkFlush(client, nil, nil, []uint32{stream}); err != nil {
+		t.Fatalf("flush() error = %v", err)
+	}
+	held := client.files[handle]
+	if string(held.data) != string([]byte{7, 8, 9}) {
+		t.Errorf("the file holds %v after the flush, want [7 8 9]", held.data)
+	}
+	// A flush that drained everything must not write the same block again.
+	if _, err := javaByteSinkFlush(client, nil, nil, []uint32{stream}); err != nil {
+		t.Fatal(err)
+	}
+	if held := client.files[handle]; len(held.data) != 3 {
+		t.Errorf("a second flush wrote again: %v", held.data)
+	}
+
+	if _, err := javaFileWriteByte(client, nil, nil, []uint32{file, 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaFileClose(client, nil, nil, []uint32{file}); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+	stored, ok := client.readFile("save.dat")
+	if !ok {
+		t.Fatal("nothing was stored for a file that was written and closed")
+	}
+	if string(stored) != string([]byte{7, 8, 9, 10}) {
+		t.Errorf("the store holds %v, want [7 8 9 10]", stored)
+	}
+}
+
+// The read half of the same pair. A stream opened on a File reads what is left
+// of it from the file's own position, and the file follows what the stream
+// consumed — a title that reads a header through the stream and the rest
+// through `File.read` has to see one file rather than two views of it.
+func TestFileInputStreamReadsFromTheFilesPosition(t *testing.T) {
+	client := fixtureClient(t)
+	client.saveStore = newMemorySaveStore()
+	client.writeFile("save.dat", []byte{1, 2, 3, 4, 5})
+
+	name, err := client.newJavaString("save.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := uint32(0x1100)
+	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, fileOpenReadWrite, 1}); err != nil {
+		t.Fatalf("File() error = %v", err)
+	}
+	// One byte read through the File first, so the stream has to start at 1
+	// rather than at the beginning.
+	handle := client.javaRuntimeState().files[file]
+	client.files[handle].cursor = 1
+
+	stream, err := javaFileOpenInputStream(client, nil, nil, []uint32{file})
+	if err != nil {
+		t.Fatalf("openInputStream() error = %v", err)
+	}
+	if _, err := javaFileOpenInputStream(client, nil, nil, []uint32{file}); err == nil {
+		t.Error("a second input stream on one file was allowed")
+	}
+	for _, want := range []uint32{2, 3} {
+		value, err := javaStreamRead(client, nil, nil, []uint32{stream})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != want {
+			t.Errorf("read() = %d, want %d", value, want)
+		}
+	}
+	if _, err := javaStreamClose(client, nil, nil, []uint32{stream}); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+	// One byte was consumed before the stream and two through it.
+	if got := client.files[handle].cursor; got != 3 {
+		t.Errorf("the file is at %d after the stream closed, want 3", got)
+	}
+}

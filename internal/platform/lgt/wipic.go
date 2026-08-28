@@ -384,8 +384,15 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		return answer(address)
 
 	case slotExit:
+		// **Name the call site.** A game that ends itself is not a failure, so
+		// nothing downstream prints a stack for it — and a Host that reports
+		// only "the game exited" leaves the reader unable to tell a title's
+		// own quit menu from a title that gave up on the first screen. The
+		// link register still holds the caller, because the import stub
+		// reaches here with `bx lr` intact.
 		client.exited = true
-		return ErrGuestExited
+		client.exitedFrom, _ = thread.Register(14)
+		return client.exitError()
 
 	case slotAlloc, slotCalloc:
 		// MC_knlCalloc takes one size, not C's (count, size) pair — it is

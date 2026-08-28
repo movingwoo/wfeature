@@ -224,6 +224,12 @@ type Session struct {
 	// on one goroutine, which is the same discipline the platforms behind them
 	// already require.
 	scaler hqx.Scaler
+
+	// exitReason is what the platform said when the game ended itself. It is
+	// kept because the ending arrives at whichever call happened to be running
+	// — a tick, a key, a touch — and is read later by a Host writing a report,
+	// by which time the session is closed and the platform is gone.
+	exitReason string
 }
 
 // Start loads the archive, works out what it is, and runs it up to the point
@@ -404,6 +410,16 @@ type Progress struct {
 	Flushes uint64
 	// Exited reports that the game ended. The session is closed by then.
 	Exited bool
+	// ExitReason is where the ending came from, when Exited is set: the
+	// platform call that ended the game and, where the platform could name
+	// one, the guest address that made it. It is empty on every other tick.
+	//
+	// **An ending with nothing attached is indistinguishable from a crash to
+	// whoever reads it.** A title of this era ends itself for ordinary
+	// reasons — a quit menu, a first-run notice asking to be restarted — and a
+	// Host that reports only "the game exited" turns all of them into the same
+	// unreadable line, which is how a sweep files a working title as broken.
+	ExitReason string
 }
 
 // ErrNotRunning is returned once the session has ended.
@@ -448,8 +464,8 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		progressed, wait, err := s.ktf.TickFor(ctx, budget)
 		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktf.Flushes())}
 		if errors.Is(err, ktf.ErrGuestExited) {
-			s.Close()
 			progress.Exited = true
+			progress.ExitReason = s.noteExit(err)
 			return progress, nil
 		}
 		return progress, err
@@ -464,8 +480,8 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		// sorted the ending from a failure for one and not the other would
 		// report a game that finished as a game that broke.
 		if errors.Is(err, ktf.ErrGuestExited) {
-			s.Close()
 			progress.Exited = true
+			progress.ExitReason = s.noteExit(err)
 			return progress, nil
 		}
 		return progress, err
@@ -476,8 +492,8 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		wait, err := s.lgt.TickFor(ctx)
 		progress := Progress{Progressed: true, Wait: wait, Flushes: s.lgt.Flushes()}
 		if errors.Is(err, lgt.ErrGuestExited) {
-			s.Close()
 			progress.Exited = true
+			progress.ExitReason = s.noteExit(err)
 			return progress, nil
 		}
 		return progress, err
@@ -494,6 +510,10 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		progress := Progress{Progressed: true, Wait: guestPace(FramePace, s.runtime.Speed()), Flushes: s.surface.Flushes()}
 		if state := s.runtime.State(); state == skt.StateDestroyed || state == skt.StateError {
 			progress.Exited = true
+			// A MIDlet has no exit call to name: it is in a terminal state and
+			// which one is the whole of what this platform knows.
+			progress.ExitReason = fmt.Sprintf("the MIDlet reached state %v", state)
+			s.exitReason = progress.ExitReason
 		}
 		return progress, err
 	}
@@ -737,11 +757,31 @@ func (s *Session) endedOrFailed(err error) error {
 		return nil
 	}
 	if errors.Is(err, ktf.ErrGuestExited) || errors.Is(err, lgt.ErrGuestExited) {
-		s.Close()
+		s.noteExit(err)
 		return ErrExited
 	}
 	return err
 }
+
+// noteExit records how the game ended and tears the session down. The text is
+// the platform's own, unwrapped only of the sentinel every layer above matches
+// on: what is worth keeping is the chain in front of it, which names the call
+// the guest was inside and the address it left from.
+//
+// The session is closed here rather than by the caller so that the reason and
+// the teardown cannot get out of step — a Host reads the reason after the
+// game is gone, which is the only time it has to report one.
+func (s *Session) noteExit(err error) string {
+	if err != nil {
+		s.exitReason = err.Error()
+	}
+	s.Close()
+	return s.exitReason
+}
+
+// ExitReason is how the game ended, once it has. It is empty while a game is
+// running and for a session a Host stopped itself.
+func (s *Session) ExitReason() string { return s.exitReason }
 
 // Frame answers the current picture, magnified if the Host asked for it. ok is
 // false when there is nothing to show yet.

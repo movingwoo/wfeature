@@ -186,6 +186,159 @@ func javaFileWriteByte(
 	return 1, nil
 }
 
+// javaFileOpenOutputStream is `File.openOutputStream()`, vtable slot 12: an
+// `OutputStream` that writes into the file this File has open. A title reaches
+// for it when it has a block to write rather than an array — the specification
+// says as much, offering the four stream openers as the faster way to move
+// bytes than `read`/`write` on the File itself.
+//
+// **What comes back is a byte sink bound to the file.** A `ByteArrayOutputStream`
+// is an `OutputStream`, so the type is right and every write, flush and close
+// slot already works; the binding is what makes the bytes land somewhere other
+// than in memory. They are drained into the file on flush and on close, which
+// is where a title expects its writes to have happened, and the file reaches
+// the store on its own close the way every other write here does.
+//
+// The specification's one failure is a file that is not open or that already
+// has a stream out, and both are an IOException.
+func javaFileOpenOutputStream(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	file := arguments[0]
+	if _, _, err := client.javaFileHandle(file); err != nil {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": the file is not open")
+	}
+	runtime := client.javaRuntimeState()
+	for sink, owner := range runtime.sinkFiles {
+		if owner == file {
+			_ = sink
+			return 0, client.throwJavaPlatform(thread, javaIOExceptionClass,
+				": an output stream is already open on this file")
+		}
+	}
+	class, err := client.preparePlatformJavaClass(javaByteSinkClass)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	runtime.sinks[object] = []byte{}
+	runtime.sinkFiles[object] = file
+	if client.logger != nil {
+		client.logger.Debug("LGT java file output stream opened", "file", file, "stream", object)
+	}
+	return object, nil
+}
+
+// javaFileOpenInputStream is `File.openInputStream()`, vtable slot 16: the read
+// half of the pair above. It answers an `InputStream` over what is left of the
+// file from its current position, which is the same stream object a resource
+// read hands back, so every read, skip and close slot already implemented works
+// on it unchanged.
+//
+// **The file's own position follows what the stream consumed**, so a title that
+// reads part of a file through the stream and the rest through `File.read` sees
+// one file rather than two views of it. The bytes are taken at open because a
+// file here is wholly in memory and nothing can change it underneath: the store
+// is written on close, not during.
+//
+// The specification's failures are a file that is not open and a second stream
+// on one file, both `IOException` — the same pair `openOutputStream` refuses.
+func javaFileOpenInputStream(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	file := arguments[0]
+	_, open, err := client.javaFileHandle(file)
+	if err != nil {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": the file is not open")
+	}
+	runtime := client.javaRuntimeState()
+	for _, owner := range runtime.streamFiles {
+		if owner == file {
+			return 0, client.throwJavaPlatform(thread, javaIOExceptionClass,
+				": an input stream is already open on this file")
+		}
+	}
+	class, err := client.preparePlatformJavaClass(javaInputStreamClass)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	rest := append([]byte(nil), open.data[min(open.cursor, len(open.data)):]...)
+	runtime.streams[object] = &javaStream{Name: open.name, Data: rest}
+	runtime.streamFiles[object] = file
+	if client.logger != nil {
+		client.logger.Debug("LGT java file input stream opened",
+			"file", file, "stream", object, "bytes", len(rest))
+	}
+	return object, nil
+}
+
+// syncJavaStreamToFile moves the file's position on by what a bound read stream
+// has consumed, so the File and the stream opened on it agree about where they
+// are. It runs where the stream is done with — a close, and the File's own
+// close — rather than on every read, because a read is the hot path and the
+// two only have to agree at the points a title can observe both.
+func (client *Client) syncJavaStreamToFile(stream uint32) error {
+	runtime := client.javaRuntimeState()
+	file, bound := runtime.streamFiles[stream]
+	if !bound {
+		return nil
+	}
+	held, ok := runtime.streams[stream]
+	if !ok {
+		return nil
+	}
+	_, open, err := client.javaFileHandle(file)
+	if err != nil {
+		return err
+	}
+	open.cursor = min(open.cursor+held.Read, len(open.data))
+	return nil
+}
+
+// drainJavaSinkToFile moves what a bound sink holds into the file behind it.
+// It is what makes a stream opened on a File write to the File rather than to
+// memory, and it runs on flush, on close, and before the File itself closes —
+// a title that writes through a stream and closes only the File must still find
+// its bytes there.
+func (client *Client) drainJavaSinkToFile(sink uint32) error {
+	runtime := client.javaRuntimeState()
+	file, bound := runtime.sinkFiles[sink]
+	if !bound {
+		return nil
+	}
+	held := runtime.sinks[sink]
+	if len(held) == 0 {
+		return nil
+	}
+	handle, open, err := client.javaFileHandle(file)
+	if err != nil {
+		return err
+	}
+	if !open.writable {
+		return fmt.Errorf("%s was opened read-only", open.name)
+	}
+	// The bytes go in at the file's own cursor, which is what a write through
+	// the File would have done, and the sink is emptied so a flush followed by
+	// a close does not write the same block twice.
+	end := open.cursor + len(held)
+	if end > len(open.data) {
+		open.data = append(open.data, make([]byte, end-len(open.data))...)
+	}
+	copy(open.data[open.cursor:end], held)
+	open.cursor = end
+	open.dirty = true
+	runtime.sinks[sink] = []byte{}
+	_ = handle
+	return nil
+}
+
 // javaFileClose is `close()`, which is where a write reaches the store: the C
 // path writes a dirty file back on its own close, and this is the same close.
 func javaFileClose(
@@ -195,10 +348,32 @@ func javaFileClose(
 	if err != nil {
 		return 0, err
 	}
+	// A stream opened on this file is drained before the file goes: a title
+	// that writes through the stream and closes only the File would otherwise
+	// lose everything it wrote.
+	runtime := client.javaRuntimeState()
+	for sink, owner := range runtime.sinkFiles {
+		if owner != arguments[0] {
+			continue
+		}
+		if err := client.drainJavaSinkToFile(sink); err != nil {
+			return 0, err
+		}
+		delete(runtime.sinkFiles, sink)
+	}
+	for stream, owner := range runtime.streamFiles {
+		if owner != arguments[0] {
+			continue
+		}
+		if err := client.syncJavaStreamToFile(stream); err != nil {
+			return 0, err
+		}
+		delete(runtime.streamFiles, stream)
+	}
 	if file.dirty {
 		client.writeFile(file.name, file.data)
 	}
 	delete(client.files, handle)
-	delete(client.javaRuntimeState().files, arguments[0])
+	delete(runtime.files, arguments[0])
 	return 0, nil
 }

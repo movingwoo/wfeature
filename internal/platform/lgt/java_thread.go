@@ -738,6 +738,33 @@ func (client *Client) releaseJavaMonitors(worker *javaWorker) {
 	worker.monitors = 0
 }
 
+// javaThreadIsAlive is `Thread.isAlive()`, vtable slot 13: whether the thread
+// has been started and has not finished. A title's paint asks it every frame
+// while a loader thread builds what the paint is about to draw, and reads the
+// answer as "is what I am about to touch there yet".
+//
+// **A thread nothing started is not alive, and neither is one whose worker is
+// done.** Answering true for the second leaves a title waiting on a load that
+// already finished; answering false for a thread that is still loading sends
+// the paint into the objects the loader has not made yet, which is a
+// NullPointerException in the title's own code with nothing here to blame.
+//
+// The slot number is the declaration rule — `java/lang/Thread`'s own virtual
+// methods from 10 are `start`, `run`, `interrupt`, `isAlive`, `setPriority`,
+// which lands `start` on 10 and `setPriority` on 14, the two this table already
+// had from their own call sites. The call site agrees independently: it takes
+// the receiver alone, and answering it 0 and 1 sends a title down two different
+// paths, so the answer is a boolean rather than a dropped one.
+func javaThreadIsAlive(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	thread, known := client.javaRuntimeState().threads[arguments[0]]
+	if !known || thread.worker == nil || thread.worker.done {
+		return javaFalse, nil
+	}
+	return javaTrue, nil
+}
+
 // javaThreadSetPriority is `Thread.setPriority(int)`. The specification gives
 // it no return and no failure, and there is nothing here for it to change: a
 // guest thread on this platform is scheduled by the slice the session grants

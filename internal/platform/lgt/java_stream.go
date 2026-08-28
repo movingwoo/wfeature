@@ -301,7 +301,9 @@ func javaStreamClose(
 		return 0, fmt.Errorf("the object at %#x is not a stream this platform opened", arguments[0])
 	}
 	stream.Closed = true
-	return 0, nil
+	// A stream opened on a File leaves that file where the reading got to; a
+	// plain one is bound to nothing and this is nothing. See java_file.go.
+	return 0, client.syncJavaStreamToFile(arguments[0])
 }
 
 // javaStreamAvailable is `InputStream.available()`: how much is left, which for
@@ -559,8 +561,13 @@ func javaByteSinkWriteAll(
 func javaByteSinkFlush(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	_, _, err := client.javaByteSinkOf(arguments[0])
-	return 0, err
+	_, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	// A plain sink has nowhere to drain to and a flush is nothing; one opened
+	// on a File is where a title expects its bytes to have landed by now.
+	return 0, client.drainJavaSinkToFile(sink)
 }
 
 // javaByteSinkReset is `reset()`, slot 15: the sink emptied and used again,

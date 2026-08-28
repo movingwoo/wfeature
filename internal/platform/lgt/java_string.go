@@ -205,6 +205,24 @@ func javaStringValueOf(
 	return client.newJavaString(strconv.FormatInt(int64(int32(arguments[0])), 10))
 }
 
+// javaStringValueOfObject is `String.valueOf(Object)`, static entry 88. The
+// language defines it as `"null"` for null and `obj.toString()` otherwise, and
+// what this answers is the same text `StringBuffer.append(Object)` already
+// appends — see javaObjectText.
+//
+// **A class that overrides `toString` is answered with `Object`'s form
+// anyway.** Getting the override right means calling back into the guest's own
+// method from inside a platform call, which is a nested guest call rather than
+// a lookup; nothing here needs it yet, and a title that puts the answer on the
+// screen would show `Class@1f0c` where it meant a name. That is a wrong label
+// rather than a stopped title, and it is written down here so the next reader
+// of a screen with one on it knows where it came from.
+func javaStringValueOfObject(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return client.newJavaString(client.javaObjectText(arguments[0]))
+}
+
 // javaStringEmpty is `String()`, which the language defines as no characters at
 // all — on an object the module has already allocated.
 func javaStringEmpty(
