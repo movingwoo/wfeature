@@ -4584,6 +4584,32 @@ it was there before the throw — so the field is at offset 16 and the platform
 had simply never written it. Writing the pinned exception address there is the
 whole fix.
 
+**What is left of that family, measured rather than guessed.** Five titles of
+the browser sweep end on a guest exception nobody caught, and the handler
+search was instrumented on the three that reproduce to ask which of two things
+is true: the game has no catch, or it has one this platform cannot find. The
+answer is different for each group, so this is not one defect.
+
+- **One title's painting thread has no handler chain at all.** The search reads
+  the chain head as a thread-local word, and on the client thread — which is
+  where the Host calls a card's `paint` — it is zero. The game's own
+  `catch (Exception)` is a record on *its own* thread's chain, pushed by the
+  `run()` that would have called paint on a handset. So a throw inside `paint`
+  can never reach it here, and what the title does with the array it indexes is
+  a separate question from where the throw goes.
+- **Two titles throw at a label that is exactly the end of a guarded region.**
+  A handler record carries the label the guest last wrote, and each entry
+  guards a half-open range of labels. In both titles the label at the throw is
+  the `to` of the last range — `0xcc` against `[0xc5,0xcc)` and `0x1796`
+  against `[0x1793,0x1796)` — which is either a genuine "the code had left the
+  region" or an off-by-one in what the label means. Making the bound inclusive
+  as an experiment rescues one of the two and does not touch the other, and it
+  re-opens the hazard the paragraph above describes: a throw inside a catch
+  block matching the region it has just left and jumping back to the top of the
+  same block. **What settles it is the label's own contract** — when the
+  compiled code writes it, relative to the call that throws — and that is read
+  out of a title's code rather than inferred from whether a run survives.
+
 **A title's own `throw` had no platform slot, and read the empty slot as a
 method pointer.** Slot 2 of the initialization callbacks table was zero. Slot 1
 is the throw that takes a class name and makes the exception; slot 2 is the one
