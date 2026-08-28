@@ -146,6 +146,18 @@ func Render(character rune) Bitmap { return faceLarge.Render(character) }
 // from this face's font on this face's grid, and characters neither source
 // covers keep the deterministic codepoint-marked box from Pattern.
 func (face *Face) Render(character rune) Bitmap {
+	// A NUL is padding, not a character. A title of this era keeps its
+	// dialogue in fixed-length buffers and hands the whole buffer to
+	// drawString, so the text it draws ends in as many NULs as the line was
+	// short — and the codepoint-marked box below is exactly the wrong answer
+	// for them: a run of boxes after every line, and a stringWidth wide enough
+	// to centre the line off the screen. One face rendered them and one did
+	// not, because the 16-dot font happens to carry a blank glyph at zero and
+	// the handset font does not, which is not a difference a title should be
+	// able to see. It reads as nothing, and takes no width, on both.
+	if character == 0 {
+		return Bitmap{}
+	}
 	if character == ' ' && face.authoredLatin {
 		return Bitmap{Advance: 3}
 	}

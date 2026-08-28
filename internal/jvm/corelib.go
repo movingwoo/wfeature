@@ -155,6 +155,10 @@ func stringDefinition() ClassDefinition {
 			{Name: "valueOf", Descriptor: "([C)Ljava/lang/String;", Access: staticNative},
 			{Name: "valueOf", Descriptor: "([CII)Ljava/lang/String;", Access: staticNative},
 			{Name: "valueOf", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
+			// The long form is what a title formats a score, a coin count or a
+			// clock with. Five KTF archives name it in their client image's
+			// pool and every one of them would have stopped at the call.
+			{Name: "valueOf", Descriptor: "(J)Ljava/lang/String;", Access: staticNative},
 			{Name: "valueOf", Descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", Access: staticNative},
 		},
 	}

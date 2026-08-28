@@ -1297,6 +1297,10 @@ func (vm *VM) registerStringBuiltins() {
 		value, err := nativeInt(arguments, 0)
 		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), err
 	})
+	vm.builtin(StringClass, "valueOf", "(J)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeLong(arguments, 0)
+		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), err
+	})
 	vm.builtin(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {

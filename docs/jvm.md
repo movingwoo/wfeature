@@ -278,6 +278,19 @@ registered bodies and fails on one no declaration names — and its inverse
 checks that a declaration marked native has a body or is one of the two a
 platform answers.
 
+**Which titles a missing member would stop is a measurable number on the
+compiled platform.** A KTF client image's name pool holds its method entries as
+`<descriptor>+<name>`, so a member with a distinctive pair can be counted
+across a corpus by reading the pool. The owning class is still not in there —
+`internal/tools/apiscan` says why — but for `(J)Ljava/lang/String;+valueOf`
+there is only one class it can belong to. Five of the 261 local KTF archives
+name it, and this library had every other form of `String.valueOf` and not that
+one, so each of those five would have stopped at the call rather than at
+anything to do with the number it was formatting. The same scan says
+`StringBuffer.append(long)` is named by forty of them, which is what the
+measurement is worth: it turns "a gap somewhere out there" into a list of
+titles, and it is how this one was decided rather than argued about.
+
 **A field belongs to the class that declares it, whatever the code touching it
 calls that class.** A compiler names a field reference after the type the
 source expression had, not after the declaring class, so a subclass reading an

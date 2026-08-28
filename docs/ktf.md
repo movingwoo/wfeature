@@ -757,6 +757,28 @@ Text is drawn by coverage rather than by a bit per pixel: `Graphics.drawString`
 and `MC_grpDrawString` mix the colour into the framebuffer by how much of each
 pixel the outline covers, in the 5/6/5 space the framebuffer already holds.
 
+**A NUL in a string is padding rather than a character.** A title of this era
+keeps its dialogue in fixed-length buffers and hands the whole buffer to
+drawString, so what it draws ends in as many NULs as the line was short. A
+character this runtime has no glyph for is drawn as a codepoint-marked box
+rather than dropped — which is the right answer for a character and the wrong
+one for padding: a run of boxes after every line, and a `stringWidth` wide
+enough to centre the line off the screen. The two faces disagreed about it,
+which is the part that makes it a defect rather than a choice: the 16-dot font
+happens to carry a blank glyph at zero and the handset font does not, so the
+same string drew clean on one screen size and broken on the other. Zero now
+reads as nothing and measures nothing on both, and every other control
+character keeps its box.
+
+**No local title draws one in a boot window, which is why this is an argument
+rather than a screenshot.** All 261 KTF archives were driven for six hundred
+ticks at eight times speed with both text paths reporting any string that
+carries a NUL, and not one did — the title the report came from puts its
+padding in dialogue several screens in, past a gap in the input-method surface
+this runtime still has. So the change costs the corpus nothing measurable, and
+what stands behind it is that the two faces answered differently for the same
+string.
+
 **Neither face needs that any more, and the reason is why there are two of
 them.** A face on its own grid covers whole pixels, and a fully covered pixel
 writes the colour untouched — exactly what plotting a bit did. Coverage was

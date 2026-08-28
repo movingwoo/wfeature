@@ -578,6 +578,7 @@ func init() {
 				{class: "java/lang/String", name: "valueOf", descriptor: "([C)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "([CII)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/String", name: "valueOf", descriptor: "(J)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", accessFlags: 0x0009},
 			},
 		},

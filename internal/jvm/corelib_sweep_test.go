@@ -857,3 +857,31 @@ func TestByteArrayInputStreamPublishesTheSpecifiedFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// The long form of valueOf. Five KTF archives name it in their client image's
+// pool — a score, a coin count, a clock — and this library had every other
+// form of it, so each of those five would have stopped at the call rather than
+// at anything to do with the number.
+func TestStringValueOfFormatsALong(t *testing.T) {
+	vm := New(nil, Options{})
+	for _, probe := range []struct {
+		value int64
+		want  string
+	}{
+		{0, "0"},
+		{1234567890123, "1234567890123"},
+		{-9223372036854775808, "-9223372036854775808"},
+	} {
+		result, err := vm.InvokeStatic(StringClass, "valueOf", "(J)Ljava/lang/String;", LongValue(probe.value))
+		if err != nil {
+			t.Fatalf("valueOf(%d): %v", probe.value, err)
+		}
+		object, err := result.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text, _ := StringText(object); text != probe.want {
+			t.Fatalf("valueOf(%d) = %q, want %q", probe.value, text, probe.want)
+		}
+	}
+}
