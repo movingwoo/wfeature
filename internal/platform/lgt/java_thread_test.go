@@ -156,3 +156,48 @@ func TestAFinishedGuestThreadIsNotGrantedAnotherSlice(t *testing.T) {
 		t.Fatal("a second grant to a finished thread blocked")
 	}
 }
+
+// `Thread.isAlive` is baked slot 13, and it answers the worker's real state: a
+// thread nothing started is not alive, a started one is, and one whose worker
+// has finished is not. A title's paint asks this every frame while a loader
+// thread builds what the paint is about to draw, so the wrong answer either
+// leaves it waiting on a load that finished or sends it into objects that do
+// not exist yet.
+func TestThreadIsAliveAnswersTheWorkersState(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	object := uint32(0x2000)
+
+	alive, err := javaThreadIsAlive(client, nil, nil, []uint32{object})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive != javaFalse {
+		t.Error("a thread this platform never saw answered alive")
+	}
+
+	runtime.threads[object] = &javaThread{object: object, runnable: object}
+	if alive, err = javaThreadIsAlive(client, nil, nil, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if alive != javaFalse {
+		t.Error("a thread that was built and not started answered alive")
+	}
+
+	worker := &javaWorker{}
+	runtime.threads[object].worker = worker
+	if alive, err = javaThreadIsAlive(client, nil, nil, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if alive != javaTrue {
+		t.Error("a started thread answered not alive")
+	}
+
+	worker.done = true
+	if alive, err = javaThreadIsAlive(client, nil, nil, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if alive != javaFalse {
+		t.Error("a finished thread answered alive")
+	}
+}

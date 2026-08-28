@@ -247,17 +247,19 @@ func (client *Client) Initialize(ctx context.Context, executableAddress uint32) 
 type initializationRuntime struct {
 	client *Client
 	arena  *guestArena
-	// poisonWindow is the buffer the arena's use-after-free check reads
-	// through; see arena_poison.go. It is nil in release builds, where
-	// poisonedBlocks and checkedBlocks also stay zero.
-	poisonWindow []byte
+	// arenaShadow is the Host-side copy of the arena's free bytes and
+	// shadowWindow the buffer its check reads guest memory through; see
+	// arena_shadow.go. Both are nil in release builds, where shadowedBlocks
+	// and checkedBlocks also stay zero.
+	arenaShadow  *arenaShadow
+	shadowWindow []byte
 	// inputModeTableAddress is the `M_Char **` the input-method table answers
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
-	// poisonedBlocks and checkedBlocks are how much the detector covered.
+	// shadowedBlocks and checkedBlocks are how much the detector covered.
 	// They are reported because a clean report otherwise cannot be told apart
 	// from a detector that never ran.
-	poisonedBlocks      uint64
+	shadowedBlocks      uint64
 	checkedBlocks       uint64
 	codeCursor          uint64
 	stubs               map[uint64]uint32
@@ -539,7 +541,7 @@ func newInitializationRuntime(client *Client) (*initializationRuntime, error) {
 		clockBase:         client.now(),
 		trace:             traceRing{limit: client.traceLimit},
 	}
-	runtime.installArenaPoison()
+	runtime.installArenaShadow()
 	if err := runtime.registerRuntimeJavaNatives(); err != nil {
 		return nil, err
 	}
@@ -1195,9 +1197,16 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		return runtime.wipicGetResource(thread)
 	case wipicKernelExit:
 		// MC_knlExit ends the program; the Host observes ErrGuestExited and
-		// tears the session down instead of treating it as a failure.
+		// tears the session down instead of treating it as a failure. The
+		// caller is named for the same reason a failure names one: an ending
+		// nothing can locate reads as a broken game rather than a finished
+		// one. The stub returns with `bx lr`, so LR is still the caller.
 		runtime.countDiagnostic("kernel exit")
-		return 0, ErrGuestExited
+		link, err := thread.Register(armcore.RegisterLR)
+		if err != nil {
+			return 0, ErrGuestExited
+		}
+		return 0, fmt.Errorf("MC_knlExit from %#x: %w", link, ErrGuestExited)
 	case wipicKernelGetDLLInterface:
 		return runtime.wipicGetDLLInterface(thread)
 	default:

@@ -63,6 +63,13 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// constructing one is taking delivery of an object the module allocated.
 	"org/kwis/msp/lwc/AnnunciatorComponent.<init>(Z)V": {Words: 2, Implementat: javaNoResult},
 	"org/kwis/msp/lcdui/Card.<init>()V":                {Words: 1, Implementat: javaNoResult},
+	// `ShellComponent(int x, int y, int w, int h)` is the toolkit's top-level
+	// container — the one a title has to use to put any widget on a Card — and
+	// the four arguments are the box it occupies. It is taken the same way as
+	// the annunciator above: the geometry is the platform's to keep, and this
+	// platform has none of the toolkit to keep it for, so a title that builds
+	// one goes on to whatever it does with the object.
+	"org/kwis/msp/lwc/ShellComponent.<init>(IIII)V": {Words: 5, Implementat: javaNoResult},
 	// Showing the annunciator is showing the handset's own status bar, which
 	// this platform does not draw at all — so it takes no room either, and a
 	// title that lays its card out below one gets the whole screen.
@@ -146,6 +153,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// an array.
 	"org/kwis/msp/media/BaseClip.putData([BII)I": {Words: 4, Implementat: javaClipPutData},
 	"org/kwis/msp/media/BaseClip.clearData()V":   {Words: 1, Implementat: javaClipClearData},
+	// The other way a clip built without a buffer gets one: set once, rather
+	// than appended to. See javaClipSetBuffer. **Keyed under `BaseClip`, like
+	// the two above** — the specification declares all three on `Clip`, but the
+	// original runtime splits the class and the module numbers the slot under
+	// the half that declares it, which is the name a lookup here has to use.
+	"org/kwis/msp/media/BaseClip.setBuffer([BI)Z": {Words: 3, Implementat: javaClipSetBuffer},
 	"org/kwis/msp/media/Clip.setListener(Lorg/kwis/msp/media/PlayListener;)V": {
 		Words: 2, Implementat: javaClipSetListener},
 	"org/kwis/msp/media/Player.play(Lorg/kwis/msp/media/Clip;Z)Z": {
@@ -197,15 +210,20 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// The constructor comes in both of the specification's forms: with the
 	// sharing level and without it. Nothing here shares a file, so the two open
 	// the same way.
-	"org/kwis/msp/io/File.<init>(Ljava/lang/String;II)V":     {Words: 4, Implementat: javaFileOpen},
-	"org/kwis/msp/io/File.<init>(Ljava/lang/String;I)V":      {Words: 3, Implementat: javaFileOpen},
-	"org/kwis/msp/io/File.sizeOf()I":                         {Words: 1, Implementat: javaFileSize},
-	"org/kwis/msp/io/File.read([B)I":                         {Words: 2, Implementat: javaFileRead},
-	"org/kwis/msp/io/File.read([BII)I":                       {Words: 4, Implementat: javaFileRead},
-	"org/kwis/msp/io/File.write([B)I":                        {Words: 2, Implementat: javaFileWrite},
-	"org/kwis/msp/io/File.write([BII)I":                      {Words: 4, Implementat: javaFileWrite},
-	"org/kwis/msp/io/File.write(I)I":                         {Words: 2, Implementat: javaFileWriteByte},
-	"org/kwis/msp/io/File.close()V":                          {Words: 1, Implementat: javaFileClose},
+	"org/kwis/msp/io/File.<init>(Ljava/lang/String;II)V": {Words: 4, Implementat: javaFileOpen},
+	"org/kwis/msp/io/File.<init>(Ljava/lang/String;I)V":  {Words: 3, Implementat: javaFileOpen},
+	"org/kwis/msp/io/File.sizeOf()I":                     {Words: 1, Implementat: javaFileSize},
+	"org/kwis/msp/io/File.read([B)I":                     {Words: 2, Implementat: javaFileRead},
+	"org/kwis/msp/io/File.read([BII)I":                   {Words: 4, Implementat: javaFileRead},
+	"org/kwis/msp/io/File.write([B)I":                    {Words: 2, Implementat: javaFileWrite},
+	"org/kwis/msp/io/File.write([BII)I":                  {Words: 4, Implementat: javaFileWrite},
+	"org/kwis/msp/io/File.write(I)I":                     {Words: 2, Implementat: javaFileWriteByte},
+	"org/kwis/msp/io/File.close()V":                      {Words: 1, Implementat: javaFileClose},
+	// The stream forms of the same read and write; see java_file.go.
+	"org/kwis/msp/io/File.openOutputStream()Ljava/io/OutputStream;": {
+		Words: 1, Implementat: javaFileOpenOutputStream},
+	"org/kwis/msp/io/File.openInputStream()Ljava/io/InputStream;": {
+		Words: 1, Implementat: javaFileOpenInputStream},
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;)Z": {Words: 1, Implementat: javaFileExists},
 	// The form that names which directory to look in. A title here has one —
 	// its own — so the flag chooses nothing and the two forms answer the same
@@ -255,11 +273,13 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// Text. What a String or a StringBuffer holds is kept on this platform's
 	// side, keyed by the object the module allocated; see java_string.go.
 	"java/lang/String.valueOf(I)Ljava/lang/String;": {Words: 1, Implementat: javaStringValueOf},
-	"java/lang/String.<init>()V":                    {Words: 1, Implementat: javaStringEmpty},
-	"java/lang/String.<init>([B)V":                  {Words: 2, Implementat: javaStringConstructor},
-	"java/lang/String.<init>([BII)V":                {Words: 4, Implementat: javaStringConstructor},
-	"java/lang/String.<init>([CII)V":                {Words: 4, Implementat: javaStringFromChars},
-	"java/lang/StringBuffer.<init>()V":              {Words: 1, Implementat: javaBufferConstructor},
+	"java/lang/String.valueOf(Ljava/lang/Object;)Ljava/lang/String;": {
+		Words: 1, Implementat: javaStringValueOfObject},
+	"java/lang/String.<init>()V":       {Words: 1, Implementat: javaStringEmpty},
+	"java/lang/String.<init>([B)V":     {Words: 2, Implementat: javaStringConstructor},
+	"java/lang/String.<init>([BII)V":   {Words: 4, Implementat: javaStringConstructor},
+	"java/lang/String.<init>([CII)V":   {Words: 4, Implementat: javaStringFromChars},
+	"java/lang/StringBuffer.<init>()V": {Words: 1, Implementat: javaBufferConstructor},
 	// The capacity form is a hint about a buffer this platform grows on
 	// demand, so it builds the same empty buffer the no-argument form does —
 	// and it takes the no-argument path, because its one argument is a number
@@ -444,6 +464,7 @@ func init() {
 	}
 	javaBakedVirtualSlots[javaThreadClass] = map[uint32]javaBakedSlot{
 		10: {Called: "start()V", Method: javaPlatformMethod{Words: 1, Implementat: javaThreadStart}},
+		13: {Called: "isAlive()Z", Method: javaPlatformMethod{Words: 1, Implementat: javaThreadIsAlive}},
 		14: {Called: "setPriority(I)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaThreadSetPriority}},
 	}

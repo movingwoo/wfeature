@@ -69,7 +69,15 @@ tool could not finish stops before it, having written the reason to stderr.
 Four things deliberately exit **zero**:
 
 - **a guest that exited on its own.** A title closing itself is what the Jlet
-  or the Clet asked for, and the whole point of some runs is to reach it.
+  or the Clet asked for, and the whole point of some runs is to reach it. It is
+  the one zero that used to be silent: a run that stopped four hundred ticks
+  short of `-ticks` with no error and no note is indistinguishable from a hang,
+  and a sweep reading only the exit code counted a title that quit on its
+  opening screen as a title that ran. Such a run now prints `the game exited at
+  tick N: …` to stderr and carries `exited` and `exit_reason` in its summary —
+  the platform call the guest was inside and the address it left from. The code
+  stays zero, because the run did what it was asked; what changed is that the
+  ending can be read. See [`session.md`](session.md).
 - **a run somebody interrupted.** Ctrl-C cancels the context rather than
   killing the process, so it reaches the exit code as the reason a tick
   stopped; the person who sent it does not need it reported back.
@@ -296,7 +304,7 @@ only that the title asked something: `stream <resource> found=<bool>` for a
 class-path resource, `exists <path> found=<bool>` for a filesystem test, and
 `sysprop <name>` for a handset property.
 
-A debug run also carries `arena blocks marked on release` and
+A debug run also carries `arena blocks recorded on release` and
 `arena blocks checked on reuse`, which are how much of the guest heap the
 use-after-free detector covered, and `arena use after free` if a title wrote
 into memory it had given back. The two coverage counts are there so that a

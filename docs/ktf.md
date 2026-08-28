@@ -228,16 +228,37 @@ leak. An unbalanced count is not the signal; a *growing* gap is.
 trigger for this one: the failure it would produce is a wrong sprite or a fault
 at an address the game never computed, arriving randomly rather than on a
 repeatable screen, so waiting for one to be noticed means waiting for the fault
-to become visible as well as to happen. Marking makes the question decidable
-instead — a released block is filled with a byte no guest value looks like, and
-the fill is read back where the arena hands those bytes out again. Intact means
-nothing wrote there while the block was free; a difference is a write that
+to become visible as well as to happen. Remembering makes the question decidable
+instead — a released block is copied to the Host side, and the copy is compared
+against guest memory where the arena hands those bytes out again. Identical
+means nothing wrote there while the block was free; a difference is a write that
 happened after the release, reported as `arena use after free` with the block,
 the offset and the bytes found there, which is enough to put a watchpoint on the
 address and catch the writer on the next run.
 
+**The detector must not change what the guest reads, and for two rounds it
+did.** It began as a fill: the released block was overwritten with a byte no
+guest value looks like, and the fill was checked on reuse. That is cheaper than
+a copy and it found the same writes — and it also destroyed the block's
+contents, which neither a handset's allocator nor this arena in a release build
+does. A title that frees a structure and keeps *reading* it therefore ran in
+release and died in debug, faulting on a pointer made of the fill:
+`0xdfdfdfdf`, or an offset from it, at an address that named nothing a reader
+could act on. Two local titles do exactly that — one of them an A-grade title
+whose whole route runs to the end with the detector's copy in place and stops
+after 160 ticks with the fill — and **the server the archives are played on is
+a debug build**, so what the reports named was the instrument. Reading a freed
+block is still a title's own defect and still invisible; what changed is that
+it is invisible here in the same way it is invisible on the handset, which is
+what an instrument owes the thing it measures.
+
+The copy grows to what the arena has handed out rather than to the region it
+could hand out. The arena spans 64MB and a session's whole working set is a
+small fraction of that, so a span reserved up front would be the largest thing
+a debug session holds.
+
 Three details decide whether it works, and all three are why it belongs to
-`guestArena` rather than to `MC_knlFree` (`arena_poison.go`):
+`guestArena` rather than to `MC_knlFree` (`arena_shadow.go`):
 
 - **The check has to know which bytes were marked.** A block from the free list
   is reuse; so is a cursor allocation below the arena's high-water mark, because
@@ -246,16 +267,17 @@ Three details decide whether it works, and all three are why it belongs to
   checked, since nothing marked it.
 - **The object collector releases into the same arena.** A fill applied to the
   guest's frees alone would read every collected object as a use after free.
-- **The pattern must not look like an arena address.** The collector reads every
-  committed word as a possible reference, so a mark that pointed into the arena
-  would keep dead objects alive for as long as a block stayed free. `0xdf`
-  repeats into a word far above the arena, which the extent index rejects on two
-  compares.
+- **A freed block keeps its contents, so the collector reads them.** The
+  collector treats every committed word as a possible reference, and a freed
+  block still holding old pointers can keep dead objects alive until it is
+  reused. That is over-retention, which is the safe direction, and it is
+  exactly what a release build has always done: the copy is what made debug
+  agree with release rather than a third behavior of its own.
 
 Both halves walk the bytes of every block released and every block reused, so
 they are installed in debug builds alone; a release build's arena behaves exactly
 as it did. How much they covered is reported alongside what they found —
-`arena blocks marked on release` and `arena blocks checked on reuse` — because a
+`arena blocks recorded on release` and `arena blocks checked on reuse` — because a
 report with no fault in it says nothing unless it also says the detector was
 running.
 
@@ -735,6 +757,28 @@ Text is drawn by coverage rather than by a bit per pixel: `Graphics.drawString`
 and `MC_grpDrawString` mix the colour into the framebuffer by how much of each
 pixel the outline covers, in the 5/6/5 space the framebuffer already holds.
 
+**A NUL in a string is padding rather than a character.** A title of this era
+keeps its dialogue in fixed-length buffers and hands the whole buffer to
+drawString, so what it draws ends in as many NULs as the line was short. A
+character this runtime has no glyph for is drawn as a codepoint-marked box
+rather than dropped — which is the right answer for a character and the wrong
+one for padding: a run of boxes after every line, and a `stringWidth` wide
+enough to centre the line off the screen. The two faces disagreed about it,
+which is the part that makes it a defect rather than a choice: the 16-dot font
+happens to carry a blank glyph at zero and the handset font does not, so the
+same string drew clean on one screen size and broken on the other. Zero now
+reads as nothing and measures nothing on both, and every other control
+character keeps its box.
+
+**No local title draws one in a boot window, which is why this is an argument
+rather than a screenshot.** All 261 KTF archives were driven for six hundred
+ticks at eight times speed with both text paths reporting any string that
+carries a NUL, and not one did — the title the report came from puts its
+padding in dialogue several screens in, past a gap in the input-method surface
+this runtime still has. So the change costs the corpus nothing measurable, and
+what stands behind it is that the two faces answered differently for the same
+string.
+
 **Neither face needs that any more, and the reason is why there are two of
 them.** A face on its own grid covers whole pixels, and a fully covered pixel
 writes the colour untouched — exactly what plotting a bit did. Coverage was
@@ -794,14 +838,16 @@ whole.
 Most of what a runtime-owned class holds never reaches guest memory: the guest
 asks for it through a method call and the Go side answers. A **published**
 instance field is the exception — a field the class declares in its KTF
-metadata, at an offset guest code compiles into a load. Three classes publish
+metadata, at an offset guest code compiles into a load. Four classes publish
 any, and each is here because something reads the field instead of calling for
 it: `java/lang/String`, whose characters the client's own helpers read through
 `value`, `offset` and `count` rather than calling `charAt`;
 `org/kwis/msp/lcdui/Card`, whose geometry a title reads off its own canvas
-rather than calling `getWidth`; and `java/io/ByteArrayOutputStream`, whose
-`buf` a title reads instead of calling `toByteArray` when it is about to hand
-the bytes straight on rather than keep them.
+rather than calling `getWidth`; and the two byte streams,
+`java/io/ByteArrayOutputStream` and `java/io/ByteArrayInputStream`, whose `buf`
+a title reads instead of copying the array back out of them — the sink when it
+is about to hand the bytes straight on rather than keep them, the source when
+it decodes straight out of the array it is streaming.
 
 That leaves the one thing an array and a static field both avoid. An array made
 guest memory its only storage; a static field's value word lives inside its own
@@ -840,15 +886,25 @@ mechanism rather than one class's fix: a class that gains a published instance
 field without saying how it stays in step fails there rather than diverging
 inside a game.
 
-**Publishing one field of a class is not publishing the class.** The byte sink
-publishes `buf` and not `count`, which sit beside each other in the
-specification and are both protected. Nothing in the local set reads `count`, so
+**Publishing one field of a class is not publishing the class.** The two byte
+streams publish `buf` and not `count` — nor, on the source, `pos` — which sit
+beside each other in the specification and are all protected. Nothing in the local set reads `count`, so
 there is no offset for it in the metadata and a title that reaches for one stops
 with the field's name in the message — which is a better failure than a word no
 mutator maintains answering a stale number. The same reasoning is why the
 mutator list is a list: `buf` changes only when the array behind it is replaced,
-so the constructor, a write that outgrows the array and a reset are the three
-calls after which the payload can be wrong.
+so on the sink the constructor, a write that outgrows the array and a reset are
+the three calls after which the payload can be wrong, and on the source the
+constructor is the only one — reading moves an index the Go side keeps and
+leaves the array alone.
+
+**A static field's initializer runs after its class is registered.** The boxed
+flag is what made that necessary: `java/lang/Boolean.TRUE` is an instance of
+the class whose record is being built, so an initializer that resolves it
+re-enters the builder for a class that does not exist yet. The field records
+are written with their offset word and patched once the class is registered,
+which also keeps the guest's `TRUE` and the core library's own the same object
+— a title compares a boxed flag against the field with a pointer compare.
 
 ## Host integration
 
@@ -4550,6 +4606,32 @@ it was there before the throw — so the field is at offset 16 and the platform
 had simply never written it. Writing the pinned exception address there is the
 whole fix.
 
+**What is left of that family, measured rather than guessed.** Five titles of
+the browser sweep end on a guest exception nobody caught, and the handler
+search was instrumented on the three that reproduce to ask which of two things
+is true: the game has no catch, or it has one this platform cannot find. The
+answer is different for each group, so this is not one defect.
+
+- **One title's painting thread has no handler chain at all.** The search reads
+  the chain head as a thread-local word, and on the client thread — which is
+  where the Host calls a card's `paint` — it is zero. The game's own
+  `catch (Exception)` is a record on *its own* thread's chain, pushed by the
+  `run()` that would have called paint on a handset. So a throw inside `paint`
+  can never reach it here, and what the title does with the array it indexes is
+  a separate question from where the throw goes.
+- **Two titles throw at a label that is exactly the end of a guarded region.**
+  A handler record carries the label the guest last wrote, and each entry
+  guards a half-open range of labels. In both titles the label at the throw is
+  the `to` of the last range — `0xcc` against `[0xc5,0xcc)` and `0x1796`
+  against `[0x1793,0x1796)` — which is either a genuine "the code had left the
+  region" or an off-by-one in what the label means. Making the bound inclusive
+  as an experiment rescues one of the two and does not touch the other, and it
+  re-opens the hazard the paragraph above describes: a throw inside a catch
+  block matching the region it has just left and jumping back to the top of the
+  same block. **What settles it is the label's own contract** — when the
+  compiled code writes it, relative to the call that throws — and that is read
+  out of a title's code rather than inferred from whether a run survives.
+
 **A title's own `throw` had no platform slot, and read the empty slot as a
 method pointer.** Slot 2 of the initialization callbacks table was zero. Slot 1
 is the throw that takes a class name and makes the exception; slot 2 is the one
@@ -5007,6 +5089,87 @@ title screen and menu under `-play`. The other reaches its first lit frame one
 tick earlier — the same picture, the same pixel count, the same colour count —
 because its `startApp` pushes its card and the notification now runs there
 rather than in the tick after. Nothing else moves.
+
+### The tenth round: four members of the standard library, and the eleven behind them
+
+A hand-played sweep of the corpus in a browser reported four titles stopping on
+a class-library member the AOT link could not find: `java/lang/Boolean`'s
+constructor, `StringBuffer.append(char[],int,int)`, `String.replace(char,char)`
+and `java/io/ByteArrayInputStream`'s protected `buf`. **Four titles is not the
+size of the defect.** The standard library is what every title links against,
+so a member missing from it is missing for all of them; which four stopped is
+which four happened to be played far enough.
+
+**Three of the four were already implemented.** `String.replace`, the two
+char-array appends and five more `StringBuffer` members had working bodies in
+the core library and no declaration naming them, which is a member a native
+dispatch can reach and compiled code cannot — see
+[`jvm.md`](jvm.md), "A body with no declaration". Eleven were in that state; the
+sweep found the four a title had reached. The KTF table publishes the ones a
+guest can name, and both layers now have a tripwire behind them: the core
+library fails a test when a body has no declaration, and this platform already
+failed one when it published a method the VM had no body for.
+
+**The fourth is a field, and a field is published rather than declared.** A
+title subclasses `ByteArrayInputStream` and reads `buf` to decode straight out
+of the array it is streaming, which is the same thing another title does to the
+sink. It joins the published-field mechanism above with the constructor as its
+only mutator.
+
+**The boxed flag needed the class registration to change.** `Boolean.TRUE` is
+an instance of the class being built, so its static initializer re-entered the
+class builder; initializers now run after the record is registered.
+
+**A whole-set A/B says the rest of the corpus does not notice.** The 261 KTF
+archives at four hundred stepped ticks and the fifteen SKT archives at the same
+are identical on both binaries — the same ticks, flushes, lit pixels and
+errors, line for line. That is the reassuring answer to the field-resolution
+change underneath this round, which is not a KTF change at all: it is every
+interpreted class that inherits a field, and the sweep is what says nothing
+depended on the old answer. The LGT set is not in the comparison because that
+platform does not use this VM.
+
+**What the four titles do now.** Three of them run their reported session
+through to the end — a page log carries every key press with a timestamp, so
+dividing by the guest's tick length replays what the player did. The fourth
+reaches the same failure only in the browser: its `buf` read is a few presses
+into a menu whose timing a replay does not reproduce, and what stands behind it
+here is the field resolving from the class record in a test rather than a run
+of the archive.
+
+### The eleventh round: an address made of the detector's own fill
+
+Five titles of the browser sweep died reading or writing an address nothing had
+computed, and the two worth the most were reading `0xdfdfe02b` and
+`0xdfdfdff0` — the arena's use-after-free fill, plus an offset. The reading is
+straightforward once the fill is recognised: the title had freed a structure
+and kept a pointer into it, read the pointer back out of the freed block, and
+followed it.
+
+**What made it a failure was the instrument.** The block's contents are what a
+handset leaves alone and what a release build leaves alone; only the debug
+build's fill destroyed them. The A-grade title of the pair runs its whole
+reported session — two and a half thousand ticks of somebody else's play,
+replayed from the page log — with the detector recording instead of filling,
+and stops after 160 ticks with the fill. The detector's own counters say it
+kept working: 816 blocks recorded on release, 950 checked on reuse, and not one
+byte of a released block written. See "A block a title frees" above for the
+mechanism and why the copy is the right shape for it.
+
+**A whole-set A/B says the swap costs nothing.** The 261 local archives booted
+for four hundred ticks on a debug build with the fill and on one with the copy
+are identical, line for line.
+
+**The other three were not the same defect.** Two are the other platform's, and
+[`lgt.md`](lgt.md), "A title draws past the surface it was given", has them: a
+title's fill loop walking off the end of the LCD onto the platform's own
+records. The third is open. It is a title that writes a save on its first run,
+exits deliberately, and then reads a null on its second — about one run in
+three, in release as well as in debug, always at the same instruction, where a
+lookup answered zero and the caller dereferenced it without asking. **A title
+whose first run ends itself is a title whose second run is a different
+program**, and a sweep that starts from an empty save directory only ever sees
+the first.
 
 ### The older modules run under the platform, and all three of them play
 

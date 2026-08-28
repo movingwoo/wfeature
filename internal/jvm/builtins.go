@@ -1297,6 +1297,10 @@ func (vm *VM) registerStringBuiltins() {
 		value, err := nativeInt(arguments, 0)
 		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), err
 	})
+	vm.builtin(StringClass, "valueOf", "(J)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeLong(arguments, 0)
+		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), err
+	})
 	vm.builtin(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
@@ -1399,6 +1403,41 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 			return "true", nil
 		}
 		return "false", nil
+	}))
+	// The char-array appends. The whole array and a window on it are the same
+	// read, and both are what a title that formats into a char array reaches
+	// for when it puts the result into a line.
+	vm.builtin(class, "append", "([C)"+self, appendStringBuffer(func(arguments []Value) (string, error) {
+		array, err := nativeReference(arguments, 1)
+		if err != nil {
+			return "", err
+		}
+		if array == nil {
+			return "", guestException("java/lang/NullPointerException", "StringBuffer.append char array")
+		}
+		_, values, err := ArraySnapshot(array)
+		if err != nil {
+			return "", err
+		}
+		return charArrayString(array, 0, int32(len(values)))
+	}))
+	vm.builtin(class, "append", "([CII)"+self, appendStringBuffer(func(arguments []Value) (string, error) {
+		array, err := nativeReference(arguments, 1)
+		if err != nil {
+			return "", err
+		}
+		if array == nil {
+			return "", guestException("java/lang/NullPointerException", "StringBuffer.append char array")
+		}
+		offset, err := nativeInt(arguments, 2)
+		if err != nil {
+			return "", err
+		}
+		length, err := nativeInt(arguments, 3)
+		if err != nil {
+			return "", err
+		}
+		return charArrayString(array, offset, length)
 	}))
 	vm.builtin(class, "delete", "(II)"+self, func(_ *VM, arguments []Value) (Value, error) {
 		object, data, err := stringBufferArgument(arguments)

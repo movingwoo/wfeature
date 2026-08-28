@@ -81,18 +81,44 @@ var fieldSyncs = map[string]fieldSync{
 		adopt:    adoptGuestByteSinkBuffer,
 		reserved: byteArrayOutputStreamFieldsSize,
 	},
+	// A byte source publishes the same word for the same reason, and the
+	// constructor is its only mutator: reading moves an index this class keeps
+	// on the Go side, and neither constructor is ever followed by one that
+	// puts a different array behind the field. pos and count stay unpublished
+	// on the same argument the sink's count is: a title that reads one stops
+	// where the evidence for maintaining it would be.
+	jvm.ByteArrayInputStreamClass: {
+		mutators: []string{"<init>"},
+		publish:  publishGuestByteSourceBuffer,
+		adopt:    adoptGuestByteSourceBuffer,
+		reserved: byteArrayInputStreamFieldsSize,
+	},
 }
 
 // byteArrayOutputStreamFieldsSize is how many payload bytes the runtime's own
 // ByteArrayOutputStream field records describe: the one buf reference.
-const byteArrayOutputStreamFieldsSize = 4
+// byteArrayInputStreamFieldsSize is the same word on the source.
+const (
+	byteArrayOutputStreamFieldsSize = 4
+	byteArrayInputStreamFieldsSize  = 4
+)
 
 // publishGuestByteSinkBuffer points the payload word at the guest array the Go
 // buffer is. The array has to be bound for the guest to have anything to read,
 // and binding is what gives it its guest memory in the first place — an array
 // the guest has never seen has no address until something asks for one.
 func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
-	value, err := runtime.client.vm.Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	return publishGuestBufferWord(runtime, address, object, jvm.ByteArrayOutputStreamClass)
+}
+
+// publishGuestByteSourceBuffer is the same word on java/io/ByteArrayInputStream,
+// which a title reads to decode straight out of the array it is streaming.
+func publishGuestByteSourceBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	return publishGuestBufferWord(runtime, address, object, jvm.ByteArrayInputStreamClass)
+}
+
+func publishGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {
+	value, err := runtime.client.vm.Field(object, class, "buf", "[B")
 	if err != nil {
 		return false, err
 	}
@@ -103,15 +129,15 @@ func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, 
 	var wanted uint32
 	if buffer != nil {
 		if err := runtime.ensureResultBound(buffer); err != nil {
-			return false, fmt.Errorf("bind KTF byte sink buffer: %w", err)
+			return false, fmt.Errorf("bind KTF %s buffer: %w", class, err)
 		}
 		bound, ok := runtime.client.vm.AOTAddress(buffer)
 		if !ok {
-			return false, fmt.Errorf("KTF byte sink buffer has no guest address")
+			return false, fmt.Errorf("KTF %s buffer has no guest address", class)
 		}
 		wanted = bound
 	}
-	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
 	if err != nil {
 		return false, err
 	}
@@ -121,7 +147,7 @@ func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, 
 	payload := make([]byte, 4)
 	binary.LittleEndian.PutUint32(payload, wanted)
 	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
-		return false, fmt.Errorf("write KTF byte sink buffer at %#x: %w", address, err)
+		return false, fmt.Errorf("write KTF %s buffer at %#x: %w", class, address, err)
 	}
 	return true, nil
 }
@@ -132,7 +158,15 @@ func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, 
 // Go buffer for whatever the word names would be a guess about which side is
 // right.
 func adoptGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
-	value, err := runtime.client.vm.Field(object, jvm.ByteArrayOutputStreamClass, "buf", "[B")
+	return adoptGuestBufferWord(runtime, address, object, jvm.ByteArrayOutputStreamClass)
+}
+
+func adoptGuestByteSourceBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	return adoptGuestBufferWord(runtime, address, object, jvm.ByteArrayInputStreamClass)
+}
+
+func adoptGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {
+	value, err := runtime.client.vm.Field(object, class, "buf", "[B")
 	if err != nil {
 		return false, err
 	}
@@ -148,7 +182,7 @@ func adoptGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, ob
 			return false, nil
 		}
 	}
-	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
 	if err != nil {
 		return false, err
 	}

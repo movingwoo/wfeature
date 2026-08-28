@@ -629,3 +629,47 @@ func TestATouchIsAnsweredOnlyWhereThereIsSomethingToTouch(t *testing.T) {
 	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
 	expectFrame(t, connection)
 }
+
+// The cause line a session report carries for a game that ended itself keeps
+// the platform's own text behind the sentence every profile's report starts
+// with. A sweep greps the first half and a person reads the second, so neither
+// one may replace the other.
+func TestTheEndingCauseKeepsThePlatformsText(t *testing.T) {
+	if cause := endedByExit(""); cause != "the game exited" {
+		t.Errorf("an ending with nothing to say = %q", cause)
+	}
+	reason := "run LGT handleCletEvent at 0x1219: MC_knlExit from 0x1959: LGT guest exited"
+	cause := endedByExit(reason)
+	if !strings.HasPrefix(cause, "the game exited") {
+		t.Errorf("the cause no longer starts the way every report does: %q", cause)
+	}
+	if !strings.Contains(cause, reason) {
+		t.Errorf("the cause dropped the platform's text: %q", cause)
+	}
+}
+
+// The page is told why, not only that. Its run log is where an ending gets
+// read afterwards, and a bare "exited" is what left a sweep unable to tell a
+// title's first-run restart notice from a title that broke.
+func TestTheExitedMessageCarriesItsReason(t *testing.T) {
+	encoded, err := encodeMessage(serverMessage{
+		Kind:    serverExited,
+		Message: "MC_knlExit from 0x1959: LGT guest exited",
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var decoded struct {
+		Kind    string `json:"kind"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.Kind != serverExited {
+		t.Fatalf("kind = %q", decoded.Kind)
+	}
+	if !strings.Contains(decoded.Message, "0x1959") {
+		t.Fatalf("the page is not told where the game exited: %q", decoded.Message)
+	}
+}

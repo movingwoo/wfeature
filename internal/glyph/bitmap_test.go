@@ -223,3 +223,29 @@ func TestCoverageOutsideTheGlyphIsEmpty(t *testing.T) {
 		}
 	}
 }
+
+// The padding a title's fixed-length text buffer carries has to draw nothing
+// and measure nothing. The handset face used to answer a lit 5x7 box with an
+// advance of six for it, so a dialogue line whose buffer was longer than its
+// text ended in a run of boxes and was centred by a width that counted them.
+func TestNulIsPaddingRatherThanAGlyph(t *testing.T) {
+	for name, face := range map[string]*Face{"large": Default(), "handset": Handset()} {
+		bitmap := face.Render(0)
+		if bitmap.Advance != 0 || bitmap.Width != 0 {
+			t.Errorf("%s face renders NUL %d wide with advance %d, want nothing",
+				name, bitmap.Width, bitmap.Advance)
+		}
+		for _, coverage := range bitmap.Alpha {
+			if coverage != 0 {
+				t.Errorf("%s face inks NUL", name)
+				break
+			}
+		}
+	}
+	// Every other control character keeps the codepoint-marked box, which is
+	// the answer that says "this runtime has no glyph for it" rather than
+	// dropping it from the frame.
+	if bitmap := Handset().Render(1); bitmap.Advance == 0 {
+		t.Error("a control character other than NUL disappeared")
+	}
+}

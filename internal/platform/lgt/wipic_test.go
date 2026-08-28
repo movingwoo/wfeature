@@ -2,6 +2,7 @@ package lgt
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,76 @@ func TestResourceIDIsAHandleTheResourceCallAccepts(t *testing.T) {
 	}
 	if length, err := client.readWord(size); err != nil || length != 0 {
 		t.Fatalf("missing resource size = %d/%v, want 0", length, err)
+	}
+}
+
+// The id is a pointer to a copy of the name, and the copy is in memory the
+// title can write. One local title's fill loop runs past the end of the LCD
+// and lands on it — after which the name reads empty, the read fails, and the
+// title sizes an allocation from the garbage it parsed instead. What the
+// platform issued, the platform remembers.
+func TestResourceIDSurvivesAGuestOverwriteOfTheName(t *testing.T) {
+	client := fixtureClient(t)
+
+	name, err := client.allocateBytes(append([]byte("data/hello.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := client.allocate(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifier := callSlot(t, client, slotGetResourceID, name, size)
+	if int32(identifier) < 0 {
+		t.Fatalf("resource id = %#x", identifier)
+	}
+	length, err := client.readWord(size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The guest scribbles over the copy the id points at, which is what a fill
+	// that runs off the end of a surface does to whatever follows it.
+	if err := client.core.Memory().Write(identifier, make([]byte, len("data/hello.txt")+1)); err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := client.allocate(uint64(length))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read := callSlot(t, client, slotGetResource, identifier, buffer, length); read != 0 {
+		t.Fatalf("the read answered %#x after the name was overwritten, want 0", read)
+	}
+	content := make([]byte, length)
+	if err := client.core.Memory().Read(buffer, content); err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "packaged" {
+		t.Fatalf("resource content = %q", content)
+	}
+}
+
+// Pixels and the platform's own data are separate regions, because a title
+// draws past the surface it was given: the LCD's own clear walks off the end.
+// A surface that shared the region with the resource names put that overrun on
+// top of them.
+func TestSurfacesAreAllocatedAwayFromPlatformData(t *testing.T) {
+	client := fixtureClient(t)
+
+	screen, err := client.screenSurface()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := client.allocateBytes(append([]byte("data/hello.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := uint64(screen.address) + uint64(screen.width*screen.height*2)
+	if uint64(name) >= uint64(screen.address) && uint64(name) < end+(1<<20) {
+		t.Fatalf("a platform name at %#x sits within a megabyte of the screen at %#x..%#x",
+			name, screen.address, end)
+	}
+	if screen.address < surfaceBase || uint64(screen.address) >= uint64(surfaceBase)+surfaceSize {
+		t.Fatalf("the screen at %#x is outside the surface region", screen.address)
 	}
 }
 
@@ -776,5 +847,142 @@ func TestRenameMovesAFileAndRefusesTheTwoDocumentedCases(t *testing.T) {
 	}
 	if data, ok := client.readFile("data/hello.txt"); !ok || string(data) != "second" {
 		t.Fatalf("the refused rename changed the source to %q (%v)", data, ok)
+	}
+}
+
+// MC_fsOpen with write intent creates the file, and the file is there from the
+// moment the open returns rather than from the first write. The specification
+// says as much by omission: M_E_NOENT is documented only for a read-only open,
+// so every other flag makes the file.
+//
+// **The gap this closes is not the handle, it is everything else that asks
+// about the path.** A title opens its save, immediately asks its size, and
+// reads M_E_NOENT as a filesystem it cannot write to — one puts that on the
+// screen as "saving failed" and calls MC_knlExit before reaching any of its
+// own screens.
+func TestOpenWithWriteIntentCreatesTheFileImmediately(t *testing.T) {
+	client := fixtureClient(t)
+	client.saveStore = newMemorySaveStore()
+
+	name, err := client.allocateBytes(append([]byte("save.dat"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := callSlot(t, client, slotFsIsExist, name); int32(result) != wipiNoEntry {
+		t.Fatalf("a file nothing has opened answered %d, want %d", int32(result), wipiNoEntry)
+	}
+	handle := int32(callSlot(t, client, slotFsOpen, name, fileOpenReadWrite, 1))
+	if handle <= 0 {
+		t.Fatalf("open for read-write answered %d, want a handle", handle)
+	}
+	if result := callSlot(t, client, slotFsIsExist, name); int32(result) != wipiSuccess {
+		t.Fatalf("an opened file answered %d, want %d", int32(result), wipiSuccess)
+	}
+	info, err := client.allocate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := callSlot(t, client, slotFsFileAttribute, name, info, 1); int32(result) != wipiSuccess {
+		t.Fatalf("the attributes of an opened file answered %d, want %d", int32(result), wipiSuccess)
+	}
+	size, err := client.readWord(info + 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Fatalf("a created file reported size %d, want 0", size)
+	}
+
+	// Read-only is still the one flag that cannot create: a title asking
+	// whether its save is there by opening it must not be handed one.
+	absent, err := client.allocateBytes(append([]byte("absent.dat"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := int32(callSlot(t, client, slotFsOpen, absent, fileOpenReadOnly, 1)); result != wipiNoEntry {
+		t.Fatalf("a read-only open of a missing file answered %d, want %d", result, wipiNoEntry)
+	}
+	if result := callSlot(t, client, slotFsIsExist, absent); int32(result) != wipiNoEntry {
+		t.Fatalf("a read-only open created %q", "absent.dat")
+	}
+}
+
+// A guest that ends itself says where it left from. Nothing above this matches
+// on the text — every layer uses errors.Is — so the wrapping costs those
+// callers nothing and is the only record of which call ended the run.
+func TestExitNamesTheCallSite(t *testing.T) {
+	client := fixtureClient(t)
+
+	thread := armcore.NewThread(armcore.NewContext())
+	if err := thread.SetRegister(14, 0x1959); err != nil {
+		t.Fatal(err)
+	}
+	err := client.handleWIPICSVC(context.Background(), thread, slotExit)
+	if !errors.Is(err, ErrGuestExited) {
+		t.Fatalf("exit answered %v, want %v", err, ErrGuestExited)
+	}
+	if !strings.Contains(err.Error(), "0x1959") {
+		t.Fatalf("the exit does not name its caller: %q", err)
+	}
+	// The session is over from here, and every later call has to say the same
+	// thing rather than the bare sentinel.
+	after := client.exitError()
+	if !errors.Is(after, ErrGuestExited) || !strings.Contains(after.Error(), "0x1959") {
+		t.Fatalf("a later call answered %q", after)
+	}
+}
+
+// `Clip.setBuffer(byte[], int)` sets a clip's buffer once. It is not `putData`:
+// it answers a boolean rather than a count, `false` means a buffer was already
+// there, and `dataSize` rather than the array's length is how much of the array
+// is sound — a title reusing one large read buffer for a short clip is taken at
+// its word.
+func TestClipSetBufferTakesTheBufferOnceAndHonoursTheSize(t *testing.T) {
+	client := fixtureClient(t)
+	client.clips = map[uint32]*mediaClip{0x30: {mediaType: "audio/midi", volume: mediaMaxVolume}}
+
+	array, err := client.javaArrayType(1, "B", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := client.allocateJavaArray(array.Object, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _, err := client.javaArrayBlock(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.core.Memory().Write(block+javaArrayLengthWords*4,
+		[]byte{1, 2, 3, 4, 5, 6, 7, 8}); err != nil {
+		t.Fatal(err)
+	}
+
+	answer, err := javaClipSetBuffer(client, nil, nil, []uint32{0x30, buffer, 3})
+	if err != nil {
+		t.Fatalf("setBuffer() error = %v", err)
+	}
+	if answer != javaTrue {
+		t.Fatalf("setBuffer on an empty clip = %d, want %d", answer, javaTrue)
+	}
+	if got := string(client.clips[0x30].data); got != string([]byte{1, 2, 3}) {
+		t.Errorf("the clip holds %v, want the first three bytes", client.clips[0x30].data)
+	}
+
+	// The specification's one failure: a buffer is already set.
+	if answer, err = javaClipSetBuffer(client, nil, nil, []uint32{0x30, buffer, 8}); err != nil {
+		t.Fatal(err)
+	}
+	if answer != javaFalse {
+		t.Errorf("setBuffer on a filled clip = %d, want %d", answer, javaFalse)
+	}
+	if len(client.clips[0x30].data) != 3 {
+		t.Errorf("a refused setBuffer changed the clip: %v", client.clips[0x30].data)
+	}
+
+	// A size past the end of the array is the title's error, not silence.
+	client.clips[0x30].data = nil
+	if _, err = javaClipSetBuffer(client, nil, nil, []uint32{0x30, buffer, 9}); err == nil {
+		t.Error("a data size past the end of the array was accepted")
 	}
 }

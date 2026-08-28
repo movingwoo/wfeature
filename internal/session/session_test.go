@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -481,12 +482,21 @@ func TestAGuestEndingIsAnEndingRatherThanAFailure(t *testing.T) {
 		if running.Running() {
 			t.Fatal("the session is still running after its game ended")
 		}
+		// **The ending keeps its text.** The Host reads this after the game is
+		// gone, and it is the only thing that separates a title's own quit
+		// menu from one that gave up on its first screen.
+		if reason := running.ExitReason(); !strings.Contains(reason, wrapped.Error()) {
+			t.Fatalf("the ending was recorded as %q, want %q", reason, wrapped.Error())
+		}
 	}
 
 	running := &Session{}
 	failure := errors.New("the core faulted")
 	if err := running.endedOrFailed(failure); !errors.Is(err, failure) {
 		t.Fatalf("a real failure answered %v, want it kept", err)
+	}
+	if reason := running.ExitReason(); reason != "" {
+		t.Fatalf("a failure was recorded as an ending: %q", reason)
 	}
 	if err := running.endedOrFailed(nil); err != nil {
 		t.Fatalf("a call that succeeded answered %v", err)

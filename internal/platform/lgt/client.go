@@ -22,9 +22,33 @@ const (
 	heapBase uint32 = 0x20000000
 	heapSize uint64 = 32 << 20
 	// platformDataBase holds the structures the platform writes for the
-	// module: the init parameter blocks, framebuffers, resource copies.
+	// module: the init parameter blocks, resource copies, surface records.
 	platformDataBase uint32 = 0x30000000
-	platformDataSize uint64 = 32 << 20
+	platformDataSize uint64 = 16 << 20
+	// surfaceBase holds nothing but pixels — the LCD and every offscreen
+	// surface a title draws into.
+	//
+	// **A title's drawing is not bounded by the surface it was given.** A Clet
+	// writes pixels through the pointer this platform hands it, and one local
+	// title's own fill loop runs past the end of the LCD by several thousand
+	// bytes on the screen it clears before its first frame. On a handset that
+	// lands in whatever the LCD's memory is followed by; here it landed in the
+	// next thing this arena had handed out, which was the platform's own
+	// bookkeeping — the copy of a resource name that MC_knlGetResourceID
+	// answers with, sitting sixty bytes past the end of the screen. The name
+	// came back empty, the resource read that followed failed, and the title
+	// allocated a buffer from the garbage it had parsed and wrote through the
+	// null it got. Splitting the region is what makes that overrun land in
+	// space nothing else is keeping.
+	//
+	// The two halves are the same size because neither is close to full: the
+	// heaviest local title's surfaces come to a few megabytes and its platform
+	// data to far less. The sixteen megabytes above the surfaces are left
+	// unmapped on purpose — a small overrun lands in surface space and is
+	// absorbed, and one that walks a whole region faults where it happens
+	// rather than reaching the stubs.
+	surfaceBase uint32 = 0x31000000
+	surfaceSize uint64 = 16 << 20
 	// platformCodeBase holds the SVC stubs the import table hands back. It
 	// sits above the data arena with a gap: the arena hands out every byte it
 	// spans, and a stub arena inside that span would be handed to the module
@@ -36,7 +60,8 @@ const (
 	platformCodeSize uint64 = 1 << 20
 	// This expression does not compile if the two are ever made to overlap
 	// again: an unsigned constant cannot go negative.
-	_ = uint64(platformCodeBase) - (uint64(platformDataBase) + platformDataSize)
+	_ = uint64(platformCodeBase) - (uint64(surfaceBase) + surfaceSize)
+	_ = uint64(surfaceBase) - (uint64(platformDataBase) + platformDataSize)
 	// stackBase is the Clet thread's stack.
 	stackBase uint32 = 0x40000000
 	stackSize uint64 = 1 << 20
@@ -99,13 +124,20 @@ type Client struct {
 	logger    *slog.Logger
 	saveStore backend.SaveStore
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// arena is the platform's own data, surfaces the pixels a title draws
+	// into. They are separate regions because a title's drawing runs past the
+	// surface it was given; see surfaceBase.
 	arena     *arena
+	surfaces  *arena
 	heap      *arena
 	codeCurse uint32
 	stubs     map[uint64]uint32
 	clet      CletFunctions
 	exited    bool
+	// exitedFrom is the guest address MC_knlExit was called from, kept so the
+	// ending can be placed the way a failure is.
+	exitedFrom uint32
 
 	// screen is the LCD the game draws into, and frame is what the Host
 	// takes. A Clet may draw straight into the framebuffer memory, so the
@@ -216,6 +248,10 @@ type Client struct {
 	// searching that table for it. A fresh copy per call makes every one of
 	// those searches miss. See handleResource in wipic_file.go.
 	resourceIDs map[string]uint32
+	// resourceNames is the same pairing the other way round, and it is what
+	// MC_knlGetResource resolves an id through: the copy in guest memory is
+	// the title's to overwrite, and one of them does.
+	resourceNames map[uint32]string
 
 	// trace records recent platform calls when a caller asked for one. It is
 	// nil otherwise, which is what keeps an untraced run free of the cost.
@@ -324,6 +360,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	}{
 		{heapBase, heapSize, armcore.PermissionReadWrite, "heap"},
 		{platformDataBase, platformDataSize, armcore.PermissionReadWrite, "platform data"},
+		{surfaceBase, surfaceSize, armcore.PermissionReadWrite, "surfaces"},
 		{platformCodeBase, platformCodeSize, armcore.PermissionReadWriteExecute, "platform code"},
 		{stackBase, stackSize, armcore.PermissionReadWrite, "stack"},
 	} {
@@ -342,6 +379,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		logger:       options.Logger,
 		saveStore:    options.SaveStore,
 		arena:        newArena(platformDataBase, platformDataSize),
+		surfaces:     newArena(surfaceBase, surfaceSize),
 		heap:         newArena(heapBase, heapSize),
 		codeCurse:    platformCodeBase,
 		stubs:        make(map[uint64]uint32),
@@ -566,6 +604,17 @@ func (client *Client) call(ctx context.Context, address uint32, arguments []uint
 	return client.callOn(ctx, client.thread, address, arguments)
 }
 
+// exitError is the ending, as an error, with the call site the guest left from
+// attached. Every layer above matches on the sentinel with errors.Is, so the
+// wrapping costs them nothing and gives whoever reads the report an address
+// instead of a bare "the game exited".
+func (client *Client) exitError() error {
+	if client.exitedFrom == 0 {
+		return ErrGuestExited
+	}
+	return fmt.Errorf("MC_knlExit from %#x: %w", client.exitedFrom, ErrGuestExited)
+}
+
 // callOn runs one guest function to completion below a thread's current frame.
 //
 // **Which thread matters.** A call made while the guest is inside a platform
@@ -580,7 +629,7 @@ func (client *Client) callOn(
 	ctx context.Context, thread *armcore.Thread, address uint32, arguments []uint32,
 ) (uint32, error) {
 	if client.exited {
-		return 0, ErrGuestExited
+		return 0, client.exitError()
 	}
 	// A try region belongs to the call that opened it: see dropJavaTryFrames.
 	client.javaCallDepth++
@@ -588,11 +637,11 @@ func (client *Client) callOn(
 		client.javaCallDepth--
 		client.dropJavaTryFrames(client.javaCallDepth)
 	}()
+	// An exit arrives as an error like any other, and it already says where it
+	// came from: replacing it here with the bare sentinel is what threw that
+	// away, and left a Host with an ending it could not place.
 	summary, err := client.core.Call(ctx, thread, address, returnAddress, arguments, client.handleSupervisorCall)
 	if err != nil {
-		if client.exited {
-			return 0, ErrGuestExited
-		}
 		return 0, err
 	}
 	return summary.Context.Registers[0], nil
@@ -798,6 +847,20 @@ func (client *Client) allocate(size uint64) (uint32, error) {
 	address, ok := client.arena.allocate(size)
 	if !ok {
 		return 0, fmt.Errorf("LGT platform data space exhausted")
+	}
+	return address, nil
+}
+
+// allocateSurface reserves pixels in the surface region. A surface is the one
+// allocation a title writes into itself, so it is kept away from everything
+// the platform has to be able to read back; see surfaceBase.
+func (client *Client) allocateSurface(size uint64) (uint32, error) {
+	if size > maxPlatformAllocation {
+		return 0, fmt.Errorf("LGT surface allocation %d exceeds %d bytes", size, maxPlatformAllocation)
+	}
+	address, ok := client.surfaces.allocate(size)
+	if !ok {
+		return 0, fmt.Errorf("LGT surface space exhausted")
 	}
 	return address, nil
 }

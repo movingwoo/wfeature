@@ -664,3 +664,224 @@ func TestDataInputStreamResetsThroughToItsSource(t *testing.T) {
 		t.Fatalf("readByte() after reset = %d, want 9", value)
 	}
 }
+
+// The boxed flag. A title puts one in a Vector and reads Boolean.TRUE to make
+// it, and the class existed nowhere until it did: `new Boolean(true)` resolves
+// the class before it can call anything, so the whole class was one stop.
+func TestBooleanBoxesAFlagAndPublishesItsInstances(t *testing.T) {
+	vm := New(nil, Options{})
+	for _, probe := range []struct {
+		value int32
+		text  string
+		hash  int32
+	}{{1, "true", 1231}, {0, "false", 1237}} {
+		object, err := vm.NewObject(BooleanClass, "(Z)V", IntValue(probe.value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		flag, err := vm.InvokeVirtual(object, "booleanValue", "()Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, _ := flag.Int32(); value != probe.value {
+			t.Fatalf("booleanValue() = %d, want %d", value, probe.value)
+		}
+		text, err := vm.InvokeVirtual(object, "toString", "()Ljava/lang/String;")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reference, _ := text.Reference()
+		if got, _ := StringText(reference); got != probe.text {
+			t.Fatalf("toString() = %q, want %q", got, probe.text)
+		}
+		// The hash is the specification's two constants rather than the value,
+		// which is what a title hashing a flag into a Hashtable depends on.
+		hash, err := vm.InvokeVirtual(object, "hashCode", "()I")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, _ := hash.Int32(); value != probe.hash {
+			t.Fatalf("hashCode() = %d, want %d", value, probe.hash)
+		}
+	}
+
+	// TRUE and FALSE are the same object every read, because a title compares
+	// a boxed flag against the field rather than calling equals.
+	first, err := vm.StaticField(BooleanClass, "TRUE", "Ljava/lang/Boolean;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := vm.StaticField(BooleanClass, "TRUE", "Ljava/lang/Boolean;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, _ := first.Reference()
+	repeated, _ := again.Reference()
+	if published == nil || published != repeated {
+		t.Fatalf("Boolean.TRUE read twice gave %p and %p", published, repeated)
+	}
+	value, err := vm.InvokeVirtual(published, "booleanValue", "()Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag, _ := value.Int32(); flag != 1 {
+		t.Fatalf("Boolean.TRUE.booleanValue() = %d, want 1", flag)
+	}
+	// A guest may pass any non-zero int for true, and two boxes of the same
+	// flag have to compare equal however they were made.
+	other, err := vm.NewObject(BooleanClass, "(Z)V", IntValue(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal, err := vm.InvokeVirtual(other, "equals", "(Ljava/lang/Object;)Z", ReferenceValue(published))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag, _ := equal.Int32(); flag != 1 {
+		t.Fatal("two boxes of true do not compare equal")
+	}
+}
+
+// A title that keeps its text in a char array appends a window of it to a line
+// rather than building a String in between.
+func TestStringBufferAppendsACharArrayWindow(t *testing.T) {
+	vm := New(nil, Options{})
+	array, err := vm.InvokeVirtual(vm.NewString("WIPI 1.2"), "toCharArray", "()[C")
+	if err != nil {
+		t.Fatal(err)
+	}
+	characters, err := array.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := vm.NewObject(StringBufferClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "append", "([CII)Ljava/lang/StringBuffer;", ReferenceValue(characters), IntValue(5), IntValue(3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "append", "([C)Ljava/lang/StringBuffer;", ReferenceValue(characters)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeVirtual(buffer, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := result.Reference()
+	if got, _ := StringText(text); got != "1.2WIPI 1.2" {
+		t.Fatalf("append([CII) then append([C) built %q", got)
+	}
+	// A window the array cannot hold is the caller's own error rather than a
+	// silently shortened append.
+	if _, err := vm.InvokeVirtual(buffer, "append", "([CII)Ljava/lang/StringBuffer;", ReferenceValue(characters), IntValue(6), IntValue(9)); err == nil {
+		t.Fatal("an over-long window was appended")
+	}
+}
+
+// Five StringBuffer members and four String members had working bodies and no
+// declaration, so nothing could resolve them. These are the calls a title
+// makes through the class rather than through a native dispatch.
+func TestStringAndBufferMembersResolveThroughTheirClass(t *testing.T) {
+	vm := New(nil, Options{})
+	buffer, err := vm.NewObject(StringBufferClass, "(I)V", IntValue(16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, form := range []struct {
+		descriptor string
+		argument   Value
+	}{
+		{"(J)Ljava/lang/StringBuffer;", LongValue(12)},
+		{"(Z)Ljava/lang/StringBuffer;", IntValue(1)},
+	} {
+		if _, err := vm.InvokeVirtual(buffer, "append", form.descriptor, form.argument); err != nil {
+			t.Fatalf("append%s: %v", form.descriptor, err)
+		}
+	}
+	if _, err := vm.InvokeVirtual(buffer, "append", "(Ljava/lang/Object;)Ljava/lang/StringBuffer;", ReferenceValue(vm.NewString("x"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "setLength", "(I)V", IntValue(2)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeVirtual(buffer, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := result.Reference()
+	if got, _ := StringText(text); got != "12" {
+		t.Fatalf("the buffer holds %q, want %q", got, "12")
+	}
+
+	replaced, err := vm.InvokeVirtual(vm.NewString("a.b.c"), "replace", "(CC)Ljava/lang/String;", IntValue('.'), IntValue('/'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := replaced.Reference()
+	if got, _ := StringText(object); got != "a/b/c" {
+		t.Fatalf("replace('.', '/') = %q", got)
+	}
+}
+
+// The four fields the specification declares protected on a byte source carry
+// the specification's own names, because a title subclasses the stream and
+// reads `buf` rather than copying the array back out of it.
+func TestByteArrayInputStreamPublishesTheSpecifiedFieldNames(t *testing.T) {
+	vm := New(nil, Options{})
+	array := NewByteArray([]byte{1, 2, 3, 4, 5})
+	stream, err := vm.NewObject(ByteArrayInputStreamClass, "([BII)V", ReferenceValue(array), IntValue(1), IntValue(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := vm.Field(stream, ByteArrayInputStreamClass, "buf", "[B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := buffer.Reference(); held != array {
+		t.Fatal("buf does not name the array the stream was opened on")
+	}
+	if _, err := vm.InvokeVirtual(stream, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []struct {
+		name string
+		want int32
+	}{{"pos", 2}, {"count", 4}, {"mark", 1}} {
+		value, err := vm.Field(stream, ByteArrayInputStreamClass, field.name, "I")
+		if err != nil {
+			t.Fatalf("%s: %v", field.name, err)
+		}
+		if held, _ := value.Int32(); held != field.want {
+			t.Fatalf("%s = %d, want %d", field.name, held, field.want)
+		}
+	}
+}
+
+// The long form of valueOf. Five KTF archives name it in their client image's
+// pool — a score, a coin count, a clock — and this library had every other
+// form of it, so each of those five would have stopped at the call rather than
+// at anything to do with the number.
+func TestStringValueOfFormatsALong(t *testing.T) {
+	vm := New(nil, Options{})
+	for _, probe := range []struct {
+		value int64
+		want  string
+	}{
+		{0, "0"},
+		{1234567890123, "1234567890123"},
+		{-9223372036854775808, "-9223372036854775808"},
+	} {
+		result, err := vm.InvokeStatic(StringClass, "valueOf", "(J)Ljava/lang/String;", LongValue(probe.value))
+		if err != nil {
+			t.Fatalf("valueOf(%d): %v", probe.value, err)
+		}
+		object, err := result.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text, _ := StringText(object); text != probe.want {
+			t.Fatalf("valueOf(%d) = %q, want %q", probe.value, text, probe.want)
+		}
+	}
+}

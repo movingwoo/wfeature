@@ -313,3 +313,46 @@ func runtimeDefinition() ClassDefinition {
 		},
 	}
 }
+
+// booleanDefinition is the boxed flag. It is the one boxed type this library
+// never declared, and a title that keeps a flag in a Vector — or reads
+// Boolean.TRUE to put one there — resolves the class before it can box
+// anything, so the omission stopped a title rather than a call.
+//
+// TRUE and FALSE are the two instances the specification publishes. They are
+// built in the class initializer rather than answered by a Go singleton so
+// that a title comparing a boxed flag against Boolean.TRUE with `==` gets the
+// same object every time it reads the field.
+func booleanDefinition() ClassDefinition {
+	native := AccessPublic | AccessNative
+	return ClassDefinition{
+		Name:      BooleanClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessFinal,
+		Fields: []FieldDefinition{
+			{Name: "TRUE", Descriptor: "Ljava/lang/Boolean;", Access: AccessPublic | AccessStatic | AccessFinal},
+			{Name: "FALSE", Descriptor: "Ljava/lang/Boolean;", Access: AccessPublic | AccessStatic | AccessFinal},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "(Z)V", Access: native},
+			{Name: "booleanValue", Descriptor: "()Z", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "<clinit>", Descriptor: "()V", Access: AccessStatic, Body: booleanClassInit},
+		},
+	}
+}
+
+func booleanClassInit(call *Invocation, _ []Value) (Value, error) {
+	for name, value := range map[string]int32{"TRUE": 1, "FALSE": 0} {
+		object, err := call.NewObject(BooleanClass, "(Z)V", IntValue(value))
+		if err != nil {
+			return VoidValue(), err
+		}
+		if err := call.SetStaticField(BooleanClass, name, "Ljava/lang/Boolean;", ReferenceValue(object)); err != nil {
+			return VoidValue(), err
+		}
+	}
+	return VoidValue(), nil
+}

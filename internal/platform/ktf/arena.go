@@ -18,13 +18,13 @@ type guestArena struct {
 	// allocation that reuses released space from one that claims space nothing
 	// has ever held.
 	highWater uint64
-	// poisonReleased and checkReused are the two halves of the use-after-free
-	// detector in arena_poison.go: the first marks a block that has just gone
-	// back, the second reports one whose mark did not survive being left
+	// recordReleased and checkReused are the two halves of the use-after-free
+	// detector in arena_shadow.go: the first remembers a block that has just
+	// gone back, the second reports one whose bytes did not survive being left
 	// alone. They belong to the arena rather than to either caller because
-	// both the guest's free and the object collector release here, and a mark
-	// applied on one path only would read every collected object as a fault.
-	poisonReleased func(address uint32, size uint64)
+	// both the guest's free and the object collector release here, and a copy
+	// taken on one path only would read every collected object as a fault.
+	recordReleased func(address uint32, size uint64)
 	checkReused    func(address uint32, size uint64)
 }
 
@@ -77,7 +77,7 @@ func (arena *guestArena) allocate(size uint64) (uint32, bool) {
 	arena.cursor = end
 	// A release at the top of the arena goes back to the cursor rather than to
 	// the list, so space below the high-water mark is reuse just as a listed
-	// block is, and is marked the same way.
+	// block is, and is checked the same way.
 	if arena.checkReused != nil && start < arena.highWater {
 		arena.checkReused(uint32(start), min(end, arena.highWater)-start)
 	}
@@ -95,8 +95,8 @@ func (arena *guestArena) release(address uint32, size uint64) {
 	if start < uint64(arena.base) || end > arena.cursor {
 		return
 	}
-	if arena.poisonReleased != nil {
-		arena.poisonReleased(address, size)
+	if arena.recordReleased != nil {
+		arena.recordReleased(address, size)
 	}
 	// A block at the very top of the arena is better given back to the cursor
 	// than kept on the list: it keeps the high-water mark honest, which is what

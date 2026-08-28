@@ -602,7 +602,10 @@ func runtimeJletGetAppProperty(runtime *initializationRuntime, vm *jvm.VM, argum
 // rather than a failure.
 func runtimeJletNotifyDestroyed(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	runtime.countDiagnostic("Jlet.notifyDestroyed")
-	return jvm.VoidValue(), ErrGuestExited
+	// Which of the two endings this was is worth carrying: a Java title
+	// declaring itself finished and a native one calling MC_knlExit reach a
+	// Host as the same error, and the two are looked into differently.
+	return jvm.VoidValue(), fmt.Errorf("Jlet.notifyDestroyed: %w", ErrGuestExited)
 }
 
 // runtimeDisplayAddListener registers a Jlet event listener. Notify events and

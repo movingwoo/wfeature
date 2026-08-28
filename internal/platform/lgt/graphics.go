@@ -258,7 +258,7 @@ func (client *Client) newFramebuffer(width, height int, screen bool) (*framebuff
 	if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
 		return nil, fmt.Errorf("LGT framebuffer %dx%d is outside the supported range", width, height)
 	}
-	address, err := client.allocate(uint64(width) * uint64(height) * 2)
+	address, err := client.allocateSurface(uint64(width) * uint64(height) * 2)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +304,7 @@ func (client *Client) releaseSurface(buffer *framebuffer) {
 	if buffer == nil || buffer.screen {
 		return
 	}
-	client.arena.release(buffer.address)
+	client.surfaces.release(buffer.address)
 	client.arena.release(buffer.handle)
 	delete(client.framebuffers, buffer.handle)
 }

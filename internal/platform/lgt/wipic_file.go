@@ -50,6 +50,16 @@ type openFile struct {
 // right at the first call and fail at the second, because the size is then
 // what arrives where a name is expected.
 //
+// **An id this platform issued is read back from its own table, not from the
+// guest's memory.** The id is a pointer to a copy of the name because that is
+// the handle the other WIPI platform hands out, and a copy in guest memory is
+// something a title can write over: one local title's fill loop runs past the
+// end of the LCD and lands on it, after which the name reads empty, the read
+// fails, and the title parses garbage into an allocation size. The overrun is
+// kept away from the platform's data now (see surfaceBase), and this is the
+// other half of the same answer — what the platform issued, the platform
+// remembers.
+//
 // **One name answers one id, for the life of the client.** The id is the
 // resource's identity to a title, not a scratch handle it is done with when
 // the read returns: a title here reads its resource list at boot and builds a
@@ -65,9 +75,13 @@ func (client *Client) handleResource(thread *armcore.Thread, slot uint32) error 
 	if err != nil {
 		return err
 	}
-	name, err := client.readCString(identifier)
-	if err != nil {
-		return err
+	name, known := client.resourceNames[identifier]
+	if !known {
+		// A name the platform has not issued an id for is read from guest
+		// memory, which is what MC_knlGetResourceID is always handed.
+		if name, err = client.readCString(identifier); err != nil {
+			return err
+		}
 	}
 	data, ok := client.readFile(name)
 	if slot == slotGetResourceID {
@@ -100,6 +114,10 @@ func (client *Client) handleResource(thread *armcore.Thread, slot uint32) error 
 			client.resourceIDs = make(map[string]uint32)
 		}
 		client.resourceIDs[name] = handle
+		if client.resourceNames == nil {
+			client.resourceNames = make(map[uint32]string)
+		}
+		client.resourceNames[handle] = name
 		return thread.SetRegister(0, handle)
 	}
 	if !ok {
@@ -347,6 +365,16 @@ func (client *Client) openFile(name string, flag uint32) int32 {
 			return wipiNoEntry
 		}
 		data = nil
+		// **The create happens at open, not at the first write.** A handset
+		// has the file the moment the open returns, so everything that asks
+		// about a path — MC_fsFileAttribute, MC_fsIsExist, a second open —
+		// answers about a file of length zero from here on. Leaving the
+		// creation until something is written keeps the handle usable but
+		// hides the file from those calls, and a title that opens its save and
+		// immediately stats it is told there is no such file. One reads that
+		// as a filesystem it cannot save to and quits with a message saying
+		// so, before any of its own screens.
+		client.writeFile(name, nil)
 	}
 	cursor := 0
 	switch {

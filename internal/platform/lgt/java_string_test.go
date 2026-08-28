@@ -1,6 +1,9 @@
 package lgt
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A string constant answers the object, and the same object every time: the
 // module's own helper for a constant is nothing but this call and returns what
@@ -203,5 +206,44 @@ func TestJavaStringBufferAppendsANumber(t *testing.T) {
 	}
 	if text, _ := client.javaText(buffer); text != "-12" {
 		t.Errorf("the buffer holds %q, want %q", text, "-12")
+	}
+}
+
+// `String.valueOf(Object)` is null-safe and answers the same text
+// `StringBuffer.append(Object)` appends, which is what keeps the two agreeing
+// about an object neither of them built the characters of.
+func TestStringValueOfObjectIsNullSafeAndNamesTheClass(t *testing.T) {
+	client := fixtureClient(t)
+
+	empty, err := javaStringValueOfObject(client, nil, nil, []uint32{0})
+	if err != nil {
+		t.Fatalf("valueOf(null) error = %v", err)
+	}
+	if text, _ := client.javaText(empty); text != "null" {
+		t.Errorf("valueOf(null) = %q, want %q", text, "null")
+	}
+
+	held, err := client.newJavaString("already text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := javaStringValueOfObject(client, nil, nil, []uint32{held})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := client.javaText(same); text != "already text" {
+		t.Errorf("valueOf(String) = %q, want the string's own characters", text)
+	}
+
+	// An object with no text of its own is named by its class, which is
+	// `Object.toString()`'s shape — and is the documented limit here: a class
+	// that overrides toString is still answered this way.
+	other, err := javaStringValueOfObject(client, nil, nil, []uint32{0x30001234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := client.javaText(other)
+	if !strings.Contains(text, "@") {
+		t.Errorf("valueOf(Object) = %q, want a class-and-address form", text)
 	}
 }

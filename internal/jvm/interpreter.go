@@ -336,8 +336,12 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 			if err := vm.setStaticValue(state, reference, value); err != nil {
 				return stepResult{}, err
 			}
+			// The key is the resolved one, because that is the slot the write
+			// went to: an observer answering "what wrote this" has to name the
+			// field it can read back.
+			resolved := vm.resolveFieldReference(reference)
 			vm.observeStore(StoreEvent{
-				Class: reference.Class, Key: fieldReferenceKey(reference), Index: -1, Value: value,
+				Class: resolved.Class, Key: fieldReferenceKey(resolved), Index: -1, Value: value,
 				SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
 			})
 			return stepResult{}, nil
@@ -367,7 +371,7 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		// Reported after the store and only when it happened: an observer is
 		// answering "what wrote this", and a store that threw wrote nothing.
 		vm.observeStore(StoreEvent{
-			Object: object, Key: fieldReferenceKey(reference), Index: -1, Value: value,
+			Object: object, Key: fieldReferenceKey(vm.resolveFieldReference(reference)), Index: -1, Value: value,
 			SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
 		})
 		return stepResult{}, nil

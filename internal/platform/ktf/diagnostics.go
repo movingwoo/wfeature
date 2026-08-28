@@ -338,8 +338,8 @@ func (runtime *initializationRuntime) diagnosticCounts() map[string]uint32 {
 	// it found, because a report with no fault in it says nothing unless it
 	// also says the detector was running. Both stay absent in a release build,
 	// where it is not.
-	if runtime.poisonedBlocks > 0 {
-		counts["arena blocks marked on release"] = countedTotal(runtime.poisonedBlocks)
+	if runtime.shadowedBlocks > 0 {
+		counts["arena blocks recorded on release"] = countedTotal(runtime.shadowedBlocks)
 	}
 	if runtime.checkedBlocks > 0 {
 		counts["arena blocks checked on reuse"] = countedTotal(runtime.checkedBlocks)

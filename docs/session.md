@@ -590,6 +590,39 @@ Both paths now answer the same way: the session closes and the page is told the
 game exited. `session.ErrExited` is what an input call reports it with, and
 anything else stays a failure.
 
+### An ending says where it came from
+
+**"The game exited" on its own is not a finding, it is the absence of one.** A
+title of this era ends itself for ordinary reasons — a quit menu, a game over, a
+first-run notice that writes a flag and asks to be launched again — and every
+one of those reached a reader as the same four words. Nothing prints a stack for
+an ending, because it is not a failure, so the reader had no address, no call,
+and no way to tell a working title from one that gave up on its opening screen.
+A manual sweep of the corpus filed nineteen titles as broken on that line alone;
+fourteen of them were the restart notice and ran on the second launch.
+
+So the platforms name the call site and the layers above keep the text:
+
+- `MC_knlExit` wraps the sentinel with the address in the link register, which
+  the import stub leaves intact because it arrives with `bx lr`. The WIPI Java
+  path does the same for `Jlet.notifyDestroyed`, which is the other ending and
+  is looked into differently.
+- Every layer above matches with `errors.Is`, so the wrapping costs them
+  nothing. The one place it used to be thrown away was a re-entry check that
+  replaced a live error with the bare sentinel; it now returns what it was
+  given.
+- `session.Progress.ExitReason` carries it out of the tick, and
+  `Session.ExitReason()` keeps it after the session is closed — which is the
+  only time a Host has to report one.
+- The CLI prints `the game exited at tick N: …` and puts `exited` and
+  `exit_reason` in its summary. The server writes `ended: the game exited: …`
+  into the session report and sends the reason with the `exited` message, so it
+  lands in the page's run log. The player's status line is unchanged: an address
+  is for whoever reads the log afterwards, not for whoever is holding the phone.
+
+The reason reads as the chain it came through, ending in the sentinel — the
+call the guest was inside, the supervisor call, and the address it left from.
+
 ### A guest thread that panics is a failed game, not a dead server
 
 Guest code also runs on goroutines of its own: each platform's guest threads,

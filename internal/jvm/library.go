@@ -12,6 +12,7 @@ const (
 	ThreadClass                = "java/lang/Thread"
 	SystemClass                = "java/lang/System"
 	ThrowableClass             = "java/lang/Throwable"
+	BooleanClass               = "java/lang/Boolean"
 	IntegerClass               = "java/lang/Integer"
 	LongClass                  = "java/lang/Long"
 	ByteClass                  = "java/lang/Byte"

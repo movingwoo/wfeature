@@ -116,6 +116,13 @@ type javaRuntime struct {
 	// object it was built on. A wrapper stands for the same open sink, so it
 	// holds the other object's handle rather than a second block of bytes.
 	wrapped map[uint32]uint32
+	// sinkFiles binds a sink to the org/kwis/msp/io/File it drains into, for
+	// the streams File.openOutputStream hands out, and streamFiles binds a
+	// read stream to the File it was opened on so the file's cursor can follow
+	// what the stream consumed. A sink or stream with no entry here is a plain
+	// one and is bound to nothing. See java_file.go.
+	sinkFiles   map[uint32]uint32
+	streamFiles map[uint32]uint32
 	// dates is the instant each java/util/Date stands for.
 	dates          map[uint32]int64
 	databases      map[uint32]*javaDatabase
@@ -138,25 +145,27 @@ type javaRuntime struct {
 
 func newJavaRuntime() *javaRuntime {
 	return &javaRuntime{
-		byHandle:   map[uint32]*javaRuntimeClass{},
-		byObject:   map[uint32]*javaRuntimeClass{},
-		byName:     map[string]*javaRuntimeClass{},
-		strings:    map[uint32]string{},
-		named:      map[string]bool{},
-		singletons: map[string]uint32{},
-		random:     map[uint32]*rand.Rand{},
-		streams:    map[uint32]*javaStream{},
-		images:     map[uint32]uint32{},
-		files:      map[uint32]uint32{},
-		graphics:   map[uint32]*javaGraphics{},
-		threads:    map[uint32]*javaThread{},
-		monitors:   map[uint32]*javaMonitor{},
-		vectors:    map[uint32][]uint32{},
-		calendars:  map[uint32]int64{},
-		sinks:      map[uint32][]byte{},
-		wrapped:    map[uint32]uint32{},
-		dates:      map[uint32]int64{},
-		databases:  map[uint32]*javaDatabase{},
+		byHandle:    map[uint32]*javaRuntimeClass{},
+		byObject:    map[uint32]*javaRuntimeClass{},
+		byName:      map[string]*javaRuntimeClass{},
+		strings:     map[uint32]string{},
+		named:       map[string]bool{},
+		singletons:  map[string]uint32{},
+		random:      map[uint32]*rand.Rand{},
+		streams:     map[uint32]*javaStream{},
+		images:      map[uint32]uint32{},
+		files:       map[uint32]uint32{},
+		graphics:    map[uint32]*javaGraphics{},
+		threads:     map[uint32]*javaThread{},
+		monitors:    map[uint32]*javaMonitor{},
+		vectors:     map[uint32][]uint32{},
+		calendars:   map[uint32]int64{},
+		sinks:       map[uint32][]byte{},
+		wrapped:     map[uint32]uint32{},
+		sinkFiles:   map[uint32]uint32{},
+		streamFiles: map[uint32]uint32{},
+		dates:       map[uint32]int64{},
+		databases:   map[uint32]*javaDatabase{},
 	}
 }
 
@@ -680,8 +689,18 @@ func (client *Client) describeJavaVirtualSlot(slot uint32) string {
 	if !known {
 		return fmt.Sprintf("vtable slot %d", index)
 	}
-	if _, member, ok := client.javaVirtualMember(slot); ok {
-		return fmt.Sprintf("%s.%s (vtable slot %d)", name, member, index)
+	if owner, member, ok := client.javaVirtualMember(slot); ok {
+		// **The name to report is the one a lookup uses**, which is the class
+		// the slot was numbered under rather than the class dispatching on it.
+		// Reporting the dispatching class sends whoever implements the method
+		// to register it under a name nothing will ever ask for: this platform
+		// splits some library classes the way the original runtime did, so a
+		// call on `Clip` is numbered under its superclass and answers to that.
+		// The dispatching class is still worth saying when the two differ.
+		if owner != name {
+			return fmt.Sprintf("%s.%s (vtable slot %d, dispatched on %s)", owner, member, index, name)
+		}
+		return fmt.Sprintf("%s.%s (vtable slot %d)", owner, member, index)
 	}
 	// A class the module lists no virtual methods for: the compiler numbered
 	// this slot against a platform header, so the number is all there is.

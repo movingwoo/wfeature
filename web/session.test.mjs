@@ -202,3 +202,25 @@ test("a start carries a screen only when it is not the default", async () => {
   assert.equal(asPlain.width, undefined);
   assert.equal(asPlain.height, undefined);
 });
+
+// An ending arrives with the platform's own account of it. The page's run log
+// is where an ending gets read afterwards, and a bare "the game exited" is
+// what left a sweep unable to tell a title's first-run restart notice — these
+// games quit themselves and ask to be launched again — from a title that broke.
+test("an ending hands over the reason the server sent with it", async () => {
+  const endings = [];
+  const { socket } = await openFakeSession({ onExited: reason => endings.push(reason) });
+
+  socket.deliver({
+    kind: "exited",
+    message: "run LGT handleCletEvent at 0x1219: MC_knlExit from 0x1959: LGT guest exited",
+  });
+  assert.equal(endings.length, 1);
+  assert.match(endings[0], /0x1959/);
+
+  // A server with nothing to say still ends the game, and the handler must be
+  // able to tell that apart from a reason rather than printing "undefined".
+  socket.deliver({ kind: "exited" });
+  assert.equal(endings.length, 2);
+  assert.equal(endings[1], "");
+});

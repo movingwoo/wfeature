@@ -495,11 +495,17 @@ const openSession = async () => {
   const opening = new GameSession({
     onFrame: drawFrame,
     onAudio: events => playAudioEvents(pageAudio, events),
-    onExited: () => {
+    onExited: reason => {
       gameRunning = false;
       // A game that ended has nothing to come back to.
       rememberResumeToken("");
-      recordEvent(`${currentPlatform} session exited`);
+      // The reason is for the run log, not for the player: it names a guest
+      // address and the platform call the game left from, which is what makes
+      // an ending investigable afterwards. The status line stays the sentence
+      // whoever is holding the phone can act on.
+      recordEvent(reason
+        ? `${currentPlatform} session exited: ${reason}`
+        : `${currentPlatform} session exited`);
       setStatus("게임이 종료되었습니다. 🔄 재시작으로 다시 시작할 수 있습니다.");
     },
     onError: message => {

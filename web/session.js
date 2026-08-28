@@ -25,7 +25,7 @@ export const sessionAvailable = () =>
   typeof WebSocket === "function" && typeof createImageBitmap === "function";
 
 export class GameSession {
-  // handlers: onFrame(bitmap), onAudio(events), onStarted(info), onExited(),
+  // handlers: onFrame(bitmap), onAudio(events), onStarted(info), onExited(reason),
   // onError(message), onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
@@ -119,7 +119,9 @@ export class GameSession {
         this.handlers.onStarted?.(message.started);
         break;
       case "exited":
-        this.handlers.onExited?.();
+        // The reason travels with the ending: a game of this era quits itself
+        // for ordinary reasons, and the run log is where that gets read.
+        this.handlers.onExited?.(message.message ?? "");
         break;
       case "audio":
         this.handlers.onAudio?.(message.audio ?? []);

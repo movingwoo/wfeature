@@ -374,8 +374,13 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			continue
 		}
 		if progress.Exited {
-			r.endGame("the game exited", true)
-			r.send(serverMessage{Kind: serverExited})
+			// **An ending says where it came from.** A game of this era ends
+			// itself for ordinary reasons, and a page that reports only "the
+			// game exited" leaves its reader unable to tell a quit menu from a
+			// title that gave up on its first screen — which is how a working
+			// game gets written down as a broken one.
+			r.endGame(endedByExit(progress.ExitReason), true)
+			r.send(serverMessage{Kind: serverExited, Message: progress.ExitReason})
 			continue
 		}
 
@@ -384,6 +389,17 @@ func (r *sessionRunner) loop(ctx context.Context) {
 		// wait out the guest's idle time to be delivered.
 		r.drainCommands(ctx, progress.Wait)
 	}
+}
+
+// endedByExit is the cause line for a game that ended itself. The reason is the
+// platform's own text, and it is appended rather than replacing the sentence so
+// that the reports of every profile still start the same way — a sweep greps
+// the first half, a person reads the second.
+func endedByExit(reason string) string {
+	if reason == "" {
+		return "the game exited"
+	}
+	return "the game exited: " + reason
 }
 
 // drainCommands handles everything queued, then waits out the guest's idle
@@ -432,8 +448,8 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		case err == nil:
 		case errors.Is(err, session.ErrExited):
 			// A game that ends on a key press has ended, not failed.
-			r.endGame("the game exited", true)
-			r.send(serverMessage{Kind: serverExited})
+			r.endGame(endedByExit(r.game.ExitReason()), true)
+			r.send(serverMessage{Kind: serverExited, Message: r.game.ExitReason()})
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}
@@ -449,8 +465,8 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 			// dropped rather than reported: the alternative is an error rail
 			// filling up because somebody rested a thumb on the canvas.
 		case errors.Is(err, session.ErrExited):
-			r.endGame("the game exited", true)
-			r.send(serverMessage{Kind: serverExited})
+			r.endGame(endedByExit(r.game.ExitReason()), true)
+			r.send(serverMessage{Kind: serverExited, Message: r.game.ExitReason()})
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}

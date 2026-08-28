@@ -178,3 +178,94 @@ func TestByteSinkPublishesItsBuffer(t *testing.T) {
 		t.Fatalf("published buf after growth = %#x, want %#x", words[0], moved)
 	}
 }
+
+// The source publishes the same word, and a title that decodes straight out of
+// the array it is streaming reads it there. The constructor is the only
+// mutator, so this is what the guest sees for the life of the stream.
+func TestByteSourcePublishesItsBuffer(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	classAddress, err := runtime.ensureJavaClass(jvm.ByteArrayInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, object, err := runtime.allocateAOTInstance(classAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The lookup the guest makes: the field record has to be findable from
+	// the class record, which is where a title reading buf stopped.
+	if _, found, err := client.JVM().FindAOTField(classAddress, "buf", "[B"); err != nil {
+		t.Fatal(err)
+	} else if !found {
+		t.Fatal("buf:[B does not resolve from the guest's ByteArrayInputStream record")
+	}
+	array := jvm.NewByteArray([]byte{1, 2, 3, 4})
+	if _, err := client.JVM().InvokeSpecial(object, jvm.ByteArrayInputStreamClass, "<init>", "([B)V", jvm.ReferenceValue(array)); err != nil {
+		t.Fatal(err)
+	}
+	construct := runtimeJavaMethod{class: jvm.ByteArrayInputStreamClass, name: "<init>", descriptor: "([B)V"}
+	if err := runtime.publishGuestFields(object, construct); err != nil {
+		t.Fatal(err)
+	}
+	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := client.JVM().AOTAddress(array)
+	if !ok {
+		t.Fatal("the source array was not bound to guest memory")
+	}
+	if words[0] != bound {
+		t.Fatalf("published buf = %#x, want the bound array at %#x", words[0], bound)
+	}
+	// Reading moves an index the Go side keeps and leaves the array alone, so
+	// the word the guest already read stays valid.
+	if _, err := client.JVM().InvokeVirtual(object, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after[0] != bound {
+		t.Fatalf("buf after a read = %#x, want %#x", after[0], bound)
+	}
+}
+
+// A title that boxes a flag resolves java/lang/Boolean first, and the class
+// was published by nothing until it did. TRUE is a static whose word has to
+// name the very object the core library holds, because a title compares the
+// two with a pointer compare.
+func TestBooleanResolvesAndPublishesItsInstances(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	classAddress, err := runtime.ensureJavaClass(jvm.BooleanClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	method, found, err := client.JVM().FindAOTMethod(classAddress, "<init>", "(Z)V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || method.Body == 0 {
+		t.Fatal("java/lang/Boolean.<init>(Z)V does not resolve from the guest's class record")
+	}
+	value, err := client.JVM().StaticField(jvm.BooleanClass, "TRUE", "Ljava/lang/Boolean;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := runtimeBoxedBoolean(runtime, "TRUE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := client.JVM().AOTAddress(object)
+	if !ok {
+		t.Fatal("Boolean.TRUE was not bound to guest memory")
+	}
+	if published != bound {
+		t.Fatalf("published TRUE = %#x, want the core library's own instance at %#x", published, bound)
+	}
+}

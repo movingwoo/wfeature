@@ -1144,6 +1144,12 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	}
 	if errors.Is(tickError, ktf.ErrGuestExited) {
 		summary["exited"] = true
+		// A run that stops hundreds of ticks short of what was asked for, with
+		// no error and no note, reads as a hang. Saying which call ended it is
+		// the difference between "this title is broken" and "this title asked
+		// to be restarted", and only one of those is worth a morning.
+		summary["exit_reason"] = tickError.Error()
+		fmt.Fprintf(stderr, "the game exited at tick %d: %v\n", ran, tickError)
 	} else if tickError != nil {
 		summary["tick_error"] = tickError.Error()
 	}
@@ -2084,6 +2090,12 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	// here for the exit code, which is the only place a batch sweep can read
 	// it without parsing the summary.
 	var runErr error
+	// exitErr is the same news for a game that ended itself: not a failure, so
+	// it never reaches runErr and never sets an exit code, but the only record
+	// of which call ended the run. Without it a run that stops early reads as
+	// a hang in the summary, and a title that merely asked to be restarted is
+	// filed as a broken one.
+	var exitErr error
 	// One tick, whatever is driving it. A plain run counts them off against
 	// -ticks and a route asks for them a step at a time, and both have to dump
 	// frames, deliver scheduled keys and read the cheat console the same way —
@@ -2149,6 +2161,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 			// tells both callers the run is over.
 			stopped = true
 			if errors.Is(tickErr, lgt.ErrGuestExited) {
+				exitErr = tickErr
 				return false, nil
 			}
 			runErr = tickErr
@@ -2261,6 +2274,11 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	// often as from its output, and the two commands answer with the same key.
 	if runErr != nil {
 		summary["tick_error"] = runErr.Error()
+	}
+	if exitErr != nil {
+		summary["exited"] = true
+		summary["exit_reason"] = exitErr.Error()
+		fmt.Fprintf(stderr, "the game exited at tick %d: %v\n", ran, exitErr)
 	}
 	if script != nil {
 		summary["route_completed"] = routeResult.Completed

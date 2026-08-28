@@ -100,6 +100,62 @@ func (vm *VM) registerBoxBuiltins() {
 		return IntValue(value), nil
 	})
 
+	// The boxed flag. Its value is the same int32 the other boxes keep, so
+	// everything that reads a box reads this one too; what is its own is the
+	// hash, which the specification fixes at two constants rather than at the
+	// value.
+	vm.builtin(BooleanClass, "<init>", "(Z)V", func(_ *VM, arguments []Value) (Value, error) {
+		object, err := requireObject(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		value, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		object.Native = booleanBox(value)
+		return VoidValue(), nil
+	})
+	vm.builtin(BooleanClass, "booleanValue", "()Z", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return IntValue(value), nil
+	})
+	vm.builtin(BooleanClass, "equals", "(Ljava/lang/Object;)Z", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		other, err := nativeReference(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if other == nil || other.ClassName != BooleanClass {
+			return booleanValue(false), nil
+		}
+		stored, ok := other.Native.(int32)
+		return booleanValue(ok && stored == value), nil
+	})
+	vm.builtin(BooleanClass, "hashCode", "()I", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if value != 0 {
+			return IntValue(1231), nil
+		}
+		return IntValue(1237), nil
+	})
+	vm.builtin(BooleanClass, "toString", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(booleanText(value))), nil
+	})
+
 	vm.builtin(LongClass, "<init>", "(J)V", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := requireObject(arguments, 0)
 		if err != nil {
@@ -273,6 +329,22 @@ func longPair(arguments []Value) (int64, int64, error) {
 // boxedInt and boxedLong read the value a box carries. A box holds its number
 // natively rather than in a field, which is what lets the runtime hand one
 // back without running a constructor.
+// booleanBox normalizes what a boxed flag holds. A guest may pass any
+// non-zero int for true, and two boxes of the same flag have to compare equal.
+func booleanBox(value int32) int32 {
+	if value != 0 {
+		return 1
+	}
+	return 0
+}
+
+func booleanText(value int32) string {
+	if value != 0 {
+		return "true"
+	}
+	return "false"
+}
+
 func boxedInt(arguments []Value, index int) (int32, error) {
 	object, err := requireObject(arguments, index)
 	if err != nil {
