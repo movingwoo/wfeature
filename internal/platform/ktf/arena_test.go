@@ -85,7 +85,7 @@ func TestGuestArenaMarksEveryReuse(t *testing.T) {
 	arena := newGuestArena(0x1000, 4096)
 	marked := map[uint32]uint64{}
 	checked := map[uint32]uint64{}
-	arena.poisonReleased = func(address uint32, size uint64) { marked[address] = size }
+	arena.recordReleased = func(address uint32, size uint64) { marked[address] = size }
 	arena.checkReused = func(address uint32, size uint64) { checked[address] = size }
 
 	first, _ := arena.allocate(16)

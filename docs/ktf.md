@@ -228,16 +228,37 @@ leak. An unbalanced count is not the signal; a *growing* gap is.
 trigger for this one: the failure it would produce is a wrong sprite or a fault
 at an address the game never computed, arriving randomly rather than on a
 repeatable screen, so waiting for one to be noticed means waiting for the fault
-to become visible as well as to happen. Marking makes the question decidable
-instead — a released block is filled with a byte no guest value looks like, and
-the fill is read back where the arena hands those bytes out again. Intact means
-nothing wrote there while the block was free; a difference is a write that
+to become visible as well as to happen. Remembering makes the question decidable
+instead — a released block is copied to the Host side, and the copy is compared
+against guest memory where the arena hands those bytes out again. Identical
+means nothing wrote there while the block was free; a difference is a write that
 happened after the release, reported as `arena use after free` with the block,
 the offset and the bytes found there, which is enough to put a watchpoint on the
 address and catch the writer on the next run.
 
+**The detector must not change what the guest reads, and for two rounds it
+did.** It began as a fill: the released block was overwritten with a byte no
+guest value looks like, and the fill was checked on reuse. That is cheaper than
+a copy and it found the same writes — and it also destroyed the block's
+contents, which neither a handset's allocator nor this arena in a release build
+does. A title that frees a structure and keeps *reading* it therefore ran in
+release and died in debug, faulting on a pointer made of the fill:
+`0xdfdfdfdf`, or an offset from it, at an address that named nothing a reader
+could act on. Two local titles do exactly that — one of them an A-grade title
+whose whole route runs to the end with the detector's copy in place and stops
+after 160 ticks with the fill — and **the server the archives are played on is
+a debug build**, so what the reports named was the instrument. Reading a freed
+block is still a title's own defect and still invisible; what changed is that
+it is invisible here in the same way it is invisible on the handset, which is
+what an instrument owes the thing it measures.
+
+The copy grows to what the arena has handed out rather than to the region it
+could hand out. The arena spans 64MB and a session's whole working set is a
+small fraction of that, so a span reserved up front would be the largest thing
+a debug session holds.
+
 Three details decide whether it works, and all three are why it belongs to
-`guestArena` rather than to `MC_knlFree` (`arena_poison.go`):
+`guestArena` rather than to `MC_knlFree` (`arena_shadow.go`):
 
 - **The check has to know which bytes were marked.** A block from the free list
   is reuse; so is a cursor allocation below the arena's high-water mark, because
@@ -246,16 +267,17 @@ Three details decide whether it works, and all three are why it belongs to
   checked, since nothing marked it.
 - **The object collector releases into the same arena.** A fill applied to the
   guest's frees alone would read every collected object as a use after free.
-- **The pattern must not look like an arena address.** The collector reads every
-  committed word as a possible reference, so a mark that pointed into the arena
-  would keep dead objects alive for as long as a block stayed free. `0xdf`
-  repeats into a word far above the arena, which the extent index rejects on two
-  compares.
+- **A freed block keeps its contents, so the collector reads them.** The
+  collector treats every committed word as a possible reference, and a freed
+  block still holding old pointers can keep dead objects alive until it is
+  reused. That is over-retention, which is the safe direction, and it is
+  exactly what a release build has always done: the copy is what made debug
+  agree with release rather than a third behavior of its own.
 
 Both halves walk the bytes of every block released and every block reused, so
 they are installed in debug builds alone; a release build's arena behaves exactly
 as it did. How much they covered is reported alongside what they found —
-`arena blocks marked on release` and `arena blocks checked on reuse` — because a
+`arena blocks recorded on release` and `arena blocks checked on reuse` — because a
 report with no fault in it says nothing unless it also says the detector was
 running.
 
@@ -5066,6 +5088,40 @@ reaches the same failure only in the browser: its `buf` read is a few presses
 into a menu whose timing a replay does not reproduce, and what stands behind it
 here is the field resolving from the class record in a test rather than a run
 of the archive.
+
+### The eleventh round: an address made of the detector's own fill
+
+Five titles of the browser sweep died reading or writing an address nothing had
+computed, and the two worth the most were reading `0xdfdfe02b` and
+`0xdfdfdff0` — the arena's use-after-free fill, plus an offset. The reading is
+straightforward once the fill is recognised: the title had freed a structure
+and kept a pointer into it, read the pointer back out of the freed block, and
+followed it.
+
+**What made it a failure was the instrument.** The block's contents are what a
+handset leaves alone and what a release build leaves alone; only the debug
+build's fill destroyed them. The A-grade title of the pair runs its whole
+reported session — two and a half thousand ticks of somebody else's play,
+replayed from the page log — with the detector recording instead of filling,
+and stops after 160 ticks with the fill. The detector's own counters say it
+kept working: 816 blocks recorded on release, 950 checked on reuse, and not one
+byte of a released block written. See "A block a title frees" above for the
+mechanism and why the copy is the right shape for it.
+
+**A whole-set A/B says the swap costs nothing.** The 261 local archives booted
+for four hundred ticks on a debug build with the fill and on one with the copy
+are identical, line for line.
+
+**The other three were not the same defect.** Two are the other platform's, and
+[`lgt.md`](lgt.md), "A title draws past the surface it was given", has them: a
+title's fill loop walking off the end of the LCD onto the platform's own
+records. The third is open. It is a title that writes a save on its first run,
+exits deliberately, and then reads a null on its second — about one run in
+three, in release as well as in debug, always at the same instruction, where a
+lookup answered zero and the caller dereferenced it without asking. **A title
+whose first run ends itself is a title whose second run is a different
+program**, and a sweep that starts from an empty save directory only ever sees
+the first.
 
 ### The older modules run under the platform, and all three of them play
 

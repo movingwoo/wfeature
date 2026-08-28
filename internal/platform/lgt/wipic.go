@@ -890,7 +890,7 @@ func (client *Client) screenSurface() (*framebuffer, error) {
 	if client.screen.handle != 0 {
 		return client.screen, nil
 	}
-	address, err := client.allocate(uint64(client.screen.width) * uint64(client.screen.height) * 2)
+	address, err := client.allocateSurface(uint64(client.screen.width) * uint64(client.screen.height) * 2)
 	if err != nil {
 		return nil, err
 	}

@@ -55,6 +55,52 @@ unmapped — which a module that addresses its own padding would then fault on.
 There is no ELF library here. The project takes no new dependencies, and the
 parts of ELF that would justify one are the parts this loader never touches.
 
+## A title draws past the surface it was given, so pixels live apart
+
+The platform's memory is two regions rather than one. `platformDataBase` holds
+what the platform writes for the module — the init parameter blocks, the
+surface records, the copies of resource names it hands out as ids — and
+`surfaceBase`, sixteen megabytes further up, holds nothing but pixels: the LCD
+and every offscreen surface a title draws into.
+
+**A Clet's drawing is not bounded by the surface it was given.** It writes
+pixels through the pointer this platform hands it, and one local title's own
+fill loop — the clear it runs before its first frame — walks several thousand
+bytes past the end of the LCD. On a handset that lands in whatever follows the
+panel's memory. Here it landed in the next thing the arena had handed out,
+which was a copy of the resource name `MC_knlGetResourceID` had answered with,
+sixty bytes past the end of the screen.
+
+What that cost was not a wrong pixel. The name read back empty, so the
+`MC_knlGetResource` that followed looked for a resource called "" and failed;
+the title took the size out of the buffer it had not filled, asked
+`MC_knlAlloc` for 0x1c1c1c1c bytes, got the null that refuses, and stored
+through it. **The report was a write to address zero inside a timer callback,
+seven hundred instructions and one platform call after the cause** — and a
+second title died the same way with a different address, because what the
+overrun destroys depends on what the arena had put there.
+
+Two answers, and both are needed. Pixels are allocated from their own region,
+so an overrun lands in space nothing else is keeping; and **an id this platform
+issued is read back from its own table rather than from guest memory**
+(`resourceNames` in `client.go`), because a handle whose meaning lives where
+the guest can write it is a handle the guest can destroy. The id stays a
+pointer to the name — that is what the other WIPI platform hands out, and a
+title stores it as the resource's identity — but what the platform does with it
+no longer depends on those bytes surviving.
+
+**A whole-set A/B says the split costs nothing.** The 94 local archives run for
+three thousand ticks before and after are identical, and the two titles that
+died now run their reported sessions to the end — one of them only on its
+second run, because its first writes a save and ends itself.
+
+**Finding it was a watchpoint on the platform's own bytes.** A probe that
+compared every issued id against the name it was issued for, run after every
+supervisor call, named the moment the copy stopped holding its name; a write
+watch on that address named the instruction. Both are in `armcore` already —
+the watch reports guest and host writers separately, which is what said this
+was the title's own store rather than something the platform did.
+
 ## Startup
 
 1. The platform hands the entry point two blocks. The first is scratch the

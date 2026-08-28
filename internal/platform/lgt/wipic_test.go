@@ -143,6 +143,76 @@ func TestResourceIDIsAHandleTheResourceCallAccepts(t *testing.T) {
 	}
 }
 
+// The id is a pointer to a copy of the name, and the copy is in memory the
+// title can write. One local title's fill loop runs past the end of the LCD
+// and lands on it — after which the name reads empty, the read fails, and the
+// title sizes an allocation from the garbage it parsed instead. What the
+// platform issued, the platform remembers.
+func TestResourceIDSurvivesAGuestOverwriteOfTheName(t *testing.T) {
+	client := fixtureClient(t)
+
+	name, err := client.allocateBytes(append([]byte("data/hello.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := client.allocate(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifier := callSlot(t, client, slotGetResourceID, name, size)
+	if int32(identifier) < 0 {
+		t.Fatalf("resource id = %#x", identifier)
+	}
+	length, err := client.readWord(size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The guest scribbles over the copy the id points at, which is what a fill
+	// that runs off the end of a surface does to whatever follows it.
+	if err := client.core.Memory().Write(identifier, make([]byte, len("data/hello.txt")+1)); err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := client.allocate(uint64(length))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read := callSlot(t, client, slotGetResource, identifier, buffer, length); read != 0 {
+		t.Fatalf("the read answered %#x after the name was overwritten, want 0", read)
+	}
+	content := make([]byte, length)
+	if err := client.core.Memory().Read(buffer, content); err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "packaged" {
+		t.Fatalf("resource content = %q", content)
+	}
+}
+
+// Pixels and the platform's own data are separate regions, because a title
+// draws past the surface it was given: the LCD's own clear walks off the end.
+// A surface that shared the region with the resource names put that overrun on
+// top of them.
+func TestSurfacesAreAllocatedAwayFromPlatformData(t *testing.T) {
+	client := fixtureClient(t)
+
+	screen, err := client.screenSurface()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := client.allocateBytes(append([]byte("data/hello.txt"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := uint64(screen.address) + uint64(screen.width*screen.height*2)
+	if uint64(name) >= uint64(screen.address) && uint64(name) < end+(1<<20) {
+		t.Fatalf("a platform name at %#x sits within a megabyte of the screen at %#x..%#x",
+			name, screen.address, end)
+	}
+	if screen.address < surfaceBase || uint64(screen.address) >= uint64(surfaceBase)+surfaceSize {
+		t.Fatalf("the screen at %#x is outside the surface region", screen.address)
+	}
+}
+
 // The id is the resource's identity, so asking twice for the same name has to
 // answer the same value. A title here reads its resource list at boot and
 // keeps `{id, size}` beside each name, then loads a resource by asking for its

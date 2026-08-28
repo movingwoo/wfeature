@@ -304,7 +304,7 @@ only that the title asked something: `stream <resource> found=<bool>` for a
 class-path resource, `exists <path> found=<bool>` for a filesystem test, and
 `sysprop <name>` for a handset property.
 
-A debug run also carries `arena blocks marked on release` and
+A debug run also carries `arena blocks recorded on release` and
 `arena blocks checked on reuse`, which are how much of the guest heap the
 use-after-free detector covered, and `arena use after free` if a title wrote
 into memory it had given back. The two coverage counts are there so that a
