@@ -45,6 +45,18 @@ type ExceptionHandler struct {
 	CatchType string
 }
 
+// FindField locates one field this class declares itself. Resolution through
+// the superclass chain is the VM's, because only it can load the next class.
+func (c *Class) FindField(name, descriptor string) *Member {
+	for index := range c.Fields {
+		field := &c.Fields[index]
+		if field.Name == name && field.Descriptor == descriptor {
+			return field
+		}
+	}
+	return nil
+}
+
 func (c *Class) FindMethod(name, descriptor string) *Member {
 	for index := range c.Methods {
 		method := &c.Methods[index]

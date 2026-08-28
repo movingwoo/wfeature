@@ -264,6 +264,50 @@ and exists whenever its element type does, with a primitive element always
 existing. All three are one question now, asked in one place, and the exception
 is what is left when none of them answers.
 
+**A body with no declaration is reachable from a native dispatch and from
+nowhere else.** Eleven members of this library were in that state at once:
+`String.replace(char,char)`, its char-array reads and its encoding-named
+`getBytes`, `StringBuffer`'s long, boolean, object and char-array appends, its
+capacity constructor and `setLength`, and `Class.forName`. Every one had a
+working Go body, and every one was unreachable from compiled code, because a
+class file resolves a member through its class rather than through a native
+table. Four local archives stopped on four of them, which is how the group was
+found; the rest were the same defect waiting for a title that used them.
+`TestEveryCoreLibraryBodyIsDeclared` is now the tripwire — it walks the
+registered bodies and fails on one no declaration names — and its inverse
+checks that a declaration marked native has a body or is one of the two a
+platform answers.
+
+**A field belongs to the class that declares it, whatever the code touching it
+calls that class.** A compiler names a field reference after the type the
+source expression had, not after the declaring class, so a subclass reading an
+inherited field emits its own name — `Sub.buf` for a field `java.io` declares,
+`Sub.v` for one its own superclass declares — while the superclass that wrote
+the field emitted the superclass's name. Storing under the name as written put
+the write and the read in two different slots, and the read answered a zero
+nothing had written. Field access resolves the declaring class now, the way the
+specification's field resolution does, walking superinterfaces before the
+superclass because a static final may be declared on an interface; the answer
+is cached per reference and thrown away whenever a class is defined. **This was
+never about the library**: it is every guest class that inherits a field, which
+is the shape a title's own hierarchy has. It was found by a stream subclass
+reaching for the buffer its superclass had filled.
+
+**The boxed flag is the fourth box.** `java/lang/Boolean` was the one CLDC box
+this library never declared, and a title that puts a flag in a `Vector`
+resolves the class before it can box anything. `TRUE` and `FALSE` are built in
+the class initializer rather than answered by a Go singleton, because a title
+compares a boxed flag against the field with `==` and has to get the same
+object every time it reads it; the hash is the specification's 1231 and 1237
+rather than the value.
+
+**The byte source carries the specification's field names.** `buf`, `pos`,
+`count` and `mark` are what `java.io.ByteArrayInputStream` declares protected,
+and this runtime had named them `data`, `position` and `limit` behind private
+access. A title that subclasses the stream to hand its buffer on — the same
+thing it does to the sink — asks for `buf`, and a private field under another
+name answers nothing.
+
 **`System.exit` is a Host decision, so it is a hook.** `Options.Exit` is what
 the call reaches, and a platform installs the teardown its own destroy path
 uses. A MIDlet is not supposed to call it — `notifyDestroyed` is the
@@ -288,6 +332,17 @@ session as a failure rather than as the shutdown the title asked for.
   runtime cannot act on, and `getPriority` answering what was set is the honest
   half of that
 - reflection, class loader object, weak reference
+- **an object appended to a `StringBuffer` is named, not asked.**
+  `StringBuffer.append(Object)` and `String.valueOf(Object)` answer a string's
+  text for a string and `class@identity` for everything else, where the
+  specification says both call the object's own `toString`. A class of this
+  library that overrides `toString` — a boxed number, a `Vector` — therefore
+  prints as its identity when a title appends it. Making the call is a few
+  lines; what it costs is a virtual dispatch out of a native, which for an
+  ahead-of-time platform means re-entering guest code from inside a call the
+  guest is already in, and no local title has been seen to depend on the text.
+  It is written down here rather than fixed so that the first title that does
+  is the evidence for how to fix it
 - execution semantics for `invokedynamic`, method handles, and module constants
 - the LCDUI presentation for uncaught exceptions already retained in host
   diagnostics
@@ -304,6 +359,28 @@ made of. [`lcdui.md`](lcdui.md) and [`rms.md`](rms.md) describe them. Text is no
 longer ASCII-only either: two pixel fonts are embedded and shared by every
 platform through `internal/glyph`, and [`ktf.md`](ktf.md) has how a face is
 chosen per screen size.
+
+**How much of CLDC is missing is a measurable number, and measuring it is one
+pass.** The specification site publishes every CLDC class page in one file
+(`llms-full.txt`, see `AGENTS.md`), and each page carries its field, constructor
+and method summaries in a fixed shape; turning those into descriptors and
+subtracting `jvm.CoreLibraryDefinitions` reports what the classes this runtime
+already publishes still do not answer. It was 153 members when this was first
+run, and reading that list is how the group above stopped being four titles'
+problem. Most of what is left is one of three kinds: the floating-point half of
+`Math` and the boxed numbers, which is arithmetic; radix forms of the parses and
+the `toString`s; and members that would be a guess rather than an implementation
+— `Class.forName`'s reflective neighbours, `Calendar.computeFields`,
+`Vector`'s protected `elementData`, `Hashtable.rehash`. **A member is worth
+declaring when its behavior is exactly specified and its body is a few lines,
+and worth leaving out when answering it means inventing what it answers**, which
+is the same rule the platform tables use.
+
+Text formatting of a float is deliberately not in the first group. `Float` and
+`Double` are absent from this library, and `StringBuffer.append(float)` with
+them: Java's shortest-representation printing is not Go's, so a title that
+formats a number would draw text that is subtly not what the handset drew, and
+nothing local has asked for it yet.
 
 Go's garbage collector also collects the guest object graph, so the project does
 not implement a separate tracing GC. A compatibility layer will be added if a

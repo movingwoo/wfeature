@@ -794,14 +794,16 @@ whole.
 Most of what a runtime-owned class holds never reaches guest memory: the guest
 asks for it through a method call and the Go side answers. A **published**
 instance field is the exception — a field the class declares in its KTF
-metadata, at an offset guest code compiles into a load. Three classes publish
+metadata, at an offset guest code compiles into a load. Four classes publish
 any, and each is here because something reads the field instead of calling for
 it: `java/lang/String`, whose characters the client's own helpers read through
 `value`, `offset` and `count` rather than calling `charAt`;
 `org/kwis/msp/lcdui/Card`, whose geometry a title reads off its own canvas
-rather than calling `getWidth`; and `java/io/ByteArrayOutputStream`, whose
-`buf` a title reads instead of calling `toByteArray` when it is about to hand
-the bytes straight on rather than keep them.
+rather than calling `getWidth`; and the two byte streams,
+`java/io/ByteArrayOutputStream` and `java/io/ByteArrayInputStream`, whose `buf`
+a title reads instead of copying the array back out of them — the sink when it
+is about to hand the bytes straight on rather than keep them, the source when
+it decodes straight out of the array it is streaming.
 
 That leaves the one thing an array and a static field both avoid. An array made
 guest memory its only storage; a static field's value word lives inside its own
@@ -840,15 +842,25 @@ mechanism rather than one class's fix: a class that gains a published instance
 field without saying how it stays in step fails there rather than diverging
 inside a game.
 
-**Publishing one field of a class is not publishing the class.** The byte sink
-publishes `buf` and not `count`, which sit beside each other in the
-specification and are both protected. Nothing in the local set reads `count`, so
+**Publishing one field of a class is not publishing the class.** The two byte
+streams publish `buf` and not `count` — nor, on the source, `pos` — which sit
+beside each other in the specification and are all protected. Nothing in the local set reads `count`, so
 there is no offset for it in the metadata and a title that reaches for one stops
 with the field's name in the message — which is a better failure than a word no
 mutator maintains answering a stale number. The same reasoning is why the
 mutator list is a list: `buf` changes only when the array behind it is replaced,
-so the constructor, a write that outgrows the array and a reset are the three
-calls after which the payload can be wrong.
+so on the sink the constructor, a write that outgrows the array and a reset are
+the three calls after which the payload can be wrong, and on the source the
+constructor is the only one — reading moves an index the Go side keeps and
+leaves the array alone.
+
+**A static field's initializer runs after its class is registered.** The boxed
+flag is what made that necessary: `java/lang/Boolean.TRUE` is an instance of
+the class whose record is being built, so an initializer that resolves it
+re-enters the builder for a class that does not exist yet. The field records
+are written with their offset word and patched once the class is registered,
+which also keeps the guest's `TRUE` and the core library's own the same object
+— a title compares a boxed flag against the field with a pointer compare.
 
 ## Host integration
 
@@ -5007,6 +5019,53 @@ title screen and menu under `-play`. The other reaches its first lit frame one
 tick earlier — the same picture, the same pixel count, the same colour count —
 because its `startApp` pushes its card and the notification now runs there
 rather than in the tick after. Nothing else moves.
+
+### The tenth round: four members of the standard library, and the eleven behind them
+
+A hand-played sweep of the corpus in a browser reported four titles stopping on
+a class-library member the AOT link could not find: `java/lang/Boolean`'s
+constructor, `StringBuffer.append(char[],int,int)`, `String.replace(char,char)`
+and `java/io/ByteArrayInputStream`'s protected `buf`. **Four titles is not the
+size of the defect.** The standard library is what every title links against,
+so a member missing from it is missing for all of them; which four stopped is
+which four happened to be played far enough.
+
+**Three of the four were already implemented.** `String.replace`, the two
+char-array appends and five more `StringBuffer` members had working bodies in
+the core library and no declaration naming them, which is a member a native
+dispatch can reach and compiled code cannot — see
+[`jvm.md`](jvm.md), "A body with no declaration". Eleven were in that state; the
+sweep found the four a title had reached. The KTF table publishes the ones a
+guest can name, and both layers now have a tripwire behind them: the core
+library fails a test when a body has no declaration, and this platform already
+failed one when it published a method the VM had no body for.
+
+**The fourth is a field, and a field is published rather than declared.** A
+title subclasses `ByteArrayInputStream` and reads `buf` to decode straight out
+of the array it is streaming, which is the same thing another title does to the
+sink. It joins the published-field mechanism above with the constructor as its
+only mutator.
+
+**The boxed flag needed the class registration to change.** `Boolean.TRUE` is
+an instance of the class being built, so its static initializer re-entered the
+class builder; initializers now run after the record is registered.
+
+**A whole-set A/B says the rest of the corpus does not notice.** The 261 KTF
+archives at four hundred stepped ticks and the fifteen SKT archives at the same
+are identical on both binaries — the same ticks, flushes, lit pixels and
+errors, line for line. That is the reassuring answer to the field-resolution
+change underneath this round, which is not a KTF change at all: it is every
+interpreted class that inherits a field, and the sweep is what says nothing
+depended on the old answer. The LGT set is not in the comparison because that
+platform does not use this VM.
+
+**What the four titles do now.** Three of them run their reported session
+through to the end — a page log carries every key press with a timestamp, so
+dividing by the guest's tick length replays what the player did. The fourth
+reaches the same failure only in the browser: its `buf` read is a few presses
+into a menu whose timing a replay does not reproduce, and what stands behind it
+here is the field resolving from the class record in a test rather than a run
+of the archive.
 
 ### The older modules run under the platform, and all three of them play
 

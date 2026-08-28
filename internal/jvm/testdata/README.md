@@ -21,3 +21,19 @@ stream that was passed rather than on an interface this runtime never declares.
 ```sh
 javac -source 1.8 -target 1.8 -g:none internal/jvm/testdata/Streams.java
 ```
+
+`CoreMembers.java` is a fixture for the class-library link surface: one method
+that reaches, through a constant pool, the members a compiled title resolves
+through their class — the char-array append, the boxed flag and its published
+instances, the character replace, and a stream subclass that reads the
+protected buffer. Each of those had a working body and no declaration behind
+it, which is a member only a native dispatch can reach.
+
+`Inherited.java` is a fixture for field resolution: a superclass writes an
+instance field and a static beside it, and the subclass reads both under its
+own name for them, which is the name a compiler emits.
+
+```sh
+javac -source 1.8 -target 1.8 -g:none -d internal/jvm/testdata \
+    internal/jvm/testdata/CoreMembers.java internal/jvm/testdata/Inherited.java
+```

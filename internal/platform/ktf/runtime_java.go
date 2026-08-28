@@ -276,6 +276,14 @@ func init() {
 			name:        "java/io/ByteArrayInputStream",
 			superName:   "java/io/InputStream",
 			accessFlags: 0x0021,
+			// The specification declares buf protected here as it does on the
+			// sink, and a title reads it for the same reason: what it wants is
+			// the array it is streaming, without the copy. Keeping the payload
+			// word in step with the Go array is fieldSyncs' job.
+			instanceSize: byteArrayInputStreamFieldsSize,
+			fields: []runtimeJavaField{
+				{name: "buf", descriptor: "[B", accessFlags: 0x0004, offset: 0},
+			},
 			methods: []runtimeJavaMethod{
 				{class: "java/io/ByteArrayInputStream", name: "<init>", descriptor: "([B)V", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayInputStream", name: "<init>", descriptor: "([BII)V", accessFlags: 0x0001},
@@ -434,6 +442,32 @@ func init() {
 				{class: "java/lang/Integer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
+		// java/lang/Boolean is the fourth box, and the one nothing published
+		// until a title asked for it. TRUE and FALSE are the two instances the
+		// specification names; they come from the core library's own class
+		// initializer rather than from a pair made here, so guest code
+		// comparing a boxed flag against the field with a pointer compare sees
+		// the same object interpreted code would.
+		"java/lang/Boolean": {
+			name:        "java/lang/Boolean",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "java/lang/Boolean", name: "<init>", descriptor: "(Z)V", accessFlags: 0x0001},
+				{class: "java/lang/Boolean", name: "booleanValue", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/lang/Boolean", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Boolean", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Boolean", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+			},
+			fields: []runtimeJavaField{
+				{name: "TRUE", descriptor: "Ljava/lang/Boolean;", accessFlags: 0x0019, initializer: func(runtime *initializationRuntime) (uint32, error) {
+					return runtimeBoxedBoolean(runtime, "TRUE")
+				}},
+				{name: "FALSE", descriptor: "Ljava/lang/Boolean;", accessFlags: 0x0019, initializer: func(runtime *initializationRuntime) (uint32, error) {
+					return runtimeBoxedBoolean(runtime, "FALSE")
+				}},
+			},
+		},
 		// The other three boxed numbers, exposed the same way. A title that
 		// parses a UI form's attributes asks for one class per attribute type
 		// — a coordinate through java/lang/Short, a flag through
@@ -537,6 +571,8 @@ func init() {
 				{class: "java/lang/String", name: "toUpperCase", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "toLowerCase", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "trim", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "replace", descriptor: "(CC)Ljava/lang/String;", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "getBytes", descriptor: "(Ljava/lang/String;)[B", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(C)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "([C)Ljava/lang/String;", accessFlags: 0x0009},
@@ -561,6 +597,8 @@ func init() {
 				{class: "java/lang/StringBuffer", name: "append", descriptor: "(Ljava/lang/Object;)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "append", descriptor: "(J)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "append", descriptor: "(Z)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "append", descriptor: "([C)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "append", descriptor: "([CII)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "delete", descriptor: "(II)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(IC)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(II)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
@@ -2220,6 +2258,32 @@ func runtimeSystemOut(runtime *initializationRuntime) (uint32, error) {
 	return runtime.allocateAOTObject(metadata, make([]byte, metadata.InstanceSize), stream)
 }
 
+// runtimeBoxedBoolean answers one of java/lang/Boolean's two published
+// instances with a guest address. Reading the static through the VM is what
+// runs the core library's class initializer, so the object handed over is the
+// one that class holds rather than a second box that would compare unequal.
+func runtimeBoxedBoolean(runtime *initializationRuntime, name string) (uint32, error) {
+	value, err := runtime.client.vm.StaticField(jvm.BooleanClass, name, "Ljava/lang/Boolean;")
+	if err != nil {
+		return 0, fmt.Errorf("read java/lang/Boolean.%s: %w", name, err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		return 0, err
+	}
+	if object == nil {
+		return 0, fmt.Errorf("java/lang/Boolean.%s is null", name)
+	}
+	if err := runtime.ensureResultBound(object); err != nil {
+		return 0, fmt.Errorf("bind java/lang/Boolean.%s: %w", name, err)
+	}
+	address, ok := runtime.client.vm.AOTAddress(object)
+	if !ok {
+		return 0, fmt.Errorf("java/lang/Boolean.%s has no guest address", name)
+	}
+	return address, nil
+}
+
 func runtimeClassReceiverName(arguments []jvm.Value) (string, error) {
 	if len(arguments) < 1 {
 		return "", fmt.Errorf("Class method expected receiver")
@@ -2915,27 +2979,29 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 	if err != nil {
 		return 0, err
 	}
+	// A static field's initializer runs after the class is registered rather
+	// than here, so the records are written with their offset word first and
+	// patched below. An initializer that has to resolve a class — and the
+	// boxed flag's two instances have to resolve their own — would otherwise
+	// re-enter this function for a class that is still being built.
 	fieldPointers := make([]uint32, 0, len(definition.fields)+1)
-	for _, field := range definition.fields {
+	deferredFields := make([]uint32, len(definition.fields))
+	for index, field := range definition.fields {
 		fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(field.descriptor+"+"+field.name), 0)...))
 		if err != nil {
 			return 0, err
-		}
-		value := field.offset
-		if field.initializer != nil {
-			value, err = field.initializer(runtime)
-			if err != nil {
-				return 0, fmt.Errorf("initialize KTF runtime Java field %s.%s: %w", definition.name, field.name, err)
-			}
 		}
 		fieldData := make([]byte, javaFieldSize)
 		binary.LittleEndian.PutUint32(fieldData[0:], field.accessFlags)
 		binary.LittleEndian.PutUint32(fieldData[4:], classAddress)
 		binary.LittleEndian.PutUint32(fieldData[8:], fullName)
-		binary.LittleEndian.PutUint32(fieldData[12:], value)
+		binary.LittleEndian.PutUint32(fieldData[12:], field.offset)
 		fieldAddress, err := runtime.allocateBytes(fieldData)
 		if err != nil {
 			return 0, err
+		}
+		if field.initializer != nil {
+			deferredFields[index] = fieldAddress
 		}
 		fieldPointers = append(fieldPointers, fieldAddress)
 	}
@@ -2978,6 +3044,20 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		return 0, err
 	}
 	runtime.classes[definition.name] = classAddress
+	for index, field := range definition.fields {
+		if deferredFields[index] == 0 {
+			continue
+		}
+		value, err := field.initializer(runtime)
+		if err != nil {
+			return 0, fmt.Errorf("initialize KTF runtime Java field %s.%s: %w", definition.name, field.name, err)
+		}
+		valueData := make([]byte, 4)
+		binary.LittleEndian.PutUint32(valueData, value)
+		if err := runtime.client.core.Memory().Write(deferredFields[index]+12, valueData); err != nil {
+			return 0, fmt.Errorf("write KTF runtime Java field %s.%s: %w", definition.name, field.name, err)
+		}
+	}
 	return classAddress, nil
 }
 

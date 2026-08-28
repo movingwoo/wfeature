@@ -53,6 +53,7 @@ func coreLibraryDefinitions() []ClassDefinition {
 		vectorDefinition(),
 		hashtableDefinition(),
 		randomDefinition(),
+		booleanDefinition(),
 		integerDefinition(),
 		longDefinition(),
 		byteDefinition(),
@@ -91,6 +92,7 @@ func classDefinition() ClassDefinition {
 		SuperName: ObjectClass,
 		Access:    AccessPublic | AccessFinal,
 		Methods: []MethodDefinition{
+			{Name: "forName", Descriptor: "(Ljava/lang/String;)Ljava/lang/Class;", Access: AccessPublic | AccessStatic | AccessNative, Throws: []string{"java/lang/ClassNotFoundException"}},
 			{Name: "getResourceAsStream", Descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", Access: AccessPublic | AccessNative},
 			{Name: "getName", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative},
@@ -122,12 +124,17 @@ func stringDefinition() ClassDefinition {
 			// nothing. A body with no declaration is reachable from a native
 			// dispatch and from nowhere else.
 			{Name: "<init>", Descriptor: "([BIILjava/lang/String;)V", Access: AccessPublic, Throws: []string{"java/io/IOException"}},
+			{Name: "<init>", Descriptor: "(Ljava/lang/StringBuffer;)V", Access: AccessPublic},
 			{Name: "length", Descriptor: "()I", Access: native},
 			{Name: "charAt", Descriptor: "(I)C", Access: native},
 			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
 			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "concat", Descriptor: "(Ljava/lang/String;)Ljava/lang/String;", Access: native},
 			{Name: "getBytes", Descriptor: "()[B", Access: native},
+			{Name: "getBytes", Descriptor: "(Ljava/lang/String;)[B", Access: native, Throws: []string{"java/io/UnsupportedEncodingException"}},
+			{Name: "getChars", Descriptor: "(II[CI)V", Access: native},
+			{Name: "toCharArray", Descriptor: "()[C", Access: native},
+			{Name: "replace", Descriptor: "(CC)Ljava/lang/String;", Access: native},
 			{Name: "indexOf", Descriptor: "(I)I", Access: native},
 			{Name: "indexOf", Descriptor: "(Ljava/lang/String;)I", Access: native},
 			{Name: "indexOf", Descriptor: "(II)I", Access: native},
@@ -161,10 +168,19 @@ func stringBufferDefinition() ClassDefinition {
 		Access:    AccessPublic | AccessFinal,
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "()V", Access: AccessPublic},
+			{Name: "<init>", Descriptor: "(I)V", Access: AccessPublic},
 			{Name: "<init>", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic},
 			{Name: "append", Descriptor: "(C)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "append", Descriptor: "(I)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "append", Descriptor: "(J)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "append", Descriptor: "(Z)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "append", Descriptor: "(Ljava/lang/String;)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "append", Descriptor: "(Ljava/lang/Object;)Ljava/lang/StringBuffer;", Access: native},
+			// The two char-array appends are how a title that keeps its text
+			// in a char array puts a piece of it into a line without building
+			// a String in between.
+			{Name: "append", Descriptor: "([C)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "append", Descriptor: "([CII)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "delete", Descriptor: "(II)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(IC)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(II)Ljava/lang/StringBuffer;", Access: native},
@@ -176,6 +192,7 @@ func stringBufferDefinition() ClassDefinition {
 			// the declaration was missing, which made the call a stop.
 			{Name: "charAt", Descriptor: "(I)C", Access: native},
 			{Name: "setCharAt", Descriptor: "(IC)V", Access: native},
+			{Name: "setLength", Descriptor: "(I)V", Access: native},
 			{Name: "length", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
 		},
@@ -201,6 +218,8 @@ func stringBuilderDefinition() ClassDefinition {
 			{Name: "append", Descriptor: "(Z)Ljava/lang/StringBuilder;", Access: native},
 			{Name: "append", Descriptor: "(Ljava/lang/String;)Ljava/lang/StringBuilder;", Access: native},
 			{Name: "append", Descriptor: "(Ljava/lang/Object;)Ljava/lang/StringBuilder;", Access: native},
+			{Name: "append", Descriptor: "([C)Ljava/lang/StringBuilder;", Access: native},
+			{Name: "append", Descriptor: "([CII)Ljava/lang/StringBuilder;", Access: native},
 			{Name: "delete", Descriptor: "(II)Ljava/lang/StringBuilder;", Access: native},
 			{Name: "insert", Descriptor: "(IC)Ljava/lang/StringBuilder;", Access: native},
 			{Name: "insert", Descriptor: "(II)Ljava/lang/StringBuilder;", Access: native},

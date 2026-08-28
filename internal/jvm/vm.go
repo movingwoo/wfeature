@@ -146,17 +146,21 @@ type VM struct {
 	// which have no constant pool for the class initializer to read them from.
 	definedConstants map[string][]definedConstant
 	statics          map[fieldKey]Value
-	classMonitors    map[string]*monitor
-	nextExecution    atomic.Uint64
-	nextObject       atomic.Uint32
-	arraycopyMu      sync.Mutex
-	threadMu         sync.Mutex
-	threads          map[*Object]*guestThread
-	mainThread       *Object
-	aotClasses       map[string]AOTClassMetadata
-	aotAddresses     map[uint32]string
-	aotObjects       map[uint32]aotBinding
-	aotInvoker       AOTInvoker
+	// declaringFields caches field resolution: which class in a reference's
+	// chain actually declares the field it names. It is cleared whenever a
+	// class is defined, because a class that arrives later can be the answer.
+	declaringFields map[fieldKey]string
+	classMonitors   map[string]*monitor
+	nextExecution   atomic.Uint64
+	nextObject      atomic.Uint32
+	arraycopyMu     sync.Mutex
+	threadMu        sync.Mutex
+	threads         map[*Object]*guestThread
+	mainThread      *Object
+	aotClasses      map[string]AOTClassMetadata
+	aotAddresses    map[uint32]string
+	aotObjects      map[uint32]aotBinding
+	aotInvoker      AOTInvoker
 
 	initMu       sync.Mutex
 	initCond     *sync.Cond
@@ -201,20 +205,21 @@ func New(source ClassSource, options Options) *VM {
 		options.MaxArrayLength = 16 * 1024 * 1024
 	}
 	vm := &VM{
-		loader:         NewLoader(source),
-		config:         options,
-		natives:        make(map[methodKey]NativeMethod),
-		contextNatives: make(map[methodKey]contextNativeMethod),
-		builtinNatives: make(map[methodKey]bool),
-		statics:        make(map[fieldKey]Value),
-		classMonitors:  make(map[string]*monitor),
-		threads:        make(map[*Object]*guestThread),
-		aotClasses:     make(map[string]AOTClassMetadata),
-		aotAddresses:   make(map[uint32]string),
-		aotObjects:     make(map[uint32]aotBinding),
-		initializing:   make(map[string]bool),
-		initialized:    make(map[string]bool),
-		initErrors:     make(map[string]error),
+		loader:          NewLoader(source),
+		config:          options,
+		natives:         make(map[methodKey]NativeMethod),
+		contextNatives:  make(map[methodKey]contextNativeMethod),
+		builtinNatives:  make(map[methodKey]bool),
+		statics:         make(map[fieldKey]Value),
+		declaringFields: make(map[fieldKey]string),
+		classMonitors:   make(map[string]*monitor),
+		threads:         make(map[*Object]*guestThread),
+		aotClasses:      make(map[string]AOTClassMetadata),
+		aotAddresses:    make(map[uint32]string),
+		aotObjects:      make(map[uint32]aotBinding),
+		initializing:    make(map[string]bool),
+		initialized:     make(map[string]bool),
+		initErrors:      make(map[string]error),
 	}
 	vm.initCond = sync.NewCond(&vm.initMu)
 	vm.initialized["java/lang/Object"] = true
@@ -763,7 +768,8 @@ func (vm *VM) staticValue(state *execution, reference classfile.Reference) (Valu
 	if err != nil {
 		return VoidValue(), err
 	}
-	key := fieldKey{class: reference.Class, name: reference.Name, descriptor: reference.Descriptor}
+	resolved := vm.resolveFieldReference(reference)
+	key := fieldKey{class: resolved.Class, name: resolved.Name, descriptor: resolved.Descriptor}
 	vm.mu.RLock()
 	value, ok := vm.statics[key]
 	vm.mu.RUnlock()
@@ -784,7 +790,8 @@ func (vm *VM) setStaticValue(state *execution, reference classfile.Reference, va
 	if err := validateValue(value, typeInfo); err != nil {
 		return err
 	}
-	key := fieldKey{class: reference.Class, name: reference.Name, descriptor: reference.Descriptor}
+	resolved := vm.resolveFieldReference(reference)
+	key := fieldKey{class: resolved.Class, name: resolved.Name, descriptor: resolved.Descriptor}
 	vm.mu.Lock()
 	vm.statics[key] = value
 	vm.mu.Unlock()
@@ -840,6 +847,7 @@ func (vm *VM) instanceValue(object *Object, reference classfile.Reference) (Valu
 	if object == nil {
 		return VoidValue(), guestException("java/lang/NullPointerException", "get field "+reference.Class+"."+reference.Name)
 	}
+	reference = vm.resolveFieldReference(reference)
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
 	if err != nil {
 		return VoidValue(), err
@@ -858,6 +866,7 @@ func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, va
 	if object == nil {
 		return guestException("java/lang/NullPointerException", "put field "+reference.Class+"."+reference.Name)
 	}
+	reference = vm.resolveFieldReference(reference)
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
 	if err != nil {
 		return err
@@ -882,6 +891,90 @@ func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, va
 func fieldReferenceKey(reference classfile.Reference) string {
 	return reference.Class + "." + reference.Name + ":" + reference.Descriptor
 }
+
+// resolveFieldReference answers the reference a field access is really about:
+// the same field on the class that declares it.
+//
+// A compiler names a field reference after the type the source expression had,
+// not after the class the field is declared on, so a subclass reading an
+// inherited field emits its own name — `Sub.buf` for a field java/io's stream
+// declares, `Sub.v` for one its own superclass declares. Storing under the name
+// as written puts the subclass's read and the superclass's write in two
+// different slots, and the read answers a zero that was never written. The
+// specification's field resolution is this walk, and it is what makes the two
+// meet.
+func (vm *VM) resolveFieldReference(reference classfile.Reference) classfile.Reference {
+	declaring := vm.declaringFieldClass(reference.Class, reference.Name, reference.Descriptor)
+	if declaring == reference.Class {
+		return reference
+	}
+	resolved := reference
+	resolved.Class = declaring
+	return resolved
+}
+
+// declaringFieldClass walks a reference's class chain for the class that
+// declares the field, and answers the referenced class itself when nothing in
+// the chain does — a field an object carries without any class declaring it is
+// the arrangement a platform's own objects use, and it keeps the name it was
+// written under.
+func (vm *VM) declaringFieldClass(className, name, descriptor string) string {
+	key := fieldKey{class: className, name: name, descriptor: descriptor}
+	vm.mu.RLock()
+	cached, ok := vm.declaringFields[key]
+	vm.mu.RUnlock()
+	if ok {
+		return cached
+	}
+	declaring := className
+	// The chain is bounded by the loader, which refuses a cycle; the counter
+	// bounds it again because this runs on every field access.
+	for current, depth := className, 0; current != "" && depth < maxFieldResolutionDepth; depth++ {
+		class, err := vm.loader.Load(current)
+		if err != nil {
+			break
+		}
+		if class.FindField(name, descriptor) != nil {
+			declaring = current
+			break
+		}
+		// A static final may be declared on an interface, which is why
+		// resolution searches them before the superclass.
+		if found, ok := vm.declaringInterfaceField(class, name, descriptor, depth); ok {
+			declaring = found
+			break
+		}
+		current = class.SuperName
+	}
+	vm.mu.Lock()
+	vm.declaringFields[key] = declaring
+	vm.mu.Unlock()
+	return declaring
+}
+
+// declaringInterfaceField searches a class's superinterfaces for the field.
+func (vm *VM) declaringInterfaceField(class *classfile.Class, name, descriptor string, depth int) (string, bool) {
+	if depth >= maxFieldResolutionDepth {
+		return "", false
+	}
+	for _, interfaceName := range class.Interfaces {
+		declared, err := vm.loader.Load(interfaceName)
+		if err != nil {
+			continue
+		}
+		if declared.FindField(name, descriptor) != nil {
+			return interfaceName, true
+		}
+		if found, ok := vm.declaringInterfaceField(declared, name, descriptor, depth+1); ok {
+			return found, true
+		}
+	}
+	return "", false
+}
+
+// maxFieldResolutionDepth bounds the walk a field reference takes through a
+// chain a game supplies.
+const maxFieldResolutionDepth = 64
 
 // NewArray creates a guest array of the given component type and length for a
 // native service that has to hand one back. It applies the same limits the
