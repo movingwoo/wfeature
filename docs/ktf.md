@@ -4627,7 +4627,8 @@ answer is different for each group, so this is not one defect.
   `catch (Exception)` is a record on *its own* thread's chain, pushed by the
   `run()` that would have called paint on a handset. So a throw inside `paint`
   can never reach it here, and what the title does with the array it indexes is
-  a separate question from where the throw goes.
+  a separate question from where the throw goes. The round below answers both:
+  the callback ends rather than the session, and the array is the title's own.
 - **Two titles throw at a label that is exactly the end of a guarded region.**
   A handler record carries the label the guest last wrote, and each entry
   guards a half-open range of labels. In both titles the label at the throw is
@@ -4639,7 +4640,9 @@ answer is different for each group, so this is not one defect.
   block matching the region it has just left and jumping back to the top of the
   same block. **What settles it is the label's own contract** — when the
   compiled code writes it, relative to the call that throws — and that is read
-  out of a title's code rather than inferred from whether a run survives.
+  out of a title's code rather than inferred from whether a run survives. The
+  round below reads it: the half-open range is right, and both titles threw
+  after leaving the try.
 
 **A title's own `throw` had no platform slot, and read the empty slot as a
 method pointer.** Slot 2 of the initialization callbacks table was zero. Slot 1
@@ -5262,6 +5265,83 @@ and after, are identical line for line — the title itself included, because on
 a *first* run it writes its save and exits at tick one and never reaches the
 list call. Only the second run, against the save tree the first one wrote,
 moves: from a fault on tick one to the whole route.
+
+### The thirteenth round: who catches what a callback threw
+
+The family the round above left open — five titles of the browser sweep ending
+on a guest exception nobody caught — turned out to be one question about this
+platform and one about the titles, and the measurement above had them the wrong
+way round.
+
+**An exception nothing catches ends the callback, not the program.** Every
+guest callback here is entered from a Host service call — a card's `paint`, a
+`keyNotify`, a queued Runnable, a timer task, a thread's `run` — and the guest
+frame it runs in is one this Host built. That is not where the title's own `try`
+is: a title whose frame loop is a thread wraps its work in `catch (Exception)`
+on *that* thread, and the paint this Host starts to satisfy a `repaint` runs on
+the client thread, whose handler chain is empty. The same throw its own loop
+swallows arrives at the bridge with nowhere to go, and this platform used to end
+the session for it.
+
+That is wrong twice over. The language says an exception nothing catches ends
+the *thread*, and the Host's callbacks are not even that much: a callback that
+threw did not happen, and the next one still does. `Client.absorbUncaughtCallback`
+is that rule, applied to the three service calls a tick makes. **Only a
+`jvm.GuestException` is absorbed** — an unmapped read, a member this platform
+does not publish, a limit a Host imposes are none of them, and every one of
+those still stops the run.
+
+**It is counted rather than swallowed.** A session that survives every paint is
+indistinguishable from a session that paints, and a sweep reading the exit code
+would have promoted a dead title to a working one. The class and the callback go
+into the diagnostics, the first one goes into the run summary as `uncaught` and
+`uncaught_first`, and the log carries each at warning level.
+
+**The label a handler record carries is written before each protected call and
+again on the way out, and the half-open range was right all along.** Two of the
+five throw at a label exactly equal to the `to` of the last guarded range, which
+read like an off-by-one, and making the bound inclusive rescued one of them. It
+is not an off-by-one. The compiled code settles it: inside a region every call
+site is preceded by `movs r3,#<label>; str r3,[sp,#<record+12>]`, and the region
+`[0x76,0x7f)` covers exactly the labels `0x76` and `0x7c` that its two calls
+write — while `0x7f`, the range's own `to`, is written on the branch that leaves
+the region. `[0xc5,0xcc)` is the same shape: `0xc5` and `0xc9` before its two
+calls, and `0xcc` written by a `movs` that branches straight to the shared store
+and out of the region. **So a throw carrying `to` is a throw after the try**, and
+an inclusive bound would have run a catch block for an exception raised outside
+it — the hazard the round above describes, arrived at from the other side.
+
+The label is also *stale* outside every region: the compiler only maintains it
+where a handler needs it, so the value at a throw from unprotected code is
+whichever protected region ran last. That is why the answer cannot come from
+whether a run survives — a stale label can fall inside a range as easily as
+outside one, and rescuing a title by widening the test is as likely to be a
+wrong catch as a right one.
+
+**What the search looked at is now reported when it finds nothing.** "No
+handler" has two very different causes — the title has no catch for this, or it
+has one this platform did not match — and only the chain tells them apart. A
+failed search now counts a diagnostic naming every record on the chain, its
+method and body address, the label it carried, and every entry's range and
+target. Both readings above were read straight off one of those lines.
+
+**A whole-set A/B measured the wrong thing, and that is worth knowing too.**
+The 264 archives booted through the same routed 400 ticks before and after are
+identical line for line, and not one of them reached an absorbed exception. Of
+course not: every title in this family needs a dozen key presses to get where it
+fails, and a boot sweep presses nothing. The corpus run is the regression net —
+it says nothing that worked stopped working — and it is not evidence about the
+change. That came from the reported sessions replayed as routes: two titles that
+ended at tick 64 and tick 154 now run their whole script.
+
+**Two of the titles are now their own arithmetic rather than this platform's.**
+One indexes a fixed 32-entry row table with `height / 10 + 1`, which is 33 on the
+240x320 screen this platform gives it by default and fits on any handset whose
+card was shorter; run at `-screen 240x310` it plays, drawing every tick instead
+of 82 frames in 330. Its own thread catches that exception and carries on, so the
+absorbed paint is the same outcome the handset had. The other indexes a
+zero-length `String[]` its own code allocated. Neither is a platform defect, and
+neither ends a session any more.
 
 ### The older modules run under the platform, and all three of them play
 

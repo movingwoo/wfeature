@@ -371,7 +371,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	phase := client.phaseClock()
 	ranTimers, timerErr := client.ServiceTimers(ctx, timerLimit)
 	client.sincePhase(phase, &client.costs.Timers)
-	if timerErr != nil {
+	if timerErr = client.absorbUncaughtCallback("timer", timerErr); timerErr != nil {
 		client.log("KTF timer service failed", "error", timerErr)
 		return ranTimers > 0, timerErr
 	}
@@ -379,7 +379,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	phase = client.phaseClock()
 	ranThreads, threadErr := client.ServiceThreads(ctx, 1)
 	client.sincePhase(phase, &client.costs.Threads)
-	if threadErr != nil {
+	if threadErr = client.absorbUncaughtCallback("thread", threadErr); threadErr != nil {
 		client.log("KTF thread service failed", "error", threadErr)
 		return ranTimers+ranThreads > 0, threadErr
 	}
@@ -401,7 +401,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 		var paintErr error
 		painted, paintErr = client.ServicePaint(ctx)
 		client.sincePhase(phase, &client.costs.Paint)
-		if paintErr != nil {
+		if paintErr = client.absorbUncaughtCallback("paint", paintErr); paintErr != nil {
 			client.log("KTF paint failed", "error", paintErr)
 			return true, paintErr
 		}

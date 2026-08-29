@@ -1244,6 +1244,12 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		return nil, fmt.Errorf("read KTF Java exception handler head: %w", err)
 	}
 	visited := make(map[uint32]bool)
+	// What the search looked at, kept for the case where it finds nothing.
+	// "No handler" is the answer that ends a run, and it has two very
+	// different causes — the title has no catch for this, or it has one this
+	// platform did not match — which only the chain itself tells apart. See
+	// docs/ktf.md, "What is left of that family".
+	var searched strings.Builder
 	for depth := 0; handlerAddress != 0; depth++ {
 		if depth >= maxExceptionHandlers {
 			return nil, fmt.Errorf("KTF Java exception handler chain exceeds %d", maxExceptionHandlers)
@@ -1273,6 +1279,8 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		if err != nil {
 			return nil, err
 		}
+		fmt.Fprintf(&searched, " [%d]%s label=%#x entries=%d",
+			depth, runtime.describeAOTMethodRecord(methodAddress), currentPC, entryCount)
 		for _, entryAddress := range entryPointers {
 			if entryAddress&3 != 0 {
 				return nil, fmt.Errorf("KTF Java exception entry address %#x is not word-aligned", entryAddress)
@@ -1288,6 +1296,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			if fromPC >= toPC {
 				return nil, fmt.Errorf("KTF Java exception range [%#x, %#x) is invalid", fromPC, toPC)
 			}
+			fmt.Fprintf(&searched, " [%#x,%#x)->%#x", fromPC, toPC, target)
 			if currentPC < fromPC || currentPC >= toPC {
 				continue
 			}
@@ -1350,7 +1359,26 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		}
 		handlerAddress = oldHandler
 	}
+	chain := searched.String()
+	if chain == "" {
+		chain = " none"
+	}
+	runtime.countDiagnostic("no handler for " + exceptionClass + " chain" + chain)
 	return nil, nil
+}
+
+// describeAOTMethodRecord names a method record for a diagnostic, falling back
+// to its address. The handler chain is read at the moment a run is about to
+// end, so a name that cannot be read is not worth failing over.
+func (runtime *initializationRuntime) describeAOTMethodRecord(methodAddress uint32) string {
+	method, _, err := runtime.readAOTMethod(methodAddress)
+	if err != nil || method.Name == "" {
+		return fmt.Sprintf("method@%#x", methodAddress)
+	}
+	// The body address is what makes the name useful: the question a chain
+	// with no match raises is answered by disassembling the method, and a name
+	// an obfuscated archive shares with thirty others does not locate one.
+	return fmt.Sprintf("%s%s@%#x", method.Name, method.Descriptor, method.Body)
 }
 
 func (runtime *initializationRuntime) aotExceptionMatches(exceptionClass string, catchAddress uint32) (bool, error) {
