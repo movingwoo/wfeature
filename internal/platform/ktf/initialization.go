@@ -499,6 +499,11 @@ func (runtime *initializationRuntime) guestMillis() int64 {
 	if runtime == nil {
 		return time.Now().UnixMilli()
 	}
+	// Every guest-visible read of the clock arrives here, which is what makes
+	// this the place to count them: a service call that spends a step window
+	// asking the time is waiting rather than computing, and the Host charges
+	// the two differently. See continueHostService.
+	runtime.client.guestClockReads++
 	elapsed := runtime.client.now().Sub(runtime.clockBase)
 	if elapsed < 0 {
 		elapsed = 0

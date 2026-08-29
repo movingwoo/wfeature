@@ -144,8 +144,22 @@ type Client struct {
 	// guest asks for after it; above one the host is oversubscribed.
 	paintLoad        float64
 	serviceSteps     uint64
+	serviceWait      time.Duration
 	serviceRemaining uint64
 	serviceDepth     int
+	// A service call that is waiting on the clock is charged differently from
+	// one that is computing: serviceStartedAt and serviceWindowAt are where
+	// the session clock stood when the call and the current step window began,
+	// and serviceWindowReads is what guestClockReads held at the same moment.
+	// See continueHostService.
+	serviceStartedAt   time.Time
+	serviceWindowAt    time.Time
+	serviceWindowReads uint64
+	// guestClockReads counts the times the guest has asked what time it is,
+	// through any of the calls that answer from the session clock. It only
+	// ever grows; the difference across a step window is what says the guest
+	// spent that window waiting.
+	guestClockReads uint64
 	// clock is the time source guest waits are measured against, and speed
 	// scales those waits. clientWakeAt carries a wait the guest declared on
 	// the client thread, which has nothing to park. See clock.go.
@@ -375,6 +389,25 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 		round = limit
 	}
 	serviced := serialRan
+	// `limit` shares out the grants that end with the worker still running:
+	// those are the ones competing for the next round too. A worker that
+	// returned from run() is leaving, so it does not spend the round's share
+	// and the queue behind it is not held back for a round it will not be in.
+	// A title that starts a thread per sound effect starts them faster than
+	// one a round retires them, and the queue only ever grew — see
+	// "A thread that finished is not a slice" in docs/ktf.md.
+	//
+	// What bounds the drain is steps rather than a count: a round grants at
+	// most one slice's worth of execution beyond the grant it was already
+	// entitled to, so retiring a hundred threads that each cost a few thousand
+	// steps is allowed and one that spends a whole slice before returning ends
+	// the round.
+	slices := serialRan
+	spent := uint64(0)
+	allowance := client.threadSliceSteps
+	if allowance == 0 {
+		allowance = defaultThreadSliceSteps
+	}
 	previousThread, previousContext := runtime.currentThread, runtime.currentContext
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
@@ -384,20 +417,23 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 	// workers rejoin the queue, and one pass over the queue bounds the search
 	// so a round where every worker is sleeping ends instead of spinning.
 	now := client.now()
-	for attempts := len(client.workers); serviced < round && attempts > 0; attempts-- {
+	for attempts := len(client.workers); attempts > 0 && slices < round && spent < allowance; attempts-- {
 		worker := client.workers[0]
 		client.workers = client.workers[1:]
 		if now.Before(worker.wakeAt) {
 			client.workers = append(client.workers, worker)
 			continue
 		}
+		before := client.core.Steps()
 		runtime.currentThread, runtime.currentContext = worker.armThread, ctx
 		client.activeWorker = worker
 		worker.grant <- struct{}{}
 		event := <-worker.events
 		client.activeWorker = nil
 		serviced++
+		spent += client.core.Steps() - before
 		if !event.done {
+			slices++
 			client.workers = append(client.workers, worker)
 			continue
 		}
