@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -24,6 +25,7 @@ import (
 //	WFEATURE_BREAKPOINT_WATCH=0x179198 \
 //	WFEATURE_BREAKPOINT_CLASSES=fm,GamePlay \
 //	WFEATURE_BREAKPOINT_DUMP=0x30001450-0x30001530 \
+//	WFEATURE_BREAKPOINT_SAVE=/abs/path/savedata/debug/ktf \
 //	go test ./internal/platform/ktf -run TestLocalBreakpointProbe -v
 //
 // The class dump is what turns an AOT native's address into the name the
@@ -53,7 +55,19 @@ func TestLocalBreakpointProbe(t *testing.T) {
 	}
 	var core *armcore.Core
 	var client *Client
-	options := SessionOptions{TraceLimit: 4096}
+	// A title whose first run ends itself is a different program on its
+	// second, so the save tree is part of what is being probed rather than a
+	// detail of the Host.
+	// The probe runs on a manual clock and jumps to each next deadline, the
+	// same pacing `runktf` uses without -play. It is not only faster: a title
+	// that seeds itself from the clock takes a different branch on every
+	// wall-clock run, and a fault reached once in three runs cannot be read.
+	clock := NewManualClock(time.Time{})
+	options := SessionOptions{
+		TraceLimit: 4096,
+		SaveRoot:   os.Getenv("WFEATURE_BREAKPOINT_SAVE"),
+		Clock:      clock,
+	}
 	options.Debug = func(attached *armcore.Core) {
 		core = attached
 		armProbe(t, core, &hits, limit, &client)
@@ -80,6 +94,7 @@ func TestLocalBreakpointProbe(t *testing.T) {
 	}
 	dumpProbeState(t, session)
 	for round := 0; round < 400; round++ {
+		session.SkipToNextDeadline()
 		if _, err := session.Tick(context.Background()); err != nil {
 			t.Logf("tick %d: %v", round, err)
 			break

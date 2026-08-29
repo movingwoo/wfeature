@@ -346,6 +346,25 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDeleteRecord(thread *ar
 	return 0, nil
 }
 
+// wipicRecordDatabaseList fills a caller's array with the id of every record
+// the database holds.
+//
+// **Its third argument counts identifiers, not bytes.** The specification calls
+// it "the size of the buffer" over an `M_Int32*`, which reads either way, and
+// this platform read it as bytes — so a title asking for twelve ids received
+// three and read its own uninitialized stack for the rest. A title settles it:
+// one reserves 0x30 bytes of frame for the array, hands the call 12, and then
+// indexes the fourth entry. Twelve four-byte ids in forty-eight bytes is the
+// count reading, and only the count reading fills the entry it goes on to use.
+//
+// The reading is a contract rather than a compromise, and it has to be: a
+// caller that meant bytes passes four times the number a caller that meant
+// entries does, so serving the count reading writes past an array that meant
+// the other one as soon as the database holds more than a quarter of that
+// number. Nothing here reads it as bytes — the specification's own type is
+// `M_Int32 *`, and the one title that reaches this call sizes its frame for
+// the count — and the guard that remains is that a database is never asked to
+// produce ids it does not have.
 func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
@@ -355,9 +374,12 @@ func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Th
 	if err != nil {
 		return 0, err
 	}
-	length, err := thread.Register(2)
+	capacity, err := thread.Register(2)
 	if err != nil {
 		return 0, err
+	}
+	if buffer == 0 || int32(capacity) <= 0 {
+		return wipicErrorInvalid, nil
 	}
 	written := uint32(0)
 	var word [4]byte
@@ -365,7 +387,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Th
 		if record == nil {
 			continue
 		}
-		if (written+1)*4 > length {
+		if written >= capacity {
 			break
 		}
 		binary.LittleEndian.PutUint32(word[:], uint32(index+1))

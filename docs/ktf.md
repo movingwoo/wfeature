@@ -2896,12 +2896,21 @@ named — every time execution reaches one:
 ```sh
 WFEATURE_BREAKPOINT_ARCHIVE=<abs path> WFEATURE_BREAKPOINTS=0x105b0e,0x105b12 \
 WFEATURE_BREAKPOINT_WATCH=0x179198 WFEATURE_BREAKPOINT_CLASSES=fm \
+WFEATURE_BREAKPOINT_SAVE=<abs path to a save tree> \
     go test ./internal/platform/ktf -run TestLocalBreakpointProbe -v
 ```
 
 It is the companion to the disassemble probe — that says what an instruction
 does, this says what it was holding — and the class dump beside it is what
 turns an AOT native's address into the method name the archive gave it.
+
+**It runs on the manual clock and jumps to each next deadline**, which is the
+pacing `runktf` uses without `-play`, and it takes a save root. Both are about
+being able to reach the run at all rather than about speed: a title that seeds
+itself from the clock takes a different branch on every wall-clock run, so a
+fault reached once in three runs cannot be stopped before; and a title whose
+first run ends itself is a different program on its second, which a probe with
+nowhere to read a save from can never be.
 
 **Everything it arms is armed before the first guest instruction**, through
 `SessionOptions.Debug`, which is handed the ARM core as soon as the core exists
@@ -5163,13 +5172,96 @@ are identical, line for line.
 **The other three were not the same defect.** Two are the other platform's, and
 [`lgt.md`](lgt.md), "A title draws past the surface it was given", has them: a
 title's fill loop walking off the end of the LCD onto the platform's own
-records. The third is open. It is a title that writes a save on its first run,
-exits deliberately, and then reads a null on its second — about one run in
-three, in release as well as in debug, always at the same instruction, where a
-lookup answered zero and the caller dereferenced it without asking. **A title
-whose first run ends itself is a title whose second run is a different
-program**, and a sweep that starts from an empty save directory only ever sees
-the first.
+records. The third is a title that writes a save on its first run, exits
+deliberately, and then reads a null on its second, always at the same
+instruction, where a lookup answered zero and the caller dereferenced it
+without asking. **A title whose first run ends itself is a title whose second
+run is a different program**, and a sweep that starts from an empty save
+directory only ever sees the first. The round below is that one.
+
+### The twelfth round: a record list counted in bytes, and the stack a title read instead
+
+The title above — a save on the first run, a deliberate exit, a null read on
+the second — is fixed, and the distance between the call that was wrong and the
+instruction that faulted is the whole point of writing it down. **Three
+platform calls and a resource load separate them, and nothing in between
+reports anything.**
+
+**Reproducing it first meant taking the wall clock away.** On `-play` it faulted
+about one run in three, which is not a bug that can be read. It is not a race:
+the title seeds a choice — which character and which course — from the clock,
+and only some of those choices reach the code that breaks. A route replay stays
+on the manual clock and jumps to each next deadline, so the same seed comes out
+every time:
+
+```sh
+printf 'wait 600\n' > /tmp/wait.route
+wfeature runktf <archive> -save <a save tree the title has already written> \
+    -route /tmp/wait.route
+```
+
+Every run then faults on the first tick. `TestLocalBreakpointProbe` was moved
+onto the same clock for the same reason, and given a save root, because
+"the second run" is a program the probe could not otherwise start.
+
+Reading it backwards from the fault:
+
+- **the faulting instruction** is `ldr r3,[r0]` with `r0` zero, immediately
+  after a call that resolves a resource by name. That helper is
+  `MC_knlGetResourceID` followed by `MC_knlGetResource`, and it returns zero
+  when the first of the two answers a negative — which a breakpoint on its
+  error path confirmed it had;
+- **the name it was handed was the empty string.** The `-diag` trace names
+  every resource a run asks for, in order, and the last entry before the fault
+  is `resource ` with nothing after it. Eight of the title's nine names that
+  round are `char_…` files that exist in the archive; the ninth is empty;
+- **the names live in a table of 32-byte slots in the image's BSS**, built at
+  run time. The first eight calls index it with constants and the ninth with
+  `*(M_Uint8 *)(record + 0x21) - 1`. That byte was `0x4f`, so the ninth call
+  read slot 78 — far past any slot the title had written, and still the zeros
+  the image started with, which is why the name is empty rather than wrong;
+- **`0x4f` is one byte of the title's own uninitialized stack.** A watch on
+  that single byte names its writer, and the writer copies it out of a 128-byte
+  buffer the title had just handed to `MC_dbSelectRecord`. That call returned
+  `M_E_INVALID` and wrote nothing. The title does not check it, so what it
+  copied is the stack frame as it found it.
+
+**`MC_dbSelectRecord` failed because the record id it was given was never
+written either.** The title opens its database, calls `MC_dbListRecords` to
+collect the ids, and then selects the fourth of them. This platform wrote three.
+
+**The list call's third argument counts identifiers, not bytes.** The
+specification calls it "the size of the buffer" over an `M_Int32 *`, which
+reads either way, and this platform read it as a byte length — so an array of
+twelve got three ids and nine untouched words. The title settles it without
+ambiguity: it reserves `0x30` bytes of its frame for the array, hands the call
+`12`, and goes on to index entry three. Forty-eight bytes is twelve four-byte
+ids, and only the count reading fills the entry it uses.
+
+**It is a contract rather than a compromise, and it has to be.** A caller that
+meant bytes passes four times the number a caller that meant entries does, so
+serving the count reading writes past an array that meant the other one as soon
+as the database holds more than a quarter of that number. There is no answer
+that is safe under both, which is why the evidence had to decide it rather than
+caution; the guard that remains is that a database is never asked to produce
+ids it does not have. Two answers were added beside it that the specification
+names and this platform did not give — a null buffer and a non-positive count
+are `M_E_INVALID` rather than an empty list.
+
+**What this cost is a general shape.** An error a title does not check is not a
+failure at the call; it is a value invented some distance later, in a register
+that nothing traces back. The chain here is a list call short by nine entries →
+a record id read out of a stack frame → a select that refuses → a structure
+field made of that same frame → an index 78 into a table of fourteen → an empty
+resource name → a lookup that answers not-found → a null the caller
+dereferences. Only the last link is in the fault report.
+
+**A whole-set A/B says the corpus does not notice.** The 264 local archives of
+this platform, booted through the same routed 400 ticks on a debug build before
+and after, are identical line for line — the title itself included, because on
+a *first* run it writes its save and exits at tick one and never reaches the
+list call. Only the second run, against the save tree the first one wrote,
+moves: from a fault on tick one to the whole route.
 
 ### The older modules run under the platform, and all three of them play
 

@@ -209,3 +209,78 @@ func TestPackagedRecordDatabaseRejectsWhatIsNotOne(t *testing.T) {
 		t.Fatal("parsed a file claiming a zero record size")
 	}
 }
+
+// TestRecordDatabaseListCountsIdentifiersRatherThanBytes pins the unit of the
+// list call's third argument. Reading it as a byte length quartered the answer,
+// and a title that asked for twelve identifiers received three: the entries it
+// went on to index held whatever its own stack had left there, which it used as
+// a resource name and then dereferenced the failed lookup.
+func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	records := make([][]byte, 0, 12)
+	for index := range 12 {
+		records = append(records, []byte{byte(index), 0, 0, 0, 0, 0, 0, 0})
+	}
+	runtime.guestFiles = map[string][]byte{"SLOTS.db": packedRecordDatabase(8, records...)}
+	handle := openRecordDatabase(t, runtime, "SLOTS", 8, 0)
+
+	const buffer = platformDataBase + 0x9000
+	list := func(capacity uint32) uint32 {
+		t.Helper()
+		if err := runtime.client.core.Memory().Write(buffer, make([]byte, 4*len(records)+16)); err != nil {
+			t.Fatal(err)
+		}
+		thread := armcore.NewThread(armcore.Context{})
+		for register, value := range map[int]uint32{0: handle, 1: buffer, 2: capacity} {
+			if err := thread.SetRegister(register, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		written, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseList)
+		if err != nil {
+			t.Fatalf("list error = %v", err)
+		}
+		return written
+	}
+
+	if written := list(uint32(len(records))); written != uint32(len(records)) {
+		t.Fatalf("list of %d records into a %d-entry array wrote %d", len(records), len(records), written)
+	}
+	for index := range records {
+		var word [4]byte
+		if err := runtime.client.core.Memory().Read(buffer+uint32(index)*4, word[:]); err != nil {
+			t.Fatal(err)
+		}
+		if got := binary.LittleEndian.Uint32(word[:]); got != uint32(index+1) {
+			t.Fatalf("identifier %d = %d, want %d", index, got, index+1)
+		}
+	}
+
+	// An array smaller than the database still stops at what it can hold, so
+	// the reading that was wrong is not an overrun for a title that held it.
+	if written := list(4); written != 4 {
+		t.Fatalf("list into a four-entry array wrote %d, want 4", written)
+	}
+	var past [4]byte
+	if err := runtime.client.core.Memory().Read(buffer+16, past[:]); err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(past[:]) != 0 {
+		t.Fatal("the list wrote past the entries it was given")
+	}
+
+	// A buffer that is not there, or an array with no room in it, is the one
+	// case the specification names as invalid rather than empty.
+	for _, arguments := range []struct{ buffer, capacity uint32 }{{0, 4}, {buffer, 0}} {
+		thread := armcore.NewThread(armcore.Context{})
+		for register, value := range map[int]uint32{0: handle, 1: arguments.buffer, 2: arguments.capacity} {
+			if err := thread.SetRegister(register, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseList)
+		if err != nil || result != wipicErrorInvalid {
+			t.Fatalf("list(buffer=%#x, capacity=%d) = %#x, err = %v", arguments.buffer, arguments.capacity, result, err)
+		}
+	}
+}
