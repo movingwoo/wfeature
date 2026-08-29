@@ -2896,12 +2896,21 @@ named — every time execution reaches one:
 ```sh
 WFEATURE_BREAKPOINT_ARCHIVE=<abs path> WFEATURE_BREAKPOINTS=0x105b0e,0x105b12 \
 WFEATURE_BREAKPOINT_WATCH=0x179198 WFEATURE_BREAKPOINT_CLASSES=fm \
+WFEATURE_BREAKPOINT_SAVE=<abs path to a save tree> \
     go test ./internal/platform/ktf -run TestLocalBreakpointProbe -v
 ```
 
 It is the companion to the disassemble probe — that says what an instruction
 does, this says what it was holding — and the class dump beside it is what
 turns an AOT native's address into the method name the archive gave it.
+
+**It runs on the manual clock and jumps to each next deadline**, which is the
+pacing `runktf` uses without `-play`, and it takes a save root. Both are about
+being able to reach the run at all rather than about speed: a title that seeds
+itself from the clock takes a different branch on every wall-clock run, so a
+fault reached once in three runs cannot be stopped before; and a title whose
+first run ends itself is a different program on its second, which a probe with
+nowhere to read a save from can never be.
 
 **Everything it arms is armed before the first guest instruction**, through
 `SessionOptions.Debug`, which is handed the ARM core as soon as the core exists
@@ -4618,7 +4627,8 @@ answer is different for each group, so this is not one defect.
   `catch (Exception)` is a record on *its own* thread's chain, pushed by the
   `run()` that would have called paint on a handset. So a throw inside `paint`
   can never reach it here, and what the title does with the array it indexes is
-  a separate question from where the throw goes.
+  a separate question from where the throw goes. The round below answers both:
+  the callback ends rather than the session, and the array is the title's own.
 - **Two titles throw at a label that is exactly the end of a guarded region.**
   A handler record carries the label the guest last wrote, and each entry
   guards a half-open range of labels. In both titles the label at the throw is
@@ -4630,7 +4640,9 @@ answer is different for each group, so this is not one defect.
   block matching the region it has just left and jumping back to the top of the
   same block. **What settles it is the label's own contract** — when the
   compiled code writes it, relative to the call that throws — and that is read
-  out of a title's code rather than inferred from whether a run survives.
+  out of a title's code rather than inferred from whether a run survives. The
+  round below reads it: the half-open range is right, and both titles threw
+  after leaving the try.
 
 **A title's own `throw` had no platform slot, and read the empty slot as a
 method pointer.** Slot 2 of the initialization callbacks table was zero. Slot 1
@@ -5163,13 +5175,232 @@ are identical, line for line.
 **The other three were not the same defect.** Two are the other platform's, and
 [`lgt.md`](lgt.md), "A title draws past the surface it was given", has them: a
 title's fill loop walking off the end of the LCD onto the platform's own
-records. The third is open. It is a title that writes a save on its first run,
-exits deliberately, and then reads a null on its second — about one run in
-three, in release as well as in debug, always at the same instruction, where a
-lookup answered zero and the caller dereferenced it without asking. **A title
-whose first run ends itself is a title whose second run is a different
-program**, and a sweep that starts from an empty save directory only ever sees
-the first.
+records. The third is a title that writes a save on its first run, exits
+deliberately, and then reads a null on its second, always at the same
+instruction, where a lookup answered zero and the caller dereferenced it
+without asking. **A title whose first run ends itself is a title whose second
+run is a different program**, and a sweep that starts from an empty save
+directory only ever sees the first. The round below is that one.
+
+### The twelfth round: a record list counted in bytes, and the stack a title read instead
+
+The title above — a save on the first run, a deliberate exit, a null read on
+the second — is fixed, and the distance between the call that was wrong and the
+instruction that faulted is the whole point of writing it down. **Three
+platform calls and a resource load separate them, and nothing in between
+reports anything.**
+
+**Reproducing it first meant taking the wall clock away.** On `-play` it faulted
+about one run in three, which is not a bug that can be read. It is not a race:
+the title seeds a choice — which character and which course — from the clock,
+and only some of those choices reach the code that breaks. A route replay stays
+on the manual clock and jumps to each next deadline, so the same seed comes out
+every time:
+
+```sh
+printf 'wait 600\n' > /tmp/wait.route
+wfeature runktf <archive> -save <a save tree the title has already written> \
+    -route /tmp/wait.route
+```
+
+Every run then faults on the first tick. `TestLocalBreakpointProbe` was moved
+onto the same clock for the same reason, and given a save root, because
+"the second run" is a program the probe could not otherwise start.
+
+Reading it backwards from the fault:
+
+- **the faulting instruction** is `ldr r3,[r0]` with `r0` zero, immediately
+  after a call that resolves a resource by name. That helper is
+  `MC_knlGetResourceID` followed by `MC_knlGetResource`, and it returns zero
+  when the first of the two answers a negative — which a breakpoint on its
+  error path confirmed it had;
+- **the name it was handed was the empty string.** The `-diag` trace names
+  every resource a run asks for, in order, and the last entry before the fault
+  is `resource ` with nothing after it. Eight of the title's nine names that
+  round are `char_…` files that exist in the archive; the ninth is empty;
+- **the names live in a table of 32-byte slots in the image's BSS**, built at
+  run time. The first eight calls index it with constants and the ninth with
+  `*(M_Uint8 *)(record + 0x21) - 1`. That byte was `0x4f`, so the ninth call
+  read slot 78 — far past any slot the title had written, and still the zeros
+  the image started with, which is why the name is empty rather than wrong;
+- **`0x4f` is one byte of the title's own uninitialized stack.** A watch on
+  that single byte names its writer, and the writer copies it out of a 128-byte
+  buffer the title had just handed to `MC_dbSelectRecord`. That call returned
+  `M_E_INVALID` and wrote nothing. The title does not check it, so what it
+  copied is the stack frame as it found it.
+
+**`MC_dbSelectRecord` failed because the record id it was given was never
+written either.** The title opens its database, calls `MC_dbListRecords` to
+collect the ids, and then selects the fourth of them. This platform wrote three.
+
+**The list call's third argument counts identifiers, not bytes.** The
+specification calls it "the size of the buffer" over an `M_Int32 *`, which
+reads either way, and this platform read it as a byte length — so an array of
+twelve got three ids and nine untouched words. The title settles it without
+ambiguity: it reserves `0x30` bytes of its frame for the array, hands the call
+`12`, and goes on to index entry three. Forty-eight bytes is twelve four-byte
+ids, and only the count reading fills the entry it uses.
+
+**It is a contract rather than a compromise, and it has to be.** A caller that
+meant bytes passes four times the number a caller that meant entries does, so
+serving the count reading writes past an array that meant the other one as soon
+as the database holds more than a quarter of that number. There is no answer
+that is safe under both, which is why the evidence had to decide it rather than
+caution; the guard that remains is that a database is never asked to produce
+ids it does not have. Two answers were added beside it that the specification
+names and this platform did not give — a null buffer and a non-positive count
+are `M_E_INVALID` rather than an empty list.
+
+**What this cost is a general shape.** An error a title does not check is not a
+failure at the call; it is a value invented some distance later, in a register
+that nothing traces back. The chain here is a list call short by nine entries →
+a record id read out of a stack frame → a select that refuses → a structure
+field made of that same frame → an index 78 into a table of fourteen → an empty
+resource name → a lookup that answers not-found → a null the caller
+dereferences. Only the last link is in the fault report.
+
+**A whole-set A/B says the corpus does not notice.** The 264 local archives of
+this platform, booted through the same routed 400 ticks on a debug build before
+and after, are identical line for line — the title itself included, because on
+a *first* run it writes its save and exits at tick one and never reaches the
+list call. Only the second run, against the save tree the first one wrote,
+moves: from a fault on tick one to the whole route.
+
+### The thirteenth round: who catches what a callback threw
+
+The family the round above left open — five titles of the browser sweep ending
+on a guest exception nobody caught — turned out to be one question about this
+platform and one about the titles, and the measurement above had them the wrong
+way round.
+
+**An exception nothing catches ends the callback, not the program.** Every
+guest callback here is entered from a Host service call — a card's `paint`, a
+`keyNotify`, a queued Runnable, a timer task, a thread's `run` — and the guest
+frame it runs in is one this Host built. That is not where the title's own `try`
+is: a title whose frame loop is a thread wraps its work in `catch (Exception)`
+on *that* thread, and the paint this Host starts to satisfy a `repaint` runs on
+the client thread, whose handler chain is empty. The same throw its own loop
+swallows arrives at the bridge with nowhere to go, and this platform used to end
+the session for it.
+
+That is wrong twice over. The language says an exception nothing catches ends
+the *thread*, and the Host's callbacks are not even that much: a callback that
+threw did not happen, and the next one still does. `Client.absorbUncaughtCallback`
+is that rule, applied to the three service calls a tick makes. **Only a
+`jvm.GuestException` is absorbed** — an unmapped read, a member this platform
+does not publish, a limit a Host imposes are none of them, and every one of
+those still stops the run.
+
+**It is counted rather than swallowed.** A session that survives every paint is
+indistinguishable from a session that paints, and a sweep reading the exit code
+would have promoted a dead title to a working one. The class and the callback go
+into the diagnostics, the first one goes into the run summary as `uncaught` and
+`uncaught_first`, and the log carries each at warning level.
+
+**The label a handler record carries is written before each protected call and
+again on the way out, and the half-open range was right all along.** Two of the
+five throw at a label exactly equal to the `to` of the last guarded range, which
+read like an off-by-one, and making the bound inclusive rescued one of them. It
+is not an off-by-one. The compiled code settles it: inside a region every call
+site is preceded by `movs r3,#<label>; str r3,[sp,#<record+12>]`, and the region
+`[0x76,0x7f)` covers exactly the labels `0x76` and `0x7c` that its two calls
+write — while `0x7f`, the range's own `to`, is written on the branch that leaves
+the region. `[0xc5,0xcc)` is the same shape: `0xc5` and `0xc9` before its two
+calls, and `0xcc` written by a `movs` that branches straight to the shared store
+and out of the region. **So a throw carrying `to` is a throw after the try**, and
+an inclusive bound would have run a catch block for an exception raised outside
+it — the hazard the round above describes, arrived at from the other side.
+
+The label is also *stale* outside every region: the compiler only maintains it
+where a handler needs it, so the value at a throw from unprotected code is
+whichever protected region ran last. That is why the answer cannot come from
+whether a run survives — a stale label can fall inside a range as easily as
+outside one, and rescuing a title by widening the test is as likely to be a
+wrong catch as a right one.
+
+**What the search looked at is now reported when it finds nothing.** "No
+handler" has two very different causes — the title has no catch for this, or it
+has one this platform did not match — and only the chain tells them apart. A
+failed search now counts a diagnostic naming every record on the chain, its
+method and body address, the label it carried, and every entry's range and
+target. Both readings above were read straight off one of those lines.
+
+**A whole-set A/B measured the wrong thing, and that is worth knowing too.**
+The 264 archives booted through the same routed 400 ticks before and after are
+identical line for line, and not one of them reached an absorbed exception. Of
+course not: every title in this family needs a dozen key presses to get where it
+fails, and a boot sweep presses nothing. The corpus run is the regression net —
+it says nothing that worked stopped working — and it is not evidence about the
+change. That came from the reported sessions replayed as routes: two titles that
+ended at tick 64 and tick 154 now run their whole script.
+
+**Two of the titles are now their own arithmetic rather than this platform's.**
+One indexes a fixed 32-entry row table with `height / 10 + 1`, which is 33 on the
+240x320 screen this platform gives it by default and fits on any handset whose
+card was shorter; run at `-screen 240x310` it plays, drawing every tick instead
+of 82 frames in 330. Its own thread catches that exception and carries on, so the
+absorbed paint is the same outcome the handset had. The other indexes a
+zero-length `String[]` its own code allocated. Neither is a platform defect, and
+neither ends a session any more.
+
+### The fourteenth round: three drawing arguments, and only one of them was the title's
+
+Three titles of the browser sweep stopped on a drawing call whose arguments
+could not be true — a colour depth of 805486848, a pixel range four times its
+own array, a framebuffer 2464 pixels wide. Two of the three were this platform
+reading an argument wrongly, which is the way that list of symptoms usually
+goes, and the third was a title reading its own freed memory.
+
+**A blit's line pitch is bytes, and this platform read it as elements.**
+`Graphics.setRGBPixels(x, y, w, h, int[] pixels, offset, bpl)` names its last
+argument in the specification as "한 줄의 이미지가 저장되기 위해서 필요한 바이트
+수" — the bytes one line needs — and the WIPI C call beside it,
+`MC_grpSetRGBPixels`, was already read that way here. The Java side was not, so
+every range check ran four times too long. The title that found it hands over an
+88x102 picture in an 8976-element array with a line of 352: 352 is 88 pixels of
+four bytes, 88 times 102 is 8976, and the array holds the picture exactly. It
+died on its ninth tick, on its first frame. The two throws the specification
+names for this call — `ArrayIndexOutOfBoundsException` for a range past the
+array, `NullPointerException` for a null one — are now raised as guest
+exceptions rather than reported as platform failures, because a title guarding
+its own call with a catch gets nothing from an error the guest cannot see.
+
+**A surface is bounded by what it costs, not by how long its sides are.** A
+per-dimension cap of 2048 refused a title's 2464x32 sprite strip — 154KB, and
+nothing a handset would have minded — while allowing 2048x2048, which is 8MB.
+The byte budget was already there and is the bound that means something; the
+side bound that remains is only wide enough to keep the multiplication in range.
+
+**The third is the guest drawing an image it had destroyed.** The depth that
+read back as a heap address was word three of a record that is no longer a
+record: the title calls `MC_grpDestroyImage`, the arena hands the span to the
+next allocation, and a later frame blits through the handle it kept. On a
+handset the block's contents outlive the free, so it draws its old picture and
+carries on — the same shape as the arena poison two rounds ago, from the other
+end. **Drawing nothing is the honest version of undefined contents**, and it is
+what the specification already says for a source that is not the screen's depth.
+It is told apart from a handle nothing ever issued by remembering the last 256
+addresses `MC_knlFree` gave back, cleared when the arena reissues one: a
+released address draws nothing and is counted, and anything else still fails,
+because that one is this platform's bug rather than the title's.
+
+**A whole-set A/B moves exactly one row.** The 264 archives booted through the
+same routed 400 ticks before and after differ in one line, and it is the title
+whose first frame used to end it: tick 9 and 9 flushes become 400 and 400. The
+other two need a dozen key presses to reach their call and a boot sweep presses
+none, so what says they are fixed is their own reported sessions replayed as
+routes — 148 ticks to 377, and 901 to 1254 with the lit pixel count going from
+2880 to 65047.
+
+**The reports named the argument, and that is why two of the three took
+minutes.** A record that does not decode now carries the handle, the record
+address, the five words it was read from, the eight words the handle sits in,
+whether this platform issued either of them, and the guest address that made the
+call; a range check that fails carries the rectangle, the offset and the line.
+Every conclusion above is one line of a failure message — "words=[0x3002c1d0 …]"
+said the record was a linked structure rather than a framebuffer, and
+"rect=[0 0 88 102] offset=0 bpl=352" said 352 was 88 times four before anything
+had to be disassembled.
 
 ### The older modules run under the platform, and all three of them play
 

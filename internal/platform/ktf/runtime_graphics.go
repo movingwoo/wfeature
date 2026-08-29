@@ -1017,27 +1017,51 @@ func runtimeGraphicsTransferRGBPixels(write bool) runtimeJavaImplementation {
 			return jvm.VoidValue(), err
 		}
 		if buffer == nil {
-			return jvm.VoidValue(), fmt.Errorf("Graphics RGB pixel buffer is null")
+			// The specification names the throw, and a title that guards its
+			// own call with `catch (NullPointerException)` gets nothing from a
+			// platform error.
+			return jvm.VoidValue(), &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: "java/lang/NullPointerException", Native: "Graphics RGB pixel buffer"},
+				Message: "Graphics RGB pixel buffer is null",
+			}
 		}
 		tail, err := runtimeGraphicsInts(arguments[5:], 2)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		offset, pitch := tail[0], tail[1]
+		offset, bytesPerLine := tail[0], tail[1]
 		width, height := bounds[2], bounds[3]
 		if width <= 0 || height <= 0 {
 			return jvm.VoidValue(), nil
 		}
-		if pitch == 0 {
-			pitch = width
+		// **The last argument is bytes per line, not elements.** The
+		// specification says so in as many words — "한 줄의 이미지가 저장되기
+		// 위해서 필요한 바이트 수" — and the WIPI C call beside it is already
+		// read that way here. Reading it as an element pitch multiplies the
+		// span by four: one title hands over an 88x102 picture in an 8976
+		// element array with a line of 352, which is exactly 88 pixels of four
+		// bytes and exactly fills the array, and this platform made it a range
+		// four times too long and ended the session on its first frame.
+		pitch := width
+		if bytesPerLine != 0 {
+			pitch = bytesPerLine / 4
 		}
 		_, length, ok := jvm.ArrayComponent(buffer)
 		if !ok {
 			return jvm.VoidValue(), fmt.Errorf("Graphics RGB pixel buffer is not an array")
 		}
+		// A line too short to hold the row copies nothing, which is what the C
+		// call's own specification says for the same argument.
+		if pitch < width {
+			return jvm.VoidValue(), nil
+		}
 		last := int64(offset) + int64(height-1)*int64(pitch) + int64(width)
 		if offset < 0 || last > int64(length) {
-			return jvm.VoidValue(), fmt.Errorf("Graphics RGB pixel range exceeds the %d element buffer", length)
+			message := fmt.Sprintf("Graphics RGB pixel range exceeds the %d element buffer (rect=%v offset=%d bpl=%d last=%d)", length, bounds, offset, bytesPerLine, last)
+			return jvm.VoidValue(), &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: "java/lang/ArrayIndexOutOfBoundsException", Native: message},
+				Message: message,
+			}
 		}
 		memory := runtime.client.core.Memory()
 		var source []jvm.Value

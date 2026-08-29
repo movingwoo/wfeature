@@ -1067,6 +1067,13 @@ func (r *sessionRunner) composeReport(cause string) string {
 		fmt.Fprintf(&report, "messages shed to a slow connection: %d\n", shed)
 	}
 	if ktfSession := r.game.KTF(); ktfSession != nil {
+		// A callback that ended in an exception nothing caught no longer ends
+		// the session, so a report that only carried `ended:` would show a
+		// title failing every paint as a title that played. See docs/ktf.md,
+		// "who catches what a callback threw".
+		if uncaught, first := ktfSession.Client.UncaughtCallbacks(); uncaught > 0 {
+			fmt.Fprintf(&report, "callbacks ended by an uncaught exception: %d, first %s\n", uncaught, first)
+		}
 		fmt.Fprintf(&report, "\n%s\n", ktfSession.HostCosts())
 		if profile := ktfSession.Profile(); profile.Samples > 0 {
 			fmt.Fprintf(&report, "\n===== guest profile =====\n%s\n", profile.Report(30))

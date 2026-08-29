@@ -134,6 +134,12 @@ type Client struct {
 	skipPaint  bool
 	lastPaint  time.Time
 	paintsDrop uint64
+	// uncaughtCallbacks counts the guest exceptions that ended a callback this
+	// Host started, and uncaughtFirst keeps what the first one said. Absorbing
+	// one keeps the session alive, so without a count a title that fails every
+	// paint reads exactly like a title that plays. See uncaught.go.
+	uncaughtCallbacks uint64
+	uncaughtFirst     string
 	// paintLoad is the running ratio of what an entry costs to the wait the
 	// guest asks for after it; above one the host is oversubscribed.
 	paintLoad        float64

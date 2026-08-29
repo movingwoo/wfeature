@@ -8,8 +8,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/route"
 )
 
 // TestLocalBreakpointProbe stops at guest addresses and prints the registers
@@ -24,6 +26,8 @@ import (
 //	WFEATURE_BREAKPOINT_WATCH=0x179198 \
 //	WFEATURE_BREAKPOINT_CLASSES=fm,GamePlay \
 //	WFEATURE_BREAKPOINT_DUMP=0x30001450-0x30001530 \
+//	WFEATURE_BREAKPOINT_SAVE=/abs/path/savedata/debug/ktf \
+//	WFEATURE_BREAKPOINT_ROUTE=/abs/path/reach-the-scene.route \
 //	go test ./internal/platform/ktf -run TestLocalBreakpointProbe -v
 //
 // The class dump is what turns an AOT native's address into the name the
@@ -53,7 +57,19 @@ func TestLocalBreakpointProbe(t *testing.T) {
 	}
 	var core *armcore.Core
 	var client *Client
-	options := SessionOptions{TraceLimit: 4096}
+	// A title whose first run ends itself is a different program on its
+	// second, so the save tree is part of what is being probed rather than a
+	// detail of the Host.
+	// The probe runs on a manual clock and jumps to each next deadline, the
+	// same pacing `runktf` uses without -play. It is not only faster: a title
+	// that seeds itself from the clock takes a different branch on every
+	// wall-clock run, and a fault reached once in three runs cannot be read.
+	clock := NewManualClock(time.Time{})
+	options := SessionOptions{
+		TraceLimit: 4096,
+		SaveRoot:   os.Getenv("WFEATURE_BREAKPOINT_SAVE"),
+		Clock:      clock,
+	}
 	options.Debug = func(attached *armcore.Core) {
 		core = attached
 		armProbe(t, core, &hits, limit, &client)
@@ -79,13 +95,61 @@ func TestLocalBreakpointProbe(t *testing.T) {
 		return
 	}
 	dumpProbeState(t, session)
-	for round := 0; round < 400; round++ {
-		if _, err := session.Tick(context.Background()); err != nil {
-			t.Logf("tick %d: %v", round, err)
-			break
+	if script := os.Getenv("WFEATURE_BREAKPOINT_ROUTE"); script != "" {
+		runProbeRoute(t, session, script)
+	} else {
+		for round := 0; round < 400; round++ {
+			session.SkipToNextDeadline()
+			if _, err := session.Tick(context.Background()); err != nil {
+				t.Logf("tick %d: %v", round, err)
+				break
+			}
 		}
 	}
 	t.Logf("breakpoint hits: %d", hits)
+}
+
+// runProbeRoute replays a route script instead of ticking blindly. **A probe
+// that cannot press a key cannot reach the state a title fails in**: the
+// interesting faults are minutes into a game, a page log of a reported session
+// is already a route, and without this the only states reachable here are the
+// ones a title walks into on its own. It is the same script `runktf -route`
+// takes and the same pacing, so a repro found on the command line is armed
+// here by naming the file.
+func runProbeRoute(t *testing.T, session *Session, path string) {
+	t.Helper()
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := route.Parse(string(text), KeyCodeByName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &route.Runner{
+		Digest: session.FrameDigest,
+		SendKey: func(ctx context.Context, pressed bool, key int32) error {
+			event := KeyPressed
+			if !pressed {
+				event = KeyReleased
+			}
+			return session.SendKey(ctx, event, key)
+		},
+		Stalled: func() bool {
+			_, pending := session.NextDeadline()
+			return !pending
+		},
+		Advance: func(ctx context.Context) (bool, error) {
+			progressed, err := session.Tick(ctx)
+			session.SkipToNextDeadline()
+			return progressed, err
+		},
+	}
+	result, err := runner.Run(context.Background(), script)
+	if err != nil {
+		t.Logf("route: %v", err)
+	}
+	t.Logf("route ticks=%d completed=%v stopped_at=%d %s", result.Ticks, result.Completed, result.StoppedAt, result.Reason)
 }
 
 // armProbe sets the breakpoints, the watches and the debugger the environment

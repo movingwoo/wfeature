@@ -379,6 +379,18 @@ type initializationRuntime struct {
 	// hold is the only thing that separates a real release from a double free
 	// or a pointer that never came from here.
 	wipicAllocations map[uint32]uint64
+	// releasedWIPIC remembers addresses freeWIPIC gave back, most recent last.
+	// A title that destroys an image and draws it again is asking to read a
+	// block it freed — on a handset the pixels are still there and it draws
+	// the old picture, and here the arena has already handed the span to
+	// something else, so the record decodes as nonsense. Telling that apart
+	// from a handle nothing ever issued is the difference between the guest's
+	// use-after-free and this platform's bug, and only these two maps can.
+	// The list is bounded because a title that cycles blocks would otherwise
+	// grow it for the length of the run; the oldest entries are the ones the
+	// arena has most likely reused anyway.
+	releasedWIPIC      map[uint32]struct{}
+	releasedWIPICOrder []uint32
 	// userMemoryInterface is the handset library table handed to a game that
 	// asked for it by name, and userMemoryPools the buffers it manages. See
 	// wipic_usermem.go.
@@ -1885,6 +1897,9 @@ func (runtime *initializationRuntime) allocateWIPIC(size uint32) (uint32, error)
 		runtime.wipicAllocations = make(map[uint32]uint64)
 	}
 	runtime.wipicAllocations[address] = total
+	// The span is live again, so it is no longer a release anyone can be
+	// reading through.
+	delete(runtime.releasedWIPIC, address)
 	return address, nil
 }
 
@@ -1926,7 +1941,35 @@ func (runtime *initializationRuntime) freeWIPIC(id uint32) {
 	// that lives in the block, so a released address must not carry its mask
 	// into whatever is allocated there next.
 	runtime.setFramebufferOpacity(id, nil)
+	runtime.noteReleasedWIPIC(id)
 	runtime.arena.release(id, size)
+}
+
+// maxReleasedWIPIC bounds the released-address list. It is a debugging aid for
+// the call that is about to fail, not a free list, so forgetting the oldest
+// costs nothing but a less specific message.
+const maxReleasedWIPIC = 256
+
+func (runtime *initializationRuntime) noteReleasedWIPIC(id uint32) {
+	if runtime.releasedWIPIC == nil {
+		runtime.releasedWIPIC = make(map[uint32]struct{}, maxReleasedWIPIC)
+	}
+	if _, already := runtime.releasedWIPIC[id]; already {
+		return
+	}
+	if len(runtime.releasedWIPICOrder) >= maxReleasedWIPIC {
+		delete(runtime.releasedWIPIC, runtime.releasedWIPICOrder[0])
+		runtime.releasedWIPICOrder = runtime.releasedWIPICOrder[1:]
+	}
+	runtime.releasedWIPIC[id] = struct{}{}
+	runtime.releasedWIPICOrder = append(runtime.releasedWIPICOrder, id)
+}
+
+// wasReleasedWIPIC reports that the guest freed this address and nothing has
+// been allocated at it since.
+func (runtime *initializationRuntime) wasReleasedWIPIC(id uint32) bool {
+	_, released := runtime.releasedWIPIC[id]
+	return released
 }
 
 // wipicResource resolves a guest resource name against the attached archive

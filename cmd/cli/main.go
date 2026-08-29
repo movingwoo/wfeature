@@ -1153,6 +1153,14 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	} else if tickError != nil {
 		summary["tick_error"] = tickError.Error()
 	}
+	// A callback that ended in an exception nothing caught no longer ends the
+	// session, so the summary has to carry it: a sweep reading only the exit
+	// code and `tick_error` would otherwise count a title that fails every
+	// paint as one that plays. See ktf.Client.UncaughtCallbacks.
+	if uncaught, first := session.Client.UncaughtCallbacks(); uncaught > 0 {
+		summary["uncaught"] = uncaught
+		summary["uncaught_first"] = first
+	}
 	if script != nil {
 		summary["route_completed"] = routeResult.Completed
 		marks := make([]map[string]any, 0, len(routeResult.Marks))
