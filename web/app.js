@@ -115,8 +115,17 @@ const initStatus = () => {
   document.getElementById("status-close")?.addEventListener("click", () => setStatus(""));
 };
 
+// Something the person asked for did not happen. The status line is what they
+// can act on; the run log needs the same sentence as an event of its own,
+// because that is what a later reading of the log looks for. **A start that
+// the server refuses arrives here and nowhere else** — the session's own error
+// handler covers a running game, not a request that was answered with an
+// error — so without this line the worst failure a title can have, no first
+// frame at all, left the log with nothing but a stack trace.
 const reportError = error => {
-  setStatus(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  setStatus(message);
+  recordEvent(`failed: ${message}`);
   console.error(error);
 };
 

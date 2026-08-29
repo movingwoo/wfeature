@@ -148,6 +148,29 @@ in a title's behaviour distinguishes "the handset played it" from "the runtime
 accepted it and dropped it", so a whole surface can be missing for as long as
 nobody plays the game with the sound on.
 
+## A sound the archive does not carry is not a failed program
+
+`Clip(String type, String resourceName)` names a packaged resource, and the
+specification declares the constructor no exception at all. So there is nothing
+a handset could have told a title whose archive is missing the name it asked
+for, and no reason to believe one stopped the program over it. This platform
+did: the constructor failed, `startApp` failed with it, and the session ended
+before its first frame.
+
+The title that found it builds its whole sound set in `startApp` from a
+numbering its own archive is sparse in — twelve clips in a row, then every
+third one to thirty-six — so the first gap was fatal and thirteen more followed
+it. It now gets a clip with no data, which plays nothing, and the miss is
+logged. That is what the specification leaves as the only available answer, and
+what the archive's own shape says the title expects: a program that could not
+survive a gap would not have asked for one.
+
+**A first frame is worth more than a sound.** This is the same trade the
+accepted C-block no-ops used to make and lost — there, success was claimed for
+a whole surface nobody was watching, and here the loss is one clip out of a set
+the title itself indexes past. The difference is that this one is written into
+the run log every time it happens.
+
 ## A device volume, and whose it is
 
 `backend.Audio.SetVolume(percent)` is the level a *guest* asked for through its

@@ -69,7 +69,18 @@ export const clearLog = () => {
 
 const formatArgument = value => {
   if (typeof value === "string") return value;
-  if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`;
+  // **An error's message is the part worth keeping, and a stack is not
+  // guaranteed to carry it.** V8 begins `stack` with "Name: message" and this
+  // used to log the stack alone on that basis; WebKit begins it with the first
+  // frame, so a server refusal reported through console.error reached the run
+  // log as two lines of addresses and nothing about what was refused. One
+  // session's whole record of why a game would not start was
+  // "#receive@…/session.js:113:53".
+  if (value instanceof Error) {
+    const described = `${value.name}: ${value.message}`;
+    if (!value.stack) return described;
+    return value.stack.startsWith(value.name) ? value.stack : `${described}\n${value.stack}`;
+  }
   try {
     return JSON.stringify(value);
   } catch {

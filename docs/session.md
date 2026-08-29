@@ -623,6 +623,29 @@ So the platforms name the call site and the layers above keep the text:
 The reason reads as the chain it came through, ending in the sentinel — the
 call the guest was inside, the supervisor call, and the address it left from.
 
+### A start the server refuses has to reach the run log too
+
+The `exited` path above covers a game that ran. A game that never started is
+the worse failure — there is no first frame, no session report, and nothing on
+the screen — and it used to be the one the log said least about. The refusal
+comes back as the `error` answer to the start request, which rejects the page's
+own promise rather than reaching the session's error handler, and the page put
+it on the status line and into `console.error` and nowhere else. Two things
+then lost the sentence:
+
+- `console.error(anError)` logged `error.stack`, on the reasoning that V8
+  begins a stack with `Name: message`. WebKit does not — its stack is frames
+  only — and the phone the sweep was run from is WebKit. One session's entire
+  record of why a title would not start was
+  `#receive@…/session.js:113:53`. The log now writes the message and then the
+  stack, and skips the message when the stack already carries it.
+- Nothing recorded an event for it at all. `reportError` now writes one, so a
+  refused start reads beside the `starting …` line that preceded it instead of
+  as an unexplained end to the log.
+
+What the server sends was already right: `startGame` answers `err.Error()`, so
+the text existed on the page the whole time.
+
 ### A guest thread that panics is a failed game, not a dead server
 
 Guest code also runs on goroutines of its own: each platform's guest threads,
