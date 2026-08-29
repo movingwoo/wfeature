@@ -1840,7 +1840,10 @@ func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, argument
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if width <= 0 || height <= 0 || width > 2048 || height > 2048 {
+	// The size a picture may be is bounded by what it costs rather than by its
+	// sides; newWIPICFramebufferRecord holds that bound and this one only keeps
+	// a negative or absurd argument out of it.
+	if width <= 0 || height <= 0 || width > maxWIPICFramebufferSide || height > maxWIPICFramebufferSide {
 		return jvm.VoidValue(), fmt.Errorf("Image.createImage size %dx%d is out of range", width, height)
 	}
 	// Mutable images back their pixels with a guest offscreen framebuffer so

@@ -5343,6 +5343,65 @@ absorbed paint is the same outcome the handset had. The other indexes a
 zero-length `String[]` its own code allocated. Neither is a platform defect, and
 neither ends a session any more.
 
+### The fourteenth round: three drawing arguments, and only one of them was the title's
+
+Three titles of the browser sweep stopped on a drawing call whose arguments
+could not be true — a colour depth of 805486848, a pixel range four times its
+own array, a framebuffer 2464 pixels wide. Two of the three were this platform
+reading an argument wrongly, which is the way that list of symptoms usually
+goes, and the third was a title reading its own freed memory.
+
+**A blit's line pitch is bytes, and this platform read it as elements.**
+`Graphics.setRGBPixels(x, y, w, h, int[] pixels, offset, bpl)` names its last
+argument in the specification as "한 줄의 이미지가 저장되기 위해서 필요한 바이트
+수" — the bytes one line needs — and the WIPI C call beside it,
+`MC_grpSetRGBPixels`, was already read that way here. The Java side was not, so
+every range check ran four times too long. The title that found it hands over an
+88x102 picture in an 8976-element array with a line of 352: 352 is 88 pixels of
+four bytes, 88 times 102 is 8976, and the array holds the picture exactly. It
+died on its ninth tick, on its first frame. The two throws the specification
+names for this call — `ArrayIndexOutOfBoundsException` for a range past the
+array, `NullPointerException` for a null one — are now raised as guest
+exceptions rather than reported as platform failures, because a title guarding
+its own call with a catch gets nothing from an error the guest cannot see.
+
+**A surface is bounded by what it costs, not by how long its sides are.** A
+per-dimension cap of 2048 refused a title's 2464x32 sprite strip — 154KB, and
+nothing a handset would have minded — while allowing 2048x2048, which is 8MB.
+The byte budget was already there and is the bound that means something; the
+side bound that remains is only wide enough to keep the multiplication in range.
+
+**The third is the guest drawing an image it had destroyed.** The depth that
+read back as a heap address was word three of a record that is no longer a
+record: the title calls `MC_grpDestroyImage`, the arena hands the span to the
+next allocation, and a later frame blits through the handle it kept. On a
+handset the block's contents outlive the free, so it draws its old picture and
+carries on — the same shape as the arena poison two rounds ago, from the other
+end. **Drawing nothing is the honest version of undefined contents**, and it is
+what the specification already says for a source that is not the screen's depth.
+It is told apart from a handle nothing ever issued by remembering the last 256
+addresses `MC_knlFree` gave back, cleared when the arena reissues one: a
+released address draws nothing and is counted, and anything else still fails,
+because that one is this platform's bug rather than the title's.
+
+**A whole-set A/B moves exactly one row.** The 264 archives booted through the
+same routed 400 ticks before and after differ in one line, and it is the title
+whose first frame used to end it: tick 9 and 9 flushes become 400 and 400. The
+other two need a dozen key presses to reach their call and a boot sweep presses
+none, so what says they are fixed is their own reported sessions replayed as
+routes — 148 ticks to 377, and 901 to 1254 with the lit pixel count going from
+2880 to 65047.
+
+**The reports named the argument, and that is why two of the three took
+minutes.** A record that does not decode now carries the handle, the record
+address, the five words it was read from, the eight words the handle sits in,
+whether this platform issued either of them, and the guest address that made the
+call; a range check that fails carries the rectangle, the offset and the line.
+Every conclusion above is one line of a failure message — "words=[0x3002c1d0 …]"
+said the record was a linked structure rather than a framebuffer, and
+"rect=[0 0 88 102] offset=0 bpl=352" said 352 was 88 times four before anything
+had to be disassembled.
+
 ### The older modules run under the platform, and all three of them play
 
 **Three archives of the local set carry the older relocatable module, and all

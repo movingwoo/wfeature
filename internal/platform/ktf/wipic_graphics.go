@@ -30,6 +30,12 @@ type wipicFramebuffer struct {
 
 const maxWIPICFramebufferBytes = 8 << 20
 
+// maxWIPICFramebufferSide bounds one dimension of a surface this platform
+// creates. It is a guard on the arithmetic rather than a policy: what a
+// framebuffer may cost is maxWIPICFramebufferBytes, and a picture that is very
+// wide and one row tall costs almost nothing.
+const maxWIPICFramebufferSide = 1 << 16
+
 // readWIPICDrawSurface reads a frame buffer a drawing call was handed, and
 // reports whether there is one at all. This API is C, and the handle is a
 // pointer: a null one is the game saying it has no surface there, not a
@@ -52,7 +58,25 @@ func (runtime *initializationRuntime) readWIPICDrawSurface(handle uint32, call s
 	}
 	framebuffer, err := runtime.readWIPICFramebuffer(handle)
 	if err != nil {
-		return wipicFramebuffer{}, false, err
+		// **A surface the guest destroyed and drew again is the guest's own
+		// use-after-free, and on a handset it is not a failure.** The block's
+		// pixels are still where they were until something else takes the
+		// span, so the title draws its old picture and carries on; here the
+		// arena has already reissued the memory, so the record decodes as
+		// whatever now lives there. One title destroys an image and blits it
+		// on a later frame, and the depth it read back was a heap address.
+		// Drawing nothing is the honest version of undefined contents, and it
+		// is what the specification already says for a source whose depth is
+		// not the screen's.
+		if runtime.wasReleasedWIPIC(handle) {
+			runtime.countDiagnostic("grp " + call + " on a destroyed surface")
+			return wipicFramebuffer{}, false, nil
+		}
+		// Which surface of the call, and which handle. A blit takes two, and a
+		// record that does not decode says nothing about which argument was
+		// misread without them — the same message for a destination and for a
+		// source is a report that has to be reproduced before it can be read.
+		return wipicFramebuffer{}, false, fmt.Errorf("%s %#x: %w", call, handle, err)
 	}
 	return framebuffer, true, nil
 }
@@ -90,10 +114,10 @@ func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int)
 		buffer: fields[4],
 	}
 	if framebuffer.bpp != 16 {
-		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer depth %d is not supported", framebuffer.bpp)
+		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer depth %d is not supported (%s)", framebuffer.bpp, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
 	if framebuffer.width == 0 || framebuffer.height == 0 || framebuffer.bpl < framebuffer.width*2 {
-		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d bpl %d is invalid", framebuffer.width, framebuffer.height, framebuffer.bpl)
+		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d bpl %d is invalid (%s)", framebuffer.width, framebuffer.height, framebuffer.bpl, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
 	if uint64(framebuffer.bpl)*uint64(framebuffer.height) > maxWIPICFramebufferBytes {
 		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d exceeds size limit", framebuffer.width, framebuffer.height)
@@ -104,6 +128,29 @@ func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int)
 	}
 	framebuffer.pixels = bufferBase[0] + 8
 	return framebuffer, nil
+}
+
+// describeWIPICSurfaceWords prints the words a surface record was read from.
+// A record that does not decode is a question about which structure the handle
+// really points at, and the five numbers answer it where the one field that
+// failed the check cannot: a depth that is a heap address says the fields are
+// shifted or the handle is not this kind of record at all.
+func (runtime *initializationRuntime) describeWIPICSurfaceWords(handle, recordBase uint32, fields []uint32) string {
+	description := fmt.Sprintf("handle=%#x record=%#x words=%#x", handle, recordBase, fields)
+	// The words the handle itself sits in say what kind of structure it is,
+	// which the record's five fields cannot: a handle this platform issued
+	// points four bytes into its own allocation, and one the guest built
+	// points wherever the guest put it.
+	if around, err := runtime.readAOTWords(handle, 8, "surface neighbourhood"); err == nil {
+		description += fmt.Sprintf(" at=%#x", around)
+	}
+	// Whether the platform issued the handle, and whether the record's first
+	// word is one it issued, is what separates "this is not an image record"
+	// from "this is an image whose framebuffer this platform has forgotten".
+	_, issuedHandle := runtime.wipicAllocations[handle]
+	_, issuedFirst := runtime.wipicAllocations[fields[0]]
+	description += fmt.Sprintf(" issued=%v first-issued=%v", issuedHandle, issuedFirst)
+	return description
 }
 
 // wipicImageFramebuffer answers the framebuffer an MC_GrpImage record names,
@@ -813,8 +860,16 @@ func (runtime *initializationRuntime) wipicEncodeImage(thread *armcore.Thread) (
 // newWIPICFramebufferRecord builds one MC_GrpFrameBuffer record plus its pixel
 // allocation and returns the record handle.
 func (runtime *initializationRuntime) newWIPICFramebufferRecord(width, height uint32) (uint32, error) {
-	if width == 0 || height == 0 || width > 2048 || height > 2048 {
+	// **The bound that matters is the total, not the side.** A per-dimension
+	// cap of 2048 refused a title's 2464x32 sprite strip — 154KB, and nothing
+	// a handset would have minded — while allowing 2048x2048, which is 8MB.
+	// The side bound that remains is only there to keep the multiplication
+	// below obviously in range.
+	if width == 0 || height == 0 || width > maxWIPICFramebufferSide || height > maxWIPICFramebufferSide {
 		return 0, fmt.Errorf("KTF framebuffer size %dx%d is out of range", width, height)
+	}
+	if uint64(width)*2*uint64(height) > maxWIPICFramebufferBytes {
+		return 0, fmt.Errorf("KTF framebuffer %dx%d exceeds size limit", width, height)
 	}
 	bytesPerLine := width * 2
 	buffer, err := runtime.allocateWIPIC(bytesPerLine * height)
@@ -1078,12 +1133,18 @@ func (runtime *initializationRuntime) wipicDrawImage(thread *armcore.Thread) (ui
 		registers[index] = value
 	}
 	destination, ok, err := runtime.readWIPICDrawSurface(registers[0], "draw image destination")
-	if err != nil || !ok {
-		return 0, err
+	if err != nil {
+		return 0, fmt.Errorf("%w%s", err, runtime.callerSite(thread))
+	}
+	if !ok {
+		return 0, nil
 	}
 	source, ok, err := runtime.readWIPICDrawSurface(registers[5], "draw image source")
-	if err != nil || !ok {
-		return 0, err
+	if err != nil {
+		return 0, fmt.Errorf("%w%s", err, runtime.callerSite(thread))
+	}
+	if !ok {
+		return 0, nil
 	}
 	clip, err := runtime.wipicReadContextClip(registers[8])
 	if err != nil {
