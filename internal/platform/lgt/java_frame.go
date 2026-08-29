@@ -178,7 +178,11 @@ func (client *Client) callJavaCardMethod(
 	}
 	call := append([]uint32{runtime.card}, arguments...)
 	if _, err := client.callOn(ctx, thread, method.Body, call); err != nil {
-		return fmt.Errorf("run %s.%s%s at %#x: %w", owner, name, method.Descriptor, method.Body, err)
+		// A card's callback is entered with none of the title's own handlers
+		// under it, so an exception its own loop would have caught arrives
+		// here. It ends the callback rather than the session; see uncaught.go.
+		return client.absorbUncaughtCallback(name,
+			fmt.Errorf("run %s.%s%s at %#x: %w", owner, name, method.Descriptor, method.Body, err))
 	}
 	return nil
 }

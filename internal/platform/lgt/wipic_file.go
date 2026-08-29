@@ -521,6 +521,31 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 	return client.archive.Resource(name)
 }
 
+// flushOpenFiles persists every open file that has been written to and not
+// closed.
+//
+// **A handset's write reaches the filesystem; ours reaches a buffer.** The
+// bytes are kept on the open file here and persisted when it is closed, which
+// is right for a title that closes what it opened and wrong for one that does
+// not — and one local title does not: it writes the single byte that says its
+// first run is over and calls `MC_knlExit` on the next line, so the file it
+// created stayed on disk at zero bytes and the title showed its first-run
+// notice again on every run, for ever.
+//
+// Closing is not the only moment a write becomes durable, so the ending is a
+// second one. It costs nothing per write, which is what a flush on every write
+// would not: a title that fills a save a byte at a time would rewrite the whole
+// file once per byte.
+func (client *Client) flushOpenFiles() {
+	for _, file := range client.files {
+		if file == nil || !file.dirty {
+			continue
+		}
+		client.writeFile(file.name, file.data)
+		file.dirty = false
+	}
+}
+
 // writeFile persists a guest file. A failure is a diagnostic, not a guest
 // error: the in-memory copy stays authoritative for the session.
 func (client *Client) writeFile(name string, data []byte) {

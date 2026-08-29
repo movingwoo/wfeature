@@ -173,8 +173,30 @@ func (client *Client) throwJava(thread *armcore.Thread, class string, object uin
 		client.logger.Debug("LGT java throw is uncaught", "class", class,
 			"open", len(client.javaTry), "depth", client.javaCallDepth)
 	}
-	return fmt.Errorf("%w (the application threw %s%s)", ErrJavaAppUnsupported, class, what)
+	return &javaUncaughtThrow{Class: class, What: what}
 }
+
+// javaUncaughtThrow is an exception with nothing of the application's own left
+// to catch it. It is told apart from every other way a Java title can stop
+// because it is the one that is not a defect in this platform: the guest did
+// what it was written to do and the frame that would have caught it is not on
+// this stack. A callback ends on it; see absorbUncaughtCallback.
+//
+// It still unwraps to ErrJavaAppUnsupported, because everything that reports
+// on an LGT Java title stopping reads that.
+type javaUncaughtThrow struct {
+	Class string
+	What  string
+}
+
+// The sentinel's own words are not repeated here: every path that reports one
+// of these wraps it in ErrJavaAppUnsupported on the way out, and a message that
+// said "LGT Java apps are not supported" twice was what the first one did.
+func (throw *javaUncaughtThrow) Error() string {
+	return fmt.Sprintf("the application threw %s%s", throw.Class, throw.What)
+}
+
+func (throw *javaUncaughtThrow) Unwrap() error { return ErrJavaAppUnsupported }
 
 // throwJavaPlatform throws one of the exceptions the platform itself raises:
 // the object is this platform's to build, and it is an instance of the class

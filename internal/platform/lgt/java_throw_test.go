@@ -140,3 +140,77 @@ func TestJavaTryRegionsDoNotOutliveTheirCall(t *testing.T) {
 		t.Errorf("%d regions survived the call that opened them", len(client.javaTry))
 	}
 }
+
+// An exception the application had nothing left to catch with ends the
+// callback it was thrown out of, and nothing else does. A fault, a slot this
+// platform does not serve and a limit a Host imposes all still stop the run:
+// the absorbed case is the one where the guest behaved exactly as written and
+// the only question is who catches it.
+func TestUncaughtCallbackEndsTheCallbackAndNothingElse(t *testing.T) {
+	client := fixtureClient(t)
+	thread := armcore.NewThread(armcore.NewContext())
+	thrown := client.throwJavaPlatform(thread, javaThrowNullClass, ": drawImage")
+	if thrown == nil {
+		t.Fatal("an uncaught throw is not reported")
+	}
+	// It still reads as an LGT Java title stopping, because everything that
+	// reports on one asks that question.
+	if !errors.Is(thrown, ErrJavaAppUnsupported) {
+		t.Errorf("the throw %q does not unwrap to the sentinel", thrown)
+	}
+	if err := client.absorbUncaughtCallback("paint", thrown); err != nil {
+		t.Fatalf("an uncaught exception ended the session: %v", err)
+	}
+	uncaught, first := client.UncaughtCallbacks()
+	if uncaught != 1 {
+		t.Fatalf("callbacks ended by an uncaught exception = %d, want 1", uncaught)
+	}
+	if !strings.Contains(first, javaThrowNullClass) || !strings.Contains(first, "paint") {
+		t.Errorf("the first uncaught callback reads %q, want the callback and the class", first)
+	}
+
+	fault := errors.New("guest memory at 0x4 is not mapped")
+	if err := client.absorbUncaughtCallback("paint", fault); !errors.Is(err, fault) {
+		t.Errorf("a fault was absorbed: %v", err)
+	}
+	unsupported := errors.New("LGT Java apps are not supported (it called something)")
+	if err := client.absorbUncaughtCallback("paint", unsupported); !errors.Is(err, unsupported) {
+		t.Errorf("a slot this platform does not serve was absorbed: %v", err)
+	}
+	if uncaught, _ := client.UncaughtCallbacks(); uncaught != 1 {
+		t.Errorf("the two that were not absorbed were counted: %d", uncaught)
+	}
+}
+
+// The specification gives drawImage a NullPointerException for an image
+// argument that is null, and two local titles depend on which of the two
+// answers this platform gives: they release the pictures of the scene they are
+// leaving and are painted once before the next scene's are loaded. A platform
+// refusal ends the run there; the exception the handset threw ends one frame.
+func TestANullImageArgumentThrowsRatherThanRefusing(t *testing.T) {
+	client := fixtureClient(t)
+	thread := armcore.NewThread(armcore.NewContext())
+
+	_, err := client.javaImageArgument(thread, 0, "drawImage")
+	if err == nil {
+		t.Fatal("a null image was accepted")
+	}
+	var throw *javaUncaughtThrow
+	if !errors.As(err, &throw) || throw.Class != javaThrowNullClass {
+		t.Fatalf("a null image answered %q, want the specification's NullPointerException", err)
+	}
+	if !strings.Contains(err.Error(), "drawImage") {
+		t.Errorf("the throw %q does not name the call", err)
+	}
+
+	// An object that is not null and not an image is a different answer: this
+	// platform never issued it, which is a defect rather than the language's
+	// own null, and it is reported as one.
+	_, err = client.javaImageArgument(thread, 0x30001000, "drawImage")
+	if err == nil {
+		t.Fatal("an object this platform never issued was accepted")
+	}
+	if errors.As(err, &throw) {
+		t.Errorf("an object that is not an image was answered with a throw: %v", err)
+	}
+}

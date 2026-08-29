@@ -3528,6 +3528,136 @@ path out of its `try`, believing a file it had never opened was open, and failed
 two hundred instructions later. The throw travels back as a sentinel error for
 that reason, and every caller that services a platform call knows it.
 
+### What a title links against, from the module's own metadata
+
+The demand a Java title makes on this platform is a set, not a sequence of
+failures, and the module carries it: the load call hands over five member
+tables and a class table that says which class owns which run of each. That is
+the LGT counterpart of reading a KTF module's string pool, and it is worth
+having because the alternative costs one run per member —
+`TestLocalAPIDemandProbe` lists every member a title names and marks the ones
+this platform serves:
+
+```sh
+WFEATURE_API_DEMAND_ARCHIVE=<abs path> WFEATURE_API_DEMAND_PREFIX=lwc \
+    go test ./internal/platform/lgt -run TestLocalAPIDemandProbe -v
+# MISSING static     72 org/kwis/msp/lwc/TextFieldComponent.<init>(Ljava/lang/String;I)V
+# MISSING virtual    24 org/kwis/msp/lwc/TextFieldComponent.setString(Ljava/lang/String;)V
+# served  static     77 org/kwis/msp/lwc/ShellComponent.<init>(IIII)V
+```
+
+**What it cannot say is which class owns an instance field.** The field table is
+shared with the application's own classes and the entries carry no owner, so
+those come back unattributed — which is still the answer to "does this title
+read a platform field at all", and that question is what the section below
+turned on.
+
+### The lwc widgets, and the field a title reads instead of asking
+
+Two titles reach a text field: one asks the player for a name, the other for a
+message. The demand is the specification's TextComponent family — a field or a
+box built with a string and a constraint, `getString`, `setString`,
+`setMaxLength`, the `insert` and `delete` a handset's input method drives, the
+shell that holds them, and the `InputMethodHandler` a text component owns.
+Everything here **keeps what it was given and answers it back**, and nothing is
+drawn, which is the same limitation the other platform's toolkit carries.
+
+**A key offered to a widget is answered false.** A widget that took one would be
+taking it from the card that is the only thing drawing, and the player would be
+typing into something invisible.
+
+**The field is what took the work.** `TextComponent.imHandler` is protected on
+the handset, so a title takes the automaton off the component rather than
+constructing one — and the module asks for that field's number in the same
+table it asks for its own fields' numbers. This platform never answered that
+table: a platform class's instance state lives on the Go side and everything
+else reaches it through a method, so the class table's field run was read past.
+An entry nothing answers leaves the module's array holding zero, the read lands
+on the object's first word, and the title got a null it did not check —
+`java/lang/NullPointerException` in a thread whose death showed as a screen that
+said `Now Loading` for ever.
+
+Three pieces close it. `layoutPlatformFields` numbers each platform class's own
+instance fields above whatever the classes it extends took, and answers
+`FieldsOut`; a platform class's object block is sized to hold them, because a
+block sized to nothing puts the module's read past what the arena handed out;
+and a text component's constructor builds the handler and writes it into the
+word. **All three are needed** — the number without the block writes outside the
+allocation, and the block without the constructor holds a zero the title reads
+as null.
+
+### A file written and never closed
+
+The bytes of an open file are kept here and persisted when it is closed, which
+is right for a title that closes what it opened. One does not: it writes the
+single byte that says its first run is over and calls `MC_knlExit` on the next
+line. The file was created on disk at zero bytes, the second run read an empty
+file, and the title showed its first-run notice again — every run, for ever,
+which reads exactly like a title that cannot get past its own splash.
+
+`flushOpenFiles` persists every dirty open file at the two other moments a write
+becomes durable: the guest's own ending, and the session's. It costs nothing per
+write, which is what a flush on every write would not — a title that fills a
+save a byte at a time would rewrite the whole file once per byte.
+
+### One surface per named picture
+
+A picture loaded from a resource is immutable — the specification says only a
+copy can be drawn into — so two Images of the same name are the same pixels.
+Decoding a second set of them costs a surface, and **nothing here reclaims one**:
+the Java path has no collector, and an Image is released by the language on a
+handset. One title reloads its sprite sheets from inside `paint`, 879 loads of a
+handful of names in two thousand ticks, and the surface region filled and ended
+the run.
+
+`javaCreateImageNamed` keeps the surface by name. The object is still a new one:
+sharing the pixels is unobservable, and sharing the object would make `==`
+answer true where the language says nothing.
+
+**The byte form is not cached and the leak behind it is still open.** An image
+built from an array could be a picture the title assembled, and two arrays that
+happen to match are not the same picture in the way two loads of one name are.
+What would close it for both is reclaiming a surface whose Image nothing holds,
+which is the collector the other platform has (`docs/ktf.md`, "Guest object
+collection") and this one does not.
+
+### An exception nothing catches ends the callback, not the session
+
+The other side of the try region: what happens when the search above finds
+nothing armed. A throw that reaches the platform's own frame used to end the
+run, and two local titles show why that is the wrong answer.
+
+Both leave a scene the same way — stop the sound, drop the pictures of the
+scene they are leaving by storing null into their own array, ask for a
+collection — and both are painted once more before the next scene's pictures
+have been loaded. The frame they draw reaches `drawImage` with a null, one
+paint, from a card whose own loop is somewhere else entirely. The language says
+an exception nothing catches ends the *thread*; a handset's event loop ends the
+callback and calls the next one. Ending the session for it stopped both titles
+on a frame they were about to throw away.
+
+`Client.absorbUncaughtCallback` is that rule, applied where a callback is
+entered: a card's `paint` and `keyNotify` through `callJavaCardMethod`, and a
+guest thread's `run`. **Only an exception the application threw is absorbed** —
+`javaUncaughtThrow` and nothing else, so a slot this platform does not serve, a
+fault, a limit a Host imposes and a guest exit all still stop the run, and the
+type is what keeps those apart from the one case where the guest behaved
+exactly as written. It is counted rather than swallowed:
+`Session.UncaughtCallbacks` carries how many and what the first said, into both
+the CLI summary's `uncaught` key and the browser session report, so that a title
+failing every paint reads as a title failing every paint. The other platform's
+counterpart, and the reasoning in full, is in [`ktf.md`](ktf.md), "who catches
+what a callback threw".
+
+**A null image is the language's own exception and not a platform refusal.**
+`javaImageSurface` answers the surface an object stands for and reports an
+object this platform never issued, which is a defect — but zero is not a wrong
+object, it is the missing one, and the specification gives `drawImage` a
+`NullPointerException` for exactly that argument. `javaImageArgument` is the
+distinction: null throws what the handset threw, and every other refusal stays a
+refusal. Without both halves neither title moves — the throw alone still ends
+the session, and the absorb alone has nothing of the right type to absorb.
+
 ### The String pair, and the two slots that answer them
 
 `0xe1` and `0xe2` take **no argument at any of their 254 call sites**, and each

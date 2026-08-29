@@ -372,6 +372,17 @@ func (session *Session) GuestElapsed() time.Duration {
 // answers the same question for a run with no route; this is how a run that
 // was driven to a scene answers it, which is the only place a title is doing
 // the work worth measuring.
+// UncaughtCallbacks reports how many guest callbacks ended in an exception the
+// application had nothing left to catch with, and what the first of them said.
+// A Host reads it the way it reads a tick error: the session survived, and this
+// is what it survived. See uncaught.go.
+func (session *Session) UncaughtCallbacks() (uint64, string) {
+	if session == nil {
+		return 0, ""
+	}
+	return session.client.UncaughtCallbacks()
+}
+
 func (session *Session) Steps() uint64 {
 	if session == nil || session.client == nil || session.client.core == nil {
 		return 0
@@ -528,6 +539,10 @@ func (session *Session) Close(ctx context.Context) error {
 	// nothing else will ever wake them: they have to be told the session is
 	// over or they stay parked for the life of the process.
 	session.client.StopJavaThreads()
+	// A session can end without the guest ending — a page that went away, a
+	// run that reached its tick count — and a file the title wrote and did not
+	// close is still only in a buffer. See flushOpenFiles.
+	session.client.flushOpenFiles()
 	if err := session.client.DestroyClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
 		return err
 	}

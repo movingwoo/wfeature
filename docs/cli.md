@@ -88,6 +88,13 @@ Four things deliberately exit **zero**:
 - **a run that drew nothing.** Whether a frame is blank is a question about
   pixels, and `framestats` is the command that answers it — see below. A run
   that ticked its whole count without failing did what it was asked.
+- **a callback that ended in an exception nothing caught.** Both ARM platforms
+  end the callback rather than the session for one, because that is what the
+  language and the handset do; the run continued and its code says so. What
+  says it happened is `uncaught` and `uncaught_first` in the summary, on
+  `runktf` and `runlgt` alike — **a sweep reading only the exit code and
+  `tick_error` counts a title that fails every paint as one that plays**, so a
+  sweep has to read them. See [`ktf.md`](ktf.md) and [`lgt.md`](lgt.md).
 
 `checkgames` and `framestats` are the other two commands whose exit code is an
 answer rather than a status; both are documented with the answer they give.
@@ -593,6 +600,28 @@ invented.
 wfeature zoom out/tick0900.png look.png -x 30 -y 130 -width 90 -height 70 -scale 5
 # (30,130)-(120,200) at 5x -> look.png (450x350)
 ```
+
+## The local probes
+
+Three throwaway investigation aids live as skipped tests rather than commands,
+because each needs an archive path and answers one question about it:
+
+```sh
+# the instructions around an address a failure named
+WFEATURE_DISASSEMBLE_ARCHIVE=<abs path> WFEATURE_DISASSEMBLE_RANGES=0x114e00-0x114ea0 \
+    go test ./internal/platform/ktf -run TestLocalDisassembleProbe -v
+
+# every platform member an LGT Java title links against, and which are served
+WFEATURE_API_DEMAND_ARCHIVE=<abs path> WFEATURE_API_DEMAND_PREFIX=lwc \
+    go test ./internal/platform/lgt -run TestLocalAPIDemandProbe -v
+```
+
+The demand probe is the one that changes how a gap is worked: a title's missing
+members are a **set** in its own metadata, and finding them one failure at a
+time costs a run each. See [`lgt.md`](lgt.md), "What a title links against".
+The KTF equivalent is a scan of the module's string pool — see
+[`ktf.md`](ktf.md), "A widget toolkit that is one text box" — which lists the
+names but not which class owns each.
 
 ## checkgames
 

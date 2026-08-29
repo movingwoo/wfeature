@@ -216,7 +216,72 @@ func javaCreateImageNamed(
 	if !found {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+name)
 	}
-	return client.newJavaImage(encoded)
+	// **One surface per named picture.** A picture loaded from a resource is
+	// immutable — the specification says only a copy can be drawn into — so two
+	// Images of the same name are the same pixels, and decoding a second set of
+	// them costs a surface nothing here ever reclaims. One title reloads its
+	// sprite sheets from inside `paint`: 879 loads of a handful of names in two
+	// thousand ticks, which filled the surface region and ended the run.
+	//
+	// The object is still a new one. Sharing the pixels is unobservable;
+	// sharing the object would make `==` answer true where the language says
+	// nothing, and a title that keeps two of them apart is entitled to.
+	runtime := client.javaRuntimeState()
+	if handle, cached := runtime.namedImages[name]; cached {
+		return client.newJavaImageOn(handle)
+	}
+	object, err := client.newJavaImage(encoded)
+	if err != nil {
+		return 0, err
+	}
+	if runtime.namedImages == nil {
+		runtime.namedImages = map[string]uint32{}
+	}
+	runtime.namedImages[name] = runtime.images[object]
+	return object, nil
+}
+
+// unshareNamedSurface gives an image its own pixels when it is about to be
+// drawn into and its surface is one the name cache is handing out. An image
+// nothing else holds is left alone: the copy is only for the sharing.
+func (client *Client) unshareNamedSurface(object uint32, surface *framebuffer) (*framebuffer, error) {
+	runtime := client.javaRuntimeState()
+	name := ""
+	for cached, handle := range runtime.namedImages {
+		if handle == surface.handle {
+			name = cached
+			break
+		}
+	}
+	if name == "" {
+		return surface, nil
+	}
+	private, err := client.newFramebuffer(surface.width, surface.height, false)
+	if err != nil {
+		return nil, err
+	}
+	copy(private.pixels, surface.pixels)
+	if surface.opaque != nil {
+		private.opaque = append([]bool(nil), surface.opaque...)
+	}
+	runtime.images[object] = private.handle
+	// The name keeps the picture it loaded, for whoever asks for it next.
+	return private, nil
+}
+
+// newJavaImageOn answers a fresh Image object over a surface that is already
+// decoded.
+func (client *Client) newJavaImageOn(handle uint32) (uint32, error) {
+	class, err := client.preparePlatformJavaClass(javaImageClass)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().images[object] = handle
+	return object, nil
 }
 
 // newJavaImage decodes an encoded picture and answers the Image object a title
@@ -262,11 +327,25 @@ func (client *Client) javaImageSurface(object uint32) (*framebuffer, error) {
 	return surface, nil
 }
 
+// javaImageArgument answers the surface an image argument names. A null is not
+// a wrong object but the missing one, and the specification says what a call
+// handed it does: it throws. Keeping the two apart is the whole difference
+// between a title whose scene change drew one frame too early and a title that
+// stopped; see uncaught.go.
+func (client *Client) javaImageArgument(
+	thread *armcore.Thread, object uint32, where string,
+) (*framebuffer, error) {
+	if object == 0 {
+		return nil, client.javaNullImage(thread, where)
+	}
+	return client.javaImageSurface(object)
+}
+
 // javaImageWidth and javaImageHeight answer what the decoded picture measures.
 func javaImageWidth(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	surface, err := client.javaImageSurface(arguments[0])
+	surface, err := client.javaImageArgument(thread, arguments[0], "getWidth")
 	if err != nil {
 		return 0, err
 	}
@@ -274,9 +353,9 @@ func javaImageWidth(
 }
 
 func javaImageHeight(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	surface, err := client.javaImageSurface(arguments[0])
+	surface, err := client.javaImageArgument(thread, arguments[0], "getHeight")
 	if err != nil {
 		return 0, err
 	}

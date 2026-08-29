@@ -79,6 +79,16 @@ func (client *Client) linkJavaSurface(surface *javaSurface, layout *javaLayout) 
 		return fmt.Errorf("write the java virtual method answers at %#x: %w",
 			surface.VirtualMethodsOut, err)
 	}
+	// An instance field of a platform class is answered with its word in the
+	// object's own block. See layoutPlatformFields for why the table was left
+	// unanswered until a title read one.
+	fields, err := layout.layoutPlatformFields(surface)
+	if err != nil {
+		return err
+	}
+	if err := client.writeJavaSlots(surface.FieldsOut, fields); err != nil {
+		return fmt.Errorf("write the java field answers at %#x: %w", surface.FieldsOut, err)
+	}
 	// A static field is answered with its position in its own class's storage.
 	// The module compiles a read of one as an index past the words a class
 	// object uses for itself, so the number and the size of the block it lands
