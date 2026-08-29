@@ -190,6 +190,11 @@ type Client struct {
 	// removed is the set of paths MC_fsRemove has deleted, loaded from the
 	// store on first use. See fileRemovedKey for why a delete needs a list.
 	removed map[string]bool
+	// created is the set of paths a title has written that the archive does
+	// not package, kept for the same reason removed is: the save store answers
+	// about keys it is asked for and cannot be enumerated, so a directory
+	// listing has nothing to find its own saves with. See fileCreatedKey.
+	created map[string]bool
 
 	traceLive string
 	traceOut  io.Writer
@@ -203,6 +208,11 @@ type Client struct {
 	// the generator behind a `java/util/Random`: a title may hold both, and
 	// seeding one must not move the other.
 	cRandom *rand.Rand
+
+	// strtokScan is where the next strtok continues from, the one static the
+	// C library here carries between calls. Zero means there is nothing to
+	// continue, which is what a continuation before any first call answers on.
+	strtokScan uint32
 
 	// inputMode is the automaton's current mode, an index into inputModes, and
 	// inputModeTableAddress is the string array MC_imGetSupportedModes answers

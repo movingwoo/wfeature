@@ -543,6 +543,15 @@ func registerWords(thread *armcore.Thread, count int) []uint32 {
 	return values
 }
 
+// describeCallWords is describeJavaWords over the registers a call arrived
+// with. **A slot with no name is settled by what its arguments are**, and that
+// question is asked the same way on both sides of the platform: the C library
+// slots reach this platform through the same stubs and are as unnamed, so a
+// title that stops on one leaves the same evidence and gets the same report.
+func (client *Client) describeCallWords(thread *armcore.Thread, count int) string {
+	return client.describeJavaWords(registerWords(thread, count))
+}
+
 // describeJavaWords names the class of every argument that turns out to be an
 // object this platform issued. **What a word is, is what settles a slot**: a
 // call that takes an array and an index reads the same as one that takes an

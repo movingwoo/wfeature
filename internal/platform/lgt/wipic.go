@@ -132,9 +132,16 @@ const (
 	// slotFsRename is MC_fsRename(oldname, newname, accessLevel). It sits
 	// between remove and mkdir, which is where the specification's own order
 	// puts it, and that order is what fixed every other number in this block.
-	slotFsRename     uint32 = 0x197
-	slotFsMkDir      uint32 = 0x198
-	slotFsRmDir      uint32 = 0x199
+	slotFsRename uint32 = 0x197
+	slotFsMkDir  uint32 = 0x198
+	slotFsRmDir  uint32 = 0x199
+	// slotFsList is MC_fsList(dirName, buf, bufSize, accessLevel), the entry
+	// the block's own order already had a place for between rmDir and
+	// totalSpace, both of which titles call. A title's call site agrees down
+	// to the argument: it zeroes a 1024-byte stack buffer, passes it with a
+	// size of 1023, treats a zero answer as success and then walks the buffer
+	// as NUL-terminated names until it reaches an empty one.
+	slotFsList       uint32 = 0x19a
 	slotFsTotalSpace uint32 = 0x19b
 	slotFsAvailable  uint32 = 0x19c
 	// slotFsTell is MC_fsTell(fd). The file block runs in the specification's
@@ -158,7 +165,21 @@ const (
 	slotNetSocketRead    uint32 = 0x25d
 	slotNetSocketClose   uint32 = 0x25e
 	slotNetSetReadCB     uint32 = 0x265
-	slotNetSetWriteCB    uint32 = 0x266
+	// slotNetSocket is MC_netSocket(domain, type), and it is the one entry of
+	// the block that is **not** where the block's order puts it: counting from
+	// MC_netConnect lands it on 0x25a, and the module that calls it resolves
+	// 0x7d0. Nothing else moved with it — the same module goes on to resolve
+	// MC_netSocketConnect at 0x25b and MC_netSocketClose at 0x25e — so 0x25a
+	// is left unclaimed rather than filled in by the count that this entry
+	// disproves.
+	//
+	// What it is, is not in doubt: the caller passes the specification's own
+	// MC_AF_INET (2) and MC_SOCKET_STREAM (1), tests the answer for a
+	// non-negative descriptor, and on success calls MC_netSocketConnect with
+	// the address and port that the MC_utilInetAddrInt and MC_utilHtons calls
+	// just above it prepared.
+	slotNetSocket     uint32 = 0x7d0
+	slotNetSetWriteCB uint32 = 0x266
 	// Block nine is the utility block, in the specification's own order, the
 	// same rule the identified blocks follow. Two calls named it: one title's
 	// authenticating screen passes 0x385 a port and keeps the result as a
@@ -247,9 +268,10 @@ func knownWIPICSlot(slot uint32) bool {
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
 		slotFsOpen, slotFsRead, slotFsWrite,
 		slotFsClose, slotFsSeek, slotFsFileAttribute, slotFsRemove,
-		slotFsRename, slotFsMkDir, slotFsRmDir, slotFsTotalSpace, slotFsAvailable, slotFsTell,
-		slotFsIsExist,
-		slotNetConnect, slotNetClose, slotNetSocketConnect, slotNetSocketWrite,
+		slotFsRename, slotFsMkDir, slotFsRmDir, slotFsList, slotFsTotalSpace,
+		slotFsAvailable, slotFsTell, slotFsIsExist,
+		slotNetConnect, slotNetClose, slotNetSocket, slotNetSocketConnect,
+		slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
 		slotDbListDataBases,
 		slotUtilHtonl, slotUtilHtons, slotUtilNtohl, slotUtilNtohs,
@@ -723,7 +745,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotFsOpen, slotFsRead, slotFsWrite, slotFsClose, slotFsSeek,
 		slotFsFileAttribute, slotFsRemove, slotFsRename, slotFsMkDir, slotFsRmDir,
-		slotFsTotalSpace, slotFsAvailable, slotFsTell, slotFsIsExist:
+		slotFsList, slotFsTotalSpace, slotFsAvailable, slotFsTell, slotFsIsExist:
 		return client.handleFile(thread, slot)
 
 	case slotNetConnect:
@@ -731,7 +753,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// than through its return value. See wipic_net.go.
 		return answerInt(client.connectNetwork(thread))
 
-	case slotNetSocketConnect, slotNetSocketWrite,
+	case slotNetSocket, slotNetSocketConnect, slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB:
 		// There is no network. Reporting an error is what the game's own
 		// state machine handles; claiming a connection would make it wait
@@ -840,7 +862,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// needs a shape instead, argued for where it is recorded.
 		return answerInt(wipiSuccess)
 	}
-	return fmt.Errorf("unimplemented LGT WIPI C slot %#x", slot)
+	return fmt.Errorf("unimplemented LGT WIPI C slot %#x%s, with %s; %s", slot,
+		client.describeJavaCallSite(thread),
+		formatWords(registerWords(thread, 4)), client.describeCallWords(thread, 4))
 }
 
 // The font metrics the three font slots answer with. They are read off the

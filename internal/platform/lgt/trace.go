@@ -154,7 +154,7 @@ func (client *Client) traceDetail(category, slot uint32, arguments [4]uint32) st
 	switch slot {
 	case slotFsOpen:
 		return fmt.Sprintf("%q, %s", client.traceString(arguments[0]), fileOpenFlagName(arguments[1]))
-	case slotFsIsExist, slotFsRemove, slotFsFileAttribute, slotFsMkDir, slotFsRmDir,
+	case slotFsIsExist, slotFsRemove, slotFsFileAttribute, slotFsMkDir, slotFsRmDir, slotFsList,
 		slotGetResourceID, slotGetResource, slotGetDefaultVolume:
 		return fmt.Sprintf("%q", client.traceString(arguments[0]))
 	case slotSprintk:
@@ -394,6 +394,7 @@ var wipicSlotNames = map[uint32]string{
 	slotFsFileAttribute:             "fsFileAttribute",
 	slotFsMkDir:                     "fsMkDir",
 	slotFsRmDir:                     "fsRmDir",
+	slotFsList:                      "fsList",
 	slotFsTotalSpace:                "fsTotalSpace",
 	slotFsAvailable:                 "fsAvailable",
 	slotFsTell:                      "fsTell",
@@ -401,6 +402,7 @@ var wipicSlotNames = map[uint32]string{
 	slotDbListDataBases:             "dbListDataBases",
 	slotFsIsExist:                   "fsIsExist",
 	slotNetConnect:                  "netConnect",
+	slotNetSocket:                   "netSocket",
 	slotBackLight:                   "backLight",
 	slotVibrator:                    "vibrator",
 	slotClipCreate:                  "clipCreate",
@@ -445,6 +447,8 @@ var stdlibSlotNames = map[uint32]string{
 	stdlibStrpbrk:   "strpbrk",
 	stdlibStrstr:    "strstr",
 	stdlibStrlen:    "strlen",
+	stdlibStrtok:    "strtok",
+	stdlibFree:      "free",
 	stdlibMemcpy:    "memcpy",
 	stdlibMemmove:   "memmove",
 	stdlibMemcmp:    "memcmp",

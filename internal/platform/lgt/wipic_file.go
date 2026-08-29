@@ -31,6 +31,14 @@ const fileSaveScope = "fs/"
 // has to be written down beside it.
 const fileRemovedKey = fileSaveScope + ".removed"
 
+// fileCreatedKey lists the paths a title has written that the archive does not
+// package. It is the removal list's mirror and exists for the same reason: a
+// SaveStore answers about the keys it is handed and cannot be walked, so a
+// directory listing built only from the archive would show a title the files
+// it shipped and none of the files it wrote — which for a title that lists a
+// directory to find its own save slots is a listing that is always empty.
+const fileCreatedKey = fileSaveScope + ".created"
+
 // openFile is one MC_fsOpen handle.
 type openFile struct {
 	name     string
@@ -340,6 +348,41 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		// than any save and small enough to stay an ordinary integer.
 		return answer(storageQuotaBytes)
 
+	case slotFsList:
+		pointer, err := thread.Register(0)
+		if err != nil {
+			return err
+		}
+		buffer, err := thread.Register(1)
+		if err != nil {
+			return err
+		}
+		size, err := thread.Register(2)
+		if err != nil {
+			return err
+		}
+		name, err := client.readCString(pointer)
+		if err != nil {
+			return err
+		}
+		// The names go back NUL-terminated one after another and the list ends
+		// with an empty one, which is the convention the caller reads: it takes
+		// the buffer's first byte as the whole answer's "is there anything",
+		// and walks name by name until it meets a zero-length one.
+		packed := make([]byte, 0, 64)
+		for _, entry := range client.listDirectory(name) {
+			packed = append(packed, entry...)
+			packed = append(packed, 0)
+		}
+		packed = append(packed, 0)
+		if uint32(len(packed)) > size {
+			return answerCode(thread, wipiShortBuffer)
+		}
+		if err := client.core.Memory().Write(buffer, packed); err != nil {
+			return err
+		}
+		return answerCode(thread, wipiSuccess)
+
 	case slotFsMkDir, slotFsRmDir:
 		// The store has no directories — a path is a save key. A title that
 		// creates its save directory before writing into it is answered that
@@ -348,7 +391,9 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		return answer(wipiSuccess)
 
 	}
-	return fmt.Errorf("unimplemented LGT file slot %#x", slot)
+	return fmt.Errorf("unimplemented LGT file slot %#x%s, with %s; %s", slot,
+		client.describeJavaCallSite(thread),
+		formatWords(registerWords(thread, 4)), client.describeCallWords(thread, 4))
 }
 
 // openFile resolves a path and returns a handle.
@@ -482,6 +527,7 @@ func (client *Client) writeFile(name string, data []byte) {
 	// Writing a path brings it back, whether or not the store round trip below
 	// succeeds: the session's own view has the file from here on.
 	client.markFileRemoved(name, false)
+	client.markFileCreated(name)
 	if client.saveStore == nil {
 		return
 	}
@@ -499,6 +545,102 @@ func (client *Client) writeFile(name string, data []byte) {
 // them unreachable until something writes the path again.
 func (client *Client) removeFile(name string) {
 	client.markFileRemoved(name, true)
+}
+
+// createdFiles is the set of paths a title has written, read from the store
+// once per session and kept in memory after that. A path the archive packages
+// is not in it: the listing finds those anyway, and recording them would grow
+// the index by every file a title ever rewrote.
+func (client *Client) createdFiles() map[string]bool {
+	if client.created != nil {
+		return client.created
+	}
+	client.created = make(map[string]bool)
+	if client.saveStore == nil {
+		return client.created
+	}
+	data, ok := client.saveStore.LoadSave(fileCreatedKey)
+	if !ok {
+		return client.created
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			client.created[line] = true
+		}
+	}
+	return client.created
+}
+
+// markFileCreated records one written path and writes the list back.
+func (client *Client) markFileCreated(name string) {
+	if _, packaged := client.archive.Resource(name); packaged {
+		return
+	}
+	set := client.createdFiles()
+	key := canonicalFileName(name)
+	if set[key] {
+		return
+	}
+	set[key] = true
+	if client.saveStore == nil {
+		return
+	}
+	names := make([]string, 0, len(set))
+	for entry := range set {
+		names = append(names, entry)
+	}
+	sort.Strings(names)
+	if err := client.saveStore.StoreSave(fileCreatedKey, []byte(strings.Join(names, "\n"))); err != nil && client.logger != nil {
+		client.logger.Debug("LGT created list store failed", "name", name, "error", err)
+	}
+}
+
+// listDirectory answers the immediate children of one directory: the entries
+// the archive packages under it and the paths a title has written under it,
+// minus anything removed. A child is one path segment, so a directory two
+// levels down contributes its own name once rather than each file inside it —
+// which is what a listing is, and what the title reading this one wants: it
+// lists a folder of song folders and reads each name as a number.
+func (client *Client) listDirectory(name string) []string {
+	prefix := canonicalFileName(name)
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	removed := client.removedFiles()
+	seen := make(map[string]string)
+	consider := func(path string) {
+		trimmed := strings.TrimPrefix(path, "/")
+		lowered := strings.ToLower(trimmed)
+		if !strings.HasPrefix(lowered, prefix) || removed[lowered] {
+			return
+		}
+		rest := trimmed[len(prefix):]
+		if cut := strings.IndexByte(rest, '/'); cut >= 0 {
+			rest = rest[:cut]
+		}
+		if rest == "" {
+			return
+		}
+		seen[strings.ToLower(rest)] = rest
+	}
+	if client.archive != nil {
+		for path := range client.archive.Resources {
+			consider(path)
+		}
+		for path := range client.archive.Packaged {
+			consider(path)
+		}
+	}
+	for path := range client.createdFiles() {
+		consider(path)
+	}
+	names := make([]string, 0, len(seen))
+	for _, entry := range seen {
+		names = append(names, entry)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // canonicalFileName is the form the removal list is keyed by, so that a title
