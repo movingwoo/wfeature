@@ -66,8 +66,20 @@ const (
 	stdlibRand  uint32 = 0x403
 	stdlibSrand uint32 = 0x404
 
-	stdlibStrstr    uint32 = 0x410
-	stdlibStrlen    uint32 = 0x411
+	stdlibStrstr uint32 = 0x410
+	stdlibStrlen uint32 = 0x411
+
+	// stdlibStrtok is `char *strtok(char *, const char *)`, and a call site is
+	// what says so rather than the specification's ordering — which puts it at
+	// 0x412, one below. A title parsing a text table calls this slot with its
+	// buffer and a one-character delimiter, passes the answer to `atoi`, and
+	// then calls **the same function pointer again with a null first
+	// argument** and the same delimiter. Continuing from saved state on a null
+	// argument is `strtok` and nothing else in the list, so the slot the
+	// ordering predicted is the one that is still unaccounted for; see
+	// "strtok is one past where the list puts it" in docs/lgt.md.
+	stdlibStrtok uint32 = 0x413
+
 	stdlibMemcpy    uint32 = 0x414
 	stdlibMemmove   uint32 = 0x415
 	stdlibMemcmp    uint32 = 0x416
@@ -95,6 +107,18 @@ const (
 	// hands out — the caller's own memset is the evidence that the handset's
 	// did not either.
 	stdlibMalloc uint32 = 0x426
+
+	// stdlibFree is `void free(void *)`, and the call site is what says so.
+	// A title reaches it through a two-instruction wrapper that is the C
+	// idiom for one function and no other — `if (p) free(p)` — and the
+	// pointer it guards is a live block of the same heap `malloc` hands out.
+	// The registers beside it are the previous call's leavings: a string a
+	// title had just looked up sits in the second, which is why the shape had
+	// to come from the code rather than from the trace.
+	//
+	// It is two slots above `malloc` rather than one, and what sits between
+	// them is unknown; the slot is placed by its caller, not by counting.
+	stdlibFree uint32 = 0x428
 )
 
 // maxStdlibLength bounds one string or block operation, because a length that
@@ -431,6 +455,19 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		}
 		return answer(address)
 
+	case stdlibFree:
+		address, err := argument(0)
+		if err != nil {
+			return err
+		}
+		// A pointer this heap never handed out is ignored rather than trusted,
+		// which is the arena's rule and not this call's — see arena.release.
+		// `free` answers nothing, so the return register is left alone: it is
+		// the caller's, and inventing a value for it is a decision this
+		// platform has no reason to make.
+		client.heap.release(address)
+		return nil
+
 	case stdlibVsprintf:
 		destination, err := argument(0)
 		if err != nil {
@@ -472,6 +509,9 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		// to make; see the same call's KTF twin in docs/ktf.md.
 		return nil
 
+	case stdlibStrtok:
+		return client.strtok(thread)
+
 	case stdlibLocaltime:
 		pointer, err := argument(0)
 		if err != nil {
@@ -483,7 +523,95 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		}
 		return answer(address)
 	}
-	return fmt.Errorf("unimplemented LGT stdlib slot %#x", slot)
+	return fmt.Errorf("unimplemented LGT stdlib slot %#x%s, with %s; %s", slot,
+		client.describeJavaCallSite(thread),
+		formatWords(registerWords(thread, 4)), client.describeCallWords(thread, 4))
+}
+
+// strtok splits a buffer in place, and it is the one C library function here
+// that carries state from one call to the next: a first call names the buffer,
+// and every call after it passes a null pointer and continues where the last
+// one stopped. The state is the scan position and it lives on the client,
+// which is where the handset's own copy lives too — one module, one static.
+//
+// **The buffer is the title's own and the scan runs to its terminator**, not
+// to a name-sized bound: the same title that found this slot reads a text
+// table of several kilobytes and splits it line by line.
+func (client *Client) strtok(thread *armcore.Thread) error {
+	start, err := thread.Register(0)
+	if err != nil {
+		return err
+	}
+	delimiters, err := thread.Register(1)
+	if err != nil {
+		return err
+	}
+	separators, err := client.readCString(delimiters)
+	if err != nil {
+		return err
+	}
+	scan := start
+	if scan == 0 {
+		// A continuation with nothing to continue answers nothing. C leaves
+		// that undefined and a handset would read whatever its static held;
+		// answering null is the reading a caller can survive.
+		scan = client.strtokScan
+		if scan == 0 {
+			return thread.SetRegister(0, 0)
+		}
+	}
+	isSeparator := func(character byte) bool {
+		return strings.IndexByte(separators, character) >= 0
+	}
+	read := func(address uint32) (byte, error) {
+		one := make([]byte, 1)
+		if err := client.core.Memory().Read(address, one); err != nil {
+			return 0, err
+		}
+		return one[0], nil
+	}
+	// Leading separators are not part of a token, and a run of them is one
+	// separator: a table whose last line ends with the delimiter must not
+	// yield an empty final token.
+	for {
+		character, readErr := read(scan)
+		if readErr != nil {
+			return readErr
+		}
+		if character == 0 {
+			client.strtokScan = 0
+			return thread.SetRegister(0, 0)
+		}
+		if !isSeparator(character) {
+			break
+		}
+		scan++
+	}
+	token := scan
+	for offset := uint32(0); offset < maxCStringLength; offset++ {
+		character, readErr := read(scan)
+		if readErr != nil {
+			return readErr
+		}
+		if character == 0 {
+			// The last token ends at the buffer's own terminator, and there is
+			// nothing after it to continue from.
+			client.strtokScan = 0
+			return thread.SetRegister(0, token)
+		}
+		if isSeparator(character) {
+			// The separator becomes this token's terminator, in the caller's
+			// buffer. That is what makes the answer a string, and it is why
+			// strtok cannot be given a literal.
+			if err := client.core.Memory().Write(scan, []byte{0}); err != nil {
+				return err
+			}
+			client.strtokScan = scan + 1
+			return thread.SetRegister(0, token)
+		}
+		scan++
+	}
+	return fmt.Errorf("LGT strtok token at %#x is not terminated within %d bytes", token, maxCStringLength)
 }
 
 // stringWrite implements strcpy, strncpy and strcat, which differ only in

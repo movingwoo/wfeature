@@ -79,3 +79,55 @@ func TestSetBufferReportsWhetherTheDataWasTaken(t *testing.T) {
 		t.Fatalf("clip holds %d bytes after an empty setBuffer, want 0", got)
 	}
 }
+
+// A title builds its whole sound set in startApp from a numbering its own
+// archive is sparse in, so a missing name reached the constructor thirteen
+// times in one start. The specification declares this constructor no
+// exception, which leaves an empty clip as the only answer there is — and the
+// alternative, which is what this used to do, was to end the session before
+// the title's first frame.
+func TestAClipNamingAResourceTheArchiveLacksIsEmptyRatherThanFatal(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.AttachResources(map[string][]byte{"1.mmf": []byte("MMMDsound")})
+
+	packaged := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
+	arguments := []jvm.Value{
+		jvm.ReferenceValue(packaged),
+		jvm.ReferenceValue(client.JVM().NewString("audio/x-mmf")),
+		jvm.ReferenceValue(client.JVM().NewString("/1.mmf")),
+	}
+	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err != nil {
+		t.Fatalf("a packaged clip failed: %v", err)
+	}
+	if got := string(runtime.clip(packaged).data); got != "MMMDsound" {
+		t.Fatalf("the packaged clip holds %q, want the resource's bytes", got)
+	}
+
+	missing := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
+	arguments = []jvm.Value{
+		jvm.ReferenceValue(missing),
+		jvm.ReferenceValue(client.JVM().NewString("audio/x-mmf")),
+		jvm.ReferenceValue(client.JVM().NewString("/13.mmf")),
+	}
+	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err != nil {
+		t.Fatalf("a clip naming an absent resource failed: %v", err)
+	}
+	if data := runtime.clip(missing).data; len(data) != 0 {
+		t.Fatalf("the clip holds %d bytes, want none", len(data))
+	}
+
+	// A name that climbs out of the archive is still refused: that is a
+	// malformed path rather than a gap in the archive, and nothing in the
+	// specification asks this platform to follow it. A relative name cannot
+	// reach one — it is resolved against the class's own package first, which
+	// absorbs the climb — so this is the absolute form.
+	escaping := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
+	arguments = []jvm.Value{
+		jvm.ReferenceValue(escaping),
+		jvm.ReferenceValue(client.JVM().NewString("audio/x-mmf")),
+		jvm.ReferenceValue(client.JVM().NewString("/../outside.mmf")),
+	}
+	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err == nil {
+		t.Fatal("a clip naming a resource outside the package was accepted")
+	}
+}

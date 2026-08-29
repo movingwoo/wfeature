@@ -46,6 +46,13 @@ type SessionOptions struct {
 	// exhausting a window only renews it. Zero selects a default that covers
 	// the longest save load these games perform.
 	ServiceSteps uint64
+	// ServiceWait caps how long one Host service call may spend waiting on the
+	// session clock before it fails with ErrServiceWaitLimit. A guest that
+	// waits by polling the clock inside a delay loop — which is how a title
+	// paces its opening sequence with no scheduler to yield to — spends steps
+	// without doing work, so those windows are charged here instead of against
+	// ServiceSteps. Zero selects a default.
+	ServiceWait time.Duration
 	// SaveStore persists guest saves. When nil and SaveRoot is set, a
 	// directory store scoped by the archive PID is attached instead.
 	SaveStore SaveStore
@@ -276,6 +283,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	}
 	client.threadSliceSteps = options.ThreadSliceSteps
 	client.serviceSteps = options.ServiceSteps
+	client.serviceWait = options.ServiceWait
 	client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
 	client.AttachAppProperties(archive.Descriptor.Properties)
 	client.AttachResources(archive.JAR.Entries)
@@ -355,8 +363,9 @@ func (client *Client) newStringArrayObject() (*jvm.Object, error) {
 }
 
 // Tick performs one cooperative service round: pending WIPI C timers, one
-// queued guest thread, and a card paint. It reports whether any service ran,
-// so Hosts can idle when the game is fully waiting.
+// queued guest thread — plus any workers that finish, which is not what the
+// limit shares out — and a card paint. It reports whether any service ran, so
+// Hosts can idle when the game is fully waiting.
 func (session *Session) Tick(ctx context.Context) (bool, error) {
 	if session == nil || session.Client == nil {
 		return false, fmt.Errorf("KTF session is not started")

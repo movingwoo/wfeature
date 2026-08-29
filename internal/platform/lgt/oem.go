@@ -41,7 +41,9 @@ func knownOEMSlot(slot uint32) bool {
 // handleOEMSVC services one call into table 0x1f8.
 func (client *Client) handleOEMSVC(_ context.Context, thread *armcore.Thread, slot uint32) error {
 	if slot != oemSlotConfigure {
-		return fmt.Errorf("unimplemented LGT OEM slot %#x", slot)
+		return fmt.Errorf("unimplemented LGT OEM slot %#x%s, with %s; %s", slot,
+			client.describeJavaCallSite(thread),
+			formatWords(registerWords(thread, 4)), client.describeCallWords(thread, 4))
 	}
 	// Accepted and ignored, which is all that is known to be right. The
 	// arguments are logged because they are the only evidence about this call

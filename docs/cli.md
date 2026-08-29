@@ -201,6 +201,16 @@ time; with `-play`, the same route reaches the play screen. **The tell is in
 the current-time call) rather than the mix of drawing and allocation a loading
 screen makes. Reach for `-play` before believing the title is stuck.
 
+**`-play` is not the same as `-play -speed 8`, and a batch that only measures
+the second one misses a whole failure.** A wait the guest spends polling the
+clock costs steps in proportion to how long it lasts, so eight times the clock
+is an eighth of the steps: a title whose opening sequence waits five seconds
+inside one timer callback fits under the service allowance at 8x and does not
+at 1x, which is the speed a person plays it at. It is now the wait rather than
+the steps that bounds such a call — [`ktf.md`](ktf.md), "The fifteenth round" —
+but the lesson about the batch stands, because a speed multiplier changes what
+a run is able to reach.
+
 ### Key names
 
 `-key` and a route script share one table, so `fire` cannot mean two things:

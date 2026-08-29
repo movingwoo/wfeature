@@ -122,6 +122,17 @@ func runtimeClipConstructor(runtime *initializationRuntime, vm *jvm.VM, argument
 
 // clipResource reads a packaged resource named relative to the clip's class,
 // the same resolution Class.getResourceAsStream applies.
+//
+// **A name the archive does not hold answers no bytes rather than a failure.**
+// The specification gives `Clip(String type, String resourceName)` no declared
+// exception, so there is no way to tell the guest that its resource is missing
+// and no reason to believe a handset stopped the program over one. A title
+// found this by building its whole sound set in `startApp` from a numbering
+// its own archive is sparse in — twelve clips packaged in a row and then every
+// third one — and the first gap ended the session before its first frame. An
+// empty clip plays nothing, which is what a handset with no data for that
+// number would have done, and the miss is logged so a silent game is still
+// traceable to its cause.
 func (runtime *initializationRuntime) clipResource(receiver *jvm.Object, name string) ([]byte, error) {
 	resourceName := name
 	if strings.HasPrefix(resourceName, "/") {
@@ -138,7 +149,8 @@ func (runtime *initializationRuntime) clipResource(receiver *jvm.Object, name st
 	data, ok := runtime.client.resources[cleaned]
 	runtime.countDiagnostic(fmt.Sprintf("clip resource %s found=%t", cleaned, ok))
 	if !ok {
-		return nil, fmt.Errorf("Clip resource %q is not packaged", name)
+		runtime.client.log("KTF clip resource is not packaged", "name", name)
+		return nil, nil
 	}
 	return append([]byte(nil), data...), nil
 }

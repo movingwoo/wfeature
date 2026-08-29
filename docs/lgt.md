@@ -439,6 +439,91 @@ All three originals reach the same in-game state on this platform, because the
 refusal was already handled. Nothing here has to recognise or defeat an
 authentication routine.
 
+### `MC_netSocket` is at `0x7d0`, which is not where the block's order puts it
+
+Two titles reach a slot at `0x7d0` from inside the callback `MC_netConnect`
+answers with, and it is `MC_netSocket(domain, type)`. Nothing about that had to
+be guessed: the caller passes the specification's own `MC_AF_INET` (2) and
+`MC_SOCKET_STREAM` (1), tests the answer for a non-negative descriptor, and on
+the success side calls `MC_netSocketConnect` with the address and port that the
+`MC_utilInetAddrInt` and `MC_utilHtons` calls immediately above it prepared.
+
+**What is worth writing down is the number.** Counting the block from
+`MC_netConnect` at `0x258` lands `MC_netSocket` on `0x25a`, and it is not
+there. The rest of the block did not move with it — granted a descriptor, the
+same module goes on to resolve `MC_netSocketConnect` at `0x25b` and
+`MC_netSocketClose` at `0x25e`, exactly where the count puts them. So one entry
+of the network block sits two thousand slots away from its neighbours, `0x25a`
+is left unclaimed rather than filled in by a count this entry disproves, and
+the lesson the string.h run taught — that a run of slots between two known ones
+is not free to be anything else — has a counterexample on this platform.
+
+It answers `M_E_ERROR`, which is what the rest of the block answers and for the
+same reason: there is no network, and a title refused a socket takes the
+offline path it already has. Both titles do. One of them shows "서버와 연결이
+끊어졌습니다 / 다시 연결하시겠습니까?" and waits for an answer; granting the
+socket instead and letting `MC_netSocketConnect` fail reaches the identical
+screen, which is what says the refusal is delivered somewhere the title is
+listening.
+
+### `MC_fsList` is `0x19a`, and a listing is more than the archive
+
+`0x19a` is the one entry of the file block that had a place in the order and no
+implementation. A title reaching it settled both halves at once: it zeroes a
+1024-byte stack buffer, calls `0x19a(dirName, buffer, 1023, accessLevel)`,
+treats a zero answer as success, and then walks the buffer as NUL-terminated
+names until it meets an empty one — reading each name as a three-digit number,
+because what it is listing is a folder of song folders.
+
+So the answer is the immediate children of the directory, one path segment
+each, packed NUL-terminated and ended by an empty name, with `M_E_SHORTBUF` for
+a buffer that cannot hold them. A file two levels down contributes its parent's
+name once rather than its own, which is what makes a listing a listing.
+
+**Where the names come from is the part that needed a second index.** A
+`SaveStore` answers about the keys it is handed and cannot be walked, so a
+listing built from the archive alone would show a title the files it shipped
+and none of the files it wrote — and for a title that lists a directory to find
+its own save slots, that listing is always empty. `fs/.created` is therefore
+kept the way `fs/.removed` already was, and for the same reason: what the store
+cannot represent is written down beside it. A path the archive packages is not
+recorded, because the listing finds it anyway.
+
+### `strtok` is one past where the list puts it, and `free` two past `malloc`
+
+The C table's string.h run was placed by counting the specification's list from
+`strcpy`, and the count left one slot unaccounted for between `strlen` at
+`0x411` and `memcpy` at `0x414` — with `strtok` predicted at `0x412`. A title
+now calls it, and it is at **`0x413`**. The call site is unambiguous: the title
+passes a text table and a one-character delimiter, hands the answer to `atoi`,
+and then calls **the same function pointer** with a null first argument and the
+same delimiter. Continuing from saved state on a null argument is `strtok` and
+nothing else in the list, so `0x412` is the slot that is still unknown.
+
+That also settles the reason `strtok` had been left out — that it is the one
+function in the list carrying state between calls, and a wrong contract there
+would corrupt a parse silently. The state is the scan position, it lives on the
+client because that is where a handset's single static lives, and the trace of
+the title reading its table is what checks it: over one route the title names a
+buffer twice and continues sixty-nine times, alternating a comma inside a line
+with a newline at the end of it, each answer one segment further along.
+
+`free` is at **`0x428`**, two slots above `malloc` rather than one, and again a
+caller says so rather than a count. The title reaches it through a wrapper that
+is the C idiom for one function and no other — `if (p) free(p)` — and every
+pointer it guards is a live block of the same heap `malloc` hands out; over a
+whole session not one of them is an address this platform did not issue. What
+sits at `0x427` is unknown.
+
+**Both of these were found by the failure message rather than by a
+disassembler.** An unimplemented C or WIPI C slot now reports what the Java
+side already reported: the address it was called from, the four registers a
+call can pass in, and what each of those words turns out to be — an object this
+platform issued, printable text, or the first few words it points at. "argument
+0 is the text \"GGI\", argument 1 is the text \"XPlayerURL\"" is what said
+`0x428` takes a pointer and made it worth reading two instructions of the
+caller; the disassembly was then confirmation rather than search.
+
 ### Slots that are accepted without being understood
 
 A slot that a real module reaches, that has no known contract, and that is
@@ -1533,6 +1618,11 @@ There is no record database beside it. `0x130` was serviced as one until the
 block it sits in was identified as the input method's; no title here imports a
 database call at all.
 
+**A directory listing is `MC_fsList` at `0x19a`**, and it answers from two
+places: the archive entries under the directory and a second index, `fs/.created`,
+of the paths a title has written. See "`MC_fsList` is `0x19a`" above for why the
+index has to exist at all.
+
 **A removed file has to be recorded as removed.** The save boundary has no
 delete and a read falls back to the packaged JAR, so `MC_fsRemove` writes the
 path into a list — `fs/.removed` — that a read consults before either. This is
@@ -1848,10 +1938,11 @@ they are implemented together rather than one crash at a time.
 The run stops being forced immediately after that. `strtok` would be `0x412` by
 the same count, but `memcpy` is `0x414` rather than the `0x413` the list
 predicts, so one unaccounted slot sits somewhere past `strlen` and everything
-after it is a guess. `strtok` is left unimplemented for that reason, and
+after it is a guess. `strtok` was left unimplemented for that reason, and
 because it is the one function in the list that carries state between calls —
 the wrong contract there would corrupt a title's parse silently instead of
-stopping it.
+stopping it. **A caller has since put it at `0x413`, so the unaccounted slot is
+`0x412`**; see "strtok is one past where the list puts it" above.
 
 `strchr` and `strrchr` search the terminator too, so a call asking for `\0`
 answers the end of the string rather than nothing; a caller measuring a

@@ -912,11 +912,11 @@ which also keeps the guest's `TRUE` and the core library's own the same object
 client, set the program name, attach resources and filesystem, execute the
 entry and initialization functions, construct the ADF main class, and call
 `startApp`. `Session.Tick` runs one cooperative service round (timers, one
-queued thread slice, card paint), `Session.Frame` exposes the last flushed
-RGBA frame, and `Session.SendKey` dispatches WIPI key events (`type` 1/2/3
-for press/release/repeat; codes -1..-16 for navigation and soft keys, ASCII
-for digits, star, and hash) to the pushed cards from top to bottom,
-propagating while a card's `keyNotify` returns true. A guest `MC_knlExit`
+queued thread slice plus the workers that finish, card paint), `Session.Frame`
+exposes the last flushed RGBA frame, and `Session.SendKey` dispatches WIPI key
+events (`type` 1/2/3 for press/release/repeat; codes -1..-16 for navigation and
+soft keys, ASCII for digits, star, and hash) to the pushed cards from top to
+bottom, propagating while a card's `keyNotify` returns true. A guest `MC_knlExit`
 surfaces as `ktf.ErrGuestExited`, which Hosts treat as a clean game end.
 
 Guest Java threads run on worker goroutines with private ARM stacks (mapped
@@ -927,6 +927,12 @@ parks, finishes, or fails. Parking freezes the worker's whole nested guest
 call stack via the armcore step-budget hook, so an endless main loop keeps
 progressing tick after tick; `Thread.sleep` also ends the slice, and the worker
 stays out of the queue until the sleep has elapsed (see [Pacing](#pacing)).
+The slice limit shares the round out between the workers that are **still
+running**; a grant that ends with the worker returned from `run()` is not
+charged to it, so a title that starts short-lived threads faster than a round
+retires them does not build a queue up to the worker ceiling. That drain is
+bounded by steps rather than by a count — a round grants at most one slice's
+worth of execution beyond the grant it was already entitled to.
 `StartSessionAsync`/`PendingSession.Pump` run the long startApp the same way:
 each pump grants an 8M-step startup slice, keeping a browser event loop alive
 during initialization.
@@ -946,6 +952,17 @@ mid-call: while the client thread runs, no worker thread, timer, or paint runs,
 so a guest waiting inside a service call for another thread waits forever no
 matter how much execution it is granted. The native CLI wires SIGINT to it
 through `signal.NotifyContext`.
+
+**A window the guest spent waiting is charged to the clock instead.** A title
+that paces its opening sequence by polling `MC_knlCurrentTime` inside a delay
+loop spends hundreds of millions of steps passing the time, and those steps are
+not work — so a window in which the guest read the clock, on a clock that moved
+under it, renews without touching `ServiceSteps`, and what bounds the call is
+`SessionOptions.ServiceWait` (default 15s) failing with
+`ktf.ErrServiceWaitLimit`. The clock having moved is what keeps a batch Host on
+the old behaviour: it holds the session clock still for the length of a service
+call, so there the same loop still ends on the step allowance in seconds rather
+than never. "The fifteenth round" below is the title and the measurement.
 
 ## A BMP declares its transparent colour in the header
 
@@ -5401,6 +5418,72 @@ Every conclusion above is one line of a failure message — "words=[0x3002c1d0 �
 said the record was a linked structure rather than a framebuffer, and
 "rect=[0 0 88 102] offset=0 bpl=352" said 352 was 88 times four before anything
 had to be disassembled.
+
+### The fifteenth round: two Host ceilings a title reached by playing normally
+
+Two titles of the browser sweep ended on a limit this platform imposes rather
+than on anything the guest got wrong — one on the number of guest workers, one
+on the step allowance a Host service call gets. Both ceilings are worth having.
+What was wrong in each case is what it counted.
+
+**A thread that finished is not a slice.** A round grants one guest worker a
+step slice, which is the pacing rule for the threads that are still running:
+they are competing for the next round too, so sharing the rounds out between
+them is the whole point. A worker that returned from `run()` is not competing
+for anything. Holding the rest of the queue behind it only makes the queue
+longer, and one title makes that visible in about ten seconds: it starts a
+thread per sound effect, two to a round, and a round that retired one left the
+queue a thread longer every time — 253 threads started, 189 retired, 64 alive
+and the sixty-fifth stack refused. The queue now drains: a grant that ends with
+the worker finished is not charged to the round's limit.
+
+**What bounds the drain is steps, not a count.** A round grants at most one
+slice's worth of execution beyond the grant it was already entitled to, so
+retiring a hundred threads that each cost a few thousand steps is allowed and
+one that spends a whole slice before returning ends the round. A count would
+have been a second arbitrary number beside the first; this one says what the
+round is actually protecting, which is the frame after it. With it the queue
+sits at two where it used to climb, and the title reaches its base screen and
+holds it for three thousand ticks.
+
+**Steps are the wrong unit for a call that is waiting rather than working.**
+The other title's whole opening sequence is a WIPI timer callback that draws,
+waits, and draws again. It waits by polling `MC_knlCurrentTime` inside a
+counted delay loop — `r3 += 25` up to 999999, about 160,000 instructions
+between polls — because a callback on a handset has no scheduler to yield to.
+Five point two seconds of that is 828 million steps against an allowance of
+500 million, and the title died on a black screen. A window the guest spent
+asking what time it is, on a clock that moved under it, is now renewed without
+being charged; what bounds it instead is the session clock, through
+`SessionOptions.ServiceWait` and `ErrServiceWaitLimit`. Fifteen seconds is
+three times the longest wait measured here, and it is a bound on the Host
+freezing rather than on the guest computing — while the client thread is inside
+that loop, no worker, timer or paint can run.
+
+**The clock has to have moved, and that is what keeps a batch Host honest.**
+A Host stepping ticks holds the session clock still for the length of a service
+call, so a title that busy-waits there never sees its wait end. Renewing those
+windows for free would turn a run that fails in three seconds into one that
+never returns, so the free renewal is conditional on the clock having advanced
+since the window opened — which on a stepped run it never has. That run still
+fails on the step allowance, in the same three seconds, which is what
+[`cli.md`](cli.md) tells a reader to reach for `-play` about.
+
+**The whole-set A/B moves no verdict.** The 264 archives run through the same
+400 stepped ticks before and after differ in one line, and it is a title whose
+first lit frame arrives a tick earlier with the frames themselves identical —
+a worker that finished now retires in the round it finished in. The second
+pass, `-play -speed 8` over 600 ticks, differs in 55 lines and in none of them
+by anything but a flush count or a lit-pixel total; re-run alone, the two
+largest movers give the two builds the same numbers. No `tick_error` and no
+exit code differs anywhere in either pass.
+
+**A batch measured at eight times speed is why this was on the "not a fault"
+line.** The sweep's second pass runs `-play -speed 8`, and at eight times the
+clock a 5.2-second wait costs an eighth of the steps — comfortably under the
+ceiling. The stepped pass failed and was correctly read as the clock standing
+still. Nobody had run the title at the speed a person plays it at, which is the
+one speed where the wait is long enough to matter and the clock is moving.
 
 ### The older modules run under the platform, and all three of them play
 

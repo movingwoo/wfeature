@@ -320,7 +320,9 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		}
 		return answer(0)
 	}
-	return fmt.Errorf("unimplemented LGT media slot %#x", slot)
+	return fmt.Errorf("unimplemented LGT media slot %#x%s, with %s; %s", slot,
+		client.describeJavaCallSite(thread),
+		formatWords(registerWords(thread, 4)), client.describeCallWords(thread, 4))
 }
 
 // createClip serves MC_mdaClipCreate(type, bufSize, callback).
