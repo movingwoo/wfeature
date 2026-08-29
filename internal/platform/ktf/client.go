@@ -477,6 +477,54 @@ func (client *Client) ServicePaint(ctx context.Context) (bool, error) {
 	return runtime.paintTopCard()
 }
 
+// ServiceEvents delivers the events a game posted to its own queue and reports
+// how many were delivered.
+//
+// It is the Host's half of a queue that otherwise has no reader. A game driving
+// its own WIPI loop drains the queue itself with getNextEvent, and everything
+// the Host originates — a key, a pointer, a repaint — is dispatched to the card
+// stack directly rather than queued. What is left is the event a game posts to
+// itself from inside its own code with MC_grpPostEvent, which a handset would
+// hand back to it on a later turn around the event loop. Without a drain here
+// the game waits for a message it sent itself.
+//
+// The round delivers what was waiting when it started. A handler that posts
+// while it runs is queuing for the next round, which is what a queue does and
+// what keeps a game that answers every event with another event from holding
+// this round for ever.
+func (client *Client) ServiceEvents(ctx context.Context) (int, error) {
+	if client == nil || client.core == nil || client.thread == nil {
+		return 0, fmt.Errorf("KTF client is not initialized")
+	}
+	client.run.Lock()
+	defer client.run.Unlock()
+	if client.runtime == nil {
+		return 0, fmt.Errorf("KTF client initialization has not completed")
+	}
+	runtime := client.runtime
+	if runtime.guestEventLoop || len(runtime.events) == 0 {
+		return 0, nil
+	}
+	defer client.beginHostService(ctx)()
+	previousThread, previousContext := runtime.currentThread, runtime.currentContext
+	runtime.currentThread, runtime.currentContext = client.thread, ctx
+	defer func() {
+		runtime.currentThread, runtime.currentContext = previousThread, previousContext
+	}()
+	delivered := 0
+	for waiting := len(runtime.events); waiting > 0; waiting-- {
+		event, ok := runtime.nextGuestEvent()
+		if !ok {
+			break
+		}
+		delivered++
+		if err := runtime.dispatchGuestEvent(client.vm, event); err != nil {
+			return delivered, err
+		}
+	}
+	return delivered, nil
+}
+
 // ServiceTimers runs up to limit due WIPI C timer callbacks in registration
 // order and reports how many ran. A timer is due when its delay has elapsed on
 // the session clock; the rest stay pending, which is what keeps a game whose

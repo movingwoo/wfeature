@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -108,6 +109,14 @@ func runtimeInputMethodHandlerClassDefinition() runtimeJavaClass {
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeInputMethodConstructor},
 			{class: class, name: "setCurrentMode", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeInputMethodSetMode},
+			// The listener the handler hands its characters to. There is no
+			// automaton behind this to hand any over — text reaches a
+			// component through the Host keypad, not through a key the title
+			// forwards — so the listener is kept and not fired. Keeping it is
+			// what the caller needs: the specification says a handler with no
+			// listener refuses every key, so a title that could not register
+			// one has been told its own input will never work.
+			{class: class, name: "setInputMethodListener", descriptor: "(Lorg/kwis/msp/lcdui/InputMethodListener;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)},
 		},
 	}
 }
@@ -281,24 +290,74 @@ func runtimeEventQueueDispatchEvent(runtime *initializationRuntime, vm *jvm.VM, 
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	return jvm.VoidValue(), runtime.dispatchGuestEvent(vm, event)
+}
+
+// wipicPostEvent serves MC_grpPostEvent(id, type, param1, param2): it puts one
+// event on the program's own queue, where the specification says a handset
+// delivers it to `handleCletEvent` with the three remaining arguments. A title
+// that is a Jlet rather than a bare Clet receives the same three through
+// `notifyEvent`, which is the shape the queue already carries, so the event is
+// queued as a notify event and takes the ordinary dispatch.
+//
+// **The identifier is not checked**, for the reason the Java `postEvent(int,
+// int[])` beside it does not check one: this platform runs exactly one program,
+// so every identifier a title can hold names this queue. The local callers ask
+// MC_knlGetCurProgramID for it and hand back what they were given.
+//
+// Queuing rather than calling the handler here is what the specification
+// describes and is also what keeps the call safe: a title posts from inside its
+// own paint, and delivering inline would re-enter the card while it is drawing.
+func (runtime *initializationRuntime) wipicPostEvent(thread *armcore.Thread) (uint32, error) {
+	kind, err := thread.Register(1)
+	if err != nil {
+		return 0, err
+	}
+	first, err := thread.Register(2)
+	if err != nil {
+		return 0, err
+	}
+	second, err := thread.Register(3)
+	if err != nil {
+		return 0, err
+	}
+	runtime.countDiagnostic(fmt.Sprintf("postEvent %#x", kind))
+	runtime.postGuestEvent(guestEvent{
+		kind:   eventKindNotify,
+		param1: int32(kind),
+		param2: int32(first),
+		param3: int32(second),
+	})
+	return wipicPostEventQueued, nil
+}
+
+// wipicPostEventQueued is MC_grpPostEvent's success answer: the specification
+// gives it 1 for a queued event and 0 for a refused one.
+const wipicPostEventQueued uint32 = 1
+
+// dispatchGuestEvent delivers one queued event, whoever took it off the queue.
+// A game that drives its own loop reaches it through EventQueue.dispatchEvent
+// and a Host-driven one through Client.ServiceEvents; both owe the event the
+// same delivery.
+func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event guestEvent) error {
 	switch event.kind {
 	case eventKindKey:
-		return jvm.VoidValue(), runtime.dispatchKeyToCards(event.param1, event.param2)
+		return runtime.dispatchKeyToCards(event.param1, event.param2)
 	case eventKindPointer:
 		// The specification's table: event[1] is the pointer event type and
 		// event[2] and event[3] are its screen coordinates.
-		return jvm.VoidValue(), runtime.dispatchPointerToCards(event.param1, event.param2, event.param3)
+		return runtime.dispatchPointerToCards(event.param1, event.param2, event.param3)
 	case eventKindRepaint:
 		// The redraw request has been taken off the queue, so the dirty flag
 		// the Host-driven path uses is satisfied by this paint.
 		runtime.repaintPending = false
 		_, err := runtime.paintTopCard()
-		return jvm.VoidValue(), err
+		return err
 	case eventKindNotify:
-		return jvm.VoidValue(), runtime.dispatchNotifyEvent(vm, event)
+		return runtime.dispatchNotifyEvent(vm, event)
 	default:
 		message := fmt.Sprintf("invalid event queue event type %d", event.kind)
-		return jvm.VoidValue(), &jvm.GuestException{
+		return &jvm.GuestException{
 			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: message},
 			Message: message,
 		}
@@ -465,6 +524,9 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	}
 	return true, runtime.presentScreen()
 }
+
+// inputMethodListenerField is the listener a handler was given.
+const inputMethodListenerField = "listener:Lorg/kwis/msp/lcdui/InputMethodListener;"
 
 func runtimeInputMethodConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 2 {

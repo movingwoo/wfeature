@@ -89,16 +89,26 @@ const (
 	wipicKernelSprintk        uint32 = 1
 	wipicKernelGetExecNames   uint32 = 2
 	wipicKernelExit           uint32 = 7
-	wipicKernelGetAccessLevel uint32 = 13
-	wipicKernelGetProgramName uint32 = 14
-	wipicKernelDefTimer       uint32 = 25
-	wipicKernelSetTimer       uint32 = 26
-	wipicKernelUnsetTimer     uint32 = 27
-	wipicKernelCurrentTime    uint32 = 28
-	wipicKernelGetSysProperty uint32 = 29
-	wipicKernelGetResourceID  uint32 = 31
-	wipicKernelGetResource    uint32 = 32
-	wipicKernelReserved1      uint32 = 33
+	// Slot 9 is MC_knlGetCurProgramID, the program's own identifier. The
+	// specification's order puts it two past MC_knlExit and the table's three
+	// extra slots are already behind both, so it lands where the entries
+	// around it do. What the local callers do with the answer confirms it:
+	// one middleware wrapper is `postEvent(type, p1, p2)` compiled as
+	// `MC_grpPostEvent(MC_knlGetCurProgramID(), type, p1, p2)`, and
+	// MC_grpPostEvent's first argument is documented as the application
+	// identifier of the program the event is queued for. The same pairing
+	// appears on the other platform (`lgt.md`), by a different engine.
+	wipicKernelGetCurProgramID uint32 = 9
+	wipicKernelGetAccessLevel  uint32 = 13
+	wipicKernelGetProgramName  uint32 = 14
+	wipicKernelDefTimer        uint32 = 25
+	wipicKernelSetTimer        uint32 = 26
+	wipicKernelUnsetTimer      uint32 = 27
+	wipicKernelCurrentTime     uint32 = 28
+	wipicKernelGetSysProperty  uint32 = 29
+	wipicKernelGetResourceID   uint32 = 31
+	wipicKernelGetResource     uint32 = 32
+	wipicKernelReserved1       uint32 = 33
 	// Slot 36 answers MC_knlGetDLLInterface: a handset library is asked for by
 	// name and version, and the caller receives a table of function pointers.
 	wipicKernelGetDLLInterface uint32 = 36
@@ -1170,6 +1180,8 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		return runtime.wipicPrintk(thread)
 	case wipicKernelSprintk:
 		return runtime.wipicSprintk(thread)
+	case wipicKernelGetCurProgramID:
+		return runtime.programID(), nil
 	case wipicKernelGetAccessLevel:
 		return wipicAccessLevel, nil
 	case wipicKernelGetExecNames:
@@ -1232,6 +1244,27 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		// that can be disassembled in the image.
 		return 0, fmt.Errorf("KTF WIPI C SVC id %#x is not implemented%s", id, runtime.callerSite(thread))
 	}
+}
+
+// programID is the identifier MC_knlGetCurProgramID answers with. A handset
+// runs many programs and hands each one a number; this platform runs exactly
+// one, so the only property the answer needs is to be stable — a title asks
+// for it once and hands it straight back to a call that names a program, and
+// what it names has to still be this one. It is derived from the archive's own
+// identifier rather than chosen here so that two different archives never
+// answer the same number, and it is forced away from zero because zero is what
+// a title reads as "no program".
+func (runtime *initializationRuntime) programID() uint32 {
+	name := runtime.client.programName
+	hash := uint32(2166136261)
+	for _, symbol := range []byte(name) {
+		hash ^= uint32(symbol)
+		hash *= 16777619
+	}
+	if hash == 0 {
+		hash = 1
+	}
+	return hash
 }
 
 // callerSite renders the guest call site of the platform stub currently being
@@ -1496,6 +1529,8 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		return runtime.wipicDestroyImage(thread)
 	case table == wipicTableGraphics && function == 35:
 		return runtime.wipicEncodeImage(thread)
+	case table == wipicTableGraphics && function == 36:
+		return runtime.wipicPostEvent(thread)
 	case table == wipicTableRecordDatabase:
 		return runtime.handleWIPICRecordDatabaseCall(thread, function)
 	case table == wipicTableFilesystem:

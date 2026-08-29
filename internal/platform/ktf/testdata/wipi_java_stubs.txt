@@ -101,11 +101,21 @@ org/kwis/msp/lwc/DialogComponent layout ()V noop
 org/kwis/msp/lwc/FormComponent <init> ()V noop
 org/kwis/msp/lwc/FormComponent layout ()V noop
 org/kwis/msp/lwc/LabelComponent <init> ()V noop
+org/kwis/msp/lwc/ButtonComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> ()V noop
 org/kwis/msp/lwc/ShellComponent <init> (IIII)V noop
-org/kwis/msp/lwc/ShellComponent hide ()V noop
 org/kwis/msp/lwc/ShellComponent layout ()V noop
-org/kwis/msp/lwc/ShellComponent show ()V noop
+
+# The vendor toolkit's form as a component, built with no geometry: the three
+# constructors of the form above keep the rectangle they are given and this one
+# has none to keep. The vendor device-information class is the same shape — its
+# instance carries nothing the constructor could decide.
+com/ktf/kfc/GFormComponent <init> ()V noop
+wec/DMInfo <init> ()V noop
+
+# An image reference an observer holds is released by the JVM here, so the call
+# a title makes to release it has nothing to release.
+org/kwis/msp/lcdui/Image stopImage (Lorg/kwis/msp/lcdui/ImageObserver;)V noop
 
 # A dialog is never put in front of anyone, so the three calls that would
 # arrange one have nothing to arrange: the button text is drawn by the dialog

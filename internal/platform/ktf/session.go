@@ -393,6 +393,14 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 		return ranTimers+ranThreads > 0, threadErr
 	}
 
+	phase = client.phaseClock()
+	ranEvents, eventErr := client.ServiceEvents(ctx)
+	client.sincePhase(phase, &client.costs.Events)
+	if eventErr = client.absorbUncaughtCallback("event", eventErr); eventErr != nil {
+		client.log("KTF event service failed", "error", eventErr)
+		return ranTimers+ranThreads+ranEvents > 0, eventErr
+	}
+
 	// Skipping a paint is a trade — the picture for the logic in the same round
 	// — and a round with no logic in it has nothing to trade. Not all games put
 	// their frame loop in a timer or a thread: one runs it from its card's
@@ -401,7 +409,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	// left it perpetually due, which the Host reads as work waiting and spins
 	// on. The screen kept updating, at a cost of a busy core and a million
 	// empty rounds a minute.
-	if ranTimers+ranThreads == 0 {
+	if ranTimers+ranThreads+ranEvents == 0 {
 		client.skipPaint = false
 	}
 	painted := false
@@ -433,7 +441,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	if collectErr != nil {
 		return true, collectErr
 	}
-	return ranTimers > 0 || ranThreads > 0 || painted, nil
+	return ranTimers > 0 || ranThreads > 0 || ranEvents > 0 || painted, nil
 }
 
 // TickFor runs service rounds until the guest has nothing due, a frame is

@@ -81,6 +81,17 @@ var fieldSyncs = map[string]fieldSync{
 		adopt:    adoptGuestByteSinkBuffer,
 		reserved: byteArrayOutputStreamFieldsSize,
 	},
+	// A text component publishes the handler it owns, because a title takes
+	// the automaton off the component rather than asking for one — it is a
+	// protected field on the handset and the code was written against that.
+	// The constructors are the only mutators: the handler a component is built
+	// with is the one it keeps, and nothing here replaces it.
+	runtimeTextComponentClass: {
+		mutators: []string{"<init>"},
+		publish:  publishGuestInputHandler,
+		adopt:    adoptGuestInputHandler,
+		reserved: textComponentFieldsSize,
+	},
 	// A byte source publishes the same word for the same reason, and the
 	// constructor is its only mutator: reading moves an index this class keeps
 	// on the Go side, and neither constructor is ever followed by one that
@@ -118,7 +129,15 @@ func publishGuestByteSourceBuffer(runtime *initializationRuntime, address uint32
 }
 
 func publishGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {
-	value, err := runtime.client.vm.Field(object, class, "buf", "[B")
+	return publishGuestReferenceWord(runtime, address, object, class, "buf", "[B")
+}
+
+// publishGuestReferenceWord points the first payload word at whatever object a
+// runtime-owned reference field holds. Every published reference field is the
+// same job: the object has to be bound for the guest to have anything to read,
+// and binding is what gives it its guest memory in the first place.
+func publishGuestReferenceWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class, name, descriptor string) (bool, error) {
+	value, err := runtime.client.vm.Field(object, class, name, descriptor)
 	if err != nil {
 		return false, err
 	}
@@ -166,7 +185,15 @@ func adoptGuestByteSourceBuffer(runtime *initializationRuntime, address uint32, 
 }
 
 func adoptGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {
-	value, err := runtime.client.vm.Field(object, class, "buf", "[B")
+	return adoptGuestReferenceWord(runtime, address, object, class, "buf", "[B")
+}
+
+// adoptGuestReferenceWord reports a payload word that has stopped naming the
+// object the Go field holds. It never writes, for the reason the buffer's does
+// not: swapping the Go value for whatever the word names would be a guess about
+// which side is right.
+func adoptGuestReferenceWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class, name, descriptor string) (bool, error) {
+	value, err := runtime.client.vm.Field(object, class, name, descriptor)
 	if err != nil {
 		return false, err
 	}
@@ -189,6 +216,31 @@ func adoptGuestBufferWord(runtime *initializationRuntime, address uint32, object
 	return current[0] != expected, nil
 }
 
+// runtimeFieldSyncFor finds the entry that governs a runtime class's payload,
+// which is its own or the one it inherits the published field from. A subclass
+// of a class that publishes a field has the same word in the same place — the
+// offset comes from the superclass's record either way — and its own
+// constructor is what decides that word on an instance of it. Without the walk
+// a text field would publish nothing while a text component published
+// correctly, which is one class getting a field and its subclasses getting a
+// zero.
+//
+// It answers the owning class as well, because that is what says how much of
+// the payload the entry describes.
+func runtimeFieldSyncFor(name string) (string, fieldSync, bool) {
+	for depth := 0; depth < aotHierarchyLimit && name != ""; depth++ {
+		if sync, ok := fieldSyncs[name]; ok {
+			return name, sync, true
+		}
+		class, ok := runtimeJavaClasses[name]
+		if !ok {
+			return "", fieldSync{}, false
+		}
+		name = class.superName
+	}
+	return "", fieldSync{}, false
+}
+
 // publishGuestFields brings the guest payload of a bound object back in step
 // with the Go value a runtime method has just changed.
 func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, method runtimeJavaMethod) error {
@@ -198,7 +250,7 @@ func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, met
 	// The key is the class whose method just ran rather than the object's own
 	// class: a title's canvas is a guest subclass of Card, and it is Card's
 	// constructor that decides Card's words on it.
-	sync, ok := fieldSyncs[method.class]
+	owner, sync, ok := runtimeFieldSyncFor(method.class)
 	if !ok || sync.publish == nil {
 		return nil
 	}
@@ -218,7 +270,7 @@ func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, met
 		// when it is bound, which is where every published field starts.
 		return nil
 	}
-	if !runtime.guestReservesRuntimeBlock(object, method.class, sync.reserved) {
+	if !runtime.guestReservesRuntimeBlock(object, owner, sync.reserved) {
 		return nil
 	}
 	written, err := sync.publish(runtime, address, object)
@@ -239,7 +291,7 @@ func (runtime *initializationRuntime) adoptGuestFields(object *jvm.Object) {
 	if object == nil || !backend.DebugBuild() {
 		return
 	}
-	sync, ok := fieldSyncs[object.ClassName]
+	owner, sync, ok := runtimeFieldSyncFor(object.ClassName)
 	if !ok || sync.adopt == nil {
 		return
 	}
@@ -247,7 +299,7 @@ func (runtime *initializationRuntime) adoptGuestFields(object *jvm.Object) {
 	if !bound {
 		return
 	}
-	if !runtime.guestReservesRuntimeBlock(object, object.ClassName, sync.reserved) {
+	if !runtime.guestReservesRuntimeBlock(object, owner, sync.reserved) {
 		return
 	}
 	diverged, err := sync.adopt(runtime, address, object)
@@ -474,4 +526,18 @@ func adoptGuestCardBounds(runtime *initializationRuntime, address uint32, object
 		return false, err
 	}
 	return !slices.Equal(current, cardBoundsValues(object)), nil
+}
+
+// publishGuestInputHandler points a text component's payload word at the input
+// method handler it owns, which is the field a title reads instead of asking.
+func publishGuestInputHandler(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	return publishGuestReferenceWord(runtime, address, object, runtimeTextComponentClass,
+		"imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;")
+}
+
+// adoptGuestInputHandler reports a component whose payload word has stopped
+// naming the handler the Go field holds.
+func adoptGuestInputHandler(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	return adoptGuestReferenceWord(runtime, address, object, runtimeTextComponentClass,
+		"imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;")
 }
