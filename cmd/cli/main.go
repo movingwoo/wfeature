@@ -933,6 +933,16 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
+		// **A guest that ends itself inside startApp has ended, not failed.**
+		// A title whose first run installs itself does this on its *second*
+		// run: it reads the flag it wrote, decides there is nothing to do and
+		// calls MC_knlExit before startApp returns. The same call one tick
+		// later is reported as an ending and exits zero, and reporting it as
+		// a start failure here is what made one title look like a regression
+		// that only ever appeared on a second run.
+		if errors.Is(err, ktf.ErrGuestExited) {
+			return reportEndingBeforeFirstTick(err, stdout, stderr)
+		}
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -1221,6 +1231,34 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// driving hundreds of archives cannot parse every summary to find out
 	// whether the run it just did ended on a guest failure.
 	return exitForRun(tickError, ktf.ErrGuestExited)
+}
+
+// reportEndingBeforeFirstTick is a guest that ended itself while the session
+// was still starting.
+//
+// **A guest that ends inside startApp has ended, not failed.** A title whose
+// first run installs itself does exactly that on its *second* run: it reads
+// the flag it wrote, decides there is nothing left to do and calls MC_knlExit
+// before startApp returns. The same call one tick later is reported as an
+// ending and exits zero, and reporting it as a start failure here is what made
+// one title read as a regression that only ever appeared on a second run — the
+// case a sweep that always starts from an empty save directory cannot see.
+//
+// The summary is the one a run of no ticks has: how the game ended, in the
+// same two fields a run that ended on its hundredth tick carries.
+func reportEndingBeforeFirstTick(err error, stdout, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "the game exited before its first tick: %v\n", err)
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	if encodeErr := encoder.Encode(map[string]any{
+		"ticks":       0,
+		"exited":      true,
+		"exit_reason": err.Error(),
+	}); encodeErr != nil {
+		fmt.Fprintf(stderr, "write result: %v\n", encodeErr)
+		return 1
+	}
+	return 0
 }
 
 // exitForRun is what a run that already printed its summary exits with. Zero

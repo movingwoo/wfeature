@@ -189,7 +189,7 @@ func TestANamedPictureIsSharedUntilSomethingDrawsIntoIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	surface.pixels[0] = 0x1234
-	runtime.namedImages = map[string]uint32{"/a.png": surface.handle}
+	runtime.decodedImages = map[string]uint32{"name:/a.png": surface.handle}
 
 	first, err := client.newJavaImageOn(surface.handle)
 	if err != nil {
@@ -206,9 +206,9 @@ func TestANamedPictureIsSharedUntilSomethingDrawsIntoIt(t *testing.T) {
 		t.Fatal("two loads of one name did not share the surface")
 	}
 
-	drawn, err := client.unshareNamedSurface(first, surface)
+	drawn, err := client.unshareDecodedSurface(first, surface)
 	if err != nil {
-		t.Fatalf("unshareNamedSurface: %v", err)
+		t.Fatalf("unshareDecodedSurface: %v", err)
 	}
 	if drawn.handle == surface.handle {
 		t.Fatal("drawing into a named picture kept the shared surface")
@@ -229,7 +229,61 @@ func TestANamedPictureIsSharedUntilSomethingDrawsIntoIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if same, err := client.unshareNamedSurface(second, own); err != nil || same != own {
+	if same, err := client.unshareDecodedSurface(second, own); err != nil || same != own {
 		t.Fatalf("an unshared surface was copied anyway: %v %v", same, err)
+	}
+}
+
+// The byte form gets the same rule under a different key: a title that decodes
+// one picture's bytes twice pays for one surface, and a title that then draws
+// into one of them still gets its own copy.
+func TestTheSameBytesDecodeIntoOneSurface(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	encoded := encodedTestImage(t, 4, 4)
+
+	key := imageDigestKey(encoded)
+	first, err := client.newSharedJavaImage(key, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.newSharedJavaImage(key, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("two decodes of one picture answered the same object")
+	}
+	if runtime.images[first] != runtime.images[second] {
+		t.Fatal("two decodes of one picture did not share the surface")
+	}
+	if got := len(runtime.decodedImages); got != 1 {
+		t.Fatalf("the decode cache holds %d entries, want 1", got)
+	}
+
+	// Different bytes are a different picture and cost their own surface. The
+	// key is what decides, so the same pixels under another digest are two.
+	other := append(append([]byte(nil), encoded...), 0)
+	third, err := client.newSharedJavaImage(imageDigestKey(other), encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.images[third] == runtime.images[first] {
+		t.Fatal("a second picture was handed the first one's surface")
+	}
+
+	shared := client.framebuffers[runtime.images[first]]
+	if shared == nil {
+		t.Fatal("the shared surface is not in the table")
+	}
+	drawn, err := client.unshareDecodedSurface(first, shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drawn.handle == shared.handle {
+		t.Fatal("drawing into a decoded picture kept the shared surface")
+	}
+	if runtime.images[second] != shared.handle {
+		t.Fatal("the other holder lost the picture it decoded")
 	}
 }

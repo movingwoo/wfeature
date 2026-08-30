@@ -123,9 +123,12 @@ type javaRuntime struct {
 	// one and is bound to nothing. See java_file.go.
 	sinkFiles   map[uint32]uint32
 	streamFiles map[uint32]uint32
-	// namedImages is the surface each resource picture was decoded into, by the
-	// name it was loaded from. See javaCreateImageNamed.
-	namedImages map[string]uint32
+	// decodedImages is the surface each picture was decoded into, by what it
+	// was decoded from: the resource name for a picture loaded by name, and
+	// the digest of the bytes for one built from an array. Both forms answer
+	// the same question — has this exact picture already cost a surface —
+	// because nothing here reclaims one. See javaCreateImageNamed.
+	decodedImages map[string]uint32
 	// widgets is the state behind each lwc component and input-method handler
 	// the title built: the text it holds, its limit, the mode it is in and the
 	// children it was given. See java_widget.go.

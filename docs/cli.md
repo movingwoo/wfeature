@@ -78,6 +78,16 @@ Four things deliberately exit **zero**:
   the platform call the guest was inside and the address it left from. The code
   stays zero, because the run did what it was asked; what changed is that the
   ending can be read. See [`session.md`](session.md).
+
+  **A guest can end before the first tick, and that is the same ending.** A
+  title whose first run installs itself quits inside `startApp` on its *second*
+  run: it reads the flag it wrote, decides there is nothing to do, and calls the
+  platform's exit. That used to arrive as a start failure — exit code 1 and no
+  summary at all — where the identical call one tick later was an ending. Such a
+  run now prints `the game exited before its first tick: …` and carries the same
+  `exited` and `exit_reason` in a summary of no ticks. **A sweep that always
+  starts from an empty save directory never sees this**, which is why it went
+  unnoticed: it takes two runs over one save.
 - **a run somebody interrupted.** Ctrl-C cancels the context rather than
   killing the process, so it reaches the exit code as the reason a tick
   stopped; the person who sent it does not need it reported back.

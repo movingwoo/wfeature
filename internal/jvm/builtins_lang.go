@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 func (vm *VM) registerLanguageBuiltins() {
 	vm.registerBoxBuiltins()
+	vm.registerMathFloatBuiltins()
 	vm.registerRuntimeBuiltins()
 	vm.registerStringExtraBuiltins()
 
@@ -312,6 +314,77 @@ func (vm *VM) registerBoxBuiltins() {
 		}
 		return LongValue(max(left, right)), nil
 	})
+
+}
+
+// registerMathFloatBuiltins is the floating-point half of CLDC 1.1's Math.
+//
+// Each of these is exactly specified — a value the standard names rather than
+// a behaviour to invent, which is this library's rule for what it declares —
+// and Go's own library answers the same IEEE cases the specification lists,
+// including the NaN and signed-zero ones that make max and min more than a
+// comparison. The two conversions are written as the specification's own
+// expressions rather than folded into a constant, because the rounding of
+// `x * 180 / PI` is not the rounding of `x * (180 / PI)`.
+func (vm *VM) registerMathFloatBuiltins() {
+	vm.builtin(MathClass, "min", "(FF)F", floatPairBuiltin(math.Min))
+	vm.builtin(MathClass, "max", "(FF)F", floatPairBuiltin(math.Max))
+	vm.builtin(MathClass, "min", "(DD)D", doublePairBuiltin(math.Min))
+	vm.builtin(MathClass, "max", "(DD)D", doublePairBuiltin(math.Max))
+	vm.builtin(MathClass, "ceil", "(D)D", doubleBuiltin(math.Ceil))
+	vm.builtin(MathClass, "floor", "(D)D", doubleBuiltin(math.Floor))
+	vm.builtin(MathClass, "sqrt", "(D)D", doubleBuiltin(math.Sqrt))
+	vm.builtin(MathClass, "sin", "(D)D", doubleBuiltin(math.Sin))
+	vm.builtin(MathClass, "cos", "(D)D", doubleBuiltin(math.Cos))
+	vm.builtin(MathClass, "tan", "(D)D", doubleBuiltin(math.Tan))
+	vm.builtin(MathClass, "toDegrees", "(D)D", doubleBuiltin(func(value float64) float64 {
+		return value * 180 / math.Pi
+	}))
+	vm.builtin(MathClass, "toRadians", "(D)D", doubleBuiltin(func(value float64) float64 {
+		return value / 180 * math.Pi
+	}))
+}
+
+// doubleBuiltin, doublePairBuiltin and floatPairBuiltin wrap the arithmetic
+// above so each entry is the operation and nothing else. The float pair goes
+// through float64 because widening a float is exact and the answer is one of
+// the two arguments, so narrowing it back cannot lose anything.
+func doubleBuiltin(operation func(float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		value, err := arguments[0].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(operation(value)), nil
+	}
+}
+
+func doublePairBuiltin(operation func(float64, float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		left, err := arguments[0].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		right, err := arguments[1].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(operation(left, right)), nil
+	}
+}
+
+func floatPairBuiltin(operation func(float64, float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		left, err := arguments[0].Float32()
+		if err != nil {
+			return VoidValue(), err
+		}
+		right, err := arguments[1].Float32()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return FloatValue(float32(operation(float64(left), float64(right)))), nil
+	}
 }
 
 func longPair(arguments []Value) (int64, int64, error) {

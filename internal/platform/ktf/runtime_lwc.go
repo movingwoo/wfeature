@@ -58,6 +58,10 @@ func runtimeTextComponentClassDefinition() runtimeJavaClass {
 			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeTextComponentConstructor},
 			{class: class, name: "setMaxLength", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetMaxLength},
 			{class: class, name: "getString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeTextComponentGetString},
+			// A text component takes the keys its own card hands it; see
+			// runtime_lwc_key.go for why this one class overrides the
+			// toolkit's rule that a widget answers a key as unconsumed.
+			{class: class, name: "keyNotify", descriptor: "(II)Z", accessFlags: 0x0001, implementation: runtimeTextComponentKeyNotify},
 		},
 	}
 }
@@ -574,8 +578,13 @@ func runtimeComponentRemoveAllComponents(_ *initializationRuntime, _ *jvm.VM, ar
 	return jvm.VoidValue(), nil
 }
 
-func runtimeComponentChildren(receiver *jvm.Object) []jvm.Value {
-	children, _ := receiver.Native.([]jvm.Value)
+// runtimeComponentChildren is the one reader of what a container keeps, and it
+// reads the same type addComponent writes. They were two types once — the adds
+// stored objects and the reads asked for values — so a container answered zero
+// children however many it had been given, and a title that walked what it had
+// just built saw an empty one.
+func runtimeComponentChildren(receiver *jvm.Object) []*jvm.Object {
+	children, _ := receiver.Native.([]*jvm.Object)
 	return children
 }
 
@@ -600,7 +609,7 @@ func runtimeComponentAt(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Val
 	if index < 0 || int(index) >= len(children) {
 		return jvm.ReferenceValue(nil), nil
 	}
-	return children[index], nil
+	return jvm.ReferenceValue(children[index]), nil
 }
 
 func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -613,7 +622,7 @@ func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 		return jvm.VoidValue(), err
 	}
 	for index, child := range runtimeComponentChildren(receiver) {
-		if object, referenceErr := child.Reference(); referenceErr == nil && object == wanted {
+		if child == wanted {
 			return jvm.IntValue(int32(index)), nil
 		}
 	}

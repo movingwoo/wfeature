@@ -270,9 +270,11 @@ func shortDefinition() ClassDefinition {
 	}
 }
 
-// mathDefinition publishes the arithmetic. CLDC 1.1 has the floating-point
-// half as well, and the natives behind these have carried it for as long as
-// the class did not exist to name them through.
+// mathDefinition publishes the arithmetic, including CLDC 1.1's
+// floating-point half. Every member here is a value the specification names
+// exactly rather than a behaviour to invent, which is the rule for what this
+// library declares — the text formatting of a float is the other side of that
+// rule and is still absent; see docs/jvm.md.
 func mathDefinition() ClassDefinition {
 	staticNative := AccessPublic | AccessStatic | AccessNative
 	return ClassDefinition{
@@ -290,8 +292,20 @@ func mathDefinition() ClassDefinition {
 			{Name: "abs", Descriptor: "(D)D", Access: staticNative},
 			{Name: "min", Descriptor: "(II)I", Access: staticNative},
 			{Name: "min", Descriptor: "(JJ)J", Access: staticNative},
+			{Name: "min", Descriptor: "(FF)F", Access: staticNative},
+			{Name: "min", Descriptor: "(DD)D", Access: staticNative},
 			{Name: "max", Descriptor: "(II)I", Access: staticNative},
 			{Name: "max", Descriptor: "(JJ)J", Access: staticNative},
+			{Name: "max", Descriptor: "(FF)F", Access: staticNative},
+			{Name: "max", Descriptor: "(DD)D", Access: staticNative},
+			{Name: "ceil", Descriptor: "(D)D", Access: staticNative},
+			{Name: "floor", Descriptor: "(D)D", Access: staticNative},
+			{Name: "sqrt", Descriptor: "(D)D", Access: staticNative},
+			{Name: "sin", Descriptor: "(D)D", Access: staticNative},
+			{Name: "cos", Descriptor: "(D)D", Access: staticNative},
+			{Name: "tan", Descriptor: "(D)D", Access: staticNative},
+			{Name: "toDegrees", Descriptor: "(D)D", Access: staticNative},
+			{Name: "toRadians", Descriptor: "(D)D", Access: staticNative},
 		},
 	}
 }

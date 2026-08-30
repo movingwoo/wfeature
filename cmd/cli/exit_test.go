@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -125,5 +126,38 @@ func TestATouchIsReadFromItsSpelling(t *testing.T) {
 				t.Fatalf("parseTouchEvent(%q) was accepted", spec)
 			}
 		})
+	}
+}
+
+// A guest that ends itself while the session is still starting has ended. One
+// title's second run over its own save does that — it reads the flag its first
+// run wrote and quits inside startApp — and reporting it as a start failure
+// gave a sweep a broken title where there was a finished one. The summary and
+// the code are the ones a run that ended on a later tick would carry.
+func TestAGuestThatEndedDuringStartIsAnEndingAndNotAFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ending := fmt.Errorf("start KTF main class Clet: %w", ktf.ErrGuestExited)
+	if code := reportEndingBeforeFirstTick(ending, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "exited before its first tick") {
+		t.Fatalf("stderr = %q, want the ending named", stderr.String())
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+		t.Fatalf("the summary is not JSON: %v", err)
+	}
+	if summary["exited"] != true {
+		t.Fatalf("summary exited = %v, want true", summary["exited"])
+	}
+	if reason, _ := summary["exit_reason"].(string); !strings.Contains(reason, ktf.ErrGuestExited.Error()) {
+		t.Fatalf("summary exit_reason = %q, want the platform's own chain", reason)
+	}
+	if ticks, _ := summary["ticks"].(float64); ticks != 0 {
+		t.Fatalf("summary ticks = %v, want 0", ticks)
+	}
+	// A start that failed for any other reason is still a failure.
+	if _, ok := summary["tick_error"]; ok {
+		t.Fatal("an ending carries a tick_error")
 	}
 }

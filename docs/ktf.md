@@ -5636,6 +5636,82 @@ reach before running the title twice**, and the same is true of "the game
 exited": [`lgt.md`](lgt.md) has had that written down since its first commit and
 it has been rediscovered twice.
 
+### A container that answered zero children, and who uses this toolkit
+
+**The adds and the reads kept two different types in the same field.**
+`ContainerComponent.addComponent` stored its children as bound objects and
+`getNumberOfComponent`, `getComponent` and `getIndexOf` asked for values, so a
+container answered *empty* however many components a title had put in it, and
+`getIndexOf` answered −1 for a child it was holding. Nothing failed: a title
+that walks its own form back got a well-formed wrong answer. One reader of the
+field is the fix, and the test is a container asked for what it was given.
+
+**Which titles use the toolkit at all is now a measurement.** Every local KTF
+archive was run with the call counter on, and outside `AnnunciatorComponent` —
+which every title constructs and shows, and which is not a widget — the toolkit
+is nine titles. What they ask for is small and specific: five build a text
+field, four add a child to a container, and one each reaches a dialog's
+`doModal`, a progress bar, a shell's `show`, and the vendor's own form with its
+text field.
+
+### A card that forwards a key to its own text field
+
+**One of the nine titles was stopped by this, and the drawing was never the
+missing half.** It draws a character-creation screen with two labelled boxes on
+it — a name for the daughter, a name for the father — builds a
+`TextFieldComponent` for each, gives one focus, and from its own `keyNotify`
+forwards the key to the component. Then nothing happened: `keyNotify` answered
+that the key was not consumed, the component's text never grew, and the boxes
+stayed empty for as long as anyone kept pressing.
+
+**What the counter says the title does next is the whole answer.** Pressing six
+keys on that screen produces six `Component.keyNotify` calls from one call site
+and six `TextComponent.getString` calls from the next address along. The title
+reads the string back and draws it itself. Nothing here has to draw a widget
+for this screen to work — the only half missing was the component doing
+something with the key it was handed.
+
+So `TextComponent.keyNotify` now runs the handset's multi-tap keypad —
+`internal/textinput`, the same automaton the other platforms type through —
+against the component's own text, and answers zero for the keys a keypad
+carries: the digits, the mode key, the two that delete. Everything else — the
+navigation keys, the soft keys, the select key — is answered as unconsumed,
+because a screen with a text field on it still has to be able to leave. The
+value stays the component's rather than the editor's: `setString` and the box's
+own `insert` and `delete` write it, so the editor is brought back into step
+with the field before each key and what it keeps between keys is only the
+cycle.
+
+**Zero is "taken", which is the polarity a card's own `keyNotify` uses here** —
+a nonzero answer is the key still travelling down the stack, matching the
+original runtime's traversal. The title above does not read the answer at all:
+it calls `getString` on the next line whatever came back. So the polarity is
+the card convention rather than something a title has demonstrated, and a title
+that does read it is what would settle it.
+
+**This is the exception to the toolkit's rule, not a repeal of it.** A widget
+answers a key as unconsumed because a widget that took one would be taking it
+from the card that is the only thing drawing, and the player would be typing
+into something invisible ([`lgt.md`](lgt.md)). A card that calls `keyNotify` on
+a component *itself* is the case that rule was not about: the card asked, and
+the card is drawing the answer. With it, the title takes both names and goes on
+to the age and birthday screens behind them.
+
+**Nothing else in the nine has been seen waiting on drawing, on the evidence
+there is.** All nine were run six hundred ticks with no key pressed and their
+last frames read; two were driven by hand as well, and both reach their own game
+— one an in-game dialogue scene, the other the screen above. That is weaker
+evidence than a hand-driven pass over all nine, and it is what there is: the
+seven undriven ones sit where a title sits when nobody presses anything.
+
+The counter also reports five *field divergences* on the text component class in
+the title above, which is the guest writing over the `imHandler` word this
+platform publishes — it installs its own input-method handler rather than taking
+the one the constructor built, and reads the string rather than waiting for the
+handler to call it. **Drawing a component is still not done** and is still the
+honest description of this toolkit; what is no longer true is that a title is
+known to be stopped by it.
+
 ### The older modules run under the platform, and all three of them play
 
 **Three archives of the local set carry the older relocatable module, and all

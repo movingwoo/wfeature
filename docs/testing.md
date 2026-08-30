@@ -106,6 +106,30 @@ habits are worth keeping:
   title was written down as "needs an authentication server" for several
   sessions; its dialog simply wanted its confirm key, and behind it the game
   runs to its ending credits.
+- **A dialog's default answer is not the only answer.** Another was filed as a
+  wall for the same reason one step further in: its certificate dialog offers
+  two buttons, the *declining* one starts selected, and pressing confirm on it
+  closes the title — which reads exactly like a title that cannot get past its
+  own gate. One press of the left key moves the selection, and the other answer
+  reaches an error the title handles and a menu behind it. Press what moves a
+  selection before pressing what takes it, and check that the highlight moved.
+- **Run every archive twice over one save.** A sweep that starts from an empty
+  directory is measuring first runs only, and titles of this era install
+  themselves on the first run: the screen you get is the notice, and the game is
+  what the second run does. Two rounds over one save directory is what found a
+  guest ending inside `startApp` being reported as a start failure
+  ([`cli.md`](cli.md)), and three titles whose first run is a notice and whose
+  second is the game ([`ktf.md`](ktf.md), [`lgt.md`](lgt.md)).
+
+  **What the whole round costs and what it caught**: 261 KTF archives run twice
+  over one save directory at `-play -speed 8 -ticks 600`, about forty minutes
+  six at a time. One row failed and it is an archive rather than a title — a
+  RAR named `.zip`, which the first round refuses too. Two titles exit on their
+  first round and run their six hundred ticks on the second, which is the
+  installer shape this habit is for. Everything else is identical between the
+  rounds. So the round is cheap enough to keep and finds little **once the
+  ending it first found is fixed**; the reason to run it is a change to
+  anything a save is read by.
 - **A title nobody has driven deeply is a to-do, not a limitation.** Three
   sibling titles once sat at the shallowest depth on a list of how far each had
   been taken, which looked like one shared platform gap worth

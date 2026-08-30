@@ -353,9 +353,17 @@ session as a failure rather than as the shutdown the title asked for.
   prints as its identity when a title appends it. Making the call is a few
   lines; what it costs is a virtual dispatch out of a native, which for an
   ahead-of-time platform means re-entering guest code from inside a call the
-  guest is already in, and no local title has been seen to depend on the text.
-  It is written down here rather than fixed so that the first title that does
-  is the evidence for how to fix it
+  guest is already in.
+
+  **It has now been measured rather than assumed.** A run of every local KTF
+  archive with the call counter on says the object form is asked for by seven
+  titles — `String.valueOf(Object)`, eleven hundred calls, one title making
+  five hundred of them in a single run — and `StringBuffer.append(Object)` by
+  none. Probing the four heaviest of the seven for *what* they hand it, the
+  answer every time was a string, which is the one case this already gets
+  right. So the demand is real and the defect is not reached: it stays written
+  down here, and the evidence to act on is a title that hands it something
+  else, not a title that calls it
 - execution semantics for `invokedynamic`, method handles, and module constants
 - the LCDUI presentation for uncaught exceptions already retained in host
   diagnostics
@@ -380,16 +388,24 @@ and method summaries in a fixed shape; turning those into descriptors and
 subtracting `jvm.CoreLibraryDefinitions` reports what the classes this runtime
 already publishes still do not answer. It was 153 members when this was first
 run, and reading that list is how the group above stopped being four titles'
-problem. Most of what is left is one of three kinds: the floating-point half of
-`Math` and the boxed numbers, which is arithmetic; radix forms of the parses and
-the `toString`s; and members that would be a guess rather than an implementation
+problem. Most of what is left is one of three kinds: the boxed numbers, which is
+arithmetic; radix forms of the parses and the `toString`s; and members that
+would be a guess rather than an implementation
 — `Class.forName`'s reflective neighbours, `Calendar.computeFields`,
 `Vector`'s protected `elementData`, `Hashtable.rehash`. **A member is worth
 declaring when its behavior is exactly specified and its body is a few lines,
 and worth leaving out when answering it means inventing what it answers**, which
 is the same rule the platform tables use.
 
-Text formatting of a float is deliberately not in the first group. `Float` and
+**`Math` is no longer in the first group.** CLDC 1.1's floating-point half —
+`sqrt`, `ceil`, `floor`, `sin`, `cos`, `tan`, `toDegrees`, `toRadians`, and the
+`float` and `double` overloads of `min` and `max` — is declared and implemented,
+because every one of them is a value the specification names exactly rather than
+a behaviour to invent. The two cases worth having a test for are the ones a
+comparison would get wrong: a NaN poisons `max` and `min` rather than losing to
+a number, and the two zeroes are ordered.
+
+Text formatting of a float is deliberately not in that group. `Float` and
 `Double` are absent from this library, and `StringBuffer.append(float)` with
 them: Java's shortest-representation printing is not Go's, so a title that
 formats a number would draw text that is subtly not what the handset drew, and

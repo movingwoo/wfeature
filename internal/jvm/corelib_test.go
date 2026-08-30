@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -491,5 +492,76 @@ func TestStringValueOfTakesAWholeCharacterArray(t *testing.T) {
 	}
 	if content, ok := StringText(reference); !ok || content != "WIPI" {
 		t.Fatalf("String.valueOf([C) = %q/%v, want \"WIPI\"", content, ok)
+	}
+}
+
+// CLDC 1.1's Math is the integer half plus a floating-point one, and a title
+// that scales a sprite or turns a heading into a step asks for the second.
+// The cases worth naming are the ones a comparison would get wrong: a NaN
+// poisons max and min rather than losing to a number, and the two zeroes are
+// ordered.
+func TestMathAnswersTheFloatingPointHalfOfCLDC(t *testing.T) {
+	vm := New(nil, Options{})
+	call := func(name, descriptor string, arguments ...Value) float64 {
+		t.Helper()
+		value, err := vm.InvokeStatic(MathClass, name, descriptor, arguments...)
+		if err != nil {
+			t.Fatalf("Math.%s%s error = %v", name, descriptor, err)
+		}
+		number, err := value.Float64()
+		if err != nil {
+			t.Fatalf("Math.%s%s answered %v", name, descriptor, err)
+		}
+		return number
+	}
+
+	for _, probe := range []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{"sqrt", 144, 12},
+		{"ceil", -0.5, 0}, // a negative zero, which compares equal to zero
+		{"ceil", 1.25, 2},
+		{"floor", -1.25, -2},
+		{"sin", 0, 0},
+		{"cos", 0, 1},
+		{"tan", 0, 0},
+		{"toDegrees", math.Pi, 180},
+		{"toRadians", 180, math.Pi},
+	} {
+		if got := call(probe.name, "(D)D", DoubleValue(probe.in)); got != probe.want {
+			t.Errorf("Math.%s(%v) = %v, want %v", probe.name, probe.in, got, probe.want)
+		}
+	}
+
+	if got := call("max", "(DD)D", DoubleValue(math.NaN()), DoubleValue(1)); !math.IsNaN(got) {
+		t.Errorf("Math.max(NaN, 1) = %v, want NaN", got)
+	}
+	if got := call("min", "(DD)D", DoubleValue(1), DoubleValue(math.NaN())); !math.IsNaN(got) {
+		t.Errorf("Math.min(1, NaN) = %v, want NaN", got)
+	}
+	// The zeroes are ordered, so max answers the positive one and min the
+	// negative one — which a plain `<` cannot tell apart.
+	if got := call("max", "(DD)D", DoubleValue(math.Copysign(0, -1)), DoubleValue(0)); math.Signbit(got) {
+		t.Error("Math.max(-0.0, 0.0) answered the negative zero")
+	}
+	if got := call("min", "(DD)D", DoubleValue(0), DoubleValue(math.Copysign(0, -1))); !math.Signbit(got) {
+		t.Error("Math.min(0.0, -0.0) answered the positive zero")
+	}
+
+	value, err := vm.InvokeStatic(MathClass, "max", "(FF)F", FloatValue(1.5), FloatValue(-2.5))
+	if err != nil {
+		t.Fatalf("Math.max(FF)F error = %v", err)
+	}
+	if got, err := value.Float32(); err != nil || got != 1.5 {
+		t.Fatalf("Math.max(1.5f, -2.5f) = %v/%v, want 1.5", got, err)
+	}
+	value, err = vm.InvokeStatic(MathClass, "min", "(FF)F", FloatValue(1.5), FloatValue(-2.5))
+	if err != nil {
+		t.Fatalf("Math.min(FF)F error = %v", err)
+	}
+	if got, err := value.Float32(); err != nil || got != -2.5 {
+		t.Fatalf("Math.min(1.5f, -2.5f) = %v/%v, want -2.5", got, err)
 	}
 }
