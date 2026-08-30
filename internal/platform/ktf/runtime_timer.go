@@ -93,7 +93,7 @@ func runtimeTimerSchedule(runtime *initializationRuntime, _ *jvm.VM, arguments [
 		task:   task,
 		owner:  owner,
 		period: timerDuration(period),
-		due:    runtime.client.waitDeadline(timerDuration(delay)),
+		due:    runtime.client.framePeriodDeadline(timerDuration(delay)),
 	})
 	return jvm.VoidValue(), nil
 }

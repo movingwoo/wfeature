@@ -1884,7 +1884,7 @@ func (runtime *initializationRuntime) wipicSetTimer(thread *armcore.Thread) (uin
 		callback: callback[0],
 		param:    param,
 		delay:    delay,
-		due:      runtime.client.waitDeadline(wait),
+		due:      runtime.client.framePeriodDeadline(wait),
 	})
 	return 0, nil
 }
