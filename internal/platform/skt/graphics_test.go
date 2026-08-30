@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"sync"
 	"testing"
 )
 
@@ -131,4 +132,53 @@ func TestBitmapFontMetricsMatchRenderedAdvance(t *testing.T) {
 			t.Fatalf("underline alpha at x=%d = %d, want 255", x, pixels[(7*14+x)*4+3])
 		}
 	}
+}
+
+// The screen Graphics is the one a title keeps and draws through from its own
+// thread, and the Host copies the same bytes out to present a frame. Nothing
+// held a lock across that pair — a context drawing into an Image locked the
+// Image, and a context drawing on the screen had no destination to lock — so
+// the two ran into each other on a real archive, which is what the race
+// detector reported.
+//
+// This is that pair in miniature: it fails under `go test -race` when the
+// screen context takes no lock, and passes when it takes the one the copier
+// takes. Without the detector it only asserts that neither side crashes, which
+// is why the race build is part of the standard checks.
+func TestTheScreenContextLocksAgainstTheFrameCopy(t *testing.T) {
+	const width, height = 8, 8
+	var screen sync.Mutex
+	pixels := make([]byte, width*height*4)
+	context := &graphicsContext{
+		pixels: pixels,
+		width:  width,
+		height: height,
+		clip:   paintRect{maxX: width, maxY: height},
+		color:  0x00ff00,
+		active: true,
+		screen: &screen,
+	}
+
+	var group sync.WaitGroup
+	group.Add(2)
+	// The guest thread's side: a drawing call, through the one seam every
+	// drawing call goes through.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			context.withDestinationWrite(func() {
+				context.fillClipped(paintRect{maxX: width, maxY: height})
+			})
+		}
+	}()
+	// The Host's side: the copy that becomes a frame.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			screen.Lock()
+			_ = append([]byte(nil), pixels...)
+			screen.Unlock()
+		}
+	}()
+	group.Wait()
 }

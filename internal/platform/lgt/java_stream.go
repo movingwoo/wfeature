@@ -2,6 +2,7 @@ package lgt
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"unicode/utf16"
 
@@ -195,7 +196,10 @@ func javaCreateImage(
 	if err := client.core.Memory().Read(block+javaArrayLengthWords*4+offset, encoded); err != nil {
 		return 0, err
 	}
-	return client.newJavaImage(encoded)
+	// The same rule the named form gets: the bytes are the name here, so a
+	// title that decodes one picture twice pays for one surface. See
+	// newSharedJavaImage.
+	return client.newSharedJavaImage(imageDigestKey(encoded), encoded)
 }
 
 // javaCreateImageNamed is `Image.createImage(String)`: the same picture, named
@@ -216,44 +220,64 @@ func javaCreateImageNamed(
 	if !found {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+name)
 	}
-	// **One surface per named picture.** A picture loaded from a resource is
-	// immutable — the specification says only a copy can be drawn into — so two
-	// Images of the same name are the same pixels, and decoding a second set of
-	// them costs a surface nothing here ever reclaims. One title reloads its
-	// sprite sheets from inside `paint`: 879 loads of a handful of names in two
-	// thousand ticks, which filled the surface region and ended the run.
-	//
-	// The object is still a new one. Sharing the pixels is unobservable;
-	// sharing the object would make `==` answer true where the language says
-	// nothing, and a title that keeps two of them apart is entitled to.
+	// **One surface per picture** — see newSharedJavaImage, which gives the
+	// byte form the same rule under a different key.
+	return client.newSharedJavaImage("name:"+name, encoded)
+}
+
+// newSharedJavaImage answers an Image over the surface this exact picture was
+// already decoded into, decoding it only the first time.
+//
+// A picture is immutable — the specification says only a copy can be drawn
+// into — so two Images decoded from the same resource, or from the same bytes,
+// are the same pixels; and decoding a second set of them costs a surface
+// **nothing here ever reclaims**, because the Java path has no collector and
+// an Image is released by the language on a handset. One title reloads its
+// sprite sheets from inside `paint`: 879 loads of a handful of names in two
+// thousand ticks, which filled the surface region and ended the run.
+//
+// The object is still a new one. Sharing the pixels is unobservable; sharing
+// the object would make `==` answer true where the language says nothing, and
+// a title that keeps two of them apart is entitled to. A title that then draws
+// into one gets its own copy — see unshareDecodedSurface.
+func (client *Client) newSharedJavaImage(key string, encoded []byte) (uint32, error) {
 	runtime := client.javaRuntimeState()
-	if handle, cached := runtime.namedImages[name]; cached {
+	if handle, cached := runtime.decodedImages[key]; cached {
 		return client.newJavaImageOn(handle)
 	}
 	object, err := client.newJavaImage(encoded)
 	if err != nil {
 		return 0, err
 	}
-	if runtime.namedImages == nil {
-		runtime.namedImages = map[string]uint32{}
+	if runtime.decodedImages == nil {
+		runtime.decodedImages = map[string]uint32{}
 	}
-	runtime.namedImages[name] = runtime.images[object]
+	runtime.decodedImages[key] = runtime.images[object]
 	return object, nil
 }
 
-// unshareNamedSurface gives an image its own pixels when it is about to be
-// drawn into and its surface is one the name cache is handing out. An image
+// imageDigestKey names a picture by its bytes, for the form that is handed an
+// array rather than a name. It is a digest rather than the bytes themselves so
+// that a title assembling large pictures does not also pay for a second copy
+// of each one in the key.
+func imageDigestKey(encoded []byte) string {
+	digest := sha256.Sum256(encoded)
+	return "bytes:" + string(digest[:])
+}
+
+// unshareDecodedSurface gives an image its own pixels when it is about to be
+// drawn into and its surface is one the decode cache is handing out. An image
 // nothing else holds is left alone: the copy is only for the sharing.
-func (client *Client) unshareNamedSurface(object uint32, surface *framebuffer) (*framebuffer, error) {
+func (client *Client) unshareDecodedSurface(object uint32, surface *framebuffer) (*framebuffer, error) {
 	runtime := client.javaRuntimeState()
-	name := ""
-	for cached, handle := range runtime.namedImages {
+	shared := false
+	for _, handle := range runtime.decodedImages {
 		if handle == surface.handle {
-			name = cached
+			shared = true
 			break
 		}
 	}
-	if name == "" {
+	if !shared {
 		return surface, nil
 	}
 	private, err := client.newFramebuffer(surface.width, surface.height, false)
@@ -265,7 +289,7 @@ func (client *Client) unshareNamedSurface(object uint32, surface *framebuffer) (
 		private.opaque = append([]bool(nil), surface.opaque...)
 	}
 	runtime.images[object] = private.handle
-	// The name keeps the picture it loaded, for whoever asks for it next.
+	// The cache keeps the picture it decoded, for whoever asks for it next.
 	return private, nil
 }
 

@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -491,5 +492,260 @@ func TestStringValueOfTakesAWholeCharacterArray(t *testing.T) {
 	}
 	if content, ok := StringText(reference); !ok || content != "WIPI" {
 		t.Fatalf("String.valueOf([C) = %q/%v, want \"WIPI\"", content, ok)
+	}
+}
+
+// CLDC 1.1's Math is the integer half plus a floating-point one, and a title
+// that scales a sprite or turns a heading into a step asks for the second.
+// The cases worth naming are the ones a comparison would get wrong: a NaN
+// poisons max and min rather than losing to a number, and the two zeroes are
+// ordered.
+func TestMathAnswersTheFloatingPointHalfOfCLDC(t *testing.T) {
+	vm := New(nil, Options{})
+	call := func(name, descriptor string, arguments ...Value) float64 {
+		t.Helper()
+		value, err := vm.InvokeStatic(MathClass, name, descriptor, arguments...)
+		if err != nil {
+			t.Fatalf("Math.%s%s error = %v", name, descriptor, err)
+		}
+		number, err := value.Float64()
+		if err != nil {
+			t.Fatalf("Math.%s%s answered %v", name, descriptor, err)
+		}
+		return number
+	}
+
+	for _, probe := range []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{"sqrt", 144, 12},
+		{"ceil", -0.5, 0}, // a negative zero, which compares equal to zero
+		{"ceil", 1.25, 2},
+		{"floor", -1.25, -2},
+		{"sin", 0, 0},
+		{"cos", 0, 1},
+		{"tan", 0, 0},
+		{"toDegrees", math.Pi, 180},
+		{"toRadians", 180, math.Pi},
+	} {
+		if got := call(probe.name, "(D)D", DoubleValue(probe.in)); got != probe.want {
+			t.Errorf("Math.%s(%v) = %v, want %v", probe.name, probe.in, got, probe.want)
+		}
+	}
+
+	if got := call("max", "(DD)D", DoubleValue(math.NaN()), DoubleValue(1)); !math.IsNaN(got) {
+		t.Errorf("Math.max(NaN, 1) = %v, want NaN", got)
+	}
+	if got := call("min", "(DD)D", DoubleValue(1), DoubleValue(math.NaN())); !math.IsNaN(got) {
+		t.Errorf("Math.min(1, NaN) = %v, want NaN", got)
+	}
+	// The zeroes are ordered, so max answers the positive one and min the
+	// negative one — which a plain `<` cannot tell apart.
+	if got := call("max", "(DD)D", DoubleValue(math.Copysign(0, -1)), DoubleValue(0)); math.Signbit(got) {
+		t.Error("Math.max(-0.0, 0.0) answered the negative zero")
+	}
+	if got := call("min", "(DD)D", DoubleValue(0), DoubleValue(math.Copysign(0, -1))); !math.Signbit(got) {
+		t.Error("Math.min(0.0, -0.0) answered the positive zero")
+	}
+
+	value, err := vm.InvokeStatic(MathClass, "max", "(FF)F", FloatValue(1.5), FloatValue(-2.5))
+	if err != nil {
+		t.Fatalf("Math.max(FF)F error = %v", err)
+	}
+	if got, err := value.Float32(); err != nil || got != 1.5 {
+		t.Fatalf("Math.max(1.5f, -2.5f) = %v/%v, want 1.5", got, err)
+	}
+	value, err = vm.InvokeStatic(MathClass, "min", "(FF)F", FloatValue(1.5), FloatValue(-2.5))
+	if err != nil {
+		t.Fatalf("Math.min(FF)F error = %v", err)
+	}
+	if got, err := value.Float32(); err != nil || got != -2.5 {
+		t.Fatalf("Math.min(1.5f, -2.5f) = %v/%v, want -2.5", got, err)
+	}
+}
+
+// java/lang/Character was the one CLDC class this library did not publish at
+// all, and a missing class is worse than a missing method: a member nothing
+// answers stops the call, while a class nothing declares stops the resolution
+// — so a title that puts a char in a Vector, or asks whether a key it was
+// handed is a digit, dies before it reaches anything.
+func TestCharacterAnswersTheTestsAndConversionsCLDCNames(t *testing.T) {
+	vm := New(nil, Options{})
+
+	boxed, err := vm.NewObject(CharacterClass, "(C)V", IntValue('Q'))
+	if err != nil {
+		t.Fatalf("new Character: %v", err)
+	}
+	value, err := vm.InvokeVirtual(boxed, "charValue", "()C")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := value.Int32(); got != 'Q' {
+		t.Fatalf("charValue = %d, want %d", got, 'Q')
+	}
+	text, err := vm.InvokeVirtual(boxed, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, _ := text.Reference(); object == nil {
+		t.Fatal("toString answered null")
+	} else if got, _ := StringText(object); got != "Q" {
+		t.Fatalf("toString = %q, want %q", got, "Q")
+	}
+	// Equality is the value, so a title finds the character it stored rather
+	// than only the object it stored.
+	same, err := vm.NewObject(CharacterClass, "(C)V", IntValue('Q'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal, err := vm.InvokeVirtual(boxed, "equals", "(Ljava/lang/Object;)Z", ReferenceValue(same))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := equal.Int32(); got != 1 {
+		t.Fatal("two boxes of one character are not equal")
+	}
+
+	static := func(name, descriptor string, arguments ...Value) int32 {
+		t.Helper()
+		answer, err := vm.InvokeStatic(CharacterClass, name, descriptor, arguments...)
+		if err != nil {
+			t.Fatalf("Character.%s%s: %v", name, descriptor, err)
+		}
+		number, err := answer.Int32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return number
+	}
+
+	for _, probe := range []struct {
+		name string
+		in   int32
+		want int32
+	}{
+		{"isDigit", '7', 1},
+		{"isDigit", 'a', 0},
+		// The tests answer over ISO Latin-1, which is what CLDC says a handset
+		// provides: a Hangul syllable is neither upper nor lower case here,
+		// and answering otherwise would be a divergence with no caller.
+		{"isUpperCase", 'A', 1},
+		{"isUpperCase", 0xC9, 1}, // É
+		{"isUpperCase", '가', 0},
+		{"isLowerCase", 'z', 1},
+		{"isLowerCase", 0xE9, 1}, // é
+		{"isLowerCase", '가', 0},
+	} {
+		if got := static(probe.name, "(C)Z", IntValue(probe.in)); got != probe.want {
+			t.Errorf("Character.%s(%d) = %d, want %d", probe.name, probe.in, got, probe.want)
+		}
+	}
+	for _, probe := range []struct {
+		name string
+		in   int32
+		want int32
+	}{
+		{"toLowerCase", 'A', 'a'},
+		{"toLowerCase", 0xC9, 0xE9},
+		// The multiplication sign sits inside the accented run and is not a
+		// letter, so it converts to itself.
+		{"toLowerCase", 0xD7, 0xD7},
+		{"toUpperCase", 'a', 'A'},
+		{"toUpperCase", 0xE9, 0xC9},
+		{"toUpperCase", '가', '가'},
+	} {
+		if got := static(probe.name, "(C)C", IntValue(probe.in)); got != probe.want {
+			t.Errorf("Character.%s(%d) = %d, want %d", probe.name, probe.in, got, probe.want)
+		}
+	}
+
+	for _, probe := range []struct {
+		character int32
+		radix     int32
+		want      int32
+	}{
+		{'7', 10, 7},
+		{'f', 16, 15},
+		{'F', 16, 15},
+		// A digit the radix does not carry, and a radix outside the two the
+		// class publishes, are both −1 rather than an exception.
+		{'8', 8, -1},
+		{'1', 1, -1},
+		{'z', 37, -1},
+		{'가', 16, -1},
+	} {
+		if got := static("digit", "(CI)I", IntValue(probe.character), IntValue(probe.radix)); got != probe.want {
+			t.Errorf("Character.digit(%d, %d) = %d, want %d", probe.character, probe.radix, got, probe.want)
+		}
+	}
+}
+
+// The radix half of the boxed numbers: the parses, the formats, and the
+// equality that is about the value. Nothing local reaches any of them — which
+// is the reason to have them, because the call that would is on a title nobody
+// has run and a member nothing answers stops it.
+func TestTheBoxedNumbersAnswerTheirRadixForms(t *testing.T) {
+	vm := New(nil, Options{})
+
+	parsed, err := vm.InvokeStatic(LongClass, "parseLong", "(Ljava/lang/String;I)J",
+		ReferenceValue(vm.NewString("-7fffffffffffffff")), IntValue(16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := parsed.Int64(); got != -9223372036854775807 {
+		t.Fatalf("Long.parseLong(hex) = %d", got)
+	}
+	formatted, err := vm.InvokeStatic(LongClass, "toString", "(JI)Ljava/lang/String;",
+		LongValue(255), IntValue(16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := formatted.Reference()
+	if got, _ := StringText(object); got != "ff" {
+		t.Fatalf("Long.toString(255, 16) = %q, want %q", got, "ff")
+	}
+	// A radix outside the bounds means ten when formatting, which is what the
+	// standard says, and is refused when parsing, which is the exception it
+	// names.
+	formatted, err = vm.InvokeStatic(IntegerClass, "toString", "(II)Ljava/lang/String;",
+		IntValue(255), IntValue(99))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ = formatted.Reference()
+	if got, _ := StringText(object); got != "255" {
+		t.Fatalf("Integer.toString(255, 99) = %q, want %q", got, "255")
+	}
+	if _, err := vm.InvokeStatic(IntegerClass, "valueOf", "(Ljava/lang/String;I)Ljava/lang/Integer;",
+		ReferenceValue(vm.NewString("10")), IntValue(99)); err == nil {
+		t.Fatal("a radix outside the bounds was accepted by a parse")
+	}
+
+	// A boxed long compares by value, and its hash is the two halves folded
+	// together — the number the standard names rather than one this runtime
+	// picks.
+	first, err := vm.NewObject(LongClass, "(J)V", LongValue(0x0000_0001_0000_0002))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := vm.NewObject(LongClass, "(J)V", LongValue(0x0000_0001_0000_0002))
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal, err := vm.InvokeVirtual(first, "equals", "(Ljava/lang/Object;)Z", ReferenceValue(second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := equal.Int32(); got != 1 {
+		t.Fatal("two boxes of one long are not equal")
+	}
+	hash, err := vm.InvokeVirtual(first, "hashCode", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := hash.Int32(); got != 3 {
+		t.Fatalf("Long.hashCode = %d, want the halves folded together", got)
 	}
 }

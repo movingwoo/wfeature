@@ -186,16 +186,38 @@ keeping: of three that looked like this in one sweep, one was waiting for a
 key, one wanted a file operation that was missing, and only the third really
 wanted a server.
 
-### A certificate is the same gate under another name
+### A certificate is the same gate under another name, and it is not a wall
 
 One LGT title asks for a certificate rather than a login: "[인증서가 없습니다]
-최초1회만 서버로부터 인증서를 받아옵니다 (통화료10원미만)". Answering it dials,
-the dial is refused, and the title ends itself — which is the same shape as the
-titles above and the same absence behind it. The other platform has a way in
+최초1회만 서버로부터 인증서를 받아옵니다 (통화료10원미만)", with 예 and 아니요
+under it. This was written down as a wall — answer it and the title ends
+itself — and **the wall was the default answer**. 아니요 is the button that
+starts selected, and declining a certificate is a title closing itself, which
+is what it does on a handset too.
+
+**Pressing left moves the selection and 예 opens the offline path.** It calls
+`MC_netConnect` and `MC_netClose`, one each, puts its own dialog up — "에러:
+서버와의 접속이 끊어졌습니다" — and that dialog is dismissable: past it the
+title reaches its main menu and its difficulty screen. The whole path is
+reached from a cold save with five keys.
+
+**There is no certificate file anywhere in it.** Over fifteen hundred ticks the
+title opens five files, none of them a certificate; declining the dialog makes
+no network call at all and calls the platform's exit two ticks later. So the
+gate is entirely the title's own, and the only thing behind it is the dial this
+platform refuses — which the title handles.
+
+So there is nothing to provide. The other platform's way in
 (`internal/platform/ktf/provision.go`: a certificate sealed with a subscriber
-number, dropped into the save tree where the title reads it), and this platform
-does not. Nothing is wrong with the refusal; what is missing is a certificate
-this title would accept, and that is a file rather than a code change.
+number, dropped into the save tree where the title reads it) has no counterpart
+here because this title never looks for a file — and a title that reports its
+own network error and carries on is the case this document already calls
+handled.
+
+**A dialog's default answer is part of what a screen means.** Reading one
+button as "the answer" is how a handled path came to be filed as a dead end,
+and the check that would have caught it is one more key: press what moves a
+selection before pressing what takes it.
 
 ### One title does not report its own error, it parks
 

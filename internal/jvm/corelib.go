@@ -58,6 +58,7 @@ func coreLibraryDefinitions() []ClassDefinition {
 		longDefinition(),
 		byteDefinition(),
 		shortDefinition(),
+		characterDefinition(),
 		mathDefinition(),
 		runtimeDefinition(),
 		calendarDefinition(),

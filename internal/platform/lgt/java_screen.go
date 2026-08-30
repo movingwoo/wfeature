@@ -528,7 +528,7 @@ func javaImageGraphics(
 	// checks that the copy is what a title is drawing into. A title that draws
 	// into a named picture gets its own surface from here on, so a second
 	// holder of that name keeps the picture it loaded. See javaCreateImageNamed.
-	if surface, err = client.unshareNamedSurface(arguments[0], surface); err != nil {
+	if surface, err = client.unshareDecodedSurface(arguments[0], surface); err != nil {
 		return 0, err
 	}
 	runtime := client.javaRuntimeState()

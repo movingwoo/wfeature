@@ -3600,7 +3600,7 @@ becomes durable: the guest's own ending, and the session's. It costs nothing per
 write, which is what a flush on every write would not — a title that fills a
 save a byte at a time would rewrite the whole file once per byte.
 
-### One surface per named picture
+### One surface per picture, named or not
 
 A picture loaded from a resource is immutable — the specification says only a
 copy can be drawn into — so two Images of the same name are the same pixels.
@@ -3610,16 +3610,36 @@ handset. One title reloads its sprite sheets from inside `paint`, 879 loads of a
 handful of names in two thousand ticks, and the surface region filled and ended
 the run.
 
-`javaCreateImageNamed` keeps the surface by name. The object is still a new one:
+`newSharedJavaImage` keeps the surface under what it was decoded from — the
+resource name for `Image.createImage(String)`. The object is still a new one:
 sharing the pixels is unobservable, and sharing the object would make `==`
 answer true where the language says nothing.
 
-**The byte form is not cached and the leak behind it is still open.** An image
-built from an array could be a picture the title assembled, and two arrays that
-happen to match are not the same picture in the way two loads of one name are.
-What would close it for both is reclaiming a surface whose Image nothing holds,
-which is the collector the other platform has (`docs/ktf.md`, "Guest object
-collection") and this one does not.
+**The byte form is cached the same way, under the bytes' digest as its key.**
+The objection to it was that two arrays which happen to match are not the same
+picture in the way two loads of one name are — and that is an objection to
+sharing the *object*, which nothing here does: each call answers its own Image,
+and drawing into any of them takes a private copy first
+(`unshareDecodedSurface`, which is the same call the named form goes through).
+What is left is the decode, and paying for one decode of one picture is right
+whichever way the title asked for it.
+
+**A surface whose Image nothing holds is still not reclaimed**, and the cache
+is what makes that survivable: it turns the unbounded case — the same picture
+decoded over and over from inside `paint` — into one surface, which is the
+shape the failure actually had.
+
+**Measured over the local Java set, nothing climbs.** Counting cache misses —
+distinct pictures, which is exactly the number of surfaces a title costs —
+across all fourteen archives at three thousand ticks: eight decode fewer than
+fifty, four decode none at all, and the largest decodes 517. That one is the
+case to watch and it is flat: six thousand ticks decode the same 517, so it
+loads its sprite set once and the cache serves every repeat after it. A title
+that built a genuinely *new* picture every frame would still climb, and closing
+that needs the collector the other platform has
+(`internal/platform/ktf/collect.go`, and `docs/ktf.md`'s "A screen that only
+waits still allocates" for what it bought) and this one does not. No local
+title is that one.
 
 ### An exception nothing catches ends the callback, not the session
 
@@ -4915,8 +4935,11 @@ than a fix.
   policy is unchanged** (see docs/network.md for why a connection is refused at
   all); what this records is that for this title the refusal is the wall, and
   that the title has an offline path of its own behind a question it never gets
-  to ask. A second title with the same shape reaches its main menu under the
-  refusal, so the two are not one case.
+  to ask. **A second title with the same question is not the same case**: it
+  asks it without being dialled first, and its own 예 dials, is refused, and
+  reaches its main menu behind the error dialog the refusal produces — the wall
+  there was the button its dialog starts on, not the refusal
+  ([`network.md`](network.md)).
 
 **A title's "the save failed" dialog is not always a save.** One puts up "data
 could not be saved, the game is closing" over an empty save tree, which reads

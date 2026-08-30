@@ -190,7 +190,11 @@ func integerDefinition() ClassDefinition {
 			{Name: "parseInt", Descriptor: "(Ljava/lang/String;)I", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "parseInt", Descriptor: "(Ljava/lang/String;I)I", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "valueOf", Descriptor: "(Ljava/lang/String;)Ljava/lang/Integer;", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "floatValue", Descriptor: "()F", Access: native},
+			{Name: "doubleValue", Descriptor: "()D", Access: native},
+			{Name: "valueOf", Descriptor: "(Ljava/lang/String;I)Ljava/lang/Integer;", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "toString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
+			{Name: "toString", Descriptor: "(II)Ljava/lang/String;", Access: staticNative},
 			{Name: "toHexString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
 			{Name: "toBinaryString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
 			{Name: "toOctalString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
@@ -216,9 +220,15 @@ func longDefinition() ClassDefinition {
 			{Name: "<init>", Descriptor: "(J)V", Access: native},
 			{Name: "longValue", Descriptor: "()J", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
+			{Name: "floatValue", Descriptor: "()F", Access: native},
+			{Name: "doubleValue", Descriptor: "()D", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseLong", Descriptor: "(Ljava/lang/String;)J", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseLong", Descriptor: "(Ljava/lang/String;I)J", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "toString", Descriptor: "(J)Ljava/lang/String;", Access: staticNative},
+			{Name: "toString", Descriptor: "(JI)Ljava/lang/String;", Access: staticNative},
 		},
 	}
 }
@@ -239,7 +249,10 @@ func byteDefinition() ClassDefinition {
 			{Name: "byteValue", Descriptor: "()B", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseByte", Descriptor: "(Ljava/lang/String;)B", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseByte", Descriptor: "(Ljava/lang/String;I)B", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 		},
 	}
 }
@@ -265,14 +278,19 @@ func shortDefinition() ClassDefinition {
 			{Name: "shortValue", Descriptor: "()S", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseShort", Descriptor: "(Ljava/lang/String;)S", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseShort", Descriptor: "(Ljava/lang/String;I)S", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 		},
 	}
 }
 
-// mathDefinition publishes the arithmetic. CLDC 1.1 has the floating-point
-// half as well, and the natives behind these have carried it for as long as
-// the class did not exist to name them through.
+// mathDefinition publishes the arithmetic, including CLDC 1.1's
+// floating-point half. Every member here is a value the specification names
+// exactly rather than a behaviour to invent, which is the rule for what this
+// library declares — the text formatting of a float is the other side of that
+// rule and is still absent; see docs/jvm.md.
 func mathDefinition() ClassDefinition {
 	staticNative := AccessPublic | AccessStatic | AccessNative
 	return ClassDefinition{
@@ -290,8 +308,20 @@ func mathDefinition() ClassDefinition {
 			{Name: "abs", Descriptor: "(D)D", Access: staticNative},
 			{Name: "min", Descriptor: "(II)I", Access: staticNative},
 			{Name: "min", Descriptor: "(JJ)J", Access: staticNative},
+			{Name: "min", Descriptor: "(FF)F", Access: staticNative},
+			{Name: "min", Descriptor: "(DD)D", Access: staticNative},
 			{Name: "max", Descriptor: "(II)I", Access: staticNative},
 			{Name: "max", Descriptor: "(JJ)J", Access: staticNative},
+			{Name: "max", Descriptor: "(FF)F", Access: staticNative},
+			{Name: "max", Descriptor: "(DD)D", Access: staticNative},
+			{Name: "ceil", Descriptor: "(D)D", Access: staticNative},
+			{Name: "floor", Descriptor: "(D)D", Access: staticNative},
+			{Name: "sqrt", Descriptor: "(D)D", Access: staticNative},
+			{Name: "sin", Descriptor: "(D)D", Access: staticNative},
+			{Name: "cos", Descriptor: "(D)D", Access: staticNative},
+			{Name: "tan", Descriptor: "(D)D", Access: staticNative},
+			{Name: "toDegrees", Descriptor: "(D)D", Access: staticNative},
+			{Name: "toRadians", Descriptor: "(D)D", Access: staticNative},
 		},
 	}
 }

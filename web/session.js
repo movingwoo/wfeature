@@ -110,8 +110,14 @@ export class GameSession {
     if (message.id && this.pending.has(message.id)) {
       const { resolve, reject } = this.pending.get(message.id);
       this.pending.delete(message.id);
-      if (message.kind === "error") reject(new Error(message.message));
-      else resolve(message);
+      if (message.kind === "error") {
+        const failure = new Error(message.message);
+        // An ending is refused the same way a failure is — the request
+        // produced no game either way — and carries the mark that says which
+        // of the two it was, so whoever asked can say the right sentence.
+        failure.exited = message.exited === true;
+        reject(failure);
+      } else resolve(message);
       return;
     }
     switch (message.kind) {

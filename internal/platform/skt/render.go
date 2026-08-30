@@ -3,6 +3,7 @@ package skt
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -54,13 +55,19 @@ type graphicsContext struct {
 	width       int
 	height      int
 	destination *imageData
-	deviceClip  paintRect
-	clip        paintRect
-	translateX  int32
-	translateY  int32
-	color       uint32
-	font        *jvm.Object
-	active      bool
+	// screen is the lock a context that draws on the screen takes for one
+	// drawing call, and it is set only on the long-lived screen Graphics —
+	// the one object a title keeps and draws through from its own thread.
+	// The Host's own screen contexts leave it nil because they are built
+	// while the same lock is already held. See withDestinationWrite.
+	screen     *sync.Mutex
+	deviceClip paintRect
+	clip       paintRect
+	translateX int32
+	translateY int32
+	color      uint32
+	font       *jvm.Object
+	active     bool
 }
 
 func (runtime *Runtime) getDisplayableWidth(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -220,8 +227,14 @@ func (runtime *Runtime) paintPendingCanvas() error {
 
 	graphics := runtime.screenGraphics(clip)
 
-	runtime.renderMu.Lock()
+	// **The paint runs without the render lock held.** The Graphics it is
+	// handed is the screen's, and that context now takes the same lock for
+	// each drawing call it makes — holding it across the call would be the
+	// paint deadlocking against itself. What the lock still covers is the
+	// copy: a frame is taken between drawing calls rather than through one.
 	_, paintErr := runtime.VM.InvokeVirtual(canvas, "paint", "(Ljavax/microedition/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
+
+	runtime.renderMu.Lock()
 	frame := backend.Frame{
 		Width:  runtime.frameWidth,
 		Height: runtime.frameHeight,
@@ -264,6 +277,7 @@ func (runtime *Runtime) screenGraphics(clip paintRect) *jvm.Object {
 			height: runtime.frameHeight,
 			font:   runtime.fontObject(fontSystem, fontPlain, fontMedium),
 			active: true,
+			screen: &runtime.renderMu,
 		}
 		runtime.screenGraphicsContext = context
 		runtime.screenGraphicsObject = &jvm.Object{
@@ -634,10 +648,26 @@ func (context *graphicsContext) putColorPixel(x, y int64) {
 	context.pixels[index+3] = 0xff
 }
 
+// withDestinationWrite holds the lock that owns the pixels for the length of
+// one drawing call.
+//
+// **The screen had no lock at all.** A context drawing into an Image locked the
+// Image; a context drawing on the screen has no destination, so it locked
+// nothing — and the screen Graphics is exactly the one a title keeps and draws
+// through from its own thread, against a Host that copies the same bytes out
+// to present a frame. The race detector reports it on a real archive, and it
+// has been there since long before this was written down.
+//
+// A drawing call is the unit, not a frame: the pixels are one buffer, so what
+// this prevents is a copy taken through the middle of a fill.
 func (context *graphicsContext) withDestinationWrite(draw func()) {
-	if context.destination != nil {
+	switch {
+	case context.destination != nil:
 		context.destination.mu.Lock()
 		defer context.destination.mu.Unlock()
+	case context.screen != nil:
+		context.screen.Lock()
+		defer context.screen.Unlock()
 	}
 	draw()
 }

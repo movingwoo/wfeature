@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 
 func (vm *VM) registerLanguageBuiltins() {
 	vm.registerBoxBuiltins()
+	vm.registerCharacterBuiltins()
+	vm.registerMathFloatBuiltins()
 	vm.registerRuntimeBuiltins()
 	vm.registerStringExtraBuiltins()
 
@@ -298,6 +301,154 @@ func (vm *VM) registerBoxBuiltins() {
 		return IntValue(int32(value)), nil
 	})
 
+	// The rest of CLDC 1.1's boxed numbers: the radix forms of the parses and
+	// the formats, the two equalities that are about values rather than
+	// identity, and the widening accessors. Each is a value the specification
+	// names exactly. None of them is reached by a local title — the class-wide
+	// scan says the whole corpus uses `parseInt`, `toString(int)` and four
+	// others — which is the reason to have them rather than not: a member
+	// nothing answers stops the call that wanted it, and the calls that would
+	// want these are on titles nobody has run.
+	for _, parse := range []struct {
+		class      string
+		name       string
+		descriptor string
+		bits       int
+	}{
+		{ByteClass, "parseByte", "(Ljava/lang/String;I)B", 8},
+		{ShortClass, "parseShort", "(Ljava/lang/String;I)S", 16},
+	} {
+		bits := parse.bits
+		vm.builtin(parse.class, parse.name, parse.descriptor, func(_ *VM, arguments []Value) (Value, error) {
+			value, err := parseRadix(arguments, bits)
+			if err != nil {
+				return VoidValue(), err
+			}
+			return IntValue(int32(value)), nil
+		})
+	}
+	vm.builtin(LongClass, "parseLong", "(Ljava/lang/String;I)J", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := parseRadix(arguments, 64)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return LongValue(value), nil
+	})
+	vm.builtin(IntegerClass, "valueOf", "(Ljava/lang/String;I)Ljava/lang/Integer;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := parseRadix(arguments, 32)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(&Object{ClassName: IntegerClass, Native: int32(value)}), nil
+	})
+	vm.builtin(IntegerClass, "toString", "(II)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		radix, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(radixText(int64(value), radix))), nil
+	})
+	vm.builtin(LongClass, "toString", "(JI)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeLong(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		radix, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(radixText(value, radix))), nil
+	})
+
+	// Equality is about the value on every box, so a title looking one up in a
+	// Vector finds the number it stored rather than only the object it stored.
+	for _, class := range []string{ByteClass, ShortClass} {
+		boxed := class
+		vm.builtin(boxed, "equals", "(Ljava/lang/Object;)Z", func(_ *VM, arguments []Value) (Value, error) {
+			value, err := boxedInt(arguments, 0)
+			if err != nil {
+				return VoidValue(), err
+			}
+			other, err := nativeReference(arguments, 1)
+			if err != nil {
+				return VoidValue(), err
+			}
+			if other == nil || other.ClassName != boxed {
+				return booleanValue(false), nil
+			}
+			stored, ok := other.Native.(int32)
+			return booleanValue(ok && stored == value), nil
+		})
+		vm.builtin(boxed, "hashCode", "()I", func(_ *VM, arguments []Value) (Value, error) {
+			value, err := boxedInt(arguments, 0)
+			if err != nil {
+				return VoidValue(), err
+			}
+			return IntValue(value), nil
+		})
+	}
+	vm.builtin(LongClass, "equals", "(Ljava/lang/Object;)Z", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedLong(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		other, err := nativeReference(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if other == nil || other.ClassName != LongClass {
+			return booleanValue(false), nil
+		}
+		stored, ok := other.Native.(int64)
+		return booleanValue(ok && stored == value), nil
+	})
+	// A long's hash is its two halves folded together, which is the value the
+	// standard names rather than a choice this runtime gets to make.
+	vm.builtin(LongClass, "hashCode", "()I", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedLong(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return IntValue(int32(value ^ (value >> 32))), nil
+	})
+
+	// The widening accessors. A boxed integer read as a float is the number,
+	// not its text, so the reason floats are otherwise absent from this
+	// library — Java's shortest-representation printing is not Go's — does not
+	// reach them.
+	vm.builtin(IntegerClass, "floatValue", "()F", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return FloatValue(float32(value)), nil
+	})
+	vm.builtin(IntegerClass, "doubleValue", "()D", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(float64(value)), nil
+	})
+	vm.builtin(LongClass, "floatValue", "()F", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedLong(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return FloatValue(float32(value)), nil
+	})
+	vm.builtin(LongClass, "doubleValue", "()D", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := boxedLong(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(float64(value)), nil
+	})
+
 	vm.builtin(MathClass, "min", "(JJ)J", func(_ *VM, arguments []Value) (Value, error) {
 		left, right, err := longPair(arguments)
 		if err != nil {
@@ -312,6 +463,101 @@ func (vm *VM) registerBoxBuiltins() {
 		}
 		return LongValue(max(left, right)), nil
 	})
+
+}
+
+// registerMathFloatBuiltins is the floating-point half of CLDC 1.1's Math.
+//
+// Each of these is exactly specified — a value the standard names rather than
+// a behaviour to invent, which is this library's rule for what it declares —
+// and Go's own library answers the same IEEE cases the specification lists,
+// including the NaN and signed-zero ones that make max and min more than a
+// comparison. The two conversions are written as the specification's own
+// expressions rather than folded into a constant, because the rounding of
+// `x * 180 / PI` is not the rounding of `x * (180 / PI)`.
+func (vm *VM) registerMathFloatBuiltins() {
+	vm.builtin(MathClass, "min", "(FF)F", floatPairBuiltin(math.Min))
+	vm.builtin(MathClass, "max", "(FF)F", floatPairBuiltin(math.Max))
+	vm.builtin(MathClass, "min", "(DD)D", doublePairBuiltin(math.Min))
+	vm.builtin(MathClass, "max", "(DD)D", doublePairBuiltin(math.Max))
+	vm.builtin(MathClass, "ceil", "(D)D", doubleBuiltin(math.Ceil))
+	vm.builtin(MathClass, "floor", "(D)D", doubleBuiltin(math.Floor))
+	vm.builtin(MathClass, "sqrt", "(D)D", doubleBuiltin(math.Sqrt))
+	vm.builtin(MathClass, "sin", "(D)D", doubleBuiltin(math.Sin))
+	vm.builtin(MathClass, "cos", "(D)D", doubleBuiltin(math.Cos))
+	vm.builtin(MathClass, "tan", "(D)D", doubleBuiltin(math.Tan))
+	vm.builtin(MathClass, "toDegrees", "(D)D", doubleBuiltin(func(value float64) float64 {
+		return value * 180 / math.Pi
+	}))
+	vm.builtin(MathClass, "toRadians", "(D)D", doubleBuiltin(func(value float64) float64 {
+		return value / 180 * math.Pi
+	}))
+}
+
+// doubleBuiltin, doublePairBuiltin and floatPairBuiltin wrap the arithmetic
+// above so each entry is the operation and nothing else. The float pair goes
+// through float64 because widening a float is exact and the answer is one of
+// the two arguments, so narrowing it back cannot lose anything.
+func doubleBuiltin(operation func(float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		value, err := arguments[0].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(operation(value)), nil
+	}
+}
+
+func doublePairBuiltin(operation func(float64, float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		left, err := arguments[0].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		right, err := arguments[1].Float64()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return DoubleValue(operation(left, right)), nil
+	}
+}
+
+func floatPairBuiltin(operation func(float64, float64) float64) func(*VM, []Value) (Value, error) {
+	return func(_ *VM, arguments []Value) (Value, error) {
+		left, err := arguments[0].Float32()
+		if err != nil {
+			return VoidValue(), err
+		}
+		right, err := arguments[1].Float32()
+		if err != nil {
+			return VoidValue(), err
+		}
+		return FloatValue(float32(operation(float64(left), float64(right)))), nil
+	}
+}
+
+// parseRadix is the radix half of the boxed parses: the text, the base beside
+// it, and the width the answer has to fit. A base outside what Character
+// publishes is the caller's mistake and is refused the way an unparsable
+// string is, because that is the exception the specification names.
+func parseRadix(arguments []Value, bits int) (int64, error) {
+	text, err := parsedText(arguments)
+	if err != nil {
+		return 0, err
+	}
+	radix, err := nativeInt(arguments, 1)
+	if err != nil {
+		return 0, err
+	}
+	if radix < characterMinRadix || radix > characterMaxRadix {
+		return 0, guestException("java/lang/NumberFormatException",
+			fmt.Sprintf("radix %d is outside %d..%d", radix, characterMinRadix, characterMaxRadix))
+	}
+	value, parseErr := strconv.ParseInt(strings.TrimSpace(text), int(radix), bits)
+	if parseErr != nil {
+		return 0, guestException("java/lang/NumberFormatException", parseErr.Error())
+	}
+	return value, nil
 }
 
 func longPair(arguments []Value) (int64, int64, error) {

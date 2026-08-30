@@ -578,7 +578,16 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.gameCancel = nil
 		r.server.releaseSaveDirectory(r.saveDirectory)
 		r.saveDirectory = ""
-		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		// **A guest that ended itself inside its own start has ended.** There
+		// is no game to hand back either way, so the answer is still the one
+		// that settles the request the page is waiting on — what changes is
+		// that the page is told this was an ending. See session.ErrExited.
+		r.send(serverMessage{
+			Kind:    serverError,
+			ID:      message.ID,
+			Message: err.Error(),
+			Exited:  errors.Is(err, session.ErrExited),
+		})
 		return
 	}
 	r.game = started

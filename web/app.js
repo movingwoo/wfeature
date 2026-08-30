@@ -129,6 +129,21 @@ const reportError = error => {
   console.error(error);
 };
 
+// A game that closes itself inside its own start is not a failure. Titles of
+// this era do it on purpose: the first run installs the game and says so, and
+// the second run finds nothing left to do. The picker comes back either way —
+// what changes is that the player is told the game ended rather than shown the
+// platform's own text as a fault. The text still goes to the run log, because
+// that is where an ending is investigated.
+const reportEndingOrError = error => {
+  if (!error?.exited) {
+    reportError(error);
+    return;
+  }
+  recordEvent(`session exited during start: ${error.message}`);
+  setStatus("게임이 스스로 종료되었습니다. 다시 실행하면 이어서 볼 수 있습니다.");
+};
+
 // Restarting is a page reload rather than a teardown: the server holds one
 // session per connection and a fresh document is the cheapest way back to a
 // clean one. Saves live on the server, so nothing but unsaved progress is lost.
@@ -721,7 +736,7 @@ const initGameSelect = async () => {
         setStatus("게임을 시작하는 중입니다. 수십 초 걸릴 수 있습니다.");
         await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
       } catch (error) {
-        reportError(error);
+        reportEndingOrError(error);
         select.disabled = false;
         startButton.disabled = false;
         startButton.textContent = "실행";

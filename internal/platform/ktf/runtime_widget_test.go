@@ -3,8 +3,10 @@ package ktf
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
 // newWidget makes the kind of receiver an lwc constructor is handed: a bound
@@ -459,5 +461,185 @@ func TestTextBoxEditsItsTextAndClipsTheRange(t *testing.T) {
 	insert("WXYZ", 0)
 	if got := runtimeComponentText(box); got != "WXYZ" {
 		t.Fatalf("an insert past the limit gave %q, want it clipped to four", got)
+	}
+}
+
+// A container answers the children it was given. The adds and the reads used
+// to keep two different types in the same field, so every container reported
+// itself empty however many components a title had put in it — and a title
+// that walks its own form back is reading the answer to this.
+func TestContainerAnswersTheChildrenItWasGiven(t *testing.T) {
+	container := newWidget(runtimeContainerComponentClass)
+	first := newWidget(runtimeButtonComponentClass)
+	second := newWidget(runtimeTextFieldComponentClass)
+	for index, child := range []*jvm.Object{first, second} {
+		got, err := runtimeComponentAddComponent(nil, nil, []jvm.Value{
+			jvm.ReferenceValue(container), jvm.ReferenceValue(child),
+		})
+		if err != nil {
+			t.Fatalf("addComponent %d: %v", index, err)
+		}
+		position, err := got.Int32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if position != int32(index) {
+			t.Fatalf("addComponent %d answered %d", index, position)
+		}
+	}
+
+	count, err := runtimeComponentCount(nil, nil, []jvm.Value{jvm.ReferenceValue(container)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := count.Int32(); got != 2 {
+		t.Fatalf("getNumberOfComponent = %d, want 2", got)
+	}
+
+	at, err := runtimeComponentAt(nil, nil, []jvm.Value{jvm.ReferenceValue(container), jvm.IntValue(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := at.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object != second {
+		t.Fatalf("getComponent(1) = %v, want the second child", object)
+	}
+
+	index, err := runtimeComponentIndexOf(nil, nil, []jvm.Value{
+		jvm.ReferenceValue(container), jvm.ReferenceValue(first),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := index.Int32(); got != 0 {
+		t.Fatalf("getIndexOf(first) = %d, want 0", got)
+	}
+
+	if _, err := runtimeComponentRemoveComponent(nil, nil, []jvm.Value{
+		jvm.ReferenceValue(container), jvm.ReferenceValue(first),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	count, err = runtimeComponentCount(nil, nil, []jvm.Value{jvm.ReferenceValue(container)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := count.Int32(); got != 1 {
+		t.Fatalf("after removeComponent getNumberOfComponent = %d, want 1", got)
+	}
+}
+
+// A card that hands its own text field a key gets the handset's keypad. The
+// title this is for forwards the key and reads the string back on the very
+// next call, so what it draws is whatever the multi-tap automaton has typed.
+func TestATextComponentTypesTheKeysItsCardForwards(t *testing.T) {
+	// A manual clock, because multi-tap is a question about guest time: the
+	// same key twice inside the commit delay cycles the character it just
+	// produced, and a test that let the wall clock answer would be asserting
+	// how fast it ran.
+	clock := NewManualClock(time.Time{})
+	runtime := &initializationRuntime{client: &Client{clock: clock}}
+	field := newWidget(runtimeTextFieldComponentClass)
+	vm := jvm.New(nil, jvm.Options{})
+
+	press := func(key int32) int32 {
+		t.Helper()
+		result, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
+			jvm.ReferenceValue(field), jvm.IntValue(KeyPressed), jvm.IntValue(key),
+		})
+		if err != nil {
+			t.Fatalf("keyNotify(%d): %v", key, err)
+		}
+		answer, err := result.Int32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return answer
+	}
+
+	// "4" once is 'g', "4" again inside the commit delay cycles to 'h'; a
+	// different key starts its own character.
+	if got := press('4'); got != 0 {
+		t.Fatalf("a digit answered %d, want 0 — the component took it", got)
+	}
+	press('4')
+	press('6')
+	if got := runtimeComponentText(field); got != "hm" {
+		t.Fatalf("the field holds %q, want %q", got, "hm")
+	}
+
+	// Past the commit delay the same key starts a character instead of
+	// cycling one, which is what makes a doubled letter typable.
+	clock.Advance(2 * textinput.CommitDelay)
+	press('6')
+	if got := runtimeComponentText(field); got != "hmm" {
+		t.Fatalf("after the commit delay the field holds %q, want %q", got, "hmm")
+	}
+
+	// The clear key deletes, and the two keys the keypad spends on editing are
+	// the component's too.
+	press(KeyClear)
+	press(KeyClear)
+	if got := runtimeComponentText(field); got != "h" {
+		t.Fatalf("after clear the field holds %q, want %q", got, "h")
+	}
+
+	// Everything else travels on: a screen with a field on it still has to be
+	// able to leave.
+	for _, key := range []int32{KeyUp, KeyDown, KeyLeft, KeyRight, KeyFire, KeyLeftSoft} {
+		if got := press(key); got != 1 {
+			t.Fatalf("key %d answered %d, want 1 — the component did not take it", key, got)
+		}
+	}
+	// A release is not a press: multi-tap counts presses, and cycling on the
+	// release would type every character twice.
+	result, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
+		jvm.ReferenceValue(field), jvm.IntValue(KeyReleased), jvm.IntValue('4'),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer, _ := result.Int32(); answer != 1 {
+		t.Fatalf("a release answered %d, want 1", answer)
+	}
+	if got := runtimeComponentText(field); got != "h" {
+		t.Fatalf("a release typed: the field holds %q", got)
+	}
+
+	// The value is the component's, not the editor's: a title that sets the
+	// string is what the next key edits.
+	if _, err := runtimeComponentSetField("setString", componentTextField)(runtime, vm, []jvm.Value{
+		jvm.ReferenceValue(field), jvm.ReferenceValue(vm.NewString("ab")),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	press('2')
+	if got := runtimeComponentText(field); got != "aba" {
+		t.Fatalf("after setString the field holds %q, want %q", got, "aba")
+	}
+}
+
+// The limit a title sets is the limit typing obeys.
+func TestTypingStopsAtTheMaximumLength(t *testing.T) {
+	runtime := &initializationRuntime{client: &Client{}}
+	vm := jvm.New(nil, jvm.Options{})
+	field := newWidget(runtimeTextFieldComponentClass)
+	if _, err := runtimeTextComponentSetMaxLength(runtime, vm, []jvm.Value{
+		jvm.ReferenceValue(field), jvm.IntValue(2),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []int32{'2', '3', '4', '5'} {
+		if _, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
+			jvm.ReferenceValue(field), jvm.IntValue(KeyPressed), jvm.IntValue(key),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := runtimeComponentText(field); len([]rune(got)) != 2 {
+		t.Fatalf("the field holds %q, want two characters", got)
 	}
 }
