@@ -130,6 +130,31 @@ screen Graphics for the life of the runtime; each paint resets it to that
 repaint's clip, no translation, and the default font. Two guest threads drawing
 at once still race — that is the game's business, as it was on the handset.
 
+**What was not the game's business is the Host reading the same bytes.** A
+context that draws into an Image locks the Image for the length of one drawing
+call; a context that draws on the screen has no destination, so it locked
+nothing at all — and the screen is exactly what the Host copies out to present
+a frame. A real archive reports it under the race detector: a guest thread
+inside `fillRect` against the main goroutine's copy, on a binary two releases
+old as well as on this one. The buffer is allocated once and never grown, so
+the cost was a torn frame rather than anything out of bounds, which is why it
+went unseen for so long.
+
+The screen context now takes the render lock for each drawing call, the same
+seam the Image lock uses. **The paint call is what had to move**: it used to run
+with that lock held for its whole length, which would be the paint deadlocking
+against its own Graphics, so it runs without it and the copy that follows takes
+it alone. A frame is therefore taken between drawing calls rather than through
+one; it is not a snapshot of a whole paint, and for the titles this is about
+there is no such thing anyway — their painting is a thread that never stops.
+
+**Frames are not comparable run to run on this platform, so the check is the
+detector.** Two runs of the *same* binary over the fifteen local archives
+disagree on ten of them, which is more than the nine that separate the binaries
+either side of this change: guest threads interleave differently every time. A
+noise floor above the effect is what a frame diff is worth here. All fifteen run
+clean under `-race` now, where one reported a race twice out of twice before.
+
 **`XDisplay.refresh` takes the picture at once and shows it with the pass.**
 The call is the game's own frame boundary — the guest thread saying the screen
 is complete — so the surface is copied there, on that thread, which is what

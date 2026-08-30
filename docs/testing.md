@@ -127,9 +127,10 @@ habits are worth keeping:
   RAR named `.zip`, which the first round refuses too. Two titles exit on their
   first round and run their six hundred ticks on the second, which is the
   installer shape this habit is for. Everything else is identical between the
-  rounds. So the round is cheap enough to keep and finds little **once the
-  ending it first found is fixed**; the reason to run it is a change to
-  anything a save is read by.
+  rounds. **It is deliberately not part of the standing sweep** — forty minutes
+  and the machine to itself is too much to pay every round for what it now
+  finds. Run it when a change touches anything a save is read by, and after a
+  release-blocking regression that only one run could not explain.
 - **A title nobody has driven deeply is a to-do, not a limitation.** Three
   sibling titles once sat at the shallowest depth on a list of how far each had
   been taken, which looked like one shared platform gap worth
