@@ -1761,6 +1761,73 @@ fill, a shape `fill_loop.go` already knows, refused only for the guard above it
 and for an ending that compares the counter against a register holding −1
 rather than against zero. Neither is built.
 
+### The sixth is the same blit with a clip test per pixel
+
+The second-busiest loop in the same title — 95 million closings against the
+fifth shape's 149 million — is that blit with three tests in front of it:
+
+	ldr rL, [sp, #a] ; cmp rX, rL       ; blt tail   — off the left of the clip
+	ldr rH, [sp, #b] ; cmp rH, rX       ; ble tail   — off the right of it
+	ldr rR, [sp, #c] ; ldr rF, [rR, #d] ; cmp rF, #0 ; bne blend
+
+So the body has three exits, two of which rejoin it: a pixel outside the clip
+skips the store and still advances the source and the index, and the
+destination only advances where a pixel was written.
+
+**The clip is not an invariant, and that is the whole difference.** The guard in
+the shape above reads only things the loop cannot move, so proving it falls
+through once proves it for the rest of the run. Two of these three read the
+index as well, and the index is what the loop advances. What makes them
+tractable is that it advances one way and by one: the pixels the tests let
+through are a single contiguous stretch, and its bounds are arithmetic rather
+than a search. A run is at most three phases — skipped, drawn, skipped — and the
+middle one is the blit the fifth shape already stands in for.
+
+**What each path costs is not one number**, which is new. The step count has to
+be what the guest would have retired or a run that should have hit its budget
+does not, so the three phases are charged separately: a pixel off the left runs
+the first test and the tail, one off the right runs two tests and the tail, and
+a drawn pixel runs the whole body. `clipped_blit.go` carries all three.
+
+Measured on the same title and route, against the fifth shape alone:
+
+| | before | after |
+|---|---|---|
+| the route, host wall clock | 54.6s | **44.2s** (−19.0%) |
+| the heavy scene, host cost a round | 20ms | **13ms** |
+| the same scene, share of a core | 51% | **41%** |
+
+The same 2,168 ticks and 2,179 flushes, and twelve KTF and eight LGT archives
+render byte-identical first frames.
+
+### The seventh was built, measured, and is not kept
+
+The third-busiest loop in that title is a counted halfword fill behind the same
+flag — `fill_loop.go`'s own shape, refused for the guard above it and for an
+ending that compares the counter against a register the body builds −1 in
+rather than against zero. Thirty-one million closings, and a recogniser for it
+is a hundred and eighty lines.
+
+**It costs 1.9% and returns nothing**, and the reason is worth keeping because
+it is a property of the chain rather than of the shape. Instrumented over the
+route: the analyser accepted the loop 13.9 million times and the stand-in ran
+78 thousand of them. The rest declined on the flag — this fill runs mostly in
+its blending form, where the guest leaves the loop by a path the stand-in
+cannot follow.
+
+**A refusal by analysis is cached in the branch's decode entry; a decline by
+the run is not**, and must not be: caching "too few iterations this time" would
+write the loop off for the session. So a shape that is recognised and then
+declines pays every analyser in the chain, on every execution, for ever —
+where the same loop with no recogniser for it at all pays one bit test. Adding
+the seventh turned a cached refusal into 13.9 million six-analyser walks.
+
+The two blits do not have this problem because they decline rarely: over the
+same route the fifth ran 9.29 million of the 9.33 million loops it accepted,
+and the sixth 3.60 million of 5.81 million. **The number to look at before
+building a recogniser is not how often the shape appears — it is how often the
+run will decline after the analysis has already been paid for.**
+
 ## The supervisor-call boundary, and the slots that do not need it
 
 A supervisor call ends the quantum. That is what makes the boundary safe: the
