@@ -146,6 +146,18 @@ func TestRoutedLoadProbe(t *testing.T) {
 	}
 	defer session.Close()
 
+	// A title that paces itself by polling the clock rather than by arming a
+	// timer parks nothing, so there is no deadline for the manual clock to be
+	// jumped to and the guest never gets past its splash: one local title runs
+	// two ticks that way and eight hundred on the wall. Warming on the wall
+	// costs the run real time and is the only way to reach those, so it is
+	// asked for rather than assumed. That a batch Host cannot run these titles
+	// at all is the same gap the sibling platform's work clock closes.
+	wallWarmup := os.Getenv("WFEATURE_PERF_WALL") != ""
+	if wallWarmup {
+		clock.golive()
+	}
+
 	routeStarted := time.Now()
 	runner := &route.Runner{
 		Digest: session.FrameDigest,
@@ -166,7 +178,16 @@ func TestRoutedLoadProbe(t *testing.T) {
 				return progressed, tickErr
 			}
 			if deadline, pending := session.NextDeadline(); pending {
-				clock.jumpTo(deadline)
+				if wallWarmup {
+					// Against the probe's own clock, not the wall's: the
+					// deadline is an instant on the guest's 2007 timeline, and
+					// time.Until would measure it from today and never sleep.
+					if wait := deadline.Sub(clock.Now()); wait > 0 {
+						time.Sleep(wait)
+					}
+				} else {
+					clock.jumpTo(deadline)
+				}
 			}
 			return progressed, nil
 		},
@@ -196,17 +217,37 @@ func TestRoutedLoadProbe(t *testing.T) {
 	before := session.HostCosts()
 	beforeFlushes := session.Flushes()
 	session.SetSpeed(speed)
-	clock.golive()
+	if !wallWarmup {
+		clock.golive()
+	}
 
-	startGuest := session.GuestElapsed()
+	startSteps := session.Client.core.Steps()
 	started := time.Now()
 	busy := time.Duration(0)
+	// behind counts the entries that came back with no wait left, and slack
+	// totals the wait on the ones that had some.
+	//
+	// **Not the guest clock.** This platform derives guest time from the wall
+	// and the multiplier — `initialization.go`, `guestMillis` — so guest
+	// elapsed over wall times speed is 1 by construction and says nothing
+	// about whether the Host kept up. It reads as a perfect score on a Host
+	// that is missing half the frames the guest asked for, which is exactly
+	// the case worth catching. What a late Host does show is here: the guest's
+	// next deadline is already past when the entry returns, so there is no
+	// wait to sleep out and the loop goes straight round again.
+	behind := 0
+	slack := time.Duration(0)
 	for entry := 0; entry < entries; entry++ {
 		entered := time.Now()
 		_, wait, tickErr := session.TickFor(ctx, hostTickBudget)
 		busy += time.Since(entered)
 		if tickErr != nil {
 			t.Fatal(tickErr)
+		}
+		if wait <= 0 {
+			behind++
+		} else {
+			slack += wait
 		}
 		// A Host that finishes early sleeps out the rest, and skipping that
 		// would make every entry look free — the load ratio the paint-drop
@@ -216,7 +257,6 @@ func TestRoutedLoadProbe(t *testing.T) {
 		}
 	}
 	wall := time.Since(started)
-	guest := session.GuestElapsed() - startGuest
 	costs := session.HostCosts()
 
 	rounds := costs.Rounds - before.Rounds
@@ -239,7 +279,51 @@ func TestRoutedLoadProbe(t *testing.T) {
 	t.Logf("paint=%v entry=%v share=%.4f (floor %.2f)",
 		session.Client.paintCost.Round(time.Microsecond),
 		session.Client.entryCost.Round(time.Microsecond), paintShare, paintShareFloor)
-	t.Logf("fps=%.1f schedule_kept=%.0f%% guest=%v",
-		float64(painted)/wall.Seconds(),
-		100*guest.Seconds()/(wall.Seconds()*speed), guest.Round(time.Millisecond))
+	meanSlack := time.Duration(0)
+	if onTime := entries - behind; onTime > 0 {
+		meanSlack = slack / time.Duration(onTime)
+	}
+	// What share of the rate the guest asked for it actually got.
+	//
+	// A late round does not show as a missed deadline on this platform: the
+	// guest re-arms its timer from where the round ended, so the next deadline
+	// moves out with it and `behind` stays zero however long the round took.
+	// It shows here instead. The guest asked to run again after the slack; the
+	// round before it cost what it cost; so it runs every cost-plus-slack
+	// rather than every slack, and the fraction of the two is the share of its
+	// own frame rate the guest is being given.
+	kept := 0.0
+	if meanCost := busy / time.Duration(entries); meanCost+meanSlack > 0 {
+		kept = 100 * meanSlack.Seconds() / (meanCost + meanSlack).Seconds()
+	}
+	t.Logf("fps=%.1f kept=%.0f%% of the guest's own rate (cost %v against slack %v, behind %d/%d)",
+		float64(painted)/wall.Seconds(), kept,
+		(busy / time.Duration(entries)).Round(time.Millisecond),
+		meanSlack.Round(time.Millisecond), behind, entries)
+
+	// What a work clock would have to run at for this scene to keep the period
+	// it asks for.
+	//
+	// This platform charges guest time to the wall, so a frame that costs the
+	// handset more than its own frame period costs the guest nothing and the
+	// scene runs at a speed no handset ever gave it. LGT charges the work
+	// instead — `guestInstructionsPerMillisecond`, the rate of the handset it
+	// stands in for — and the rate decides which scenes that slows: a scene
+	// whose frame fits inside its own period at that rate is untouched, and one
+	// whose frame overruns is slowed in proportion. So the number to gather
+	// across the corpus, before any of this moves, is the rate each scene would
+	// need. See docs/lgt.md, "What the rate has to be for a title to get the
+	// period it asks for".
+	if rounds > 0 {
+		perRound := float64(session.Client.core.Steps()-startSteps) / float64(rounds)
+		// The slack is wall time; the period the guest asked for is what that
+		// is worth on its own clock.
+		guestPeriodMillis := meanSlack.Seconds() * 1000 * speed
+		needed := 0.0
+		if guestPeriodMillis > 0 {
+			needed = perRound / guestPeriodMillis
+		}
+		t.Logf("work=%.2fM instructions a round over a %.1fms guest period, so a work clock keeps this scene whole at %.0fk instructions/ms",
+			perRound/1e6, guestPeriodMillis, needed/1000)
+	}
 }

@@ -156,6 +156,91 @@ func (client *Client) waitDeadline(wait time.Duration) time.Time {
 	return now.Add(time.Duration(float64(wait) / client.speedOrDefault()))
 }
 
+// What a frame period costs, and why the wait a game asks for is not it.
+//
+// This platform charges guest time to the wall: a frame that costs the handset
+// more than the interval it asked for costs the guest nothing, so a title asks
+// for a frame every 10ms and gets one, at a speed no handset ever gave it. The
+// sibling platform does not have that problem because its guest clock advances
+// with the instructions the guest retires, and it is worth being precise about
+// which of the two things that buys is wanted here.
+//
+// **It is the period, not the clock.** The Host sleeps until the deadline this
+// returns, so a period that grows takes the wall with it: guest time and real
+// time stay in step, and what changes is how many frames fit in a second. A
+// title that moves its world a step per frame slows down, which is what a
+// handset did to it; a title that moves by its own clock keeps its speed and
+// loses frames, which is also what a handset did to it. Neither needs the
+// guest's own reading of the clock to be touched, and not touching it is what
+// keeps this out of the Host's bookkeeping — see the note on the five reads
+// TickFor makes.
+//
+// **A floor belongs on the period.** Ten milliseconds is this era's idiom for
+// "as soon as you can" rather than a request for a hundred frames a second,
+// and the specification agrees: a timer is accurate to the resolution the
+// system underneath supports. Every local title a person reported as too fast
+// at 1x asks for 10ms; every title they reported as fine asks for 25ms or
+// more, so the floor has to land between the two and the sibling platform's
+// one frame of a sixty hertz display does. It is not a claim about a handset.
+//
+// **The work is the other bound and the honest one.** A frame that retires
+// more instructions than the modelled handset could run in the period it asked
+// for took longer than that period, and this is where it is charged for it.
+const (
+	// minGuestFramePeriod is the floor. See above for why it is not a handset
+	// measurement.
+	minGuestFramePeriod = 16667 * time.Microsecond
+)
+
+// guestInstructionsPerMillisecond is the rate the work bound runs at — the
+// speed of the handset this platform stands in for. It decides which scenes
+// the charge above slows: one whose frame fits inside its own period at this
+// rate is untouched, and one that overruns is slowed in proportion.
+//
+// It is a variable rather than a constant so that the measurement which picked
+// it can be repeated. Nothing in the running emulator writes it.
+var guestInstructionsPerMillisecond uint64 = 200_000
+
+// framePeriodDeadline is waitDeadline for the wait that is a frame period: a
+// timer's interval, or the sleep a frame loop takes in its own paint. It is a
+// separate entry point because the two are not the same request — a game that
+// sleeps eight milliseconds mid-frame asked to sleep, not to be shown, and
+// flooring that would change what it means.
+func (client *Client) framePeriodDeadline(wait time.Duration) time.Time {
+	return client.waitDeadline(client.chargedFramePeriod(wait))
+}
+
+// chargedFramePeriod raises a frame period to the floor, and then to whatever
+// the frame's own work cost on the modelled handset.
+func (client *Client) chargedFramePeriod(wait time.Duration) time.Duration {
+	if client == nil {
+		return wait
+	}
+	if wait < minGuestFramePeriod {
+		wait = minGuestFramePeriod
+	}
+	if work := client.workSinceLastPeriod(); work > wait {
+		wait = work
+	}
+	return wait
+}
+
+// workSinceLastPeriod is what the guest has retired since the last period was
+// charged, as time on the modelled handset. Reading it moves the baseline, so
+// the work between two frames is charged to one of them and not to both.
+func (client *Client) workSinceLastPeriod() time.Duration {
+	if client == nil || client.core == nil {
+		return 0
+	}
+	steps := client.core.Steps()
+	retired := steps - client.workBaseline
+	client.workBaseline = steps
+	if guestInstructionsPerMillisecond == 0 {
+		return 0
+	}
+	return time.Duration(float64(retired) / float64(guestInstructionsPerMillisecond) * float64(time.Millisecond))
+}
+
 // deferClientWait records a wait the guest declared on the client thread,
 // where there is nothing to park. The Host answers it by holding the client
 // thread's next frame work — a paint, a timer round — until the wait has
@@ -167,6 +252,10 @@ func (client *Client) deferClientWait(wait time.Duration) {
 	if client == nil || wait <= 0 {
 		return
 	}
+	// A title whose frame loop lives in its card paint declares its period
+	// here rather than on a timer, so it is the same request and takes the
+	// same charge.
+	wait = client.chargedFramePeriod(wait)
 	base := client.now()
 	if client.clientWakeAt.After(base) {
 		base = client.clientWakeAt

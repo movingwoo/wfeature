@@ -140,6 +140,9 @@ type Client struct {
 	// paint reads exactly like a title that plays. See uncaught.go.
 	uncaughtCallbacks uint64
 	uncaughtFirst     string
+	// workBaseline is the step count the next frame period is charged from.
+	// See chargedFramePeriod.
+	workBaseline uint64
 	// paintLoad is the running ratio of what an entry costs to the wait the
 	// guest asks for after it; above one the host is oversubscribed.
 	paintLoad float64
@@ -595,7 +598,7 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 				return serviced, err
 			}
 			if timer.period > 0 {
-				timer.due = client.waitDeadline(timer.period)
+				timer.due = client.framePeriodDeadline(timer.period)
 				client.runtime.pendingTimers = append(client.runtime.pendingTimers, timer)
 			}
 			serviced++
