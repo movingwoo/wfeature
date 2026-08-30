@@ -116,6 +116,80 @@ func TestTimerWaitsOutItsDelay(t *testing.T) {
 	}
 }
 
+// TestAFramePeriodRunsFromTheDeadlineItAnswers is the difference between
+// modelling a handset and charging for one twice. The period a frame is held
+// to includes what the frame's own work cost on the handset, and the Host has
+// already spent real time — more of it than the handset would — doing exactly
+// that work. Anchoring the period to the deadline the callback was due at is
+// what takes the round's own cost out of it; anchoring it to the arm would
+// hold the guest for the work twice over, which is what a person reported as
+// lag in the scenes that draw the most.
+func TestAFramePeriodRunsFromTheDeadlineItAnswers(t *testing.T) {
+	clock := NewManualClock(time.Unix(1700000000, 0))
+	client, _ := newPacedTestRuntime(t, clock, 1)
+
+	// Outside a callback there is no deadline being answered — an initial arm
+	// — and the period runs from now.
+	deadline := client.framePeriodDeadline(10 * time.Millisecond)
+	if want := clock.Now().Add(minGuestFramePeriod); !deadline.Equal(want) {
+		t.Fatalf("an initial arm is due in %v, want %v", deadline.Sub(clock.Now()), minGuestFramePeriod)
+	}
+
+	// Inside one, a round that cost the Host ten milliseconds has spent ten
+	// milliseconds of the period that follows it.
+	due := clock.Now()
+	client.servingDue = due
+	clock.Advance(10 * time.Millisecond)
+	deadline = client.framePeriodDeadline(10 * time.Millisecond)
+	if want := due.Add(minGuestFramePeriod); !deadline.Equal(want) {
+		t.Fatalf("a re-arm after a 10ms round is due in %v, want %v: the period runs from the deadline it answers",
+			deadline.Sub(clock.Now()), want.Sub(clock.Now()))
+	}
+
+	// A round that outran the whole period is already late, and holding it any
+	// longer would charge it for time the wall has taken.
+	clock.Advance(minGuestFramePeriod)
+	if deadline := client.framePeriodDeadline(10 * time.Millisecond); !deadline.Equal(clock.Now()) {
+		t.Fatalf("a re-arm after a round that outran its period is due in %v, want no wait at all",
+			deadline.Sub(clock.Now()))
+	}
+}
+
+// TestFrameWorkIsAddedToThePeriodRatherThanReplacingIt pins the other half of
+// the same model: a handset's frame is its work and then the wait it asked
+// for, so the two add. Taking the larger of them would give a frame that
+// overran its period no wait at all.
+func TestFrameWorkIsAddedToThePeriodRatherThanReplacingIt(t *testing.T) {
+	clock := NewManualClock(time.Unix(1700000000, 0))
+	client, runtime := newPacedTestRuntime(t, clock, 1)
+
+	// A rate of one instruction a millisecond so that a stub's few retired
+	// instructions are a legible amount of handset time.
+	defer func(rate uint64) { guestInstructionsPerMillisecond = rate }(guestInstructionsPerMillisecond)
+	guestInstructionsPerMillisecond = 1
+
+	baseline := client.core.Steps()
+	setTimer(t, client, runtime, 10)
+	// Past the floor as well as the delay, since a period below the floor is
+	// raised to it.
+	clock.Advance(minGuestFramePeriod + 10*time.Millisecond)
+	if _, err := client.ServiceTimers(context.Background(), 4); err != nil {
+		t.Fatalf("ServiceTimers() error = %v", err)
+	}
+	retired := client.core.Steps() - baseline
+	if retired == 0 {
+		t.Fatal("the timer callback retired nothing, so there is no work to charge")
+	}
+
+	client.workBaseline = baseline
+	asked := 20 * time.Millisecond
+	want := asked + time.Duration(retired)*time.Millisecond
+	if charged := client.chargedFramePeriod(asked); charged != want {
+		t.Fatalf("a %v period after %d instructions of work charged %v, want %v",
+			asked, retired, charged, want)
+	}
+}
+
 // TestSpeedScalesTheWaitAndTheGuestClockTogether is what makes the multiplier
 // mean "faster" rather than "out of step": the wait shrinks by the same factor
 // the guest's own clock grows by, so a game that times its animation itself

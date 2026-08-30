@@ -1840,6 +1840,108 @@ now stored per game (`docs/session.md`, "The speed belongs to the game, not to
 the page") so that a title needing a quarter speed keeps it while the title
 beside it keeps full speed.
 
+### The frame period a handset would have charged for
+
+The multiplier is a person's answer, and it is still there. What follows is the
+Host's own, added after the section above and narrower than it: not a cost
+model for the platform's drawing, only for the guest's own instructions, which
+is the part the emulator can count.
+
+A game of this era paces itself by asking for a wait, and this platform used to
+hand back exactly the wait it asked for. That is generous in a way no handset
+was: every local title reported as too fast at 1x asks for a frame every ten
+milliseconds — this era's idiom for "as soon as you can" rather than a request
+for a hundred frames a second — and every title reported as fine asks for
+twenty-five or more. The specification agrees: a timer is accurate to the
+resolution the system underneath supports, and error is expected.
+
+So a frame period — a timer's interval, not a sleep taken mid-frame, which is a
+different request — is raised twice before it becomes a deadline
+(`chargedFramePeriod`):
+
+- by **the frame's own work**, at 200,000 guest instructions a millisecond,
+  which is the handset this platform stands in for. A handset's frame is its
+  work and then its wait, so the two add;
+- then to **a floor** of 16.667ms, the sibling platform's one frame of a sixty
+  hertz display. It is not a claim about a handset — it is where the two
+  reports above have to be separated, and it is also the only thing standing in
+  for the drawing a title does through the platform rather than in its own
+  instructions, which the work bound cannot see at all.
+
+**The period runs from the deadline it answers, not from the arm.** The Host
+has already spent real time retiring those instructions — more of it than the
+handset would, on any scene where the work bound binds at all, because the
+emulator runs slower than the handset it models. Charging the work against the
+instant a callback happens to re-arm charges it twice: once on the wall it has
+already taken, and again as a wait. A heavy in-game scene of one local title
+spends 26ms of host time on a frame the handset would have spent 17.7ms on, and
+then waited another 17.7ms — 44ms a round for a frame a handset turned in 28.
+So `ServiceTimers` records the deadline each callback was due at and
+`framePeriodDeadline` measures from it, which leaves a Host faster than the
+handset sleeping out the difference and a Host slower than it sleeping not at
+all.
+
+**The anchor is the deadline and not the arm, and the difference is not a
+detail.** A title that re-arms at the top of its frame arms a whole frame after
+its previous arm, so measuring from that arm gives every deadline a head start
+on the one before it and the period converges on half of what was asked. Four
+of nine local titles doubled their round rate that way before this was written
+down — a runaway that looks exactly like a fix, which is why the number to
+check after a pacing change is every title's and not the one that was slow.
+
+Measured at 1x as rounds a second, before this against after it. The first row
+is the routed heavy scene the complaint was about; the rest are blind-warmed,
+which reaches a menu as often as a game and is why they move as little as they
+do:
+
+| | before | after |
+|---|---|---|
+| heavy in-game scene, routed | 21.9 | **35.6** |
+| title A | 24.9 | 33.8 |
+| title B | 14.7 | 19.8 |
+| title C | 9.7 | 11.0 |
+| title D | 20.9 | 21.7 |
+| titles E, F, G, H | 19.2, 9.4, 12.1, 94.5 | 19.0, 9.4, 12.1, 94.6 |
+| title I | 27.8 | **54.1** |
+
+Four of the nine do not move at all: they never arm a WIPI timer, so nothing
+here reaches them. Title I is the one to watch — its frame costs about what its
+period does, so the round's own cost was most of its wall, and the model now
+gives it the handset's rate rather than the handset's rate plus ours.
+
+A batch Host is unaffected: on a manual clock the deadline being answered is
+the instant the clock was jumped to, so the anchor is a no-op and the same
+route replays to the same 2,168 ticks and 2,179 flushes it did before.
+
+### Where a heavy scene's time actually goes
+
+The title that prompted the section above answers the question directly, and
+the answer is worth keeping because it is not the platform's: **92% of its
+guest execution in a heavy fight is its own sprite drawing.** The guest
+profiler over a minute of play, 4.17e9 instructions:
+
+| share | what the code is |
+|---|---|
+| 47.7% | the sprite blitter: a run-length source byte stream, a palette index per pixel, `ldrh` from the palette and `strh` to the frame buffer, clipped per pixel |
+| 26.7% | the RGB565 alpha blend it calls per pixel on translucent runs — the 0x1f, 0x7e0 and 0xf800 masks, `(src*a + dst*(256-a))>>8` a channel, recombined |
+| ~18% | the rest of the same family: run fills and a second entry into the blitter |
+| ~7% | everything else the title does |
+
+Which is what a person means by "the flashy skills lag": a translucent effect
+takes the second row's path, which is a call and some thirty instructions a
+pixel against the first row's dozen. The platform is barely in it — 32
+graphics-table calls and one flush a frame, against 3.5M guest instructions a
+frame.
+
+That puts the scene squarely in the case
+`docs/armcore.md` closes with: interpreter throughput, not a hook. The blitter
+is a loop over a length and so the cost model in "Recognized C runtime
+routines" would pay for it many times over — but it is the game's own routine,
+not a compiler's, and every hook here is codegen-keyed rather than game-keyed
+for the reason that keeping it that way is what makes the hooks safe. Whether
+this engine's blitter is shared across a studio's titles, and so whether a
+pattern for it would be game-keyed in name only, is not measured.
+
 `SessionOptions.Speed` (and `Session.SetSpeed`, live) scales the pace between
 0.1x and 16x. It divides every wait and multiplies the guest's own clock by the
 same factor, so a game that times its animation with `MC_knlCurrentTime` speeds

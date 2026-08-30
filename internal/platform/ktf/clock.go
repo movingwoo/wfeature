@@ -183,9 +183,28 @@ func (client *Client) waitDeadline(wait time.Duration) time.Time {
 // more, so the floor has to land between the two and the sibling platform's
 // one frame of a sixty hertz display does. It is not a claim about a handset.
 //
-// **The work is the other bound and the honest one.** A frame that retires
-// more instructions than the modelled handset could run in the period it asked
-// for took longer than that period, and this is where it is charged for it.
+// **The work is added to the period, and the period runs from the deadline it
+// is answering.** A handset's frame is its work and then its wait, so a frame
+// that retires more instructions than the modelled handset could run in a
+// millisecond is charged for the time they take on top of the period it asked
+// for. But the Host has already spent real time retiring them — more of it
+// than the handset would, on any scene where this bound binds at all, because
+// the emulator runs slower than the handset it models. Charging the work
+// against the instant the callback happens to re-arm would charge it twice:
+// once on the wall it already took, and again as a wait. So a period charged
+// inside a timer callback runs from the deadline that callback was due at, and
+// the round's own cost comes out of it. A Host that is faster than the handset
+// sleeps out the difference and the guest sees the handset's rate; a Host that
+// is slower sleeps not at all and the guest sees the best the Host can do,
+// which is what it saw before any of this existed.
+//
+// **The anchor is the deadline and not the arm**, which is the difference
+// between a period and a race. A title that re-arms at the top of its frame
+// arms a whole frame after the previous arm, so measuring from that arm gave
+// every deadline a head start on the one before it and the period converged on
+// half of what was asked — four local titles doubled their round rate before
+// this was written down. Anchoring to the deadline being served advances by
+// exactly one period per frame however the callback is arranged.
 const (
 	// minGuestFramePeriod is the floor. See above for why it is not a handset
 	// measurement.
@@ -207,20 +226,42 @@ var guestInstructionsPerMillisecond uint64 = 200_000
 // sleeps eight milliseconds mid-frame asked to sleep, not to be shown, and
 // flooring that would change what it means.
 func (client *Client) framePeriodDeadline(wait time.Duration) time.Time {
-	return client.waitDeadline(client.chargedFramePeriod(wait))
+	if client == nil {
+		return client.waitDeadline(wait)
+	}
+	now := client.now()
+	charged := client.chargedFramePeriod(wait)
+	if charged <= 0 {
+		return now
+	}
+	scaled := time.Duration(float64(charged) / client.speedOrDefault())
+	// Outside a callback there is no deadline being answered — an initial arm,
+	// a title arming a timer from its own thread — and the period runs from
+	// now, which is what the guest asked for.
+	from := client.servingDue
+	if from.IsZero() {
+		return now.Add(scaled)
+	}
+	// A round that overran its own period is already late, and holding it any
+	// longer would charge it for work the wall has taken.
+	if deadline := from.Add(scaled); deadline.After(now) {
+		return deadline
+	}
+	return now
 }
 
-// chargedFramePeriod raises a frame period to the floor, and then to whatever
-// the frame's own work cost on the modelled handset.
+// chargedFramePeriod is a frame period plus what the frame's own work cost on
+// the modelled handset, raised to the floor. What the Host has already spent
+// on that work is not subtracted here: framePeriodDeadline takes it off the
+// deadline instead, which is the same subtraction and keeps this reading as
+// what the handset would have charged.
 func (client *Client) chargedFramePeriod(wait time.Duration) time.Duration {
 	if client == nil {
 		return wait
 	}
+	wait += client.workSinceLastPeriod()
 	if wait < minGuestFramePeriod {
 		wait = minGuestFramePeriod
-	}
-	if work := client.workSinceLastPeriod(); work > wait {
-		wait = work
 	}
 	return wait
 }

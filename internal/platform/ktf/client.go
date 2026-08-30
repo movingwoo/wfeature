@@ -140,9 +140,12 @@ type Client struct {
 	// paint reads exactly like a title that plays. See uncaught.go.
 	uncaughtCallbacks uint64
 	uncaughtFirst     string
-	// workBaseline is the step count the next frame period is charged from.
-	// See chargedFramePeriod.
+	// workBaseline is the step count the next frame period is charged from,
+	// and servingDue the deadline the callback now running was due at, which
+	// is what a period charged inside it is measured from. See
+	// chargedFramePeriod for the first and framePeriodDeadline for the second.
 	workBaseline uint64
+	servingDue   time.Time
 	// paintLoad is the running ratio of what an entry costs to the wait the
 	// guest asks for after it; above one the host is oversubscribed.
 	paintLoad float64
@@ -598,12 +601,20 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 				return serviced, err
 			}
 			if timer.period > 0 {
+				// From the deadline this run was due at, so a repeating task
+				// keeps its own rate rather than drifting by what each run
+				// cost. See framePeriodDeadline.
+				client.servingDue = timer.due
 				timer.due = client.framePeriodDeadline(timer.period)
+				client.servingDue = time.Time{}
 				client.runtime.pendingTimers = append(client.runtime.pendingTimers, timer)
 			}
 			serviced++
 			continue
 		}
+		// The frame period this callback arms for its next frame runs from the
+		// deadline this one was due at, wherever in the callback it is armed.
+		client.servingDue = timer.due
 		run, err := client.core.Call(
 			ctx,
 			client.thread,
@@ -612,6 +623,7 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 			[]uint32{timer.pointer, timer.param},
 			client.runtime.handleSupervisorCall,
 		)
+		client.servingDue = time.Time{}
 		if err != nil {
 			// A fault inside a timer callback gets the same evidence a fault
 			// inside an AOT call gets. The address a fault names is never the
