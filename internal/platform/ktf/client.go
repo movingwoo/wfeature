@@ -142,7 +142,15 @@ type Client struct {
 	uncaughtFirst     string
 	// paintLoad is the running ratio of what an entry costs to the wait the
 	// guest asks for after it; above one the host is oversubscribed.
-	paintLoad        float64
+	paintLoad float64
+	// paintCost is what one card paint runs to, and entryCost what one entry
+	// does. Their ratio is the other half of the drop decision: paintLoad says
+	// the host is over its schedule, and these say whether the paint is what
+	// it is over on. Both are running averages, and paintCost is only moved by
+	// a paint that actually ran, so dropping paints cannot walk its own input
+	// down and oscillate.
+	paintCost        time.Duration
+	entryCost        time.Duration
 	serviceSteps     uint64
 	serviceWait      time.Duration
 	serviceRemaining uint64

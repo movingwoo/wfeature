@@ -348,3 +348,36 @@ func TestAnEmptyRoundPaintsEvenWhenTheHostIsBehind(t *testing.T) {
 		t.Fatal("a round with nothing else to run gave up its paint")
 	}
 }
+
+// TestACheapPaintIsNotWorthDropping pins the other limit. A saturated host
+// gives up the picture to buy back the logic, which only works when the
+// picture is what the round is spending its time on. A title that draws from a
+// timer into its own buffer leaves its card paint costing microseconds against
+// a round of milliseconds, and dropping that buys nothing at all — measured on
+// one, 48µs against 35ms, half the frames of an eight-second stretch dropped
+// for 0.1% of a round each.
+func TestACheapPaintIsNotWorthDropping(t *testing.T) {
+	client, _ := newTestRuntime(t)
+	clock := NewManualClock(time.Unix(0, 0))
+	client.clock = clock
+	session := &Session{Client: client}
+
+	// Saturated, with a paint recent enough that dropping one more would not
+	// read as a freeze: everything the decision used to ask.
+	client.paintLoad = 4
+	client.lastPaint = clock.Now()
+
+	// A round that is nearly all paint is a round the drop can rescue.
+	client.entryCost, client.paintCost = 35*time.Millisecond, 34*time.Millisecond
+	if !session.behindOnPaint() {
+		t.Fatal("behindOnPaint() is false where the paint is the whole round")
+	}
+
+	// The same saturation, with the time going somewhere the drop cannot reach.
+	client.paintCost = 48 * time.Microsecond
+	if session.behindOnPaint() {
+		t.Fatalf("behindOnPaint() dropped a %v paint out of a %v round, which buys back %.1f%% of it",
+			client.paintCost, client.entryCost,
+			100*client.paintCost.Seconds()/client.entryCost.Seconds())
+	}
+}

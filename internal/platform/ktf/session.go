@@ -415,8 +415,18 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	painted := false
 	if !client.skipPaint {
 		phase = client.phaseClock()
+		// This one phase is timed whether or not a report asked for phase
+		// timing, because what a paint costs is half of the decision to drop
+		// one and a decision that only worked while someone was taking a
+		// report would be the wrong decision every time a person was actually
+		// playing. It is two clock reads against the nineteen a round the
+		// guest already spends asking the time. The wall is the right clock
+		// here even when the session is on another: the question is what the
+		// host spends, not what the guest is told.
+		paintStarted := time.Now()
 		var paintErr error
 		painted, paintErr = client.ServicePaint(ctx)
+		client.notePaintCost(time.Since(paintStarted))
 		client.sincePhase(phase, &client.costs.Paint)
 		if paintErr = client.absorbUncaughtCallback("paint", paintErr); paintErr != nil {
 			client.log("KTF paint failed", "error", paintErr)
@@ -535,6 +545,25 @@ const (
 	maxPaintInterval = 100 * time.Millisecond
 	// paintLoadSmoothing weights the newest entry against the running average.
 	paintLoadSmoothing = 0.25
+	// paintShareFloor is how much of an entry the paint must be before
+	// dropping it is worth the frame.
+	//
+	// Saturation alone was not enough to ask. Dropping a paint gives back what
+	// the paint costs, and a title that draws from its card paint hands back
+	// nearly the whole round — 96% against 3% for its threads, which is the
+	// measurement this behaviour was built on. But not every title draws
+	// there. One measured here spends its rounds in a timer, drawing into its
+	// own buffer, and its card paint reads four clip values and flushes: 48µs
+	// against a 35ms round. Its rounds ran long for reasons the paint had no
+	// part in, so every drop bought back 0.1% of a round and cost a frame, and
+	// because the load never fell the next round dropped too. Half the frames
+	// of an eight-second stretch went that way and the game got no faster for
+	// any of them.
+	//
+	// A quarter sits four orders of magnitude from that title and three from
+	// the one the behaviour was built for, so it is a floor on "could this
+	// possibly help" rather than a tuned number, and it is meant to stay one.
+	paintShareFloor = 0.25
 )
 
 // noteEntryLoad records what one entry cost against the wait the guest asked
@@ -547,10 +576,23 @@ func (client *Client) noteEntryLoad(cost, wait time.Duration) {
 	}
 	load := cost.Seconds() / wait.Seconds()
 	if client.paintLoad == 0 {
-		client.paintLoad = load
+		client.paintLoad, client.entryCost = load, cost
 		return
 	}
 	client.paintLoad += paintLoadSmoothing * (load - client.paintLoad)
+	client.entryCost += time.Duration(paintLoadSmoothing * float64(cost-client.entryCost))
+}
+
+// notePaintCost records what one card paint ran to. Only a paint that actually
+// happened arrives here, which is what keeps the average steady across a
+// stretch of dropped ones — an average that fell while paints were being
+// dropped would stop the dropping, restore it, and oscillate.
+func (client *Client) notePaintCost(cost time.Duration) {
+	if client.paintCost == 0 {
+		client.paintCost = cost
+		return
+	}
+	client.paintCost += time.Duration(paintLoadSmoothing * float64(cost-client.paintCost))
 }
 
 // behindOnPaint answers whether this round should skip its paint: the host is
@@ -560,6 +602,15 @@ func (client *Client) noteEntryLoad(cost, wait time.Duration) {
 func (session *Session) behindOnPaint() bool {
 	client := session.Client
 	if client.paintLoad < paintSaturationBias {
+		return false
+	}
+	// The host is over its schedule; this asks whether the paint is what it is
+	// over on. An entry can hold more than one round, which understates the
+	// paint's share — but a saturated entry is the case that matters and that
+	// one is a single round which overran the budget, so the two agree exactly
+	// where the answer counts.
+	if client.entryCost > 0 &&
+		client.paintCost.Seconds() < paintShareFloor*client.entryCost.Seconds() {
 		return false
 	}
 	now := client.now()
