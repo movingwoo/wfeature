@@ -263,7 +263,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 				Height:    options.height(),
 			})
 			if err != nil {
-				return nil, err
+				return nil, startEndedOrFailed(err)
 			}
 			session.ktfNative = started
 			session.startedAt = time.Now()
@@ -279,7 +279,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			Height:     options.height(),
 		})
 		if err != nil {
-			return nil, err
+			return nil, startEndedOrFailed(err)
 		}
 		started.TimeHostPhases(options.TraceLimit > 0)
 		session.ktf = started
@@ -293,7 +293,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			Speed:     options.Speed,
 		})
 		if err != nil {
-			return nil, err
+			return nil, startEndedOrFailed(err)
 		}
 		session.lgt = started
 	case detect.SKT:
@@ -327,7 +327,7 @@ func Start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		session.runtime = runtime
 		if err != nil {
 			session.Close()
-			return nil, err
+			return nil, startEndedOrFailed(err)
 		}
 		if options.AudioSink != nil {
 			runtime.AttachAudioSink(options.AudioSink)
@@ -750,6 +750,30 @@ func (s *Session) guestSinceLastTick() time.Duration {
 		return time.Duration(float64(elapsed) * s.speed)
 	}
 	return elapsed
+}
+
+// startEndedOrFailed is endedOrFailed for a start rather than for a call on a
+// running game: **a guest that ends itself before its start returns has ended,
+// not failed.**
+//
+// A title whose first run installs itself does this on its second run — it
+// reads the flag it wrote, decides there is nothing left to do and asks the
+// platform to exit, inside `startApp`. The identical call one tick later is an
+// ending every layer above knows how to report; arriving here it was a start
+// failure, and a player saw the raw text of one where the game had simply
+// finished.
+//
+// There is no session to hang the reason on, because there is no game — so the
+// reason travels in the error, and ErrExited is what a Host matches on. See
+// `docs/session.md`.
+func startEndedOrFailed(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ktf.ErrGuestExited) || errors.Is(err, lgt.ErrGuestExited) {
+		return fmt.Errorf("%w: %w", ErrExited, err)
+	}
+	return err
 }
 
 // endedOrFailed sorts a guest's ending from a real failure. Both arrive as an

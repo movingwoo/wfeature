@@ -111,6 +111,16 @@ type serverMessage struct {
 	// Message carries an error's text or a human-readable answer.
 	Message string `json:"message,omitempty"`
 
+	// Exited marks an "error" that is a game ending rather than a failure.
+	//
+	// It rides on the error kind rather than getting one of its own because
+	// the page settles a request on its id, and only the error kind settles a
+	// request that produced no game — a start that ends this way has nothing
+	// to hand back and must still answer the request that asked for it. The
+	// page reads this to say "the game closed itself" instead of showing the
+	// platform's own text as a fault.
+	Exited bool `json:"exited,omitempty"`
+
 	// Profile is this server's build profile, sent once with "ready". The page
 	// shows the developer's half of its interface — the run log and the report
 	// button — only when a debug build answers, so a release is the same page

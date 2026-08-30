@@ -190,7 +190,11 @@ func integerDefinition() ClassDefinition {
 			{Name: "parseInt", Descriptor: "(Ljava/lang/String;)I", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "parseInt", Descriptor: "(Ljava/lang/String;I)I", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "valueOf", Descriptor: "(Ljava/lang/String;)Ljava/lang/Integer;", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "floatValue", Descriptor: "()F", Access: native},
+			{Name: "doubleValue", Descriptor: "()D", Access: native},
+			{Name: "valueOf", Descriptor: "(Ljava/lang/String;I)Ljava/lang/Integer;", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "toString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
+			{Name: "toString", Descriptor: "(II)Ljava/lang/String;", Access: staticNative},
 			{Name: "toHexString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
 			{Name: "toBinaryString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
 			{Name: "toOctalString", Descriptor: "(I)Ljava/lang/String;", Access: staticNative},
@@ -216,9 +220,15 @@ func longDefinition() ClassDefinition {
 			{Name: "<init>", Descriptor: "(J)V", Access: native},
 			{Name: "longValue", Descriptor: "()J", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
+			{Name: "floatValue", Descriptor: "()F", Access: native},
+			{Name: "doubleValue", Descriptor: "()D", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseLong", Descriptor: "(Ljava/lang/String;)J", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseLong", Descriptor: "(Ljava/lang/String;I)J", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 			{Name: "toString", Descriptor: "(J)Ljava/lang/String;", Access: staticNative},
+			{Name: "toString", Descriptor: "(JI)Ljava/lang/String;", Access: staticNative},
 		},
 	}
 }
@@ -239,7 +249,10 @@ func byteDefinition() ClassDefinition {
 			{Name: "byteValue", Descriptor: "()B", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseByte", Descriptor: "(Ljava/lang/String;)B", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseByte", Descriptor: "(Ljava/lang/String;I)B", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 		},
 	}
 }
@@ -265,7 +278,10 @@ func shortDefinition() ClassDefinition {
 			{Name: "shortValue", Descriptor: "()S", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
+			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseShort", Descriptor: "(Ljava/lang/String;)S", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
+			{Name: "parseShort", Descriptor: "(Ljava/lang/String;I)S", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
 		},
 	}
 }

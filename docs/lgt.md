@@ -3624,13 +3624,22 @@ and drawing into any of them takes a private copy first
 What is left is the decode, and paying for one decode of one picture is right
 whichever way the title asked for it.
 
-**A surface whose Image nothing holds is still not reclaimed.** The cache turns
-the unbounded case — the same picture decoded over and over from inside `paint`
-— into one surface, which is the shape the failure actually had; a title that
-builds a genuinely new picture every frame would still climb, and closing that
-needs the collector the other platform has (`internal/platform/ktf/collect.go`,
-and `docs/ktf.md`'s "A screen that only waits still allocates" for what it
-bought) and this one does not.
+**A surface whose Image nothing holds is still not reclaimed**, and the cache
+is what makes that survivable: it turns the unbounded case — the same picture
+decoded over and over from inside `paint` — into one surface, which is the
+shape the failure actually had.
+
+**Measured over the local Java set, nothing climbs.** Counting cache misses —
+distinct pictures, which is exactly the number of surfaces a title costs —
+across all fourteen archives at three thousand ticks: eight decode fewer than
+fifty, four decode none at all, and the largest decodes 517. That one is the
+case to watch and it is flat: six thousand ticks decode the same 517, so it
+loads its sprite set once and the cache serves every repeat after it. A title
+that built a genuinely *new* picture every frame would still climb, and closing
+that needs the collector the other platform has
+(`internal/platform/ktf/collect.go`, and `docs/ktf.md`'s "A screen that only
+waits still allocates" for what it bought) and this one does not. No local
+title is that one.
 
 ### An exception nothing catches ends the callback, not the session
 

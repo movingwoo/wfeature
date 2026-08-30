@@ -646,6 +646,37 @@ then lost the sentence:
 What the server sends was already right: `startGame` answers `err.Error()`, so
 the text existed on the page the whole time.
 
+### A start can be refused by a game that ended, not a game that broke
+
+The previous section is about a start that failed. **A start can also be
+refused by a title that simply finished**, and the two used to be one message.
+
+A title whose first run installs itself quits inside `startApp` on its *second*
+run: it reads the flag it wrote, decides there is nothing left to do, and asks
+the platform to exit before the start has returned. That is the same ending
+`Tick` reports as an ending one tick later — but arriving here there is no
+session yet, so it came back as a start failure and the player got the
+platform's own chain printed as a fault. A sweep that always begins from an
+empty save directory never reaches it: it takes two runs over one save.
+
+The ending travels in the error, because there is no session to hang it on:
+`session.startEndedOrFailed` wraps the platform's chain in `ErrExited`, the
+same sentinel a running game's ending carries.
+
+**The page settles a request on its id, and only the `error` answer settles a
+request that produced no game** — so the mark rides on that answer rather than
+getting a message kind of its own. A `serverExited` with the request's id would
+be read as a start that worked; one without it would leave the page waiting on
+a promise nothing will resolve. So `error` carries `exited: true`, the page's
+own rejection carries `.exited`, and the game picker comes back either way —
+what changes is that the player is told the game closed itself instead of being
+shown a guest address. The reason still goes to the run log, which is where an
+ending is investigated.
+
+The CLI answers the same shape: `the game exited before its first tick: …`,
+`exited` and `exit_reason` in a summary of no ticks, and exit code zero. See
+[`cli.md`](cli.md).
+
 ### A guest thread that panics is a failed game, not a dead server
 
 Guest code also runs on goroutines of its own: each platform's guest threads,

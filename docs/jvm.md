@@ -388,16 +388,37 @@ and method summaries in a fixed shape; turning those into descriptors and
 subtracting `jvm.CoreLibraryDefinitions` reports what the classes this runtime
 already publishes still do not answer. It was 153 members when this was first
 run, and reading that list is how the group above stopped being four titles'
-problem. Most of what is left is one of three kinds: the boxed numbers, which is
-arithmetic; radix forms of the parses and the `toString`s; and members that
-would be a guess rather than an implementation
+problem. What is left is now one kind: members that would be a guess rather
+than an implementation
 — `Class.forName`'s reflective neighbours, `Calendar.computeFields`,
 `Vector`'s protected `elementData`, `Hashtable.rehash`. **A member is worth
 declaring when its behavior is exactly specified and its body is a few lines,
 and worth leaving out when answering it means inventing what it answers**, which
 is the same rule the platform tables use.
 
-**`Math` is no longer in the first group.** CLDC 1.1's floating-point half —
+**The boxed numbers and the radix forms are no longer on the list, and neither
+is `java/lang/Character`.** The class was the one CLDC class this library did
+not publish at all, and **a missing class is worse than a missing method**: a
+member nothing answers stops the call that wanted it, while a class nothing
+declares stops the resolution, so a title that puts a char in a `Vector` — or
+asks whether a key it was handed is a digit — dies before it reaches anything.
+It is there now with the tests and conversions the specification names, and
+**the character tests answer over ISO Latin-1**, which is what CLDC says a
+handset provides by default: a runtime may know more of Unicode and this one
+does not pretend to, because answering `isUpperCase` for a Hangul syllable one
+way here and another on the handset is a divergence invented for no caller.
+
+Beside it are the radix halves — `parseByte`, `parseShort`, `parseLong` and
+`Integer.valueOf` with a base, `Integer.toString(int, int)` and
+`Long.toString(long, int)` — the value equalities and hashes on `Byte`,
+`Short` and `Long`, and the widening `floatValue`/`doubleValue`. **Nothing
+local reaches one of them**: a scan of every KTF archive says the whole corpus
+uses `parseInt`, `toString(int)`, `intValue`, `toHexString`, `byteValue`,
+`parseByte` and the `Integer` constructor, and nothing else. That is the reason
+to have them rather than not — the call that wants one is on a title nobody has
+run, and it would stop rather than fail.
+
+**`Math` is no longer on the list either.** CLDC 1.1's floating-point half —
 `sqrt`, `ceil`, `floor`, `sin`, `cos`, `tan`, `toDegrees`, `toRadians`, and the
 `float` and `double` overloads of `min` and `max` — is declared and implemented,
 because every one of them is a value the specification names exactly rather than

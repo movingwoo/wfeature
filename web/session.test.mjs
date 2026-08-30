@@ -224,3 +224,41 @@ test("an ending hands over the reason the server sent with it", async () => {
   assert.equal(endings.length, 2);
   assert.equal(endings[1], "");
 });
+
+// A game that closes itself inside its own start refuses the request, because
+// there is no game to hand back — and it has to say which of the two it was.
+// The picker comes back either way; only the sentence the player reads differs,
+// and a title whose first run installs itself reaches this on purpose.
+test("a start the guest ended itself is refused as an ending, not a failure", async () => {
+  const { session, socket } = await openFakeSession();
+
+  const asking = session.start("ktf/game.zip");
+  const sent = socket.sent.at(-1);
+  socket.deliver({
+    kind: "error",
+    id: sent.id,
+    exited: true,
+    message: "start KTF main class Clet: KTF guest requested exit",
+  });
+
+  await assert.rejects(asking, error => {
+    assert.equal(error.exited, true);
+    assert.match(error.message, /guest requested exit/);
+    return true;
+  });
+});
+
+// An ordinary refusal must not start looking like an ending, or a real failure
+// would be reported to the player as a game that finished.
+test("a start that failed is refused without the ending mark", async () => {
+  const { session, socket } = await openFakeSession();
+
+  const asking = session.start("ktf/game.zip");
+  const sent = socket.sent.at(-1);
+  socket.deliver({ kind: "error", id: sent.id, message: "open KTF archive: not a zip" });
+
+  await assert.rejects(asking, error => {
+    assert.equal(error.exited, false);
+    return true;
+  });
+});

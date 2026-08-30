@@ -5697,12 +5697,15 @@ a component *itself* is the case that rule was not about: the card asked, and
 the card is drawing the answer. With it, the title takes both names and goes on
 to the age and birthday screens behind them.
 
-**Nothing else in the nine has been seen waiting on drawing, on the evidence
-there is.** All nine were run six hundred ticks with no key pressed and their
-last frames read; two were driven by hand as well, and both reach their own game
-— one an in-game dialogue scene, the other the screen above. That is weaker
-evidence than a hand-driven pass over all nine, and it is what there is: the
-seven undriven ones sit where a title sits when nobody presses anything.
+**Nothing else in the nine is waiting on drawing.** All nine were driven — a
+confirm key every two hundred ticks for twenty-eight hundred, frames kept — and
+every one of them reaches its own content: a baseball match in play, an opening
+cutscene advancing, a dialogue scene, the character creation above. The
+shallowest of them still produces forty-seven distinct frames over the run and
+the deepest twenty-seven hundred, so none is sitting on a screen the toolkit
+was supposed to draw. What they ask of the toolkit while they do it is what the
+counter said before: a text field's constructor and limit, a container's add, a
+component's height.
 
 The counter also reports five *field divergences* on the text component class in
 the title above, which is the guest writing over the `imHandler` word this

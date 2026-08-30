@@ -671,3 +671,33 @@ func TestParkingASessionWithNoGameSaysThereIsNone(t *testing.T) {
 		t.Fatalf("Resume on a closed session = %v, want ErrNotRunning", err)
 	}
 }
+
+// The same ending, one moment earlier: a guest that quits inside `startApp`
+// before the start has returned. There is no session to hang the reason on,
+// so the reason travels in the error and a Host matches ErrExited on it —
+// which is what lets a page say "the game closed itself" where it used to
+// print the platform's own text as a fault.
+func TestAGuestThatEndedDuringItsStartIsAnEnding(t *testing.T) {
+	for _, ending := range []error{ktf.ErrGuestExited, lgt.ErrGuestExited} {
+		wrapped := fmt.Errorf("start KTF main class Clet: %w", ending)
+		err := startEndedOrFailed(wrapped)
+		if !errors.Is(err, ErrExited) {
+			t.Fatalf("a guest ending during start answered %v, want ErrExited", err)
+		}
+		// The platform's own chain is what says which call the guest was
+		// inside and where it left from, so it has to survive the wrapping.
+		if !errors.Is(err, ending) || !strings.Contains(err.Error(), wrapped.Error()) {
+			t.Fatalf("the ending was reported as %q, want the platform's chain", err)
+		}
+	}
+
+	// Everything else stays a failure. A start that could not read the archive
+	// is not a game that finished, and reporting it as one would hide it.
+	failure := errors.New("open KTF archive: not a zip")
+	if err := startEndedOrFailed(failure); errors.Is(err, ErrExited) || !errors.Is(err, failure) {
+		t.Fatalf("a failed start answered %v, want the failure", err)
+	}
+	if err := startEndedOrFailed(nil); err != nil {
+		t.Fatalf("a start that worked answered %v", err)
+	}
+}
