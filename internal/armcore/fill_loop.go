@@ -155,13 +155,17 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 	loop := memory.analyseStoreLoop(head, branchPC)
 	if loop == nil {
 		// The other shapes worth standing in for, each in a file of its own:
-		// a blit through a lookup table, a guarded byte blend, a modulate of
-		// two packed streams.
+		// a blit through a lookup table, a guarded byte blend, the same blit
+		// with its destination in a frame slot, a modulate of two packed
+		// streams.
 		if blit := memory.analyseTableBlit(head, branchPC); blit != nil {
 			return memory.runTableBlit(context, blit)
 		}
 		if blend := memory.analyseByteBlend(head, branchPC); blend != nil {
 			return memory.runByteBlend(context, blend)
+		}
+		if spilled := memory.analyseSpilledBlit(head, branchPC); spilled != nil {
+			return memory.runSpilledBlit(context, spilled)
 		}
 		modulate := memory.analyseWordModulate(head, branchPC)
 		if modulate == nil {
