@@ -194,3 +194,270 @@ func TestURLFindRefusesWithTheDeclaredException(t *testing.T) {
 		t.Fatalf("threw %s, want %s", guest.Object.ClassName, runtimeSchemeExceptionClass)
 	}
 }
+
+// A text component owns the input method handler the specification declares
+// protected on it, and three local titles take it off the component rather
+// than asking for one. A component whose field is null hands the title
+// nothing to register its listener on, so what is pinned is that every
+// constructor in the family leaves one there.
+func TestEveryTextComponentIsBuiltWithAnInputHandler(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	for _, probe := range []struct {
+		name        string
+		class       string
+		build       runtimeJavaImplementation
+		arguments   []jvm.Value
+		constraint  int32
+		hasArgument bool
+	}{
+		{name: "TextComponent", class: runtimeTextComponentClass, build: runtimeTextComponentConstructor},
+		{
+			name: "TextFieldComponent", class: runtimeTextFieldComponentClass,
+			build:     runtimeTextComponentConstructorWithText,
+			arguments: []jvm.Value{jvm.ReferenceValue(client.JVM().NewString("hi")), jvm.IntValue(4)},
+			// The field's constraint is the handler's mode: a title that asks
+			// for digits has to get a handler that was built for digits.
+			constraint: 4, hasArgument: true,
+		},
+		{
+			name: "GTextField", class: runtimeGTextFieldClass,
+			build:     runtimeGTextFieldConstructor,
+			arguments: []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(client.JVM().NewString("hi")), jvm.IntValue(8)},
+		},
+	} {
+		component := newWidget(probe.class)
+		arguments := append([]jvm.Value{jvm.ReferenceValue(component)}, probe.arguments...)
+		if _, err := probe.build(runtime, client.JVM(), arguments); err != nil {
+			t.Fatalf("%s constructor: %v", probe.name, err)
+		}
+		value, ok := component.Fields[componentInputHandlerField]
+		if !ok {
+			t.Fatalf("%s was built without an input handler", probe.name)
+		}
+		handler, err := value.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if handler == nil || handler.ClassName != runtimeInputMethodHandlerClass {
+			t.Fatalf("%s input handler = %v", probe.name, handler)
+		}
+		if probe.hasArgument {
+			if got := widgetInt(t, handler, "mode:I"); got != probe.constraint {
+				t.Fatalf("%s handler mode = %d, want the component's constraint %d", probe.name, got, probe.constraint)
+			}
+		}
+		// The listener a title registers on the handler is kept, because a
+		// handler that cannot be given one has told the title its own input
+		// will never work.
+		listener := newWidget("test/Listener")
+		if _, err := runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)(
+			runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(handler), jvm.ReferenceValue(listener)}); err != nil {
+			t.Fatalf("%s setInputMethodListener: %v", probe.name, err)
+		}
+		kept, err := handler.Fields[inputMethodListenerField].Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept != listener {
+			t.Fatalf("%s handler kept %v, want the listener it was given", probe.name, kept)
+		}
+	}
+}
+
+// A button is a string and a picture, and a title that builds one reads both
+// back off it.
+func TestButtonKeepsItsStringAndItsImage(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	button := newWidget(runtimeButtonComponentClass)
+	text := client.JVM().NewString("OK")
+	image := newWidget("org/kwis/msp/lcdui/Image")
+	if _, err := runtimeButtonConstructor(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(button), jvm.ReferenceValue(text), jvm.ReferenceValue(image),
+	}); err != nil {
+		t.Fatalf("ButtonComponent constructor: %v", err)
+	}
+	answered, err := runtimeTextComponentGetString(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(button)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := answered.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := jvm.StringText(object); got != "OK" {
+		t.Fatalf("getString = %q, want the string it was built with", got)
+	}
+	answered, err = runtimeComponentField(componentImageField)(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(button)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, err = answered.Reference(); err != nil {
+		t.Fatal(err)
+	}
+	if object != image {
+		t.Fatalf("getImage = %v, want the image it was built with", object)
+	}
+}
+
+// The indexed add puts a child where it was asked for and the replacing set
+// puts one over the child that is there. What a title reads back is the order,
+// so the order is what is pinned — and a position nothing occupies is refused
+// rather than growing the container behind the caller's back.
+func TestContainerPlacesChildrenWhereItIsAsked(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	container := newWidget(runtimeContainerComponentClass)
+	first, second, third := newWidget("test/A"), newWidget("test/B"), newWidget("test/C")
+
+	for _, child := range []*jvm.Object{first, second} {
+		if _, err := runtimeComponentAddComponent(runtime, client.JVM(), []jvm.Value{
+			jvm.ReferenceValue(container), jvm.ReferenceValue(child),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runtimeComponentAddComponentAt(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(container), jvm.IntValue(1), jvm.ReferenceValue(third),
+	}); err != nil {
+		t.Fatalf("addComponent at an index: %v", err)
+	}
+	children, _ := container.Native.([]*jvm.Object)
+	if len(children) != 3 || children[0] != first || children[1] != third || children[2] != second {
+		t.Fatalf("children after the indexed add = %v", children)
+	}
+	if _, err := runtimeComponentSetComponentAt(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(container), jvm.IntValue(0), jvm.ReferenceValue(second),
+	}); err != nil {
+		t.Fatalf("setComponent: %v", err)
+	}
+	children, _ = container.Native.([]*jvm.Object)
+	if len(children) != 3 || children[0] != second {
+		t.Fatalf("children after the replace = %v", children)
+	}
+	if _, err := runtimeComponentSetComponentAt(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(container), jvm.IntValue(3), jvm.ReferenceValue(first),
+	}); err == nil {
+		t.Fatal("setComponent past the end was accepted")
+	}
+}
+
+// The vendor form takes a child with the rectangle it goes in. Nothing lays a
+// container out here, so the rectangle is dropped and the child still has to
+// arrive — a form that swallowed it would leave a title walking an empty
+// screen it believes it filled.
+func TestVendorFormAddsTheChildAndDropsTheRectangle(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	form := newWidget(runtimeGFormComponentClass)
+	child := newWidget(runtimeButtonComponentClass)
+	answered, err := runtimeGFormAddComponent(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(form), jvm.ReferenceValue(child),
+		jvm.IntValue(4), jvm.IntValue(8), jvm.IntValue(60), jvm.IntValue(20),
+	})
+	if err != nil {
+		t.Fatalf("GFormComponent.addComponent: %v", err)
+	}
+	if index, err := answered.Int32(); err != nil || index != 0 {
+		t.Fatalf("addComponent answered %v (err %v), want the child's index", answered, err)
+	}
+	children, _ := form.Native.([]*jvm.Object)
+	if len(children) != 1 || children[0] != child {
+		t.Fatalf("form children = %v", children)
+	}
+}
+
+// The one vendor class outside the toolkit answers a single instance and the
+// handset's subscriber number. Two calls that ask this handset who it is must
+// not disagree, so the number is the one every other such question answers.
+func TestDeviceInformationAnswersOneInstanceAndTheHandsetNumber(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	first, err := runtimeDMInfoInstance(runtime, client.JVM(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtimeDMInfoInstance(runtime, client.JVM(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, _ := first.Reference()
+	other, _ := second.Reference()
+	if one == nil || one != other {
+		t.Fatalf("getDMInfo answered %v then %v", one, other)
+	}
+	answered, err := runtimeDMInfoHandsetNumber(runtime, client.JVM(), []jvm.Value{first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := answered.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := jvm.StringText(object); got != HandsetNumber() {
+		t.Fatalf("gethandsetMIN = %q, want the handset number %q", got, HandsetNumber())
+	}
+}
+
+// The box declares its own editing calls, and what they have to get right is
+// the range: a position past the end appends rather than failing, and a delete
+// wider than the text is clipped. The caller is the handset's own input method
+// working against a caret this platform does not move, so a range it computed
+// is not the title's mistake.
+func TestTextBoxEditsItsTextAndClipsTheRange(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	box := newWidget(runtimeTextBoxComponentClass)
+	if _, err := runtimeTextComponentConstructorWithText(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(box), jvm.ReferenceValue(client.JVM().NewString("abcd")), jvm.IntValue(0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	insert := func(text string, position int32) {
+		t.Helper()
+		units := make([]jvm.Value, 0, len(text))
+		for _, symbol := range text {
+			units = append(units, jvm.IntValue(int32(symbol)))
+		}
+		array := newIntArray(t, client, int32(len(units)))
+		array.ClassName = "[C"
+		if err := jvm.SetArrayRange(array, 0, units); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runtimeTextComponentInsert(runtime, client.JVM(), []jvm.Value{
+			jvm.ReferenceValue(box), jvm.ReferenceValue(array),
+			jvm.IntValue(0), jvm.IntValue(int32(len(units))), jvm.IntValue(position),
+		}); err != nil {
+			t.Fatalf("insert(%q at %d): %v", text, position, err)
+		}
+	}
+	insert("XY", 2)
+	if got := runtimeComponentText(box); got != "abXYcd" {
+		t.Fatalf("after inserting at 2 the text is %q", got)
+	}
+	insert("Z", 99)
+	if got := runtimeComponentText(box); got != "abXYcdZ" {
+		t.Fatalf("an insert past the end gave %q, want it appended", got)
+	}
+
+	if _, err := runtimeTextComponentDelete(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(box), jvm.IntValue(2), jvm.IntValue(2),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtimeComponentText(box); got != "abcdZ" {
+		t.Fatalf("after delete(2, 2) the text is %q", got)
+	}
+	if _, err := runtimeTextComponentDelete(runtime, client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(box), jvm.IntValue(3), jvm.IntValue(99),
+	}); err != nil {
+		t.Fatalf("a delete past the end was refused: %v", err)
+	}
+	if got := runtimeComponentText(box); got != "abc" {
+		t.Fatalf("after a clipped delete the text is %q", got)
+	}
+
+	// The limit the component was given clips an insert rather than being
+	// grown past.
+	box.Fields[componentMaxLengthField] = jvm.IntValue(4)
+	insert("WXYZ", 0)
+	if got := runtimeComponentText(box); got != "WXYZ" {
+		t.Fatalf("an insert past the limit gave %q, want it clipped to four", got)
+	}
+}

@@ -1066,6 +1066,15 @@ func (r *sessionRunner) composeReport(cause string) string {
 	if shed := r.shedTotal.Load(); shed > 0 {
 		fmt.Fprintf(&report, "messages shed to a slow connection: %d\n", shed)
 	}
+	if lgtSession := r.game.LGT(); lgtSession != nil {
+		// The same line the KTF branch below writes, for the same reason: a
+		// paint that ended in an exception nothing caught no longer ends the
+		// session, so a report that only carried `ended:` would read a title
+		// failing every frame as a title that played.
+		if uncaught, first := lgtSession.UncaughtCallbacks(); uncaught > 0 {
+			fmt.Fprintf(&report, "callbacks ended by an uncaught exception: %d, first %s\n", uncaught, first)
+		}
+	}
 	if ktfSession := r.game.KTF(); ktfSession != nil {
 		// A callback that ended in an exception nothing caught no longer ends
 		// the session, so a report that only carried `ended:` would show a

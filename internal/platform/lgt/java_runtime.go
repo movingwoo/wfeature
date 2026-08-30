@@ -123,6 +123,13 @@ type javaRuntime struct {
 	// one and is bound to nothing. See java_file.go.
 	sinkFiles   map[uint32]uint32
 	streamFiles map[uint32]uint32
+	// namedImages is the surface each resource picture was decoded into, by the
+	// name it was loaded from. See javaCreateImageNamed.
+	namedImages map[string]uint32
+	// widgets is the state behind each lwc component and input-method handler
+	// the title built: the text it holds, its limit, the mode it is in and the
+	// children it was given. See java_widget.go.
+	widgets map[uint32]*javaWidget
 	// dates is the instant each java/util/Date stands for.
 	dates          map[uint32]int64
 	databases      map[uint32]*javaDatabase
@@ -272,6 +279,14 @@ func (client *Client) preparePlatformJavaClass(name string) (*javaRuntimeClass, 
 		if laid, ok := client.javaLink.layout.classes[name]; ok {
 			class.Slots = laid.VTableSize
 			class.Instance = laid.InstanceSize
+			// A platform class whose instance fields the module asked for
+			// needs a block long enough to hold them: the module reads the
+			// word this platform numbered, and a block sized to nothing puts
+			// that read past what the arena handed out. See
+			// layoutPlatformFields.
+			if laid.InstanceWords > class.Instance {
+				class.Instance = laid.InstanceWords
+			}
 			// **A platform class's statics are storage the module reads
 			// directly.** Its class object's block has to be long enough for
 			// the run the load call numbered, or the module's own read of one

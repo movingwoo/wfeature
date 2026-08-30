@@ -759,6 +759,11 @@ func init() {
 					implementation: runtimeJletConstructor,
 				},
 				{class: runtimeJletClass, name: "getActiveJlet", descriptor: "()Lorg/kwis/msp/lcdui/Jlet;", accessFlags: 0x0009, implementation: runtimeJletGetActive},
+				// The specification has both "the Jlet running at the top"
+				// and "the Jlet running now", and a handset that runs several
+				// programs can tell them apart. This one runs a single
+				// program, so they are one object and both calls answer it.
+				{class: runtimeJletClass, name: "getCurrentJlet", descriptor: "()Lorg/kwis/msp/lcdui/Jlet;", accessFlags: 0x0009, implementation: runtimeJletGetActive},
 				{class: runtimeJletClass, name: "getEventQueue", descriptor: "()Lorg/kwis/msp/lcdui/EventQueue;", accessFlags: 0x0001, implementation: runtimeJletGetEventQueue},
 				{class: runtimeJletClass, name: "getAppProperty", descriptor: "(Ljava/lang/String;)Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeJletGetAppProperty},
 				{class: runtimeJletClass, name: "notifyDestroyed", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeJletNotifyDestroyed},
@@ -953,6 +958,13 @@ func init() {
 			methods: []runtimeJavaMethod{
 				{class: runtimeContainerComponentClass, name: "<init>", descriptor: "()V", accessFlags: 0x0004, implementation: runtimeComponentNoop},
 				{class: runtimeContainerComponentClass, name: "addComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)I", accessFlags: 0x0001, implementation: runtimeComponentAddComponent},
+				// The indexed form puts the child at a position in the stack
+				// rather than on the end. Nothing here lays a container out,
+				// so where a child sits only decides the order a title walks
+				// them in, which is what getComponent and getIndexOf answer.
+				{class: runtimeContainerComponentClass, name: "addComponent", descriptor: "(ILorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentAddComponentAt},
+				{class: runtimeContainerComponentClass, name: "setComponent", descriptor: "(ILorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentSetComponentAt},
+				{class: runtimeContainerComponentClass, name: "useFrame", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("useFrame:Z")},
 				{class: runtimeContainerComponentClass, name: "removeComponent", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentRemoveComponent},
 				{class: runtimeContainerComponentClass, name: "removeComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentRemoveComponent},
 				{class: runtimeContainerComponentClass, name: "removeAllComponents", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentRemoveAllComponents},
@@ -975,11 +987,33 @@ func init() {
 				{class: runtimeShellComponentClass, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "<init>", descriptor: "(IIII)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: runtimeShellComponentClass, name: "setWorkComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentSetWorkComponent},
+				{class: runtimeShellComponentClass, name: "getWorkComponent", descriptor: "()Lorg/kwis/msp/lwc/Component;", accessFlags: 0x0001, implementation: runtimeComponentField(componentWorkField)},
+				// A shell carries a title and a command component beside its
+				// work component. Nothing draws either, so both are kept and
+				// answered — a title that builds its screen once reads them
+				// back to find out whether it already has.
+				//
+				// **A title set as a string has no component to answer with.**
+				// The handset wraps it in a label; here there is no label to
+				// wrap it in, so the string is kept under its own name and
+				// getTitle answers the component form or null. A caller that
+				// only sets a string never asks.
+				{class: runtimeShellComponentClass, name: "setTitle", descriptor: "(Lorg/kwis/msp/lwc/Component;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("ShellComponent.setTitle", componentTitleField)},
+				{class: runtimeShellComponentClass, name: "setTitle", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("ShellComponent.setTitle", componentTitleTextField)},
+				{class: runtimeShellComponentClass, name: "getTitle", descriptor: "()Lorg/kwis/msp/lwc/Component;", accessFlags: 0x0001, implementation: runtimeComponentField(componentTitleField)},
+				{class: runtimeShellComponentClass, name: "setCommand", descriptor: "(Lorg/kwis/msp/lwc/Component;Z)V", accessFlags: 0x0001, implementation: runtimeComponentSetCommand},
+				{class: runtimeShellComponentClass, name: "getCommand", descriptor: "()Lorg/kwis/msp/lwc/Component;", accessFlags: 0x0001, implementation: runtimeComponentField(componentCommandField)},
 				{class: runtimeShellComponentClass, name: "getX", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("x:I", 0)},
 				{class: runtimeShellComponentClass, name: "getY", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("y:I", 0)},
 				{class: runtimeShellComponentClass, name: "layout", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
-				{class: runtimeShellComponentClass, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
-				{class: runtimeShellComponentClass, name: "hide", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				// A shell is the component a title puts on the screen, so
+				// show and hide are the two calls that decide whether it is
+				// there — and isShown is the question a title asks before it
+				// builds its screen again. Nothing draws the shell either way;
+				// what the flag has to be is what the title last said.
+				{class: runtimeShellComponentClass, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentShown(true)},
+				{class: runtimeShellComponentClass, name: "hide", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentShown(false)},
+				{class: runtimeShellComponentClass, name: "isShown", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeCardIntField("shown:Z", 0)},
 			},
 		},
 		// org/kwis/msp/lcdui/Image currently supports mutable off-screen creation
@@ -1010,6 +1044,14 @@ func init() {
 				// tells it to make afterwards.
 				{class: "org/kwis/msp/lcdui/Image", name: "play", descriptor: "(Lorg/kwis/msp/lcdui/ImageObserver;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "org/kwis/msp/lcdui/Image", name: "stop", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				// stopImage drops the reference an observer holds on a picture
+				// that was loaded through it, and the specification says why a
+				// title should call it: an image nothing lets go of is memory
+				// nothing reclaims. Here the JVM owns that reference and
+				// collects it, so the release has nothing to release — but a
+				// title that does the housekeeping it was told to do has to be
+				// able to make the call.
+				{class: "org/kwis/msp/lcdui/Image", name: "stopImage", descriptor: "(Lorg/kwis/msp/lcdui/ImageObserver;)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
 			},
 		},
 		// org/kwis/msp/lcdui/Graphics currently records its target; drawing
@@ -1321,6 +1363,7 @@ func init() {
 		runtimeTextComponentClass:      runtimeTextComponentClassDefinition(),
 		runtimeTextFieldComponentClass: runtimeTextFieldComponentClassDefinition(),
 		runtimeTextBoxComponentClass:   runtimeTextBoxComponentClassDefinition(),
+		runtimeButtonComponentClass:    runtimeButtonComponentClassDefinition(),
 		runtimeVibratorClass:           runtimeVibratorClassDefinition(),
 		runtimeDialogComponentClass:    runtimeDialogComponentClassDefinition(),
 		runtimeFormComponentClass:      runtimeFormComponentClassDefinition(),
@@ -1332,6 +1375,9 @@ func init() {
 		runtimeGMsgBoxClass:           runtimeGFormClassDefinition(runtimeGMsgBoxClass, runtimeGFormClass),
 		runtimeGTextFieldClass:        runtimeGTextFieldClassDefinition(),
 		runtimeGTextListenerClass:     runtimeGTextListenerClassDefinition(),
+		runtimeChoiceTextClass:        runtimeChoiceTextClassDefinition(),
+		runtimeGFormComponentClass:    runtimeGFormComponentClassDefinition(),
+		runtimeDMInfoClass:            runtimeDMInfoClassDefinition(),
 		runtimeNetworkClass:           runtimeNetworkClassDefinition(),
 		runtimeURLClass:               runtimeURLClassDefinition(),
 		runtimeDataBaseExceptionClass: runtimeExceptionClass(runtimeDataBaseExceptionClass, "java/lang/Exception"),

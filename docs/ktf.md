@@ -5485,6 +5485,157 @@ ceiling. The stepped pass failed and was correctly read as the clock standing
 still. Nobody had run the title at the speed a person plays it at, which is the
 one speed where the wait is long enough to matter and the clock is moving.
 
+### The sixteenth round: a message a title sends itself, and a save that was renamed
+
+Three of the browser sweep's titles ended on a WIPI C call this platform did not
+serve. Two of them are the same call, and it is one a title makes to itself.
+
+**Kernel slot 9 is `MC_knlGetCurProgramID` and graphics slot 36 is
+`MC_grpPostEvent`, and the two only make sense together.** Two titles by
+different publishers share a middleware routine compiled to
+`MC_grpPostEvent(MC_knlGetCurProgramID(), type, param1, param2)` — a message
+the program queues for itself, with its own identifier as the address. The
+identity of each slot settles the other's: the specification documents
+`MC_grpPostEvent`'s first argument as the application identifier of the program
+the event is for, and its no-argument neighbour in the kernel table is the call
+that answers one. The numbering agrees independently — the kernel table's three
+extra slots put `MC_knlGetCurProgramID` at 9, and the graphics table's two
+absences (`MC_grpFlushLcd` and `MC_grpCreateSubImage`, both fixed by the slots
+already identified around them) put `MC_grpPostEvent` at 36. The same pairing
+appears on the other platform under a different engine; see [`lgt.md`](lgt.md).
+
+**The identifier only has to be stable.** A handset runs many programs and hands
+each a number; this platform runs one, so what a title does with the answer is
+hand it straight back. It is derived from the archive's own identifier so that
+two archives never answer the same number, and forced away from zero because
+that is what a caller reads as "no program".
+
+**A queue with no reader is not a queue.** The event this call posts is the one
+thing in the event queue that neither the guest nor the Host was draining: a
+title driving its own `getNextEvent` loop reads its own queue, and everything
+the Host originates is dispatched to the card stack directly, so a message a
+title sent itself sat there. `Client.ServiceEvents` is the round's drain, and it
+delivers what was waiting when the round started — a handler that answers an
+event with another event is queuing for the next round, which is what a queue
+does and what keeps two of them from holding a round for ever. The event is
+delivered as the queue's notify event, which reaches the listener a Jlet
+registered; both local titles register their own card, whose `notifyEvent` is
+what the middleware is waiting for. Delivering inline instead would re-enter the
+card while it is drawing, because both of them post from inside their own
+`paint`.
+
+**Table 7's slot 7 is `MC_fsRename`, and a title's save was waiting on it.** The
+call site settles it without the numbering: three arguments, the third the
+constant 1 that every other call in this table passes for the program's own
+directory, made after the file it names has been closed. The title writes its
+installed data to a scratch name and renames it over the real one, which is how
+a save is committed atomically on a filesystem; here it means the bytes have to
+move in the live store, in the persisted store, and on the removal list the
+delete already keeps, because the save store has no delete of its own. Handles
+follow the file rather than break: they hold the store and only its name
+changed.
+
+**A leading separator is not part of the name.** The same title opens
+`/lo.dsk`, stats `lo.dsk`, and renames onto `lo.dsk` — three spellings of one
+file, which is only true because the specification says every name in this
+section is an absolute path resolved inside the area `aMode` names. The store
+behind the table is flat, so the two spellings were two files and the title
+could not find what it had just written. Every slot that takes a name now goes
+through one key, and what follows the leading separator stays part of the name:
+a title that keeps its files under a directory of its own is naming different
+files with it. Nothing in the local save tree was keyed with a leading
+separator, so no save was orphaned by the change.
+
+**What that title does next is a question of its own.** With the rename served
+it installs its 1.7 MB resource archive — a well-formed zip, written and read
+back — and then calls `MC_knlExit`, which is what a first-run installer does
+when it wants to be restarted. The second run reads the whole of that archive
+and exits again, from inside `startApp`, with nothing on the screen and no
+allocation made. That is a different question from the one this round answered,
+and it is the one to pick this title up on.
+
+### Members of four vendor tables, and one class the archive does not ship
+
+The browser sweep's largest remaining family was AOT link failures: a title
+calls a member of a class this platform publishes and the member is not there.
+Twelve titles, four groups, and the same shape in all of them — the missing
+member is real, documented, and small.
+
+**Two are the specification's own lcdui.** `Jlet.getCurrentJlet` is the
+specification's second name for the active Jlet: a handset that runs several
+programs can tell "the one on top" from "the one running now" and this platform
+cannot, so both answer the one object. `Image.stopImage(ImageObserver)` releases
+the reference an observer holds on a picture, which the JVM here owns and
+collects; a title doing the housekeeping it was told to do still has to be able
+to make the call.
+
+**Six are the lwc toolkit, and the field is the one that mattered.**
+`TextComponent.imHandler` is a protected field on the handset, and three titles
+take the input-method automaton off the component rather than asking for one —
+they register their own listener on it, which is how a title that draws its own
+text field receives characters. A field record alone does not serve that: the
+guest loads the word at the offset the record gives it, so the handler is
+published into the payload as well, and `fieldSyncs` gained the entry that keeps
+the two in step. The lookup now walks the runtime superclass chain, because a
+text field is the same word in the same place as the text component it extends
+and its own constructor is what decides that word. Beside it are
+`InputMethodHandler.setInputMethodListener`, `TextFieldComponent.setString`,
+`ButtonComponent` with the string-and-picture constructor the specification
+gives it and its action listener, and the shell's title, command and
+`isShown` — the calls a title makes when it builds its own screen out of the
+toolkit and reads back what it built.
+
+**Nothing here draws any of it, which is the same limitation the vendor toolkit
+already carried.** A component is constructed, keeps what it was given and
+answers it back; a title that lays a screen out of components gets its own
+structure back and no picture. Two of the twelve stop on that rather than on a
+missing member, which is a different piece of work and a visible one.
+
+**Two are the vendor's own `com/ktf/kfc`.** `ChoiceText` is a list of strings
+constructed from the array it offers, and `GFormComponent` is a form as a
+component — the shell the lwc classes already publish plus one call that takes a
+child with the rectangle it goes in. The rectangle is dropped for the reason
+nothing else here lays a container out.
+
+**One class the archive does not ship is not the title's own.** `wec/DMInfo`
+appears in a module's string pool as a class name and one static that answers an
+instance of it, with no class file anywhere in the archive — which is what a
+class the handset provides looks like. What the title asks the instance settles
+what it is: `gethandsetMIN`, the subscriber number. That is a number this
+platform already has one answer for, the one `MC_knlGetSysProperty` reports for
+`PHONENUMBER` and the one a certificate is sealed with, so it is the answer
+here: two calls that ask this handset who it is must not disagree. See
+[`network.md`](network.md) for where the number comes from.
+
+**The pool scan is what makes this cheap and the failures are what make it
+honest.** An AOT module stores every name and descriptor it links against
+verbatim, so a scan for a package prefix lists the demand as a set; what it does
+not do is say which class each member belongs to, so the last step is still to
+run the title and read the name in the failure. Each of these took one run per
+member, and every one of the twelve titles now runs its scripted pass without a
+link failure.
+
+### The text box's own editing calls, and two titles that were not stuck
+
+**A text box declares `setString`, `insert` and `delete` where a text field
+declares only the first.** The box is the multi-line one, and the handset's own
+input method drives it a run of characters at a time; a title that edits its own
+box drives the same calls itself, which is the half that works without a widget
+being drawn. A range past the end appends and a delete wider than the text is
+clipped rather than refused: the caller computed it against a caret this
+platform does not move.
+
+**Two titles filed as "cannot leave its splash" were first-run installers.**
+Both draw a notice — one says the game has been installed, the other that the
+program has to be closed and started again — write a flag, and end themselves.
+A run from an empty save directory sees only the notice, which is what a sweep
+that always starts empty records. The second run over the same directory goes
+to the menu, and one of the two reaches character creation, which is where its
+missing member was. **A verdict of "stuck on the first screen" is not one to
+reach before running the title twice**, and the same is true of "the game
+exited": [`lgt.md`](lgt.md) has had that written down since its first commit and
+it has been rediscovered twice.
+
 ### The older modules run under the platform, and all three of them play
 
 **Three archives of the local set carry the older relocatable module, and all

@@ -19,11 +19,23 @@ const (
 	runtimeTextComponentClass      = "org/kwis/msp/lwc/TextComponent"
 	runtimeTextFieldComponentClass = "org/kwis/msp/lwc/TextFieldComponent"
 	runtimeTextBoxComponentClass   = "org/kwis/msp/lwc/TextBoxComponent"
+	runtimeButtonComponentClass    = "org/kwis/msp/lwc/ButtonComponent"
 	runtimeEventListenerClass      = "org/kwis/msp/lwc/EventListener"
 
 	componentTextField      = "text:Ljava/lang/String;"
 	componentMaxLengthField = "maxLength:I"
+	// componentImageField is the picture a button was built with.
+	componentImageField = "image:Lorg/kwis/msp/lcdui/Image;"
+	// componentInputHandlerField is the automaton a text component owns. The
+	// specification declares it protected on TextComponent and a title reads
+	// it off the component rather than asking for it, so it is published into
+	// the guest payload as well; see textComponentFieldsSize.
+	componentInputHandlerField = "imHandler:Lorg/kwis/msp/lcdui/InputMethodHandler;"
 )
+
+// textComponentFieldsSize is how many payload bytes TextComponent's own field
+// records describe: the one imHandler reference.
+const textComponentFieldsSize = 4
 
 func runtimeTextComponentClassDefinition() runtimeJavaClass {
 	const class = runtimeTextComponentClass
@@ -31,6 +43,17 @@ func runtimeTextComponentClassDefinition() runtimeJavaClass {
 		name:        class,
 		superName:   runtimeComponentClass,
 		accessFlags: 0x0021,
+		// The specification declares imHandler protected, and three local
+		// titles read it off the component instead of asking for it — they
+		// take the handler and register their own listener on it, which is
+		// how a title that draws its own text field gets the characters. The
+		// field record alone is not enough for that: the guest loads the word
+		// at the offset the record gives it, so the handler is published into
+		// the payload too. See fieldSyncs.
+		instanceSize: textComponentFieldsSize,
+		fields: []runtimeJavaField{
+			{name: "imHandler", descriptor: "Lorg/kwis/msp/lcdui/InputMethodHandler;", accessFlags: 0x0004, offset: 0},
+		},
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeTextComponentConstructor},
 			{class: class, name: "setMaxLength", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetMaxLength},
@@ -47,8 +70,45 @@ func runtimeTextFieldComponentClassDefinition() runtimeJavaClass {
 		accessFlags: 0x0021,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0001, implementation: runtimeTextComponentConstructorWithText},
+			// setString replaces the field's text. The specification declares
+			// it on the field rather than on TextComponent, which is why it is
+			// here and not beside getString above.
+			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("TextFieldComponent.setString", componentTextField)},
 		},
 	}
+}
+
+// runtimeButtonComponentClassDefinition is the toolkit's button: "버튼은
+// 문자열과 이미지 두개로 구성됩니다" — a string and a picture, either of which
+// may be absent. Nothing here draws one, so what it does is hold the two and
+// answer them back, which is what a title that builds its own menu out of
+// buttons reads.
+func runtimeButtonComponentClassDefinition() runtimeJavaClass {
+	const class = runtimeButtonComponentClass
+	return runtimeJavaClass{
+		name:        class,
+		superName:   runtimeComponentClass,
+		accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+			{class: class, name: "<init>", descriptor: "(Ljava/lang/String;Lorg/kwis/msp/lcdui/Image;)V", accessFlags: 0x0001, implementation: runtimeButtonConstructor},
+			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("ButtonComponent.setString", componentTextField)},
+			{class: class, name: "getString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeTextComponentGetString},
+			{class: class, name: "setActionListener", descriptor: "(Lorg/kwis/msp/lwc/ActionListener;Ljava/lang/Object;)V", accessFlags: 0x0001, implementation: runtimeComponentSetActionListener},
+			{class: class, name: "setImage", descriptor: "(Lorg/kwis/msp/lcdui/Image;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("ButtonComponent.setImage", componentImageField)},
+			{class: class, name: "getImage", descriptor: "()Lorg/kwis/msp/lcdui/Image;", accessFlags: 0x0001, implementation: runtimeComponentField(componentImageField)},
+		},
+	}
+}
+
+func runtimeButtonConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ButtonComponent constructor", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentTextField] = arguments[1]
+	receiver.Fields[componentImageField] = arguments[2]
+	return jvm.VoidValue(), nil
 }
 
 func runtimeTextBoxComponentClassDefinition() runtimeJavaClass {
@@ -59,8 +119,139 @@ func runtimeTextBoxComponentClassDefinition() runtimeJavaClass {
 		accessFlags: 0x0021,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0001, implementation: runtimeTextComponentConstructorWithText},
+			// The box declares its own editing calls where the field declares
+			// only setString: a box is the multi-line one, and the handset's
+			// input method drives it a run of characters at a time. Nothing
+			// drives it here, so what they do is edit the text the component
+			// holds — which is the half a title that edits its own box uses.
+			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("TextBoxComponent.setString", componentTextField)},
+			{class: class, name: "insert", descriptor: "([CIII)V", accessFlags: 0x0001, implementation: runtimeTextComponentInsert},
+			{class: class, name: "delete", descriptor: "(II)V", accessFlags: 0x0001, implementation: runtimeTextComponentDelete},
+			{class: class, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("focused:Z")},
 		},
 	}
+}
+
+// runtimeTextComponentInsert is `insert(char[] data, int offset, int len, int
+// position)`: a run of characters put into the text at a position. A position
+// past the end appends, which is where a caret at the end of the text is.
+func runtimeTextComponentInsert(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextBoxComponent.insert", arguments, 5)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	array, err := arguments[1].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if array == nil {
+		return jvm.VoidValue(), fmt.Errorf("TextBoxComponent.insert data is null")
+	}
+	_, values, err := jvm.ArraySnapshot(array)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	offset, err := arguments[2].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	length, err := arguments[3].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if offset < 0 || length < 0 || int64(offset)+int64(length) > int64(len(values)) {
+		return jvm.VoidValue(), fmt.Errorf("TextBoxComponent.insert range [%d, %d) is out of bounds", offset, offset+length)
+	}
+	inserted := make([]rune, 0, length)
+	for _, value := range values[offset : offset+length] {
+		unit, err := value.Int32()
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		inserted = append(inserted, rune(uint16(unit)))
+	}
+	position, err := arguments[4].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	symbols := []rune(runtimeComponentText(receiver))
+	at := clampTextPosition(position, len(symbols))
+	grown := append([]rune{}, symbols[:at]...)
+	grown = append(grown, inserted...)
+	grown = append(grown, symbols[at:]...)
+	if limit := runtimeComponentMaxLength(receiver); limit > 0 && int32(len(grown)) > limit {
+		grown = grown[:limit]
+	}
+	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(string(grown)))
+	return jvm.VoidValue(), nil
+}
+
+// runtimeTextComponentDelete is `delete(int index, int len)`, in characters. A
+// range outside the text is clipped rather than refused: the caller is the
+// handset's own input method working against a caret this platform does not
+// move, so a position it computed is not the title's mistake.
+func runtimeTextComponentDelete(_ *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextBoxComponent.delete", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	index, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	length, err := arguments[2].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	symbols := []rune(runtimeComponentText(receiver))
+	at := clampTextPosition(index, len(symbols))
+	count := int(length)
+	if count < 0 {
+		count = 0
+	}
+	if at+count > len(symbols) {
+		count = len(symbols) - at
+	}
+	kept := append(append([]rune{}, symbols[:at]...), symbols[at+count:]...)
+	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(string(kept)))
+	return jvm.VoidValue(), nil
+}
+
+func clampTextPosition(position int32, length int) int {
+	if position < 0 {
+		return 0
+	}
+	if int(position) > length {
+		return length
+	}
+	return int(position)
+}
+
+// runtimeComponentText and runtimeComponentMaxLength read back what a text
+// component holds, for the calls that edit it.
+func runtimeComponentText(receiver *jvm.Object) string {
+	value, ok := receiver.Fields[componentTextField]
+	if !ok {
+		return ""
+	}
+	object, err := value.Reference()
+	if err != nil || object == nil {
+		return ""
+	}
+	text, _ := jvm.StringText(object)
+	return text
+}
+
+func runtimeComponentMaxLength(receiver *jvm.Object) int32 {
+	value, ok := receiver.Fields[componentMaxLengthField]
+	if !ok {
+		return 0
+	}
+	limit, err := value.Int32()
+	if err != nil {
+		return 0
+	}
+	return limit
 }
 
 func runtimeTextComponentConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -69,7 +260,20 @@ func runtimeTextComponentConstructor(_ *initializationRuntime, _ *jvm.VM, argume
 		return jvm.VoidValue(), err
 	}
 	receiver.Fields[componentMaxLengthField] = jvm.IntValue(0)
+	attachInputMethodHandler(receiver, jvm.IntValue(0))
 	return jvm.VoidValue(), nil
+}
+
+// attachInputMethodHandler gives a text component the automaton the
+// specification says every one of them owns. A handset builds it in the
+// component's own constructor and a title reaches it through the protected
+// field rather than constructing one, so a component without one hands the
+// title a null to register its listener on.
+func attachInputMethodHandler(receiver *jvm.Object, constraint jvm.Value) {
+	receiver.Fields[componentInputHandlerField] = jvm.ReferenceValue(&jvm.Object{
+		ClassName: runtimeInputMethodHandlerClass,
+		Fields:    map[string]jvm.Value{"mode:I": constraint},
+	})
 }
 
 // runtimeTextComponentConstructorWithText keeps the initial text and the input
@@ -81,6 +285,7 @@ func runtimeTextComponentConstructorWithText(_ *initializationRuntime, _ *jvm.VM
 	}
 	receiver.Fields[componentTextField] = arguments[1]
 	receiver.Fields["constraint:I"] = arguments[2]
+	attachInputMethodHandler(receiver, arguments[2])
 	return jvm.VoidValue(), nil
 }
 
@@ -204,7 +409,111 @@ func runtimeComponentSetWorkComponent(_ *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	receiver.Fields["workComponent:Lorg/kwis/msp/lwc/Component;"] = arguments[1]
+	receiver.Fields[componentWorkField] = arguments[1]
+	return jvm.VoidValue(), nil
+}
+
+// componentWorkField, componentTitleField, componentTitleTextField and
+// componentCommandField are the three slots a shell carries beside its
+// children: the component it works with, its title, and the command component
+// its soft keys operate.
+const (
+	componentWorkField      = "workComponent:Lorg/kwis/msp/lwc/Component;"
+	componentTitleField     = "title:Lorg/kwis/msp/lwc/Component;"
+	componentTitleTextField = "titleText:Ljava/lang/String;"
+	componentCommandField   = "command:Lorg/kwis/msp/lwc/Component;"
+	componentCommandGrabbed = "commandGrab:Z"
+)
+
+// runtimeComponentShown records whether a shell is on the screen, which is the
+// whole of what showing one does here.
+func runtimeComponentShown(shown bool) runtimeJavaImplementation {
+	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		receiver, err := runtimeComponentReceiver("ShellComponent show", arguments, 1)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		value := int32(0)
+		if shown {
+			value = 1
+		}
+		receiver.Fields["shown:Z"] = jvm.IntValue(value)
+		return jvm.VoidValue(), nil
+	}
+}
+
+// runtimeComponentSetCommand keeps the command component and whether the shell
+// was asked to grab the keys for it. Nothing grabs anything: no component here
+// is drawn, so no soft key is over one.
+func runtimeComponentSetCommand(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ShellComponent.setCommand", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentCommandField] = arguments[1]
+	receiver.Fields[componentCommandGrabbed] = arguments[2]
+	return jvm.VoidValue(), nil
+}
+
+// runtimeComponentAddComponentAt puts a child at a position in the stack. An
+// index past the end appends, which is what a container with room does with
+// one; a negative index is the caller's mistake and is refused.
+func runtimeComponentAddComponentAt(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.addComponent", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	index, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	child, err := arguments[2].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if child == nil {
+		return jvm.VoidValue(), fmt.Errorf("ContainerComponent.addComponent child is null")
+	}
+	if index < 0 {
+		return jvm.VoidValue(), fmt.Errorf("ContainerComponent.addComponent index %d is negative", index)
+	}
+	children, _ := receiver.Native.([]*jvm.Object)
+	if len(children) >= maxContainerChildren {
+		return jvm.VoidValue(), fmt.Errorf("KTF container child count exceeds %d", maxContainerChildren)
+	}
+	at := int(index)
+	if at > len(children) {
+		at = len(children)
+	}
+	children = append(children, nil)
+	copy(children[at+1:], children[at:])
+	children[at] = child
+	receiver.Native = children
+	return jvm.VoidValue(), nil
+}
+
+// runtimeComponentSetComponentAt replaces the child at a position. A position
+// nothing occupies is the caller's mistake and is refused, because the
+// alternative is a container that silently grew.
+func runtimeComponentSetComponentAt(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ContainerComponent.setComponent", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	index, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	child, err := arguments[2].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	children, _ := receiver.Native.([]*jvm.Object)
+	if index < 0 || int(index) >= len(children) {
+		return jvm.VoidValue(), fmt.Errorf("ContainerComponent.setComponent index %d is outside %d children", index, len(children))
+	}
+	children[index] = child
+	receiver.Native = children
 	return jvm.VoidValue(), nil
 }
 
@@ -317,6 +626,13 @@ func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 const (
 	componentEventListenerField = "eventListener:Lorg/kwis/msp/lwc/EventListener;"
 	componentEventDataField     = "eventData:Ljava/lang/Object;"
+	// componentActionListenerField and componentActionDataField are the same
+	// pair under the other name the toolkit uses: a button calls its action
+	// listener when the select key is released, where a component calls its
+	// event listener for everything. They are kept apart because a title sets
+	// both on the same object.
+	componentActionListenerField = "actionListener:Lorg/kwis/msp/lwc/ActionListener;"
+	componentActionDataField     = "actionData:Ljava/lang/Object;"
 )
 
 // runtimeComponentSetEventListener keeps both halves. Nothing fires them —
@@ -329,6 +645,21 @@ func runtimeComponentSetEventListener(_ *initializationRuntime, _ *jvm.VM, argum
 	}
 	receiver.Fields[componentEventListenerField] = arguments[1]
 	receiver.Fields[componentEventDataField] = arguments[2]
+	return jvm.VoidValue(), nil
+}
+
+// runtimeComponentSetActionListener keeps the pair a button is given. Nothing
+// fires it for the reason nothing fires the event listener: the specification
+// says a button calls its listener when the select key is released on it, and
+// no button here is drawn to be pressed. A title that wires one and reads it
+// back sees what it wired.
+func runtimeComponentSetActionListener(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("Component.setActionListener", arguments, 3)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentActionListenerField] = arguments[1]
+	receiver.Fields[componentActionDataField] = arguments[2]
 	return jvm.VoidValue(), nil
 }
 

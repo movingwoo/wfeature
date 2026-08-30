@@ -47,7 +47,15 @@ func (run javaRun) contains(index uint32) bool {
 
 // javaAPIClass is one platform class the module expects this runtime to have.
 type javaAPIClass struct {
-	Name           string
+	Name string
+	// Fields is the class's own instance fields. The word was skipped here for
+	// as long as nothing read one: a platform class's instance state lives on
+	// the Go side and a title reaches it through a method. One title does not —
+	// it takes the input-method handler off its text component, the way the
+	// specification's protected field lets it — and the module asks for that
+	// field's number in the same table it asks for its own. See
+	// layoutPlatformFields.
+	Fields         javaRun
 	StaticFields   javaRun
 	VirtualMethods javaRun
 	Methods        javaRun
@@ -205,6 +213,7 @@ func (client *Client) readJavaAPIClasses(base uint32, surface *javaSurface) erro
 		}
 		class := javaAPIClass{
 			Name:           name,
+			Fields:         javaRunOf(words[1]),
 			StaticFields:   javaRunOf(words[2]),
 			VirtualMethods: javaRunOf(words[3]),
 			Methods:        javaRunOf(words[4]),
@@ -215,6 +224,7 @@ func (client *Client) readJavaAPIClasses(base uint32, surface *javaSurface) erro
 			run   javaRun
 			table []javaMemberRef
 		}{
+			{"fields", class.Fields, surface.Fields},
 			{"static fields", class.StaticFields, surface.StaticFields},
 			{"virtual methods", class.VirtualMethods, surface.VirtualMethods},
 			{"methods", class.Methods, surface.Methods},

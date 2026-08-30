@@ -29,11 +29,14 @@ import (
 // grows a text overlay can give this one the same one — the reason it is not
 // wired here is that nothing draws the form the field would sit in.
 const (
-	runtimeGFormClass         = "com/ktf/kfc/GForm"
-	runtimeGMenubarFormClass  = "com/ktf/kfc/GMenubarForm"
-	runtimeGMsgBoxClass       = "com/ktf/kfc/GMsgBox"
-	runtimeGTextFieldClass    = "com/ktf/kfc/GTextField"
-	runtimeGTextListenerClass = "com/ktf/kfc/GTextListener"
+	runtimeGFormClass          = "com/ktf/kfc/GForm"
+	runtimeGMenubarFormClass   = "com/ktf/kfc/GMenubarForm"
+	runtimeGMsgBoxClass        = "com/ktf/kfc/GMsgBox"
+	runtimeGTextFieldClass     = "com/ktf/kfc/GTextField"
+	runtimeGTextListenerClass  = "com/ktf/kfc/GTextListener"
+	runtimeChoiceTextClass     = "com/ktf/kfc/ChoiceText"
+	runtimeGFormComponentClass = "com/ktf/kfc/GFormComponent"
+	runtimeDMInfoClass         = "wec/DMInfo"
 
 	// componentShownField is whether a form has been shown. `doModal` closes
 	// at once, so a form is never shown for longer than the call.
@@ -119,6 +122,78 @@ func runtimeGTextListenerClassDefinition() runtimeJavaClass {
 	}
 }
 
+// runtimeGFormComponentClassDefinition is the toolkit's form as a component: a
+// shell a title fills with widgets and hangs off its own card. It is the shell
+// the lwc classes already publish, plus the one call the vendor added — a child
+// with the rectangle it goes in, which the lwc form makes a title compute for
+// itself.
+//
+// **The rectangle is dropped.** Nothing here lays a container out or draws one,
+// so where a child was asked to go decides nothing; what a title reads back is
+// the order of its children, and that is what the shell already keeps.
+func runtimeGFormComponentClassDefinition() runtimeJavaClass {
+	const class = runtimeGFormComponentClass
+	return runtimeJavaClass{
+		name:        class,
+		superName:   runtimeShellComponentClass,
+		accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+			{class: class, name: "<init>", descriptor: "(IIII)V", accessFlags: 0x0001, implementation: runtimeGFormConstructor},
+			{class: class, name: "<init>", descriptor: "(Lorg/kwis/msp/lcdui/Display;IIII)V", accessFlags: 0x0001, implementation: runtimeGFormConstructor},
+			{class: class, name: "addComponent", descriptor: "(Lorg/kwis/msp/lwc/Component;IIII)I", accessFlags: 0x0001, implementation: runtimeGFormAddComponent},
+		},
+	}
+}
+
+// runtimeGFormAddComponent adds the child and drops the rectangle, then answers
+// the index the shell's own add would have.
+func runtimeGFormAddComponent(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 6 {
+		return jvm.VoidValue(), fmt.Errorf("GFormComponent.addComponent expected receiver, child and four bounds, got %d arguments", len(arguments))
+	}
+	return runtimeComponentAddComponent(runtime, vm, arguments[:2])
+}
+
+// runtimeChoiceTextClassDefinition is the toolkit's list-of-strings widget: a
+// component constructed from the choices it offers. A second local title puts
+// one in a form beside the lwc components, holds it in a field of its own, and
+// works it through the component calls the form already answers.
+//
+// **It holds its choices and its selection and draws neither.** Nothing here
+// puts a list in front of anyone, for the same reason the dialog above does not
+// draw: there is no toolkit surface to draw it on. What a title can do is ask
+// which entry is chosen, and the answer is the first one, which is what a list
+// nobody has moved through is showing.
+func runtimeChoiceTextClassDefinition() runtimeJavaClass {
+	const class = runtimeChoiceTextClass
+	return runtimeJavaClass{
+		name:        class,
+		superName:   runtimeComponentClass,
+		accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "<init>", descriptor: "([Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeChoiceTextConstructor},
+		},
+	}
+}
+
+// choiceTextChoicesField is the array a choice list was constructed from, and
+// choiceTextSelectedField is the entry a title is looking at.
+const (
+	choiceTextChoicesField  = "choices:[Ljava/lang/String;"
+	choiceTextSelectedField = "selected:I"
+)
+
+func runtimeChoiceTextConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("ChoiceText constructor", arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[choiceTextChoicesField] = arguments[1]
+	receiver.Fields[choiceTextSelectedField] = jvm.IntValue(0)
+	return jvm.VoidValue(), nil
+}
+
 // componentIMEModesField is the mode list a listener was given.
 const componentIMEModesField = "imeModes:[I"
 
@@ -185,6 +260,7 @@ func runtimeGTextFieldConstructor(_ *initializationRuntime, vm *jvm.VM, argument
 	}
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(text))
 	receiver.Fields[componentMaxLengthField] = jvm.IntValue(0)
+	attachInputMethodHandler(receiver, jvm.IntValue(0))
 	if len(arguments) > 3 {
 		if length, intErr := arguments[3].Int32(); intErr == nil && length > 0 {
 			receiver.Fields[componentMaxLengthField] = jvm.IntValue(length)
@@ -225,4 +301,53 @@ func runtimeGTextFieldListener(runtime *initializationRuntime, vm *jvm.VM, argum
 	receiver.Fields[componentTextListenerField] = listener
 	runtime.countDiagnostic("kfc text listener created")
 	return listener, nil
+}
+
+// runtimeDMInfoClassDefinition publishes the one vendor class outside
+// `com/ktf/kfc` a local title asks for. It is not the title's own — the archive
+// ships no class file for it and the module names it the way it names every
+// other class the handset provides — and the only member the module links
+// against is the static that answers the instance.
+//
+// **What it is for is not known and nothing here pretends to know.** The
+// instance exists so the call the title makes has something to answer with; a
+// member asked of it that is not here fails by name, which is the evidence the
+// next round would need.
+func runtimeDMInfoClassDefinition() runtimeJavaClass {
+	const class = runtimeDMInfoClass
+	return runtimeJavaClass{
+		name:        class,
+		superName:   "java/lang/Object",
+		accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+			{class: class, name: "getDMInfo", descriptor: "()Lwec/DMInfo;", accessFlags: 0x0009, implementation: runtimeDMInfoInstance},
+			// The one thing the local title asks the instance is the handset's
+			// MIN — its subscriber number. That is a number this platform
+			// already has one answer for, the one `MC_knlGetSysProperty`
+			// reports for `PHONENUMBER` and the one a certificate is sealed
+			// with, so it is the answer here too: two calls that ask the
+			// handset who it is must not disagree. See docs/network.md for
+			// where the number comes from and what it costs.
+			{class: class, name: "gethandsetMIN", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeDMInfoHandsetNumber},
+		},
+	}
+}
+
+// runtimeDMInfoInstance answers the one instance, built the first time it is
+// asked for. A title compares what it got with what it got last time.
+func runtimeDMInfoInstance(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	instance := runtime.runtimeObjects[runtimeDMInfoClass]
+	if instance == nil {
+		instance = &jvm.Object{ClassName: runtimeDMInfoClass, Fields: make(map[string]jvm.Value)}
+		runtime.runtimeObjects[runtimeDMInfoClass] = instance
+	}
+	return jvm.ReferenceValue(instance), nil
+}
+
+// runtimeDMInfoHandsetNumber answers the subscriber number, which is what a MIN
+// is. It is the same number every other question about this handset's identity
+// is answered with.
+func runtimeDMInfoHandsetNumber(_ *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.ReferenceValue(vm.NewString(HandsetNumber())), nil
 }

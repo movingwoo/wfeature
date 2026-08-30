@@ -36,4 +36,3 @@ org/kwis/msp/lcdui/Card paint (Lorg/kwis/msp/lcdui/Graphics;)V
 # every image here is, so answering that is the contract rather than a guess.
 # See the stub inventory.
 org/kwis/msp/lcdui/Image loadImage (Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;
-org/kwis/msp/lcdui/Image stopImage (Lorg/kwis/msp/lcdui/ImageObserver;)V

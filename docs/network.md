@@ -186,6 +186,17 @@ keeping: of three that looked like this in one sweep, one was waiting for a
 key, one wanted a file operation that was missing, and only the third really
 wanted a server.
 
+### A certificate is the same gate under another name
+
+One LGT title asks for a certificate rather than a login: "[인증서가 없습니다]
+최초1회만 서버로부터 인증서를 받아옵니다 (통화료10원미만)". Answering it dials,
+the dial is refused, and the title ends itself — which is the same shape as the
+titles above and the same absence behind it. The other platform has a way in
+(`internal/platform/ktf/provision.go`: a certificate sealed with a subscriber
+number, dropped into the save tree where the title reads it), and this platform
+does not. Nothing is wrong with the refusal; what is missing is a certificate
+this title would accept, and that is a file rather than a code change.
+
 ### One title does not report its own error, it parks
 
 The decision above assumes the refusal lands somewhere the title has code for.

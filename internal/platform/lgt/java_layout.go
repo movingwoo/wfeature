@@ -123,6 +123,15 @@ type javaLayoutClass struct {
 	// declares. A subclass looks through it before allocating a slot of its
 	// own, which is what makes an override share one.
 	Virtual map[string]uint32
+	// Fields is the word this class gives each instance field it declares,
+	// counted from zero inside the object's own block. It is looked through
+	// from a subclass the way Virtual is, because an instance field is
+	// inherited: a text field reading the handler its text component owns is
+	// reading the superclass's word.
+	Fields map[string]uint32
+	// InstanceWords is how many words of the object block this class and the
+	// classes above it need.
+	InstanceWords uint32
 	// Statics is the slot this class gives each static field it declares,
 	// counted from zero inside the class's own storage. **Nothing inherits a
 	// static**, so unlike Virtual this is never looked through from a
@@ -170,6 +179,7 @@ func (layout *javaLayout) class(name string) *javaLayoutClass {
 	class := &javaLayoutClass{
 		Name: name, Super: javaPlatformSuper(name),
 		Virtual: map[string]uint32{}, Statics: map[string]uint32{},
+		Fields: map[string]uint32{},
 	}
 	layout.classes[name] = class
 	return class
@@ -284,6 +294,86 @@ func (layout *javaLayout) layoutPlatformStatics(surface *javaSurface) (map[uint3
 		}
 	}
 	return answers, nil
+}
+
+// layoutPlatformFields answers the instance-field numbers of the platform's own
+// classes, and records where each one sits.
+//
+// **A platform class's instance state is on the Go side and a title reaches it
+// through a method** — that is why this table went unanswered for as long as it
+// did. One title does not: the specification declares `TextComponent.imHandler`
+// protected, so its code takes the automaton off the component directly, and
+// the module asks for that field's number here the way it asks for its own. An
+// entry nothing answers leaves the module's array holding zero, and the read
+// lands on the object's first word: the title read a null and threw its own
+// NullPointerException, in a thread whose death showed as a screen that never
+// finished loading.
+//
+// The numbers are assigned per class, above whatever the classes it extends
+// took, because a field is inherited: a text field's `imHandler` is the text
+// component's word.
+func (layout *javaLayout) layoutPlatformFields(surface *javaSurface) (map[uint32]uint32, error) {
+	answers := map[uint32]uint32{}
+	// Shallowest first, so a class's own fields are numbered above the ones it
+	// inherits rather than over them.
+	order := make([]javaAPIClass, len(surface.Classes))
+	copy(order, surface.Classes)
+	sort.SliceStable(order, func(a, b int) bool {
+		return javaPlatformDepth(order[a].Name) < javaPlatformDepth(order[b].Name)
+	})
+	for _, api := range order {
+		class := layout.class(api.Name)
+		base := layout.inheritedInstanceWords(api.Name)
+		for offset := uint32(0); offset < api.Fields.Count; offset++ {
+			index := api.Fields.Start + offset
+			if int(index) >= len(surface.Fields) {
+				return nil, fmt.Errorf("platform class %s claims field entry %d of %d",
+					api.Name, index, len(surface.Fields))
+			}
+			member := surface.Fields[index]
+			if member.Name == "" {
+				// The two entries every class's run opens with carry no name.
+				continue
+			}
+			word := base + offset
+			class.Fields[javaMemberKey(member)] = word
+			answers[index] = word
+			if word+1 > class.InstanceWords {
+				class.InstanceWords = word + 1
+			}
+		}
+		if class.InstanceWords < base {
+			class.InstanceWords = base
+		}
+	}
+	return answers, nil
+}
+
+// inheritedInstanceWords is how many object words the classes above this one
+// have already taken.
+func (layout *javaLayout) inheritedInstanceWords(name string) uint32 {
+	words := uint32(0)
+	for super := javaPlatformSuper(name); super != ""; super = javaPlatformSuper(super) {
+		if class, ok := layout.classes[super]; ok && class.InstanceWords > words {
+			words = class.InstanceWords
+		}
+	}
+	return words
+}
+
+// platformFieldWord answers the object word a platform class's instance field
+// was given, looking through what the class extends.
+func (layout *javaLayout) platformFieldWord(name, field, descriptor string) (uint32, bool) {
+	for class := name; class != ""; class = javaPlatformSuper(class) {
+		entry, ok := layout.classes[class]
+		if !ok {
+			continue
+		}
+		if word, found := entry.Fields[javaMemberKey(javaMemberRef{Name: field, Descriptor: descriptor})]; found {
+			return word, true
+		}
+	}
+	return 0, false
 }
 
 func javaPlatformDepth(name string) int {

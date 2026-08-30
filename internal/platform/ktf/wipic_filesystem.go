@@ -75,6 +75,11 @@ const (
 	// certificate it could not renew and expects the next question about it to
 	// answer "no such file".
 	wipicFileDelete = 6
+	// MC_fsRename takes two names and an access area, and is how a title that
+	// writes a save to a scratch name commits it: close the scratch file, then
+	// rename it over the real one. One local title does exactly that, and
+	// while the slot was missing its save was written and then never arrived.
+	wipicFileRename = 7
 	// MC_fsMkDir takes a name and an access area — 1 is the program's own
 	// directory, which is the only area this platform has. **Nothing here
 	// holds a directory**: a name is a key in one flat store, so making one is
@@ -111,6 +116,8 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		return runtime.wipicFileSeek(thread)
 	case wipicFileDelete:
 		return runtime.wipicFileDelete(thread)
+	case wipicFileRename:
+		return runtime.wipicFileRename(thread)
 	case wipicFileStatByName:
 		return runtime.wipicFileStatByName(thread)
 	case wipicFileNumRecords:
@@ -151,7 +158,7 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		if err != nil {
 			return 0, err
 		}
-		name, err := runtime.readCString(nameAddress, 512)
+		name, err := runtime.readFileName(nameAddress)
 		if err != nil {
 			return 0, fmt.Errorf("read KTF file name: %w", err)
 		}
@@ -190,7 +197,7 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
@@ -210,6 +217,118 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	}
 	runtime.markDatabaseRemoved(name, true)
 	runtime.storeSave("db/"+name, nil)
+	return 0, nil
+}
+
+// wipicFileKey is the name a file is stored under here, which is the name the
+// guest passed with its leading separators removed.
+//
+// The specification says every file name in this section is an absolute path
+// and that a name is resolved inside the area `aMode` names, so a program's own
+// `/save.dat` and its `save.dat` are one file on a handset — the leading
+// separator is the root of the program's own directory, not a different place.
+// The store behind this table is flat, so the two spellings would otherwise be
+// two files, and a title is free to use both: one local title creates its save
+// under a bare name, renames it, and then opens it back with a leading slash.
+// It wrote its save and could not find it afterwards.
+//
+// Only the leading separators go. What follows one is part of the name, because
+// a title that keeps its files under a directory of its own is naming different
+// files with it.
+func wipicFileKey(name string) string {
+	return strings.TrimLeft(name, "/")
+}
+
+// readFileName reads a name argument of this table and answers the key it
+// stands for. Every slot that takes a name goes through it, because two slots
+// that disagree about which file a name means are worse than either rule.
+func (runtime *initializationRuntime) readFileName(address uint32) (string, error) {
+	name, err := runtime.readCString(address, 512)
+	if err != nil {
+		return "", err
+	}
+	return wipicFileKey(name), nil
+}
+
+// wipicFileRename serves MC_fsRename(oldName, newName, aMode): "파일이름을
+// 변경한다", with the one refusal the specification spells out — a name that is
+// already taken cannot be renamed onto, which answers `M_E_EXIST`.
+//
+// A rename is a move in one flat store, so it is the same three places an open
+// looks at, in the same order: the live store, then the archive's packaged copy
+// of the old name. Handles follow the file rather than break, because they hold
+// the store itself and only its name changes; a title that renames a file it
+// still has open keeps reading the bytes it opened.
+//
+// The persisted side needs both halves. The bytes are written under the new key
+// and the old name goes on the removal list `MC_fsRemove` keeps, because the
+// save store has no delete: without that the next open of the old name would be
+// handed back the copy the rename was supposed to move away.
+func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (uint32, error) {
+	oldAddress, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	newAddress, err := thread.Register(1)
+	if err != nil {
+		return 0, err
+	}
+	oldName, err := runtime.readFileName(oldAddress)
+	if err != nil {
+		return 0, fmt.Errorf("read KTF file name: %w", err)
+	}
+	newName, err := runtime.readFileName(newAddress)
+	if err != nil {
+		return 0, fmt.Errorf("read KTF file name: %w", err)
+	}
+	if oldName == "" || newName == "" {
+		return wipicErrorGeneric, nil
+	}
+	if oldName == newName {
+		// The same file under the same name: there is nothing to move, and
+		// answering M_E_EXIST because the destination is occupied by the
+		// source would refuse a rename that has already happened.
+		runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> itself", oldName))
+		return 0, nil
+	}
+	_, taken := runtime.cFiles[newName]
+	if _, seeded := runtime.databaseSeed(newName); seeded {
+		taken = true
+	}
+	if runtime.createdDirectories()[newName] {
+		taken = true
+	}
+	if taken {
+		runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s exists", oldName, newName))
+		return wipicErrorExists, nil
+	}
+	store, live := runtime.cFiles[oldName]
+	if !live {
+		seed, exists := runtime.databaseSeed(oldName)
+		if !exists {
+			// The specification's failure list for this call has no "no such
+			// file", so the source that is not there is the catch-all
+			// M_E_ERROR rather than the M_E_NOENT the questions about a name
+			// answer with.
+			runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> missing", oldName))
+			return wipicErrorGeneric, nil
+		}
+		store = &runtimeCFile{name: oldName, data: append([]byte(nil), seed...)}
+		if packaged, ok := runtime.packagedDatabase(oldName); ok {
+			store.packaged = len(packaged)
+		}
+	}
+	delete(runtime.cFiles, oldName)
+	store.name = newName
+	if runtime.cFiles == nil {
+		runtime.cFiles = make(map[string]*runtimeCFile)
+	}
+	runtime.cFiles[newName] = store
+	runtime.markDatabaseRemoved(newName, false)
+	store.persist(runtime)
+	runtime.markDatabaseRemoved(oldName, true)
+	runtime.storeSave("db/"+oldName, nil)
+	runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s", oldName, newName))
 	return 0, nil
 }
 
@@ -275,7 +394,7 @@ func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread)
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF directory name: %w", err)
 	}
@@ -358,7 +477,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
@@ -475,7 +594,7 @@ func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}

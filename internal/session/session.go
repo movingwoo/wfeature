@@ -353,6 +353,10 @@ func (s *Session) Summary() Summary { return s.summary }
 // which is the answer a Host needs anyway.
 func (s *Session) KTF() *ktf.Session { return s.ktf }
 
+// LGT is the LGT session, or nil for anything else. A Host asks for it to read
+// what only that platform reports; see UncaughtCallbacks.
+func (s *Session) LGT() *lgt.Session { return s.lgt }
+
 // Cheat exposes the attached cheat engine. Every platform has one now. The two
 // ARM platforms give the guest a flat address space a scan can sweep; the MIDP
 // runtime has no address space at all, so it builds one over its object graph

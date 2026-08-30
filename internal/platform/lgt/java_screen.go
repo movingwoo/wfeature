@@ -298,6 +298,10 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.drawImage(Lorg/kwis/msp/lcdui/Image;III)V": {
 		Words: 5, Implementat: javaDrawImage},
 
+	// A surface copying part of itself, which is how a title scrolls without
+	// keeping a second copy of the screen.
+	"org/kwis/msp/lcdui/Graphics.copyArea(IIIIII)V": {Words: 7, Implementat: javaCopyArea},
+
 	// The font a title measures its text with. One face, one height: the same
 	// glyphs the C drawing calls render.
 	"org/kwis/msp/lcdui/Font.getDefaultFont()Lorg/kwis/msp/lcdui/Font;": {
@@ -512,10 +516,19 @@ func javaCreateBlankImage(
 // which is what the specification's own wording — the image's graphics —
 // means.
 func javaImageGraphics(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	surface, err := client.javaImageSurface(arguments[0])
+	surface, err := client.javaImageArgument(thread, arguments[0], "getGraphics")
 	if err != nil {
+		return 0, err
+	}
+	// **Asking to draw into a picture ends its sharing.** A picture loaded from
+	// a resource is immutable and two Images of one name share its pixels, but
+	// the specification's own rule is a rule about *copies* — and nothing here
+	// checks that the copy is what a title is drawing into. A title that draws
+	// into a named picture gets its own surface from here on, so a second
+	// holder of that name keeps the picture it loaded. See javaCreateImageNamed.
+	if surface, err = client.unshareNamedSurface(arguments[0], surface); err != nil {
 		return 0, err
 	}
 	runtime := client.javaRuntimeState()
@@ -710,9 +723,9 @@ func (client *Client) javaCharsText(array, offset, length uint32) (string, error
 // blit a Clet's `MC_grpDrawImage` does, so a picture's declared transparency is
 // honoured on both paths.
 func javaDrawImage(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	source, err := client.javaImageSurface(arguments[1])
+	source, err := client.javaImageArgument(thread, arguments[1], "drawImage")
 	if err != nil {
 		return 0, err
 	}
@@ -725,6 +738,32 @@ func javaDrawImage(
 		return client.drawImage(context, []int32{
 			int32(left + state.translateX), int32(top + state.translateY),
 			int32(source.width), int32(source.height), int32(source.handle), 0, 0})
+	})
+}
+
+// javaCopyArea is `copyArea(dx, dy, sx, sy, w, h)`, a rectangle copied inside
+// the surface the Graphics draws on.
+//
+// **This is not the MIDP call of the same name.** The WIPI specification gives
+// the destination first, then the source, then the size; MIDP names the source
+// first and ends with an anchor. The C call beside it in this platform takes a
+// third order again — destination, size, source — so the three cannot share an
+// argument list and the order is written out here. Reading it in either of the
+// other two makes a scrolling title copy nothing, because what it passed as the
+// size lands where the size is not.
+func javaCopyArea(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return 0, client.javaDraw(arguments[0], func(context *graphicsContext, state *javaGraphics) error {
+		// The C copy takes its arguments in its own order, and the translation
+		// applies to both corners: a title that shifted its origin means both
+		// the rectangle it reads and the one it writes.
+		client.copyArea(context, []int32{
+			int32(arguments[1]) + int32(state.translateX), int32(arguments[2]) + int32(state.translateY),
+			int32(arguments[5]), int32(arguments[6]),
+			int32(arguments[3]) + int32(state.translateX), int32(arguments[4]) + int32(state.translateY),
+		})
+		return nil
 	})
 }
 

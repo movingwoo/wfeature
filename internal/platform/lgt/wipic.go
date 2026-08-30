@@ -414,6 +414,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// reaches here with `bx lr` intact.
 		client.exited = true
 		client.exitedFrom, _ = thread.Register(14)
+		// A title that wrote a file and never closed it is ending with that
+		// write still in a buffer. See flushOpenFiles.
+		client.flushOpenFiles()
 		return client.exitError()
 
 	case slotAlloc, slotCalloc:

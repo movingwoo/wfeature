@@ -2283,6 +2283,14 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	if runErr != nil {
 		summary["tick_error"] = runErr.Error()
 	}
+	// A callback that ended in an exception nothing caught no longer ends the
+	// session here either, so the summary has to carry it: a sweep reading only
+	// the exit code and `tick_error` would count a title that fails every paint
+	// as one that plays. See lgt.Client.UncaughtCallbacks.
+	if uncaught, first := session.UncaughtCallbacks(); uncaught > 0 {
+		summary["uncaught"] = uncaught
+		summary["uncaught_first"] = first
+	}
 	if exitErr != nil {
 		summary["exited"] = true
 		summary["exit_reason"] = exitErr.Error()

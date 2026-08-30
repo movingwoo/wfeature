@@ -375,7 +375,10 @@ func (client *Client) callJavaRunnable(
 		return fmt.Errorf("%s declares no %s", class.Name, javaThreadRunMethod)
 	}
 	if _, err := client.callOn(ctx, armThread, body, []uint32{runnable}); err != nil {
-		return fmt.Errorf("run %s.%s at %#x: %w", owner, javaThreadRunMethod, body, err)
+		// The language says an exception nothing catches ends the thread, and
+		// this is the thread. See uncaught.go.
+		return client.absorbUncaughtCallback(javaThreadRunMethod,
+			fmt.Errorf("run %s.%s at %#x: %w", owner, javaThreadRunMethod, body, err))
 	}
 	return nil
 }

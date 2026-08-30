@@ -37,6 +37,7 @@ type HostCosts struct {
 	ClockReads uint64
 	Timers     phaseCost
 	Threads    phaseCost
+	Events     phaseCost
 	Paint      phaseCost
 	Cheat      phaseCost
 	Audio      phaseCost
@@ -73,6 +74,7 @@ func (costs HostCosts) String() string {
 	}{
 		{"threads", costs.Threads},
 		{"paint", costs.Paint},
+		{"events", costs.Events},
 		{"timers", costs.Timers},
 		{"collect", costs.Collect},
 		{"audio", costs.Audio},

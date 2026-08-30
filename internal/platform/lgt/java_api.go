@@ -70,6 +70,17 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// platform has none of the toolkit to keep it for, so a title that builds
 	// one goes on to whatever it does with the object.
 	"org/kwis/msp/lwc/ShellComponent.<init>(IIII)V": {Words: 5, Implementat: javaNoResult},
+	// The specification gives Image a public no-argument constructor beside its
+	// four factories, and a title uses it: it allocates the object itself and
+	// hands the empty picture to whatever fills it. There is nothing for this
+	// platform to build — an image here is its surface, and this one has none
+	// until something gives it one — so the constructor takes delivery of the
+	// object and no more. A picture that never arrives is a picture nothing can
+	// draw, and the call that tries says so by name.
+	"org/kwis/msp/lcdui/Image.<init>()V": {Words: 1, Implementat: javaNoResult},
+	// A Jlet asking to be torn down. It is the guest's own ending, which the
+	// Host already knows how to end a session on; see ErrGuestExited.
+	"org/kwis/msp/lcdui/Jlet.notifyDestroyed()V": {Words: 1, Implementat: javaNotifyDestroyed},
 	// Showing the annunciator is showing the handset's own status bar, which
 	// this platform does not draw at all — so it takes no room either, and a
 	// title that lays its card out below one gets the whole screen.
@@ -468,7 +479,9 @@ func init() {
 		14: {Called: "setPriority(I)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaThreadSetPriority}},
 	}
-	for _, table := range []map[string]javaPlatformMethod{javaGraphicsMethods, javaDatabaseMethods} {
+	for _, table := range []map[string]javaPlatformMethod{
+		javaGraphicsMethods, javaDatabaseMethods, javaWidgetMethods,
+	} {
 		for key, method := range table {
 			if _, duplicate := javaPlatformMethods[key]; duplicate {
 				panic("LGT java platform method declared twice: " + key)
