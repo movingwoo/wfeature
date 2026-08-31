@@ -64,7 +64,15 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 	memory.beginQuantum()
 	defer memory.endQuantum()
 
-	for steps := uint32(0); steps < count; steps++ {
+	// steps is hoisted because a stand-in charges for every instruction the
+	// loop it replaced would have retired, which can be tens of thousands in a
+	// quantum of a thousand. Reporting `count` on the exhausted path threw that
+	// overshoot away: the budget the Host schedules on stopped matching what
+	// the guest had done, and on a stand-in charging thirty times the quantum
+	// it moved the guest's own pacing. See armcore.md, "The charge a quantum
+	// could not hold".
+	steps := uint32(0)
+	for ; steps < count; steps++ {
 		pc := context.PC()
 		// A watch hit has to name the instruction that caused it, and only the
 		// engine knows where execution is. The compare is the whole cost while
@@ -217,5 +225,5 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 		}
 	}
 
-	return RunResult{Reason: StopCountExhausted, Steps: count}, nil
+	return RunResult{Reason: StopCountExhausted, Steps: steps}, nil
 }

@@ -240,6 +240,32 @@ type Memory struct {
 	wordModulateScratch wordModulate
 	spilledBlitScratch  spilledBlit
 	clippedBlitScratch  clippedBlit
+	// The one decline worth not deriving twice.
+	//
+	// A refusal by analysis is cached in the branch's decode entry and a
+	// decline by the run is not, because caching "too few iterations this
+	// time" would write a loop off for the session. One decline is not like
+	// that: a blit whose flag says the guest is in the *blending* form of the
+	// same loop leaves the loop through a call, one pixel at a time, and every
+	// one of those pixels closes the loop again and pays the whole recogniser
+	// chain to be told the same thing. On the title this was measured against
+	// that is 1.48 million declines in a route of 806 ticks, all of them in
+	// the scenes a person calls slow.
+	//
+	// So the flag's address is remembered with the branch it declined, and a
+	// later attempt at the same branch reads the one word instead of walking
+	// six analysers. Nothing about it can be wrong in the direction that
+	// matters: a decline only ever hands the loop to the interpreter, which is
+	// what would have run it anyway. A zero word falls through to the full
+	// chain, so a loop that goes back to its plain form is stood in for again
+	// on its next iteration.
+	declinedBranch uint32
+	declinedFlag   uint32
+	declinedValue  uint32
+	haveDeclined   bool
+	// leafScratch is where a compiled per-pixel writer keeps its values. See
+	// blended_blit.go.
+	leafScratch []uint32
 	// Write watching. watchCount, watchLow, and watchHigh are the span test an
 	// ordinary store pays for; the map and the hits are only reached once a
 	// store falls inside it. executingPC is where the engine currently is,

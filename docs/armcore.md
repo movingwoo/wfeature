@@ -1828,6 +1828,280 @@ and the sixth 3.60 million of 5.81 million. **The number to look at before
 building a recogniser is not how often the shape appears — it is how often the
 run will decline after the analysis has already been paid for.**
 
+**This one was built later, and the reasoning above is why it could be.** The
+decline was never the shape's fault: it declined because the fill spends its
+life in a blending arm nothing could follow. Once that arm could be followed
+there was no decline left to pay for, and the same loop turned out to be the
+busiest in the title — see "The ninth shape, and the loop census that found
+it".
+
+### The flag the fifth shape assumed, and the decline the sixth paid for twice
+
+The report the fifth and sixth shapes were built for came back: the scenes they
+were aimed at are no longer the slow ones, and a different kind of scene still
+is. Driving the same route through the same title, per tick of host cost:
+
+| the route's stretches | before the fifth and sixth | now |
+|---|---|---|
+| the stretch the route names as the one to measure | 63.0ms a tick (debug) | **11.3ms a tick** |
+| the stretch nobody had measured | — | **114ms a tick, 16.7M instructions** |
+
+Reading the second one found two defects in the shapes already shipped, both
+about the same word.
+
+**The fifth shape assumed its flag rather than reading it, and that is wrong.**
+Its walk proves the guard's own exit leaves the body, and the file argues from
+there that the backward branch is only reached by falling through the guard.
+That does not follow: the walk sees where the exit *goes*, not where the code
+there goes next, and the form this shape was built against sends its blending
+arm to a block that draws one pixel through a call and branches back into the
+body **after** the store. So the loop closes with the flag set, the analysis is
+of the arm that did not run, and standing in blits the rest of the row
+unblended. Measured on that title's route it is 71 stand-ins in 806 ticks: rare,
+because the flag is usually clear, and wrong every one of those times.
+`spilled_blit.go` reads the word now, the way `clipped_blit.go` always did, and
+`TestASpilledBlitWhoseGuardIsSetIsRefused` is the arrangement that catches it —
+a blending arm that rejoins the body, which no earlier test had.
+
+**The sixth shape declined correctly and paid for it once a pixel.** A refusal
+by analysis is cached in the branch's decode entry and a decline by the run is
+not, for the reason the section above gives. The flag is not that kind of
+decline: it holds for every pixel of a blended run, and each of those pixels
+closes the loop again and walks the whole chain to be told the same thing.
+Counted over that route, **1.48 million declines**, all of them inside the
+scenes a person calls slow.
+
+So the flag's address is remembered with the branch that declined on it, and a
+later attempt reads the one word instead of six analysers. Nothing about it can
+be wrong in the direction that matters — **a decline only ever hands the loop to
+the interpreter, which is what would have run it anyway** — and a zero word
+falls through to the full chain, so a loop that goes back to its plain form is
+stood in for on its next iteration.
+`TestAFlagDeclineIsForgottenWhenTheFlagClears` pins that half, which is the half
+a cached decline would get wrong. Interleaved on the reported scene, identical
+instruction counts on both arms:
+
+| | before | after |
+|---|---|---|
+| the heavy stretch, host cost a tick | 118.7ms | **114.7ms** (−3.3%) |
+
+All 34 local LGT archives and 42 of the 43 local KTF archives render
+byte-identical first frames; the forty-third opens on neither side. The route
+replays to the same 2,168 ticks and 2,179 flushes with all six captured frames
+identical.
+
+### What is left in that scene, and why no walk reached it
+
+The 3.3% is the whole of what was available without new arithmetic, and the
+remaining 96% is one structure. Per tick of the heavy stretch, from the guest
+profiler with the marks the route carries:
+
+| share of the tick's instructions | what it is |
+|---|---|
+| 16.1% | a **pixel-writer dispatcher**: sixteen modes behind a jump table, entered once per pixel |
+| 29.9% | the blend it dispatches to for the mode that scene uses — a per-channel alpha blend of two packed pixels, in both 5-5-5 and 5-6-5 |
+| 7.8% | a second blend, per-channel through two lookup tables the title holds |
+| ~10% | the blit loops themselves, around those calls |
+
+**The title draws its full-screen effects one pixel per function call, two calls
+deep.** A blended pixel costs about ninety guest instructions where a plain one
+costs six, and the count is exact: 1.43 million blended pixels over the route,
+about 70,000 in each of the heavy ticks, which is one screen.
+
+No walk reached it, and the reason is structural rather than a gap in any of
+them. A body with a `bl` in it is a body none of them can reason about, and the
+callee is where all the cost is — so the only stand-in that helps is one that
+**computes the blend itself**, in Go, having read the dispatcher, the jump
+table, the handler for the mode in force and the blend body behind it.
+
+That is the line "Two more shapes" drew and declined to cross for the run-length
+draws, and the criterion it drew it with is the one that decides this: the case
+for a recogniser is how much of a reported-slow scene it is. The run-length
+draws were 4.6%, 4.1% and 2.9%. This is 54% of the scene's instructions before
+the loops around it — the difference between a scene that keeps its frame rate
+and one that does not. The two sections after the next one are what was built
+for it.
+
+Two things about the shape were measured before any of that was built, and both
+turned out to decide the design:
+
+- **The mode is the flag the blits already read.** The word the guard tests at
+  the top of the loop is the same word the dispatcher indexes its jump table
+  with, so a stand-in knows which blend it is about to reproduce before it
+  starts, and the remembered decline above already has the address.
+- **Which mode matters is not a guess.** Counted per pixel over the route, the
+  clipped blit's blended pixels are 63.6% one mode, 36.0% another, 2.3% a third
+  and 0.2% a fourth — but weighted by the scene rather than the route, the
+  profile puts the alpha blend at 29.9% against the table blend's 7.8%. Two
+  modes would have covered the scene — which is what made the arithmetic look
+  portable enough to hand-write, and what the fold made unnecessary.
+
+### The charge a quantum could not hold
+
+Standing in for the blending form (below) made the guest draw a different frame,
+and the reason was not the pixels it wrote — those were identical — but the
+steps it charged for them.
+
+A stand-in charges for every instruction the loop it replaced would have
+retired. `Engine.Run` answered `count` on the exhausted path, so a charge larger
+than the quantum was **silently truncated to the quantum**. A fill of a few
+hundred pixels overran a thousand-step quantum by a little and nobody noticed;
+the blended blit charges a hundred and thirty-five steps a pixel and covers a
+row, which is thirty times the quantum, and thirty-one thirty-seconds of the
+charge went missing. The Host schedules on that number — `ServiceSteps`, the
+timer round, the budget window — so the guest was handed work it had already
+done the equivalent of, and by the hundred and thirty-eighth tick of a replay it
+was somewhere else entirely.
+
+The exhausted path now answers what it actually retired, overrun included.
+`TestAQuantumReportsTheChargeItOverran` pins it. Two consequences worth knowing:
+
+- **Instruction counts in this document taken before this are low**, by whatever
+  each title's stand-ins overran by. The same route that read 3,229M reads
+  **3,504M** afterwards, an 8.5% under-count that was entirely in the
+  recognisers. `ns_per_step` moves with it in the same direction.
+- The paragraph in "Two more shapes" that says to compare stand-ins by busy time
+  rather than `ns_per_step` was describing exactly this. It is fixed rather than
+  worked around, and the comparison is now honest either way.
+
+### The eighth shape: the pixel a blit draws through a call
+
+`blended_blit.go`. Both blits above are the fall-through of a mode word, and
+when it is set the guest leaves for an arm that draws one pixel **through a
+call** and branches back into the body. That arm is what a full-screen effect
+runs, and the call is where the cost is: a blended pixel is about a hundred and
+thirty-five guest instructions where a plain one is six, and a heavy tick draws
+seventy thousand of them — one screen.
+
+No walk can read a body with a `bl` in it, so the only stand-in that helps is one
+that performs what the callee performs. Two ways to do that, and the choice
+between them is the whole design:
+
+- **Reproduce the arithmetic in Go**, matched sequence by sequence the way
+  `word_modulate.go` matches its blend. Fastest possible, and one title's: the
+  writer here dispatches sixteen modes through a jump table, and each is a
+  different arithmetic in a 5-5-5 and a 5-6-5 form. Four sequences for the two
+  modes one scene uses, and a fifth title would need a fifth.
+- **Fold the call and compile what is left.** The writer is walked once per
+  stand-in with the destination halfword and the colour as its only unknowns.
+  Everything else it touches — the module's GOT, the mode, the jump table it
+  dispatches through, the alpha, the mask literals, the format flag — is a word
+  the loop cannot move, so it folds to a constant and the branches it decides
+  fold with it.
+
+The second is what was built, and the measurement that justifies it is the fold
+ratio rather than a taste for generality. **Most of a per-pixel writer is not
+arithmetic**: of the writer this was built against, 107 guest instructions
+compile to **62 operations** for one mode and 97 to **57** for another, and of
+those the great majority are the blend proper — the prologue, the dispatch and
+the format test are gone. No sequence matcher would have removed those from a
+title whose blend it did not already know.
+
+It is not a translator, and the distinction is the one "Why a translator is not
+the answer" draws: the win here is the folding, not the dispatch. What it
+compiles is one straight-line leaf reached from one loop, under the rules every
+other stand-in is held to — spans validated whole, every word treated as
+constant checked against the destination, the charge equal to what the guest
+would have retired, and anything the walk cannot prove handed back.
+
+**What the walk refuses is what makes it safe.** The writer has to leave the
+caller's registers and stack where it found them, which the walk proves by
+modelling its frame; every branch has to be decidable from what has already
+folded, so a writer with a pixel-dependent loop in it is refused rather than
+approximated; and it may write **one halfword, to the pixel it was handed, and
+nothing else** — `TestAWriterThatStoresElsewhereIsRefused` is that rule.
+
+Two things about the loop side are worth keeping:
+
+- **The arm's rejoin is read, not assumed.** It has to land where the
+  destination advances, and `isWriteBack` reads those three instructions rather
+  than trusting an offset.
+- **The iteration left to the interpreter has to be one that draws.** Leaving
+  the run's last iteration is what makes the registers a writer clobbers right
+  for free — but the last iteration of a run that ends outside the clip does not
+  call the writer, and then two of them keep whatever the stand-in left. So the
+  clipped form stops one short of the last *drawn* pixel and leaves the rest,
+  skipped pixels included, to the interpreter. Two runs of one blit differing
+  only in where the clip fell is what found it.
+
+Measured on the reported title, interleaved on the route that replays the scene,
+**identical instruction counts on both arms and every one of the 806 ticks
+byte-identical**:
+
+| | before | after |
+|---|---|---|
+| the heavy stretch, host cost a tick | 115.6ms | **94.9ms** (−17.9%) |
+| the replay as a whole | 18.29s | **17.28s** (−5.5%) |
+| guest instructions retired | 3,504,405,000 | the same, to the instruction |
+
+All 34 local LGT archives and 42 of the 43 local KTF archives render
+byte-identical first frames; the forty-third opens on neither side.
+
+**What it does not reach, measured rather than guessed.** The writer is called
+from seven places in that title. This covers the two that are blits these
+recognisers already read, and the heavy scene still spent about a third of its
+instructions in the writer, reached from loops that are **not** blits of either
+shape. Counting every backward branch that closes a loop over the route says
+which one to build next, and the answer was not a blit at all — see below. One
+mode's writer is also refused outright by the walk: the unclipped blit's arm
+compiles for every mode the reported scene uses and declines one that appears
+elsewhere in the route, which costs that stretch nothing it was not already
+paying.
+
+### The ninth shape, and the loop census that found it
+
+The heavy scene was still 94.9ms a tick against a 64ms frame period, and the
+guest profile said where — the writer — but not which loop was calling it. **A
+profile ranks addresses; what was needed was a ranking of loops.** Counting the
+guest steps between two closings of the same backward branch, over the whole
+replay and including the branches already marked refused, gives that directly:
+
+| loop | closings | guest instructions | an iteration |
+|---|---|---|---|
+| a counted halfword fill behind the flag | 19,445,259 | **967,665,411** | 49.8 |
+| the unclipped blit | 2,256,293 | 686,917,305 | 304.4 |
+| the clipped blit | 612,079 | 239,915,014 | 392.0 |
+| four others | — | under 155M each | — |
+
+The busiest loop in the title by a distance, at **28% of every instruction the
+replay retires**, and it is neither of the blits. It is
+`fill_loop.go`'s own shape behind the same flag — which is to say **it is the
+seventh shape**, the one "was built, measured, and is not kept" describes.
+
+That section's reasoning was right and its conclusion has expired. It was
+rejected because the analyser accepted the loop 13.9 million times and the
+stand-in ran 78 thousand of them: the fill spends its life in its blending arm,
+and a recogniser that accepts and then declines pays every analyser in the chain
+on every execution, for ever. **Following the arm is what changed.** With the
+writer compiled there is no decline left, because the recogniser now answers for
+the flag set and the flag clear alike — the plain fill *and* the blended one,
+one shape, no path back to the interpreter to be paid for.
+
+`blended_blit.go` carries it. The arm is smaller than a blit's — the colour is
+loop-invariant, so it is a few moves and a shift rather than a palette lookup —
+and the three forms the walk allows there are the three a compiler emits to put
+a value in place, replayed over the loop's own registers to get the argument the
+writer would have been handed.
+
+Measured on the reported title, same route, same probe, **identical instruction
+counts and every one of the 806 ticks byte-identical**:
+
+| | before the eighth | + the eighth | + the ninth |
+|---|---|---|---|
+| the heavy stretch, host cost a tick | 115.6ms | 94.9ms | **37.6ms** |
+| its p90 | — | — | **49.1ms** |
+| the replay | 18.29s | 17.28s | **11.27s** |
+
+**A tick of this scene is 64ms of guest time, so it goes from missing its frame
+period by half to keeping it with a quarter of the period in hand.** Over the
+full 2,168-tick route every one of the three stretches the route marks now sits
+under 35ms at p99, where the worst of them was 94ms at p90.
+
+The whole-corpus controls: all 34 local LGT and 42 of the 43 local KTF archives
+render byte-identical first frames, and two other KTF titles driven through
+their own routes are unmoved to within 1% — this costs nothing where it never
+fires.
+
 ## The supervisor-call boundary, and the slots that do not need it
 
 A supervisor call ends the quantum. That is what makes the boundary safe: the
