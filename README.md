@@ -213,7 +213,7 @@ make serve              # 디버그
 make serve-release      # 릴리즈
 ```
 
-배포본은 `make dist VERSION=0.3.0`처럼 버전을 주면 다섯 OS용 아카이브로 묶습니다.  
+배포본은 `make dist VERSION=0.3.1`처럼 버전을 주면 다섯 OS용 아카이브로 묶습니다.  
 `v`로 시작하는 태그를 밀면 GitHub Actions가 같은 아카이브를 만들어 릴리스로 올리고 푸시마다 우분투·윈도우·macOS에서 서버를 실제로 띄워 봅니다.  
 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
 

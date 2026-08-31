@@ -267,7 +267,7 @@ release number is a decision; in CI it comes from the tag, which is the same
 decision written down somewhere durable:
 
 ```sh
-make dist VERSION=0.3.0
+make dist VERSION=0.3.1
 ```
 
 ```text
@@ -391,17 +391,29 @@ nothing in the Go tree is platform-specific enough to fail to compile or to trip
 written for all three.
 
 What CI does not open is the archives themselves, so that is done by hand
-before a release. The 0.3.0 set was built on macOS and all five extracted and
+before a release. The 0.3.1 set was built on macOS and all five extracted and
 read: each holds the server, its three launchers, both READMEs, the licence and
 the notices, and the empty `games/{ktf,lgt,skt}` tree. The Windows archive's
 five text files are CRLF throughout, the two Korean READMEs open with a UTF-8
 BOM and the three `.bat` launchers do not; the Unix archives carry no CR at all
 and their launchers and binary keep their executable bit. Every binary is
-stamped with the version — the native one answers `wfeature-server 0.3.0
+stamped with the version — the native one answers `wfeature-server 0.3.1
 (release)` — and `SHA256SUMS` checks out against the five files beside it. The
 native one was also run out of the extracted folder: it serves the page from
-the client it carries, answers `/api/status` with the stamped version, and
-drains on `/api/shutdown`.
+the client it carries (`client=embedded`, saves `beside the executable`),
+answers `/api/status` with the stamped version, and drains on `/api/shutdown`.
+The 0.3.0 set was read the same way and differed in nothing but the stamp,
+which is what a `make dist` recipe unchanged between the two should produce.
+
+**Talk to the server you started, and prove it before you stop it.** The
+port this is done on is one a developer's machine tends to have several
+servers on already — leftovers from earlier sessions, each answering
+`/api/status` and each willing to drain on `/api/shutdown` from any local
+caller, because that route has no authentication and should not. A check that
+starts a server, waits for `/api/status` to answer and then posts a shutdown
+will happily do all three to somebody else's process if its own failed to
+start. `/api/status` reports the PID for exactly this: compare it against the
+one that was spawned, before the request that stops it.
 
 The gap that leaves is what `.github/workflows/checks.yml` is for. Its `smoke`
 job runs on Ubuntu, Windows and macOS runners and, on each, builds the release
