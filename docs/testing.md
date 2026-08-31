@@ -257,6 +257,56 @@ host CPU against the guest time that CPU bought, and a ratio over 1 is a load
 the user waits through. `docs/ktf.md` has what it found across the local
 archives and why that closed the binary-hook question rather than opening it.
 
+**A scene that is a burst in the middle of a route needs a third probe.**
+`TestRoutedLoadProbe` measures where a route *ends*, and a full-screen effect
+that lasts a second is over long before it starts counting.
+`TestHeavySceneProbe` walks the whole replay instead, keeping what every tick
+cost the host and how many instructions it retired, and reports each window
+between the route's marks beside the run as a whole and the twenty costliest
+ticks:
+
+```sh
+WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
+  go test -count=1 ./internal/platform/ktf -run TestHeavySceneProbe -v -timeout 30m
+```
+
+**A profile ranks addresses; a slow scene is usually a loop.** When the two
+disagree — the profile says a function and the function has five callers — count
+the guest steps between two closings of the same backward branch instead, over
+the whole replay and **including the branches already marked refused**, and rank
+loops by the total. That is a dozen lines of throwaway instrumentation in
+`Engine.Run` and it is what found the ninth shape in `armcore.md`: the busiest
+loop in one title was 28% of the replay and did not appear in any profile
+ranking, because its cost was attributed to the function it called.
+
+`WFEATURE_PERF_DIGESTS=<file>` writes the frame digest and the instruction
+count of every tick, which is what says an engine change is invisible to the
+guest: **two runs whose digests agree line for line and whose instruction counts
+agree to the instruction have changed nothing the game can see**, and a `diff`
+of the two files names the first tick where that stops being true. That is how
+the stand-in in `armcore.md`'s "The eighth shape" was judged, and how the
+accounting defect underneath it was found — the digests matched for a hundred
+and thirty-seven ticks while the step counts drifted by a fixed amount per tick,
+which is a shape no frame comparison would have shown.
+
+It runs on a manual clock, so **two runs of one binary agree to the tenth of a
+millisecond** and an A/B needs no repetition to be readable — which is what
+makes a 3% change in one stretch of one route a number rather than a hope. Give
+it `-count=1` or `go test` answers from its cache and both arms of an A/B read
+the same. `WFEATURE_PERF_CPU=<file>` starts a Go CPU profile at the route's
+first `mark`, so the profile covers the scene rather than the boot; read it with
+the warning further down about what a macOS profile of this engine attributes to
+`pthread_cond_signal`, which here was 73 to 89% of the samples and none of the
+time. Raising the quantum does not fix that reading on this platform — it costs
+the run 21% and changes what it executes — so the ranking to trust is the guest
+profiler's.
+
+Where the marks come from matters as much as the probe. A route written for a
+report carries `shot` at the scenes it was written for; a `mark` is what resets
+the guest profiler, so **turning a `shot` into a `mark` in a copy of the route
+is how a stretch gets a profile of its own**. The copy belongs in a scratch
+directory rather than in `var/routes/`, which is for routes that name a scene.
+
 `internal/platform/lgt/local_perf_test.go` holds the same question for a Clet,
 and it reports one number the KTF probes do not:
 
