@@ -92,27 +92,32 @@ var fieldSyncs = map[string]fieldSync{
 		adopt:    adoptGuestInputHandler,
 		reserved: textComponentFieldsSize,
 	},
-	// A byte source publishes the same word for the same reason, and the
-	// constructor is its only mutator: reading moves an index this class keeps
-	// on the Go side, and neither constructor is ever followed by one that
-	// puts a different array behind the field. pos and count stay unpublished
-	// on the same argument the sink's count is: a title that reads one stops
-	// where the evidence for maintaining it would be.
+	// A byte source publishes the same word for the same reason, and its three
+	// cursors beside it: a title decodes out of buf, and it reads pos to know
+	// where the decode got to rather than counting its own reads. That makes
+	// every call that moves a cursor a mutator — the constructors decide all
+	// four, and a read, a skip, a mark and a reset each move one. The four
+	// words go out together, so a read costs one guest read of the block and a
+	// write only when something in it changed.
 	jvm.ByteArrayInputStreamClass: {
-		mutators: []string{"<init>"},
-		publish:  publishGuestByteSourceBuffer,
-		adopt:    adoptGuestByteSourceBuffer,
+		mutators: []string{"<init>", "read", "skip", "mark", "reset"},
+		publish:  publishGuestByteSource,
+		adopt:    adoptGuestByteSource,
 		reserved: byteArrayInputStreamFieldsSize,
 	},
 }
 
 // byteArrayOutputStreamFieldsSize is how many payload bytes the runtime's own
 // ByteArrayOutputStream field records describe: the one buf reference.
-// byteArrayInputStreamFieldsSize is the same word on the source.
+// byteArrayInputStreamFieldsSize is that word plus the source's three cursors,
+// in the order its record declares them: buf, pos, count, mark.
 const (
 	byteArrayOutputStreamFieldsSize = 4
-	byteArrayInputStreamFieldsSize  = 4
+	byteArrayInputStreamFieldsSize  = 16
 )
+
+// byteSourceCursors are the payload words after buf, in record order.
+var byteSourceCursors = []string{"pos", "count", "mark"}
 
 // publishGuestByteSinkBuffer points the payload word at the guest array the Go
 // buffer is. The array has to be bound for the guest to have anything to read,
@@ -122,10 +127,75 @@ func publishGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, 
 	return publishGuestBufferWord(runtime, address, object, jvm.ByteArrayOutputStreamClass)
 }
 
-// publishGuestByteSourceBuffer is the same word on java/io/ByteArrayInputStream,
-// which a title reads to decode straight out of the array it is streaming.
-func publishGuestByteSourceBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
-	return publishGuestBufferWord(runtime, address, object, jvm.ByteArrayInputStreamClass)
+// publishGuestByteSource writes java/io/ByteArrayInputStream's four words: the
+// array it is streaming, which a title reads to decode straight out of, and
+// the three cursors it reads to know where that decode stands. They are one
+// block, so the whole of it is read once and written once — a read() that only
+// moved pos would otherwise pay four guest reads a byte.
+func publishGuestByteSource(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	wanted, err := guestByteSourceWords(runtime, object, true)
+	if err != nil {
+		return false, err
+	}
+	base := address + javaInstanceSize + javaInstanceHeader
+	current, err := runtime.readAOTWords(base, uint32(len(wanted)), "byte source words")
+	if err != nil {
+		return false, err
+	}
+	if slices.Equal(current, wanted) {
+		return false, nil
+	}
+	payload := make([]byte, 4*len(wanted))
+	for index, word := range wanted {
+		binary.LittleEndian.PutUint32(payload[index*4:], word)
+	}
+	if err := runtime.client.core.Memory().Write(base, payload); err != nil {
+		return false, fmt.Errorf("write KTF byte source fields at %#x: %w", address, err)
+	}
+	return true, nil
+}
+
+// guestByteSourceWords is what the payload should hold. Binding is what gives
+// the array its guest memory, so publishing asks for it and reporting does not:
+// an object the guest has never seen cannot be the one it wrote.
+func guestByteSourceWords(runtime *initializationRuntime, object *jvm.Object, bind bool) ([]uint32, error) {
+	class := jvm.ByteArrayInputStreamClass
+	value, err := runtime.client.vm.Field(object, class, "buf", "[B")
+	if err != nil {
+		return nil, err
+	}
+	buffer, err := value.Reference()
+	if err != nil {
+		return nil, err
+	}
+	words := make([]uint32, 1+len(byteSourceCursors))
+	if buffer != nil {
+		if bind {
+			if err := runtime.ensureResultBound(buffer); err != nil {
+				return nil, fmt.Errorf("bind KTF %s buffer: %w", class, err)
+			}
+		}
+		bound, ok := runtime.client.vm.AOTAddress(buffer)
+		if !ok {
+			if bind {
+				return nil, fmt.Errorf("KTF %s buffer has no guest address", class)
+			}
+			return nil, nil
+		}
+		words[0] = bound
+	}
+	for index, name := range byteSourceCursors {
+		cursor, err := runtime.client.vm.Field(object, class, name, "I")
+		if err != nil {
+			return nil, err
+		}
+		held, err := cursor.Int32()
+		if err != nil {
+			return nil, err
+		}
+		words[index+1] = uint32(held)
+	}
+	return words, nil
 }
 
 func publishGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {
@@ -180,8 +250,24 @@ func adoptGuestByteSinkBuffer(runtime *initializationRuntime, address uint32, ob
 	return adoptGuestBufferWord(runtime, address, object, jvm.ByteArrayOutputStreamClass)
 }
 
-func adoptGuestByteSourceBuffer(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
-	return adoptGuestBufferWord(runtime, address, object, jvm.ByteArrayInputStreamClass)
+// adoptGuestByteSource reports a source whose payload has stopped describing
+// the Go stream. It never writes, for the reason the buffer's does not: a
+// subclass may assign any of the four, and taking the guest's word for one
+// would be a guess about which side is right.
+func adoptGuestByteSource(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	expected, err := guestByteSourceWords(runtime, object, false)
+	if err != nil {
+		return false, err
+	}
+	if expected == nil {
+		return false, nil
+	}
+	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader,
+		uint32(len(expected)), "byte source words")
+	if err != nil {
+		return false, err
+	}
+	return !slices.Equal(current, expected), nil
 }
 
 func adoptGuestBufferWord(runtime *initializationRuntime, address uint32, object *jvm.Object, class string) (bool, error) {

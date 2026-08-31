@@ -86,12 +86,12 @@ type graphicsContext struct {
 // it does to it.
 const (
 	grpContextMask        = 0
-	grpContextClip        = 4 // four uint16: left, top, right, bottom
+	grpContextClip        = 4 // four uint16: left, top, and the corner past right, bottom
 	grpContextForeground  = 12
 	grpContextBackground  = 16
 	grpContextTransparent = 20
 	grpContextAlpha       = 24
-	grpContextOffset      = 28 // two uint16: x, y
+	grpContextOffset      = 28 // two uint16: x, y — an array of two M_Int32 to the game
 	grpContextPixelOp     = 32
 	grpContextParam1      = 36
 	grpContextReserved    = 40

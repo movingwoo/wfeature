@@ -622,12 +622,31 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		return answer(uint32(rgb565(red, green, blue)))
 
 	case slotGetRGBFromPixel:
+		// `M_Int32 MC_grpGetRGBFromPixel(M_Int32 pixel, M_Int32 *r, M_Int32 *g,
+		// M_Int32 *b)`: the three channels go back **through the pointers**, and
+		// the answer is the pixel the call was handed, unchanged. Packing the
+		// channels into the answer instead — the shape its counterpart
+		// MC_grpGetPixelFromRGB has — wrote nothing at all, so a caller's own
+		// r, g and b kept whatever was in them and a title that reads a colour
+		// apart to rebuild it drew with three numbers it never set.
 		pixel, err := argument(0)
 		if err != nil {
 			return err
 		}
 		red, green, blue := unpack565(uint16(pixel))
-		return answer(red<<16 | green<<8 | blue)
+		for index, channel := range []uint32{red, green, blue} {
+			pointer, err := argument(index + 1)
+			if err != nil {
+				return err
+			}
+			if pointer == 0 {
+				continue
+			}
+			if err := client.writeWord(pointer, channel); err != nil {
+				return err
+			}
+		}
+		return answer(pixel)
 
 	case slotGetDisplayInfo:
 		// MC_grpGetDisplayInfo(lcd, pdi): the display index comes first and the
@@ -1012,9 +1031,10 @@ func (client *Client) initContext(pointer uint32) int32 {
 		}
 	}
 	// A fresh context may draw anywhere on the LCD and draws in white. The clip
-	// is four uint16 — left, top, right, bottom — so the first word is already
-	// zero and only the far corner has to be written.
-	corner := uint32(client.screen.height-1)<<16 | uint32(client.screen.width-1)
+	// is four uint16 — left, top, right, bottom, the last two one past the
+	// corner they name — so the first word is already zero and only the far
+	// corner has to be written.
+	corner := uint32(client.screen.height)<<16 | uint32(client.screen.width)
 	if err := client.writeWord(pointer+grpContextClip+4, corner); err != nil {
 		return wipiError
 	}
@@ -1047,39 +1067,66 @@ func (client *Client) transferContextField(thread *armcore.Thread, slot uint32) 
 	if pointer == 0 {
 		return wipiError
 	}
-	offset, words := contextFieldOffset(field)
-	if words == 0 {
+	offset, count := contextFieldOffset(field)
+	if count == 0 {
 		// A field this platform does not carry is accepted rather than
 		// refused: the call has no return value for a game to read, and the
 		// fields that matter to the ones here are all below.
 		return wipiSuccess
 	}
-	for index := uint32(0); index < words; index++ {
+	if count > 1 {
+		// The two coordinate fields are the ones the specification hands as an
+		// array of `M_Int32` rather than as the word itself — four numbers for
+		// the clip and two for the offset — while the structure keeps them as
+		// halfwords. Copying words straight across took the caller's x1 for a
+		// whole corner and its y1 for the other, which is a clip no title ever
+		// asked for; and on the way back it filled two of the four elements, so
+		// a title that reads its clip to decide what to draw was answered its
+		// own uninitialised array and drew nothing.
+		return client.transferContextRect(pointer+offset, value, count, slot)
+	}
+	if slot == slotGetContext {
+		word, err := client.readWord(pointer + offset)
+		if err != nil {
+			return wipiError
+		}
+		if err := client.writeWord(value, word); err != nil {
+			return wipiError
+		}
+		return wipiSuccess
+	}
+	if err := client.writeWord(pointer+offset, value); err != nil {
+		return wipiError
+	}
+	if offset == grpContextPixelOp {
+		// What a draw will run has to have arrived here first; see
+		// readContextPixelOp for the title that left a return address in the
+		// field.
+		client.installPixelOp(value)
+	}
+	return wipiSuccess
+}
+
+// transferContextRect moves one coordinate field between the game's array of
+// `M_Int32` and the halfwords the structure keeps them in. The count is how
+// many numbers the field has: four for the clip, two for the offset.
+func (client *Client) transferContextRect(field, array uint32, count uint32, slot uint32) int32 {
+	for index := uint32(0); index < count; index++ {
 		if slot == slotSetContext {
-			source := value
-			if offset == grpContextClip || offset == grpContextOffset {
-				word, readErr := client.readWord(value + index*4)
-				if readErr != nil {
-					return wipiError
-				}
-				source = word
-			}
-			if err := client.writeWord(pointer+offset+index*4, source); err != nil {
+			word, err := client.readWord(array + index*4)
+			if err != nil {
 				return wipiError
 			}
-			if offset == grpContextPixelOp {
-				// What a draw will run has to have arrived here first; see
-				// readContextPixelOp for the title that left a return address
-				// in the field.
-				client.installPixelOp(source)
+			if err := client.writeHalfword(field+index*2, uint16(word)); err != nil {
+				return wipiError
 			}
 			continue
 		}
-		word, readErr := client.readWord(pointer + offset + index*4)
-		if readErr != nil {
+		half, err := client.readHalfword(field + index*2)
+		if err != nil {
 			return wipiError
 		}
-		if err := client.writeWord(value+index*4, word); err != nil {
+		if err := client.writeWord(array+index*4, uint32(half)); err != nil {
 			return wipiError
 		}
 	}
@@ -1087,12 +1134,13 @@ func (client *Client) transferContextField(thread *armcore.Thread, slot uint32) 
 }
 
 // contextFieldOffset maps a field identifier to its place in the structure and
-// how many words it occupies. A zero count means this platform does not carry
-// the field.
+// how many numbers the game passes for it: one for a field that is the word
+// itself, and more for the two that come as an array. A zero count means this
+// platform does not carry the field.
 func contextFieldOffset(field uint32) (uint32, uint32) {
 	switch field {
 	case grpFieldClip:
-		return grpContextClip, 2
+		return grpContextClip, 4
 	case grpFieldForeground:
 		return grpContextForeground, 1
 	case grpFieldBackground:
@@ -1110,7 +1158,7 @@ func contextFieldOffset(field uint32) (uint32, uint32) {
 	case grpFieldStyle:
 		return grpContextStyle, 1
 	case grpFieldOffset:
-		return grpContextOffset, 1
+		return grpContextOffset, 2
 	}
 	return 0, 0
 }
@@ -1146,9 +1194,13 @@ func (client *Client) contextFor(
 	context.background = uint16(words[grpContextBackground/4])
 	left, top := int(words[grpContextClip/4]&0xffff), int(words[grpContextClip/4]>>16)
 	right, bottom := int(words[(grpContextClip+4)/4]&0xffff), int(words[(grpContextClip+4)/4]>>16)
+	// The top-left corner is inside the clip and **the bottom-right one is
+	// not**, which the specification says in the same sentence that gives the
+	// array its order. Counting the far corner as inside drew one row and one
+	// column past every clip a title set.
 	if right > left && bottom > top {
 		context.clipX, context.clipY = left, top
-		context.clipWidth, context.clipHeight = right-left+1, bottom-top+1
+		context.clipWidth, context.clipHeight = right-left, bottom-top
 	}
 	context.op = client.readContextPixelOp(
 		words[grpContextPixelOp/4], words[grpContextParam1/4])

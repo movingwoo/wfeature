@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -180,8 +181,8 @@ func TestByteSinkPublishesItsBuffer(t *testing.T) {
 }
 
 // The source publishes the same word, and a title that decodes straight out of
-// the array it is streaming reads it there. The constructor is the only
-// mutator, so this is what the guest sees for the life of the stream.
+// the array it is streaming reads it there. Nothing replaces the array, so it
+// is what the guest sees for the life of the stream.
 func TestByteSourcePublishesItsBuffer(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	classAddress, err := runtime.ensureJavaClass(jvm.ByteArrayInputStreamClass)
@@ -218,8 +219,8 @@ func TestByteSourcePublishesItsBuffer(t *testing.T) {
 	if words[0] != bound {
 		t.Fatalf("published buf = %#x, want the bound array at %#x", words[0], bound)
 	}
-	// Reading moves an index the Go side keeps and leaves the array alone, so
-	// the word the guest already read stays valid.
+	// Reading moves a cursor and leaves the array alone, so the word the guest
+	// already read stays valid.
 	if _, err := client.JVM().InvokeVirtual(object, "read", "()I"); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +230,68 @@ func TestByteSourcePublishesItsBuffer(t *testing.T) {
 	}
 	if after[0] != bound {
 		t.Fatalf("buf after a read = %#x, want %#x", after[0], bound)
+	}
+}
+
+// The three cursors are published beside the array, because a title reads pos
+// to know where its own decode stands rather than counting its reads. A name
+// the record does not carry is not a field that reads zero: the guest resolves
+// each of them against this record, and a miss stops the title at the link.
+func TestByteSourcePublishesItsCursors(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	classAddress, err := runtime.ensureJavaClass(jvm.ByteArrayInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range byteSourceCursors {
+		if _, found, err := client.JVM().FindAOTField(classAddress, name, "I"); err != nil {
+			t.Fatal(err)
+		} else if !found {
+			t.Fatalf("%s:I does not resolve from the guest's ByteArrayInputStream record", name)
+		}
+	}
+	address, object, err := runtime.allocateAOTInstance(classAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	array := jvm.NewByteArray([]byte{1, 2, 3, 4})
+	// The window constructor, because it is the one that decides all three
+	// separately: reading starts at 1, ends at 4, and a reset goes back to 1.
+	if _, err := client.JVM().InvokeSpecial(object, jvm.ByteArrayInputStreamClass,
+		"<init>", "([BII)V", jvm.ReferenceValue(array), jvm.IntValue(1), jvm.IntValue(3)); err != nil {
+		t.Fatal(err)
+	}
+	construct := runtimeJavaMethod{class: jvm.ByteArrayInputStreamClass, name: "<init>", descriptor: "([BII)V"}
+	if err := runtime.publishGuestFields(object, construct); err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := client.JVM().AOTAddress(array)
+	if !ok {
+		t.Fatal("the source array was not bound to guest memory")
+	}
+	base := address + javaInstanceSize + javaInstanceHeader
+	words, err := runtime.readAOTWords(base, 4, "byte source words")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []uint32{bound, 1, 4, 1}; !slices.Equal(words, want) {
+		t.Fatalf("published words = %v, want %v", words, want)
+	}
+
+	// A read moves pos, and the guest sees the number the stream is at.
+	if _, err := client.JVM().InvokeVirtual(object, "read", "()I"); err != nil {
+		t.Fatal(err)
+	}
+	read := runtimeJavaMethod{class: jvm.ByteArrayInputStreamClass, name: "read", descriptor: "()I"}
+	if err := runtime.publishGuestFields(object, read); err != nil {
+		t.Fatal(err)
+	}
+	words, err = runtime.readAOTWords(base, 4, "byte source words")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []uint32{bound, 2, 4, 1}; !slices.Equal(words, want) {
+		t.Fatalf("published words after a read = %v, want %v", words, want)
 	}
 }
 
