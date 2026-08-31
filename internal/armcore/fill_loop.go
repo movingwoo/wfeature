@@ -167,6 +167,9 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 		if spilled := memory.analyseSpilledBlit(head, branchPC); spilled != nil {
 			return memory.runSpilledBlit(context, spilled)
 		}
+		if clipped := memory.analyseClippedBlit(head, branchPC); clipped != nil {
+			return memory.runClippedBlit(context, clipped)
+		}
 		modulate := memory.analyseWordModulate(head, branchPC)
 		if modulate == nil {
 			// Refused by analysis, which is the only answer that cannot
