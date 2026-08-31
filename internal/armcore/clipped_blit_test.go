@@ -305,3 +305,53 @@ func TestAClippedBlitWhoseFlagBranchStaysInsideIsRefused(t *testing.T) {
 		t.Fatalf("a flag branch landing inside the body was recognised: %+v", loop)
 	}
 }
+
+// A remembered decline must not write the loop off.
+//
+// The flag is the one decline worth not deriving twice — it holds for every
+// pixel of a blended run, and re-deriving it costs the whole recogniser chain
+// per pixel. What makes that safe is that the word is read back rather than
+// trusted: the same loop with the flag clear has to be stood in for again.
+// Caching the decline itself is the mistake this pins against.
+func TestAFlagDeclineIsForgottenWhenTheFlagClears(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const pixels = 40
+	branchPC := base + uint32(len(clippedBlitBody)-1)*2
+
+	memory := clippedBlitMemory(t, clippedBlitBody, base, destination, 0, pixels, pixels, 1)
+	memory.beginQuantum()
+	loop := memory.analyseClippedBlit(base, branchPC)
+	if loop == nil {
+		t.Fatal("the clipped palette blit was not recognised")
+	}
+	context := clippedBlitContext(base, pixels)
+	context.Registers[8] = 1
+	context.Registers[6] = 1
+	stood, err := memory.runClippedBlit(context, loop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stood != 0 {
+		t.Fatalf("the blit stood in for %d steps with its flag set", stood)
+	}
+	if !memory.haveDeclined || memory.declinedBranch != branchPC ||
+		memory.declinedFlag != spilledRecord+clippedFlagAt {
+		t.Fatalf("the decline was remembered as branch %#x flag %#x, want %#x and %#x",
+			memory.declinedBranch, memory.declinedFlag, branchPC, uint32(spilledRecord+clippedFlagAt))
+	}
+	// The guest goes back to the plain form of the same blit, which is what a
+	// remembered decline must not stop.
+	if err := memory.writeData32(spilledRecord+clippedFlagAt, 0); err != nil {
+		t.Fatal(err)
+	}
+	memory.endQuantum()
+	memory.beginQuantum()
+	defer memory.endQuantum()
+	stood, err = memory.runStoreLoop(context, base, branchPC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stood == 0 {
+		t.Fatal("the blit was not stood in for once its flag had cleared")
+	}
+}

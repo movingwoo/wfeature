@@ -77,6 +77,14 @@ type clippedBlit struct {
 	lowSteps  uint32
 	highSteps uint32
 	after     uint32
+	// branch is the loop's own closing branch, which is what a remembered
+	// decline is keyed by. See Memory.declinedBranch.
+	branch uint32
+	// armTarget is where the flag sends the guest when it is set, and tailAt
+	// where the body's three paths rejoin. Both are read by blended_blit.go,
+	// which is the only thing that follows the flag rather than refusing it.
+	armTarget uint32
+	tailAt    uint32
 }
 
 // runClippedBlit stands in for the loop closed by a branch at branchPC back to
@@ -110,9 +118,19 @@ func (memory *Memory) runClippedBlit(context *Context, loop *clippedBlit) (uint3
 		return 0, nil
 	}
 	if flag != 0 {
-		// The guest is about to leave this loop for the blending form of the
-		// same blit, which is somewhere this cannot follow it to.
-		return 0, nil
+		// The guest is leaving this loop for the blending form of the same
+		// blit, which draws its pixel through a call. `blended_blit.go` reads
+		// that arm and the writer behind it; what it cannot read is remembered
+		// with the branch and the flag it declined on, because otherwise the
+		// whole chain is walked again for every pixel of the run. See
+		// Memory.declinedBranch.
+		draw := memory.analyseBlendedDraw(loop)
+		if draw == nil {
+			memory.declinedBranch, memory.declinedFlag = loop.branch, flagRecord+loop.flagOffset
+			memory.declinedValue, memory.haveDeclined = flag, true
+			return 0, nil
+		}
+		return memory.runBlendedClipped(context, loop, draw, low, high)
 	}
 	record, err := memory.readData32(stack + loop.record)
 	if err != nil {
@@ -284,7 +302,7 @@ func (memory *Memory) analyseClippedBlit(head, branchPC uint32) *clippedBlit {
 		return nil
 	}
 	loop := &memory.clippedBlitScratch
-	*loop = clippedBlit{after: branchPC + 2}
+	*loop = clippedBlit{after: branchPC + 2, branch: branchPC}
 	var written [16]int
 	// The chain is ten instructions, the draw ten more, and the tail at least
 	// the branch. A body with no room for all three is not this shape.
@@ -379,9 +397,11 @@ func (memory *Memory) analyseClippedBlit(head, branchPC uint32) *clippedBlit {
 		instruction>>8&7 != flagIn || instruction&0xff != 0 {
 		return nil
 	}
-	if target, ok := branchTo(9, 1); !ok || (target >= head && target <= branchPC) {
+	armTarget, ok := branchTo(9, 1)
+	if !ok || (armTarget >= head && armTarget <= branchPC) {
 		return nil
 	}
+	loop.armTarget, loop.tailAt = armTarget, join
 	loop.lowIn, loop.lowSlot = lowIn, lowSlot
 	loop.highIn, loop.highSlot = highIn, highSlot
 	loop.flagRecordIn, loop.flagSlot = flagRecordIn, flagSlot

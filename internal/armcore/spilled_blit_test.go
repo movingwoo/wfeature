@@ -302,3 +302,76 @@ func TestASpilledBlitOverItsOwnGuardIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// The flag is read rather than assumed.
+//
+// The walk proves the guard's exit leaves the body; it does not follow where
+// that exit goes. The form this shape was built against sends its blending arm
+// to a block that draws one pixel and branches back into the body *after* the
+// store, so the loop closes with the flag set and the body the analysis read is
+// the arm that did not run. A stand-in there blits the rest of the row
+// unblended, and only reading the flag catches it.
+func TestASpilledBlitWhoseGuardIsSetIsRefused(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const pixels = 40
+	branchPC := base + uint32(len(spilledBlitBody)-1)*2
+
+	// The blending arm: it writes its own colour and rejoins the body at the
+	// instruction after the store, which is what makes the backward branch
+	// reachable with the flag set.
+	body := append([]uint16(nil), spilledBlitBody...)
+	body[2] = 0xd10e // bne  → the arm below
+	body = append(body,
+		0x46c0, // nop — where a run that leaves the loop ends
+		0x9a0a, // ldr  r2, [sp, #0x28]
+		0x2311, // movs r3, #0x11 — the blend's result, in place of arithmetic
+		0x8013, // strh r3, [r2]
+		0xe7f3, // b    → back into the body, after the store
+	)
+
+	build := func(refuse bool) (*Memory, *Context) {
+		memory := spilledBlitMemory(t, body, base, destination, pixels)
+		memory.standInsRefused = refuse
+		memory.beginQuantum()
+		if err := memory.writeData32(spilledStack+0x74, 1); err != nil {
+			t.Fatal(err)
+		}
+		memory.endQuantum()
+		return memory, spilledBlitContext(base, spilledStack, pixels)
+	}
+	interpreted, reference := build(true)
+	stood, subject := build(false)
+	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 1_000_000); err != nil {
+		t.Fatalf("interpreting the blit: %v", err)
+	}
+	if _, err := (Engine{}).Run(subject, stood, branchPC+2, 1_000_000); err != nil {
+		t.Fatalf("standing in for the blit: %v", err)
+	}
+	for register := 0; register < 16; register++ {
+		if reference.Registers[register] != subject.Registers[register] {
+			t.Errorf("r%d = %#x after standing in, %#x after interpreting",
+				register, subject.Registers[register], reference.Registers[register])
+		}
+	}
+	interpreted.beginQuantum()
+	stood.beginQuantum()
+	defer interpreted.endQuantum()
+	defer stood.endQuantum()
+	for index := 0; index < pixels; index++ {
+		address := uint32(destination) + uint32(index)*2
+		want, err := interpreted.readData16(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := stood.readData16(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want != got {
+			t.Fatalf("pixel %d = %#x after standing in, %#x after interpreting", index, got, want)
+		}
+		if want != 0x11 {
+			t.Fatalf("pixel %d = %#x, want the blending arm's own colour", index, want)
+		}
+	}
+}

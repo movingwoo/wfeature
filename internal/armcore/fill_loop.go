@@ -152,6 +152,15 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 	if memory.standInsRefused {
 		return 0, nil
 	}
+	// The blending form of a blit declines once per pixel, and the flag it
+	// declines on is one word. Reading it back beats deriving the same answer
+	// from six analysers; see Memory.declinedBranch for why a remembered
+	// decline cannot be wrong in the direction that matters.
+	if memory.haveDeclined && memory.declinedBranch == branchPC {
+		if flag, err := memory.readData32(memory.declinedFlag); err == nil && flag != 0 && flag == memory.declinedValue {
+			return 0, nil
+		}
+	}
 	loop := memory.analyseStoreLoop(head, branchPC)
 	if loop == nil {
 		// The other shapes worth standing in for, each in a file of its own:
@@ -169,6 +178,9 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 		}
 		if clipped := memory.analyseClippedBlit(head, branchPC); clipped != nil {
 			return memory.runClippedBlit(context, clipped)
+		}
+		if fill := memory.analyseFlaggedFill(head, branchPC); fill != nil {
+			return memory.runFlaggedFill(context, fill)
 		}
 		modulate := memory.analyseWordModulate(head, branchPC)
 		if modulate == nil {

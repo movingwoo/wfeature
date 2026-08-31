@@ -88,6 +88,14 @@ type spilledBlit struct {
 	ends        [8]spilledRole
 	steps       uint32
 	after       uint32
+	// branch is the loop's own closing branch, which is what a remembered
+	// decline is keyed by. See Memory.declinedBranch.
+	branch uint32
+	// armTarget is where the guard sends the guest when the flag is set, and
+	// storeAt where the fall-through's own store is. Both are read by
+	// blended_blit.go, which follows that arm rather than refusing it.
+	armTarget uint32
+	storeAt   uint32
 }
 
 // runSpilledBlit stands in for the loop closed by a branch at branchPC back to
@@ -98,6 +106,45 @@ func (memory *Memory) runSpilledBlit(context *Context, loop *spilledBlit) (uint3
 	iterations := context.Registers[loop.counter]
 	if iterations > maxStoreLoopIterations || iterations < 2 {
 		return 0, nil
+	}
+
+	// The guard, read rather than assumed.
+	//
+	// A recogniser runs at the backward branch, and the comment above says the
+	// branch is only reached by falling through the guard. That is true of the
+	// guard's *own* exit, which the walk proves leaves the body — but not of
+	// where the exit goes next. The form this shape was built against sends the
+	// blending arm of the same blit to a block that draws one pixel through a
+	// call and then branches back into the body *after* the draw, so the loop
+	// closes with the flag set and the analysis, which reads only the
+	// fall-through, is the analysis of the arm that did not run. Standing in
+	// then blits the rest of the row unblended.
+	//
+	// Measured on the title this shape was built for, it is 71 stand-ins in a
+	// route of 806 ticks: rare, because the flag is usually clear, and wrong
+	// every time it is not. `clipped_blit.go` reads its flag for this reason;
+	// this one now does the same.
+	if loop.haveGuard {
+		address := context.Registers[loop.guardBase] + loop.guardOffset
+		flag, err := memory.readData32(address)
+		if err != nil {
+			return 0, nil
+		}
+		if flag != 0 {
+			// The guest is leaving for the blending form of this blit, which
+			// draws its pixel through a call. `blended_blit.go` reads that arm
+			// and the writer behind it; what it cannot read is remembered with
+			// the branch and the flag it declined on, or the whole chain is
+			// walked again for every pixel of the run. See
+			// Memory.declinedBranch.
+			draw := memory.analyseBlendedSpilled(loop)
+			if draw == nil {
+				memory.declinedBranch, memory.declinedFlag = loop.branch, address
+				memory.declinedValue, memory.haveDeclined = flag, true
+				return 0, nil
+			}
+			return memory.runBlendedSpilled(context, loop, draw)
+		}
 	}
 
 	// Everything this shape reads out of memory rather than out of a register.
@@ -241,7 +288,7 @@ func (memory *Memory) analyseSpilledBlit(head, branchPC uint32) *spilledBlit {
 	}
 
 	loop := &memory.spilledBlitScratch
-	*loop = spilledBlit{after: branchPC + 2}
+	*loop = spilledBlit{after: branchPC + 2, branch: branchPC}
 	var (
 		written [8]int
 		// frameWord says the register holds the word at SP+frameSlot, and
@@ -415,7 +462,7 @@ func (memory *Memory) analyseSpilledBlit(head, branchPC uint32) *spilledBlit {
 			if !frameWord[base] || advanced[base] {
 				return nil
 			}
-			haveStore, storeSlot = true, frameSlot[base]
+			haveStore, storeSlot, loop.storeAt = true, frameSlot[base], address
 
 		case thumbImmediate:
 			opcode := instruction >> 11 & 3
@@ -483,7 +530,7 @@ func (memory *Memory) analyseSpilledBlit(head, branchPC uint32) *spilledBlit {
 			if target >= head && target <= branchPC {
 				return nil
 			}
-			haveGuardExit = true
+			haveGuardExit, loop.armTarget = true, target
 
 		default:
 			return nil
