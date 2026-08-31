@@ -1706,6 +1706,61 @@ what is left is under the floor and was not chased further. It is a Clet at
 17ns a guest instruction, four times the cost of the scene above, which is to
 say almost none of its host time is in the interpreter at all.
 
+### A fifth shape: the blit that keeps its destination on the stack
+
+The four above were built against LGT titles and measured there. A KTF title
+reported as laggy in its busiest scenes says what they miss, and the answer is
+not "some of its loops": counting every backward branch that closes a loop over
+a route through the reported scene, **not one of the eighteen busiest was stood
+in for**. The two at the top close 149 million and 95 million times between them
+and are most of what the title executes.
+
+Reading them says why, and it is the same three things each time — none of them
+about what the loop computes:
+
+- **the destination lives in a frame slot.** Every pixel loads it out of the
+  slot, stores through it, adds two and puts it back, so there is no register
+  holding the destination for `table_blit.go` to read a role out of.
+- **the palette base is reloaded every pixel**, `ldr rP, [sp, #a]` then
+  `ldr rT, [rP, #b]`, and the register it lands in is reused for the
+  destination before the loop closes. Reading it at the end reads the wrong
+  thing.
+- **a flag decides the loop's shape and is re-tested every pixel.** The blit is
+  the fall-through of `ldr rG, [rB, #c]; cmp rG, #0; bne blend`, and a branch
+  inside the body refuses every recogniser outright.
+
+The third is the cheap one and the reason is worth keeping: **a recogniser runs
+at the backward branch**, which is only reached by falling through the guard. So
+the guard has already been evaluated for this iteration and did not take; if
+everything it reads is something the loop cannot change, it will not take on the
+iterations that are left either. Proving that is a check per register rather
+than an evaluation. What it costs at run time is one range check — the word the
+guard reads, the slot the destination lives in and the record the palette hangs
+off are read once and treated as constants, so a blit whose destination covers
+any of them is handed back to the interpreter.
+
+`spilled_blit.go` is that shape. Measured on the reported title, on the route
+that replays the scene, release build:
+
+| | before | after |
+|---|---|---|
+| the route, host wall clock | 63.7s | **51.9s** (−18.6%) |
+| the heavy scene, host cost a round | 26ms | **20ms** |
+| the same scene, share of a core | 92% | **73%** |
+
+The scene stops being throughput-bound: what paces it afterwards is the frame
+period the guest asks for rather than what the Host can turn in. The route
+replays to the same 2,168 ticks and 2,179 flushes it did before, and eight KTF
+and four LGT archives render byte-identical first frames.
+
+**What is still refused, in the same title.** The second-hottest loop is the
+same blit with a clip test per pixel — two bounds the loop cannot move and an
+index that walks between them — which is a range intersection rather than an
+invariant, and a different piece of reasoning. Below it is a constant halfword
+fill, a shape `fill_loop.go` already knows, refused only for the guard above it
+and for an ending that compares the counter against a register holding −1
+rather than against zero. Neither is built.
+
 ## The supervisor-call boundary, and the slots that do not need it
 
 A supervisor call ends the quantum. That is what makes the boundary safe: the

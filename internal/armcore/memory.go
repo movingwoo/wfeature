@@ -238,6 +238,7 @@ type Memory struct {
 	tableBlitScratch    tableBlit
 	byteBlendScratch    byteBlend
 	wordModulateScratch wordModulate
+	spilledBlitScratch  spilledBlit
 	// Write watching. watchCount, watchLow, and watchHigh are the span test an
 	// ordinary store pays for; the map and the hits are only reached once a
 	// store falls inside it. executingPC is where the engine currently is,
