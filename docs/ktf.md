@@ -886,17 +886,51 @@ mechanism rather than one class's fix: a class that gains a published instance
 field without saying how it stays in step fails there rather than diverging
 inside a game.
 
-**Publishing one field of a class is not publishing the class.** The two byte
-streams publish `buf` and not `count` — nor, on the source, `pos` — which sit
-beside each other in the specification and are all protected. Nothing in the local set reads `count`, so
-there is no offset for it in the metadata and a title that reaches for one stops
-with the field's name in the message — which is a better failure than a word no
-mutator maintains answering a stale number. The same reasoning is why the
-mutator list is a list: `buf` changes only when the array behind it is replaced,
-so on the sink the constructor, a write that outgrows the array and a reset are
-the three calls after which the payload can be wrong, and on the source the
-constructor is the only one — reading moves an index the Go side keeps and
-leaves the array alone.
+**Publishing one field of a class is not publishing the class.** The sink
+publishes `buf` and not `count`: nothing in the local set reads it, so there is
+no offset for it in the metadata and a title that reaches for one stops with the
+field's name in the message — which is a better failure than a word no mutator
+maintains answering a stale number. The same reasoning is why the mutator list
+is a list: `buf` changes only when the array behind it is replaced, so on the
+sink the constructor, a write that outgrows the array and a reset are the three
+calls after which the payload can be wrong.
+
+### The source's cursors are the field its window closed on
+
+The source was the same one word for the same reason, and its `pos`, `count` and
+`mark` were left out on the argument above: no title had been seen to read one.
+A report from outside the local set names one that does, and stops before its
+first frame. **The mechanism is checkable without the archive**: a title
+compiled against a handset's library resolves each protected field by name
+against the record this runtime publishes, so a name the record does not carry
+has no offset to resolve to and the miss is a failed link rather than a stale
+number. A field nobody declares is not a field that reads zero. No local
+archive exercises it — the nearest one starts and plays either way, its A/B
+sitting under its own noise floor — so what the change rests on is the report,
+that mechanism, and the sweep that says nothing else moved.
+
+So the source now declares all four in the library's own order — `buf`, `pos`,
+`count`, `mark`, an instance size of 16 rather than 4 — and publishes them
+together. Every call that moves a cursor is a mutator: the two constructors
+decide all three, and a read, a skip, a mark and a reset each move one. That is
+a hotter list than the sink's, so the four words are read as one block and
+written only when something in it changed — a `read()` that moved `pos` by one
+costs one guest read of sixteen bytes and one write, not four of each.
+
+**What it changed, over all 264 local archives**, 400 ticks each on both builds:
+**nothing.** Every summary agrees once the guest's own timestamped log lines are
+set aside — they are what a naive comparison flags, on 56 of the 264 — and of
+the 79 archives that reach a first picture in 400 ticks, not one frame differs.
+A stream the guest never holds is never published to, so the cost lands only
+where the case for it is.
+
+**The reserved size is the other half of the change.** `guestReservesRuntimeBlock`
+refuses to publish into a guest subclass whose own fields start inside the block
+this runtime describes, and that block is now 16 bytes. A subclass compiled
+against a real handset's library puts its first field after the same four, so
+raising the size is what makes the two agree; a subclass whose fields land
+inside it was compiled against something else and its payload is not this
+runtime's to write.
 
 **A static field's initializer runs after its class is registered.** The boxed
 flag is what made that necessary: `java/lang/Boolean.TRUE` is an instance of

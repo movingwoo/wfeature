@@ -276,13 +276,22 @@ func init() {
 			name:        "java/io/ByteArrayInputStream",
 			superName:   "java/io/InputStream",
 			accessFlags: 0x0021,
-			// The specification declares buf protected here as it does on the
-			// sink, and a title reads it for the same reason: what it wants is
-			// the array it is streaming, without the copy. Keeping the payload
-			// word in step with the Go array is fieldSyncs' job.
+			// The specification declares all four protected here as it does
+			// buf on the sink, and a title reads them for the same reason: it
+			// decodes out of the array it is streaming without the copy, and
+			// it takes the cursor off the stream rather than counting its own
+			// reads. A title compiled against a handset's library resolves
+			// each of them by name against this record, so a name that is not
+			// here is not a field that reads zero — it is a link that fails,
+			// and one such title stopped before its first frame. The order is
+			// the library's own declaration order, and keeping the payload in
+			// step with the Go values is fieldSyncs' job.
 			instanceSize: byteArrayInputStreamFieldsSize,
 			fields: []runtimeJavaField{
 				{name: "buf", descriptor: "[B", accessFlags: 0x0004, offset: 0},
+				{name: "pos", descriptor: "I", accessFlags: 0x0004, offset: 4},
+				{name: "count", descriptor: "I", accessFlags: 0x0004, offset: 8},
+				{name: "mark", descriptor: "I", accessFlags: 0x0004, offset: 12},
 			},
 			methods: []runtimeJavaMethod{
 				{class: "java/io/ByteArrayInputStream", name: "<init>", descriptor: "([B)V", accessFlags: 0x0001},

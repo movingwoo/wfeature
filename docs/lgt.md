@@ -750,10 +750,119 @@ fills white and writes red text onto came out as red text on black.
 The field identifiers are confirmed by the callers: one title sets index 1 six
 hundred times while drawing (a 16-bit pixel), index 0 with a pointer when it
 changes what it may touch, and index 7 once at startup. Those are the
-foreground, the clip and the font. The clip is four `uint16` — left, top, right,
-bottom — behind the pointer; a clip that does not describe a rectangle is taken
-as the whole surface, because a game that never set one would otherwise draw
-nothing.
+foreground, the clip and the font. The structure keeps the clip as four
+`uint16` — left, top, right, bottom — and a clip that does not describe a
+rectangle is taken as the whole surface, because a game that never set one would
+otherwise draw nothing.
+
+### The clip is an array of four numbers, and the far corner is outside it
+
+What is behind that pointer is **not** the structure's own packing. The
+specification says it in the row for `MC_GRP_CONTEXT_CLIP_IDX`:
+
+> 클리핑 영역. `pv`에는 정수 배열이 들어가며 … 배열의 첫 번째·두 번째 원소에는
+> 클리핑 사각형의 좌측 상단 x, y 좌표가, 세 번째·네 번째 원소에는 우측 하단 x, y
+> 좌표가 들어간다. 좌측 상단 점은 클리핑 영역에 포함되며, **우측 하단 점은
+> 포함되지 않는다.**
+
+Four `M_Int32`, and the bottom-right corner is one past the rectangle. The same
+row for `MC_GRP_CONTEXT_OFFSET_IDX` gives the offset the same shape with two.
+
+This platform copied words straight across in both directions, which is two
+separate faults with one cause:
+
+- **Setting** a clip took the caller's `x1` for a whole corner and its `y1` for
+  the other. A clip of (0,0)-(240,320) arrived as left 0, top 0, right 0, bottom
+  0, which fails the "is this a rectangle" test and is taken as the whole
+  surface — so full-screen clips looked like they worked and **no partial clip a
+  title set ever narrowed anything**.
+- **Reading** one back filled two of the four elements. That is the half a title
+  notices: one asks for its own clip to decide what part of a map to redraw,
+  computes a width and height from elements the platform never wrote, and draws
+  nothing. Its maps and backgrounds came out black while its sprites, which do
+  not consult the clip, drew normally.
+
+The transfer is now element by element — four for the clip, two for the offset —
+between the game's `M_Int32` array and the halfwords the structure keeps, and a
+draw's clip is `right-left` wide rather than `right-left+1`, because the far
+corner is outside. `MC_grpInitContext` writes the far corner as the width and
+the height rather than one less than each, for the same reason.
+
+**What it changed, over all 94 local archives**, 900 ticks each, every frame
+compared between the two builds: **91 are byte-identical and three differ, all
+three drawing more than they did.** One had been painting a stray black band
+across the top of its notice screen; one drew an empty dialogue frame whose text
+never arrived; one gained the border and the soft-key label of the dialogue it
+was already drawing. No title lost a pixel, and no summary gained a
+`tick_error`. The title the report came from is the fourth: driven past its
+notice screen with a key, it went from a white screen and then a black one with
+a line of text on it, to its publisher logo and then its map, sky, trees and
+character — 141 of 161 frames.
+
+### One build draws twenty-four rows below everything the platform draws
+
+The first title the clip fix made draw put its picture twenty-four rows too low,
+with the rows that fell off the bottom left as whatever was on the display
+before. Its text was in the right place and its picture was not, which is the
+shape of a disagreement about where row zero is.
+
+It is not this platform's drawing. Refusing the clip entirely and turning every
+`armcore` blit recogniser off both leave the frame byte-identical. The title
+composes its own frame — it writes pixels into an off-screen buffer with its own
+code and puts it up with one `MC_grpCopyFrameBuffer(0, 0, 240, 320)` a frame —
+and the offset is already in that buffer.
+
+**The guest's own arithmetic says so.** Its blit computes
+
+```
+destination = base + 2 * ((x - x0) + stride * (y - y0 + extra))
+```
+
+where `extra` is a word in its graphics state, read only when a byte beside it
+says the target is the display rather than one of its sprite buffers. Its
+initialisation sets that word once, immediately after
+`MC_grpGetDisplayInfo`, `MC_grpGetScreenFrameBuffer` and `MC_grpInitContext`:
+
+```
+adds r2, #0x90
+ldr  r3, [r2]
+adds r3, #0x18      ; twenty-four, a constant
+str  r3, [r2]
+```
+
+Twenty-four is not computed from anything this platform answers: the same
+constant arrives with any `PHONEMODEL`, and `-screen` does not move it. Writing
+zero into that word once mid-run makes the whole screen correct — sky at the
+top, the name tag under its character, the status bar along the bottom — which
+is what says the rest of the picture is right and only the origin is wrong.
+
+**So the build expects the raw screen framebuffer pointer to sit twenty-four
+rows above the visible top of the LCD**, the way a handset that keeps an
+annunciator strip above the client area would hand it over. This platform hands
+the visible origin.
+
+**Emulating the strip is not a platform-wide answer.** The same franchise's
+other Clet here writes its first pixel into row 0 and renders correctly, so the
+two builds assume opposite conventions; a twenty-four row band above every
+screen surface would fix the one and break the other. Nothing in either
+archive's metadata separates them (both declare an empty `Resolution`), the
+title calls no slot this platform leaves unnamed, and the guess a per-title
+patch would encode is exactly what `binary_hooks.go` refuses to encode on the
+other platform — matching by shape rather than by game. It is left as a known
+difference until a second title asks for the same band.
+
+### `MC_grpGetRGBFromPixel` answers through its pointers
+
+```c
+M_Int32 MC_grpGetRGBFromPixel(M_Int32 pixel, M_Int32 *r, M_Int32 *g, M_Int32 *b)
+```
+
+The three channels go back **through the pointers**, and the return value is the
+pixel it was handed, unchanged. This platform packed the channels into the
+return value — the shape its counterpart `MC_grpGetPixelFromRGB(r, g, b)` has,
+which is presumably where the shape came from — and wrote nothing at all, so a
+caller's own `r`, `g` and `b` kept whatever was in them. A title that takes a
+colour apart to rebuild it drew with three numbers it never set.
 
 ### A Java title's drawing does not synchronise, and a Clet's has to
 
