@@ -3,6 +3,7 @@ package webhost
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -166,6 +167,11 @@ func (s *Server) storeSave(writer http.ResponseWriter, request *http.Request, ow
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// errBodyTooLarge is the one reason a body is refused that a caller may want
+// to put into different words: it is the only one with a fix the person on the
+// other end can carry out.
+var errBodyTooLarge = errors.New("webhost: the request body is over the limit")
+
 // readBody reads a request body up to a limit and refuses anything longer,
 // rather than truncating it into a save the game would later fail to read.
 func readBody(request *http.Request, limit int64) ([]byte, error) {
@@ -174,7 +180,7 @@ func readBody(request *http.Request, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(body)) > limit {
-		return nil, io.ErrShortWrite
+		return nil, errBodyTooLarge
 	}
 	return body, nil
 }

@@ -7,6 +7,67 @@
   /* The sliders, checkboxes, dropdown lists and scrollbars are the browser's
      own, and it draws them light unless told which way round the page is. */
   color-scheme: dark;
+
+  /* The keypad's metrics live here rather than on the pad itself, because the
+     canvas above it has to know how much room it is taking. They used to be
+     two numbers that could not agree: the pad sized its keys from the viewport
+     while the canvas subtracted a constant 237px for it, so on a tall phone
+     the keys grew past the room reserved for them and on a short window they
+     left some of it empty.
+
+     The order below is what removes the disagreement. The canvas is budgeted
+     against the *smallest* keypad, and the keypad then takes everything the
+     canvas did not — so on a phone, where the canvas is capped by the width of
+     the screen rather than by the height, the leftover goes into the keys
+     instead of sitting empty under them. */
+  --stage-vertical: 0px;
+
+  /* The keypad in three bands: the row of Opts/Menu/Call/CLR, the two pads
+     under it, and the row of * 0 #. What the screen above does not use is
+     given to the space between those bands first, and only when there is none
+     of that left to give does a key itself get shorter.
+
+     That order is what a handset looks like. The keys are the size a thumb
+     wants and the pad breathes into whatever room the phone has; a squeeze
+     takes the air out before it takes the target away. */
+  --keypad-band: 32px;
+  --keypad-gap-min: 8px;
+  --keypad-gap-max: 40px;
+  /* The size a key wants to be, and the smallest it will accept. A key does
+     not grow past the first: past it a key is a large thing to press on a page
+     with nothing else to press, and the screen is what the room is worth. */
+  --keypad-key-pref: 48px;
+  --keypad-key-min: 36px;
+  --keypad-bottom: 12px;
+  /* The two row gaps inside the three-row pads, which are not between bands. */
+  --keypad-pad-rows: 16px;
+  /* The last row of the page is the one that has to clear a gesture bar. */
+  --keypad-chrome: calc(var(--keypad-bottom) + env(safe-area-inset-bottom, 0px));
+  --usable-height: calc(100dvh - var(--stage-vertical));
+
+  /* The screen is budgeted against the smallest keypad there can be, so that
+     the pad is never pushed off the bottom; the pad then spends whatever the
+     screen did not. Four rows of keys: the pads' three and the footer. */
+  --keypad-floor: calc(var(--keypad-band) + var(--keypad-gap-min) * 2
+      + var(--keypad-key-min) * 4 + var(--keypad-pad-rows) + var(--keypad-chrome));
+  --canvas-width: min(100vw, 480px,
+      calc((var(--usable-height) - var(--keypad-floor)) * 0.75));
+  --canvas-height: calc(var(--canvas-width) / 0.75);
+
+  /* What is left once the screen has taken its share and the pad has been
+     given the size it wants. Positive on a phone, where the screen is capped
+     by the width of the glass; negative in a window too short for both. */
+  --keypad-slack: calc(var(--usable-height) - var(--canvas-height)
+      - var(--keypad-band) - var(--keypad-gap-min) * 2
+      - var(--keypad-key-pref) * 4 - var(--keypad-pad-rows) - var(--keypad-chrome));
+
+  /* The two answers to that number, in the order they are spent. The gap takes
+     a surplus and gives it back first; the key only moves once the gap has
+     nothing left, which is what the two clamps say between them. */
+  --keypad-gap: clamp(var(--keypad-gap-min),
+      calc(var(--keypad-gap-min) + var(--keypad-slack) / 2), var(--keypad-gap-max));
+  --keypad-key-height: clamp(var(--keypad-key-min),
+      calc(var(--keypad-key-pref) + var(--keypad-slack) / 4), var(--keypad-key-pref));
 }
 
 body, p {
@@ -29,6 +90,20 @@ body {
   display: block;
 }
 
+/* The column fills the window and the keypad sits at the bottom of it, where a
+   thumb is. What room does not divide evenly between the screen and the pad
+   collects between them rather than under the pad, which is what made the
+   keypad look like it was floating up the page. */
+.stage-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.button-container {
+  margin-top: auto;
+}
+
 .rail {
   display: contents;
 }
@@ -44,6 +119,10 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* Adding a game and starting one are two different intentions, and the gap
+     is what says so: without it the second row reads as part of the first and
+     a thumb aimed at 실행 lands on ＋ 게임 추가. */
+  gap: 28px;
   padding: 24px;
   background: #22262a;
   box-sizing: border-box;
@@ -65,9 +144,36 @@ body {
 }
 
 .game-select,
-.game-start {
+.game-start,
+.game-add {
   font: inherit;
   border-radius: 4px;
+}
+
+/* The input is never seen: it is opened by the button beside it, which says
+   what it is for. A bare file input says "파일 선택" and nothing about games. */
+.game-file {
+  display: none;
+}
+
+/* The same shape as 실행, and a quieter fill. They are the same kind of thing
+   — one press, one word — but only one of them is what the screen is for, and
+   two buttons of equal weight would make a person read both every time. */
+.game-add {
+  background: #343a3f;
+  color: #e8e6e3;
+  border: none;
+  padding: 14px 28px;
+  cursor: pointer;
+}
+
+.game-add:hover:not(:disabled) {
+  background: #434a50;
+}
+
+.game-add:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .game-select {
@@ -113,7 +219,7 @@ body {
      the keypad, turned back into a width by the hole's 3:4. It is in the base
      rule rather than a media query because a keypad pushed off the bottom is
      not a phone-only shape — a half-height desktop window does it too. */
-  width: min(100vw, 480px, calc((100dvh - 237px) * 0.75));
+  width: var(--canvas-width);
   /* The wrapper is the hole the handset is looked at through, not the handset:
      it keeps the default screen's 3:4 whatever the game is running on, so a
      larger screen setting is shown smaller inside the same hole rather than
@@ -239,15 +345,14 @@ body {
 }
 
 .button-container {
-  /* One key's height, named once: the pads size their rows from it and the
-     buttons take it as their own, so an empty row is still a row tall. */
-  --keypad-key-height: clamp(36px, 6vh, 48px);
   position: relative;
   display: grid;
   width: min(100vw, 480px);
   margin: 0 auto;
-  padding: 44px 16px 12px;
-  gap: 12px;
+  /* The top band is positioned over this padding rather than laid out in it,
+     so the padding is the band plus the first of the two flexible gaps. */
+  padding: calc(var(--keypad-band) + var(--keypad-gap)) 16px var(--keypad-chrome);
+  gap: var(--keypad-gap);
   box-sizing: border-box;
 }
 
@@ -483,11 +588,6 @@ body:has(.status-message.visible) .modal-backdrop {
 }
 
 @media (max-width: 480px) {
-  .button-container {
-    padding-top: 36px;
-    gap: 8px;
-  }
-
   .settings-toggle,
   .clear-button,
   .menu-button,
@@ -497,14 +597,6 @@ body:has(.status-message.visible) .modal-backdrop {
 
   .cheat-list {
     max-height: 120px;
-  }
-}
-
-@media (max-width: 480px) and (max-height: 760px) and (orientation: portrait) {
-  .canvas-wrapper {
-    /* The same budget as the base rule, less the 8px of padding this layout
-       does not spend above the keypad. */
-    width: min(100vw, calc((100dvh - 229px) * 0.75));
   }
 }
 
@@ -784,6 +876,12 @@ body:has(.status-message.visible) .modal-backdrop {
    alongside the game rather than on top of it. One margin is enough for
    settings and cheats; the log needs a second one and waits for it below. */
 @media (min-width: 900px) {
+  :root {
+    /* This layout pads the stage, and that padding is height the canvas and
+       the keypad cannot have. */
+    --stage-vertical: 32px;
+  }
+
   .stage {
     display: grid;
     grid-template-columns: 480px minmax(260px, 380px);
@@ -796,6 +894,13 @@ body:has(.status-message.visible) .modal-backdrop {
 
   .rail-left {
     display: none;
+  }
+
+  /* The docked layout gives this column a grid cell to sit in, and a column
+     that filled the window would push the page taller than it. */
+  .stage-main {
+    display: block;
+    min-height: 0;
   }
 
   .rail-right {
@@ -853,7 +958,7 @@ body:has(.status-message.visible) .modal-backdrop {
      column it has always been; the floor is there so a short window shows a
      small screen rather than none. */
   .canvas-wrapper {
-    width: min(480px, max(240px, calc((100dvh - 261px) * 0.75)));
+    width: max(240px, var(--canvas-width));
   }
 
   .log-view {

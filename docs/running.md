@@ -12,11 +12,16 @@ makes portability the unit of distribution rather than a nicety: a release is
 the server binary for an OS, a folder to drop games into, and a browser. The
 client is a PWA and does not care which OS serves it.
 
-The Go code cross-compiles and vets clean for `linux/amd64`, `linux/arm64`
-and `windows/amd64`. It has no `exec.Command`, no `syscall` use, no hardcoded
-`/tmp` and no hand-built path separators — every path goes through
-`filepath.Join`, and the save keys that cross the Host boundary are
-slash-separated names normalized on both sides.
+The Go code cross-compiles and vets clean for `linux/amd64`, `linux/arm64`,
+`windows/amd64`, and — since the phone builds — `android/arm64` and
+`ios/arm64`. It has no `syscall` use, no hardcoded `/tmp` and no hand-built
+path separators — every path goes through `filepath.Join`, and the save keys
+that cross the Host boundary are slash-separated names normalized on both
+sides. The one `exec.Command` is `internal/launcher`'s, which opens a browser
+and is a desktop launcher's job by definition.
+
+A phone runs the same server rather than a port of it; what each app does with
+it, and what iOS forbids that Android allows, is [`mobile.md`](mobile.md).
 
 The server is a Go program (`cmd/server`) that carries the client files inside
 the binary, so nothing about it is shell- or runtime-specific. Every setting is
@@ -82,6 +87,36 @@ Which build profile is served is **the binary that is running**, not a flag: a
 server built with `-tags debug` collects the full diagnostics and writes to the
 debug save tree. One process cannot serve the other profile, which is what keeps
 a debug session from moving a release session's progress.
+
+### Adding a game from the page
+
+`POST /api/games?name=<file name>` writes one archive into the game root, and
+the picker has a **＋ 게임 추가** button that calls it. The name is
+percent-encoded in the query rather than carried in a header, because these
+names are Korean and a header value is Latin-1.
+
+It exists for a place with no folder to put a game in. On a desktop this is a
+convenience — one less directory to find — but on Android since 11 a file
+manager cannot open the directory an app keeps its files in, so "put the
+archive here" names a place nobody can reach.
+
+The name is **refused rather than repaired**: a separator, a climb, a leading
+dot or an extension that is not `.zip` or `.jar` is answered with a sentence
+the page shows, because a name that needs repairing is a request to write
+somewhere else. The bytes are not examined — which platform an archive belongs
+to is read from its content when it is loaded — so the archive lands in the
+game root with no platform directory, which is exactly the ungrouped case the
+picker already had.
+
+The write is atomic (a temporary file beside the target, then a rename), so
+re-uploading a corrected archive over a running library never leaves a
+truncated file the loader would fail on. Uploads are bounded at 32 MB, which
+is generous for an era whose largest archives are a few megabytes.
+
+**There is still no authentication.** Anything that can reach the port could
+already read and write the save trees; it can now add a game as well. That is
+the same trade the rest of this server makes on a home network, and the same
+reason `-addr 127.0.0.1:11541` exists.
 
 ### Starting and stopping it in the background
 
@@ -267,15 +302,28 @@ release number is a decision; in CI it comes from the tag, which is the same
 decision written down somewhere durable:
 
 ```sh
-make dist VERSION=0.3.1
+make dist VERSION=0.4.0
 ```
 
 ```text
 wfeature-<version>-darwin-arm64.tar.gz     wfeature-<version>-windows-amd64.zip
 wfeature-<version>-darwin-amd64.tar.gz     wfeature-<version>-linux-amd64.tar.gz
                                            wfeature-<version>-linux-arm64.tar.gz
-SHA256SUMS                                 checksums for all five
+SHA256SUMS                                 checksums for everything beside it
 ```
+
+The phone builds are not among them. `make mobile` writes an APK and an IPA
+into the same directory and rewrites `SHA256SUMS` over whatever is there, so a
+release that has them lists seven files rather than five. They are a separate
+command because each needs a toolchain the desktop build does not — an Android
+SDK, and Xcode — and a machine with neither still has to be able to cut a
+release. The release workflow builds the five; the two are uploaded to the
+release afterwards from a machine that can make them. See
+[`mobile.md`](mobile.md).
+
+**A tag with a suffix publishes as a pre-release.** `v0.4.0-pre` and
+`v0.5.0-rc1` are marked as such and `v0.4.0` is not, which is what keeps a
+release still waiting for half its files off the top of the downloads page.
 
 ```text
 wfeature-server[.exe]      the release binary, ~12 MB, stamped with the version

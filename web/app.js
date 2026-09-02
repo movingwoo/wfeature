@@ -5,6 +5,7 @@ import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
+import { initAddGame } from "./add-game.js";
 import {
   assign,
   bindable,
@@ -689,6 +690,18 @@ const initGameSelect = async () => {
   const select = document.getElementById("game-select");
   const startButton = document.getElementById("game-start");
 
+  // A game added from the page has to appear in the list without a reload, so
+  // this runs again after an upload. The wiring below is bound once: a second
+  // listener would start the game twice.
+  if (!startButton.dataset.bound) {
+    startButton.dataset.bound = "yes";
+    initAddGame({
+      document,
+      onStatus: setStatus,
+      onAdded: () => initGameSelect(),
+    });
+  }
+
   try {
     const response = await fetch("games.json", { cache: "no-store" });
     if (!response.ok) throw new Error(`게임 목록을 불러오지 못했습니다 (${response.status})`);
@@ -721,6 +734,8 @@ const initGameSelect = async () => {
 
     select.disabled = false;
     startButton.disabled = false;
+    if (startButton.dataset.started) return;
+    startButton.dataset.started = "yes";
     startButton.addEventListener("click", async () => {
       const path = select.value;
       if (!path) return;

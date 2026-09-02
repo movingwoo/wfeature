@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -40,6 +40,15 @@
                 <option value="">게임 목록 불러오는 중...</option>
               </select>
               <button id="game-start" class="game-start" disabled>실행</button>
+            </div>
+            <!-- A phone has no folder to put a game in: Android does not let a
+                 file manager open the directory an app keeps its files in. So
+                 the archive comes in through the page. The input is hidden
+                 because a bare file input says "파일 선택" and nothing about
+                 games; the button beside it is what a person reads. -->
+            <div class="prestart-row">
+              <input type="file" id="game-file" class="game-file" accept=".zip,.jar,application/zip,application/java-archive" multiple />
+              <button id="game-add" class="game-add">＋ 게임 추가</button>
             </div>
           </div>
         </div>

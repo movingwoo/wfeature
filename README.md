@@ -11,7 +11,11 @@ KTF·LGT·SKT 게임을 지원합니다.
 서버를 기동 후 웹 브라우저로 접근하는 방식이며 PWA 설치를 지원합니다.  
 기본 접속 정보는 `http://127.0.0.1:11541`입니다.  
 파일을 폴더에 넣고 에뮬레이터를 실행합니다.  
-운영체제 별 설치 프로그램이나 별도 앱은 없습니다.
+데스크톱은 설치 프로그램 없이 압축을 풀어 바로 실행합니다.  
+
+> 0.4.0 pre-release
+> **안드로이드·iOS 실험 빌드**가 있습니다
+> [`docs/mobile.md`](docs/mobile.md) 문서를 참조해주세요.
 
 **게임은 서버에서 돌고 브라우저는 화면만 받습니다.**  
 자세한 내용은 [`docs/session.md`](docs/session.md) 문서를 참조해주세요.
@@ -28,12 +32,15 @@ KTF·LGT·SKT 게임을 지원합니다.
 | Windows | `start.bat` 더블클릭 | SmartScreen → 추가 정보 → 실행, 방화벽 허용 |
 | macOS | `start.command` 더블클릭 | Control-클릭 → 열기 (서명된 앱이 아님) |
 | Linux | `./start.sh` | 권한 문제 시 `chmod +x start.sh wfeature-server` |
+| Android *(실험)* | `.apk` 설치 | 출처를 알 수 없는 앱 허용 |
+| iOS *(실험)* | `.ipa` 사이드로드 | AltStore·Sideloadly로 본인 Apple ID 서명 |
 
 아카이브에도 `stop`/`status`가 같이 들어 있습니다(`stop.sh`·`stop.command`·`stop.bat`).  
 서버 창을 닫아버렸거나 예전에 띄운 게 남아 있을 때 씁니다.  
 
 압축 안의 `README.txt`를 읽어주세요.  
 아카이브를 직접 만들려면 `make dist` 명령어를 사용합니다.  
+폰 빌드는 `make mobile`이고, 안드로이드 SDK와 Xcode가 필요해 릴리스 CI에는 없습니다.  
 자세한 내용은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.  
 버전별 변경 내역은 [`CHANGELOG.md`](CHANGELOG.md) 문서에 있습니다.
 
@@ -245,6 +252,7 @@ make test          # go test + Node 테스트
 | [`docs/architecture.md`](docs/architecture.md) | Host / Runtime / Execution 계층 |
 | [`docs/session.md`](docs/session.md) | 서버 세션 — 프로토콜, 페이싱, 프레임 스킵 |
 | [`docs/running.md`](docs/running.md) | OS별 실행, 데이터 위치 |
+| [`docs/mobile.md`](docs/mobile.md) | 안드로이드·iOS 앱 — 구조, 빌드, 한계 |
 | [`docs/cli.md`](docs/cli.md) | CLI 명령과 플래그, 재현 스크립트, ktfdump |
 | [`docs/armcore.md`](docs/armcore.md) | ARM 코어와 성능 |
 | [`docs/jvm.md`](docs/jvm.md) | 바이트코드 인터프리터 |

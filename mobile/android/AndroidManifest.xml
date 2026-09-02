@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app is the server with a WebView in front of it.
+
+  Nothing here is a port of the emulator: the same Go binary a desktop runs is
+  bundled as a native library, started on loopback, and drawn by the same page
+  a desktop browser loads. What that buys is the whole of what this project
+  spent a day failing to buy over a network — `http://127.0.0.1` is a secure
+  context, so the page is installable and its service worker registers, and
+  there is no address to find, no key to carry and no router to configure.
+
+  INTERNET is for the WebView to reach loopback. Nothing here talks to the
+  network, and the server is told to bind 127.0.0.1 so nothing on the Wi-Fi
+  can reach it either.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.movingwoo.wfeature">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:hardwareAccelerated="true"
+        android:extractNativeLibs="true"
+        android:supportsRtl="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

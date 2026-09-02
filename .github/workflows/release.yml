@@ -2,6 +2,12 @@
 # `make dist` writes on a developer's machine — the workflow adds nothing to
 # them, so a release can still be built and published by hand if this is
 # unavailable. See docs/running.md, "The release archives".
+#
+# The phone builds are not here. An APK needs an Android SDK and an IPA needs
+# Xcode, and a workflow that carried both would be two toolchain installs on
+# every desktop release for artifacts most releases do not have. They are built
+# with `make mobile` where those toolchains live and uploaded to the release
+# afterwards; see docs/mobile.md.
 name: release
 
 on:
@@ -121,7 +127,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          # A tag with a suffix — v0.4.0-pre, v0.5.0-rc1 — is published as a
+          # pre-release. The phone builds are why the distinction earns its
+          # keep: they need toolchains this workflow does not carry, so they
+          # are uploaded afterwards by hand, and a release that is still
+          # waiting for half its files should not sit at the top of the
+          # downloads page as the one to take.
+          prerelease=
+          case "${GITHUB_REF_NAME#v}" in
+            *-*) prerelease=--prerelease ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" $prerelease \
             --title "W-Feature $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             build/dist/*.tar.gz build/dist/*.zip build/dist/SHA256SUMS

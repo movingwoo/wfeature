@@ -2,6 +2,21 @@
 # under build/, including build/dist, so the one rule covers all of it.
 /build/
 
+# What the phone builds leave behind: the APK and IPA staging trees, and the
+# server binary the Android build copies in to be packaged as a library. The
+# rule above is anchored to the root, so these need naming of their own.
+/mobile/android/build/
+/mobile/android/jniLibs/
+/mobile/ios/build/
+
+# The key the Android build signs with. It is a throwaway, but a signing key is
+# still a signing key: Android accepts an update only when it carries the same
+# signature, so anyone holding this one could build an APK that installs over
+# somebody's copy and inherits its games and saves. It stays on the machine
+# that cuts releases — and has to be backed up there, because losing it means
+# the next APK cannot update the installed one.
+/mobile/android/debug.keystore
+
 # Compiled test binaries, from `go test -c`.
 *.test
 
