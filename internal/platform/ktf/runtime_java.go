@@ -3168,6 +3168,21 @@ func (runtime *initializationRuntime) inheritedVTable(parent uint32) (*runtimeVT
 		return vtable, nil
 	}
 	for _, pointer := range metadata.VTable {
+		// **An empty slot is a slot, not a method.** A module numbers its own
+		// methods from the first index past the table its superclass fills,
+		// and when a platform class here publishes fewer methods than the
+		// runtime the module was compiled against, buildModuleVTable pads the
+		// gap with zeroes so that the numbering still lines up. Reading one of
+		// those back as a method record dereferences address zero, which is
+		// how a title whose superclass is a few slots short failed with an
+		// invalid method range at 0x0 rather than with anything that named the
+		// cause. The entry is kept rather than dropped so the slots below it
+		// do not move; a call that lands on one branches to zero and faults
+		// with the address, which is a report that says where to look.
+		if pointer == 0 {
+			vtable.entries = append(vtable.entries, runtimeVTableEntry{})
+			continue
+		}
 		method, _, err := runtime.readAOTMethod(pointer)
 		if err != nil {
 			return nil, err
