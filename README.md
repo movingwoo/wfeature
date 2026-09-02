@@ -268,6 +268,7 @@ MIT — [`LICENSE`](LICENSE)
 | 구성 요소 | 쓰임 | 라이선스 |
 |---|---|---|
 | `golang.org/x/text`, `golang.org/x/image` | Go 모듈, 정적 링크 | BSD-3-Clause |
+| `golang.org/x/sys` | Go 모듈, amd64 대상에 정적 링크 | BSD-3-Clause |
 | NeoDGM (Neo둥근모) | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
 | Galmuri9 | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
 | hqx | `internal/filter/hqx`의 결정 테이블 번역본 | MIT OR Apache-2.0 |

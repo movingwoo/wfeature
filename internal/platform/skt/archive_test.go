@@ -59,6 +59,12 @@ func FuzzOpenNeverPanics(f *testing.F) {
 
 func makeJAR(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
+	return makeJARBytes(t, entries)
+}
+
+// makeJARBytes is makeJAR for a seed corpus, which is built from a *testing.F.
+func makeJARBytes(t testing.TB, entries map[string][]byte) []byte {
+	t.Helper()
 	var out bytes.Buffer
 	writer := zip.NewWriter(&out)
 	for name, data := range entries {

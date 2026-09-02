@@ -1698,12 +1698,42 @@ func invocationOutput(class, method, descriptor string, value jvm.Value) (invoke
 // back through getAppProperty and expects the encoding it shipped with.
 // Bytes that are not EUC-KR are left alone, because a repacked archive can
 // carry an ASCII or UTF-8 descriptor.
+//
+// **It takes the descriptor's bytes, not a name a parser has already
+// decoded.** The KTF descriptor parser decodes its own non-UTF-8 fields, so
+// running this over a KTF title's name reads finished UTF-8 as EUC-KR and
+// turns 영웅전설3 into 곸썒꾩꽕3. LGT keeps app_info's bytes as they came,
+// which is the case this is for.
 func displayName(name string) string {
 	decoded, err := korean.EUCKR.NewDecoder().String(name)
 	if err != nil {
 		return name
 	}
 	return decoded
+}
+
+// collisionClaim is one title in a collision report: where its archive is,
+// which title it is, and the name to show a reader. The name is already in the
+// form it will be printed in — whether it needed decoding is the caller's
+// question, and getting that wrong is what displayName's comment is about.
+type collisionClaim struct {
+	path string
+	aid  string
+	name string
+}
+
+func reportCollision(output io.Writer, platform, owner string, claims []collisionClaim) {
+	// KTF and LGT identify a title by the AID its descriptor declares. An SKT
+	// descriptor declares none, and what stands in for it there is the class
+	// the title runs, so the column is labelled by what it holds.
+	label := "AID"
+	if platform == "SKT" {
+		label = "class"
+	}
+	fmt.Fprintf(output, "%s save owner %s is claimed by %d titles:\n", platform, owner, len(claims))
+	for _, claim := range claims {
+		fmt.Fprintf(output, "  %s %s  %s  %s\n", label, claim.aid, claim.name, claim.path)
+	}
 }
 
 // checkGames reports the save directories that more than one title claims.
@@ -1740,30 +1770,42 @@ func checkGames(extra []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "scan LGT archives: %v\n", err)
 		return 1
 	}
-	if len(ktfCollisions) == 0 && len(lgtCollisions) == 0 {
+	sktCollisions, err := skt.SaveOwnerCollisions(gameRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "scan SKT archives: %v\n", err)
+		return 1
+	}
+	if len(ktfCollisions) == 0 && len(lgtCollisions) == 0 && len(sktCollisions) == 0 {
 		fmt.Fprintf(stdout, "no save owner is claimed by more than one title under %s\n", gameRoot)
 		return 0
 	}
 
-	report := func(platform string, owner string, claims []struct{ path, aid, name string }) {
-		fmt.Fprintf(stdout, "%s save owner %s is claimed by %d titles:\n", platform, owner, len(claims))
-		for _, claim := range claims {
-			fmt.Fprintf(stdout, "  AID %s  %s  %s\n", claim.aid, displayName(claim.name), claim.path)
-		}
-	}
 	for _, collision := range ktfCollisions {
-		claims := make([]struct{ path, aid, name string }, 0, len(collision.Claims))
+		claims := make([]collisionClaim, 0, len(collision.Claims))
 		for _, claim := range collision.Claims {
-			claims = append(claims, struct{ path, aid, name string }{claim.Path, claim.Descriptor.AID, claim.Descriptor.Properties["NAME"]})
+			// Already UTF-8: ReadDescriptor decodes its own non-UTF-8 fields.
+			claims = append(claims, collisionClaim{claim.Path, claim.Descriptor.AID, claim.Descriptor.Properties["NAME"]})
 		}
-		report("KTF", collision.Owner, claims)
+		reportCollision(stdout, "KTF", collision.Owner, claims)
 	}
 	for _, collision := range lgtCollisions {
-		claims := make([]struct{ path, aid, name string }, 0, len(collision.Claims))
+		claims := make([]collisionClaim, 0, len(collision.Claims))
 		for _, claim := range collision.Claims {
-			claims = append(claims, struct{ path, aid, name string }{claim.Path, claim.Descriptor.AID, claim.Descriptor.Fields["Name"]})
+			// Still the archive's bytes: ParseDescriptor keeps app_info as it came.
+			claims = append(claims, collisionClaim{claim.Path, claim.Descriptor.AID, displayName(claim.Descriptor.Fields["Name"])})
 		}
-		report("LGT", collision.Owner, claims)
+		reportCollision(stdout, "LGT", collision.Owner, claims)
+	}
+	for _, collision := range sktCollisions {
+		claims := make([]collisionClaim, 0, len(collision.Claims))
+		for _, claim := range collision.Claims {
+			// The container's .msd is decoded before it is parsed, and a bare
+			// JAR's manifest is UTF-8 by its own spec, so this is already the
+			// name to print. An SKT descriptor declares no AID; what tells two
+			// titles apart is the class they run.
+			claims = append(claims, collisionClaim{claim.Path, claim.Descriptor.MainClass, claim.Descriptor.Name})
+		}
+		reportCollision(stdout, "SKT", collision.Owner, claims)
 	}
 	fmt.Fprintln(stdout, "\nThese titles share one save directory and will overwrite each other.")
 	return 1

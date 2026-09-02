@@ -969,3 +969,87 @@ sheet of `-framedir` frames, diffed frame-by-frame against the build before the
 change, and questioned with `-trace-live`. It is a method rather than a test
 because its pass condition is a person recognising the screen. [`lgt.md`](lgt.md)
 has it in full, and [`cli.md`](cli.md) has the flags.
+
+## Repository-wide audit on 2026-09-01
+
+This audit is a dated baseline, not a claim that every title plays correctly.
+The ordinary Go and browser suites, the debug-profile suite, the internal race
+suite, `go vet`, and a five-target `make dist VERSION=0.3.1-audit` all passed.
+`govulncheck` reported no reachable vulnerability, and the direct Go modules
+had no update available. The generated archives had the expected top-level
+files and their checksums verified.
+
+The opt-in local probes also passed for all 15 SKT archives and all 35 LGT
+archives. The KTF frame probe rendered 43 of the 44 JAR-packaged archives and
+skipped one earlier package; the remaining archive contains a malformed nested
+JAR and fails before execution. These counts supersede undated uses of
+"currently" elsewhere in this document. They should eventually come from one
+generated, dated acceptance report so that prose cannot drift as the ignored
+local corpus changes.
+
+The review found the following boundaries that the passing suites do not yet
+cover:
+
+- The SKT outer archive and nested JAR readers did not enforce the four
+  archive limits the other two loaders do: input size, entry count, per-entry
+  expansion, and total expansion. The container bounded one entry and nothing
+  else; the JAR bounded one entry and the total. **Since fixed**, and the four
+  bounds now read the same way in all three loaders — see
+  [architecture.md](architecture.md), "What an archive may declare".
+- Hosts call `os.ReadFile` before any loader sees an archive, so a loader's
+  input bound is a bound on what will be parsed rather than on what the
+  process allocates. The input is a file the user placed in their own game
+  root, and the largest in the local library is under 4 MB. Recorded rather
+  than actioned: making it a bound on allocation means every Host entry point
+  measures before it reads.
+- `checkgames` recursively walked below the depth the Host exposes, so the
+  ignored diagnostic corpus produced ten collision reports and a nonzero exit
+  over a library that has none. It also applied EUC-KR decoding to a KTF
+  display name the descriptor parser had already decoded, which printed
+  영웅전설3 as 곸썒꾩꽕3. **Both since fixed**: the scan and the picker now
+  share one boundary in `internal/gameroot`, and each platform's name is
+  printed in the form its own parser left it in. The audit did not notice the
+  third defect the tool had: it checked KTF and LGT and **silently skipped
+  SKT**, whose program number is the same kind of self-declared, copyable id.
+  That is covered now too. See [cli.md](cli.md), "checkgames".
+- The release smoke job stages a fresh directory and runs a freshly built
+  executable; it does not extract and validate the archives that users
+  download. File presence, modes, line endings, embedded notices, version
+  output, launcher behavior, and traversal-safe extraction therefore remain a
+  manual release check. The archives also retain builder owner/group and time
+  metadata, so identical source does not currently produce byte-identical
+  packages.
+- The primary distribution is a PWA, but its automated acceptance stops at Go
+  HTTP/WebSocket tests and Node tests of browser modules. No real browser test
+  currently covers installation, service-worker update behavior, canvas,
+  audio, touch input, reconnect, or save restoration.
+- At the audit date, the workflows used `checkout@v4`, `setup-go@v5`,
+  `setup-node@v4`, and `upload-artifact@v4`, while their official examples had
+  moved to major version 7. Actions were tag-pinned rather than full-SHA-pinned,
+  the verify workflow had no explicit least-privilege `permissions`, and there
+  was no Dependabot configuration for Actions or Go modules. This is a dated
+  supply-chain observation; re-check the official action repositories and
+  GitHub security guidance before changing it.
+- The LAN server bounds individual save and debug-log bodies, but it has no
+  whole-request read deadline and no cap on simultaneously live sessions. It
+  also intentionally has no authentication. The first two are operational
+  limits that can be added without choosing an identity model; authentication
+  remains a product decision for use beyond a trusted local network.
+- The release-facing Korean text still needs a publication pass. The README's
+  third-party component table omitted `golang.org/x/sys`, although it is linked
+  on amd64 targets and was correctly included in the embedded notices — **since
+  fixed**; the pending and 0.3.1 changelog sections still contain proofreading
+  defects.
+
+The audit also read the constraint "use the same runtime data and save format
+for both profiles" as requiring one save root, and reported the per-profile
+root as a divergence from it. That is a misreading kept here so it is not made
+twice: the constraint is about the format, both profiles already read the same
+`var/games` and speak the same save API, and the split root is a deliberate
+design with its reason written down — a debug session is where a half-finished
+API is most likely to write a save the game cannot read back. See
+[architecture.md](architecture.md#build-profiles).
+
+The audit did not turn the documented semantic gaps in the JVM, widgets, or
+graphics recorder into immediate work without a caller that needs them. Those
+remain evidence-triggered watch items in the local plan.

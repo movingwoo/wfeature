@@ -12,6 +12,8 @@ import (
 
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
+
+	"github.com/movingwoo/wfeature/internal/gameroot"
 )
 
 // gameExtensions are the archive shapes the engine loads. A KTF or LGT game is
@@ -37,56 +39,47 @@ type Game struct {
 // error — a fresh install has no games yet, and the page has to load anyway so
 // the user can see where to put them.
 func ListGames(gameRoot string) []Game {
-	// ReadDir sorts by name, so the platform groups come out in a stable
-	// order without a second pass over them.
-	entries, err := os.ReadDir(gameRoot)
-	if err != nil {
-		return []Game{}
-	}
+	// The depth this reads to is the boundary every tool that reasons about
+	// the library shares; gameroot.Entries holds it, one group at a time and
+	// with the ungrouped archives last.
 	// Titles are Korean, so ordering them by byte would put them in an order
 	// no reader recognises.
 	korean := collate.New(language.Korean)
 	games := []Game{}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		inside, err := os.ReadDir(filepath.Join(gameRoot, entry.Name()))
-		if err != nil {
-			continue
-		}
-		games = append(games, archives(entry.Name(), inside, korean)...)
-	}
-	// A file dropped straight into the root is a game the user meant to play
-	// rather than a mistake to hide, and which platform loads it is decided by
-	// its bytes and not by the directory it was filed under. It lists after
-	// the platform groups: an ungrouped archive is the exception.
-	return append(games, archives("", entries, korean)...)
-}
-
-// archives picks the loadable archives out of one directory listing and orders
-// them the way a Korean reader expects. group names the directory the entries
-// were read from, and is empty for the game root itself.
-func archives(group string, entries []os.DirEntry, korean *collate.Collator) []Game {
-	prefix := "games/"
-	if group != "" {
-		prefix += url.PathEscape(group) + "/"
-	}
-	found := []Game{}
-	for _, entry := range entries {
-		if entry.IsDir() || !gameExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
-			continue
-		}
-		found = append(found, Game{
-			Group: group,
-			Name:  strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
-			Path:  prefix + url.PathEscape(entry.Name()),
+	group := ""
+	sortFrom := 0
+	// sortGroup orders the run of archives that came out of one directory.
+	// Groups keep the order they were discovered in, so a file dropped
+	// straight into the root still lists after the platform groups: it is a
+	// game the user meant to play rather than a mistake to hide, but it is
+	// the exception.
+	sortGroup := func() {
+		run := games[sortFrom:]
+		sort.SliceStable(run, func(left, right int) bool {
+			return korean.CompareString(run[left].Name, run[right].Name) < 0
 		})
 	}
-	sort.SliceStable(found, func(left, right int) bool {
-		return korean.CompareString(found[left].Name, found[right].Name) < 0
-	})
-	return found
+	for _, entry := range gameroot.Entries(gameRoot) {
+		if !gameExtensions[strings.ToLower(filepath.Ext(entry.Name))] {
+			continue
+		}
+		if entry.Group != group || len(games) == 0 {
+			sortGroup()
+			group = entry.Group
+			sortFrom = len(games)
+		}
+		prefix := "games/"
+		if entry.Group != "" {
+			prefix += url.PathEscape(entry.Group) + "/"
+		}
+		games = append(games, Game{
+			Group: entry.Group,
+			Name:  strings.TrimSuffix(entry.Name, filepath.Ext(entry.Name)),
+			Path:  prefix + url.PathEscape(entry.Name),
+		})
+	}
+	sortGroup()
+	return games
 }
 
 func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request) {
