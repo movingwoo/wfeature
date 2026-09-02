@@ -639,11 +639,36 @@ names but not which class owns each.
 go run ./cmd/cli checkgames [-games dir]
 ```
 
-KTF and LGT titles key their saves by the PID in their descriptor, and a PID is
-not reliably unique: two titles carrying the same one resolve to the same save
-directory and overwrite each other. `checkgames` scans the game root for that
-collision and exits nonzero when it finds any, which makes it worth running
+A title keys its saves by an id its own descriptor declares — a KTF or LGT PID,
+an SKT program number — and none of the three is reliably unique: two titles
+carrying the same one resolve to the same save directory and overwrite each
+other. `checkgames` scans the game root for that collision on **all three
+platforms** and exits nonzero when it finds any, which makes it worth running
 after adding archives.
+
+What separates a collision from a variant is the identity beside the id. KTF
+and LGT declare an AID, so a save owner claimed under two AIDs is the case
+worth reporting and one title shipped twice is not. **An SKT descriptor
+declares no AID**, and what stands in for it is the class the title runs: two
+archives running the same class are one title shipped twice. The report labels
+that column `class` rather than `AID` for SKT titles, because it is not the
+same thing wearing a different name.
+
+**It scans exactly what a Host offers**: the game root and one level of group
+below it, which is `internal/gameroot`'s boundary and the same listing the
+picker builds. An archive filed deeper cannot be started from a Host, so a
+collision between two of them is not a collision any save will suffer — and a
+diagnostic corpus filed under the root is made of exactly those. It used to
+walk the whole tree, which turned an ignored corpus of several hundred
+archives into ten collision reports and a nonzero exit over a library that had
+none. Point `-games` at that corpus to check it deliberately.
+
+**A title's name is printed in the form its parser left it in.** The KTF
+descriptor parser decodes its own non-UTF-8 fields, so a KTF name is already
+UTF-8 by the time the report has it; LGT's `app_info` is kept as the bytes it
+came as. Reading an already-decoded name as EUC-KR a second time is what
+printed 영웅전설3 as 곸썒꾩꽕3 in every KTF line, and an ASCII title survives
+either way, which is why it stayed invisible.
 
 ## ktfdump
 

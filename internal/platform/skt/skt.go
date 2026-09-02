@@ -15,7 +15,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	"io"
 	"path"
 	"strings"
 
@@ -57,10 +56,30 @@ func Open(data []byte) (*Archive, error) {
 // inside an SKT archive. A nil JAR means data was not an archive at all, which
 // is not an error here: the caller then reads it as a bare MIDlet JAR.
 func unpackArchive(data []byte) (Descriptor, []byte, map[string][]byte, error) {
+	return unpackArchiveWithin(data, defaultArchiveLimits)
+}
+
+// unpackArchiveWithin is unpackArchive with its bounds named, so a test can
+// reach the far side of each one without building half a gigabyte to get
+// there. The outer container is bounded exactly as the JAR inside it is: an
+// archive that is not a zip at all is still not an error here, but one that is
+// a zip past a bound is.
+func unpackArchiveWithin(data []byte, limits archiveLimits) (Descriptor, []byte, map[string][]byte, error) {
+	if uint64(len(data)) > limits.input {
+		return Descriptor{}, nil, nil, fmt.Errorf("SKT archive exceeds %d input bytes", limits.input)
+	}
+	// Whether these bytes are a container at all is decided first, and by the
+	// reader rather than by the shape of an error: bytes that are not a zip
+	// are not a failure here, because the caller then reads them as a bare
+	// MIDlet JAR. Only once it is a zip do its declared bounds apply.
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return Descriptor{}, nil, nil, nil
 	}
+	if len(reader.File) > limits.count {
+		return Descriptor{}, nil, nil, fmt.Errorf("SKT archive contains %d entries, limit %d", len(reader.File), limits.count)
+	}
+	spent := &budget{limits: limits, what: "SKT archive"}
 	var msdName string
 	for _, file := range reader.File {
 		if strings.EqualFold(path.Ext(file.Name), msdSuffix) {
@@ -71,7 +90,7 @@ func unpackArchive(data []byte) (Descriptor, []byte, map[string][]byte, error) {
 	if msdName == "" {
 		return Descriptor{}, nil, nil, nil
 	}
-	msd, err := readArchiveEntry(reader, msdName)
+	msd, err := readArchiveEntry(reader, msdName, spent)
 	if err != nil {
 		return Descriptor{}, nil, nil, fmt.Errorf("read SKT descriptor %q: %w", msdName, err)
 	}
@@ -85,14 +104,14 @@ func unpackArchive(data []byte) (Descriptor, []byte, map[string][]byte, error) {
 	// The JAR is named after the descriptor. A title whose archive was
 	// repacked can have lost the pairing, so the one JAR that is there wins —
 	// the same rule the LGT loader applies for the same reason.
-	jar, err := readArchiveEntry(reader, strings.TrimSuffix(msdName, path.Ext(msdName))+".jar")
+	jar, err := readArchiveEntry(reader, strings.TrimSuffix(msdName, path.Ext(msdName))+".jar", spent)
 	if err != nil {
-		jar, err = onlyJAR(reader)
+		jar, err = onlyJAR(reader, spent)
 		if err != nil {
 			return Descriptor{}, nil, nil, err
 		}
 	}
-	installed, err := installedFiles(reader)
+	installed, err := installedFiles(reader, spent)
 	if err != nil {
 		return Descriptor{}, nil, nil, err
 	}
@@ -107,7 +126,7 @@ func unpackArchive(data []byte) (Descriptor, []byte, map[string][]byte, error) {
 // Nothing but the packaging tells them apart from the descriptor and the
 // module, so what is excluded is named rather than guessed at: the JAR, the
 // .msd, and the two files the platform itself was sent.
-func installedFiles(reader *zip.Reader) (map[string][]byte, error) {
+func installedFiles(reader *zip.Reader, spent *budget) (map[string][]byte, error) {
 	installed := make(map[string][]byte)
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
@@ -121,7 +140,7 @@ func installedFiles(reader *zip.Reader) (map[string][]byte, error) {
 		if name == "" || name == "." {
 			continue
 		}
-		data, err := readArchiveEntry(reader, file.Name)
+		data, err := readArchiveEntry(reader, file.Name, spent)
 		if err != nil {
 			return nil, fmt.Errorf("read SKT installed file %q: %w", file.Name, err)
 		}
@@ -137,7 +156,7 @@ func installedFiles(reader *zip.Reader) (map[string][]byte, error) {
 	return installed, nil
 }
 
-func onlyJAR(reader *zip.Reader) ([]byte, error) {
+func onlyJAR(reader *zip.Reader, spent *budget) ([]byte, error) {
 	var found *zip.File
 	for _, file := range reader.File {
 		if !strings.EqualFold(path.Ext(file.Name), ".jar") {
@@ -151,7 +170,7 @@ func onlyJAR(reader *zip.Reader) ([]byte, error) {
 	if found == nil {
 		return nil, fmt.Errorf("SKT archive has no JAR")
 	}
-	return readArchiveEntry(reader, found.Name)
+	return readArchiveEntry(reader, found.Name, spent)
 }
 
 // readArchiveEntry reads one entry by its exact stored name. It walks the
@@ -160,7 +179,7 @@ func onlyJAR(reader *zip.Reader) ([]byte, error) {
 // handset's archive carries EUC-KR file names, which one local title's data
 // file is. That refusal reads as "invalid argument" on a file that is right
 // there in the archive.
-func readArchiveEntry(reader *zip.Reader, name string) ([]byte, error) {
+func readArchiveEntry(reader *zip.Reader, name string, spent *budget) ([]byte, error) {
 	var found *zip.File
 	for _, file := range reader.File {
 		if file.Name == name {
@@ -171,22 +190,21 @@ func readArchiveEntry(reader *zip.Reader, name string) ([]byte, error) {
 	if found == nil {
 		return nil, fmt.Errorf("SKT archive has no entry %q", name)
 	}
-	opened, err := found.Open()
-	if err != nil {
-		return nil, err
+	if found.UncompressedSize64 > spent.limits.entry {
+		return nil, fmt.Errorf("SKT archive entry %q is too large (%d bytes)", name, found.UncompressedSize64)
 	}
-	defer opened.Close()
-	data, err := io.ReadAll(io.LimitReader(opened, maxArchiveEntrySize+1))
+	data, err := readEntryWithin(found, spent.limits.entry)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("SKT archive entry %q: %w", name, err)
 	}
-	if int64(len(data)) > maxArchiveEntrySize {
-		return nil, fmt.Errorf("SKT archive entry %q exceeds %d bytes", name, maxArchiveEntrySize)
+	// The container is read a few entries at a time — the descriptor, the JAR,
+	// then the installed files — so the total is carried between the calls
+	// rather than counted inside any one of them.
+	if err := spent.spend(uint64(len(data))); err != nil {
+		return nil, err
 	}
 	return data, nil
 }
-
-const maxArchiveEntrySize int64 = 128 << 20
 
 // decodeEUCKR converts descriptor text to UTF-8, leaving bytes that are not
 // EUC-KR as they are: a repacked archive can carry an ASCII or UTF-8 .msd, and

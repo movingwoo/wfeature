@@ -72,6 +72,13 @@ derives the JAR name from the descriptor's own so the two move together, and
 files installed files by base name. Nothing there looks up a fixed path. That
 is the shape the other two would have to grow to stop needing the rule at all.
 
+`internal/gameroot` is the other Host-side tool of that kind: it names the
+depth a game library is discovered at — the root and one group below it — so
+that the picker and every command which reasons about "the library" agree on
+which files are in it. A tool that walks further reports on archives no Host
+will offer, which is what an ignored diagnostic corpus filed under the root is
+made of. `checkgames` reads through it; see [`cli.md`](cli.md).
+
 `internal/route` is a Host-side tool rather than a layer: it reads a scripted
 way back to a scene and drives one, and it belongs to no platform. What it
 needs of a session — advance a tick, fingerprint the screen, send a key, say
@@ -169,6 +176,43 @@ set did on a dated run, which is the form that does not go stale by standing
 still. The probes and their counts are in [`testing.md`](testing.md); the
 instruction subset and the KTF format's boundaries are in
 [`armcore.md`](armcore.md) and [`ktf.md`](ktf.md).
+
+## What an archive may declare
+
+Every platform's loader bounds the same four things about a zip, and bounds
+them the same way, because three loaders that disagree about it are three
+places to have to check:
+
+| | the input | how many entries | one entry | everything expanded |
+|---|---|---|---|---|
+| KTF outer zip and inner JAR | 128 MB | 8192 | 128 MB | 512 MB |
+| LGT zip | 128 MB | 8192 | 64 MB | 512 MB |
+| SKT container and inner JAR | 128 MB | 8192 | 128 MB | 512 MB |
+
+The per-entry bound alone is not enough: it bounds one file, and a zip that
+declares eight thousand of them is eight thousand times that. The count is
+checked before anything is read, because it is already in the directory the
+reader parsed and reading is the expensive half. What the total counts is bytes
+actually read rather than the size the zip declares, since a zip may lie about
+either.
+
+SKT was the loader that had only two of the four — its container bounded one
+entry and nothing else, and its JAR bounded one entry and the total but neither
+the input nor the count. The SKT container reads its entries in three passes —
+the descriptor, then the JAR, then the title's installed files — so its total is
+carried across the calls in a `budget` rather than counted inside any one loop.
+
+Each loader takes its limits as a value so a test can reach the far side of
+every bound without building half a gigabyte to get there; a bound nobody can
+afford to test is a bound nobody tests. The largest archive in the local
+library is under 4 MB, so these are a ceiling on damage and not a constraint any
+real title comes near.
+
+**A Host reads the file into memory before a loader sees it.** The bound is
+therefore a bound on what the loader will parse, not on what the process will
+allocate, and the input it protects is a file the user put in their own game
+root. Making it a bound on allocation too means the Host measuring before it
+reads, which is a change to every entry point rather than to the loaders.
 
 ## Build profiles
 

@@ -1,11 +1,10 @@
 package ktf
 
 import (
-	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
+
+	"github.com/movingwoo/wfeature/internal/gameroot"
 )
 
 // SaveOwnerClaim is one archive's claim on a save directory.
@@ -49,29 +48,23 @@ func (collision SaveOwnerCollision) AIDs() []string {
 // a collision is a save owner claimed under more than one AID.
 func SaveOwnerCollisions(root string) ([]SaveOwnerCollision, error) {
 	claims := make(map[string][]SaveOwnerClaim)
-	walkErr := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(name), ".zip") {
-			return nil
-		}
+	// The scan stops where the Host's picker stops. An archive deeper than
+	// that cannot be started from a Host, so a collision between two of them
+	// is not a collision a save will ever suffer — and an ignored diagnostic
+	// corpus under the game root is made of exactly those.
+	for _, name := range gameroot.Paths(root, ".zip") {
 		data, readErr := os.ReadFile(name)
 		if readErr != nil {
-			return readErr
+			return nil, readErr
 		}
 		descriptor, parseErr := ReadDescriptor(data)
 		if parseErr != nil {
 			// Archives of other platforms sit in neighbouring directories and
 			// are not this check's business.
-			return nil
+			continue
 		}
 		owner := SaveOwner(descriptor)
 		claims[owner] = append(claims[owner], SaveOwnerClaim{Path: name, Descriptor: descriptor})
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
 	}
 
 	var collisions []SaveOwnerCollision
