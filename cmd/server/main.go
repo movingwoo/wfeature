@@ -180,6 +180,10 @@ func run(arguments []string, answer, output *os.File) error {
 		options.AdminKey = state.Admin
 	}
 
+	// The page asks for this and cannot work it out for itself; see
+	// internal/webhost/connect.go for both halves of why.
+	options.ConnectURL = connectLink(portOf(listener), state.Key)
+
 	server, err := webhost.New(options)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import { createGameSpeed } from "./game-speed.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
+import { initConnect } from "./connect.js";
 import {
   assign,
   bindable,
@@ -1488,6 +1489,10 @@ const main = async () => {
   initModalBackdrop();
   initSettings();
   initKeyBindings();
+  // The phone's address does not depend on a session, and the moment it is
+  // most wanted is before there is one: the page is open on the machine that
+  // started the server, and the phone has not been let in yet.
+  initConnect({ document });
 
   session = await openSession();
   if (!session) {

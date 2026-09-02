@@ -26,7 +26,11 @@ copyright notice below applies to them.
 
 The runtime's own class library, the Java fixtures under `internal/*/testdata`,
 the fonts' rasterizer, the SMAF/MIDI code, and the emulator core were authored
-for this project.
+for this project. `web/qr.js` is a copy of the QR encoder from the same
+author's wtools (https://wtools.movingwoo.com), which carries the same MIT
+license and copyright holder as this project, so it needs no separate notice
+below — it is named here so that a reader knows where it came from and where a
+newer copy would come from.
 
 ---
 

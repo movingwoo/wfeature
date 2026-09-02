@@ -82,6 +82,39 @@ certificate it checks, so this is a choice rather than a better answer, and
 [`network.md`](network.md) has both sides of it. The CLI reads the same
 `WFEATURE_PHONE_NUMBER`.
 
+### The address a phone should open
+
+The panel behind Opts has a **📱 폰으로 열기** button, and what it draws is a QR
+of the address to point a phone at. It replaces the step most people gave up
+on: read `ipconfig`, copy four numbers and a port, retype them into a phone
+keyboard.
+
+**The page cannot work that address out for itself**, which is why there is a
+route for it rather than a line of JavaScript. Its own `location` is whatever
+was typed to reach it — on the machine running the server that is `127.0.0.1`,
+an address that means the phone when a phone opens it — and on a `-public`
+server the link needs the key, which the page is not allowed to read: the
+cookie holding it is HttpOnly, and the address bar had the key taken out of it
+the moment the link was followed. So `GET /api/connect` answers with the
+finished link, and the server is the side that knows both halves.
+
+```json
+{"url": "http://192.168.0.5:11541/?k=K6F7EZL2FPF6McP6DvsnCw"}
+```
+
+An empty `url` is an ordinary state rather than an error — a machine with
+nothing but loopback, or a listener on a Unix socket, whose reachable address
+belongs to the proxy in front of it — and the panel says so instead of showing
+a link that goes nowhere. The route is inside the access gate like everything
+else: on a public server the answer *is* the key.
+
+`web/qr.js` is the encoder, a verbatim copy of the MIT-licensed one from
+[wtools](https://wtools.movingwoo.com) by the same author. It is a copy rather
+than a call to that site for the reason the whole program is arranged this way:
+the emulator runs on a machine in a house, this screen is the one a user looks
+at when something is not working, and on a public server the text being drawn
+is the access key itself.
+
 ### A key, for a server something outside can reach
 
 `-public` makes every request carry a key. It is for the one arrangement this

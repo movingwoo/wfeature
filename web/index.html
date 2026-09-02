@@ -202,9 +202,26 @@
             <button id="key-bindings-reset" class="panel-button">기본값으로</button>
           </details>
 
+          <!-- The address a phone should open. It is a button rather than a
+               line of text because what a phone needs is a camera pointed at a
+               QR, and because the address is the server's answer rather than
+               the page's: see internal/webhost/connect.go. -->
+          <button id="connect-toggle" class="panel-button">📱 폰으로 열기</button>
+
           <button id="cheat-toggle" class="panel-button hidden">🎯 치트</button>
           <button id="debug-log" class="panel-button hidden">🐞 디버그 로그 저장</button>
           <button id="restart" class="panel-button hidden">🔄 재시작</button>
+        </div>
+
+        <div id="connect-panel" class="connect-panel">
+          <div class="panel-header">
+            <span>📱 폰으로 열기</span>
+            <button id="connect-close" class="panel-close">닫기</button>
+          </div>
+          <p class="connect-hint">폰 카메라로 찍으세요. 같은 공유기에 연결돼 있어야 합니다.</p>
+          <canvas id="connect-qr" class="connect-qr" width="0" height="0"></canvas>
+          <p id="connect-url" class="connect-url"></p>
+          <button id="connect-copy" class="panel-button">주소 복사</button>
         </div>
 
         <div id="cheat-panel" class="cheat-panel">

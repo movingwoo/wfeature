@@ -96,6 +96,12 @@ type Options struct {
 	// person entitled to end everybody's game — and it never appears in one.
 	AdminKey string
 
+	// ConnectURL is the address a phone should open, which the page asks for
+	// and cannot work out for itself; see connect.go. Empty means there is
+	// none to give, and the page says so rather than showing a link that goes
+	// nowhere.
+	ConnectURL string
+
 	Logger *slog.Logger
 }
 
@@ -132,6 +138,8 @@ type Server struct {
 	// Empty is the ordinary case for both; see access.go.
 	accessKey string
 	adminKey  string
+	// connectURL is Options.ConnectURL; see connect.go.
+	connectURL string
 
 	// parked holds games whose page went away, waiting under the token that
 	// page was given; see resume.go. They live on the Server because they have
@@ -168,6 +176,7 @@ func New(options Options) (*Server, error) {
 		requestShutdown: options.RequestShutdown,
 		accessKey:       options.AccessKey,
 		adminKey:        options.AdminKey,
+		connectURL:      options.ConnectURL,
 	}, nil
 }
 
@@ -205,6 +214,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveGameList(writer, request)
 	case strings.HasPrefix(requestPath, "/games/"):
 		s.serveGameArchive(writer, request)
+	case requestPath == "/api/connect":
+		s.serveConnect(writer, request)
 	case requestPath == "/api/status":
 		s.serveStatus(writer, request)
 	case requestPath == "/api/shutdown":

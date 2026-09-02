@@ -106,6 +106,16 @@ the token, so the restart button still starts a game over.
   write watch is not offered. Whether a session has a panel is the session's
   answer rather than the platform's, and the page removes the toggle where the
   answer is no.
+- **The address a phone should open** — `connect.js` draws a QR of it in a
+  panel behind Opts, so nobody has to read `ipconfig` and retype four numbers
+  into a phone. The address comes from the server (`GET /api/connect`) because
+  the page cannot know it: its own `location` is `127.0.0.1` on the machine
+  running the server, and on a `-public` server the link needs a key held in an
+  HttpOnly cookie the page may not read. `qr.js` is the encoder, a verbatim
+  copy of the MIT-licensed one from the author's wtools — a copy rather than a
+  call to that site, because this screen has to work with no internet and the
+  text it draws can be the access key itself. Re-syncing is a diff against
+  `js/lib/qr/encoder.js` there.
 - **Sound** — the engine's MIDI and PCM events are synthesised in the page from
   oscillators rather than a soundfont; see the head of `audio.js` for why.
 - **What is remembered, and where** — every setting the page keeps goes through

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/movingwoo/wfeature/internal/launcher"
 )
 
 // A `-public` run writes its keys down, because two other commands need them
@@ -138,6 +140,26 @@ func keyedURL(base, key string) string {
 // person pastes and a server that reads it, and both are already written down
 // in the documentation.
 const accessKeyQuery = "k"
+
+// connectLink is the address to put in front of a phone: this machine on the
+// local network, with the key when there is one. It is worked out here rather
+// than in the server because the two halves live here — the launcher knows
+// which address on this machine another device can reach, and a public run
+// holds the key.
+//
+// An empty answer is an ordinary state rather than a failure: a machine with
+// nothing but loopback, or a listener on a Unix socket, has no address of its
+// own to hand out, and the page says so.
+func connectLink(port int, key string) string {
+	if port == 0 {
+		return ""
+	}
+	lan := (launcher.Report{Port: port}).LANURL()
+	if lan == "" {
+		return ""
+	}
+	return keyedURL(lan, key)
+}
 
 // portOf is the listener's port, or zero for a listener that has none — a Unix
 // socket, which no link can name anyway.
