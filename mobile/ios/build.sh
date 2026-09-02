@@ -22,7 +22,13 @@ app=$out/Payload/wfeature.app
 
 sdk=$(xcrun --sdk iphoneos --show-sdk-path)
 [ -d "$sdk" ] || { echo "no iPhoneOS SDK; Xcode is needed, not just the command line tools" >&2; exit 1; }
-minimum=15.0
+# iOS 14 is the floor because that is where TrollStore's range starts: it
+# installs an unsigned IPA permanently on 14.0 through 16.6.1, and a build that
+# asked for 15.0 was refusing the bottom of that range for nothing. Nothing in
+# the app needs anything newer — the one API that does is guarded at its own
+# version — and the phones below 15 are exactly the old ones this emulator is
+# for.
+minimum=14.0
 
 rm -rf "$out"
 mkdir -p "$app"
