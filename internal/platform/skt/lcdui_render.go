@@ -433,7 +433,7 @@ func midpImageOf(object *jvm.Object) (*imageData, error) {
 		return nil, nil
 	}
 	image, ok := object.Native.(*imageData)
-	if object.ClassName != midp.ImageClass || !ok {
+	if !isImageClass(object.ClassName) || !ok {
 		return nil, fmt.Errorf("not a MIDP Image")
 	}
 	return image, nil

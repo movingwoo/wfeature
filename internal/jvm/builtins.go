@@ -226,6 +226,27 @@ func (vm *VM) registerThreadBuiltins() {
 		}
 		return VoidValue(), vm.threadYield()
 	})
+	// activeCount is a census a title takes of itself: it counts its own
+	// workers before starting another. What it counts here is every thread
+	// object this machine holds that is still running, plus the main one,
+	// because the specification counts the current thread group and this
+	// runtime has exactly one.
+	vm.contextBuiltin(ThreadClass, "activeCount", "()I", func(vm *VM, _ *execution, _ []Value) (Value, error) {
+		count := int32(0)
+		for _, thread := range vm.ThreadObjects() {
+			state := vm.threadState(thread)
+			state.mu.Lock()
+			alive := state.alive
+			state.mu.Unlock()
+			if alive || thread == vm.mainThread {
+				count++
+			}
+		}
+		if count == 0 {
+			count = 1
+		}
+		return IntValue(count), nil
+	})
 	vm.contextBuiltin(ThreadClass, "yield", "()V", func(vm *VM, _ *execution, _ []Value) (Value, error) {
 		runtime.Gosched()
 		return VoidValue(), vm.threadYield()
@@ -475,6 +496,34 @@ func (vm *VM) registerUtilityBuiltins() {
 		instant := time.UnixMilli(vm.nowMilliseconds())
 		instant = instant.In(timeZoneLocation(data, instant))
 		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: instant}}), nil
+	})
+	// setTimeZone moves a calendar that already exists into a zone, which is
+	// the other half of the pair above: a title takes the default calendar and
+	// then names the zone it wants to read the fields in. The instant does not
+	// move — only which fields get(I) breaks it into — so this is exactly what
+	// the zone form of getInstance does, applied to a calendar in hand.
+	vm.builtin("java/util/Calendar", "setTimeZone", "(Ljava/util/TimeZone;)V", func(_ *VM, arguments []Value) (Value, error) {
+		object, err := nativeReference(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		calendar, ok := object.Native.(*calendarData)
+		if !ok {
+			return VoidValue(), fmt.Errorf("receiver is not a Calendar")
+		}
+		zone, err := nativeReference(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if zone == nil {
+			return VoidValue(), guestException("java/lang/NullPointerException", "Calendar.setTimeZone zone")
+		}
+		data, ok := zone.Native.(*timeZoneData)
+		if !ok {
+			return VoidValue(), fmt.Errorf("argument is not a TimeZone")
+		}
+		calendar.time = calendar.time.In(timeZoneLocation(data, calendar.time))
+		return VoidValue(), nil
 	})
 	// `java/util/GregorianCalendar` is the concrete calendar a title reaches
 	// for when it wants one without going through the factory. CLDC does not
@@ -1306,13 +1355,11 @@ func (vm *VM) registerStringBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		if object == nil {
-			return ReferenceValue(nativeStringValue("null")), nil
+		text, err := vm.objectText(object)
+		if err != nil {
+			return VoidValue(), err
 		}
-		if value, ok := nativeStringObject(object); ok {
-			return ReferenceValue(nativeStringValue(value)), nil
-		}
-		return ReferenceValue(nativeStringValue(fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object)))), nil
+		return ReferenceValue(nativeStringValue(text)), nil
 	})
 }
 
@@ -1379,13 +1426,7 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		if err != nil {
 			return "", err
 		}
-		if object == nil {
-			return "null", nil
-		}
-		if value, ok := nativeStringObject(object); ok {
-			return value, nil
-		}
-		return fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object)), nil
+		return vm.objectText(object)
 	}))
 	vm.builtin(class, "append", "(J)"+self, appendStringBuffer(func(arguments []Value) (string, error) {
 		value, err := nativeLong(arguments, 1)
@@ -1463,6 +1504,56 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		data.units = append(data.units[:start], data.units[end:]...)
 		data.mu.Unlock()
 		return ReferenceValue(object), nil
+	})
+	// deleteCharAt is delete's one-character form, and it is the one a title
+	// backspacing a field reaches for. It is not delete(i, i+1) at the end of
+	// the buffer: the specification refuses an index equal to the length,
+	// where the ranged form clamps.
+	vm.builtin(class, "deleteCharAt", "(I)"+self, func(_ *VM, arguments []Value) (Value, error) {
+		object, data, err := stringBufferArgument(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		index, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		data.mu.Lock()
+		if index < 0 || int(index) >= len(data.units) {
+			data.mu.Unlock()
+			return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", fmt.Sprintf("StringBuffer.deleteCharAt index %d", index))
+		}
+		data.units = append(data.units[:index], data.units[index+1:]...)
+		data.mu.Unlock()
+		return ReferenceValue(object), nil
+	})
+	// getChars copies a window of the buffer into a char array the caller
+	// owns, which is how a title lays out text it is still building without
+	// making a String of it first. It is String.getChars against a buffer, so
+	// the range check is the same one.
+	vm.builtin(class, "getChars", "(II[CI)V", func(_ *VM, arguments []Value) (Value, error) {
+		_, data, err := stringBufferArgument(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		begin, beginErr := nativeInt(arguments, 1)
+		end, endErr := nativeInt(arguments, 2)
+		destination, destinationErr := nativeReference(arguments, 3)
+		offset, offsetErr := nativeInt(arguments, 4)
+		if beginErr != nil || endErr != nil || destinationErr != nil || offsetErr != nil {
+			return VoidValue(), fmt.Errorf("StringBuffer.getChars arguments are invalid")
+		}
+		data.mu.Lock()
+		if begin < 0 || end < begin || int(end) > len(data.units) {
+			data.mu.Unlock()
+			return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", fmt.Sprintf("StringBuffer.getChars range %d..%d", begin, end))
+		}
+		values := make([]Value, 0, end-begin)
+		for _, unit := range data.units[begin:end] {
+			values = append(values, IntValue(int32(unit)))
+		}
+		data.mu.Unlock()
+		return VoidValue(), SetArrayRange(destination, int(offset), values)
 	})
 	// insert is delete's opposite and the only other way a title of this era
 	// edits a buffer in place: it builds a line and then puts a prefix in front
@@ -1870,3 +1961,61 @@ func timeZoneArgument(arguments []Value) (*timeZoneData, error) {
 	}
 	return data, nil
 }
+
+// objectText is what `String.valueOf(Object)` and a `StringBuffer` append
+// answer for a reference, and it is the specification's answer rather than a
+// name: an object whose class overrides `toString` is asked, and only a class
+// that does not override it is printed as `class@identity`.
+//
+// Asking costs a virtual dispatch out of a native — guest code re-entered from
+// inside a call the guest is already in — so the resolution decides first and
+// nothing is invoked for the common case. A census over one platform's whole
+// corpus found the object form asked for by seven titles and handed a string
+// every time, which is why this stayed a name for so long; the caller that
+// finally needed it builds a resource path out of a `StringBuffer` and gets a
+// file name nothing in its archive answers, so it catches its own exception,
+// keeps the null image it was left with, and paints it several calls later.
+func (vm *VM) objectText(object *Object) (string, error) {
+	if object == nil {
+		return "null", nil
+	}
+	if value, ok := nativeStringObject(object); ok {
+		return value, nil
+	}
+	identity := fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object))
+	// The root's own toString is this same identity, so a class that does not
+	// override it is answered without entering the interpreter at all. A class
+	// that cannot be resolved is answered the same way, because a name is a
+	// better answer here than ending the session.
+	declaring, _, err := vm.resolveInstanceMethod(object.ClassName, "toString", "()Ljava/lang/String;")
+	if err != nil || declaring == nil || declaring.Name == ObjectClass {
+		return identity, nil
+	}
+	if depth := vm.toStringDepth.Add(1); depth > maxToStringDepth {
+		vm.toStringDepth.Add(-1)
+		return identity, nil
+	}
+	result, err := vm.InvokeVirtual(object, "toString", "()Ljava/lang/String;")
+	vm.toStringDepth.Add(-1)
+	if err != nil {
+		return "", err
+	}
+	text, err := result.Reference()
+	if err != nil {
+		return "", err
+	}
+	if text == nil {
+		return "null", nil
+	}
+	value, ok := nativeStringObject(text)
+	if !ok {
+		return identity, nil
+	}
+	return value, nil
+}
+
+// maxToStringDepth bounds objectText's nesting across the whole machine. One
+// object naming another is ordinary; a chain this long is a guest archive
+// recursing, and the answer it gets back is the identity it would have had
+// before any of this.
+const maxToStringDepth = 16

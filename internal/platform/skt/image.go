@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/wipic"
@@ -48,7 +47,7 @@ func (runtime *Runtime) createMutableImage(_ *jvm.VM, arguments []jvm.Value) (jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	image, err := newMIDPImage(int(width), int(height), true, nil)
+	image, err := runtime.newMIDPImage(int(width), int(height), true, nil)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -61,7 +60,7 @@ func (runtime *Runtime) createImageCopy(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 		return jvm.VoidValue(), err
 	}
 	pixels := source.snapshot()
-	image, err := newMIDPImage(source.width, source.height, false, pixels)
+	image, err := runtime.newMIDPImage(source.width, source.height, false, pixels)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -88,7 +87,7 @@ func (runtime *Runtime) createImageRegion(_ *jvm.VM, arguments []jvm.Value) (jvm
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "invalid image transform")
 	}
 	pixels, transformedWidth, transformedHeight := transformImageRegion(source.snapshot(), source.width, int(x), int(y), int(width), int(height), transform)
-	image, err := newMIDPImage(transformedWidth, transformedHeight, false, pixels)
+	image, err := runtime.newMIDPImage(transformedWidth, transformedHeight, false, pixels)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -108,7 +107,7 @@ func (runtime *Runtime) createImageFromResource(_ *jvm.VM, arguments []jvm.Value
 	if !ok {
 		return jvm.VoidValue(), newGuestException("java/io/IOException", "image resource not found: "+name)
 	}
-	image, err := decodeMIDPImage(data)
+	image, err := runtime.decodeMIDPImage(data)
 	if err != nil {
 		return jvm.VoidValue(), newGuestException("java/io/IOException", err.Error())
 	}
@@ -139,7 +138,7 @@ func (runtime *Runtime) createImageFromBytes(_ *jvm.VM, arguments []jvm.Value) (
 		}
 		data[index] = byte(raw)
 	}
-	image, err := decodeMIDPImage(data)
+	image, err := runtime.decodeMIDPImage(data)
 	if err != nil {
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", err.Error())
 	}
@@ -186,7 +185,7 @@ func (runtime *Runtime) createRGBImage(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 			rgba[index*4+3] = byte(raw >> 24)
 		}
 	}
-	image, err := newMIDPImage(int(width), int(height), false, rgba)
+	image, err := runtime.newMIDPImage(int(width), int(height), false, rgba)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -212,7 +211,7 @@ func (runtime *Runtime) getImageGraphics(_ *jvm.VM, arguments []jvm.Value) (jvm.
 		font:        runtime.fontObject(fontSystem, fontPlain, fontMedium),
 		active:      true,
 	}
-	return jvm.ReferenceValue(&jvm.Object{ClassName: midp.GraphicsClass, Fields: make(map[string]jvm.Value), Native: context}), nil
+	return jvm.ReferenceValue(&jvm.Object{ClassName: runtime.graphicsClassName(), Fields: make(map[string]jvm.Value), Native: context}), nil
 }
 
 func (runtime *Runtime) getImageWidth(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -291,7 +290,7 @@ func (runtime *Runtime) getImageRGB(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	return jvm.VoidValue(), nil
 }
 
-func newMIDPImage(width, height int, mutable bool, rgba []byte) (*jvm.Object, error) {
+func (runtime *Runtime) newMIDPImage(width, height int, mutable bool, rgba []byte) (*jvm.Object, error) {
 	byteLength, err := backend.RGBAByteLength(width, height)
 	if err != nil {
 		return nil, newGuestException("java/lang/IllegalArgumentException", err.Error())
@@ -310,13 +309,13 @@ func newMIDPImage(width, height int, mutable bool, rgba []byte) (*jvm.Object, er
 		rgba = append([]byte(nil), rgba...)
 	}
 	return &jvm.Object{
-		ClassName: midp.ImageClass,
+		ClassName: runtime.imageClassName(),
 		Fields:    make(map[string]jvm.Value),
 		Native:    &imageData{width: width, height: height, rgba: rgba, mutable: mutable},
 	}, nil
 }
 
-func decodeMIDPImage(data []byte) (*jvm.Object, error) {
+func (runtime *Runtime) decodeMIDPImage(data []byte) (*jvm.Object, error) {
 	if len(data) == 0 || len(data) > maxEncodedImageBytes {
 		return nil, fmt.Errorf("encoded image length %d is outside 1..%d", len(data), maxEncodedImageBytes)
 	}
@@ -329,7 +328,7 @@ func decodeMIDPImage(data []byte) (*jvm.Object, error) {
 		if err != nil {
 			return nil, err
 		}
-		return midpImageFromDecoded(decoded)
+		return runtime.midpImageFromDecoded(decoded)
 	}
 	config, _, err := stdimage.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -348,13 +347,13 @@ func decodeMIDPImage(data []byte) (*jvm.Object, error) {
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
 		return nil, fmt.Errorf("decoded image dimensions changed from %dx%d to %dx%d", config.Width, config.Height, bounds.Dx(), bounds.Dy())
 	}
-	return midpImageFromDecoded(decoded)
+	return runtime.midpImageFromDecoded(decoded)
 }
 
 // midpImageFromDecoded copies a decoded image into the straight-alpha RGBA an
 // Image holds. Every decode path ends here, so a format added to the router
 // above is stored the same way as any other.
-func midpImageFromDecoded(decoded stdimage.Image) (*jvm.Object, error) {
+func (runtime *Runtime) midpImageFromDecoded(decoded stdimage.Image) (*jvm.Object, error) {
 	bounds := decoded.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	byteLength, err := backend.RGBAByteLength(width, height)
@@ -372,7 +371,7 @@ func midpImageFromDecoded(decoded stdimage.Image) (*jvm.Object, error) {
 			rgba[index+3] = pixel.A
 		}
 	}
-	return newMIDPImage(width, height, false, rgba)
+	return runtime.newMIDPImage(width, height, false, rgba)
 }
 
 func (image *imageData) snapshot() []byte {
@@ -391,7 +390,7 @@ func midpImageArgument(arguments []jvm.Value, index int) (*imageData, error) {
 		return nil, newGuestException("java/lang/NullPointerException", "Image is null")
 	}
 	image, ok := object.Native.(*imageData)
-	if object.ClassName != midp.ImageClass || !ok || image == nil {
+	if !isImageClass(object.ClassName) || !ok || image == nil {
 		return nil, fmt.Errorf("argument %d is not a MIDP Image", index)
 	}
 	return image, nil

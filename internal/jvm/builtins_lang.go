@@ -244,6 +244,16 @@ func (vm *VM) registerBoxBuiltins() {
 		}
 		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), nil
 	})
+	// The static form is the one a title reaches for when it has a byte and no
+	// box: three local titles render a table of numbers with it, where the
+	// instance form would cost them an allocation per cell.
+	vm.builtin(ByteClass, "toString", "(B)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(int8(value)), 10))), nil
+	})
 	vm.builtin(ByteClass, "parseByte", "(Ljava/lang/String;)B", func(_ *VM, arguments []Value) (Value, error) {
 		text, err := parsedText(arguments)
 		if err != nil {

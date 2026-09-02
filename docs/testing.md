@@ -928,7 +928,11 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 
 Every archive under `var/games/skt` is started, ticked for 300 ticks and
 required to end somewhere other than the error state with something lit in its
-frame. **All 15 currently pass.** A tick here is real time — a MIDlet's threads
+frame. **All 15 currently pass.** That directory is the set the probe holds to,
+not the whole local corpus: the ninety-archive set is `var/games/test_skt`, it
+is swept with the CLI rather than with `go test`, and what the sweep found is
+`var/games/test_skt/NOT-WORKING.md` and "Ninety archives" in
+[`skvm.md`](skvm.md). A tick here is real time — a MIDlet's threads
 sleep against the wall clock — so the subtests run in parallel and the whole
 probe takes about half a minute. Two of the fifteen finish early and still
 pass: they check a licence against the handset's subscriber number, draw the

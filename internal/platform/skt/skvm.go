@@ -348,7 +348,7 @@ func (runtime *Runtime) graphics2DPixel(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	index, ok := contextPixelIndex(context, x, y)
+	index, ok := contextPixelIndexUnclipped(context, x, y)
 	if !ok {
 		return jvm.IntValue(0), nil
 	}
@@ -394,7 +394,7 @@ func (runtime *Runtime) graphics2DPixelMask(_ *jvm.VM, arguments []jvm.Value) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	index, ok := contextPixelIndex(context, x, y)
+	index, ok := contextPixelIndexUnclipped(context, x, y)
 	if !ok || context.pixels[index+3] == 0 {
 		return jvm.IntValue(0), nil
 	}
@@ -484,7 +484,7 @@ func (runtime *Runtime) graphics2DCaptureLCD(_ *jvm.VM, arguments []jvm.Value) (
 			copy(pixels[destination:destination+4], context.pixels[index:index+4])
 		}
 	}
-	image, err := newMIDPImage(int(width), int(height), false, pixels)
+	image, err := runtime.newMIDPImage(int(width), int(height), false, pixels)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -566,6 +566,26 @@ func contextPixelIndex(context *graphicsContext, x, y int32) (int, bool) {
 	px := int(x) + int(context.translateX)
 	py := int(y) + int(context.translateY)
 	if px < context.clip.minX || px >= context.clip.maxX || py < context.clip.minY || py >= context.clip.maxY {
+		return 0, false
+	}
+	return contextPixelIndexUnclipped(context, x, y)
+}
+
+// contextPixelIndexUnclipped is the read half of the pair: a pixel is bounded
+// by the surface it lives on and not by the clip.
+//
+// **A clip is a rule about drawing, and reading is not drawing.** One local
+// title finds out how its handset clips by drawing a line under a narrow clip
+// and then walking `getPixel` sideways until it meets a pixel the line did not
+// reach — a probe that can only work if it can read outside the clip it just
+// set. With the read clipped it saw the same value forever and its startApp
+// never returned; the run took the wall-clock cap rather than a frame. The
+// translation still applies, because the coordinates a title hands a Graphics
+// are the ones it draws in.
+func contextPixelIndexUnclipped(context *graphicsContext, x, y int32) (int, bool) {
+	px := int(x) + int(context.translateX)
+	py := int(y) + int(context.translateY)
+	if px < 0 || py < 0 || px >= context.width || py >= context.height {
 		return 0, false
 	}
 	index := (py*context.width + px) * 4

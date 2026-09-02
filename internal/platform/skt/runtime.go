@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/skvm"
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/curve"
@@ -39,6 +40,10 @@ type Runtime struct {
 
 	events *backend.EventLoop
 	logger *slog.Logger
+
+	// uncaught counts the guest exceptions that ended a callback rather than
+	// the session, and keeps what the first one said. See uncaught.go.
+	uncaught uncaughtCallbacks
 	// natives counts what each registered native was called, which is what a
 	// diagnostic report is built from. See diagnostics.go.
 	nativeMu   sync.RWMutex
@@ -77,8 +82,23 @@ type Runtime struct {
 	pendingPaint paintRect
 	paintCanvas  *jvm.Object
 	paintQueued  bool
-	painting     bool
-	fullScreen   map[*jvm.Object]bool
+	// jlet says this session's application class is a WIPI Jlet rather than a
+	// MIDlet, which decides which class name the display objects carry. The
+	// card stack and the event queue are the Jlet half's own state. See
+	// wipi.go.
+	jlet       bool
+	cardStack  []*jvm.Object
+	eventQueue *jvm.Object
+	// wipiFileStreams remembers which file a writing stream belongs to, so a
+	// title that writes its save through a stream reaches the save store.
+	wipiStreamMu    sync.Mutex
+	wipiFileStreams map[*jvm.Object]*xFileData
+	// paintDeferred is a repaint the title asked for from inside its own
+	// paint, held back so it becomes the next Host pass's frame rather than
+	// another turn of the drain that is already running. See render.go.
+	paintDeferred bool
+	painting      bool
+	fullScreen    map[*jvm.Object]bool
 	// The one Graphics every Canvas paint draws the screen through, and which
 	// stays usable after the paint returns. See screenGraphics.
 	screenGraphicsObject  *jvm.Object
@@ -201,6 +221,11 @@ type RuntimeSummary struct {
 	State     LifecycleState  `json:"state"`
 	Error     string          `json:"error,omitempty"`
 	Display   *DisplaySummary `json:"display,omitempty"`
+	// Callbacks that ended in an exception nothing caught. The session
+	// survived them, and a sweep reading only the state would count a title
+	// that fails every paint as one that plays. See uncaught.go.
+	Uncaught      uint64 `json:"uncaught,omitempty"`
+	UncaughtFirst string `json:"uncaught_first,omitempty"`
 }
 
 type DisplaySummary struct {
@@ -279,6 +304,13 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if err := skvm.Define(machine); err != nil {
 		return nil, err
 	}
+	// The WIPI Java surface is declared for every session rather than only for
+	// a Jlet, because it is a class library: a MIDlet that names one of these
+	// classes resolves it, and a class this runtime does not have is
+	// `class not found` at the moment the title first touches it.
+	if err := wipi.Define(machine); err != nil {
+		return nil, err
+	}
 	*runtime = Runtime{
 		pace:        pace,
 		paceStart:   pace.Now(),
@@ -306,6 +338,13 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if !isMIDlet {
 		return runtime, runtime.fail("validate", fmt.Errorf("main class does not extend %s", midp.MIDletClass))
 	}
+	// Which of the two application classes this archive carries decides what
+	// the display objects are called for the rest of the session. See wipi.go.
+	isJlet, err := wipi.IsJlet(machine, archive.Descriptor.MainClass)
+	if err != nil {
+		return runtime, runtime.fail("validate", fmt.Errorf("main class: %w", err))
+	}
+	runtime.jlet = isJlet
 	if err := runtime.registerMIDletNatives(); err != nil {
 		return runtime, runtime.fail("register MIDP services", err)
 	}
@@ -320,6 +359,9 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	}
 	if err := runtime.registerSKVMNatives(); err != nil {
 		return runtime, runtime.fail("register SKVM services", err)
+	}
+	if err := runtime.registerWIPINatives(); err != nil {
+		return runtime, runtime.fail("register WIPI Java services", err)
 	}
 	if err := runtime.dispatch("start", runtime.start); err != nil {
 		return runtime, err
@@ -382,6 +424,9 @@ func (runtime *Runtime) Destroy(unconditional bool) error {
 func (runtime *Runtime) RunPending() error {
 	runtime.dispatchMu.Lock()
 	defer runtime.dispatchMu.Unlock()
+	if err := runtime.postDeferredPaint(); err != nil {
+		return err
+	}
 	if err := runtime.postNextSerialRunnable(); err != nil {
 		return err
 	}
@@ -431,6 +476,7 @@ func (runtime *Runtime) Summary() RuntimeSummary {
 		summary.Display = display
 	}
 	runtime.displayMu.RUnlock()
+	summary.Uncaught, summary.UncaughtFirst = runtime.UncaughtCallbacks()
 	return summary
 }
 
@@ -471,6 +517,16 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 	action := "resume"
 	if state == StateCreated {
 		action = "start"
+	}
+	// **A Jlet is active before its startApp runs, and a MIDlet is not.** MIDP
+	// says a MIDlet enters the active state when startApp returns; the WIPI
+	// specification says the opposite in as many words — a Jlet becomes active
+	// the moment it is created — and one title depends on it, pushing its card
+	// from inside startApp and then spinning on `isShown` until the card is up.
+	// On the MIDlet rule that spin runs on the thread that would have to leave
+	// startApp for it to become true, so it never ends.
+	if runtime.jlet {
+		runtime.transition(action, StateActive)
 	}
 	if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "startApp", "()V"); err != nil {
 		if runtime.isStateChangeException(err) {
@@ -777,7 +833,7 @@ func (runtime *Runtime) postNextSerialRunnable() error {
 
 	err := runtime.events.Post("Display.callSerially", func() error {
 		_, err := runtime.VM.InvokeVirtual(runnable, "run", "()V")
-		return err
+		return runtime.absorbUncaughtCallback("serial Runnable "+runnable.ClassName, err)
 	})
 	if err != nil {
 		return runtime.fail("queue serial Runnable", err)
@@ -862,10 +918,28 @@ var systemProperties = map[string]string{
 	// The model number is read as a number — one title parses it before it
 	// compares it against the two handsets it carries workarounds for — so it
 	// is a number this runtime can answer without claiming to be either.
-	"m.MODEL":              "0",
-	"m.CARRIER":            "SKT",
-	"m.COLOR":              "7",
-	"m.SK_VM":              "10",
+	"m.MODEL": "0",
+	// The same number under the name one title reads it by. A title asking a
+	// handset for a name the handset does not have would have got null there
+	// too, so this is the archive's own spelling rather than a second fact,
+	// and answering it costs nothing: the value is the one m.MODEL answers and
+	// it matches none of the models any title carries a workaround for.
+	"m.MONDEL":  "0",
+	"m.CARRIER": "SKT",
+	"m.COLOR":   "7",
+	"m.SK_VM":   "10",
+	// Two more handset facts, both read the way the vendor string above is:
+	// straight into String.equals or String.length with no null check between.
+	// A static sweep of the ninety local archives for that shape — a
+	// getProperty whose answer is dereferenced before anything tests it —
+	// names m.EXT_SW in two titles and m.TYPE in six, and the two that stop
+	// today stop exactly there, one inside its MIDlet constructor and one
+	// inside the method that reads the handset. The values are chosen to match
+	// none of the constants a title compares against: not the firmware
+	// revision one looks for, and neither of the two network types another
+	// switches on.
+	"m.EXT_SW":             "0",
+	"m.TYPE":               "0",
 	"com.xce.wipi.version": "",
 }
 

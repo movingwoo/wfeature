@@ -294,7 +294,9 @@ func (runtime *Runtime) fireCommand(displayable *jvm.Object, command *jvm.Object
 	if _, err := runtime.VM.InvokeVirtual(listener, "commandAction",
 		"(Ljavax/microedition/lcdui/Command;Ljavax/microedition/lcdui/Displayable;)V",
 		jvm.ReferenceValue(command), jvm.ReferenceValue(displayable)); err != nil {
-		return fmt.Errorf("deliver commandAction: %w", err)
+		if absorbed := runtime.absorbUncaughtCallback("commandAction "+listener.ClassName, err); absorbed != nil {
+			return fmt.Errorf("deliver commandAction: %w", absorbed)
+		}
 	}
 	return nil
 }
@@ -307,7 +309,9 @@ func (runtime *Runtime) fireItemCommand(item *jvm.Object, data *itemData, comman
 	if _, err := runtime.VM.InvokeVirtual(data.listener, "commandAction",
 		"(Ljavax/microedition/lcdui/Command;Ljavax/microedition/lcdui/Item;)V",
 		jvm.ReferenceValue(command), jvm.ReferenceValue(item)); err != nil {
-		return fmt.Errorf("deliver item commandAction: %w", err)
+		if absorbed := runtime.absorbUncaughtCallback("item commandAction "+data.listener.ClassName, err); absorbed != nil {
+			return fmt.Errorf("deliver item commandAction: %w", absorbed)
+		}
 	}
 	return nil
 }

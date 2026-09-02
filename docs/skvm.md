@@ -6,7 +6,9 @@ contains `com.skt.m`, `com.skt.m3d` and `com.xce` on top of standard MIDP.
 
 So `internal/platform/skt` is the whole Java runtime: class loading through
 the shared JVM, the MIDP surface a title draws and saves through, and the SKVM
-classes on top. It used to be a thin layer over a vendor-neutral "j2me"
+classes on top. **A few archives in the same container hold a WIPI Jlet rather
+than a MIDlet**, and that surface is a layer over this one — see "Three
+archives hold a Jlet, not a MIDlet". It used to be a thin layer over a vendor-neutral "j2me"
 package; that package had exactly one consumer, and keeping it neutral only
 hid where its contracts came from. The class surface
 lives in `internal/api/skvm` and the natives in
@@ -362,6 +364,27 @@ setting). The next run prefers the save over the packaged copy, which is what
 **progress** save: one title's route reaches its opening cutscene and no save
 point, one opens files without writing during the driven route, and the third
 reaches neither. That is play, not plumbing.
+
+### A relative resource name is a name from the root too
+
+`Class.getResourceAsStream` resolves a name that does not begin with a slash
+against the package of the class it is asked through, and this did exactly
+that. One title in a package of its own asks for `tk/images/Map0.lbm` — which
+is precisely where the entry is, spelled from the root of its JAR — and the
+strict reading turned it into `tk/tk/images/Map0.lbm` and answered null. The
+title catches its own exception, keeps the null it was left with, and paints
+it a few calls later, so the session ends in `drawImage` rather than at the
+read.
+
+There was already a fallback here for the opposite mistake: three sibling
+titles load their tables through `Runtime.getRuntime().getClass()
+.getResourceAsStream("table.gft")`, where the strict reading asks `java/lang`
+for a file plainly at the top of the JAR, and the last element of the name was
+looked up at the root to answer them. **The name as the title wrote it is now
+tried at the root first**, and the last element after it. The strict reading
+still wins whenever it finds something, so both fallbacks only ever replace a
+null — the handset resolved from the root whether or not a name began with a
+slash, and these titles shipped against that.
 
 ### A record store, written and read back by a real title
 
@@ -842,9 +865,11 @@ unbuilt until a caller for it turns up.
 
 The static scan (`internal/tools/apiscan`, and "The diagnostic report" above
 for why it exists) answers one question over the whole corpus: what would a
-title link against that this runtime does not have. Run over the fifteen local
-archives with a live natives report, it now comes back **empty for thirteen of
-them**, and what is left in the other two is not surface to build.
+title link against that this runtime does not have. Run over the fifteen
+archives this platform started with, with a live natives report, it came back
+**empty for thirteen of them**, and what was left in the other two was not
+surface to build. The ninety-archive corpus reopened it — see "Ninety archives"
+below for what that pass answered and what it deliberately left alone.
 
 The entries it used to list were each on a path no local run had taken, which
 is why nothing had ever failed on one. That is exactly the state worth closing
@@ -1151,8 +1176,276 @@ carry no width-suffixed name at all and are untouched. A Host that asks for a
 size still wins — `runskt -screen` and the browser's screen setting both
 override this — so the rule only decides what "no answer" means.
 
+**The larger corpus adds one archive the rule deliberately does not reach.** It
+declares its width the same way and in the same place, but as a *directory*
+(`img_176/`) rather than a name's stem, and it chooses the set from the height
+of an offscreen image it makes one pixel wider and sixteen rows taller than the
+Canvas: over 212 rows takes the 240 set, which is the set this SKU does not
+ship. Reading the directory would answer 176 and this project's handset for 176
+is 220 rows tall, which lands on the wrong side of that test — so the rule would
+change nothing and the archive would still draw an empty screen. What runs it is
+`-screen 176x196`, and what would settle it properly is knowing whether a
+Canvas here should be shorter than the display: this title never asks for full
+screen, and a handset of the era kept a row of its own above one. That is a
+change to every Canvas in the corpus, so it waits for a second title.
+
+## Ninety archives, and the pass that made room for eleven of them
+
+The corpus went from fifteen local titles to ninety in one step, and
+`var/games/test_skt/NOT-WORKING.md` is what the first two rounds over it
+measured. Sixty-one archives ran their four hundred ticks with a picture on the
+first round; twenty-nine did not, and this section is what the twenty-nine
+turned out to be. Everything below was found the same way: run all of them,
+group by the line the run ended on, and take the group that names the most
+titles first.
+
+**Twelve of the twenty-nine are not this platform at all**, and what they are
+has a section of its own below.
+
+**Five more are the subscriber-number licence** described above, one of them
+reached only after the `Calendar` gap below stopped killing the thread that
+draws it. They are a setting rather than a defect.
+
+### A handset fact read straight into String.equals
+
+Three titles stopped on a `NullPointerException` with the platform on one side
+of it: `System.getProperty` answered null for a name this runtime did not have,
+and the title used the answer without testing it. The comment on
+`systemProperties` already said why that shape is fatal here; what was missing
+was a way to find the *next* one before a title does.
+
+A static sweep answers it. Every `ldc <name>; invokestatic System.getProperty`
+in the corpus, followed forward until the answer is either dereferenced or put
+away, splits the property names into the ones a title tests and the ones it
+walks straight into. Read that way, the ninety archives name two the runtime did
+not answer and dereference: `m.EXT_SW` in two titles and `m.TYPE` in six, plus
+`m.MONDEL` in one — which is a title's own spelling of the model number rather
+than a second fact. All three are answered now, with values chosen to match
+none of the constants a title compares against: not the firmware revision one
+looks for, and neither of the two network types another switches on.
+
+**`m.SKT_API` is the one deliberately left null.** One title dereferences it,
+and twelve *test* it and take a different path when it is present — one of them
+skipping a colour-mode workaround. Answering it would move twelve titles that
+work today onto a branch nothing here has driven, to reach a call the thirteenth
+makes on a path no local run takes. The evidence to act on is a title that stops
+on it, not a title that names it.
+
+### An exception nothing caught ends the callback, not the MIDlet
+
+Two titles stopped inside their own first `paint`, and the shape is one MIDP
+makes unavoidable: `startApp` shows a Canvas and *then* starts the thread that
+fills in what the Canvas paints with. The handset's green-threaded VM gave the
+new thread its slice before the event loop delivered the repaint, every time;
+real threads do not, so the first paint can read a field the game has not
+written yet. One title's `paint` calls a method on a null `IGraphics` for it,
+another draws a null `Image`.
+
+The runtime ended the session for that. It ends the callback now — the same
+contract, and the same reasoning, as the WIPI side's `absorbUncaughtCallback`
+(`ktf.md`): the language says an exception nothing catches ends the thread, the
+guest frame a Host built is not where the game's own `try` is, and a callback
+that threw simply did not happen. Both titles paint nothing on their first frame
+and play from the second.
+
+**Only an exception is absorbed, never a fault**, and the count reaches the
+summary as `uncaught` and `uncaught_first`, because a sweep reading only the
+state would count a title that fails every paint as one that plays. The
+MIDlet's own lifecycle calls are not absorbed: MIDP says a `startApp` that
+throws is a MIDlet that failed to start, and that is what a Host has to hear.
+
+### A repaint asked for from inside a paint is the next frame
+
+One title's `paint` ends by calling `repaint` and `Display.callSerially` on
+itself — a frame loop written across both. The repaint was posted onto the
+drain that was running the paint, so the paint ran again inside the same Host
+pass, asked again, and added a serial Runnable each time round; the run ended on
+the serial queue's own limit with `pending serial Runnable count exceeds 256`.
+
+MIDP's repaint is a request the implementation services later, which is exactly
+what the `callSerially` pass already established for the other half of that
+loop. A repaint that arrives while a paint is running is now held for the next
+Host pass. It is held *pending* rather than dropped, because `serviceRepaints`
+is the call that asks for a pending paint to happen now and still has to find
+one.
+
+### A clip is a rule about drawing, and reading is not drawing
+
+One title never returned from `startApp`, and the run took its wall-clock cap
+rather than a frame. Its opening measures how its handset clips: fill a 20×20
+square white, narrow the clip to the left half, draw a line across the whole
+square, then walk `Graphics2D.getPixel` sideways from the middle until it meets
+a pixel the line did not reach. The distance is the answer.
+
+`getPixel` was bounded by the clip, so every read outside it answered zero —
+the same value the black line has — and the walk never ended. A read is bounded
+by the surface now and the write is still bounded by the clip. The translation
+applies to both, because the coordinates a title hands a Graphics are the ones
+it draws in.
+
+### A relative resource name, and an object handed to valueOf
+
+Two more titles stopped several calls away from their cause, both of them
+because a name came out wrong and the title caught its own exception over it.
+One asks for a resource by a path spelled from the root of its JAR while
+standing in a package — "A relative resource name is a name from the root too"
+above. The other builds every path it loads by appending into a `StringBuffer`
+and calling `String.valueOf(Object)` on the buffer, which named the buffer
+instead of asking it; `jvm.md`, "An object handed to valueOf is asked, not
+named", has what that was waiting for and what it costs.
+
+### Three archives hold a Jlet, not a MIDlet
+
+The container is the same either way — `<id>.jar` beside `<id>.msd`, the
+descriptor naming a main class — and what differs is the class inside. Three
+local archives name one that extends `org.kwis.msp.lcdui.Jlet`: they are WIPI
+Java programs distributed through this vendor's channel, and they stopped at
+`class not found: org/kwis/msp/lcdui/Jlet` before anything ran.
+
+**The surface is a layer over MIDP rather than a second runtime.**
+`internal/api/wipi` declares each WIPI class as a subclass of its MIDP
+counterpart — `Jlet` a `MIDlet`, `Card` a `Canvas`, and `Display`, `Graphics`,
+`Image` and `Font` the classes of those names — so the display path, the paint
+scheduling, the key delivery, the pixels, the fonts and the save boundary are
+the ones already built for the other eighty-eight archives. What the WIPI
+classes add is what the standard has and MIDP does not, and what the platform
+adds is the half a class definition cannot carry.
+
+The specification says each of them extends `Object`. That difference is not
+observable in this corpus — no archive casts or tests one of these against a
+MIDP type — and the alternative is a second display path with its own paint
+scheduling and its own frame. A title that does test one is the reason to
+revisit it.
+
+Four things had to be decided rather than inherited:
+
+- **A Jlet session stamps the WIPI class name on the objects it hands out.**
+  `invokevirtual` resolves on the class of the receiver, so a Card's own code
+  calling `Graphics.setAlpha` on an object named
+  `javax/microedition/lcdui/Graphics` would not resolve it. Which name the
+  screen Graphics, an Image and a Font carry is decided once, from the
+  application class, and a MIDlet session is unchanged.
+- **A method that forwards to the MIDP one it shares a name with forwards
+  specially, never virtually.** Such a method is an *override*; dispatching
+  lands back on itself. Three of them did, and the failure is a host stack
+  overflow several thousand frames deep rather than anything a title reports.
+- **`Display.pushCard` shows the card before it returns.** MIDP's `setCurrent`
+  is a request the next Host pass applies, and one title pushes its card from
+  inside `startApp` and then spins on `isShown` until the card is up — on the
+  same thread that would have to leave `startApp` for the pass to happen.
+  Deferring there is a hang rather than a frame later. What is still deferred
+  is the paint.
+- **A Jlet is active before its `startApp` runs.** MIDP says a MIDlet becomes
+  active when `startApp` returns; the WIPI specification says the opposite in
+  as many words — a Jlet is active from the moment it is created — and the same
+  spin depends on it.
+
+**One MIDP rule had to give way for all three.** An anchor names where a point
+sits against what is drawn, in two halves, and MIDP requires exactly one bit
+from each. A WIPI title draws its title screen with `LEFT` alone: the handset
+filled the other half in, and refusing it ended the title on its first image.
+A half a title leaves out is now its default, which is the reading the zero
+anchor already had. Naming *two* bits from one group is still refused, because
+that is a title asking for two places at once rather than leaving one unsaid.
+
+All three reach their title screen; one reaches its main menu. What the three
+still want from this surface, and what is answered how, is in the package
+comment of `internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
+things there are declared and not built, for the reasons this project applies
+everywhere: `org.kwis.msf.io` has no radio behind it (`network.md`), and
+`Graphics.setAlpha` keeps its blend factor and reports it back without drawing
+with it — honouring it means blending every primitive rather than only the
+images that carry their own alpha, and all three titles set it once, to the
+opaque value.
+
+### The class library, again
+
+Two titles stopped on a member of the standard library this runtime does not
+have — `java.util.Calendar.setTimeZone` inside a guest thread, and
+`java.lang.StringBuffer.deleteCharAt` inside `startApp`. The scan lists the
+rest on paths no local run takes, and those are answered too rather than
+watched: `StringBuffer.getChars`, the static `Byte.toString(byte)`,
+`Thread.activeCount`, `PrintStream.println(byte[])` — which is this vendor's
+rather than the standard library's, and prints the handset's own text rather
+than an array's identity — and `java.lang.OutOfMemoryError`, which nothing here
+raises and one title catches by name.
+
+**Two are named and still not built.** `Thread.join(long)` needs a wait that
+cannot be allowed to hold a Host pass, and no local title reaches it;
+`java.lang.System.exec(String[])` is this vendor's way of launching another
+archive, which is a download this project does not do — `network.md` carries
+the same decision for the rest of the radio.
+
+### A title that draws in three dimensions, and the package called `m`
+
+One archive's Canvas dies in its own class initializer on `class not found:
+m/V3`. Three classes in a package named `m` — a vector, an affine transform and
+a renderer — are this vendor's binding of the handset 3D middleware of the era:
+`.mbac` for a model, `.mtra` for a motion, a `.bmp` for the skin.
+
+**The maths is answered and the renderer is not**, which is where
+`com.skt.m3d.Graphics3D` has stood since it was written. `V3` and `A3` are
+arithmetic a title does its own geometry with: it composes a camera, transforms
+a point, and reads three integers back out to project itself. `XO_World` is the
+half that would need a rasterizer and the two model formats, and it keeps its
+state and draws nothing.
+
+**The fixed point is the title's own arithmetic rather than a guess.** Its
+perspective is `4096 * sin(fov/2) / cos(fov/2)`, and it divides the product of
+a transformed coordinate and that value by 4096 — so one is 4096 here. The
+field of view it asks for is 512, which is 45 degrees on a circle of 4096, and
+that is the second half of the convention read off the same two lines. Both are
+pinned by `TestMicro3DTrigonometryIsFixedPointOverAFourThousandNinetySixCircle`,
+and the composition by the two tests beside it: a quarter turn twice is a half
+turn rather than a transform four thousand times too large, which is what a
+missing renormalization would give.
+
+The title reaches its title screen. What it will not do is draw its world, and
+the honest way to read that is the way `Graphics3D` is read — a rasterizer this
+project has not built, not a feature that half works.
+
+### Twelve archives in the SKT corpus are a different platform
+
+They hold a `.mod` or an `.inf` beside a `.SGS`, and the `.mod` says what they
+are in its own header: `application/x-gnex-sgs`. An `.inf` beside one carries
+the string `GVM`. That is this vendor's *other* runtime — the script platform
+that ran beside the Java one on the same carrier — and it is not a MIDlet JAR,
+so nothing here claims the archive. Four of the twelve ship a Windows
+executable beside the module, byte-identical across all four, which is the PC
+player of the day.
+
+They were investigated rather than started, and what an investigation is worth
+is knowing what building it would cost:
+
+- **The images are complete.** Two of them carry an `.inf` that declares the
+  program's byte count, and in both it matches the `.SGS` exactly. The six
+  looked at weigh between 125,022 and 131,022 bytes, which is a program budget
+  rather than a truncated download.
+- **The header is a small fixed table of sixteen-byte name slots.** Every one
+  of the six carries the name `SWAPSCRIPT` at the same offset, and two carry a
+  second name one slot earlier.
+- **The body is not ARM and not Thumb.** A byte census says so: the commonest
+  bytes are `0x33`, `0x44`, `0x22`, `0x55`, `0x11` and `0xAA` — nibble pairs —
+  and taking every fourth byte gives the same distribution as taking all of
+  them, where ARM would put its condition and class nibble there and flood it
+  with `0xE`. It is a byte-oriented instruction stream for a script machine.
+- **So the ARM core does not help.** Supporting these would mean a new archive
+  shape in `detect`, a loader for the container, an interpreter for an
+  instruction set with no published documentation available here, and the
+  platform call table underneath it — the whole of what the two WIPI platforms
+  needed, minus the one part of it this project already has. And unlike WIPI,
+  where a published standard settles a contract that a single caller cannot,
+  there is no specification to fall back on: every opcode and every platform
+  call would come from the images themselves.
+
+That is the estimate. Nothing is built.
+
 ## Deliberately incomplete
 
+- **`XO_World` has no rasterizer**, for the reason `Graphics3D` below has none.
+  See "A title that draws in three dimensions" above: the vector and transform
+  arithmetic beside it is real, and the two model formats and the drawing are
+  not.
 - **`SISImage` does not decode.** The container's frame and object tables are
   not documented anywhere available here and there is no SKT archive in this
   repository to reverse them from, so `getFrame` and `getObject` answer null
@@ -1250,4 +1543,8 @@ cp "$fixture_dir/skvm.jar" internal/platform/skt/testdata/skvm.jar
 
 The class library itself is declared in `internal/api/skvm/definitions.go` and
 installed by `skvm.Define`, so changing it is a Go change with nothing to
-rebuild.
+rebuild. The WIPI Java surface is the same shape one package over
+(`internal/api/wipi`), with `TestEachClassExtendsItsMIDPCounterpart` holding
+the chains the whole design rests on and
+`TestAnchorFillsInTheHalfATitleLeavesOut` holding the one MIDP rule it
+relaxed.

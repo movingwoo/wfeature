@@ -233,3 +233,49 @@ func TestTextBoxTypesThroughTheKeypad(t *testing.T) {
 		t.Fatalf("typedText() = %q, want %q", text, "abcjgm")
 	}
 }
+
+// An anchor names where a point sits against what is drawn, and a title may
+// name only one of its two halves. The handset filled the other in; MIDP's own
+// rule refuses it, and a WIPI title that draws its title screen with LEFT
+// alone would end on its first image.
+func TestAnchorFillsInTheHalfATitleLeavesOut(t *testing.T) {
+	for _, probe := range []struct {
+		name                 string
+		anchor               int32
+		image                bool
+		horizontal, vertical int32
+	}{
+		{name: "nothing at all is left and top", anchor: 0, horizontal: anchorLeft, vertical: anchorTop},
+		{name: "horizontal alone keeps top", anchor: anchorLeft, horizontal: anchorLeft, vertical: anchorTop},
+		{name: "a centred image keeps top", anchor: anchorHCenter, image: true, horizontal: anchorHCenter, vertical: anchorTop},
+		{name: "vertical alone keeps left", anchor: anchorBottom, horizontal: anchorLeft, vertical: anchorBottom},
+		{name: "both halves are kept", anchor: anchorRight | anchorBottom, horizontal: anchorRight, vertical: anchorBottom},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			horizontal, vertical, err := normalizeAnchor(probe.anchor, probe.image)
+			if err != nil {
+				t.Fatalf("normalizeAnchor(%d) error = %v", probe.anchor, err)
+			}
+			if horizontal != probe.horizontal || vertical != probe.vertical {
+				t.Fatalf("normalizeAnchor(%d) = %d, %d, want %d, %d",
+					probe.anchor, horizontal, vertical, probe.horizontal, probe.vertical)
+			}
+		})
+	}
+
+	// Two bits from one group is still a title asking for two places at once,
+	// and so is a bit that belongs to neither group.
+	for _, anchor := range []int32{anchorLeft | anchorRight, anchorTop | anchorBottom, 1 << 20} {
+		if _, _, err := normalizeAnchor(anchor, false); err == nil {
+			t.Fatalf("normalizeAnchor(%d) was accepted", anchor)
+		}
+	}
+	// BASELINE is a text anchor and VCENTER an image one, and neither is the
+	// other's.
+	if _, _, err := normalizeAnchor(anchorBaseline, true); err == nil {
+		t.Fatal("an image accepted the text baseline anchor")
+	}
+	if _, _, err := normalizeAnchor(anchorVCenter, false); err == nil {
+		t.Fatal("text accepted the image centre anchor")
+	}
+}

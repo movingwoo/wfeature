@@ -18,7 +18,7 @@ func TestMIDPImageDecoderReadsTheHandsetBitmap(t *testing.T) {
 	binary.LittleEndian.PutUint32(encoded[16:], uint32(len(body)))
 	copy(encoded[24:], body)
 
-	object, err := decodeMIDPImage(encoded)
+	object, err := (&Runtime{}).decodeMIDPImage(encoded)
 	if err != nil {
 		t.Fatalf("decodeMIDPImage() error = %v", err)
 	}

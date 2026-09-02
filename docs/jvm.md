@@ -328,6 +328,36 @@ lifecycle's way out — but titles of this era ship it on the path out of an
 error dialog, and with no hook the call is a missing method that ends the
 session as a failure rather than as the shutdown the title asked for.
 
+## An object handed to valueOf is asked, not named
+
+`String.valueOf(Object)` and `StringBuffer.append(Object)` answered a string's
+text for a string and `class@identity` for everything else, where the
+specification says both call the object's own `toString`. That was a deliberate
+gap for a long time and it was measured rather than assumed: a run of every
+local KTF archive with the call counter on said the object form is asked for by
+seven titles — eleven hundred calls, one title making five hundred of them in a
+single run — and probing the four heaviest for *what* they hand it, the answer
+every time was a string, the one case the identity form already got right.
+What the note asked for was a title that hands it something else.
+
+**One does.** An SKT title builds every resource path it loads by appending
+into a `StringBuffer` and then calling `String.valueOf(Object)` on the buffer,
+so a sprite sheet it asks for by the name `/image/i_intro_0.png` was asked for
+by the name `java/lang/StringBuffer@3f` instead. Nothing in the archive answers
+that, the title catches its own `IOException`, keeps the null image it was left
+with, and paints it — so the session ends in `Graphics.drawImage` several calls
+away from the read that failed, which is why no amount of reading the failing
+frame would have found it.
+
+The cost the old note named is real and is paid only where it is owed:
+`objectText` resolves `toString` first and **invokes nothing** when the
+resolution lands on `java/lang/Object`, which is every object whose class does
+not override it. A class that cannot be resolved is answered the same way,
+because a name is a better answer than ending the session over a print. The
+nesting is bounded — one object naming another is ordinary, a class whose
+`toString` names itself is a guest archive deciding how much host stack to use,
+and past `maxToStringDepth` it gets the identity it would have had before.
+
 ## Deliberately incomplete
 
 - the Java core class library and most MIDP/WIPI API classes. What is present
@@ -345,25 +375,10 @@ session as a failure rather than as the shutdown the title asked for.
   runtime cannot act on, and `getPriority` answering what was set is the honest
   half of that
 - reflection, class loader object, weak reference
-- **an object appended to a `StringBuffer` is named, not asked.**
-  `StringBuffer.append(Object)` and `String.valueOf(Object)` answer a string's
-  text for a string and `class@identity` for everything else, where the
-  specification says both call the object's own `toString`. A class of this
-  library that overrides `toString` — a boxed number, a `Vector` — therefore
-  prints as its identity when a title appends it. Making the call is a few
-  lines; what it costs is a virtual dispatch out of a native, which for an
-  ahead-of-time platform means re-entering guest code from inside a call the
-  guest is already in.
-
-  **It has now been measured rather than assumed.** A run of every local KTF
-  archive with the call counter on says the object form is asked for by seven
-  titles — `String.valueOf(Object)`, eleven hundred calls, one title making
-  five hundred of them in a single run — and `StringBuffer.append(Object)` by
-  none. Probing the four heaviest of the seven for *what* they hand it, the
-  answer every time was a string, which is the one case this already gets
-  right. So the demand is real and the defect is not reached: it stays written
-  down here, and the evidence to act on is a title that hands it something
-  else, not a title that calls it
+- ~~an object appended to a `StringBuffer` is named, not asked~~ — **the
+  title that hands one something other than a string has arrived**, and both
+  forms call `toString` now. See "An object handed to valueOf is asked, not
+  named" below
 - execution semantics for `invokedynamic`, method handles, and module constants
 - the LCDUI presentation for uncaught exceptions already retained in host
   diagnostics

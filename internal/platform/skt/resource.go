@@ -37,15 +37,23 @@ func (runtime *Runtime) getResourceAsStream(vm *jvm.VM, arguments []jvm.Value) (
 	data, ok := findEntry(runtime.Archive.Entries, cleaned)
 	if !ok && cleaned != name {
 		// A relative name that its class's package does not answer is looked
-		// up again at the root of the archive. Three sibling titles load their
-		// tables with `Runtime.getRuntime().getClass().getResourceAsStream(
-		// "table.gft")`, where the strict reading asks java/lang for a file
-		// that is plainly at the top of the JAR: the handset runtime answered
-		// it, the titles shipped, and the class they ask through is a platform
-		// class with no package of its own to hold a game's data. The strict
-		// answer still wins when it finds something, so this only replaces a
-		// null.
-		data, ok = findEntry(runtime.Archive.Entries, path.Base(cleaned))
+		// up again at the root of the archive, first as the title wrote it and
+		// then by its last element alone. The handset resolved a name from the
+		// root whether or not it began with a slash: one title in a package of
+		// its own asks for `tk/images/Map0.lbm`, which is exactly where the
+		// entry is, and the strict reading turns it into `tk/tk/images/...`
+		// and answers null — the title catches its own exception and paints
+		// the null, so the session ends in `drawImage` several calls away from
+		// the read that failed. Three sibling titles need the other form:
+		// they load their tables with `Runtime.getRuntime().getClass().
+		// getResourceAsStream("table.gft")`, where the strict reading asks
+		// java/lang for a file that is plainly at the top of the JAR and the
+		// class they ask through is a platform class with no package of its
+		// own to hold a game's data. The strict answer still wins when it
+		// finds something, so this only replaces a null.
+		if data, ok = findEntry(runtime.Archive.Entries, path.Clean(name)); !ok {
+			data, ok = findEntry(runtime.Archive.Entries, path.Base(cleaned))
+		}
 	}
 	if !ok {
 		return jvm.ReferenceValue(nil), nil

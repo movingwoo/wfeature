@@ -3,7 +3,6 @@ package skt
 import (
 	"fmt"
 
-	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -21,7 +20,7 @@ func (runtime *Runtime) initGameCanvasBuffer(_ *jvm.VM, arguments []jvm.Value) (
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	buffer, err := newMIDPImage(runtime.frameWidth, runtime.frameHeight, true, nil)
+	buffer, err := runtime.newMIDPImage(runtime.frameWidth, runtime.frameHeight, true, nil)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -45,7 +44,7 @@ func (runtime *Runtime) initGameCanvasBuffer(_ *jvm.VM, arguments []jvm.Value) (
 	state.mu.Lock()
 	data.game = &gameCanvasData{
 		buffer:       image,
-		graphics:     &jvm.Object{ClassName: midp.GraphicsClass, Fields: make(map[string]jvm.Value), Native: context},
+		graphics:     &jvm.Object{ClassName: runtime.graphicsClassName(), Fields: make(map[string]jvm.Value), Native: context},
 		suppressKeys: suppress,
 	}
 	state.mu.Unlock()
