@@ -45,8 +45,15 @@ d8=$build_tools/d8
 zipalign=$build_tools/zipalign
 apksigner=$build_tools/apksigner
 
+# Android refuses to install an older versionCode over a newer one, and a build
+# that never moves it makes every update look like the same one. The commit
+# count is a number that only goes up and is the same on any clone of this
+# tree, which is what a tester's phone needs it to be.
+version_code=${VERSION_CODE:-$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)}
+
 echo "build-tools $build_tools"
 echo "platform    $platform"
+echo "version     ${VERSION:-dev} (code $version_code)"
 
 rm -rf "$out"
 mkdir -p "$out/compiled" "$out/gen" "$out/classes" "$out/dex" "$out/apk/lib/arm64-v8a"
@@ -73,7 +80,7 @@ echo "==> linking"
     --java "$out/gen" \
     --min-sdk-version 26 \
     --target-sdk-version 35 \
-    --version-code "${VERSION_CODE:-1}" \
+    --version-code "$version_code" \
     --version-name "${VERSION:-dev}" \
     "$out/compiled/res.zip"
 
