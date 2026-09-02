@@ -56,8 +56,15 @@ xcrun --sdk iphoneos swiftc \
 
 # 3. The bundle.
 echo "==> assembling"
-sed -e "s/__VERSION__/${VERSION:-dev}/" "$here/Info.plist" > "$app/Info.plist"
-cp "$root/web/icon-192.png" "$app/AppIcon.png"
+sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+sed -e "s/__VERSION__/${VERSION:-dev}/" -e "s/__SDK__/$sdk_version/" \
+    "$here/Info.plist" > "$app/Info.plist"
+
+# The icons, at the sizes the plist names them by. A loose PNG with nothing
+# pointing at it is what a blank home-screen square looks like.
+sips -z 120 120 "$root/web/icon-512.png" --out "$app/AppIcon60x60@2x.png" >/dev/null
+sips -z 180 180 "$root/web/icon-512.png" --out "$app/AppIcon60x60@3x.png" >/dev/null
+sips -z 152 152 "$root/web/icon-512.png" --out "$app/AppIcon76x76@2x~ipad.png" >/dev/null
 xcrun plutil -convert binary1 "$app/Info.plist"
 
 # 4. An ad-hoc signature, so that a phone has something to replace rather than

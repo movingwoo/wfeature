@@ -94,6 +94,13 @@ it on the way in. A signature made here would be one no phone accepts. Real
 distribution is TestFlight, which is an Apple Developer Program decision and
 not a build one.
 
+The bundle carries what Xcode would have stamped on it —
+`CFBundleSupportedPlatforms`, the `DT*` build metadata, `UIRequiredDeviceCapabilities`
+and the icon keys. A plist written by hand has none of that by default, and the
+first one is not cosmetic: **a re-signing service reads it to decide the IPA is
+an iOS app at all**, so an unsigned build without it can be refused before
+anything looks at the signature. The build stamps the SDK it actually used.
+
 `UIFileSharingEnabled` puts the games and saves in the Files app, so an archive
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
