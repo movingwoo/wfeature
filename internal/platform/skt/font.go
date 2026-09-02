@@ -6,7 +6,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/glyph"
 
-	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -69,7 +68,7 @@ func (runtime *Runtime) fontObject(face, style, size int32) *jvm.Object {
 		return font
 	}
 	font := &jvm.Object{
-		ClassName: midp.FontClass,
+		ClassName: runtime.fontClassName(),
 		Fields:    make(map[string]jvm.Value),
 		Native:    newFontData(key),
 	}
@@ -480,7 +479,7 @@ func fontArgument(arguments []jvm.Value, index int) (*fontData, error) {
 
 func fontReceiver(object *jvm.Object) (*fontData, error) {
 	font, ok := object.Native.(*fontData)
-	if object.ClassName != midp.FontClass || !ok || font == nil {
+	if !isFontClass(object.ClassName) || !ok || font == nil {
 		return nil, fmt.Errorf("object is not a MIDP Font")
 	}
 	return font, nil
@@ -529,10 +528,14 @@ func stringUnitSlice(text string, arguments []jvm.Value, offsetIndex, lengthInde
 	return units[int(offset):int(offset+length)], nil
 }
 
+// normalizeAnchor reads the two halves of an anchor. **A half a title leaves
+// out is its default**, which is the reading the zero anchor already had and
+// the one the handset gave every other value: a WIPI title draws its title
+// screen with `LEFT` alone and nothing vertical, and MIDP's own rule — exactly
+// one bit from each group — would end that title on its first image. Naming
+// two bits from one group is still refused, because that is a title asking for
+// two different places at once rather than leaving one unsaid.
 func normalizeAnchor(anchor int32, image bool) (int32, int32, error) {
-	if anchor == 0 {
-		return anchorLeft, anchorTop, nil
-	}
 	horizontal := anchor & (anchorLeft | anchorHCenter | anchorRight)
 	verticalMask := anchorTop | anchorBottom | anchorBaseline
 	if image {
@@ -540,10 +543,20 @@ func normalizeAnchor(anchor int32, image bool) (int32, int32, error) {
 	}
 	vertical := anchor & verticalMask
 	allowed := int32(anchorLeft | anchorHCenter | anchorRight | verticalMask)
-	if anchor&^allowed != 0 || !singleAnchor(horizontal) || !singleAnchor(vertical) {
+	if anchor&^allowed != 0 || !atMostOneAnchor(horizontal) || !atMostOneAnchor(vertical) {
 		return 0, 0, newGuestException("java/lang/IllegalArgumentException", "invalid Graphics anchor")
 	}
+	if horizontal == 0 {
+		horizontal = anchorLeft
+	}
+	if vertical == 0 {
+		vertical = anchorTop
+	}
 	return horizontal, vertical, nil
+}
+
+func atMostOneAnchor(value int32) bool {
+	return value&(value-1) == 0
 }
 
 func singleAnchor(value int32) bool {

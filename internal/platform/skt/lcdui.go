@@ -708,7 +708,9 @@ func (runtime *Runtime) reportItemStateChange(item *jvm.Object, data *itemData) 
 	}
 	if _, err := runtime.VM.InvokeVirtual(listener, "itemStateChanged",
 		"(Ljavax/microedition/lcdui/Item;)V", jvm.ReferenceValue(item)); err != nil {
-		return fmt.Errorf("deliver itemStateChanged: %w", err)
+		if absorbed := runtime.absorbUncaughtCallback("itemStateChanged "+listener.ClassName, err); absorbed != nil {
+			return fmt.Errorf("deliver itemStateChanged: %w", absorbed)
+		}
 	}
 	return nil
 }

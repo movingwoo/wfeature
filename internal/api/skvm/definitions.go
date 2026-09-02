@@ -7,7 +7,7 @@ import "github.com/movingwoo/wfeature/internal/jvm"
 // directory, the audio sink, the screen — actually is.
 
 func definitions() []jvm.ClassDefinition {
-	return []jvm.ClassDefinition{
+	return append(micro3DDefinitions(), []jvm.ClassDefinition{
 		{
 			Name:      "com/skt/m/AudioClip",
 			SuperName: "java/lang/Object",
@@ -542,5 +542,5 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "stop", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},
 			},
 		},
-	}
+	}...)
 }

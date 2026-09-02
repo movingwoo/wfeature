@@ -98,13 +98,14 @@ Four things deliberately exit **zero**:
 - **a run that drew nothing.** Whether a frame is blank is a question about
   pixels, and `framestats` is the command that answers it — see below. A run
   that ticked its whole count without failing did what it was asked.
-- **a callback that ended in an exception nothing caught.** Both ARM platforms
+- **a callback that ended in an exception nothing caught.** All three platforms
   end the callback rather than the session for one, because that is what the
   language and the handset do; the run continued and its code says so. What
   says it happened is `uncaught` and `uncaught_first` in the summary, on
-  `runktf` and `runlgt` alike — **a sweep reading only the exit code and
-  `tick_error` counts a title that fails every paint as one that plays**, so a
-  sweep has to read them. See [`ktf.md`](ktf.md) and [`lgt.md`](lgt.md).
+  `runktf`, `runlgt` and `runskt` alike — **a sweep reading only the exit code
+  and `tick_error` counts a title that fails every paint as one that plays**,
+  so a sweep has to read them. See [`ktf.md`](ktf.md), [`lgt.md`](lgt.md) and
+  [`skvm.md`](skvm.md).
 
 `checkgames` and `framestats` are the other two commands whose exit code is an
 answer rather than a status; both are documented with the answer they give.

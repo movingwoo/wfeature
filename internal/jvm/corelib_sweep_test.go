@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf16"
 )
@@ -883,5 +884,221 @@ func TestStringValueOfFormatsALong(t *testing.T) {
 		if text, _ := StringText(object); text != probe.want {
 			t.Fatalf("valueOf(%d) = %q, want %q", probe.value, text, probe.want)
 		}
+	}
+}
+
+// A title that builds a path by appending into a StringBuffer and then calling
+// String.valueOf on the buffer gets the text it built, not the buffer's name.
+// Both forms of the object argument answer through the object's own toString,
+// and a class that does not override it still answers its identity — which is
+// what keeps the dispatch off the path every other caller takes.
+func TestObjectFormsAskForTheObjectsOwnText(t *testing.T) {
+	vm := New(nil, Options{})
+	buffer, err := vm.NewObject(StringBufferClass, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("/image/i_intro_")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "append", "(I)Ljava/lang/StringBuffer;", IntValue(0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;", ReferenceValue(vm.NewString(".png"))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := vm.InvokeStatic(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", ReferenceValue(buffer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := result.Reference()
+	if text, _ := StringText(got); text != "/image/i_intro_0.png" {
+		t.Fatalf("String.valueOf(StringBuffer) = %q, want the text the buffer holds", text)
+	}
+
+	appended, err := vm.NewObject(StringBufferClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(appended, "append", "(Ljava/lang/Object;)Ljava/lang/StringBuffer;", ReferenceValue(buffer)); err != nil {
+		t.Fatal(err)
+	}
+	result, err = vm.InvokeVirtual(appended, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = result.Reference()
+	if text, _ := StringText(got); text != "/image/i_intro_0.png" {
+		t.Fatalf("StringBuffer.append(StringBuffer) built %q", text)
+	}
+
+	// A class with no toString of its own is still named rather than asked, so
+	// nothing is invoked for the case every other caller in the corpus takes.
+	plain, err := vm.NewObject(VectorClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = vm.InvokeStatic(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", ReferenceValue(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = result.Reference()
+	text, _ := StringText(got)
+	if !strings.HasPrefix(text, VectorClass+"@") {
+		t.Fatalf("String.valueOf(Vector) = %q, want its identity", text)
+	}
+}
+
+// The members an SKT corpus of ninety archives named and this runtime did not
+// have. Each is here because a title links against it; two of them are what a
+// title stopped on.
+func TestStringBufferDeletesAndCopiesByIndex(t *testing.T) {
+	vm := New(nil, Options{})
+	buffer, err := vm.NewObject(StringBufferClass, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("abcd")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "deleteCharAt", "(I)Ljava/lang/StringBuffer;", IntValue(1)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeVirtual(buffer, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := result.Reference()
+	if text, _ := StringText(got); text != "acd" {
+		t.Fatalf("after deleteCharAt(1) the buffer holds %q, want \"acd\"", text)
+	}
+	// The index the ranged form clamps is the one this one refuses.
+	if _, err := vm.InvokeVirtual(buffer, "deleteCharAt", "(I)Ljava/lang/StringBuffer;", IntValue(3)); !vm.IsGuestException(err, "java/lang/StringIndexOutOfBoundsException") {
+		t.Fatalf("deleteCharAt at the length answered %v", err)
+	}
+
+	destination, err := vm.InvokeVirtual(vm.NewString("....."), "toCharArray", "()[C")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(buffer, "getChars", "(II[CI)V", IntValue(1), IntValue(3), destination, IntValue(2)); err != nil {
+		t.Fatal(err)
+	}
+	characters, err := destination.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	array, err := guestArray(characters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range []int32{'.', '.', 'c', 'd', '.'} {
+		element, err := array.Load(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, _ := element.Int32(); value != want {
+			t.Fatalf("getChars wrote %d at %d, want %d", value, index, want)
+		}
+	}
+}
+
+// Byte.toString(byte) is the static form, and the sign matters: a title
+// rendering a table of small negative numbers would print 255 for -1 if the
+// argument were read as the unsigned byte it arrives in.
+func TestByteToStringKeepsTheSign(t *testing.T) {
+	vm := New(nil, Options{})
+	for _, probe := range []struct {
+		value int32
+		want  string
+	}{{7, "7"}, {-1, "-1"}, {-128, "-128"}, {127, "127"}} {
+		result, err := vm.InvokeStatic(ByteClass, "toString", "(B)Ljava/lang/String;", IntValue(probe.value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := result.Reference()
+		if text, _ := StringText(got); text != probe.want {
+			t.Fatalf("Byte.toString(%d) = %q, want %q", probe.value, text, probe.want)
+		}
+	}
+}
+
+// A title guarding a large allocation catches OutOfMemoryError by name, so the
+// class and its two parents have to resolve even though nothing raises it.
+func TestOutOfMemoryErrorResolvesUnderError(t *testing.T) {
+	vm := New(nil, Options{})
+	for _, probe := range []struct{ class, parent string }{
+		{"java/lang/OutOfMemoryError", "java/lang/VirtualMachineError"},
+		{"java/lang/OutOfMemoryError", "java/lang/Error"},
+		{"java/lang/OutOfMemoryError", ThrowableClass},
+	} {
+		subclass, err := vm.IsSubclassOf(probe.class, probe.parent)
+		if err != nil {
+			t.Fatalf("IsSubclassOf(%s, %s) error = %v", probe.class, probe.parent, err)
+		}
+		if !subclass {
+			t.Fatalf("%s is not a %s", probe.class, probe.parent)
+		}
+	}
+	if _, err := vm.NewObject("java/lang/OutOfMemoryError", "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("out"))); err != nil {
+		t.Fatalf("new OutOfMemoryError(String) error = %v", err)
+	}
+}
+
+// setTimeZone is the other way a title names a zone: it takes the default
+// calendar and moves it, rather than asking the factory for one. The instant
+// does not move — what changes is which fields get(I) breaks it into.
+func TestCalendarSetTimeZoneMovesTheFieldsAndNotTheInstant(t *testing.T) {
+	const instant = int64(1_600_000_000_000)
+	vm := New(nil, Options{Clock: func() int64 { return instant }})
+	calendarValue, err := vm.InvokeStatic(CalendarClass, "getInstance", "()Ljava/util/Calendar;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calendar, err := calendarValue.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gmt, err := vm.InvokeStatic(TimeZoneClass, "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;",
+		ReferenceValue(vm.NewString("GMT")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(calendar, "setTimeZone", "(Ljava/util/TimeZone;)V", gmt); err != nil {
+		t.Fatal(err)
+	}
+	// 2020-09-13T12:26:40Z, whatever zone the machine running this stands in.
+	hour, err := vm.InvokeVirtual(calendar, "get", "(I)I", IntValue(11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := hour.Int32(); value != 12 {
+		t.Fatalf("after setTimeZone(GMT), get(HOUR_OF_DAY) = %d, want 12", value)
+	}
+	moment, err := vm.InvokeVirtual(calendar, "getTime", "()Ljava/util/Date;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	date, err := moment.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	millis, err := vm.InvokeVirtual(date, "getTime", "()J")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := millis.Int64(); value != instant {
+		t.Fatalf("setTimeZone moved the instant to %d, want %d", value, instant)
+	}
+	if _, err := vm.InvokeVirtual(calendar, "setTimeZone", "(Ljava/util/TimeZone;)V", ReferenceValue(nil)); !vm.IsGuestException(err, "java/lang/NullPointerException") {
+		t.Fatalf("setTimeZone(null) answered %v", err)
+	}
+}
+
+// A title counts its own workers before starting another, and the count has to
+// include the thread the count is taken on.
+func TestThreadActiveCountCountsTheRunningThreads(t *testing.T) {
+	vm := New(nil, Options{})
+	result, err := vm.InvokeStatic(ThreadClass, "activeCount", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := result.Int32(); value < 1 {
+		t.Fatalf("activeCount() = %d with a machine running, want at least 1", value)
 	}
 }

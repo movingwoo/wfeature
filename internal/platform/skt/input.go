@@ -159,7 +159,9 @@ func (runtime *Runtime) deliverCurrentCanvasKey(eventType KeyEventType, callback
 		runtime.logger.Debug("MIDP Canvas key event", "type", eventType, "code", keyCode, "class", current.ClassName)
 	}
 	if _, err := runtime.VM.InvokeVirtual(current, callback, "(I)V", jvm.IntValue(keyCode)); err != nil {
-		return fmt.Errorf("deliver %s(%d) to Canvas %s: %w", callback, keyCode, current.ClassName, err)
+		if absorbed := runtime.absorbUncaughtCallback(fmt.Sprintf("%s on Canvas %s", callback, current.ClassName), err); absorbed != nil {
+			return fmt.Errorf("deliver %s(%d) to Canvas %s: %w", callback, keyCode, current.ClassName, absorbed)
+		}
 	}
 	return nil
 }
@@ -198,7 +200,9 @@ func (runtime *Runtime) deliverCurrentCanvasPointer(eventType PointerEventType, 
 		runtime.logger.Debug("MIDP Canvas pointer event", "type", eventType, "x", x, "y", y, "class", current.ClassName)
 	}
 	if _, err := runtime.VM.InvokeVirtual(current, callback, "(II)V", jvm.IntValue(x), jvm.IntValue(y)); err != nil {
-		return fmt.Errorf("deliver %s(%d, %d) to Canvas %s: %w", callback, x, y, current.ClassName, err)
+		if absorbed := runtime.absorbUncaughtCallback(fmt.Sprintf("%s on Canvas %s", callback, current.ClassName), err); absorbed != nil {
+			return fmt.Errorf("deliver %s(%d, %d) to Canvas %s: %w", callback, x, y, current.ClassName, absorbed)
+		}
 	}
 	return nil
 }

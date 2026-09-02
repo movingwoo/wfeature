@@ -104,9 +104,16 @@ var runtimeClassParents = map[string]string{
 	"java/lang/ClassNotFoundException":          "java/lang/Exception",
 	"java/lang/Exception":                       "java/lang/Throwable",
 	"java/lang/Error":                           "java/lang/Throwable",
-	"java/util/NoSuchElementException":          "java/lang/RuntimeException",
-	"java/util/EmptyStackException":             "java/lang/RuntimeException",
-	"java/lang/Throwable":                       "java/lang/Object",
+	// A title that guards a large allocation catches this one by name. The
+	// runtime never raises it — an allocation past a bound here is refused
+	// with the limit that refused it — but the class has to exist or the catch
+	// resolves to nothing and the session ends where the handset caught and
+	// carried on.
+	"java/lang/VirtualMachineError":    "java/lang/Error",
+	"java/lang/OutOfMemoryError":       "java/lang/VirtualMachineError",
+	"java/util/NoSuchElementException": "java/lang/RuntimeException",
+	"java/util/EmptyStackException":    "java/lang/RuntimeException",
+	"java/lang/Throwable":              "java/lang/Object",
 }
 
 func runtimeClassParent(className string) string {

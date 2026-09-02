@@ -1176,6 +1176,7 @@ func printStreamDefinition() ClassDefinition {
 			{Name: "print", Descriptor: "(I)V", Access: AccessPublic, Body: printStreamPrint("(I)V")},
 			{Name: "print", Descriptor: "(J)V", Access: AccessPublic, Body: printStreamPrint("(J)V")},
 			{Name: "print", Descriptor: "([C)V", Access: AccessPublic, Body: printStreamPrint("([C)V")},
+			{Name: "print", Descriptor: "([B)V", Access: AccessPublic, Body: printStreamPrint("([B)V")},
 			{Name: "print", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic, Body: printStreamPrint("(Ljava/lang/String;)V")},
 			{Name: "print", Descriptor: "(Ljava/lang/Object;)V", Access: AccessPublic, Body: printStreamPrint("(Ljava/lang/Object;)V")},
 			{Name: "println", Descriptor: "()V", Access: AccessPublic, Body: printStreamPrintln("")},
@@ -1184,6 +1185,11 @@ func printStreamDefinition() ClassDefinition {
 			{Name: "println", Descriptor: "(I)V", Access: AccessPublic, Body: printStreamPrintln("(I)V")},
 			{Name: "println", Descriptor: "(J)V", Access: AccessPublic, Body: printStreamPrintln("(J)V")},
 			{Name: "println", Descriptor: "([C)V", Access: AccessPublic, Body: printStreamPrintln("([C)V")},
+			// The byte-array form is not the standard library's. This vendor's
+			// titles log text they already hold as handset bytes, and printing
+			// the array's identity instead of what it says would make the log
+			// useless to the person reading it.
+			{Name: "println", Descriptor: "([B)V", Access: AccessPublic, Body: printStreamPrintln("([B)V")},
 			{Name: "println", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic, Body: printStreamPrintln("(Ljava/lang/String;)V")},
 			{Name: "println", Descriptor: "(Ljava/lang/Object;)V", Access: AccessPublic, Body: printStreamPrintln("(Ljava/lang/Object;)V")},
 			{Name: "flush", Descriptor: "()V", Access: AccessPublic, Body: doNothing},
@@ -1315,6 +1321,16 @@ func printReferenceText(call *Invocation, object *Object) (string, error) {
 	}
 	if text, ok := StringText(object); ok {
 		return text, nil
+	}
+	// A byte array is the handset's own text rather than an object: this
+	// vendor's println takes one, and the bytes are in the charset the rest of
+	// this runtime decodes a String's bytes with.
+	if component, _, ok := ArrayComponent(object); ok && component.Kind == TypeByte {
+		data, err := ByteArraySnapshot(object)
+		if err != nil {
+			return "", err
+		}
+		return call.VM().decodePlatformBytes(data), nil
 	}
 	if component, length, ok := ArrayComponent(object); ok && component.Kind == TypeChar {
 		array, err := guestArray(object)

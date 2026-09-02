@@ -67,7 +67,10 @@ type graphicsContext struct {
 	translateY int32
 	color      uint32
 	font       *jvm.Object
-	active     bool
+	// alpha is the blend factor a WIPI Graphics.setAlpha keeps. It is kept
+	// and reported and nothing draws with it yet — see wipi.go.
+	alpha  uint8
+	active bool
 }
 
 func (runtime *Runtime) getDisplayableWidth(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -196,14 +199,52 @@ func (runtime *Runtime) queueCanvasPaint(canvas *jvm.Object, rect paintRect) err
 		runtime.displayMu.Unlock()
 		return nil
 	}
+	runtime.paintQueued = true
+	// **A repaint asked for from inside a paint is the next frame, not this
+	// one.** MIDP's repaint is a request the implementation services later,
+	// and a title whose paint ends by asking for another one is describing a
+	// frame loop. Posting it onto the drain that is running the paint makes
+	// the loop close inside a single Host pass: the paint runs again, asks
+	// again, and the pass ends on the events-per-run limit rather than on a
+	// frame. One local title also queues a serial Runnable in the same breath,
+	// so every one of those repeats added a Runnable nothing had taken yet and
+	// the run ended on the serial queue's own limit instead — the same defect
+	// the callSerially pass fixed, arriving through the other door.
+	//
+	// The paint stays *pending* rather than being dropped, which is what
+	// serviceRepaints needs: a title that asks for its pending paint to happen
+	// now still gets it, from the call it made.
+	if runtime.painting {
+		runtime.paintDeferred = true
+		runtime.displayMu.Unlock()
+		return nil
+	}
 	if err := runtime.events.Post("Canvas.repaint", runtime.paintPendingCanvas); err != nil {
 		runtime.pendingPaint = paintRect{}
 		runtime.paintCanvas = nil
+		runtime.paintQueued = false
 		runtime.displayMu.Unlock()
 		return fmt.Errorf("queue Canvas repaint: %w", err)
 	}
-	runtime.paintQueued = true
 	runtime.displayMu.Unlock()
+	return nil
+}
+
+// postDeferredPaint hands the Host pass a repaint that arrived while a paint
+// was running. It is called at the top of RunPending, so the frame the title
+// asked for during its own paint is the next one.
+func (runtime *Runtime) postDeferredPaint() error {
+	runtime.displayMu.Lock()
+	if !runtime.paintDeferred || !runtime.paintQueued {
+		runtime.paintDeferred = false
+		runtime.displayMu.Unlock()
+		return nil
+	}
+	runtime.paintDeferred = false
+	runtime.displayMu.Unlock()
+	if err := runtime.events.Post("Canvas.repaint", runtime.paintPendingCanvas); err != nil {
+		return fmt.Errorf("queue Canvas repaint: %w", err)
+	}
 	return nil
 }
 
@@ -218,6 +259,7 @@ func (runtime *Runtime) paintPendingCanvas() error {
 	runtime.pendingPaint = paintRect{}
 	runtime.paintCanvas = nil
 	runtime.paintQueued = false
+	runtime.paintDeferred = false
 	if runtime.currentDisplayable != canvas || runtime.State() != StateActive {
 		runtime.displayMu.Unlock()
 		return nil
@@ -246,7 +288,12 @@ func (runtime *Runtime) paintPendingCanvas() error {
 	runtime.painting = false
 	runtime.displayMu.Unlock()
 	if paintErr != nil {
-		return fmt.Errorf("paint Canvas %s: %w", canvas.ClassName, paintErr)
+		// A throw nothing caught ends this paint, not the session — see
+		// uncaught.go. The frame below is still presented: what the title had
+		// drawn before it threw is what the handset would have shown too.
+		if absorbed := runtime.absorbUncaughtCallback("paint Canvas "+canvas.ClassName, paintErr); absorbed != nil {
+			return fmt.Errorf("paint Canvas %s: %w", canvas.ClassName, absorbed)
+		}
 	}
 	if err := runtime.framebuffer.Present(frame); err != nil {
 		return fmt.Errorf("present Canvas %s: %w", canvas.ClassName, err)
@@ -281,7 +328,7 @@ func (runtime *Runtime) screenGraphics(clip paintRect) *jvm.Object {
 		}
 		runtime.screenGraphicsContext = context
 		runtime.screenGraphicsObject = &jvm.Object{
-			ClassName: midp.GraphicsClass,
+			ClassName: runtime.graphicsClassName(),
 			Fields:    make(map[string]jvm.Value),
 			Native:    context,
 		}
@@ -785,7 +832,7 @@ func graphicsArgument(arguments []jvm.Value, index int) (*graphicsContext, error
 		return nil, newGuestException("java/lang/NullPointerException", "Graphics receiver is null")
 	}
 	context, ok := receiver.Native.(*graphicsContext)
-	if receiver.ClassName != midp.GraphicsClass || !ok || context == nil || !context.active {
+	if !isGraphicsClass(receiver.ClassName) || !ok || context == nil || !context.active {
 		return nil, newGuestException("java/lang/IllegalStateException", "Graphics is only valid during paint")
 	}
 	return context, nil

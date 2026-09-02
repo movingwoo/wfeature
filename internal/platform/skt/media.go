@@ -467,7 +467,9 @@ func (runtime *Runtime) notifyPlayerListeners(object *jvm.Object, player *player
 			"(Ljavax/microedition/media/Player;Ljava/lang/String;Ljava/lang/Object;)V",
 			jvm.ReferenceValue(object), jvm.ReferenceValue(runtime.VM.NewString(event)),
 			jvm.ReferenceValue(nil)); err != nil {
-			return fmt.Errorf("deliver playerUpdate %s: %w", event, err)
+			if absorbed := runtime.absorbUncaughtCallback("playerUpdate "+listener.ClassName, err); absorbed != nil {
+				return fmt.Errorf("deliver playerUpdate %s: %w", event, absorbed)
+			}
 		}
 	}
 	return nil

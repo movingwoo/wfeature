@@ -53,7 +53,7 @@ func TestDecodeMIDPImagePreservesStraightAlpha(t *testing.T) {
 	if err := png.Encode(&encoded, source); err != nil {
 		t.Fatal(err)
 	}
-	object, err := decodeMIDPImage(encoded.Bytes())
+	object, err := (&Runtime{}).decodeMIDPImage(encoded.Bytes())
 	if err != nil {
 		t.Fatalf("decodeMIDPImage() error = %v", err)
 	}

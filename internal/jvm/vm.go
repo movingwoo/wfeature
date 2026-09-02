@@ -167,6 +167,12 @@ type VM struct {
 	initializing map[string]bool
 	initialized  map[string]bool
 	initErrors   map[string]error
+
+	// toStringDepth bounds how deeply objectText may re-enter guest code. A
+	// title's toString may itself name another object, so one call can nest;
+	// a class whose toString names itself would nest until the Go stack ran
+	// out, which is a guest archive deciding how much host stack to use.
+	toStringDepth atomic.Int32
 }
 
 type execution struct {

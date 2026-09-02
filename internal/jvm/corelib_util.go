@@ -1131,6 +1131,7 @@ func calendarDefinition() ClassDefinition {
 			{Name: "set", Descriptor: "(II)V", Access: native},
 			{Name: "getTime", Descriptor: "()Ljava/util/Date;", Access: AccessPublic | AccessFinal | AccessNative},
 			{Name: "setTime", Descriptor: "(Ljava/util/Date;)V", Access: AccessPublic | AccessFinal | AccessNative},
+			{Name: "setTimeZone", Descriptor: "(Ljava/util/TimeZone;)V", Access: native},
 		},
 	}
 }

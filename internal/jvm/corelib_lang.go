@@ -249,6 +249,7 @@ func byteDefinition() ClassDefinition {
 			{Name: "byteValue", Descriptor: "()B", Access: native},
 			{Name: "intValue", Descriptor: "()I", Access: native},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: native},
+			{Name: "toString", Descriptor: "(B)Ljava/lang/String;", Access: staticNative},
 			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
 			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "parseByte", Descriptor: "(Ljava/lang/String;)B", Access: staticNative, Throws: []string{"java/lang/NumberFormatException"}},
