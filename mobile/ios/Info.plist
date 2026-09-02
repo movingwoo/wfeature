@@ -17,7 +17,55 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>MinimumOSVersion</key>
-    <string>15.0</string>
+    <string>14.0</string>
+    <!-- Everything below is what Xcode stamps and a plist written by hand does
+         not. It is not decoration: a re-signing service reads
+         CFBundleSupportedPlatforms to decide this is an iOS app at all, and an
+         IPA without it is one such a tool can refuse before it ever looks at
+         the signature. The DT keys are the same metadata by another name, and
+         the build substitutes the SDK it actually used. -->
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>iPhoneOS</string>
+    </array>
+    <key>DTPlatformName</key>
+    <string>iphoneos</string>
+    <key>DTSDKName</key>
+    <string>iphoneos__SDK__</string>
+    <key>DTPlatformVersion</key>
+    <string>__SDK__</string>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <!-- The icon was a loose file with nothing pointing at it, which is why the
+         home screen showed a blank square. These are the names the build
+         resizes it into. -->
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+            </array>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+                <string>AppIcon76x76</string>
+            </array>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
+        </dict>
+    </dict>
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>

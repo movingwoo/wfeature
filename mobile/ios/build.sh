@@ -22,7 +22,13 @@ app=$out/Payload/wfeature.app
 
 sdk=$(xcrun --sdk iphoneos --show-sdk-path)
 [ -d "$sdk" ] || { echo "no iPhoneOS SDK; Xcode is needed, not just the command line tools" >&2; exit 1; }
-minimum=15.0
+# iOS 14 is the floor because that is where TrollStore's range starts: it
+# installs an unsigned IPA permanently on 14.0 through 16.6.1, and a build that
+# asked for 15.0 was refusing the bottom of that range for nothing. Nothing in
+# the app needs anything newer — the one API that does is guarded at its own
+# version — and the phones below 15 are exactly the old ones this emulator is
+# for.
+minimum=14.0
 
 rm -rf "$out"
 mkdir -p "$app"
@@ -56,8 +62,15 @@ xcrun --sdk iphoneos swiftc \
 
 # 3. The bundle.
 echo "==> assembling"
-sed -e "s/__VERSION__/${VERSION:-dev}/" "$here/Info.plist" > "$app/Info.plist"
-cp "$root/web/icon-192.png" "$app/AppIcon.png"
+sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+sed -e "s/__VERSION__/${VERSION:-dev}/" -e "s/__SDK__/$sdk_version/" \
+    "$here/Info.plist" > "$app/Info.plist"
+
+# The icons, at the sizes the plist names them by. A loose PNG with nothing
+# pointing at it is what a blank home-screen square looks like.
+sips -z 120 120 "$root/web/icon-512.png" --out "$app/AppIcon60x60@2x.png" >/dev/null
+sips -z 180 180 "$root/web/icon-512.png" --out "$app/AppIcon60x60@3x.png" >/dev/null
+sips -z 152 152 "$root/web/icon-512.png" --out "$app/AppIcon76x76@2x~ipad.png" >/dev/null
 xcrun plutil -convert binary1 "$app/Info.plist"
 
 # 4. An ad-hoc signature, so that a phone has something to replace rather than

@@ -117,11 +117,11 @@ jobs:
           mkdir -p build/ci
           sdk=$(xcrun --sdk iphoneos --show-sdk-path)
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CC="$(xcrun --sdk iphoneos -f clang) -arch arm64 -isysroot $sdk -miphoneos-version-min=15.0" \
+            CC="$(xcrun --sdk iphoneos -f clang) -arch arm64 -isysroot $sdk -miphoneos-version-min=14.0" \
             go build -buildmode=c-archive -o build/ci/libwfeature.a ./mobile/ios/lib
           printf '#include "libwfeature.h"\n' > build/ci/bridge.h
           xcrun --sdk iphoneos swiftc \
-            -target arm64-apple-ios15.0 -sdk "$sdk" \
+            -target arm64-apple-ios14.0 -sdk "$sdk" \
             -import-objc-header build/ci/bridge.h -I build/ci \
             -parse-as-library \
             -framework UIKit -framework WebKit -framework Foundation \

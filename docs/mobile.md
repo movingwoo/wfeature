@@ -87,12 +87,26 @@ uninstall before the next version.
 
 Needs Xcode, not just the command line tools, for the iPhoneOS SDK.
 
+**The floor is iOS 14.0**, and it is set by how this gets onto a phone rather
+than by anything in the app. TrollStore installs an unsigned IPA permanently on
+14.0 through 16.6.1, and a build asking for 15.0 was giving up the bottom of
+that range for nothing: the one API here that needs something newer is guarded
+at its own version, and the phones below 15 are the old ones this emulator is
+for.
+
 The IPA is **unsigned** (ad-hoc at most), and that is the distribution story
 rather than an omission: whoever wants it puts it on their own phone with their
 own Apple ID through AltStore, Sideloadly or the like, and those tools re-sign
 it on the way in. A signature made here would be one no phone accepts. Real
 distribution is TestFlight, which is an Apple Developer Program decision and
 not a build one.
+
+The bundle carries what Xcode would have stamped on it —
+`CFBundleSupportedPlatforms`, the `DT*` build metadata, `UIRequiredDeviceCapabilities`
+and the icon keys. A plist written by hand has none of that by default, and the
+first one is not cosmetic: **a re-signing service reads it to decide the IPA is
+an iOS app at all**, so an unsigned build without it can be refused before
+anything looks at the signature. The build stamps the SDK it actually used.
 
 `UIFileSharingEnabled` puts the games and saves in the Files app, so an archive
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
