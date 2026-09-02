@@ -32,6 +32,12 @@ import (
 // DefaultPort is the port the page, the documentation and every launcher use.
 const DefaultPort = 11541
 
+// AdminHeader carries the admin key on a shutdown request. The name is
+// webhost's — this package spells it again rather than importing the whole
+// server to read one string, and TestTheAdminHeaderIsSpelledTheSameOnBothSides
+// in cmd/server holds the two together.
+const AdminHeader = "X-Wfeature-Admin"
+
 // askTimeout bounds one question to the server. It is short because the answer
 // is local and a server too busy to reply within it is answered for by the
 // fallbacks below rather than by waiting.
@@ -228,7 +234,11 @@ const (
 // fallbacks exist for a server that cannot answer — an older build without the
 // route, or one wedged badly enough not to serve — and they are the same two
 // steps the shell scripts took, in the same order.
-func Stop(ctx context.Context, port int) (Report, Outcome, error) {
+// adminKey is sent with the shutdown request and is empty for every ordinary
+// server. A server started for the network asks for it, because it cannot tell
+// a local caller from a remote one by address alone once anything forwards to
+// it from loopback; see webhost's serveShutdown.
+func Stop(ctx context.Context, port int, adminKey string) (Report, Outcome, error) {
 	report := Query(ctx, port)
 	switch report.State {
 	case Free:
@@ -237,7 +247,7 @@ func Stop(ctx context.Context, port int) (Report, Outcome, error) {
 		return report, Refused, ErrNotOurs
 	}
 
-	if err := requestShutdown(ctx, port); err == nil {
+	if err := requestShutdown(ctx, port, adminKey); err == nil {
 		if waitUntilStopped(ctx, port, report.PID, drainWait) {
 			return report, Drained, nil
 		}
@@ -284,7 +294,7 @@ func signallable(pid int) bool {
 }
 
 // requestShutdown asks the server to stop itself.
-func requestShutdown(ctx context.Context, port int) error {
+func requestShutdown(ctx context.Context, port int, adminKey string) error {
 	requestContext, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
 	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
@@ -292,6 +302,9 @@ func requestShutdown(ctx context.Context, port int) error {
 		"http://"+address+"/api/shutdown", nil)
 	if err != nil {
 		return err
+	}
+	if adminKey != "" {
+		request.Header.Set(AdminHeader, adminKey)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

@@ -86,6 +86,16 @@ type Options struct {
 	// does not get to end that program.
 	RequestShutdown func()
 
+	// AccessKey is the key every request must carry, and empty is the
+	// ordinary case: a server on a home network asks for nothing, which is
+	// what makes a phone on the same Wi-Fi work with no setup. A run that
+	// expects to be reachable from the internet sets one; see access.go.
+	AccessKey string
+	// AdminKey guards /api/shutdown when it is set. It is a second secret
+	// with a different audience — the player holding the link is not the
+	// person entitled to end everybody's game — and it never appears in one.
+	AdminKey string
+
 	Logger *slog.Logger
 }
 
@@ -118,6 +128,10 @@ type Server struct {
 	// requestShutdown is Options.RequestShutdown; nil means the route is not
 	// served at all.
 	requestShutdown func()
+	// accessKey and adminKey are Options.AccessKey and Options.AdminKey.
+	// Empty is the ordinary case for both; see access.go.
+	accessKey string
+	adminKey  string
 
 	// parked holds games whose page went away, waiting under the token that
 	// page was given; see resume.go. They live on the Server because they have
@@ -152,6 +166,8 @@ func New(options Options) (*Server, error) {
 		diagnostics:     backend.DebugBuild(),
 		version:         options.Version,
 		requestShutdown: options.RequestShutdown,
+		accessKey:       options.AccessKey,
+		adminKey:        options.AdminKey,
 	}, nil
 }
 
@@ -169,6 +185,12 @@ func sessionTraceLimit() int {
 func (s *Server) Profile() string { return s.profile }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	// The gate is before the routing rather than inside each route, because
+	// the list of routes is the list of things a key would otherwise have to
+	// be remembered for. See access.go.
+	if !s.admitted(writer, request) {
+		return
+	}
 	// The handler is registered without a mux, so nothing has cleaned this
 	// path: what arrives is what the peer sent, minus percent-encoding.
 	requestPath := request.URL.Path
@@ -200,8 +222,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 // executable's path says nothing when it was started with `go run` or renamed
 // on the way into a release archive. It is what the stop/status scripts read.
 //
-// Nothing here is a secret this server keeps — it has no authentication at all,
-// and the page it serves already carries the same build.
+// Nothing here is a secret this server keeps: the page it serves already
+// carries the same build. It is outside the access key for that reason and for
+// a practical one — it is how anything, the launcher included, tells this
+// server from a stranger holding the port, and that question has to be
+// answerable before there is a key to ask for.
 func (s *Server) serveStatus(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
@@ -249,6 +274,18 @@ func (s *Server) serveShutdown(writer http.ResponseWriter, request *http.Request
 	}
 	if !isLoopbackRequest(request) {
 		s.logger.Warn("refused a shutdown from off this machine", "from", request.RemoteAddr)
+		writeError(writer, http.StatusForbidden, "Forbidden")
+		return
+	}
+	// **Loopback stops meaning "on this machine" the moment anything forwards
+	// from it**, and that is exactly what stands in front of this server when
+	// it is reached through a tunnel: every request arrives from 127.0.0.1
+	// wearing the tunnel agent's address, so the check above would admit the
+	// whole internet. The admin key is what a run in that position is given,
+	// and it is not the key the players hold — it lives in the run directory
+	// on this machine, so holding it means being here.
+	if !s.adminAllowed(request) {
+		s.logger.Warn("refused a shutdown with no admin key", "from", request.RemoteAddr)
 		writeError(writer, http.StatusForbidden, "Forbidden")
 		return
 	}

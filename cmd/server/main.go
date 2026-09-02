@@ -122,6 +122,8 @@ func run(arguments []string, answer, output *os.File) error {
 		"the subscriber number this handset answers with; a shorter one opens a title that gates on billing")
 	openPage := flags.Bool("open", environmentOr("WFEATURE_OPEN", "") != "",
 		"open the page in a browser once the server is listening")
+	public := flags.Bool("public", environmentOr("WFEATURE_PUBLIC", "") != "",
+		"ask every request for an access key, for a server that can be reached from outside this network")
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -160,12 +162,25 @@ func run(arguments []string, answer, output *os.File) error {
 	options.RequestShutdown = func() { once.Do(func() { close(shutdownRequested) }) }
 	requestShutdown := shutdownRequested
 
-	server, err := webhost.New(options)
+	// The listener is opened before the server is built, because a public run
+	// has to write its port down beside its keys and the port is the
+	// listener's answer — `-addr :0` is a port nobody knows until it exists.
+	listener, err := listen(*address)
 	if err != nil {
 		return err
 	}
 
-	listener, err := listen(*address)
+	var state publicState
+	if *public {
+		state, err = preparePublicState(root, portOf(listener))
+		if err != nil {
+			return err
+		}
+		options.AccessKey = state.Key
+		options.AdminKey = state.Admin
+	}
+
+	server, err := webhost.New(options)
 	if err != nil {
 		return err
 	}
@@ -180,8 +195,28 @@ func run(arguments []string, answer, output *os.File) error {
 		"games", *gameRoot,
 		"saves", *saveRoot)
 
+	// A public run is worth a line of its own. The link is the only way in —
+	// the address alone now answers 403 — and it is the thing the user has to
+	// get onto the phone, so it is printed rather than left to be assembled
+	// out of the key and the port.
+	if *public {
+		attributes := []any{"keys", publicStatePath(root)}
+		// A Unix socket has no port and no link: what is in front of it is a
+		// proxy, and the address a phone would use is that proxy's to give.
+		// The key still stands, so it is printed on its own.
+		if port := portOf(listener); port != 0 {
+			attributes = append(attributes, "link", keyedURL(localURL(port), state.Key))
+			if lan := (launcher.Report{Port: port}).LANURL(); lan != "" {
+				attributes = append(attributes, "lan", keyedURL(lan, state.Key))
+			}
+		} else {
+			attributes = append(attributes, "key", state.Key)
+		}
+		logger.Info("this server is asking for a key", attributes...)
+	}
+
 	if *openPage {
-		openWhenServing(listener)
+		openWhenServing(listener, state.Key)
 	}
 	return serve(listener, server, logger, requestShutdown)
 }
@@ -189,7 +224,7 @@ func run(arguments []string, answer, output *os.File) error {
 // openWhenServing shows the page once the port answers. A launcher used to
 // sleep a second and hope; this waits for the listener to be answering as this
 // server, which is the condition that was being guessed at.
-func openWhenServing(listener net.Listener) {
+func openWhenServing(listener net.Listener, key string) {
 	address, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
 		return
@@ -199,7 +234,10 @@ func openWhenServing(listener net.Listener) {
 		if !serving {
 			return
 		}
-		_ = launcher.OpenBrowser(report.URL())
+		// The browser on this machine is sent the same link a phone gets,
+		// because a public run answers 403 to everything else — including the
+		// page this is opening.
+		_ = launcher.OpenBrowser(keyedURL(report.URL(), key))
 	}()
 }
 
@@ -252,10 +290,27 @@ func reportStatus(arguments []string, answer, output *os.File) error {
 	report := launcher.Query(context.Background(), port)
 	switch report.State {
 	case launcher.Ours:
+		root, _ := dataRoot()
+		state := readPublicState(root)
+		// A public run's address is not enough to open it, so what a user
+		// needs back is the link. This is where they come looking for it after
+		// closing the window it was printed in.
+		//
+		// The pid is what says the file belongs to the server that just
+		// answered, rather than to a public run that ended: the file outlives
+		// a run on purpose, so the next ordinary start would otherwise be
+		// described with a link that opens nothing.
+		keyed := state.PID == report.PID && state.Key != ""
 		fmt.Fprintln(answer, "wfeature server is running.")
 		fmt.Fprintf(answer, "  address    %s\n", report.URL())
+		if keyed {
+			fmt.Fprintf(answer, "  link       %s\n", keyedURL(report.URL(), state.Key))
+		}
 		if lan := report.LANURL(); lan != "" {
 			fmt.Fprintf(answer, "  other host %s\n", lan)
+			if keyed {
+				fmt.Fprintf(answer, "  their link %s\n", keyedURL(lan, state.Key))
+			}
 		}
 		fmt.Fprintf(answer, "  version    %s (%s)\n", versionOrUnknown(report.Version), report.Profile)
 		fmt.Fprintf(answer, "  stop with  %s stop %d\n", launcherName(), port)
@@ -296,7 +351,15 @@ func stopServer(arguments []string, answer, output *os.File) error {
 	if err != nil {
 		return err
 	}
-	report, outcome, err := launcher.Stop(context.Background(), port)
+	// The admin key, when there is one, is what makes the polite stop work on
+	// a public server; without it the stop falls through to signalling the
+	// process, and on Windows that is a kill. See cmd/server/public.go.
+	root, _ := dataRoot()
+	adminKey := ""
+	if state := readPublicState(root); state.Port == port {
+		adminKey = state.Admin
+	}
+	report, outcome, err := launcher.Stop(context.Background(), port, adminKey)
 	switch outcome {
 	case launcher.AlreadyStopped:
 		fmt.Fprintf(answer, "Nothing is on port %d; the server is already stopped.\n", port)

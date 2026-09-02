@@ -145,7 +145,7 @@ func TestStopAsksTheServerToStopItself(t *testing.T) {
 	})}
 	go func() { _ = server.Serve(listener) }()
 
-	report, outcome, err := Stop(context.Background(), port)
+	report, outcome, err := Stop(context.Background(), port, "")
 	if err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestStopRefusesTheServerThatNamesInit(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	defer func() { _ = server.Close() }()
 
-	report, outcome, err := Stop(context.Background(), port)
+	report, outcome, err := Stop(context.Background(), port, "")
 	if err == nil {
 		t.Fatal("a server naming init was believed")
 	}
@@ -234,7 +234,7 @@ func TestStopLeavesAStrangerAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, outcome, err := Stop(context.Background(), port)
+	report, outcome, err := Stop(context.Background(), port, "")
 	if !errors.Is(err, ErrNotOurs) {
 		t.Fatalf("Stop() error = %v, want ErrNotOurs", err)
 	}
@@ -257,7 +257,7 @@ func TestStopOnAnEmptyPortSaysSo(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, outcome, err := Stop(context.Background(), port)
+	_, outcome, err := Stop(context.Background(), port, "")
 	if err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
@@ -323,7 +323,7 @@ func TestStopAcceptsAnotherServerTakingThePort(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
 
-	report, outcome, err := Stop(context.Background(), port)
+	report, outcome, err := Stop(context.Background(), port, "")
 	if err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}

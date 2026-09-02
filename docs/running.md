@@ -47,9 +47,11 @@ go run -tags debug .\cmd\server
 
 Then open `http://127.0.0.1:11541`, or the machine's address from a phone on
 the same network — the server binds every interface, because being reachable
-from a phone is the point of running it. **It has no authentication: anything
-that can reach the port can read and write the save trees and list the games.**
-Give `-addr 127.0.0.1:11541` to keep it to the machine it runs on.
+from a phone is the point of running it. **It asks for nothing by default:
+anything that can reach the port can read and write the save trees and list the
+games.** That is the right trade behind a router and the wrong one on a port
+the internet can reach; `-public` below is the second case, and
+`-addr 127.0.0.1:11541` keeps the server to the machine it runs on.
 
 The game runs **on the server**, and the page draws the frames it sends; see
 [`session.md`](session.md). There is nothing to build for the browser: the
@@ -63,10 +65,12 @@ server carries the page and runs the emulator itself.
 | `-saves` | `var/savedata/<profile>/ktf` | this profile's KTF save tree |
 | `-logs` | `var/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number |
+| `-public` | off | ask every request for an access key, for a server something outside this network can reach (below) |
 
 Each flag also reads an environment variable when it is not given —
 `WFEATURE_ADDR`, `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`,
-`WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER` — and
+`WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER`,
+`WFEATURE_PUBLIC` — and
 `WFEATURE_HOST` with `WFEATURE_PORT` still compose an address.
 
 `-number` is the odd one, because it is the only setting that changes what a
@@ -77,6 +81,62 @@ what lets it start. Another title needs the full-length default for the
 certificate it checks, so this is a choice rather than a better answer, and
 [`network.md`](network.md) has both sides of it. The CLI reads the same
 `WFEATURE_PHONE_NUMBER`.
+
+### A key, for a server something outside can reach
+
+`-public` makes every request carry a key. It is for the one arrangement this
+server was not built for: a port that something outside the local network can
+reach, whether that is a port forwarded on the router, a tunnel, or a machine
+with a public address. The internet contains scanners and they find an open
+port within days, so a server in that position that asks for nothing is a save
+tree anyone can rewrite and a stop button anyone can press.
+
+It is deliberately not a login. There are no accounts here and nobody to name —
+one key, one door, and whoever holds the link is the player:
+
+```text
+http://192.168.0.5:11541/?k=K6F7EZL2FPF6McP6DvsnCw
+```
+
+The page trades that key for a cookie the moment the link is followed and is
+redirected to the same address without it, so the key is not left in the
+address bar, the history or a screenshot of the tab. Everything after that —
+the game list, the archives, the save API, the session WebSocket — is refused
+with 403 unless it carries the cookie. The one route outside the gate is
+`/api/status`, which says only which build is running and is how anything tells
+this server from a stranger holding the port.
+
+**The key outlives a restart and the admin key does not.** Both live in
+`<data root>/run/public.json`, written 0600:
+
+```json
+{"key": "K6F7EZL2FPF6McP6DvsnCw", "admin": "oevnrywjO6h4OzQcxHfyqQ", "port": 11541, "pid": 50359}
+```
+
+The access key is kept because a link that changed every time the server
+restarted is a link nobody keeps — the phone that installed the page as an app
+would be the first to break. `status` prints it back, which is where a user goes
+after closing the window it was first shown in. The admin key is written fresh
+on every start, belongs to nobody outside the machine, and is the answer to a
+hole worth stating plainly:
+
+> **Loopback stops meaning "on this machine" the moment anything forwards from
+> it.** `/api/shutdown` admits only loopback callers, which is exactly right
+> until a tunnel agent runs on this machine — then every request arrives from
+> 127.0.0.1 and the whole internet inherits the stop button. So a `-public`
+> server asks for the admin key as well, and `stop` reads it out of that file.
+> It has to be a second secret rather than the players' key: holding the link
+> is not being the person entitled to end everybody's game.
+
+Without the admin key a stop falls through to signalling the process, and on
+Windows that is a kill — the one path that can lose a save being written. That
+is why the file exists rather than the keys living only in the process.
+
+What `-public` is not is a way to make the server safe to expose. It stops the
+scanner. It does not encrypt anything (a plain `http://` address is what a
+forwarded port gives), and it does not divide the players who have the link
+from each other: they share the save trees, and a second player continues the
+first one's game.
 
 Which build profile is served is **the binary that is running**, not a flag: a
 server built with `-tags debug` collects the full diagnostics and writes to the
@@ -409,7 +469,8 @@ which is what a `make dist` recipe unchanged between the two should produce.
 port this is done on is one a developer's machine tends to have several
 servers on already — leftovers from earlier sessions, each answering
 `/api/status` and each willing to drain on `/api/shutdown` from any local
-caller, because that route has no authentication and should not. A check that
+caller, because that route asks for nothing unless the server was started
+with `-public`. A check that
 starts a server, waits for `/api/status` to answer and then posts a shutdown
 will happily do all three to somebody else's process if its own failed to
 start. `/api/status` reports the PID for exactly this: compare it against the
