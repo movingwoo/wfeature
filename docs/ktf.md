@@ -3230,6 +3230,40 @@ correctly: this is a different generation of the carrier's download package,
 not a damaged copy of the one we read. `OpenNative` in `native_archive.go`
 reads it, and `IsNativePackage` tells the two apart from entry names alone.
 
+### It is not WIPI at all: this package is BREW
+
+**This generation was read as an early KTF platform for as long as there was one
+archive of it, and it is not one.** Two more arrived from QA in 2026-09 and the
+three agree on what they are — the `.sig` beside each module is a certificate
+chain, and its subjects say it plainly:
+
+```
+QCOM BREW Sigtool
+BREW Root CA
+BREW KTF Carrier Pass Through
+```
+
+Everything the format does follows from that, and the names stop being
+arbitrary. `.mif` is BREW's own **Module Information File**; `.mod` is the
+module and `.sig` its signature; the `1fim` trailer is `mif1` little-endian.
+The number the information file is named after is the applet's **ClassID**, and
+so is the first word of the span this loader reads it out of. The entry point
+takes three arguments with the third written through, which is
+`AEEMod_Load(IShell *, void *, IModule **)`; the "factory" call this platform
+makes on export 2 with the identifier is `IModule::CreateInstance`; and the
+table planted below the image is the AEE helper table, not a WIPI HAL. That is
+why the slot numbering never matched the one this platform serves — the module
+calls slot 26 as an allocator where the WIPI kernel table has its allocator at
+20, and it was never the same table.
+
+The naming here is left as it was. The code says "native package" throughout
+and `IsNativePackage` still means "this shape rather than the descriptor one",
+because renaming a working loader is not what learning what it loads is worth.
+What is worth writing down is that **the specification to reach for is BREW's,
+not WIPI's**, and that anything inferred from the single 2005 archive is a
+reading of one sample until a second one agrees with it — the section below is
+what happened when two more did not.
+
 ### The information file
 
 `.mif` is a fixed header, a table of span offsets, and the spans:
@@ -3255,12 +3289,36 @@ icons, `image/bmp`); two `0xfe` bytes introduce EUC-KR text (the vendor twice,
 then the title); anything unmarked is numbers. The numbers are kept verbatim,
 because what most of them mean is not established.
 
-**Two of them are.** One header word is the module's own length rounded up to a
-page, and `NativeInfo.ModuleSpan` finds it by computing that length and looking
-for it. A size the platform can work out for itself is a weak thing to read out
-of a file, but it is the anchor that says which of the unlabelled words are
-sizes at all. The other is in a span: `0x00100000`, the same image base this
-platform already maps a KTF executable at.
+**Two of them looked established, and both readings were one archive wide.**
+`NativeInfo.ModuleSpan` computes the module's page-rounded length and searches
+the header for a word equal to it, on the reasoning that finding it identifies
+which of the unlabelled words are sizes; the tagged record at tag 6 is what it
+matched. The other reading was a span word equal to `0x00100000`, the image
+base this platform maps a KTF executable at, which `ApplicationIdentifier`
+looks for to find the ClassID beside it.
+
+Two later archives say both are coincidences. The header of all three is the
+**same header**, values and all:
+
+| tag | 2005 archive | 2005 archive B | 2005 archive C |
+|---|---|---|---|
+| 4 | `0x03e80001` | `0x03e80001` | `0x03e80001` |
+| 5 | `0x00005000` | `0x00005000` | `0x00005000` |
+| **6** | **`0x00025000`** | **`0x00025000`** | **`0x00025000`** |
+
+and the three modules are 149836, 185540 and 165616 bytes, which round to
+`0x25000`, `0x2e000` and `0x29000`. **Tag 6 is a constant** that the first
+archive's module happened to round to exactly. It is not the module's length,
+and the mapped size does not need the file at all — the loader already computes
+the rounded length before comparing it. The span word is the same kind of
+mistake at one bit of resolution: the later two carry `0x10100000` where the
+first carries `0x00100000`, so an exact match against the image base finds
+nothing and the ClassID beside it goes unread.
+
+Neither is fixed here, because a loader that gets past both stops at the gate
+below and there is nothing yet to see on the far side. What the two readings
+cost is written down so the next pass does not re-derive them: **a number this
+platform can compute is not evidence about a file that also contains it.**
 
 Reading the rest of the header would need its record stride, which is not four
 bytes — a second size, `0x5000`, sits at an offset that makes the surrounding
@@ -3863,6 +3921,190 @@ So the second size the information file names is not a BSS size for this module.
 If a module of this generation ever does need space past its image, it faults on
 the first access rather than running on quietly, and the fault names the
 address — which is the report that would say so.
+
+### A later module refuses the platform before it does anything
+
+Two archives QA sent in 2026-09 are the same package shape and **a later
+generation of the module**, and they stop before any of the above matters. The
+loaded module's first instructions are not the dispatcher call the 2005 archive
+opens with:
+
+```
+e59f2038  ldr  r2, [pc, #0x38]   ; a link-time offset
+e08f2002  add  r2, pc, r2        ; its own base, position independently
+e5122008  ldr  r2, [r2, #-8]     ; the word two below the image base
+e3520b40  cmp  r2, #0x10000
+13a00004  movne r0, #4
+1a000007  bne  epilogue          ; return 4, having written nothing
+...
+e3a00018  mov  r0, #0x18         ; selector 0x18, where 2005 uses 0x14
+```
+
+The loader plants the platform table pointer at `ImageBase-4` and leaves
+`ImageBase-8` zero, so the compare fails, the entry returns without touching
+its out parameter, and `ReadEntryRecord` reports `KTF native entry wrote no
+record`. **It is a version gate**: the module is asking what AEE it is running
+on before it will hand over its own interface, and `0x10000` is the answer it
+wants. Patching the branch out in a copy of the archive carries both modules
+straight through the entry and into platform slot 0, which the 2005 archive
+never calls — so past the gate is a table this platform has not met either.
+
+Three things therefore separate these two archives from the one the loader was
+written against, and they are in the order they are hit: the header word
+mistaken for a module length, the exact match against the image base, and this
+gate. Only the third is a real question; the first two are readings to undo.
+
+One of the two also carries a `.mif` with **two bytes past its trailer** —
+`1fim` followed by CR LF, from something that moved the file in text mode
+before it was packed. `ParseNativeInfo` requires the file to end with the
+trailer, so it refuses. The bytes are in the archive as distributed and its zip
+CRC is correct, so this is a shape to tolerate rather than damage to detect.
+
+Both archives are kept under `var/games/test/errorFile/` with a note saying
+what each one is.
+
+## A module compiled against a longer superclass
+
+A relocatable module — the `client.bin<BSS>` kind, published as a class table
+rather than registered class by class — numbers each of its methods with the
+vtable slot it claims, and `buildModuleVTable` lays those over the table its
+superclass filled. **The numbering is the module's, from a build against a
+runtime that is not this one**, so a platform class here that publishes fewer
+methods than that runtime did leaves a gap: one local title's `Jlet` subclass
+overrides `startApp`, `pauseApp`, `resumeApp` and `destroyApp` at slots 15 to
+18, exactly where this platform's `Jlet` puts them, and then starts its own
+methods at **26**. Slots 19 to 25 belong to seven `Jlet` methods this platform
+does not publish, and nothing fills them.
+
+The gap is padded with zeroes, which is right — the slots below a method are
+what its number means, so closing one would move every method under it. What
+was wrong is what happened to the padding afterwards. `inheritedVTable` walked
+a registered parent's table and read **every** entry as a method record, so the
+first zero was a 28-byte read at address 0 and the title died with
+
+```
+link KTF module "client.bin64": method range at 0x0 has invalid size 28
+```
+
+which names neither the class nor the slot. An empty slot is now kept as an
+empty entry: the indexes below it do not move, and a call that lands on one
+branches to zero and faults with an address, which is a report that says where
+to look. Filling those seven slots needs a call site that names one; nothing
+has reached one yet.
+
+### The same archive failed two different ways on two runs
+
+The same title reported that error on some runs and a null dereference inside
+its own constructor on others — nine and three out of twelve — which read like
+a difference between the machine it ran on and made a QA report say a game
+worked on a desktop and not on a phone. It was neither. `linkModuleClasses`
+walked `moduleClassByName` with a map range, and **Go randomises that order per
+run**; `resolveModuleDescriptorCell` answers only a cell the module left
+unresolved and returns having done nothing when the module wrote its superclass
+pointer itself, which is the common case for a class declared beside its parent
+in one module. So whether a subclass found its superclass registered — and
+inherited its table, holes and all — or found nothing and inherited an empty
+table came down to the draw.
+
+A superclass that is one of the module's own is now linked before the subclass
+that needs it, and the walk is in name order so that two runs of one archive
+are one run. `TestAModuleClassLinksItsSuperclassFirst` holds the first over
+twenty rounds, which is enough for the map to hand over both orders, and
+`TestAnEmptyInheritedVTableSlotIsNotAMethod` holds the second over a
+three-deep chain with sparse slots. Over the 571 local KTF archives the change
+is byte-identical, and the three that take this path still boot and paint.
+
+### And its subclass wrote its fields over its superclass's
+
+With the link fixed the title ran every tick and painted nothing:
+`framework/FunnyCanvas.paint` threw a `NullPointerException` on every one of
+its frames. The canvas's own `display` field was null, although the title's
+`setCurrentScreen` had run and set it — which is the shape of a field offset
+that is not where the writer and the reader both think it is.
+
+**A module ships each field's offset inside its own class**, and the guest adds
+nothing to it but the instance header: it reads the offset out of the field's
+own sixteen-byte record and indexes the object with it. Watching the four words
+of the title's application object says what that costs:
+
+```
+0x3000b9e0  written from 0x104ff4 (guest)  = FunnyAppMain.<init>+0x98  -> the canvas
+0x3000b9e0  written from 0x1090e6 (guest)  = GameAppMain.<init>+0x86   -> a menu
+```
+
+`GameAppMain extends framework/FunnyAppMain`, both are the module's own, and
+both constructors wrote their first four reference fields to the same four
+words. The subclass's `menuDisplay` landed on the superclass's `curCanvas`, so
+the canvas the framework had just pushed to the display was replaced by a menu;
+`setCurrentScreen` then handed the screen to that menu, and the canvas painted
+a null screen for the rest of the run. The instance size is short by the same
+amount, so the object is also too small for the fields it does have.
+
+The offsets are static in the module image and nothing rewrote them — image and
+runtime are word-identical — so the rebase is the platform's to do. It is
+right for a class whose superclass is one of this platform's, whose fields are
+not in the guest payload at all: `framework/FunnyCanvas extends Card` writes
+its first field at the header and must keep doing so. It is wrong only where
+the superclass is another of the module's own. `rebaseModuleFields` adds the
+superclass's instance size to each of a class's own field records and grows the
+class's instance size to match, in the guest's own records because that is
+where the guest reads them.
+
+With that the title reaches its menu and then its game screen, draws its
+Korean text, its HP bar and its soft keys, and answers keys.
+`TestAModuleSubclassFieldMovesPastItsSuperclass` holds the rebase and
+`TestAModuleClassUnderAPlatformClassKeepsItsOffsets` holds the case it must not
+touch. Over the 571 local KTF archives all three changes are byte-identical,
+and the three titles that take this path paint what they painted before — under
+`-play` their frame differences are below the same pair's own noise floor
+(424 and 156 differing frames against 427 and 235 between two runs of one
+binary).
+
+One thing about the title is not a defect. It is a **240x240 handset title**:
+at the default 240x320 it draws its screen and leaves the bottom third alone,
+and `-screen 240x240` fills the frame.
+
+## A blit measured its source from the wrong corner
+
+The title's game screen carried a band of noise across the middle that its menu
+and intro did not. Sampling eight pixels of the band after every runtime call
+and recording which drawing call last changed each one named a single
+`drawImage` of a 132x123 image, and dumping the target before and after that
+one call showed a clean dialog box turning into the mess. The source was not
+at fault: the image is `/images/border.png`, the standard library decodes it
+byte-identically to any other decoder, and reading its rasterized framebuffer
+back after every draw found it unchanged from first to last.
+
+The geometry said what it was:
+
+```
+blit source=132x123 bpl=264 clip=54,35 132x123 at 26,7 opacity=true
+```
+
+**The clip answers in device coordinates and the call's arguments are in the
+caller's.** `state.clip` adds the translation itself and returns `left, top`
+past it; the blit then measured its source as `left-x` and `top-y` against the
+*untranslated* corner. With a Graphics translated by 28,28 that is a source
+read starting at (28,28) of a 132x123 image: everything it drew came from the
+wrong place, and the last 28 rows came from past the end of the pixel buffer —
+whatever the arena had put after it, which is the noise. `copyArea` already
+made this correction and carried a comment saying why; the two image paths did
+not.
+
+Both now move the corner the same way before subtracting. Over the 571 local
+KTF archives the first frame changes for **six titles and no others, and every
+one of the six is a repair**: three title screens that were drawing with black
+holes punched through them now draw whole, one publisher logo that was a
+garbled block is legible, one splash that showed only two blue bars shows its
+artwork, and one title's sprites stop sitting a few pixels into themselves.
+Nothing else moves by a pixel, and no title's tick count or error changes.
+`TestATranslatedBlitReadsItsSourceFromTheCorner` is the unit that fails on the
+old arithmetic.
+
+**A drawing change is judged on frames, not on the summary.** The summary would
+have reported this as six changed `lit_pixels` counts with no failures either
+way, which is the same shape a regression would have; what said these were
+repairs was looking at the twelve differing images.
 
 ## Sound in C, and the table that was accepted and thrown away
 

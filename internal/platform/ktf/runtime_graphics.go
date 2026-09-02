@@ -520,6 +520,15 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	}
 	width, height := int32(source.width), int32(source.height)
 	x, y = anchorOrigin(x, y, width, height, anchor)
+	// **The clip answers in device coordinates and these are still the
+	// caller's**, so the corner the source is measured from has to move the
+	// same way before the two are subtracted. Without it a translated context
+	// reads the source from the translation's own offset: one local title
+	// draws a 132x123 dialog through a Graphics translated by 28,28, took its
+	// pixels from (28,28) of itself, and ran the last 28 rows off the end of
+	// the pixel buffer into whatever the arena had put after it. copyArea
+	// already makes this correction; see runtimeGraphicsCopyArea.
+	originX, originY := x+state.translateX, y+state.translateY
 	left, top, clippedWidth, clippedHeight, ok := state.clip(x, y, width, height)
 	if !ok {
 		return nil
@@ -532,8 +541,8 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	row := make([]byte, int(clippedWidth)*2)
 	target := make([]byte, int(clippedWidth)*2)
 	for line := int32(0); line < clippedHeight; line++ {
-		sourceY := top - y + line
-		sourceAddress := source.pixels + uint32(sourceY)*source.bpl + uint32(left-x)*2
+		sourceY := top - originY + line
+		sourceAddress := source.pixels + uint32(sourceY)*source.bpl + uint32(left-originX)*2
 		if err := memory.Read(sourceAddress, row); err != nil {
 			return fmt.Errorf("read KTF blit source row %d: %w", line, err)
 		}
@@ -543,7 +552,7 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 				return fmt.Errorf("read KTF blit target row %d: %w", line, err)
 			}
 			for column := 0; column < len(row); column += 2 {
-				sourceX := left - x + int32(column/2)
+				sourceX := left - originX + int32(column/2)
 				if (transparent != nil && binary.LittleEndian.Uint16(row[column:]) == *transparent) ||
 					!opacity.opaqueAt(int(sourceX), int(sourceY)) {
 					copy(row[column:column+2], target[column:column+2])
@@ -668,6 +677,9 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 	bounds := decoded.Bounds()
 	width, height := int32(bounds.Dx()), int32(bounds.Dy())
 	x, y := anchorOrigin(positions[0], positions[1], width, height, positions[2])
+	// The same correction the framebuffer blit above makes: the clip answers
+	// in device coordinates and these are the caller's.
+	originX, originY := x+state.translateX, y+state.translateY
 	left, top, clippedWidth, clippedHeight, ok := state.clip(x, y, width, height)
 	if !ok {
 		return jvm.VoidValue(), nil
@@ -675,9 +687,9 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 	memory := runtime.client.core.Memory()
 	row := make([]byte, int(clippedWidth)*2)
 	for line := int32(0); line < clippedHeight; line++ {
-		sourceY := bounds.Min.Y + int(top-y+line)
+		sourceY := bounds.Min.Y + int(top-originY+line)
 		for column := int32(0); column < clippedWidth; column++ {
-			sourceX := bounds.Min.X + int(left-x+column)
+			sourceX := bounds.Min.X + int(left-originX+column)
 			red, green, blue, _ := decoded.At(sourceX, sourceY).RGBA()
 			pixel := uint16(red>>11)<<11 | uint16(green>>10)<<5 | uint16(blue>>11)
 			binary.LittleEndian.PutUint16(row[column*2:], pixel)

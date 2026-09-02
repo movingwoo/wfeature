@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -149,8 +150,21 @@ func (runtime *initializationRuntime) moduleName(cell uint32) (string, error) {
 // the record rather than through a call.
 func (runtime *initializationRuntime) linkModuleClasses() error {
 	runtime.client.log("KTF module classes", "count", len(runtime.moduleClassByName))
-	for _, class := range runtime.moduleClassByName {
-		if _, err := runtime.linkModuleClass(class, 0); err != nil {
+	// **Name order, not map order.** What a class inherits is read from what
+	// its superclass registered, so the order the classes are linked in used
+	// to decide what a subclass saw -- and a Go map hands them over in a
+	// different order on every run. One local title linked or failed to link
+	// depending on that draw, and reported two different errors for one
+	// archive. linkModuleClass now links a superclass before it needs one, so
+	// this order decides nothing; it is fixed so that two runs of one archive
+	// are the same run.
+	names := make([]string, 0, len(runtime.moduleClassByName))
+	for name := range runtime.moduleClassByName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := runtime.linkModuleClass(runtime.moduleClassByName[name], 0); err != nil {
 			return err
 		}
 	}
@@ -192,6 +206,19 @@ func (runtime *initializationRuntime) linkModuleClass(class uint32, depth int) (
 	if err != nil {
 		return 0, err
 	}
+	// **A resolved cell is not a linked class.** resolveModuleDescriptorCell
+	// answers a cell the module left unresolved and returns having done
+	// nothing when the module wrote its superclass pointer itself, which is
+	// what a class declared beside its parent in one module carries. The
+	// vtable below is built from what the parent registered, so a parent that
+	// has not been linked yet leaves the subclass inheriting nothing at all.
+	// Linking it here is what makes that independent of the order the module's
+	// classes are walked in.
+	if parent != 0 && runtime.isModuleClass(parent) {
+		if _, err := runtime.linkModuleClass(parent, depth+1); err != nil {
+			return 0, fmt.Errorf("KTF module class %#x superclass %#x: %w", class, parent, err)
+		}
+	}
 
 	// An array class names its element the same way, and the guest reads it
 	// straight off the descriptor when it checks an array store — so a cell
@@ -199,6 +226,9 @@ func (runtime *initializationRuntime) linkModuleClass(class uint32, depth int) (
 	// classes carry one.
 	if err := runtime.resolveModuleDescriptorCell(descriptorAddress+javaDescriptorElement, depth); err != nil {
 		return 0, fmt.Errorf("KTF module class %#x element class: %w", class, err)
+	}
+	if err := runtime.rebaseModuleFields(class, descriptorAddress, parent); err != nil {
+		return 0, fmt.Errorf("KTF module class %#x fields: %w", class, err)
 	}
 	if err := runtime.buildModuleVTable(class, descriptorAddress, parent); err != nil {
 		return 0, err
@@ -215,6 +245,18 @@ func (runtime *initializationRuntime) linkModuleClass(class uint32, depth int) (
 	return class, nil
 }
 
+// isModuleClass reports whether a class record is one the module published
+// rather than one of this platform's. Only the module's own are linked here;
+// a platform class is registered before a module ever names it.
+func (runtime *initializationRuntime) isModuleClass(class uint32) bool {
+	for _, address := range runtime.moduleClassByName {
+		if address == class {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveModuleClass answers a name with a class record: one of the module's
 // own if its table holds it, and this platform's otherwise. A module class is
 // linked on the way, so a subclass never sees an unlinked parent.
@@ -223,6 +265,111 @@ func (runtime *initializationRuntime) resolveModuleClass(name string, depth int)
 		return runtime.linkModuleClass(class, depth)
 	}
 	return runtime.ensureJavaClass(name)
+}
+
+// moduleDescriptorFieldTable and moduleDescriptorInstanceSize are where a
+// class descriptor keeps the two things a rebase has to move.
+const (
+	moduleDescriptorFieldTable   = 20
+	moduleDescriptorInstanceSize = 26
+)
+
+// rebaseModuleFields moves a class's own fields past its superclass's.
+//
+// **A module ships each field's offset inside its own class**, and the guest
+// adds nothing to it but the instance header: it reads the offset out of the
+// field's own record and indexes the object with it. That is right for a class
+// whose superclass is one of this platform's, whose fields are not in the
+// guest payload at all -- and wrong for a class whose superclass is another of
+// the module's own, whose fields are. One local title's `GameAppMain` extends
+// the framework class its archive also carries, and both constructors wrote
+// their first four reference fields to the same four words: the subclass's
+// `menuDisplay` landed on the superclass's `curCanvas`, so the canvas the
+// framework had just pushed to the display was replaced by a menu, the screen
+// it was told to show went to that menu instead, and the canvas painted a null
+// screen for every frame of the run. The instance size is short by the same
+// amount, so the object is too small for the fields it does have.
+//
+// The platform is what knows the whole chain -- the guest reads a class one at
+// a time -- so the platform is what rebases, and it rebases in the guest's own
+// records rather than only in the metadata, because the records are what the
+// guest reads. Only a class linked here is touched, and each is linked once.
+func (runtime *initializationRuntime) rebaseModuleFields(class, descriptorAddress, parent uint32) error {
+	if parent == 0 || !runtime.isModuleClass(parent) {
+		return nil
+	}
+	base, err := runtime.moduleInstanceSize(parent)
+	if err != nil {
+		return err
+	}
+	if base == 0 {
+		return nil
+	}
+	table, err := runtime.readWord(descriptorAddress + moduleDescriptorFieldTable)
+	if err != nil {
+		return err
+	}
+	if table != 0 {
+		pointers, err := runtime.readAOTPointerTable(table, "module field table")
+		if err != nil {
+			return err
+		}
+		for _, pointer := range pointers {
+			owner, err := runtime.readWord(pointer + 4)
+			if err != nil {
+				return err
+			}
+			if owner != class {
+				continue
+			}
+			offset, err := runtime.readWord(pointer + 12)
+			if err != nil {
+				return err
+			}
+			if uint64(offset)+uint64(base) > maxModuleInstanceSize {
+				return fmt.Errorf("field at %#x moves to %d bytes, limit %d", pointer, uint64(offset)+uint64(base), maxModuleInstanceSize)
+			}
+			if err := runtime.writeWord(pointer+12, offset+uint32(base)); err != nil {
+				return err
+			}
+		}
+	}
+	own, err := runtime.moduleInstanceSize(class)
+	if err != nil {
+		return err
+	}
+	if uint64(own)+uint64(base) > maxModuleInstanceSize {
+		return fmt.Errorf("instance grows to %d bytes, limit %d", uint64(own)+uint64(base), maxModuleInstanceSize)
+	}
+	return runtime.writeModuleInstanceSize(class, own+base)
+}
+
+// maxModuleInstanceSize is what the descriptor's halfword can hold.
+const maxModuleInstanceSize = 0xffff
+
+// moduleInstanceSize reads a class record's instance size.
+func (runtime *initializationRuntime) moduleInstanceSize(class uint32) (uint16, error) {
+	descriptor, err := runtime.readWord(class + 8)
+	if err != nil {
+		return 0, err
+	}
+	record, err := runtime.readAOTBytes(descriptor+moduleDescriptorInstanceSize, 2, "class instance size")
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(record), nil
+}
+
+// writeModuleInstanceSize records the size a class's instances need now that
+// its fields sit past its superclass's.
+func (runtime *initializationRuntime) writeModuleInstanceSize(class uint32, size uint16) error {
+	descriptor, err := runtime.readWord(class + 8)
+	if err != nil {
+		return err
+	}
+	var value [2]byte
+	binary.LittleEndian.PutUint16(value[:], size)
+	return runtime.client.core.Memory().Write(descriptor+moduleDescriptorInstanceSize, value[:])
 }
 
 // buildModuleVTable writes the class's virtual dispatch table. A module ships
