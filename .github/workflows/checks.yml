@@ -40,7 +40,7 @@ jobs:
 
       - name: Check gofmt
         run: |
-          unformatted=$(gofmt -l cmd internal)
+          unformatted=$(gofmt -l cmd internal mobile)
           if [ -n "$unformatted" ]; then
             echo "gofmt would change:"; echo "$unformatted"; exit 1
           fi
@@ -94,6 +94,39 @@ jobs:
           # would have downloaded.
           go-version: stable
           cache: true
+
+      # The Android app runs this same binary as a child process, so what has
+      # to hold is that it still cross-compiles for a phone. Seconds, and no
+      # Android SDK involved.
+      - name: The Android app's server cross-compiles
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "0"
+          GOOS: android
+          GOARCH: arm64
+        run: go build -o /dev/null ./cmd/server
+
+      # iOS cannot run a child process, so its half is a linked archive and a
+      # Swift app that calls into it. Compiling both is what catches an export
+      # that was renamed on one side of that boundary — the failure that would
+      # otherwise surface as an app nobody can build the week of a release.
+      - name: The iOS library and app compile
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          mkdir -p build/ci
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+            CC="$(xcrun --sdk iphoneos -f clang) -arch arm64 -isysroot $sdk -miphoneos-version-min=15.0" \
+            go build -buildmode=c-archive -o build/ci/libwfeature.a ./mobile/ios/lib
+          printf '#include "libwfeature.h"\n' > build/ci/bridge.h
+          xcrun --sdk iphoneos swiftc \
+            -target arm64-apple-ios15.0 -sdk "$sdk" \
+            -import-objc-header build/ci/bridge.h -I build/ci \
+            -parse-as-library \
+            -framework UIKit -framework WebKit -framework Foundation \
+            mobile/ios/src/App.swift build/ci/libwfeature.a \
+            -o build/ci/wfeature
 
       - name: Build the release server
         env:
