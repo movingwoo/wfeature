@@ -75,6 +75,10 @@ somebody's and inherits its games and saves. Keeping it out costs nothing —
 one person cuts the releases — and keeping it in would hand that to anyone who
 cloned the repository.
 
+The `versionCode` is the repository's commit count, because Android refuses to
+install an older one over a newer and a number that never moved would make
+every build look like the same one to a tester's phone.
+
 The other half of the same rule: **back it up.** A key that changed between
 builds would refuse to update the installed app, and every tester would have to
 uninstall before the next version.
