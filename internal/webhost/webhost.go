@@ -183,6 +183,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveGameList(writer, request)
 	case strings.HasPrefix(requestPath, "/games/"):
 		s.serveGameArchive(writer, request)
+	case requestPath == "/api/games":
+		s.serveGameUpload(writer, request)
 	case requestPath == "/api/status":
 		s.serveStatus(writer, request)
 	case requestPath == "/api/shutdown":

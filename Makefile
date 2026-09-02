@@ -1,4 +1,4 @@
-.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist pgo
+.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist mobile checksums pgo
 
 # Each profile owns its own output directory so a debug and a release build can
 # coexist. Rebuilding one never silently replaces the other, and which binary
@@ -13,7 +13,7 @@ RELEASE_SERVER := build/release/wfeature-server
 # version is stamped into the binary and into the archive names, and is set by
 # hand — `make dist VERSION=0.3.1` — because a tag is a decision, not a build
 # artefact.
-VERSION ?= 0.3.1
+VERSION ?= 0.4.0
 DIST := build/dist
 DIST_PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 
@@ -177,12 +177,34 @@ dist:
 		fi; \
 		rm -rf $$stage; \
 	done
-	@cd $(DIST) && if command -v sha256sum >/dev/null 2>&1; then \
-		sha256sum *.tar.gz *.zip > SHA256SUMS; \
-	else \
-		shasum -a 256 *.tar.gz *.zip > SHA256SUMS; \
-	fi
+	@$(MAKE) --no-print-directory checksums
 	@ls -l $(DIST)
+
+# The phone builds. They are not part of `dist` and not in the release archive:
+# each needs a toolchain the desktop build does not (an Android SDK, and Xcode
+# for the iOS one), and a machine that has neither should still be able to cut
+# a release. Run this where the toolchains are, and the artifacts land beside
+# the desktop archives to be published with them.
+mobile:
+	@mkdir -p $(DIST)
+	VERSION=$(VERSION) mobile/android/build.sh
+	cp mobile/android/build/wfeature.apk $(DIST)/wfeature-$(VERSION)-android-arm64.apk
+	VERSION=$(VERSION) mobile/ios/build.sh
+	cp mobile/ios/build/wfeature.ipa $(DIST)/wfeature-$(VERSION)-ios-arm64.ipa
+	@$(MAKE) --no-print-directory checksums
+	@ls -l $(DIST)
+
+# Every archive in the release directory, whichever command wrote it. The list
+# is gathered first because most releases have no phone builds beside the
+# desktop ones, and a pattern that matches nothing is an error rather than an
+# empty list.
+checksums:
+	@cd $(DIST) && files=`ls *.tar.gz *.zip *.apk *.ipa 2>/dev/null`; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum $$files > SHA256SUMS; \
+	else \
+		shasum -a 256 $$files > SHA256SUMS; \
+	fi
 
 # run/run-release forward their arguments: `make run ARGS="runktf game.zip -play"`.
 run: debug
