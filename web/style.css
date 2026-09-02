@@ -186,60 +186,6 @@ body {
 }
 
 .panel-header,
-/* The connect panel is the cheat panel's shape at a quarter of its size: the
-   same centred card, because it is the same kind of thing — something that
-   covers the game while it is being read, and is dismissed. */
-.connect-panel {
-  display: none;
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(92vw, 320px);
-  z-index: 200;
-  padding: 0 12px 12px;
-  box-sizing: border-box;
-  background: #2b2b2b;
-  color: #eee;
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  font-size: 0.85em;
-  user-select: text;
-  text-align: center;
-}
-
-.connect-panel.visible {
-  display: block;
-}
-
-.connect-hint {
-  margin: 4px 0 10px;
-  color: #bbb;
-}
-
-/* White padding around the code is part of the code: a QR that runs to the
-   edge of a dark panel is one a camera hunts for. The canvas draws its own
-   quiet zone, and this keeps the card from eating it. */
-.connect-qr {
-  display: block;
-  margin: 0 auto 10px;
-  background: #fff;
-  border-radius: 4px;
-  image-rendering: pixelated;
-  max-width: 100%;
-  height: auto;
-}
-
-/* The address is there to be read out or copied when a camera is not to hand,
-   so it wraps rather than being cut off. */
-.connect-url {
-  margin: 0 0 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9em;
-  color: #ddd;
-  word-break: break-all;
-}
-
 .cheat-header {
   position: sticky;
   top: 0;
@@ -704,6 +650,61 @@ body:has(.status-message.visible) .modal-backdrop {
   display: block;
 }
 
+/* The connect panel is the cheat panel's shape at a quarter of its size: the
+   same centred card, because it is the same kind of thing — something that
+   covers the game while it is being read, and is dismissed. */
+.connect-panel {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 320px);
+  z-index: 215;
+  padding: 0 12px 12px;
+  box-sizing: border-box;
+  background: #2b2b2b;
+  color: #eee;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 0.85em;
+  user-select: text;
+  text-align: center;
+}
+
+.connect-panel.visible {
+  display: block;
+}
+
+.connect-hint {
+  margin: 4px 0 10px;
+  color: #bbb;
+}
+
+/* White padding around the code is part of the code: a QR that runs to the
+   edge of a dark panel is one a camera hunts for. The canvas draws its own
+   quiet zone, and this keeps the card from eating it. */
+.connect-qr {
+  display: block;
+  margin: 0 auto 10px;
+  background: #fff;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  max-width: 100%;
+  height: auto;
+}
+
+/* The address is there to be read out or copied when a camera is not to hand,
+   so it wraps rather than being cut off. */
+.connect-url {
+  margin: 0 0 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: #ddd;
+  word-break: break-all;
+}
+
+
 .cheat-header {
   margin: 0 -12px 8px;
   padding: 10px 12px;
@@ -934,7 +935,8 @@ body:has(.status-message.visible) .modal-backdrop {
   /* Docked, not floating: the panels keep the same .visible switch the gear
      and the cheat button already flip, they just occupy the rail when on. */
   .settings-panel,
-  .cheat-panel {
+  .cheat-panel,
+  .connect-panel {
     position: static;
     transform: none;
     width: auto;
@@ -947,7 +949,8 @@ body:has(.status-message.visible) .modal-backdrop {
   }
 
   .rail .settings-panel,
-  .rail .cheat-panel {
+  .rail .cheat-panel,
+  .rail .connect-panel {
     flex: 0 1 auto;
     min-height: 0;
   }

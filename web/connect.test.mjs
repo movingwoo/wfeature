@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { drawQr, fetchConnectURL, initConnect, noAddress } from "./connect.js";
+import { drawQr, fetchConnectURL, initConnect, noAddress, noAnswer, oldServer } from "./connect.js";
 import { encodeQr } from "./qr.js";
 
 // A canvas that records what was painted, so the drawing can be checked
@@ -120,4 +120,61 @@ test("a server with no address to give explains itself instead of showing a dead
   document.elements.get("connect-toggle").click();
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(document.elements.get("connect-url").textContent, noAddress);
+});
+
+// The first real use of this panel was a page served from disk by a server
+// built before the route existed, and it was answered with a sentence about
+// the network. The two states have different fixes and now say so.
+test("a server older than the page says to restart it, not that the network is wrong", async () => {
+  const document = documentOf();
+  let answers = 0;
+  const fetcher = async () => (++answers === 1
+    ? { ok: false, status: 404 }
+    : { ok: true, json: async () => ({ url: "http://192.168.0.5:11541" }) });
+  initConnect({ document, fetcher });
+
+  const toggle = document.elements.get("connect-toggle");
+  toggle.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(document.elements.get("connect-url").textContent, oldServer);
+
+  // And the failure is not remembered: restarting the server is the fix, so
+  // the next press has to ask again rather than repeat the complaint.
+  toggle.click();
+  toggle.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(document.elements.get("connect-url").textContent, "http://192.168.0.5:11541");
+});
+
+test("a server that does not answer at all is a third sentence", async () => {
+  const document = documentOf();
+  initConnect({ document, fetcher: async () => { throw new TypeError("Failed to fetch"); } });
+  document.elements.get("connect-toggle").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(document.elements.get("connect-url").textContent, noAnswer);
+});
+
+// The button lives inside the settings panel, which on a narrow layout is a
+// modal that would otherwise cover the panel it just opened.
+test("opening the panel closes the settings modal it was opened from", async () => {
+  const document = documentOf();
+  const settings = { classList: { removed: [], remove(name) { this.removed.push(name); } } };
+  const withSettings = {
+    getElementById: id => (id === "settings-panel" ? settings : document.getElementById(id)),
+    elements: document.elements,
+  };
+  initConnect({ document: withSettings, fetcher: answering("http://192.168.0.5:11541"), docked: { matches: false } });
+  withSettings.elements.get("connect-toggle").click();
+  assert.deepEqual(settings.classList.removed, ["visible"]);
+
+  // A wide layout docks the panels side by side, and there both stay.
+  const wide = documentOf();
+  const keptSettings = { classList: { removed: [], remove(name) { this.removed.push(name); } } };
+  const withWide = {
+    getElementById: id => (id === "settings-panel" ? keptSettings : wide.getElementById(id)),
+    elements: wide.elements,
+  };
+  initConnect({ document: withWide, fetcher: answering("http://192.168.0.5:11541"), docked: { matches: true } });
+  withWide.elements.get("connect-toggle").click();
+  assert.deepEqual(keptSettings.classList.removed, []);
 });

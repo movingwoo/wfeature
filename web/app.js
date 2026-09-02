@@ -1492,7 +1492,7 @@ const main = async () => {
   // The phone's address does not depend on a session, and the moment it is
   // most wanted is before there is one: the page is open on the machine that
   // started the server, and the phone has not been let in yet.
-  initConnect({ document });
+  initConnect({ document, docked: dockedPanels });
 
   session = await openSession();
   if (!session) {
