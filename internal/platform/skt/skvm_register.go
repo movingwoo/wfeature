@@ -129,6 +129,7 @@ func (runtime *Runtime) registerSKVMNatives() error {
 		{skvm.PhoneBookClass, "isUsed", "(I)Z", zeroInt},
 
 		{skvm.XDisplayClass, "refresh", "(IIII)V", runtime.xDisplayRefresh},
+		{skvm.XDisplayClass, "clear", "(" + graphics + image + "II)V", runtime.xDisplayClear},
 		{skvm.XDisplayClass, "drawImageEx", "(" + graphics + image + "II" + image + "IIIII)V", runtime.xDisplayDrawImageEx},
 		{skvm.XDisplayClass, "copyLCD", "(" + graphics + image + "IIII)V", runtime.xDisplayCopyLCD},
 		{skvm.ToolkitClass, "drawString", "(" + text + "III)V", runtime.toolkitDrawString},

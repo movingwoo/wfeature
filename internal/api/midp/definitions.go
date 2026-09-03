@@ -474,6 +474,11 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "setFont", Descriptor: "(Ljavax/microedition/lcdui/Font;)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setColor", Descriptor: "(I)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setColor", Descriptor: "(III)V", Access: jvm.AccessPublic | jvm.AccessNative},
+				// The grey a title asks for by one number rather than three.
+				// Three local titles reach it, two of them through a Graphics
+				// facade of their own; without it the resolution walks to
+				// Object and ends the run in the middle of a paint.
+				{Name: "setGrayScale", Descriptor: "(I)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "getColor", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "setClip", Descriptor: "(IIII)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "clipRect", Descriptor: "(IIII)V", Access: jvm.AccessPublic | jvm.AccessNative},

@@ -693,6 +693,59 @@ func TestXDisplayPublishesFramebufferSize(t *testing.T) {
 	}
 }
 
+// A Canvas here reports sixteen fewer rows than the display it is on, and the
+// display is what XDisplay publishes. That is not this runtime's invention:
+// fifty-one of the seventy-eight Java archives in the local corpus add sixteen
+// back to `Canvas.getHeight()` to get the number they lay out against, and one
+// of them opens a file named for `getWidth()` and that sum. Answering the
+// display here put every one of their bottom-anchored draws sixteen rows off
+// the end of the screen. See canvasReservedRows.
+func TestCanvasReportsTheDisplayLessTheReservedRows(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 40, 40)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if dimensions := invokeFixtureInt(t, runtime, "CanvasMIDlet", "dimensions"); dimensions != 40024 {
+		t.Fatalf("dimensions() = %d, want 40024 (40 wide, 40 - 16 tall)", dimensions)
+	}
+	// The display keeps its own height on both XDisplay fields: the framebuffer
+	// is still the whole screen, and the two full-screen clears a title writes
+	// through the vendor pair still cover it.
+	for _, field := range []string{"height", "height2"} {
+		value, err := runtime.VM.StaticField(skvm.XDisplayClass, field, "I")
+		if err != nil {
+			t.Fatalf("StaticField(%s) error = %v", field, err)
+		}
+		got, err := value.Int32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 40 {
+			t.Errorf("XDisplay.%s = %d, want the display's 40", field, got)
+		}
+	}
+}
+
+// A display too short to give the rows up keeps them, so a Canvas never
+// reports nothing at all.
+func TestCanvasOnATinyDisplayReportsWhatItHas(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 4, 3)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if dimensions := invokeFixtureInt(t, runtime, "CanvasMIDlet", "dimensions"); dimensions != 4003 {
+		t.Fatalf("dimensions() = %d, want 4003", dimensions)
+	}
+}
+
 func TestCallSeriallyRunsOneRunnablePerPass(t *testing.T) {
 	archive, err := Open(displayJAR)
 	if err != nil {

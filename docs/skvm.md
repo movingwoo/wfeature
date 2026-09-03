@@ -880,6 +880,24 @@ that it is one line and that an ordinary call is silent.
 neighbouring call and it copies the screen into the caller's image, which is
 what `Graphics2D.captureLCD` does into a new one.
 
+`XDisplay.clear(Graphics, Image backdrop, int x, int y)` is the third, and it
+blacks out what the Graphics draws on. **One archive calls it, once**, with a
+null backdrop and a zero point, and then writes "Now Loading..." on what it
+cleared in white — so what the call leaves behind has to be dark, and the
+title's own screen clear beside it fills with `0xff000000` rather than a colour
+it chose. The Graphics' colour is not the answer: the call takes no colour, and
+the one caller sets one only afterwards, for the text.
+
+The backdrop and the point are unexercised, the way `drawImageEx`'s second image
+is. A picture handed to a clear is a backdrop and a point is where it goes, so a
+non-null one is drawn at `(x, y)` over the black rather than dropped, and a
+title that passes one writes one line saying so — same shape, same reason as
+above.
+
+The clear does not consult the clip. It clears the destination, which is what a
+title calling it between two scenes means, and its one caller has just been
+drawing somewhere else on the same Graphics.
+
 `captureLCD` is declared static, and the corpus is what decided that rather than
 the shape of the class around it. Five of the fifteen local titles name it, at
 eight call sites between them, and **every one of the eight is an
@@ -1231,64 +1249,94 @@ rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
 both draw an empty screen and `-screen 176x196` draws the title, which is why
 the flag is the answer here and the rule is not.
 
-### What a Canvas is here, and why the flag stays anyway
+### A Canvas here is sixteen rows shorter than the display
 
 The question underneath is whether a Canvas on this vendor is the whole display
-or the part of it a game may draw in. It is not a question about this one
-archive: **nothing in the corpus asks for full screen** — `setFullScreenMode` is
-called by none of the ninety-one — so whatever a Canvas reports is what all
-sixty-one titles that read it lay out against.
+or the part of it a game may draw in. It is not a question about one archive:
+**nothing in the corpus asks for full screen** — `setFullScreenMode` is called
+by none of the ninety-one — so whatever a Canvas reports is what every title
+that reads it lays out against.
 
-This vendor publishes both numbers. `com.xce.lcdui.XDisplay` carries `width`,
-`height` and `height2`, and the corpus is emphatic about which one it draws in:
-of the archives that name `XDisplay` at all, **forty-nine name `height2` and five
-name `height`**. `height2` is what they size their back buffer with, what they
-pass to `repaint`, and what they clear with `fillRect`.
+**The corpus answers it in one voice. Fifty-one of the seventy-eight archives
+that hold Java compute `Canvas.getHeight() + 16`**, and what each of them does
+with the sum says what the sum is:
 
-**Two archives then say what `height2` is, and they say it as a constraint
-rather than an opinion.** Each of them clears its whole screen in two different
-places, once through each pair:
+- one stores it in a field it named `m_RealY`;
+- one makes its back buffer `createImage(getWidth(), getHeight() + 16)` and
+  blits it at the origin, so the sum is the picture the display shows;
+- one builds a string out of `getWidth()` and the sum and opens a file by that
+  name, which on the handset it shipped for has to read `240320`;
+- one picks its artwork from a ladder — `> 250` the 240 set, `> 166` the 176
+  set, otherwise the 120 set — indexed by an offscreen image sixteen rows
+  taller than the Canvas, and every rung of that ladder is a handset display.
 
-```java
-g.setColor(0xffffff);
-g.fillRect(0, 0, XDisplay.width, XDisplay.height2);   // one place
-...
-g.setColor(0xff000000);
-g.fillRect(0, 0, getWidth(), getHeight());            // another, on the Canvas
-```
+So `Canvas.getHeight()` on this vendor reports the display less sixteen rows,
+every title adds them back, and a runtime that answers the display puts all
+fifty-one titles' bottom-anchored drawing sixteen rows too low — off the end of
+the screen. That is what it did until it was reported from a phone: a dialogue
+box with its second line cut through the middle, a soft-key hint cut in half, a
+border that ran off the bottom, in three unrelated titles.
 
-Both are `(0, 0, <full width>, <full height>)`. If the two pairs differed, one
-clear would leave a strip the other did not, visible every time the title
-switched between them — so on the handsets these two shipped for,
-`XDisplay.width` is `getWidth()` and **`XDisplay.height2` is `getHeight()`**.
+`canvasReservedRows` in [`render.go`](../internal/platform/skt/render.go) is the
+sixteen, and it is the only thing that changed. **The framebuffer is still the
+whole display and drawing is not clipped to the smaller rectangle** — one of
+those titles puts its soft-key hint at `height - 20` with a seven-row font,
+which crosses three rows into the band, and a handset that clipped there would
+have shipped it cut. The band is where the handset drew its own soft keys; this
+project draws nothing in it and lets the guest have it.
 
-That settles the reading of the third archive, the one that computes
-`height2 - height` and adds it to `getHeight()`. It cannot be a correction from
-the display to the drawable, because `getHeight()` is already the drawable; it
-is the idiom that is a no-op exactly when the two `XDisplay` heights are equal,
-and on a handset where they are not it centres a dialogue half a bar high. An
-idiom that is harmless when it is wrong is weak evidence beside two clears that
-have to agree.
+`XDisplay.width`, `height` and `height2` still answer the display. Of the
+archives that name `XDisplay` at all, forty-nine name `height2` and five name
+`height`; `height2` is what they size a back buffer with, pass to `repaint`,
+clear with `fillRect` and hand to `XDisplay.refresh` as the rectangle to push —
+all of which are the whole screen. One title does both in one class: it clears
+with `fillRect(0, 0, XDisplay.width, XDisplay.height2)` and lays its scene out
+against `getHeight() + 16`, so for that title the two are the same number and
+that number is the display.
 
-**So a Canvas here is the drawable area, and this platform still gives it the
-whole framebuffer** — which is a handset that reserved no rows, and which is
-self-consistent: `height`, `height2` and `getHeight()` are one number and every
-title agrees with every other. Modelling a handset that *did* reserve rows would
-mean shrinking the game area of all seventy-nine titles to make room for chrome
-this project does not draw, to fix the one archive that wants a 196-row drawable.
-That is worse for seventy-eight to help one, so the archive keeps its flag: with
-no `-screen` it draws nothing, and with `-screen 176x196` it draws — which is a
-title packaged for a phone smaller than the default, the same class of archive
-the rule above already exists for.
+**What this replaces.** The reading before this was that `getHeight()`,
+`height2` and `height` were one number, resting on two archives that each clear
+their whole screen twice, once through `(XDisplay.width, XDisplay.height2)` and
+once through `(getWidth(), getHeight())`; if the pairs differed, one clear would
+leave a strip the other did not. That argument still stands for `height2`
+against `height` — it just never reached `getWidth()`/`getHeight()`, because a
+clear that stops sixteen rows short leaves a strip only where something is
+drawn, and the band is the one place a title has no reason to leave anything.
+Fifty-one archives naming the difference, one of them in a filename, outweighs
+an inference from two.
 
-**The reference implementation reaches the same arrangement**, which is worth
-knowing before anyone reopens this: it declares the same three `XDisplay` fields
-and fills them with 240, 320 and 320, its `Displayable.getHeight` forwards to the
-display's height with no full-screen distinction, drawing the chrome for a
-Displayable that is not full screen is an unimplemented note there, and it has no
-per-archive screen selection at all — one 240x320 window for everything. Two
-implementations landing on one number for all three is not proof; the two clears
-above are the reason.
+**The 176 archive keeps its flag.** It is the one that reads its artwork set
+from the ladder above, and the rung it needs is `> 166` and not `> 212`. Under
+the old answer `-screen 176x220` gave the ladder 236 and `-screen 176x196` gave
+it 212; under this one they give 220 and 196, so 196 still works and the flag is
+unchanged. What the change does is line the ladder up with what it is a ladder
+of — a 240x320 display now indexes it with 320 rather than 336.
+
+**What the whole corpus does with it.** All ninety-one archives, 300 ticks each,
+first frame captured, before and against: **sixty-one frames differ and no run
+changes outcome** — same state, same error text, and the same tick count
+everywhere but one title, which destroys itself at 126 rather than 125. Every
+differing frame is a title that reads `Canvas.getHeight()`, directly or through
+the `+ 16`, or one that differs from *itself* between two runs of the same
+binary by as much (`docs/skvm.md`, "An SKT A/B has a per-title noise floor").
+The three Jlets are byte-identical, which is what the `Card.getHeight` note in
+[`wipi/definitions.go`](../internal/api/wipi/definitions.go) is for.
+
+**Three titles pay for it with a band.** A title that lays out against
+`getHeight()` and never adds the sixteen back now leaves the last sixteen rows
+unpainted, and this project draws no soft keys there, so they stay black. Two of
+the three are black there anyway — the band is invisible on a title screen that
+was already dark — and the third is a map that now stops short of the bottom
+edge. That is what the handset looked like, and it is three against the fifty
+that were losing a dialogue box.
+
+**The reference implementation does not do this**, which is worth knowing before
+anyone reopens it: it declares the same three `XDisplay` fields and fills them
+with 240, 320 and 320, and its `Displayable.getHeight` forwards to the display
+with no reservation. It also has no per-archive screen selection at all — one
+240x320 window for everything — and the titles above draw sixteen rows off the
+bottom of it. Two implementations agreeing is not evidence when the corpus
+disagrees with both.
 
 ## Ninety archives, and the pass that made room for eleven of them
 
@@ -1531,6 +1579,26 @@ cannot be allowed to hold a Host pass, and no local title reaches it;
 archive, which is a download this project does not do — `network.md` carries
 the same decision for the rest of the radio.
 
+### Two members a paint stopped on, reported from a phone
+
+Two archives ended a run inside `Canvas.paint` on a member this runtime did not
+declare — which is the worst place for a gap, because the resolution walks the
+chain to `java.lang.Object`, and the message a player sees names `Object` rather
+than the screen that would not draw:
+
+- `javax.microedition.lcdui.Graphics.setGrayScale(int)`, MIDP's grey by one
+  number instead of three. Three archives reach it, two of them through a
+  Graphics facade of their own that also wants `getGrayScale`, the stroke style
+  and the colour components — those three are still open, and their titles need
+  ten more members besides. This one is `setColor(v, v, v)` with the
+  specification's `IllegalArgumentException` outside 0..255.
+- `com.xce.lcdui.XDisplay.clear(Graphics, Image, int, int)`, described under
+  "What drawImageEx is" above.
+
+Both were found by a player rather than by the scan, which had listed them: the
+scan says what a title *would* ask for, and neither title asks until it is deep
+enough into its own start-up to paint.
+
 ### A title that draws in three dimensions, and the package called `m`
 
 One archive's Canvas dies in its own class initializer on `class not found:
@@ -1678,7 +1746,9 @@ titles with `runskt` and reading the frames — and each is pinned by a fixture
 test afterwards: `TestCallSeriallyRunsOneRunnablePerPass` and
 `TestCallSeriallyLoopAdvancesOneStepPerPass` for the serial queue,
 `TestScreenGraphicsStaysUsableAfterPaint` for the Graphics that outlives its
-paint, and `TestXDisplayPublishesFramebufferSize` for the screen fields.
+paint, `TestXDisplayPublishesFramebufferSize` for the screen fields, and
+`TestCanvasReportsTheDisplayLessTheReservedRows` for the sixteen a Canvas keeps
+back beside them.
 
 Regenerate the fixture with:
 

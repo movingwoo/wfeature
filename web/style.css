@@ -43,7 +43,15 @@
   --keypad-pad-rows: 16px;
   /* The last row of the page is the one that has to clear a gesture bar. */
   --keypad-chrome: calc(var(--keypad-bottom) + env(safe-area-inset-bottom, 0px));
-  --usable-height: calc(100dvh - var(--stage-vertical));
+  /* The first row of the page is the one that has to clear a status bar. A
+     browser that hands the page the whole display — an iOS home-screen app
+     with a translucent bar does, and viewport-fit=cover asks for it — puts the
+     clock over whatever is at the top, and what is at the top here is the game
+     screen. So the inset is height the column may not use and padding it has
+     to spend, the same pair --keypad-chrome is at the other end. It is zero on
+     every browser that lays the page out below the bar already. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --usable-height: calc(100dvh - var(--stage-vertical) - var(--safe-top));
 
   /* The screen is budgeted against the smallest keypad there can be, so that
      the pad is never pushed off the bottom; the pad then spends whatever the
@@ -98,6 +106,10 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
+  /* The height above is the window's; the padding is inside it, which is what
+     --usable-height already subtracts. */
+  box-sizing: border-box;
+  padding-top: var(--safe-top);
 }
 
 .button-container {

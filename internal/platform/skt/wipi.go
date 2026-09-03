@@ -90,6 +90,7 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.DisplayClass, "getKeyName", "(I)" + text, wipiKeyName},
 
 		{wipi.CardClass, "getDisplay", "()Lorg/kwis/msp/lcdui/Display;", runtime.wipiDefaultDisplay},
+		{wipi.CardClass, "getHeight", "()I", runtime.wipiDisplayHeight},
 		{wipi.CardClass, "move", "(II)V", runtime.wipiCardMove},
 		{wipi.CardClass, "resize", "(II)V", runtime.wipiCardResize},
 

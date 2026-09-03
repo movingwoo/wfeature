@@ -647,6 +647,7 @@ func (runtime *Runtime) registerMIDletNatives() error {
 		{midp.FontClass, "substringWidth", "(Ljava/lang/String;II)I", runtime.getFontSubstringWidth},
 		{midp.GraphicsClass, "setColor", "(I)V", runtime.setGraphicsColor},
 		{midp.GraphicsClass, "setColor", "(III)V", runtime.setGraphicsColorRGB},
+		{midp.GraphicsClass, "setGrayScale", "(I)V", runtime.setGraphicsGrayScale},
 		{midp.GraphicsClass, "getColor", "()I", runtime.getGraphicsColor},
 		{midp.GraphicsClass, "getFont", "()Ljavax/microedition/lcdui/Font;", runtime.getGraphicsFont},
 		{midp.GraphicsClass, "setFont", "(Ljavax/microedition/lcdui/Font;)V", runtime.setGraphicsFont},
