@@ -622,6 +622,15 @@ and [`rms.md`](rms.md), [`lcdui.md`](lcdui.md) and [`skvm.md`](skvm.md) have
 the rest. The stubs carry signatures, constants and `throws` clauses and no
 behavior at all; the fixture runs on the runtime.
 
+**A fixture that names nothing from the class library needs none of that.**
+`internal/jvm/testdata/CallLoop.java` is the interpreter's call path and uses
+only its own methods, so it compiles against the JDK alone:
+
+```sh
+javac -source 1.8 -target 1.8 -nowarn -g:none \
+  -d internal/jvm/testdata internal/jvm/testdata/CallLoop.java
+```
+
 The `java.*` classes come from the JDK's own `rt.jar` as they always did. This
 runtime implements a subset of them, so a fixture can compile against a method
 that is not here — which shows up when the fixture runs, as a missing method

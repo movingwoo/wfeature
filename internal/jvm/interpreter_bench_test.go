@@ -1,6 +1,52 @@
 package jvm
 
-import "testing"
+import (
+	_ "embed"
+	"testing"
+)
+
+//go:embed testdata/CallLoop.class
+var callLoopClass []byte
+
+func callLoopSource() mapClassSource {
+	return mapClassSource{"CallLoop": callLoopClass}
+}
+
+// callsPerOp is how many guest calls one iteration of the loop benchmarks
+// below makes. It is large enough that the Host entry around it — a fresh
+// execution, a descriptor parse, a class lookup — is a rounding error, which
+// is the whole point: what a title spends is guest calls inside one execution,
+// not Host calls into the machine.
+const callsPerOp = 1000
+
+// benchmarkCallLoop reports the cost of one *guest* call rather than of the
+// Host call around it.
+func benchmarkCallLoop(b *testing.B, method string) {
+	vm := New(callLoopSource(), Options{MaxSteps: 1 << 40})
+	arguments := []Value{IntValue(callsPerOp)}
+	if _, err := vm.InvokeStatic("CallLoop", method, "(I)I", arguments...); err != nil {
+		b.Fatalf("%s() error = %v", method, err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := vm.InvokeStatic("CallLoop", method, "(I)I", arguments...); err != nil {
+			b.Fatalf("%s() error = %v", method, err)
+		}
+	}
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/callsPerOp, "ns/call")
+}
+
+// BenchmarkGuestCallLoopInstance is a virtual call on one receiver, repeated
+// inside a single execution.
+func BenchmarkGuestCallLoopInstance(b *testing.B) { benchmarkCallLoop(b, "instanceCalls") }
+
+// BenchmarkGuestCallLoopStatic is the same frame path without a receiver.
+func BenchmarkGuestCallLoopStatic(b *testing.B) { benchmarkCallLoop(b, "staticCalls") }
+
+// BenchmarkGuestCallLoopAllocating adds an object per call, which is the shape
+// of a title's frame loop rather than of a tight arithmetic one.
+func BenchmarkGuestCallLoopAllocating(b *testing.B) { benchmarkCallLoop(b, "allocatingCalls") }
 
 // BenchmarkGuestInstanceCall is the interpreter's method-call path, which is
 // what a title spends its time in: `objectMath` makes an object and calls an

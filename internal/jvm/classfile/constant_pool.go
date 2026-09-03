@@ -160,16 +160,38 @@ func parseConstantPool(r *reader) (ConstantPool, error) {
 }
 
 func (p ConstantPool) constant(index uint16, tags ...uint8) (Constant, error) {
-	if index == 0 || int(index) >= len(p) || p[index].Tag == 0 {
-		return Constant{}, fmt.Errorf("constant pool index %d is invalid", index)
+	entry, err := p.at(index)
+	if err != nil {
+		return Constant{}, err
 	}
-	constant := p[index]
 	for _, tag := range tags {
-		if constant.Tag == tag {
-			return constant, nil
+		if entry.Tag == tag {
+			return *entry, nil
 		}
 	}
-	return Constant{}, fmt.Errorf("constant pool index %d has tag %d", index, constant.Tag)
+	return Constant{}, wrongTag(index, entry.Tag)
+}
+
+// at finds a constant without copying it, which is the difference between
+// reading the pool and reading it in a loop.
+//
+// **The accessors below are on the interpreter's hottest path**: every invoke
+// instruction decodes its own operand out of the pool again, and a profile of a
+// guest call loop put a quarter of the run in here. `constant` returned the
+// entry by value — fifty-six bytes — and took its accepted tags as a variadic,
+// so one `ReferenceAt` copied the struct five times and built five tag slices
+// to look at four strings that were already in the pool. This returns a
+// pointer into a pool that nothing writes to after it is parsed, and the
+// accessors that matter check their own tag inline.
+func (p ConstantPool) at(index uint16) (*Constant, error) {
+	if index == 0 || int(index) >= len(p) || p[index].Tag == 0 {
+		return nil, fmt.Errorf("constant pool index %d is invalid", index)
+	}
+	return &p[index], nil
+}
+
+func wrongTag(index uint16, tag uint8) error {
+	return fmt.Errorf("constant pool index %d has tag %d", index, tag)
 }
 
 func (p ConstantPool) At(index uint16) (Constant, error) {
@@ -195,33 +217,53 @@ func (p ConstantPool) At(index uint16) (Constant, error) {
 }
 
 func (p ConstantPool) UTF8At(index uint16) (string, error) {
-	constant, err := p.constant(index, ConstantUTF8)
+	entry, err := p.at(index)
 	if err != nil {
 		return "", err
 	}
-	return constant.UTF8, nil
+	if entry.Tag != ConstantUTF8 {
+		return "", wrongTag(index, entry.Tag)
+	}
+	return entry.UTF8, nil
 }
 
 func (p ConstantPool) ClassName(index uint16) (string, error) {
-	constant, err := p.constant(index, ConstantClass)
+	entry, err := p.at(index)
 	if err != nil {
 		return "", err
 	}
-	return p.UTF8At(constant.Index1)
+	if entry.Tag != ConstantClass {
+		return "", wrongTag(index, entry.Tag)
+	}
+	return p.UTF8At(entry.Index1)
 }
 
 func (p ConstantPool) ReferenceAt(index uint16) (Reference, error) {
-	constant, err := p.constant(index, ConstantFieldRef, ConstantMethodRef, ConstantInterfaceMethodRef)
+	entry, err := p.at(index)
 	if err != nil {
 		return Reference{}, err
 	}
-	className, err := p.ClassName(constant.Index1)
+	var kind ReferenceKind
+	switch entry.Tag {
+	case ConstantFieldRef:
+		kind = FieldReference
+	case ConstantMethodRef:
+		kind = MethodReference
+	case ConstantInterfaceMethodRef:
+		kind = InterfaceMethodReference
+	default:
+		return Reference{}, wrongTag(index, entry.Tag)
+	}
+	className, err := p.ClassName(entry.Index1)
 	if err != nil {
 		return Reference{}, err
 	}
-	nameAndType, err := p.constant(constant.Index2, ConstantNameAndType)
+	nameAndType, err := p.at(entry.Index2)
 	if err != nil {
 		return Reference{}, err
+	}
+	if nameAndType.Tag != ConstantNameAndType {
+		return Reference{}, wrongTag(entry.Index2, nameAndType.Tag)
 	}
 	name, err := p.UTF8At(nameAndType.Index1)
 	if err != nil {
@@ -230,13 +272,6 @@ func (p ConstantPool) ReferenceAt(index uint16) (Reference, error) {
 	descriptor, err := p.UTF8At(nameAndType.Index2)
 	if err != nil {
 		return Reference{}, err
-	}
-
-	kind := FieldReference
-	if constant.Tag == ConstantMethodRef {
-		kind = MethodReference
-	} else if constant.Tag == ConstantInterfaceMethodRef {
-		kind = InterfaceMethodReference
 	}
 	return Reference{Kind: kind, Class: className, Name: name, Descriptor: descriptor}, nil
 }

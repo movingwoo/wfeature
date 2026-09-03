@@ -17,18 +17,38 @@ type frame struct {
 	stackSlots int
 }
 
-func newFrame(class *classfile.Class, method *classfile.Member, code *classfile.Code, arguments []Value) (*frame, error) {
+// newFrame fills a frame for one method body. The frame comes from the calling
+// execution rather than from the heap: a frame lives exactly as long as the
+// `execute` that made it, calls nest, and nothing keeps one afterwards — an
+// `ExecutionError` copies the four fields it names — so the execution can hand
+// the same one back on the way out and lend it to the next call.
+//
+// **It was three allocations a method body and they were three of the four a
+// guest call cost**: the frame, its locals and its operand stack. An execution
+// belongs to one guest thread, so the free list needs no lock.
+func newFrame(state *execution, class *classfile.Class, method *classfile.Member, code *classfile.Code, arguments []Value) (*frame, error) {
 	methodType, err := ParseMethodDescriptor(method.Descriptor)
 	if err != nil {
 		return nil, err
 	}
-	result := &frame{
-		class:      class,
-		method:     method,
-		methodType: methodType,
-		code:       code,
-		locals:     make([]Value, int(code.MaxLocals)),
-		stack:      make([]Value, 0, int(code.MaxStack)),
+	result := state.takeFrame()
+	result.class = class
+	result.method = method
+	result.methodType = methodType
+	result.code = code
+	result.pc = 0
+	result.stackSlots = 0
+	// Both slices arrive zeroed — a fresh frame's are nil and a returned one
+	// was emptied on the way back — so this only has to size them.
+	if locals := int(code.MaxLocals); cap(result.locals) < locals {
+		result.locals = make([]Value, locals)
+	} else {
+		result.locals = result.locals[:locals]
+	}
+	if cap(result.stack) < int(code.MaxStack) {
+		result.stack = make([]Value, 0, int(code.MaxStack))
+	} else {
+		result.stack = result.stack[:0]
 	}
 	localIndex := 0
 	for _, argument := range arguments {
@@ -38,6 +58,42 @@ func newFrame(class *classfile.Class, method *classfile.Member, code *classfile.
 		localIndex += argument.slots()
 	}
 	return result, nil
+}
+
+// framePoolLimit bounds what an execution keeps. A run's list is as long as the
+// deepest call it made, and past this a deep recursion unwinds through the heap
+// rather than making the list a place frames go to be forgotten in.
+const framePoolLimit = 64
+
+func (state *execution) takeFrame() *frame {
+	if last := len(state.framePool) - 1; last >= 0 {
+		result := state.framePool[last]
+		state.framePool[last] = nil
+		state.framePool = state.framePool[:last]
+		return result
+	}
+	return &frame{}
+}
+
+// releaseFrame takes a finished frame back, emptied.
+//
+// **Emptied to its capacity, not to its length.** Two things turn on that. A
+// value left behind is a reference the list would keep alive until something
+// happened to overwrite it, which is a leak with no bound in sight; and the
+// next body to borrow this frame may want more locals than this one did, so
+// anything past the length it used would arrive as an initialized local that
+// nobody wrote. Clearing here rather than on the way out means a frame is
+// cleared once per use either way.
+func (state *execution) releaseFrame(result *frame) {
+	if len(state.framePool) >= framePoolLimit {
+		return
+	}
+	clear(result.locals[:cap(result.locals)])
+	clear(result.stack[:cap(result.stack)])
+	result.class = nil
+	result.method = nil
+	result.code = nil
+	state.framePool = append(state.framePool, result)
 }
 
 func (f *frame) push(value Value) error {
