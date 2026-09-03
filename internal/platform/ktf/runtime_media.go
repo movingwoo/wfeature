@@ -30,6 +30,12 @@ type clipState struct {
 	// rather than replaying what it held before.
 	handle backend.AudioHandle
 	loaded bool
+	// played records that the player has taken what the clip held. The
+	// specification says a clip's data "shrinks as the media player plays it
+	// and grows again through putData", so bytes that have been played are no
+	// longer in the buffer for the next fill to append to. See
+	// runtimeClipPutData.
+	played bool
 }
 
 func (runtime *initializationRuntime) clip(receiver *jvm.Object) *clipState {
@@ -87,6 +93,7 @@ func runtimeClipConstructor(runtime *initializationRuntime, vm *jvm.VM, argument
 
 	state := runtime.clip(receiver)
 	state.data = nil
+	state.played = false
 	runtime.invalidateClip(state)
 	if len(arguments) < 3 {
 		return jvm.VoidValue(), nil
@@ -189,6 +196,23 @@ func runtimeClipPutData(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 	}
 
 	state := runtime.clip(receiver)
+	// **A fill after a play starts a new sound, not a longer one.** The
+	// specification has a clip's contents shrink as the player plays them and
+	// grow again through this call, so once the player has taken what the clip
+	// held there is nothing left here to append to.
+	//
+	// Nothing enforced that, and a clip is a title's to reuse: one local title
+	// keeps a single Clip for every sound it makes and its whole protocol is
+	// `Player.stop`, `putData`, `Player.play`. Appending left the second
+	// sound's bytes behind the first sound's, and a SMAF file followed by a
+	// second SMAF file parses as the first one — so every sound after the
+	// first played the first sound again. Its title music was its logo sting,
+	// looping, for as long as the title was left running.
+	if state.played {
+		state.data = state.data[:0]
+		state.played = false
+		runtime.invalidateClip(state)
+	}
 	room := maxClipBufferBytes - len(state.data)
 	if room <= 0 {
 		return jvm.IntValue(0), nil
@@ -232,6 +256,7 @@ func setClipBuffer(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.V
 	}
 	state := runtime.clip(receiver)
 	state.data = nil
+	state.played = false
 	runtime.invalidateClip(state)
 	if len(arguments) < 3 {
 		return 0, nil
@@ -353,6 +378,9 @@ func runtimePlayerPlay(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 		runtime.countDiagnostic(fmt.Sprintf("clip play failed: %v", err))
 		return jvm.IntValue(0), nil
 	}
+	// The player has the bytes now. The clip keeps them so that playing it
+	// again needs no refill, but a refill starts over; see runtimeClipPutData.
+	state.played = true
 	return jvm.IntValue(1), nil
 }
 

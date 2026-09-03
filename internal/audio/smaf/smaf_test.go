@@ -412,6 +412,45 @@ func TestADPCMDecodesTwoSamplesPerByte(t *testing.T) {
 	}
 }
 
+// The low nibble of a byte is the earlier sample. A byte whose low nibble is a
+// positive step and whose high nibble is the negative one says which way round
+// the two are read, and nothing later in the stream can correct a decoder that
+// reads them the other way: every sample is a step from the one before it, so
+// the error is kept for the rest of the sound.
+func TestADPCMReadsTheLowNibbleFirst(t *testing.T) {
+	samples := DecodeADPCM([]byte{0x80})
+	if len(samples) != 2 {
+		t.Fatalf("DecodeADPCM produced %d samples, want 2", len(samples))
+	}
+	if samples[0] <= 0 {
+		t.Errorf("first sample = %d, want a positive step: the low nibble is read first", samples[0])
+	}
+	if samples[1] >= samples[0] {
+		t.Errorf("second sample = %d, want it below the first: the high nibble is the negative step", samples[1])
+	}
+}
+
+// **The step table is carried in 256ths and the four uneven entries have to be
+// exact.** Rounded to 64ths they become 57, 77, 102, 128 and 153, which is the
+// same five ratios at a quarter of the resolution and four of them rounded the
+// wrong way. The step size decides the size of the next difference, so an error
+// there is an error in every sample after it — small enough to look like
+// nothing over ten samples and enough to walk the predictor off the signal over
+// nine thousand. This locks the numbers; the reason is in adpcm.go.
+func TestADPCMStepTableIsCarriedIn256ths(t *testing.T) {
+	want := [8]uint32{230, 230, 230, 230, 307, 409, 512, 614}
+	if adpcmStepTable != want {
+		t.Errorf("adpcmStepTable = %v, want %v", adpcmStepTable, want)
+	}
+	// The same check from the other side: one maximal delta from the floor
+	// step has to grow it to 304, which is 614/256 of 127 and not 612/256.
+	state := adpcmState{stepSize: 127}
+	state.step(7)
+	if state.stepSize != 304 {
+		t.Errorf("step size after one maximal delta = %d, want 304", state.stepSize)
+	}
+}
+
 // Helpers.
 
 type bitWriter struct {

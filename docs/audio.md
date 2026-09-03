@@ -235,6 +235,77 @@ exactly like one that works.** What was missing here was not a decoder, a
 format or an API — all of that was built and tested — but the one number that
 decides whether any of it is ever due.
 
+### A predictor that walked away from the signal
+
+Every sampled sound this project decodes is 4-bit Yamaha ADPCM, and **the
+decoder had two errors in it that a single sound hides and nine thousand
+samples do not.**
+
+ADPCM stores each sample as a step from the one before it, so it has no way to
+recover from a mistake: an error in one sample is carried in every sample after
+it, and an error in the *step size* is carried into the size of every step
+after it. That is what makes this class of bug look like nothing in a unit test
+and like a broken speaker in a game.
+
+The two:
+
+- **The step table was carried in 64ths.** Its five distinct ratios are 230,
+  307, 409, 512 and 614 parts in 256; as 57, 77, 102, 128 and 153 parts in 64
+  they are the same ratios at a quarter of the resolution, and four of the five
+  round the wrong way. 0.4% per sample.
+- **The two samples in a byte were read the wrong way round.** The low nibble
+  is the earlier one.
+
+**What that did to the local set.** Seventeen sampled sounds across two KTF
+archives, decoded under the old rules: every one of them ends thousands of
+counts away from where it began — one runs from about -9,000 to +25,000 over
+its length and spends part of that pinned to a rail — and their means sit at
+-13,000, +15,000, -19,000. Under the corrected rules every one of the
+seventeen has a mean inside +-120 and ends within a few hundred counts of zero,
+which is what a decoded waveform looks like. Measured on a whole run rather
+than one sound, one title's captured wave went from a mean of -14,216 with 35
+samples at the negative rail to a mean of -58 with none.
+
+**What it sounded like** is not distortion in the usual sense: a ramp to a rail
+is a click at the start of every sound and a crackle through it, which is how
+it was reported — "the sound pops". A title whose sound effects are all
+sampled pops on every one of them.
+
+The fix costs nothing: the same multiply, a shift of eight instead of six, and
+the two nibbles swapped.
+
+### A clip a title refills is not a longer sound
+
+The specification says a clip's data "shrinks as the media player plays it and
+grows again through `putData`". Nothing here made it shrink, so `putData`
+appended for ever.
+
+**A clip is a title's to reuse.** One KTF title keeps a single `Clip` for every
+sound it makes, and its whole protocol is `Player.stop`, `putData`,
+`Player.play`. Appending left the second sound's bytes behind the first
+sound's — and a SMAF file followed by a second SMAF file parses as the first
+one, because the chunk walk ends where the first file does. So **every sound
+after the first played the first sound again**: the title's music was its logo
+sting, on a 1.9-second loop, for as long as the title was left running. The
+clip grew by one file per sound for the whole session.
+
+The rule that fixes it is the one the specification already states, applied at
+the only moment this runtime can see: a play takes what the clip holds, so a
+`putData` after a play starts a new fill rather than a longer one. Playing the
+same clip twice without refilling still works, which is what a title with a
+fixed set of sound effects does.
+
+Measured on that title's first nine hundred rounds: 231 note-ons on one
+instrument, restarting every 1.85 seconds, became 2,386 note-ons on eight
+instruments with a four-second loop — the piece the archive actually holds.
+
+**A whole-corpus check.** Over the 46 local KTF archives, no archive loses its
+sound: every one that reached the sink with a sound still does, and every one
+with sampled audio still has the same sample count. The counts move by a few
+per cent either way run to run — the same binary twice gives 4,325 and 4,320
+messages on one archive, and 1,075 and 1,039 on another — so only a count that
+goes to zero, or one that moves like this title's did, is evidence.
+
 ### What is left silent, and why
 
 With the two waits and the clock right, the corpus was asked the question the
