@@ -1214,14 +1214,59 @@ override this — so the rule only decides what "no answer" means.
 declares its width the same way and in the same place, but as a *directory*
 (`img_176/`) rather than a name's stem, and it chooses the set from the height
 of an offscreen image it makes one pixel wider and sixteen rows taller than the
-Canvas: over 212 rows takes the 240 set, which is the set this SKU does not
-ship. Reading the directory would answer 176 and this project's handset for 176
-is 220 rows tall, which lands on the wrong side of that test — so the rule would
-change nothing and the archive would still draw an empty screen. What runs it is
-`-screen 176x196`, and what would settle it properly is knowing whether a
-Canvas here should be shorter than the display: this title never asks for full
-screen, and a handset of the era kept a row of its own above one. That is a
-change to every Canvas in the corpus, so it waits for a second title.
+Canvas:
+
+```
+buffer = createImage(Canvas.getWidth() + 1, Canvas.getHeight() + 16)
+buffer.getHeight() > 250  ->  /img_240/
+                    > 212  ->  /img_240/
+                    > 166  ->  /img_176/
+                     else  ->  /img_120/
+```
+
+so the set it ships is the one it picks only when its Canvas reports between 151
+and 196 rows. Reading the directory would answer 176 and this project's handset
+for 176 is 220 rows tall, which lands on the wrong side of that ladder — so the
+rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
+both draw an empty screen and `-screen 176x196` draws the title, which is why
+the flag is the answer here and the rule is not.
+
+### What would settle it, and why the corpus does not
+
+The question underneath is whether a Canvas on this vendor is the whole display
+or the part of it a game may draw in. It is not a question about this one
+archive: **nothing in the corpus asks for full screen** — `setFullScreenMode` is
+called by none of the ninety-one — so whatever a Canvas reports is what every
+title lays out against, and changing it moves the sixty-one that read it.
+
+This vendor publishes both numbers. `com.xce.lcdui.XDisplay` carries `width`,
+`height` and **`height2`**, the last being the drawable height on a handset that
+reserved rows for a soft-key bar, and the corpus is emphatic about which one it
+draws in: of the archives that name `XDisplay` at all, **forty-nine name
+`height2` and five name `height`**. `height2` is what they size their back
+buffer with, what they pass to `repaint`, and what they clear with `fillRect`.
+It is the Canvas-shaped number.
+
+**Two archives then answer the actual question in opposite directions.**
+
+- One computes `height2 - height` into a field and adds it to
+  `Canvas.getHeight()` to get the box it centres its dialogue in. That only
+  arrives at the drawable height if `getHeight()` is the *display* — and it is
+  also exactly what a developer writes to be safe on a handset that publishes
+  zeros for both, where the correction is nothing and the Canvas answers for
+  itself.
+- The archive above needs `getHeight()` at or under 196 while shipping 176-wide
+  art, and its own background for that set is 176x202. On a 176x220 handset with
+  a twenty-four row bar those numbers all fit at once — Canvas 196, buffer 212,
+  background 202 — which requires `getHeight()` to be the *drawable*. On a
+  176x196 handset with no bar they fit equally well.
+
+So each title is self-consistent and the two disagree, and neither the
+descriptors nor the specification says which. **What would settle it is one real
+handset's `height` beside its `height2`** — a number the original runtime has
+and this corpus does not. Until then the Canvas stays the whole framebuffer,
+`height2` stays equal to `height`, and the flag is what runs the one archive
+that needs the other answer.
 
 ## Ninety archives, and the pass that made room for eleven of them
 
