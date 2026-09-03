@@ -9,7 +9,7 @@ import (
 type frame struct {
 	class      *classfile.Class
 	method     *classfile.Member
-	methodType MethodDescriptor
+	returnType Type
 	code       *classfile.Code
 	pc         int
 	locals     []Value
@@ -27,14 +27,14 @@ type frame struct {
 // guest call cost**: the frame, its locals and its operand stack. An execution
 // belongs to one guest thread, so the free list needs no lock.
 func newFrame(state *execution, class *classfile.Class, method *classfile.Member, code *classfile.Code, arguments []Value) (*frame, error) {
-	methodType, err := ParseMethodDescriptor(method.Descriptor)
+	returnType, err := ReturnTypeOf(method.Descriptor)
 	if err != nil {
 		return nil, err
 	}
 	result := state.takeFrame()
 	result.class = class
 	result.method = method
-	result.methodType = methodType
+	result.returnType = returnType
 	result.code = code
 	result.pc = 0
 	result.stackSlots = 0
@@ -94,6 +94,46 @@ func (state *execution) releaseFrame(result *frame) {
 	result.method = nil
 	result.code = nil
 	state.framePool = append(state.framePool, result)
+}
+
+// takeValues lends the slice an invoke pops its arguments into, which was the
+// last allocation a guest call made.
+//
+// It can be lent because nothing keeps it: a bytecode callee's frame copies it
+// into locals before the first instruction runs, and a native is handed a copy
+// of its own — the static path always did that, and the instance path does it
+// now too, which makes what a native may do with its arguments the same
+// question on both. The caller returns it after the call rather than before,
+// so a nested call takes a different one and the list is as long as the
+// deepest call the run made.
+func (state *execution) takeValues(count int) []Value {
+	if last := len(state.valuePool) - 1; last >= 0 {
+		result := state.valuePool[last]
+		state.valuePool[last] = nil
+		state.valuePool = state.valuePool[:last]
+		if cap(result) >= count {
+			return result[:count]
+		}
+	}
+	// A miss allocates with room to spare, because the list is shared by every
+	// call shape a title makes: sized to the call that missed, a two-argument
+	// call would keep handing back a slice the next three-argument one cannot
+	// use, and the list would allocate for ever without ever growing.
+	return make([]Value, count, max(count, valuePoolFloor))
+}
+
+// valuePoolFloor is the smallest slice worth keeping. Eight covers a receiver
+// and seven arguments, which is more than a guest method in this corpus takes.
+const valuePoolFloor = 8
+
+// releaseValues takes one back, emptied for the reason releaseFrame empties a
+// frame: what is left in it is a reference the list would hold.
+func (state *execution) releaseValues(values []Value) {
+	if len(state.valuePool) >= framePoolLimit {
+		return
+	}
+	clear(values[:cap(values)])
+	state.valuePool = append(state.valuePool, values)
 }
 
 func (f *frame) push(value Value) error {

@@ -586,6 +586,67 @@ dead as soon as the frame copies it into locals, but a native is arbitrary Go
 code that may keep it. Popping straight into the callee's locals would close it,
 and that means resolving the method before popping rather than after.
 
+### The three lookups a call did not need, and its last allocation
+
+What the section above left open was the one allocation a call still made and
+the map lookups around it. Both are closed, and the benchmarks gained two
+members so the trade is visible: a native does not take the same path a
+bytecode callee does.
+
+| | before | after | |
+|---|---|---|---|
+| instance call | 442 ns, 1.01 allocs | **405 ns, 0.02 allocs** | -8% |
+| static call | 390 ns, 1.01 allocs | **347 ns, 0.01 allocs** | -11% |
+| call that also allocates an object | 1237 ns, 6.01 allocs | **1100 ns, 4.01 allocs** | -11% |
+| static native | 330 ns, 2.01 allocs | **310 ns, 1.01 allocs** | -6% |
+| instance native | 354 ns, 2.01 allocs | 358 ns, 2.01 allocs | +1% |
+
+**There were two tables of registered natives and the interpreter asked both**,
+on every call, for an answer that is almost always "neither" — two hashes of a
+three-string key. They are one table with one entry type now, and the two
+chain walks that looked for an inherited native are one walk.
+
+**A frame parsed a whole method descriptor to keep the return type.** The parse
+is cached, but the cache is a `sync.Map` and the lookup is a hash of the
+descriptor and a walk; `ReturnTypeOf` is a `LastIndexByte` and one type, and it
+is all a frame ever wanted. The cached parse stays where the parameters are
+wanted, which is the interpreter deciding how much to pop.
+
+**The argument slice is borrowed from the execution now**, the way frames
+already were. It can be, because nothing keeps it: a bytecode callee's frame
+copies it into locals before the first instruction runs, and a native is handed
+a copy — the static path always made one, and the instance path makes one too,
+so what a native may do with its arguments is now the same question on both
+paths. That is the row where a native pays: it trades the slice the interpreter
+used to allocate for a copy of its own, which is why the static native row
+improves and the instance native row does not.
+
+**And one `defer` in the wrong function cost a fifth of a call.** Returning the
+slice on every way out is one deferred call, and `step` is the largest function
+in this package — large enough that the compiler stops open-coding defers and
+each one becomes a heap record. Measured, putting the defer in `step` cost more
+than the allocation it was there to avoid: 406 ns to 512. The four invoke
+instructions are their own function now, which is where the defer is cheap, and
+which leaves `step`'s switch smaller besides.
+
+**What is left is `step` itself.** The profile is the switch (18%), the frame's
+own push, pop and local access (11%), the remaining map lookups (5%), and
+garbage collection driven by what a title allocates rather than by what a call
+does. The first two are what a bytecode interpreter is, so **a resolution
+cached per call site would be reaching for five to eight per cent**, and that is
+the number the design has to be worth.
+
+Where to keep one is answered: a call site is a constant-pool index in a class,
+so `map[*classfile.Class][]atomic.Pointer[site]` found **once per frame** in
+`newFrame` and carried on the frame turns three lookups per call site into one
+per call, and `classfile` stays a parse result that the execution layer does not
+have to own. What it costs is three new debts — a monomorphic guard, because a
+virtual call's answer depends on the receiver's class; an invalidation
+generation, because a platform registers natives while a title is starting and a
+site cached before that would be stale; and atomic publication, because guest
+threads run the same class at once. Recorded rather than built: the debts are
+larger than the number.
+
 ### Why this could not be measured end to end
 
 A MIDlet has no tick of its own: its threads pace themselves against the wall

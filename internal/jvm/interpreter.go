@@ -83,6 +83,75 @@ func (vm *VM) execute(
 	}
 }
 
+// invokeFromBytecode is the four invoke instructions, in a function of their
+// own rather than in the middle of step's switch. It has to be its own
+// function: it borrows the argument slice from the execution and gives it back
+// on every way out, which is one `defer` — and a `defer` in `step` is a `defer`
+// in the largest function in this package, where the compiler stops open-coding
+// them and each one costs a heap record. Measured, that was a fifth of a guest
+// call.
+//
+// The second result says whether the callee gives a value back, because a void
+// method leaves the operand stack alone.
+func (vm *VM) invokeFromBytecode(
+	state *execution,
+	frame *frame,
+	opcode byte,
+	reference classfile.Reference,
+) (Value, bool, error) {
+	methodType, err := ParseMethodDescriptor(reference.Descriptor)
+	if err != nil {
+		return VoidValue(), false, err
+	}
+	returns := methodType.Return.Kind != TypeVoid
+	// One slice, borrowed from the execution, with the receiver's slot in
+	// front of the arguments where a call wants it: a bytecode frame's locals
+	// and a native's argument list both start with `this`. A static call has
+	// no receiver and takes the slice as it is.
+	//
+	// Nothing keeps it — the callee's frame copies it into locals, and a
+	// native is given a copy — so it goes back to the execution after the call
+	// rather than to the collector. It was the last allocation a guest call
+	// made.
+	count := len(methodType.Parameters)
+	if opcode != 0xb8 {
+		count++
+	}
+	slots := state.takeValues(count)
+	defer state.releaseValues(slots)
+	arguments := slots
+	if opcode != 0xb8 {
+		arguments = slots[1:]
+	}
+	for index := len(arguments) - 1; index >= 0; index-- {
+		if arguments[index], err = frame.pop(); err != nil {
+			return VoidValue(), false, err
+		}
+	}
+	if err := validateArguments(arguments, methodType.Parameters); err != nil {
+		return VoidValue(), false, err
+	}
+	if opcode == 0xb8 {
+		result, err := vm.invokeStatic(state, reference.Class, reference.Name, reference.Descriptor, slots)
+		return result, returns, err
+	}
+	receiver, err := popReference(frame)
+	if err != nil {
+		return VoidValue(), false, err
+	}
+	if receiver == nil {
+		return VoidValue(), false, guestException("java/lang/NullPointerException",
+			"invoke "+reference.Class+"."+reference.Name+reference.Descriptor)
+	}
+	lookupClass := receiver.ClassName
+	if opcode == 0xb7 {
+		lookupClass = reference.Class
+	}
+	slots[0] = ReferenceValue(receiver)
+	result, err := vm.invokeInstanceReceived(state, lookupClass, receiver, reference.Name, reference.Descriptor, slots)
+	return result, returns, err
+}
+
 func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (stepResult, error) {
 	push := func(value Value) (stepResult, error) {
 		return stepResult{}, frame.push(value)
@@ -403,54 +472,11 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 				return stepResult{}, fmt.Errorf("invalid invokeinterface operands")
 			}
 		}
-		methodType, err := ParseMethodDescriptor(reference.Descriptor)
+		result, returns, err := vm.invokeFromBytecode(state, frame, opcode, reference)
 		if err != nil {
 			return stepResult{}, err
 		}
-		// One slice with the receiver's slot in front of the arguments. A
-		// bytecode frame's locals and a native's argument list both start with
-		// `this`, so building the arguments alone and prepending the receiver
-		// afterwards allocated twice per guest method call — and that was
-		// eighty per cent of everything a title allocated. A static call spends
-		// the leading slot and hands over the rest.
-		slots := make([]Value, len(methodType.Parameters)+1)
-		arguments := slots[1:]
-		for argumentIndex := len(arguments) - 1; argumentIndex >= 0; argumentIndex-- {
-			arguments[argumentIndex], err = frame.pop()
-			if err != nil {
-				return stepResult{}, err
-			}
-		}
-		if err := validateArguments(arguments, methodType.Parameters); err != nil {
-			return stepResult{}, err
-		}
-		if opcode == 0xb8 {
-			result, err := vm.invokeStatic(state, reference.Class, reference.Name, reference.Descriptor, arguments)
-			if err != nil {
-				return stepResult{}, err
-			}
-			if methodType.Return.Kind != TypeVoid {
-				return push(result)
-			}
-			return stepResult{}, nil
-		}
-		receiver, err := popReference(frame)
-		if err != nil {
-			return stepResult{}, err
-		}
-		if receiver == nil {
-			return stepResult{}, guestException("java/lang/NullPointerException", "invoke "+reference.Class+"."+reference.Name+reference.Descriptor)
-		}
-		lookupClass := receiver.ClassName
-		if opcode == 0xb7 {
-			lookupClass = reference.Class
-		}
-		slots[0] = ReferenceValue(receiver)
-		result, err := vm.invokeInstanceReceived(state, lookupClass, receiver, reference.Name, reference.Descriptor, slots)
-		if err != nil {
-			return stepResult{}, err
-		}
-		if methodType.Return.Kind != TypeVoid {
+		if returns {
 			return push(result)
 		}
 		return stepResult{}, nil
@@ -1204,7 +1230,7 @@ func skipSwitchPadding(frame *frame) error {
 
 func returnValue(frame *frame, opcode byte) (stepResult, error) {
 	if opcode == 0xb1 {
-		if frame.methodType.Return.Kind != TypeVoid {
+		if frame.returnType.Kind != TypeVoid {
 			return stepResult{}, fmt.Errorf("void return in non-void method")
 		}
 		return stepResult{returned: true, value: VoidValue()}, nil
@@ -1215,7 +1241,7 @@ func returnValue(frame *frame, opcode byte) (stepResult, error) {
 	if err != nil {
 		return stepResult{}, err
 	}
-	if err := validateValue(value, frame.methodType.Return); err != nil {
+	if err := validateValue(value, frame.returnType); err != nil {
 		return stepResult{}, err
 	}
 	return stepResult{returned: true, value: value}, nil
