@@ -7,7 +7,16 @@
       content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- `black`, not `black-translucent`. A translucent bar makes the web view
+         the whole display and lays the page out from the top edge of the glass,
+         so the first rows of the game screen come up under a clock and a
+         battery — reported from a phone, with the top of two titles' artwork
+         behind the status bar. It also reports a viewport shorter than the
+         display it just filled, which leaves the page hanging past the bottom.
+         An opaque bar puts the page below it and makes the viewport the truth.
+         The safe-area padding in style.css covers the case where a browser
+         ignores this and hands the page the whole screen anyway. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <title>wfeature</title>
     <link rel="icon" href="icon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />

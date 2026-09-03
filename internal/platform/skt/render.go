@@ -80,11 +80,46 @@ func (runtime *Runtime) getDisplayableWidth(vm *jvm.VM, arguments []jvm.Value) (
 	return jvm.IntValue(int32(runtime.frameWidth)), nil
 }
 
+// canvasReservedRows is what this vendor's Canvas.getHeight leaves out of the
+// screen it reports. It is not a guess and it is not one archive's opinion:
+// **fifty-one of the seventy-eight archives in the local corpus that hold Java
+// compute `Canvas.getHeight() + 16`**, and what they do with the number says
+// what it is. One stores it in a field it named for being the real one; one
+// makes its back buffer that tall and blits it at the origin; one builds a
+// string out of `getWidth()` and it and opens a file by that name — on a
+// handset with a 240x320 display that string has to read "240320". One more
+// picks its artwork from a ladder of display heights it indexes with a buffer
+// sixteen rows taller than the Canvas, and the rungs are handset displays.
+//
+// So the Canvas here reports sixteen rows fewer than the display, every title
+// adds them back, and this runtime used to answer the display — which put every
+// one of those fifty-one titles' bottom-anchored drawing sixteen rows too low,
+// off the end of the screen. Three of them were reported that way from a phone:
+// a dialogue box with its second line cut in half, a soft-key label cut through
+// the middle, a border that ran off the bottom.
+//
+// Only the number changes. The framebuffer is still the whole display, drawing
+// is not clipped to the smaller rectangle, and `XDisplay.height` and `height2`
+// still answer the display — the two clears that had to agree still do, and a
+// title that draws into the sixteen rows is drawn, because on the handset that
+// is where the soft-key bar was and this runtime does not draw one.
+const canvasReservedRows = 16
+
+// canvasHeight is the height a Canvas reports: the framebuffer less the rows
+// this vendor keeps back. A screen too short to give them up reports what it
+// has rather than nothing.
+func (runtime *Runtime) canvasHeight() int32 {
+	if runtime.frameHeight <= canvasReservedRows {
+		return int32(runtime.frameHeight)
+	}
+	return int32(runtime.frameHeight - canvasReservedRows)
+}
+
 func (runtime *Runtime) getDisplayableHeight(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if _, err := runtime.displayableReceiver(vm, arguments); err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.IntValue(int32(runtime.frameHeight)), nil
+	return jvm.IntValue(runtime.canvasHeight()), nil
 }
 
 func (runtime *Runtime) repaintNewCurrentCanvas(displayable *jvm.Object) error {
@@ -354,6 +389,25 @@ func (runtime *Runtime) setGraphicsColor(_ *jvm.VM, arguments []jvm.Value) (jvm.
 		return jvm.VoidValue(), err
 	}
 	context.color = uint32(color) & 0x00ffffff
+	return jvm.VoidValue(), nil
+}
+
+// setGraphicsGrayScale is setColor with one number standing for all three
+// channels. MIDP's contract is that the value is a grey level, so the colour it
+// leaves behind is one a getColor after it reports back unchanged.
+func (runtime *Runtime) setGraphicsGrayScale(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	context, err := graphicsReceiver(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	value, err := intArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if value < 0 || value > 255 {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "Graphics gray scale is outside 0..255")
+	}
+	context.color = uint32(value)<<16 | uint32(value)<<8 | uint32(value)
 	return jvm.VoidValue(), nil
 }
 

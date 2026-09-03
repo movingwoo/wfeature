@@ -337,6 +337,38 @@ its own shape, so what does not fill is bezel. The alternative, sizing the hole
 from the frame, is what the page used to do, and a 480x800 screen sized that way
 put the keypad below the fold.
 
+### The first row of the page has to clear a status bar
+
+The page asks for the whole display — `viewport-fit=cover` in the viewport meta
+— so that the keypad's bottom row can clear a home indicator with
+`env(safe-area-inset-bottom)`. On an iOS home-screen app that request was being
+granted at the top as well, and nothing was reserved there: the game screen is
+the first thing in the column, so its first rows came up under the clock and the
+battery. Two screenshots from a phone show a title's artwork behind the status
+bar with no way to see it.
+
+The same web view then reports a viewport **shorter** than the display it just
+filled — `100dvh` comes back as the display less the status bar while the page
+is laid out from the top edge of the glass — so the column's last rows hang past
+the bottom of the screen. Here that cost only the keypad's bottom padding, which
+is why it was invisible; a layout with anything else down there would have lost
+it.
+
+Two changes, and either would do on its own:
+
+- `apple-mobile-web-app-status-bar-style` is `black` rather than
+  `black-translucent`. An opaque bar puts the page below it and makes the
+  viewport the truth, so the canvas keeps its full size.
+- `--safe-top` is `env(safe-area-inset-top, 0px)`, subtracted from
+  `--usable-height` and spent as `padding-top` on `.stage-main` — the pair
+  `--keypad-chrome` already is at the other end. It is zero on every browser
+  that lays the page out below the bar already, and it is what covers the case
+  where one ignores the meta and hands the page the whole screen anyway.
+
+Neither can be exercised by the page's own module tests: `env()` has no value
+outside a browser and the meta is read by the platform, not by the page. What
+they are checked against is a phone.
+
 ### What a frame costs on its way out
 
 A presented frame is compressed on the writer's goroutine and handed there by

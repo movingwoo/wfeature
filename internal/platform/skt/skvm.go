@@ -44,8 +44,11 @@ type skvmState struct {
 	// drawImageExReported keeps the vendor blit's report to one line a run.
 	// See reportDrawImageExArguments.
 	drawImageExReported bool
-	zBufferEnabled      bool
-	backfaceCulling     bool
+	// clearImageReported does the same for the vendor screen clear's image
+	// argument. See xDisplayClear.
+	clearImageReported bool
+	zBufferEnabled     bool
+	backfaceCulling    bool
 }
 
 type graphics2DData struct {
@@ -1358,6 +1361,76 @@ func (runtime *Runtime) presentRefresh() error {
 		return fmt.Errorf("XDisplay.refresh: %w", err)
 	}
 	return nil
+}
+
+// xDisplayClear is the vendor's screen clear: it blacks out what the Graphics
+// draws on. The one local call site passes the screen Graphics, a null image
+// and (0, 0), and then writes "Now Loading..." on it in white — so what it
+// leaves behind has to be dark, and the title's own full-screen clear beside it
+// fills with 0xff000000 rather than with a colour it chose. The Graphics' own
+// colour is not it: the call takes no colour and the caller sets one only
+// afterwards, for the text.
+//
+// **The image and the point are unexercised**, null and zero at the only site
+// there is. A picture handed to a clear is a backdrop and a point is where it
+// goes, so a non-null one is drawn at (x, y) over the black rather than
+// dropped; a title that passes one says so in the log, once per run and in both
+// build profiles, because that is the line that turns a wrong-looking backdrop
+// back into this note rather than into a hunt through the drawing code.
+//
+// The clip is not consulted. This clears the destination, which is what a title
+// calling it between two scenes means, and the one caller has just been drawing
+// somewhere else on the same Graphics.
+func (runtime *Runtime) xDisplayClear(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	context, err := graphicsArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	backdrop, err := referenceArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	x, y, err := pointArguments(arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.reportClearImage(backdrop)
+	var picture *imageData
+	if backdrop != nil {
+		if picture, err = midpImageArgument(arguments, 1); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
+	context.withDestinationWrite(func() {
+		for index := 0; index+3 < len(context.pixels); index += 4 {
+			context.pixels[index] = 0
+			context.pixels[index+1] = 0
+			context.pixels[index+2] = 0
+			context.pixels[index+3] = 0xff
+		}
+		if picture != nil {
+			context.drawRGBA(picture.snapshot(), picture.width, picture.height, int64(x), int64(y))
+		}
+	})
+	return jvm.VoidValue(), nil
+}
+
+// reportClearImage names the argument the clear was not written for, the first
+// time a title passes one.
+func (runtime *Runtime) reportClearImage(backdrop *jvm.Object) {
+	if backdrop == nil {
+		return
+	}
+	state := runtime.skvm()
+	state.mu.Lock()
+	reported := state.clearImageReported
+	state.clearImageReported = true
+	state.mu.Unlock()
+	if reported || runtime.logger == nil {
+		return
+	}
+	runtime.logger.Warn("XDisplay.clear was given a backdrop image, which no local title passes",
+		"image", backdrop.ClassName)
 }
 
 // xDisplayDrawImageEx is the vendor's blit with a source rectangle, which the

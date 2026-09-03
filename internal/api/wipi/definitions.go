@@ -234,7 +234,14 @@ func cardDefinition() jvm.ClassDefinition {
 			{Name: "showNotify", Descriptor: "(Z)V", Access: protectedMethod, Body: doNothing},
 			{Name: "getDisplay", Descriptor: "()Lorg/kwis/msp/lcdui/Display;", Access: publicNative},
 			{Name: "getWidth", Descriptor: "()I", Access: publicMethod, Body: forwardSpecial(midp.CanvasClass, "getWidth", "()I")},
-			{Name: "getHeight", Descriptor: "()I", Access: publicMethod, Body: forwardSpecial(midp.CanvasClass, "getHeight", "()I")},
+			// Not the MIDP Canvas's, which its sibling above does forward to.
+			// A Canvas on this vendor reports sixteen rows fewer than the
+			// display (`skvm.md`, "A Canvas here is sixteen rows shorter than
+			// the display"), and that is a MIDP quirk every MIDlet in the
+			// corpus corrects for by hand. Nothing says a Card carries it, and
+			// the three local Jlets lay out against the display, so this
+			// answers the display the way `Display.getHeight` beside it does.
+			{Name: "getHeight", Descriptor: "()I", Access: publicNative},
 			{Name: "getX", Descriptor: "()I", Access: publicMethod, Body: cardField("x")},
 			{Name: "getY", Descriptor: "()I", Access: publicMethod, Body: cardField("y")},
 			{Name: "isShown", Descriptor: "()Z", Access: publicMethod, Body: forwardSpecial(midp.DisplayableClass, "isShown", "()Z")},

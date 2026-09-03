@@ -447,6 +447,11 @@ func definitions() []jvm.ClassDefinition {
 			},
 			Methods: []jvm.MethodDefinition{
 				{Name: "refresh", Descriptor: "(IIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				// The vendor's screen clear. One local title calls it, with a
+				// null image and a zero point, immediately before drawing white
+				// text on what it cleared — see xDisplayClear for what the image
+				// and the point are taken to mean.
+				{Name: "clear", Descriptor: "(Ljavax/microedition/lcdui/Graphics;Ljavax/microedition/lcdui/Image;II)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "drawImageEx", Descriptor: "(Ljavax/microedition/lcdui/Graphics;Ljavax/microedition/lcdui/Image;IILjavax/microedition/lcdui/Image;IIIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "copyLCD", Descriptor: "(Ljavax/microedition/lcdui/Graphics;Ljavax/microedition/lcdui/Image;IIII)V", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 			},
