@@ -280,6 +280,33 @@ func (vm *VM) RegisterNative(class, name, descriptor string, method NativeMethod
 	return nil
 }
 
+// RegisterContextNative is RegisterNative for an implementation that needs the
+// execution it was entered on rather than only the VM. What needs it is a wait:
+// whether a platform call may block depends on whether the caller is a thread
+// the game started or the Host's own pass — see Invocation.WaitAsGuestThread.
+func (vm *VM) RegisterContextNative(class, name, descriptor string, method ContextMethod) error {
+	if method == nil {
+		return fmt.Errorf("native method is nil")
+	}
+	if _, err := ParseMethodDescriptor(descriptor); err != nil {
+		return err
+	}
+	key := methodKey{class: class, name: name, descriptor: descriptor}
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+	_, plain := vm.natives[key]
+	_, context := vm.contextNatives[key]
+	if (plain || context) && !vm.builtinNatives[key] {
+		return fmt.Errorf("native method already registered: %s.%s%s", class, name, descriptor)
+	}
+	delete(vm.natives, key)
+	delete(vm.builtinNatives, key)
+	vm.contextNatives[key] = func(vm *VM, state *execution, arguments []Value) (Value, error) {
+		return method(&Invocation{vm: vm, state: state}, arguments)
+	}
+	return nil
+}
+
 // HasMethodBody reports whether this VM can answer one method call, either
 // from a registered native or from a class it can load. A platform that
 // publishes a class to guest code without carrying its own body is promising

@@ -119,18 +119,60 @@ func TestHangulFitsTheLineTheFontReports(t *testing.T) {
 	}
 }
 
+// A font's metrics are the face's, so SMALL reports what MEDIUM does: the two
+// draw the same glyphs from the one Korean face this platform has, and the
+// only thing that ever separated them was the numbers they claimed.
 func TestBitmapFontMetricsMatchRenderedAdvance(t *testing.T) {
 	font := newFontData(fontKey{face: fontMonospace, style: fontBold | fontUnderlined, size: fontSmall})
-	if font.height != 8 || font.baseline != 7 || font.charAdvance('A') != 7 || font.textWidth([]rune("AB")) != 14 {
-		t.Fatalf("font metrics = height %d baseline %d char %d text %d", font.height, font.baseline, font.charAdvance('A'), font.textWidth([]rune("AB")))
+	if font.height != pixelFace().Height() || font.baseline != pixelFace().Ascent {
+		t.Fatalf("font metrics = height %d baseline %d, want the face's %d and %d",
+			font.height, font.baseline, pixelFace().Height(), pixelFace().Ascent)
 	}
-	pixels := make([]byte, 14*8*4)
-	context := &graphicsContext{pixels: pixels, width: 14, height: 8, clip: paintRect{maxX: 14, maxY: 8}, color: 0xffffff}
+	if font.charAdvance('A') != 7 || font.textWidth([]rune("AB")) != 14 {
+		t.Fatalf("font advances = char %d text %d", font.charAdvance('A'), font.textWidth([]rune("AB")))
+	}
+	const width, height = 14, 16
+	pixels := make([]byte, width*height*4)
+	context := &graphicsContext{pixels: pixels, width: width, height: height, clip: paintRect{maxX: width, maxY: height}, color: 0xffffff}
 	font.render(context, []rune("AB"), 0, 0)
-	for x := 0; x < 14; x++ {
-		if pixels[(7*14+x)*4+3] != 0xff {
-			t.Fatalf("underline alpha at x=%d = %d, want 255", x, pixels[(7*14+x)*4+3])
+	for x := 0; x < width; x++ {
+		if pixels[(font.baseline*width+x)*4+3] != 0xff {
+			t.Fatalf("underline alpha at x=%d = %d, want 255", x, pixels[(font.baseline*width+x)*4+3])
 		}
+	}
+}
+
+// Two lines stepped by the height the font reports must not touch. A menu that
+// steps by Font.getHeight is the common layout in this corpus, and the line
+// box has to hold the ink with room left over — a box that is exactly its own
+// ink puts the next line's syllables against this one's.
+func TestConsecutiveLinesAtTheReportedHeightDoNotTouch(t *testing.T) {
+	font := newFontData(fontKey{size: fontMedium})
+
+	const width, height = 16, 48
+	pixels := make([]byte, width*height*4)
+	context := &graphicsContext{pixels: pixels, width: width, height: height,
+		clip: paintRect{maxX: width, maxY: height}, color: 0xffffff}
+	const top = 8
+	font.render(context, []rune("한"), 0, top)
+	font.render(context, []rune("글"), 0, top+int64(font.height))
+
+	lit := func(y int) bool {
+		for x := 0; x < width; x++ {
+			if pixels[(y*width+x)*4+3] != 0 {
+				return true
+			}
+		}
+		return false
+	}
+	blank := 0
+	for y := top; y < top+2*font.height; y++ {
+		if !lit(y) {
+			blank++
+		}
+	}
+	if blank == 0 {
+		t.Fatal("the two lines run together with no blank row between them")
 	}
 }
 

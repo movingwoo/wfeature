@@ -93,3 +93,108 @@ func TestGuestThreadPanicBecomesAnError(t *testing.T) {
 		t.Error("a thread that panicked is still alive")
 	}
 }
+
+// A platform call that models something the handset did not return from until
+// it finished — a sound played to its end — waits on the thread the game
+// started and does not wait on the Host's own pass. Blocking the pass stops the
+// screen, the input and the timers together, so a caller there is told it
+// cannot wait and answers without one.
+func TestWaitAsGuestThreadWaitsOnlyOnAGuestThread(t *testing.T) {
+	const wait = 60 * time.Millisecond
+	waited := make(chan bool, 2)
+	elapsed := make(chan time.Duration, 2)
+	body := func(call *Invocation, _ []Value) (Value, error) {
+		started := time.Now()
+		ok := call.WaitAsGuestThread(wait, nil)
+		elapsed <- time.Since(started)
+		waited <- ok
+		return VoidValue(), nil
+	}
+
+	vm := New(nil, Options{})
+	// The waiting method is the thread's own run, because that is the shape
+	// this models: the platform call is entered from the game's thread.
+	if err := vm.DefineClass(ClassDefinition{
+		Name:      "net/wfeature/Waiter",
+		SuperName: ThreadClass,
+		Access:    AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "run", Descriptor: "()V", Access: AccessPublic, Body: body},
+			{Name: "now", Descriptor: "()V", Access: AccessPublic | AccessStatic, Body: body},
+		},
+	}); err != nil {
+		t.Fatalf("DefineClass() error = %v", err)
+	}
+
+	// The Host's own pass: no thread, no wait.
+	if _, err := vm.InvokeStatic("net/wfeature/Waiter", "now", "()V"); err != nil {
+		t.Fatalf("now() error = %v", err)
+	}
+	if ok := <-waited; ok {
+		t.Error("a call off a guest thread reported that it waited")
+	}
+	if took := <-elapsed; took >= wait {
+		t.Errorf("a call off a guest thread took %v, want it to return at once", took)
+	}
+
+	// A thread the game started: the wait is that thread's to take.
+	thread := &Object{ClassName: "net/wfeature/Waiter", Fields: map[string]Value{}}
+	if _, err := vm.InvokeVirtual(thread, "start", "()V"); err != nil {
+		t.Fatalf("start() error = %v", err)
+	}
+	select {
+	case ok := <-waited:
+		if !ok {
+			t.Error("a call on a guest thread reported that it did not wait")
+		}
+		if took := <-elapsed; took < wait {
+			t.Errorf("the wait took %v, want at least %v", took, wait)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guest thread never returned from the wait")
+	}
+}
+
+// The wait ends early when what it is waiting for is over — a title that stops
+// its own music is not held for the rest of the piece.
+func TestWaitAsGuestThreadEndsWhenTheReasonEnds(t *testing.T) {
+	done := make(chan time.Duration, 1)
+	over := make(chan struct{})
+
+	vm := New(nil, Options{})
+	if err := vm.DefineClass(ClassDefinition{
+		Name:      "net/wfeature/Waiter",
+		SuperName: ThreadClass,
+		Access:    AccessPublic,
+		Methods: []MethodDefinition{{
+			Name:       "run",
+			Descriptor: "()V",
+			Access:     AccessPublic,
+			Body: func(call *Invocation, _ []Value) (Value, error) {
+				started := time.Now()
+				if !call.WaitAsGuestThread(time.Minute, over) {
+					t.Error("the thread's own run did not wait")
+				}
+				done <- time.Since(started)
+				return VoidValue(), nil
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("DefineClass() error = %v", err)
+	}
+
+	thread := &Object{ClassName: "net/wfeature/Waiter", Fields: map[string]Value{}}
+	if _, err := vm.InvokeVirtual(thread, "start", "()V"); err != nil {
+		t.Fatalf("start() error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(over)
+	select {
+	case took := <-done:
+		if took >= time.Minute {
+			t.Errorf("the wait took %v, want it cut short", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait was not cut short")
+	}
+}

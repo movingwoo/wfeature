@@ -344,7 +344,7 @@ watching — a release build is not, and carries none of the three.
 ```
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
                                     [-key tick:name] [-hold N] [-route script]
-                                    [-save dir] [-diag report.json]
+                                    [-save dir] [-diag report.json] [-audio out]
                                     [-screen WxH] [-cheat]
 ```
 
@@ -358,6 +358,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-route script` | replay a route script, the same format `runktf` and `runlgt` take. It is the only way to script two keys held at once, which is what a keyboard produces and what `-key` cannot say |
 | `-save dir` | the save tree. Defaults to `var/savedata/<profile>/skt/<owner>` |
 | `-diag report.json` | write what the run used: classes loaded, classes missing, and a call count per registered native |
+| `-audio out` | record what the run played as `out.mid` and `out.wav`, the same recorder `runktf` and `runlgt` take |
 | `-screen WxH` | the handset screen, 240x320 by default |
 | `-cheat` | attach the text cheat console. Without `-ticks` the run continues until it is interrupted |
 
@@ -399,6 +400,14 @@ reading and freezing the graph is safe. Two commands read differently here:
 `regions` names classes rather than a module and a heap, so a hit says which
 class it is in, and `watch` answers "this platform cannot watch writes" because
 nothing instruments a `putfield`.
+
+`-audio` is the CLI's speaker, and it is also how this platform's sound was
+found to be silent: the summary carries `audio_midi_messages` and
+`audio_wave_samples` beside the file it wrote, and both were zero for every
+archive until the timeline and the clock it starts sounds on were made the same
+one. Forty-three of the local archives record MIDI now and thirteen record
+sampled sound, in four hundred ticks each. [`audio.md`](audio.md) has what was
+wrong and what a recording is worth reading for.
 
 There is no `-play` or `-speed` here, though the runtime itself now takes a
 speed setting: a MIDlet's threads sleep against a clock the runtime owns, and

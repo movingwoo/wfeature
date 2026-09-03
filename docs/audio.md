@@ -148,6 +148,90 @@ in a title's behaviour distinguishes "the handset played it" from "the runtime
 accepted it and dropped it", so a whole surface can be missing for as long as
 nobody plays the game with the sound on.
 
+## A play that returns at once is a busy loop in the game
+
+`com.skt.m.AudioClip.play` **does not return until the clip has finished**, and
+a local title is the whole of the evidence. Its music runs on a thread of its
+own whose body is:
+
+```java
+this.looping = Kingdoms.looping;
+clip = AudioSystem.getAudioClip("mmf");
+clip.open(data, 0, data.length);
+do { clip.play(); } while (this.looping);
+```
+
+Nothing else is in that loop — no sleep, no state to poll, no yield — and
+`looping` is set true beside the calls that start background music and false
+beside the ones that fire an effect. The title never calls `loop`, because
+`play` plus its own flag *is* how it loops. That only works if `play` waits.
+
+Read the other way, as a call that returns at once, the same loop restarts the
+piece from its first note as fast as the interpreter can go. That is what it
+was: **one archive called it 1,453,986 times in four hundred ticks**, against
+forty-nine for the other seventy-eight put together, and never played a note
+past the beginning. Its four hundred ticks cost 4.0 seconds of CPU; they now
+cost 0.19.
+
+**The wait is the guest thread's, and only the guest thread's.** A platform
+call entered from the Host's own pass — a paint, a key, a lifecycle callback —
+returns without waiting, because blocking there stops the screen, the input and
+the timers together, which is not what the handset's wait did. That is the
+whole of `Invocation.WaitAsGuestThread`, and it is why the wait needed the
+execution rather than only the VM. A stop, a pause, a close or a second start
+cuts the wait short, so a title that stops its own music is not held for the
+rest of the piece.
+
+### A sound started decades from now
+
+Making the timeline unconditional made a second thing visible, and it is the
+larger one: **this platform had never emitted a note through a sink, on either
+Host.**
+
+A sound carries the instant it started, and a Host advances the timeline to a
+reading; events fall due between the two. Here the start came from
+`clockMillis` — the absolute wall clock the record stores stamp their
+modification times with, around 1.77 × 10¹² milliseconds — and the reading came
+from the Host, which passes elapsed time since the program started. One is
+decades ahead of the other, so nothing was ever due. The other two WIPI
+runtimes advance from their own guest clock and never took the reading from
+their Host at all.
+
+They are one clock now, the MIDlet's own elapsed time, and `AdvanceAudio` no
+longer takes an argument for the Host to get wrong. The measurement is
+`runskt -audio` against the local corpus: **zero archives recorded a single
+MIDI message before, and forty-three record one now**, thirteen of them with
+sampled sound as well, in four hundred ticks each. The frames are unchanged —
+sixty-two of seventy-nine byte-identical, the rest inside the per-title noise
+floor, no title's state, tick count or error text moved.
+
+This is the lesson the KTF record database and the KTF C sound block both
+taught, a third time: **a surface that accepts everything and drops it looks
+exactly like one that works.** What was missing here was not a decoder, a
+format or an API — all of that was built and tested — but the one number that
+decides whether any of it is ever due.
+
+### The timeline is not the speaker
+
+This was invisible for as long as it was, because **the SKT runtime had no
+audio timeline at all unless a Host attached a sink.** `AttachAudioSink` made
+one; a CLI run never called it; so nothing decoded, no clip had a length, every
+audio call was an accepted no-op, and the platform's sound behaved differently
+under the two Hosts. The other two platforms build their timeline at start and
+pass the sink — which may be nil — straight into it.
+
+This one does now too, and a sink attached later swaps into the timeline that
+is already there rather than replacing it. That last part matters on its own:
+the session attaches its sink *after* `Start`, so a title that loaded its clips
+in `startApp` used to have them thrown away by the arrival of the speaker.
+
+**What the corpus does with sound, now that a run can see it**: of
+ninety-one archives, seventy-one ask for a clip in their first four hundred
+ticks, sixty open one and thirty-eight play it. The MIDP `Player` surface is
+still untouched by every one of them — that part of "Deliberately incomplete"
+stands — but the vendor's own surface is not, so a `runskt -audio` would now
+have something to catch.
+
 ## A sound the archive does not carry is not a failed program
 
 `Clip(String type, String resourceName)` names a packaged resource, and the
@@ -205,12 +289,12 @@ this is a one-line change whenever a title is found that fades.
 - **Non-ADPCM wave formats.** `TwosComplementPCM`, `OffsetBinary`, TwinVQ, and
   MP3 parse but do not decode; every wave in the local archives is mono
   4-bit Yamaha ADPCM.
-- **`runskt` has no `-audio`.** The MIDP runtime takes a sink like the other
-  two and the browser gives it one, so a MIDlet that played would be heard;
-  what is missing is only the CLI's recorder. It stays missing for the reason
-  the surface report gives — `Player`'s registrations are among the ones **no**
-  local title has ever called ([`skvm.md`](skvm.md)) — so there is nothing yet
-  for a recording to catch.
+- **`runskt -audio` exists now**, and the reasoning that kept it away is worth
+  keeping: it was that `Player`'s registrations are among the ones no local
+  title has ever called. That is still true and was still the wrong measure —
+  the vendor's own `AudioSystem`/`AudioClip` surface is what these titles use.
+  A surface nobody calls is a fair reason not to build a recorder; the wrong
+  surface being the one measured is not.
 - **The WAV is a concatenation, not a timeline.** Sampled sounds are appended
   at the first one's rate, because these games play one at a time; the file
   answers "what did it sound like", not "when".

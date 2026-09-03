@@ -570,6 +570,40 @@ against *themselves*, in one animated corner of a splash screen, because that
 animation is on the wall clock. Diffing them across a build change says
 nothing until that is subtracted.
 
+### A line box that was exactly its own ink
+
+Choosing the face fixed the shapes and left the numbers beside them alone. The
+sizes still carried a table written by hand — MEDIUM ten rows tall with a
+baseline eight rows in, SMALL eight and seven, LARGE sixteen and fourteen — and
+those numbers were fitted to the 5x7 Latin, not to the face that draws
+everything else.
+
+**A ten-row line holds a syllable and nothing more.** The face is eleven rows,
+and its ascent is what puts the nine rows of Korean ink one row below the top
+of that box and one above the bottom. Reporting ten takes the bottom row away:
+the ink still fits, so a test that asks whether the glyph is inside the line
+still passes, but there is no longer a row between one line and the next. A
+title that steps its menu by `Font.getHeight` — which is most of this corpus —
+then draws the next line's syllables against this one's, and a title that draws
+each entry twice for a shadow runs them together outright. A local title's main
+menu is six entries of Korean that read as three.
+
+**The metrics are the face's now, scaled**, which is what both other WIPI
+runtimes here already did and what `newFontData` does rather than name numbers.
+MEDIUM and SMALL come back eleven and eight, LARGE twenty-two and sixteen. The
+two small sizes report the same thing because they draw the same thing: there
+is one Korean face on this platform, and the only difference the sizes ever had
+was the number they claimed. Nothing in the local corpus asks for SMALL but one
+archive, and nothing reaches LARGE at all — the one archive that names it does
+so in a branch its own constructor makes unreachable.
+
+What moves on screen is one row, in one direction: text hangs from the reported
+baseline, so every string sits one row lower and every line box is one row
+taller. Across the ninety-one archives at 400 ticks that is eight titles beyond
+the base-versus-base floor, all of them text-drawing, none of them changing
+state, tick count, or a line of error text; the frames that differ are blink
+phases with the text a row down. The menu that prompted it reads.
+
 ### The third title's save, and the message that named the wrong culprit
 
 The remaining title is driven into play and saves now. The route is worth
@@ -1348,15 +1382,69 @@ A half a title leaves out is now its default, which is the reading the zero
 anchor already had. Naming *two* bits from one group is still refused, because
 that is a title asking for two places at once rather than leaving one unsaid.
 
-All three reach their title screen; one reaches its main menu. What the three
-still want from this surface, and what is answered how, is in the package
-comment of `internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
+All three reach their title screen, and once they are given keys they can read
+— the section after next — all three reach play. What the three still want from
+this surface, and what is answered how, is in the package comment of
+`internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
 things there are declared and not built, for the reasons this project applies
 everywhere: `org.kwis.msf.io` has no radio behind it (`network.md`), and
 `Graphics.setAlpha` keeps its blend factor and reports it back without drawing
 with it — honouring it means blending every primitive rather than only the
 images that carry their own alpha, and all three titles set it once, to the
 opaque value.
+
+### The key codes a Jlet reads are not the ones a MIDlet reads
+
+All three reached a title screen and none of them answered a key. A Card is
+handed its keys through `keyNotify(type, key)`, which this layer bridges from
+MIDP's three callbacks, and the bridge forwarded the code unchanged — this
+vendor's MIDP device codes, 141 and 142 and 145 and 146 and 148 for the pad and
+fire. No Jlet compares against those.
+
+**The specification declines to say what it should be.** `EventQueue` says only
+that an ITU key arrives as its ASCII value, that a control key arrives negative,
+that the numbers differ from handset to handset, and that a title should
+therefore ask `getGameAction` rather than compare. So the numbers had to come
+from the titles.
+
+**Two of the three answer, and they agree.** One keeps a key map as a resource,
+one table per handset, and its SKT table is a list of byte pairs: the ASCII
+digits, `*` and `#`, and then `1`, `2`, `5`, `6`, `8`, `90`, `92` and `99` —
+which are `EventQueue.UP`, `LEFT`, `RIGHT`, `DOWN`, `FIRE`, `SOFT1`, `SOFT3` and
+`CLEAR`. The other switches on the key it was handed over the same set, and
+calls `getGameAction` only in the branch where the code it got was negative,
+which on this handset it never is. This vendor answered the specification's
+"different on every handset" with the game keys themselves.
+
+So a Jlet session translates once, at the point a Host key enters it
+(`wipiKeyOfDevice`), and `Display.getGameAction`, `getKeyCode` and `getKeyName`
+speak the same vocabulary — a pad code *is* its game action, so naming one
+answers itself, and the ITU keys a handset lets stand in for the pad answer the
+key they stand in for. A MIDlet in the same container is untouched and still
+reads this platform's MIDP codes.
+
+**Two more things a Jlet's keys are not.** Its soft keys are keys: MIDP diverts
+SOFT1 and SOFT2 to a Displayable's commands because a MIDP Canvas has no other
+way to reach them, and a WIPI Card reads them itself — one of the three switches
+on 90 beside the pad. And a Jlet's `keyNotify` returns whether to pass the event
+down, which nothing here has a lower Card to pass it to.
+
+**All three reach play.** One is an isometric strategy game with its map, its
+resource counters and its build cursor; one is a vertical shooter in its first
+mission; one is a farming game in its opening scene, having gone through its
+main menu and its save-slot screen. Sound and saving are still untouched by any
+of them within the ticks these runs reach.
+
+**One of them is drawn for a smaller handset than it is given.** The shooter
+lays its playfield out from the screen it is told about — the HUD sits on the
+bottom edge and the play area is centred — but its scrolling background is
+tiled at the size it was authored for, so on the 240x320 default the terrain
+covers the upper two thirds and the rest of the field is black. At `-screen
+176x220` it fills. The archive declares no width: its resource names end in
+`_0` and `_1`, which are frames and not widths, so the rule in "The handset a
+title was packaged for is in its resource names" correctly declines to read
+them. It is playable either way, which is what separates it from the archive
+that rule was written for.
 
 ### The class library, again
 

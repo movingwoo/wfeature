@@ -62,6 +62,22 @@ func (runtime *Runtime) registerNative(class, name, descriptor string, method jv
 	})
 }
 
+// registerContextNative is registerNative for the one implementation that needs
+// the execution it was entered on, and it is counted the same way.
+func (runtime *Runtime) registerContextNative(class, name, descriptor string, method jvm.ContextMethod) error {
+	counter := &nativeCounter{key: nativeKey(class, name, descriptor)}
+	runtime.nativeMu.Lock()
+	if runtime.natives == nil {
+		runtime.natives = make(map[string]*nativeCounter)
+	}
+	runtime.natives[counter.key] = counter
+	runtime.nativeMu.Unlock()
+	return runtime.VM.RegisterContextNative(class, name, descriptor, func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+		counter.calls.Add(1)
+		return method(call, arguments)
+	})
+}
+
 func nativeKey(class, name, descriptor string) string {
 	return class + "." + name + descriptor
 }

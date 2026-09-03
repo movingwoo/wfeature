@@ -43,30 +43,47 @@ type playerData struct {
 // Without one the players still run their state machine and report their
 // events, so a game that waits for STARTED is not stuck; it simply makes no
 // sound.
+//
+// **The timeline exists whether or not a Host is listening.** It used to be
+// made here, so a run with no speaker had no timeline at all and every audio
+// call was a no-op: nothing decoded, no clip had a length, and a title's sound
+// behaved differently under the CLI than under the browser — which is where a
+// title that waits on its own music went unnoticed. A sink attached later swaps
+// into the timeline that is already there, keeping the clips a title loaded
+// while it was starting up.
 func (runtime *Runtime) AttachAudioSink(sink backend.AudioSink) {
 	if runtime == nil {
 		return
 	}
-	runtime.audioMu.Lock()
-	runtime.audio = backend.NewAudio(sink)
-	runtime.audioMu.Unlock()
+	runtime.audioTimeline().SetSink(sink)
 }
 
 // AdvanceAudio moves the audio timeline to now. A Host with a frame loop calls
 // it once per frame; a Host that only starts a MIDlet and reads its state
 // never has to.
-func (runtime *Runtime) AdvanceAudio(now time.Duration) {
-	runtime.audioMu.Lock()
-	audio := runtime.audio
-	runtime.audioMu.Unlock()
-	if audio != nil {
-		audio.Advance(now)
+//
+// **The reading is the runtime's own, not the Host's.** It used to be an
+// argument, and the two Hosts passed two different clocks while the instant a
+// sound *started* from came from a third — an absolute wall-clock stamp, which
+// is decades ahead of either. A sound therefore began far in the future and no
+// event was ever due: this platform has never emitted a note through a sink,
+// on either Host. The other two WIPI runtimes advance from their own guest
+// clock and always did.
+func (runtime *Runtime) AdvanceAudio() {
+	if audio := runtime.audioTimeline(); audio != nil {
+		audio.Advance(runtime.GuestElapsed())
 	}
 }
 
 func (runtime *Runtime) audioTimeline() *backend.Audio {
+	if runtime == nil {
+		return nil
+	}
 	runtime.audioMu.Lock()
 	defer runtime.audioMu.Unlock()
+	if runtime.audio == nil {
+		runtime.audio = backend.NewAudio(nil)
+	}
 	return runtime.audio
 }
 
@@ -256,11 +273,12 @@ func (runtime *Runtime) playerStart(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	return jvm.VoidValue(), runtime.notifyPlayerListeners(object, player, midp.PlayerEventStarted)
 }
 
-// audioNow is the timeline reading a sound starts at. The runtime has no
-// frame clock of its own, so it uses the same wall clock RMS stamps with,
-// which a Host driving AdvanceAudio also passes.
+// audioNow is the timeline reading a sound starts at, and it is the same clock
+// AdvanceAudio moves the timeline along — the MIDlet's own elapsed time. The
+// wall clock RMS stamps its records with is a different question with a
+// different answer, and using it here is what silenced this platform.
 func (runtime *Runtime) audioNow() time.Duration {
-	return time.Duration(runtime.clockMillis()) * time.Millisecond
+	return runtime.GuestElapsed()
 }
 
 func (runtime *Runtime) playerStop(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

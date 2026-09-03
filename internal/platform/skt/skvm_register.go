@@ -93,7 +93,6 @@ func (runtime *Runtime) registerSKVMNatives() error {
 
 		{skvm.RuntimeAudioClipClass, "open", "([BII)V", runtime.audioClipOpen},
 		{skvm.RuntimeAudioClipClass, "close", "()V", runtime.audioClipAction("close")},
-		{skvm.RuntimeAudioClipClass, "play", "()V", runtime.audioClipAction("play")},
 		{skvm.RuntimeAudioClipClass, "loop", "()V", runtime.audioClipAction("loop")},
 		{skvm.RuntimeAudioClipClass, "pause", "()V", runtime.audioClipAction("pause")},
 		{skvm.RuntimeAudioClipClass, "resume", "()V", runtime.audioClipAction("resume")},
@@ -203,6 +202,12 @@ func (runtime *Runtime) registerSKVMNatives() error {
 	}
 
 	registrations = append(registrations, runtime.xFileRegistrations()...)
+
+	// `play` is the one native here that has to know which thread called it,
+	// because it waits — see audioClipPlay.
+	if err := runtime.registerContextNative(skvm.RuntimeAudioClipClass, "play", "()V", runtime.audioClipPlay); err != nil {
+		return fmt.Errorf("register %s.play()V: %w", skvm.RuntimeAudioClipClass, err)
+	}
 
 	for _, registration := range registrations {
 		if err := runtime.registerNative(registration.class, registration.name, registration.descriptor, registration.method); err != nil {

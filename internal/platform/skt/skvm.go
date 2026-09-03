@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -100,6 +101,25 @@ type audioClipData struct {
 	handle backend.AudioHandle
 	loop   bool
 	paused bool
+	// playing is closed when whatever is playing stops being what `play` is
+	// waiting for — a stop, a pause, a close, or another start on the same
+	// clip. A waiting thread selects on it so that a title that stops its own
+	// music does not have to wait out the rest of the piece first.
+	playing chan struct{}
+}
+
+// startPlaying and endPlaying maintain that channel. The caller holds the lock.
+func (clip *audioClipData) startPlaying() chan struct{} {
+	clip.endPlaying()
+	clip.playing = make(chan struct{})
+	return clip.playing
+}
+
+func (clip *audioClipData) endPlaying() {
+	if clip.playing != nil {
+		close(clip.playing)
+		clip.playing = nil
+	}
 }
 
 func (runtime *Runtime) skvm() *skvmState {
@@ -1001,6 +1021,61 @@ func (runtime *Runtime) audioClipOpen(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 	return jvm.VoidValue(), nil
 }
 
+// audioClipPlay is `play`, which **does not return until the clip has
+// finished**. That is this vendor's contract and a local title is the evidence:
+// its music thread is `do { clip.play(); } while (looping)`, with nothing else
+// in the loop — no sleep, no state to poll. A play that returned at once would
+// make that a busy loop that restarts the piece from its first note every time
+// round, which is what it was: one archive called this 1.45 million times in
+// four hundred ticks and never played a note past the beginning. The same title
+// calls `loop` nowhere, because `play` plus its own flag is how it loops.
+//
+// The wait is the guest thread's. On the Host's own pass there is no thread to
+// wait on and the call returns as it always did — see WaitAsGuestThread — and a
+// stop, pause, close or second start ends the wait early, so a title that stops
+// its own music is not held for the rest of the piece.
+func (runtime *Runtime) audioClipPlay(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+	clip, err := audioClipArgument(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	audio := runtime.audioTimeline()
+	clip.mu.Lock()
+	clip.loop, clip.paused = false, false
+	handle := clip.handle
+	clip.mu.Unlock()
+	if audio == nil || handle == 0 {
+		return jvm.VoidValue(), nil
+	}
+	if err := audio.Play(handle, runtime.audioNow(), false); err != nil {
+		return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
+	}
+	length, known := audio.Length(handle)
+	if !known || length <= 0 {
+		return jvm.VoidValue(), nil
+	}
+	clip.mu.Lock()
+	stopped := clip.startPlaying()
+	clip.mu.Unlock()
+	call.WaitAsGuestThread(runtime.realDuration(length), stopped)
+	clip.mu.Lock()
+	if clip.playing == stopped {
+		clip.endPlaying()
+	}
+	clip.mu.Unlock()
+	return jvm.VoidValue(), nil
+}
+
+// realDuration converts a length on the MIDlet's own clock — which is what the
+// audio timeline is advanced against — into the wall time it takes to pass.
+func (runtime *Runtime) realDuration(guest time.Duration) time.Duration {
+	speed := runtime.Speed()
+	if speed <= 0 {
+		return guest
+	}
+	return time.Duration(float64(guest) / speed)
+}
+
 func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		clip, err := audioClipArgument(arguments)
@@ -1011,8 +1086,6 @@ func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 		clip.mu.Lock()
 		handle := clip.handle
 		switch action {
-		case "play":
-			clip.loop, clip.paused = false, false
 		case "loop":
 			clip.loop, clip.paused = true, false
 		case "pause":
@@ -1022,13 +1095,16 @@ func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 		case "stop":
 			clip.paused = false
 		}
+		if action != "resume" {
+			clip.endPlaying()
+		}
 		loop := clip.loop
 		clip.mu.Unlock()
 		if audio == nil || handle == 0 {
 			return jvm.VoidValue(), nil
 		}
 		switch action {
-		case "play", "loop", "resume":
+		case "loop", "resume":
 			// Resume restarts rather than continuing: the timeline tracks a
 			// start instant, not a paused offset, and pretending otherwise
 			// would report a position the sink is not at.

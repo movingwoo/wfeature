@@ -71,13 +71,12 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 			}
 			defer session.Destroy(true)
 
-			startedAt := time.Now()
 			for tick := 0; tick < localAcceptanceTicks; tick++ {
 				state := session.State()
 				if state == skt.StateDestroyed || state == skt.StateError {
 					break
 				}
-				session.AdvanceAudio(time.Since(startedAt))
+				session.AdvanceAudio()
 				if err := session.RunPending(); err != nil {
 					t.Fatalf("tick %d: %v", tick, err)
 				}

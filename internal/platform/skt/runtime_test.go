@@ -433,7 +433,7 @@ func TestGraphicsFontMetricsAnchorsAndTextEntryPoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	framebuffer := newTestFramebuffer(t, 24, 8)
+	framebuffer := newTestFramebuffer(t, 24, 12)
 	runtime, err := Start(archive, Options{Framebuffer: framebuffer})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -449,17 +449,21 @@ func TestGraphicsFontMetricsAnchorsAndTextEntryPoints(t *testing.T) {
 	if presents != 2 {
 		t.Fatalf("framebuffer presents after text paint = %d, want 2", presents)
 	}
-	assertRGBAPixel(t, frame, 0, 0, []byte{0x00, 0x00, 0x00, 0xff})
+	// The 5x7 body hangs from the reported baseline, so its top row is one
+	// below the top of the line the three draws share.
+	assertRGBAPixel(t, frame, 0, 1, []byte{0x00, 0x00, 0x00, 0xff})
 	for x := 1; x <= 4; x++ {
-		assertRGBAPixel(t, frame, x, 0, []byte{0xff, 0xff, 0xff, 0xff})
+		assertRGBAPixel(t, frame, x, 1, []byte{0xff, 0xff, 0xff, 0xff})
 	}
+	// The underline sits on the baseline the font reports, which is the
+	// face's ascent — one row further down than the hand-fixed metrics put it.
 	for _, span := range [][2]int{{0, 6}, {8, 14}, {16, 22}} {
 		for x := span[0]; x <= span[1]; x++ {
-			assertRGBAPixel(t, frame, x, 7, []byte{0xff, 0xff, 0xff, 0xff})
+			assertRGBAPixel(t, frame, x, 8, []byte{0xff, 0xff, 0xff, 0xff})
 		}
 	}
 	for _, x := range []int{7, 15, 23} {
-		assertRGBAPixel(t, frame, x, 7, []byte{0x00, 0x00, 0x00, 0xff})
+		assertRGBAPixel(t, frame, x, 8, []byte{0x00, 0x00, 0x00, 0xff})
 	}
 }
 

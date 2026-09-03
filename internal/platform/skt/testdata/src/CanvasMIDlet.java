@@ -328,7 +328,7 @@ public final class CanvasMIDlet extends MIDlet {
                 fontState |= 2;
             }
             char[] characters = {'A', 'B'};
-            if (font.getHeight() == 8 && font.getBaselinePosition() == 7
+            if (font.getHeight() == 11 && font.getBaselinePosition() == 8
                     && font.charWidth('A') == 7 && font.stringWidth("AB") == 14
                     && font.substringWidth("ZAB", 1, 2) == 14
                     && font.charsWidth(characters, 0, 2) == 14) {
@@ -344,7 +344,7 @@ public final class CanvasMIDlet extends MIDlet {
             }
             graphics.setFont(font);
             graphics.setColor(0xffffff);
-            graphics.drawString("A", 7, 8, Graphics.RIGHT | Graphics.BOTTOM);
+            graphics.drawString("A", 7, 11, Graphics.RIGHT | Graphics.BOTTOM);
             graphics.drawChars(characters, 1, 1, 8, 0, Graphics.TOP | Graphics.LEFT);
             graphics.drawSubstring("CD", 1, 1, 16, 0, Graphics.TOP | Graphics.LEFT);
             try {
