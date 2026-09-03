@@ -93,7 +93,6 @@ func (runtime *Runtime) registerSKVMNatives() error {
 
 		{skvm.RuntimeAudioClipClass, "open", "([BII)V", runtime.audioClipOpen},
 		{skvm.RuntimeAudioClipClass, "close", "()V", runtime.audioClipAction("close")},
-		{skvm.RuntimeAudioClipClass, "loop", "()V", runtime.audioClipAction("loop")},
 		{skvm.RuntimeAudioClipClass, "pause", "()V", runtime.audioClipAction("pause")},
 		{skvm.RuntimeAudioClipClass, "resume", "()V", runtime.audioClipAction("resume")},
 		{skvm.RuntimeAudioClipClass, "stop", "()V", runtime.audioClipAction("stop")},
@@ -203,10 +202,19 @@ func (runtime *Runtime) registerSKVMNatives() error {
 
 	registrations = append(registrations, runtime.xFileRegistrations()...)
 
-	// `play` is the one native here that has to know which thread called it,
-	// because it waits — see audioClipPlay.
-	if err := runtime.registerContextNative(skvm.RuntimeAudioClipClass, "play", "()V", runtime.audioClipPlay); err != nil {
-		return fmt.Errorf("register %s.play()V: %w", skvm.RuntimeAudioClipClass, err)
+	// `play` and `loop` are the natives here that have to know which thread
+	// called them, because they wait — see audioClipStart.
+	waiting := []struct {
+		name   string
+		method jvm.ContextMethod
+	}{
+		{"play", runtime.audioClipPlay},
+		{"loop", runtime.audioClipLoop},
+	}
+	for _, native := range waiting {
+		if err := runtime.registerContextNative(skvm.RuntimeAudioClipClass, native.name, "()V", native.method); err != nil {
+			return fmt.Errorf("register %s.%s()V: %w", skvm.RuntimeAudioClipClass, native.name, err)
+		}
 	}
 
 	for _, registration := range registrations {

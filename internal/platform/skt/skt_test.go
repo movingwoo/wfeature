@@ -544,6 +544,66 @@ func TestASoundStartedReachesTheSink(t *testing.T) {
 	}
 }
 
+// A loop has no length of its own to end it, so a thread that starts one is
+// parked until the music is stopped — which is how a local title's audio
+// thread is written: open, loop, close, one after the other, with a different
+// thread calling close to stop the music. The close after the loop is the
+// cleanup, not the stop.
+//
+// The end of the program is also the end of the music. A thread left waiting on
+// a loop nothing ever stops would outlive the program it belongs to.
+func TestALoopWaitsUntilTheProgramIsOver(t *testing.T) {
+	runtime := startFixture(t, nil)
+
+	format := jvm.ReferenceValue(runtime.VM.NewString("audio/midi"))
+	result, err := runtime.VM.InvokeStatic("com/skt/m/AudioSystem", "getAudioClip",
+		"(Ljava/lang/String;)Lcom/skt/m/AudioClip;", format)
+	if err != nil {
+		t.Fatalf("getAudioClip() error = %v", err)
+	}
+	clip, err := result.Reference()
+	if err != nil || clip == nil {
+		t.Fatalf("getAudioClip() = %v, %v; want a clip", clip, err)
+	}
+	sound := oneNoteSMAF()
+	if _, err := runtime.VM.InvokeVirtual(clip, "open", "([BII)V",
+		jvm.ReferenceValue(jvm.NewByteArray(sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))); err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+
+	// On the Host's own pass a loop returns rather than parking, or the
+	// screen would stop with it.
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.VM.InvokeVirtual(clip, "loop", "()V")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("loop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop() on the Host pass never came back")
+	}
+
+	// And the sound it started is sounding: a loop that closed itself is what
+	// silenced a local title.
+	sink := backend.NewRecordingSink(nil)
+	runtime.AttachAudioSink(sink)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runtime.AdvanceAudio()
+		if messages, _ := sink.Summary(); messages > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a looping clip reached the sink with nothing")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A minimal SMAF file, the shape internal/backend's own tests use: one note on
 // a four-millisecond timebase, which is enough for the decoder to answer a
 // length.

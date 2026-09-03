@@ -151,8 +151,10 @@ nobody plays the game with the sound on.
 ## A play that returns at once is a busy loop in the game
 
 `com.skt.m.AudioClip.play` **does not return until the clip has finished**, and
-a local title is the whole of the evidence. Its music runs on a thread of its
-own whose body is:
+`loop` does not return until the clip is stopped. Two local titles are the
+evidence, and they arrive at it from opposite directions.
+
+The first one's music runs on a thread of its own whose body is:
 
 ```java
 this.looping = Kingdoms.looping;
@@ -173,14 +175,36 @@ forty-nine for the other seventy-eight put together, and never played a note
 past the beginning. Its four hundred ticks cost 4.0 seconds of CPU; they now
 cost 0.19.
 
-**The wait is the guest thread's, and only the guest thread's.** A platform
+### The other title closes its own music
+
+The second title's audio thread is `open`, `loop`, `close`, one after the other
+with nothing between them, and the way its music is *stopped* is a different
+thread calling `close` on the same clip. That only reads as a program if `loop`
+blocks until the clip stops: the `close` after it is the cleanup, not the stop.
+With a `loop` that returned at once, the thread closed its own music
+immediately — fifty-six clips opened, looped and closed inside four hundred
+ticks, and silence.
+
+**That title also shows what a debug build is worth here.** Under the debug
+profile it recorded a hundred MIDI messages and under release none, and the
+difference is only that logging makes a tick slower: in the slower run a
+timeline advance sometimes landed between the `loop` and the `close`, emitting a
+handful of events that were never meant to be a sound. It reads as "the debug
+build has sound and the release build does not", which is a fault in a place
+where there is none. A profile difference in what a game *does* is a signal to
+distrust the instrument, not the profile — the same lesson `testing.md` records
+from the KTF investigation where debug instrumentation manufactured a fault.
+
+**Both waits are the guest thread's, and only the guest thread's.** A platform
 call entered from the Host's own pass — a paint, a key, a lifecycle callback —
 returns without waiting, because blocking there stops the screen, the input and
 the timers together, which is not what the handset's wait did. That is the
 whole of `Invocation.WaitAsGuestThread`, and it is why the wait needed the
 execution rather than only the VM. A stop, a pause, a close or a second start
-cuts the wait short, so a title that stops its own music is not held for the
-rest of the piece.
+cuts either wait short, so a title that stops its own music is not held for the
+rest of the piece — and so does the end of the program, because a loop has no
+length of its own and a thread waiting on one would otherwise outlive the
+program it belongs to.
 
 ### A sound started decades from now
 
@@ -200,7 +224,7 @@ their Host at all.
 They are one clock now, the MIDlet's own elapsed time, and `AdvanceAudio` no
 longer takes an argument for the Host to get wrong. The measurement is
 `runskt -audio` against the local corpus: **zero archives recorded a single
-MIDI message before, and forty-three record one now**, thirteen of them with
+MIDI message before, and fifty-six record one now**, sixteen of them with
 sampled sound as well, in four hundred ticks each. The frames are unchanged —
 sixty-two of seventy-nine byte-identical, the rest inside the per-title noise
 floor, no title's state, tick count or error text moved.
@@ -227,7 +251,8 @@ in `startApp` used to have them thrown away by the arrival of the speaker.
 
 **What the corpus does with sound, now that a run can see it**: of
 ninety-one archives, seventy-one ask for a clip in their first four hundred
-ticks, sixty open one and thirty-eight play it. The MIDP `Player` surface is
+ticks and sixty open one; fifty-six of them reach the sink with a sound,
+sixteen of those with sampled audio as well. The MIDP `Player` surface is
 still untouched by every one of them — that part of "Deliberately incomplete"
 stands — but the vendor's own surface is not, so a `runskt -audio` would now
 have something to catch.

@@ -224,3 +224,33 @@ func TestTheScreenContextLocksAgainstTheFrameCopy(t *testing.T) {
 	}()
 	group.Wait()
 }
+
+// A thread parked on a sound is released when the program ends. A loop has no
+// length of its own, so without this a title whose music nothing ever stops
+// leaves a thread waiting on a program that is gone.
+func TestEndingTheProgramReleasesThreadsWaitingOnASound(t *testing.T) {
+	runtime := &Runtime{}
+	clip := &audioClipData{}
+
+	clip.mu.Lock()
+	waiting := runtime.startPlaying(clip)
+	clip.mu.Unlock()
+	select {
+	case <-waiting:
+		t.Fatal("the wait ended while the clip was still sounding")
+	default:
+	}
+
+	runtime.transition("test", StateDestroyed)
+	select {
+	case <-waiting:
+	default:
+		t.Fatal("a thread waiting on a sound was left waiting by the end of the program")
+	}
+
+	// The clip's own stop after that is not a second close of the same
+	// channel, which would be a panic rather than a leak.
+	clip.mu.Lock()
+	runtime.endPlaying(clip)
+	clip.mu.Unlock()
+}

@@ -119,14 +119,18 @@ func (call *Invocation) WaitAsGuestThread(duration time.Duration, until <-chan s
 	if call == nil || call.state == nil || call.state.thread == nil {
 		return false
 	}
-	if duration <= 0 {
-		return true
-	}
 	state := call.vm.threadState(call.state.thread)
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
+	// A non-positive duration is a wait with no deadline of its own: it ends
+	// when `until` says the thing is over, or when the thread is interrupted.
+	// A caller with nothing to end it must not ask for one.
+	var deadline <-chan time.Time
+	if duration > 0 {
+		timer := time.NewTimer(duration)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	select {
-	case <-timer.C:
+	case <-deadline:
 	case <-until:
 	case <-state.wake:
 	}

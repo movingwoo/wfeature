@@ -405,7 +405,7 @@ nothing instruments a `putfield`.
 found to be silent: the summary carries `audio_midi_messages` and
 `audio_wave_samples` beside the file it wrote, and both were zero for every
 archive until the timeline and the clock it starts sounds on were made the same
-one. Forty-three of the local archives record MIDI now and thirteen record
+one. Fifty-six of the local archives record MIDI now and sixteen record
 sampled sound, in four hundred ticks each. [`audio.md`](audio.md) has what was
 wrong and what a recording is worth reading for.
 
