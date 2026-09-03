@@ -1231,54 +1231,64 @@ rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
 both draw an empty screen and `-screen 176x196` draws the title, which is why
 the flag is the answer here and the rule is not.
 
-### What would settle it, and why the corpus does not
+### What a Canvas is here, and why the flag stays anyway
 
 The question underneath is whether a Canvas on this vendor is the whole display
 or the part of it a game may draw in. It is not a question about this one
 archive: **nothing in the corpus asks for full screen** — `setFullScreenMode` is
-called by none of the ninety-one — so whatever a Canvas reports is what every
-title lays out against, and changing it moves the sixty-one that read it.
+called by none of the ninety-one — so whatever a Canvas reports is what all
+sixty-one titles that read it lay out against.
 
 This vendor publishes both numbers. `com.xce.lcdui.XDisplay` carries `width`,
-`height` and **`height2`**, the last being the drawable height on a handset that
-reserved rows for a soft-key bar, and the corpus is emphatic about which one it
-draws in: of the archives that name `XDisplay` at all, **forty-nine name
-`height2` and five name `height`**. `height2` is what they size their back
-buffer with, what they pass to `repaint`, and what they clear with `fillRect`.
-It is the Canvas-shaped number.
+`height` and `height2`, and the corpus is emphatic about which one it draws in:
+of the archives that name `XDisplay` at all, **forty-nine name `height2` and five
+name `height`**. `height2` is what they size their back buffer with, what they
+pass to `repaint`, and what they clear with `fillRect`.
 
-**Two archives then answer the actual question in opposite directions.**
+**Two archives then say what `height2` is, and they say it as a constraint
+rather than an opinion.** Each of them clears its whole screen in two different
+places, once through each pair:
 
-- One computes `height2 - height` into a field and adds it to
-  `Canvas.getHeight()` to get the box it centres its dialogue in. That only
-  arrives at the drawable height if `getHeight()` is the *display* — and it is
-  also exactly what a developer writes to be safe on a handset that publishes
-  zeros for both, where the correction is nothing and the Canvas answers for
-  itself.
-- The archive above needs `getHeight()` at or under 196 while shipping 176-wide
-  art, and its own background for that set is 176x202. On a 176x220 handset with
-  a twenty-four row bar those numbers all fit at once — Canvas 196, buffer 212,
-  background 202 — which requires `getHeight()` to be the *drawable*. On a
-  176x196 handset with no bar they fit equally well.
+```java
+g.setColor(0xffffff);
+g.fillRect(0, 0, XDisplay.width, XDisplay.height2);   // one place
+...
+g.setColor(0xff000000);
+g.fillRect(0, 0, getWidth(), getHeight());            // another, on the Canvas
+```
 
-So each title is self-consistent and the two disagree, and neither the
-descriptors nor the specification says which. **What would settle it is one real
-handset's `height` beside its `height2`.**
+Both are `(0, 0, <full width>, <full height>)`. If the two pairs differed, one
+clear would leave a strip the other did not, visible every time the title
+switched between them — so on the handsets these two shipped for,
+`XDisplay.width` is `getWidth()` and **`XDisplay.height2` is `getHeight()`**.
 
-**The reference implementation does not have that pair either.** Its `XDisplay`
-declares the same three fields and fills them with 240, 320 and 320 under a
-comment marking the values temporary; its `Displayable.getHeight` forwards to
-the display's height with no full-screen distinction; and drawing a title bar
-and a soft-key bar for a Displayable that is not full screen is an unimplemented
-note there. It also has no per-archive screen selection at all — one window,
-240x320, for everything. So the other implementation parked this in the same
-place and at the same value, which is worth knowing before spending on it again:
-the missing number is not one that a second reading of somebody else's source
-produces. It comes from a handset.
+That settles the reading of the third archive, the one that computes
+`height2 - height` and adds it to `getHeight()`. It cannot be a correction from
+the display to the drawable, because `getHeight()` is already the drawable; it
+is the idiom that is a no-op exactly when the two `XDisplay` heights are equal,
+and on a handset where they are not it centres a dialogue half a bar high. An
+idiom that is harmless when it is wrong is weak evidence beside two clears that
+have to agree.
 
-Until then the Canvas stays the whole framebuffer, `height2` stays equal to
-`height`, and the flag is what runs the one archive that needs the other
-answer.
+**So a Canvas here is the drawable area, and this platform still gives it the
+whole framebuffer** — which is a handset that reserved no rows, and which is
+self-consistent: `height`, `height2` and `getHeight()` are one number and every
+title agrees with every other. Modelling a handset that *did* reserve rows would
+mean shrinking the game area of all seventy-nine titles to make room for chrome
+this project does not draw, to fix the one archive that wants a 196-row drawable.
+That is worse for seventy-eight to help one, so the archive keeps its flag: with
+no `-screen` it draws nothing, and with `-screen 176x196` it draws — which is a
+title packaged for a phone smaller than the default, the same class of archive
+the rule above already exists for.
+
+**The reference implementation reaches the same arrangement**, which is worth
+knowing before anyone reopens this: it declares the same three `XDisplay` fields
+and fills them with 240, 320 and 320, its `Displayable.getHeight` forwards to the
+display's height with no full-screen distinction, drawing the chrome for a
+Displayable that is not full screen is an unimplemented note there, and it has no
+per-archive screen selection at all — one 240x320 window for everything. Two
+implementations landing on one number for all three is not proof; the two clears
+above are the reason.
 
 ## Ninety archives, and the pass that made room for eleven of them
 
