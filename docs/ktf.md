@@ -4379,6 +4379,50 @@ byte-identical, and the title that plays draws its own glyphs and asks for none
 of this. What the call is for is the screen a third title puts up, and that one
 now reads as its author wrote it.
 
+### What writes this, for a title nothing is unanswered for
+
+`컴투스_맞고_2006` stops with **no trap left**, which is the state a trap list
+cannot say anything about. `TestLocalNativeWatchProbe` is the tool for it: it
+watches words of the title's own state block — the word at `+0x24` of the object
+its factory built, which is where both local titles keep theirs — and reports
+the instruction that wrote each, or that nothing did.
+
+What it says about this title, over three hundred frames:
+
+| word | what it is | who writes it |
+|---|---|---|
+| state `+0x1748` | the step's own gate | **nothing** |
+| state `+0x3380` | what the state it idles in waits on | **nothing** |
+| state `+0x174c` | the state selector | one instruction, twice, ending at 1 |
+| state `+0x176c` | "there is something to draw" | set on a state change, **cleared three times and never set again** |
+| state `+0x1760` | a frame counter | every frame |
+| **every page of both pictures** | the surface it blits from | **nothing** |
+
+The last row is the one that matters, and it is not what "stuck in a state
+machine" predicts. **The title never draws into the surface it blits from.**
+Its start-up fills that surface with `0xff` — index 255 of a palette it builds
+itself, which is black — builds a bitmap header over it, hands it to the factory
+and frees what it handed over. Then it loads eighteen resources, blits twenty
+regions of the surface onto the screen, and the surface still holds nothing but
+the fill. Re-reading it on every blit changes nothing because there is nothing
+to re-read.
+
+So its black screen is not a picture this platform is failing to show. It is a
+picture the title has not drawn, and the thing to find is what fills that
+surface from the eighteen resources it did load — not another unanswered slot,
+because there is not one.
+
+Two smaller things the probe settled on the way:
+
+- **The three flags it idles on are never written by anything**, host or guest.
+  A word that nothing writes is not a word the platform is failing to set.
+- **A caller cannot be read off the value it passes.** Two of the seventeen call
+  sites that reach the state setter run, passing 0 and 3, and the word ends up
+  holding 1. The compiler pushes argument registers as stack space and pops them
+  shifted — a helper called between the argument and the store does not leave
+  the argument where it was. The trace says which callers ran; only the watch
+  says what was stored.
+
 ## A module compiled against a longer superclass
 
 A relocatable module — the `client.bin<BSS>` kind, published as a class table
