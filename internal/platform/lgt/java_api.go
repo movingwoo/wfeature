@@ -81,6 +81,11 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// A Jlet asking to be torn down. It is the guest's own ending, which the
 	// Host already knows how to end a session on; see ErrGuestExited.
 	"org/kwis/msp/lcdui/Jlet.notifyDestroyed()V": {Words: 1, Implementat: javaNotifyDestroyed},
+	// The application object, asked for by name. The specification has both
+	// "the Jlet at the top" and "the Jlet running now"; this platform runs one
+	// program, so both are the object the launcher built and both answer it.
+	"org/kwis/msp/lcdui/Jlet.getActiveJlet()Lorg/kwis/msp/lcdui/Jlet;":  {Implementat: javaCurrentJlet},
+	"org/kwis/msp/lcdui/Jlet.getCurrentJlet()Lorg/kwis/msp/lcdui/Jlet;": {Implementat: javaCurrentJlet},
 	// Showing the annunciator is showing the handset's own status bar, which
 	// this platform does not draw at all — so it takes no room either, and a
 	// title that lays its card out below one gets the whole screen.

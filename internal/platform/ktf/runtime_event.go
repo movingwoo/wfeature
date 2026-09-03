@@ -477,6 +477,11 @@ func (runtime *initializationRuntime) repaintQueued() bool {
 	return runtime != nil && runtime.repaintPending && len(runtime.displayCards) > 0
 }
 
+// guestPaintOwnershipRounds is how many Host rounds a frame the guest painted
+// itself keeps the Host's own round paint away. See paintTopCard for what the
+// number was measured against.
+const guestPaintOwnershipRounds = 8
+
 // paintTopCard paints the top pushed card into the screen framebuffer and
 // presents the frame. It reports whether a card painted. Re-entrant paints are
 // dropped: a card that repaints while painting would otherwise recurse.
@@ -502,6 +507,31 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// rule rather than a switch.
 	if !runtime.repaintPending && runtime.guestFlushedOwnFrame {
 		runtime.guestFlushedOwnFrame = false
+		return false, nil
+	}
+	// **A title painting its own frames gets the frames it asked for and no
+	// others.** A title pairing `Card.repaint` with `Card.serviceRepaints`
+	// every frame is naming its own cadence, and the Host's unconditional
+	// round paint is then a second frame per frame. That is not just a wasted
+	// paint: a title whose frame loop steps the world inside `paint` takes a
+	// step it never asked for. See runtimeCardServiceRepaints.
+	//
+	// **The round paint is still the only thing driving some titles**, so this
+	// stands down while the guest is painting and comes back when it stops.
+	// Both shapes are in the local set and neither is rare: of the titles that
+	// call `serviceRepaints` at all, some call it every frame and some call it
+	// two or three times in a whole run — a load screen — and then never
+	// again, drawing the rest from a round paint they never ask for. **Whether
+	// a title calls it does not separate the two, and neither does how often**:
+	// what separates them is the gap. Measured over the local set at 600
+	// rounds, a title driving its own screen comes back within two or three
+	// rounds and at worst seven; a title that has handed the screen back leaves
+	// hundreds, or never comes back at all. Eight rounds is past every cadence
+	// and short of every handover, and it is a count of rounds rather than of
+	// milliseconds because what it bounds is the Host's own loop.
+	runtime.roundsSinceGuestPaint++
+	if !runtime.repaintPending && runtime.guestHasPainted &&
+		runtime.roundsSinceGuestPaint <= guestPaintOwnershipRounds {
 		return false, nil
 	}
 	// The paint satisfies whatever repaint request is outstanding, whichever

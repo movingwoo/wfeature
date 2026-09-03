@@ -51,6 +51,11 @@ func (client *Client) runJavaLauncher(
 	if err != nil {
 		return err
 	}
+	// The application is one Jlet, and this is it. A title asks the platform
+	// for it back by name rather than keeping the reference itself, so the
+	// object is recorded before its constructor runs: the constructor is the
+	// first code that can ask.
+	client.javaRuntimeState().jlet = object
 	constructor, owner, ok := client.findJavaMethod(class.Record, "<init>")
 	if !ok {
 		return fmt.Errorf("%s declares no constructor", class.Name)
@@ -173,4 +178,18 @@ func (client *Client) findJavaMethod(record javaClass, name string) (javaMember,
 		record = next
 	}
 	return javaMember{}, "", false
+}
+
+// javaCurrentJlet answers the application object: the instance of the title's
+// own Jlet subclass that the launcher built and started. A title reaches it to
+// get back to itself from code that was handed nothing — a Card's paint, a
+// listener — which is why the platform holds the reference rather than the
+// guest.
+//
+// It is null before the launcher has built one, which is the honest answer
+// there: nothing has been started, so there is no current Jlet.
+func javaCurrentJlet(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	return client.javaRuntimeState().jlet, nil
 }

@@ -5914,6 +5914,66 @@ different one. The title this was for draws its own screen under `-play` now,
 menu and all, where it used to show a uniform fill for as long as it was left
 running.
 
+### A frame the title did not ask for is a step it did not take
+
+**The rule above has a Java twin, and the twin was missing.** A title can
+publish its own frame from the C side — the `MC_grpFlushLcd` case above — or it
+can do it from Java: `Card.repaint` to ask, `Card.serviceRepaints` to enter
+`paint` itself, once per frame of its own loop. The Host's per-round paint went
+on running beside the second of those, so a title driving its own screen got
+**two paints per frame it asked for.**
+
+That is more than a wasted paint, because **a frame loop that lives inside
+`paint` advances the world once per entry**. One local title scrolls there: a
+`copyArea` of the whole 240x320 screen by ten pixels, then a fresh twenty-pixel
+column of tiles at the edge, then its sprites. Its own loop asked for 583
+frames in 1,250 rounds and `paint` was entered 1,833 times — 583 from the title
+and 1,250 from the Host — so **the screen scrolled three times for every step
+the title took.** The probe reads it in one line per round:
+
+```
+scroll dx=-10 → column x=230 surface y=300
+scroll dx=-10 → column x=230 surface y=300   <- same column, same height
+scroll dx=-10 → column x=230 surface y=300
+scroll dx=-10 → column x=220 surface y=300
+```
+
+The same column of terrain laid down at three offsets is a slope drawn as a
+sawtooth, and a world advancing three times too fast down a hill is ground that
+leaves the bottom of the screen and never comes back. It looked like a drawing
+bug and was not: `copyArea`'s argument order, its overlapping-self snapshot, the
+palette transparency of the slope tiles, the tile decode and the anchor were all
+checked against the archive and all correct.
+
+**What made the rule hard is that calling `serviceRepaints` does not mean a
+title drives its own screen.** Of the local titles that call it at all, some
+call it every frame and some call it two or three times in a whole run — a load
+screen — and then never again, drawing the rest from a round paint they never
+ask for. Standing the round paint down for good on the first call froze three of
+those: their flush counts fell from about 600 in 600 rounds to 3, 4 and 36.
+Counting the calls does not separate the two shapes either.
+
+**The gap does.** Measured over 600 rounds, a title driving its own screen comes
+back within two or three rounds and at worst seven; a title that has handed the
+screen back leaves hundreds of rounds, or never comes back. So the round paint
+stands down for eight rounds after a frame the guest painted, and comes back
+when the guest stops. It is a count of rounds rather than of milliseconds
+because what it bounds is the Host's own loop.
+
+**A whole-corpus A/B says what it cost.** Over the 46 local KTF archives at 600
+rounds each, no archive stops, none changes its error, and every one still
+reaches tick 600. Seventeen rows change and fourteen change only the flush
+count. Four of those are large and are the defect going away — 900 to 301, 889
+to 289, 851 to 249, 795 to 245 — each landing on the count of frames the title
+asked for. The rest move by one or two. Three rows show a different lit-pixel
+count and none of them is this change: run alone rather than in the batch, both
+builds answer the same number for all three, which is a **nondeterminism in the
+batch itself** worth its own look.
+
+**It is also cheaper.** The title above went from 1,833 `paint` entries in 1,400
+rounds to 488 — one per frame it asked for — and each entry is guest code plus
+a frame encode. Nothing new runs per round but one integer compare.
+
 **The fault report is what read as a thread problem and was not.** The stack
 named an image array and a `paint`, so the first reading was a loading thread
 racing the frame loop. The boundary trace says otherwise in one pass: every

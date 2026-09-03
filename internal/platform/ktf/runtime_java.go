@@ -2940,6 +2940,19 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	if _, err := vm.InvokeVirtual(receiver, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
 		return jvm.VoidValue(), fmt.Errorf("service repaint of %s: %w", receiver.ClassName, err)
 	}
+	// The guest painted a frame of its own. While it keeps doing that the Host
+	// stops adding frames the guest did not ask for; see paintTopCard.
+	//
+	// **This matters beyond a wasted paint.** A title whose frame loop draws a
+	// step of the world in `paint` advances that world once per entry, so an
+	// entry the guest did not ask for is a step the guest did not take. One
+	// local title scrolls there — a `copyArea` of the whole screen and a fresh
+	// column of tiles at the edge — and the Host's extra entries scrolled the
+	// screen without the title's own state having moved, so the same column of
+	// terrain was laid down at three offsets. Its slopes came out as a sawtooth
+	// and its ground ran off the bottom of the screen.
+	runtime.guestHasPainted = true
+	runtime.roundsSinceGuestPaint = 0
 	return jvm.VoidValue(), runtime.presentScreen()
 }
 
