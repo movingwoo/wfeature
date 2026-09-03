@@ -4306,6 +4306,79 @@ half of it. The 2005 archive is byte-identical through its in-game route.
   re-reading it on every blit changes nothing, so it is empty rather than stale.
   Nothing it asks for is unanswered.
 
+### The screen draws text
+
+The slot a title asks this of was read as a status line the handset shows
+somewhere of its own, and recorded rather than drawn. It is not that. It is the
+display's own text call, and **two modules of two generations agree on its
+shape**:
+
+```
+[sp+4] = y ; [sp] = x ; [sp+8] = 0 ; [sp+0xc] = flags
+r0 = display ; r1 = font ; r2 = text ; r3 = -1
+bl veneer
+```
+
+— `DrawText(display, font, text, count, x, y, background, flags)`, which is the
+specification's own. What each argument is comes off the two call sites rather
+than off the name:
+
+- **count is -1 at both**, a run with a terminator rather than a length.
+- **y is the top of the line, not a baseline.** One module lays three lines out
+  with `(screen height - 3 * line height) / 2` and steps by the line height,
+  which only centres a block if the y it passes is the top of it.
+- **the background rectangle is null at both**, so nothing is filled.
+- **the flags are carried and not acted on.** They are `0x8020` at one call site
+  and `0x8220` at the other, and the one bit that differs belongs to the call
+  that passes the exact middle of the screen for both x and y — which reads as
+  an alignment. That is one bit read from two samples, so it is written down
+  here rather than acted on, and text lands at the point it was given.
+
+The slot at `0x08` beside it answers a font's line height and fills in an ascent
+and a descent through two pointers when they are not null, which is what a
+module that centres three lines needs to do so.
+
+#### A terminator is a zero halfword, not a zero byte
+
+Reading it as a byte cost three quarters of a sentence, and the shape of the two
+titles is what says so. One module builds each line a halfword at a time — a
+Korean character is two bytes and fills one, a space is one byte and fills one
+with a zero after it:
+
+```
+c0ce c1f5 2000 bfe4 c3bb c1df c0d4 b4cf b4d9 2e00 0000
+인   증   ' '  요   청   중   입   니   다   '.'  end
+```
+
+A reader that stops at the first zero byte stops at the space and draws
+"인증 " where the title wrote "인증 요청중입니다.". The other module hands over
+plain bytes with a zero after the last one. **One rule reads both**: a zero ends
+the run when it is on a halfword boundary or when the byte after it is zero too,
+and anywhere else it is the pad of a single-byte character. The pads are then
+dropped, which is safe because no byte of an EUC-KR character is zero.
+
+#### The ink is the darker of the two colours a title sets
+
+A module sets item 1 to black and item 2 to white and then clears its screen,
+which comes out white — so item 2 is the ground and item 1 is the ink. The 2005
+module sets neither and clears the same way, so its screen is white too and its
+ink has to be the dark one; the default is therefore dark, not light. **That is a
+pairing read off two titles rather than a numbering anybody documented**, and
+what would say it is wrong is a title whose text comes out the colour of what it
+is drawn on — which is what the first attempt looked like, white on the white a
+clear leaves behind.
+
+The face is the one the descriptor package's runtime already uses, for the same
+reason it gives there: the screen a title declares does not predict the font it
+expects, so there is one face rather than one per size.
+
+**Neither local title's screen changes for this**, which is the point rather
+than a disappointment: the 2005 archive draws one line — a `WAIT..` over its
+loading screen, which its next clear paints over — and its in-game route is
+byte-identical, and the title that plays draws its own glyphs and asks for none
+of this. What the call is for is the screen a third title puts up, and that one
+now reads as its author wrote it.
+
 ## A module compiled against a longer superclass
 
 A relocatable module — the `client.bin<BSS>` kind, published as a class table

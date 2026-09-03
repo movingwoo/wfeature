@@ -296,6 +296,7 @@ func (platform *NativePlatform) Install() error {
 	platform.installLibrary()
 	platform.images = map[uint32]*nativeImage{}
 	platform.installScreen()
+	platform.installText()
 	platform.installSound()
 	platform.installTimed()
 	platform.installRemaining()
@@ -469,13 +470,12 @@ func (platform *NativePlatform) Application() uint32 { return platform.applicati
 // through free.
 const nativeSlotDestroyObject = 0xbc
 
-// The screen's two remaining methods. The first is how the title asks the
-// platform for a status line — it passes a flag word, a message and a
-// length — and the second it calls once a second while it is running, which is
-// what a handset's "keep the backlight on" looks like. Neither answer is read
-// by the title, so both are recorded rather than invented.
+// The screen's remaining methods. The first the title calls once a second
+// while it is running, which is what a handset's "keep the backlight on" looks
+// like, and its answer is not read. The slot beside it was read as a status
+// line the handset shows somewhere of its own; it is the display's own text
+// call, and native_text.go draws it.
 const (
-	nativeScreenMessage   = 0x10
 	nativeScreenKeepAwake = 0x24
 	// nativeScreenColour takes an item number and a colour, and a later module
 	// sets two of them before it draws its own text: item 2 to 0xffffff00 and
@@ -525,7 +525,6 @@ func (platform *NativePlatform) installRemaining() {
 	client.Serve(NativePlatformTable, nativeSlotDestroyObject, platform.destroyObject)
 
 	screen := nativeInterfaceSurface(nativeInterfaceApplication)
-	client.Serve(screen, nativeScreenMessage, platform.screenMessage)
 	client.Serve(screen, nativeScreenKeepAwake, nativeAnswerOne)
 	client.Serve(screen, nativeScreenColour, platform.screenColour)
 
@@ -551,28 +550,9 @@ func (platform *NativePlatform) destroyObject(thread *armcore.Thread) (uint32, e
 	return 1, nil
 }
 
-// screenMessage records the status line the title asked for. A Host has
-// nowhere to put it — the title draws its own screen and this is the
-// handset's furniture — so it is kept for a run to report rather than drawn
-// over what the title is drawing.
-func (platform *NativePlatform) screenMessage(thread *armcore.Thread) (uint32, error) {
-	address, err := thread.Register(2)
-	if err != nil {
-		return 0, err
-	}
-	if address == 0 {
-		return 1, nil
-	}
-	text, err := platform.readString(address)
-	if err != nil {
-		// A message that cannot be read is not worth failing a run over.
-		return 1, nil
-	}
-	platform.messages = append(platform.messages, decodeEUCKR(text))
-	return 1, nil
-}
-
-// Messages reports the status lines the title asked the handset to show.
+// Messages reports the text the title has drawn, in order. A screen shows it
+// now, and the list is still what a run reports: it turns "the screen went
+// blank" into the sentence the title put there.
 func (platform *NativePlatform) Messages() []string { return platform.messages }
 
 // screenColour records one of the colours the title set.
