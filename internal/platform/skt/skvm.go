@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -100,6 +101,51 @@ type audioClipData struct {
 	handle backend.AudioHandle
 	loop   bool
 	paused bool
+	// playing is closed when whatever is playing stops being what `play` is
+	// waiting for — a stop, a pause, a close, or another start on the same
+	// clip. A waiting thread selects on it so that a title that stops its own
+	// music does not have to wait out the rest of the piece first.
+	playing chan struct{}
+}
+
+// startPlaying and endPlaying maintain that channel. The caller holds the clip
+// lock; the runtime is told about the channel too, so that the end of the
+// session ends a wait nothing else will.
+func (runtime *Runtime) startPlaying(clip *audioClipData) chan struct{} {
+	runtime.endPlaying(clip)
+	clip.playing = make(chan struct{})
+	runtime.audioMu.Lock()
+	if runtime.audioWaits == nil {
+		runtime.audioWaits = make(map[chan struct{}]struct{})
+	}
+	runtime.audioWaits[clip.playing] = struct{}{}
+	runtime.audioMu.Unlock()
+	return clip.playing
+}
+
+func (runtime *Runtime) endPlaying(clip *audioClipData) {
+	if clip.playing == nil {
+		return
+	}
+	runtime.audioMu.Lock()
+	if _, live := runtime.audioWaits[clip.playing]; live {
+		delete(runtime.audioWaits, clip.playing)
+		close(clip.playing)
+	}
+	runtime.audioMu.Unlock()
+	clip.playing = nil
+}
+
+// endAudioWaits releases every thread parked on a sound. A program that is over
+// has no music left to wait for, and a thread that waits anyway outlives it.
+func (runtime *Runtime) endAudioWaits() {
+	runtime.audioMu.Lock()
+	waits := runtime.audioWaits
+	runtime.audioWaits = nil
+	runtime.audioMu.Unlock()
+	for wait := range waits {
+		close(wait)
+	}
 }
 
 func (runtime *Runtime) skvm() *skvmState {
@@ -1001,6 +1047,90 @@ func (runtime *Runtime) audioClipOpen(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 	return jvm.VoidValue(), nil
 }
 
+// audioClipPlay and audioClipLoop are `play` and `loop`, and **neither returns
+// while the clip is still sounding**. That is this vendor's contract and two
+// local titles are the evidence, from opposite directions.
+//
+// One title's music thread is `do { clip.play(); } while (looping)` with
+// nothing else in the loop — no sleep, no state to poll — and it never calls
+// `loop`, because `play` plus its own flag is how it loops. A play that
+// returned at once would make that a busy loop restarting the piece from its
+// first note every time round, which is what it was: one archive called it
+// 1.45 million times in four hundred ticks and never played a note past the
+// beginning.
+//
+// Another title's music thread is `open`, `loop`, `close`, one after the other
+// with nothing between, and the way its music is *stopped* is a different
+// thread calling `close` on the same clip. That only reads as a program if
+// `loop` blocks until the clip stops: the `close` after it is the cleanup, not
+// the stop. With a `loop` that returned at once the thread closed its own music
+// immediately and the title was silent — fifty-six clips opened, looped and
+// closed inside four hundred ticks with nothing to show for it.
+//
+// **What ends the wait**: for `play`, the clip's own length; for `loop`,
+// nothing but a stop, since that is what a loop is. Both also end on a pause, a
+// close or a second start on the same clip, so a title that stops its own music
+// is not held for the rest of the piece, and on the end of the program.
+//
+// **The wait is the guest thread's.** On the Host's own pass there is no thread
+// to wait on and the call returns as it always did — see WaitAsGuestThread —
+// because blocking there stops the screen, the input and the timers together.
+func (runtime *Runtime) audioClipPlay(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.audioClipStart(call, arguments, false)
+}
+
+func (runtime *Runtime) audioClipLoop(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.audioClipStart(call, arguments, true)
+}
+
+func (runtime *Runtime) audioClipStart(call *jvm.Invocation, arguments []jvm.Value, repeat bool) (jvm.Value, error) {
+	clip, err := audioClipArgument(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	audio := runtime.audioTimeline()
+	clip.mu.Lock()
+	clip.loop, clip.paused = repeat, false
+	handle := clip.handle
+	clip.mu.Unlock()
+	if audio == nil || handle == 0 {
+		return jvm.VoidValue(), nil
+	}
+	if err := audio.Play(handle, runtime.audioNow(), repeat); err != nil {
+		return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
+	}
+	// A loop has no length of its own to wait out; only a stop ends it. A
+	// clip whose length is unknown or nothing is over as soon as it started.
+	wait := time.Duration(-1)
+	if !repeat {
+		length, known := audio.Length(handle)
+		if !known || length <= 0 {
+			return jvm.VoidValue(), nil
+		}
+		wait = runtime.realDuration(length)
+	}
+	clip.mu.Lock()
+	stopped := runtime.startPlaying(clip)
+	clip.mu.Unlock()
+	call.WaitAsGuestThread(wait, stopped)
+	clip.mu.Lock()
+	if clip.playing == stopped {
+		runtime.endPlaying(clip)
+	}
+	clip.mu.Unlock()
+	return jvm.VoidValue(), nil
+}
+
+// realDuration converts a length on the MIDlet's own clock — which is what the
+// audio timeline is advanced against — into the wall time it takes to pass.
+func (runtime *Runtime) realDuration(guest time.Duration) time.Duration {
+	speed := runtime.Speed()
+	if speed <= 0 {
+		return guest
+	}
+	return time.Duration(float64(guest) / speed)
+}
+
 func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		clip, err := audioClipArgument(arguments)
@@ -1011,10 +1141,6 @@ func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 		clip.mu.Lock()
 		handle := clip.handle
 		switch action {
-		case "play":
-			clip.loop, clip.paused = false, false
-		case "loop":
-			clip.loop, clip.paused = true, false
 		case "pause":
 			clip.paused = true
 		case "resume":
@@ -1022,13 +1148,16 @@ func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 		case "stop":
 			clip.paused = false
 		}
+		if action != "resume" {
+			runtime.endPlaying(clip)
+		}
 		loop := clip.loop
 		clip.mu.Unlock()
 		if audio == nil || handle == 0 {
 			return jvm.VoidValue(), nil
 		}
 		switch action {
-		case "play", "loop", "resume":
+		case "resume":
 			// Resume restarts rather than continuing: the timeline tracks a
 			// start instant, not a paused offset, and pretending otherwise
 			// would report a position the sink is not at.

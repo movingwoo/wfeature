@@ -570,6 +570,40 @@ against *themselves*, in one animated corner of a splash screen, because that
 animation is on the wall clock. Diffing them across a build change says
 nothing until that is subtracted.
 
+### A line box that was exactly its own ink
+
+Choosing the face fixed the shapes and left the numbers beside them alone. The
+sizes still carried a table written by hand — MEDIUM ten rows tall with a
+baseline eight rows in, SMALL eight and seven, LARGE sixteen and fourteen — and
+those numbers were fitted to the 5x7 Latin, not to the face that draws
+everything else.
+
+**A ten-row line holds a syllable and nothing more.** The face is eleven rows,
+and its ascent is what puts the nine rows of Korean ink one row below the top
+of that box and one above the bottom. Reporting ten takes the bottom row away:
+the ink still fits, so a test that asks whether the glyph is inside the line
+still passes, but there is no longer a row between one line and the next. A
+title that steps its menu by `Font.getHeight` — which is most of this corpus —
+then draws the next line's syllables against this one's, and a title that draws
+each entry twice for a shadow runs them together outright. A local title's main
+menu is six entries of Korean that read as three.
+
+**The metrics are the face's now, scaled**, which is what both other WIPI
+runtimes here already did and what `newFontData` does rather than name numbers.
+MEDIUM and SMALL come back eleven and eight, LARGE twenty-two and sixteen. The
+two small sizes report the same thing because they draw the same thing: there
+is one Korean face on this platform, and the only difference the sizes ever had
+was the number they claimed. Nothing in the local corpus asks for SMALL but one
+archive, and nothing reaches LARGE at all — the one archive that names it does
+so in a branch its own constructor makes unreachable.
+
+What moves on screen is one row, in one direction: text hangs from the reported
+baseline, so every string sits one row lower and every line box is one row
+taller. Across the ninety-one archives at 400 ticks that is eight titles beyond
+the base-versus-base floor, all of them text-drawing, none of them changing
+state, tick count, or a line of error text; the frames that differ are blink
+phases with the text a row down. The menu that prompted it reads.
+
 ### The third title's save, and the message that named the wrong culprit
 
 The remaining title is driven into play and saves now. The route is worth
@@ -1180,14 +1214,81 @@ override this — so the rule only decides what "no answer" means.
 declares its width the same way and in the same place, but as a *directory*
 (`img_176/`) rather than a name's stem, and it chooses the set from the height
 of an offscreen image it makes one pixel wider and sixteen rows taller than the
-Canvas: over 212 rows takes the 240 set, which is the set this SKU does not
-ship. Reading the directory would answer 176 and this project's handset for 176
-is 220 rows tall, which lands on the wrong side of that test — so the rule would
-change nothing and the archive would still draw an empty screen. What runs it is
-`-screen 176x196`, and what would settle it properly is knowing whether a
-Canvas here should be shorter than the display: this title never asks for full
-screen, and a handset of the era kept a row of its own above one. That is a
-change to every Canvas in the corpus, so it waits for a second title.
+Canvas:
+
+```
+buffer = createImage(Canvas.getWidth() + 1, Canvas.getHeight() + 16)
+buffer.getHeight() > 250  ->  /img_240/
+                    > 212  ->  /img_240/
+                    > 166  ->  /img_176/
+                     else  ->  /img_120/
+```
+
+so the set it ships is the one it picks only when its Canvas reports between 151
+and 196 rows. Reading the directory would answer 176 and this project's handset
+for 176 is 220 rows tall, which lands on the wrong side of that ladder — so the
+rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
+both draw an empty screen and `-screen 176x196` draws the title, which is why
+the flag is the answer here and the rule is not.
+
+### What a Canvas is here, and why the flag stays anyway
+
+The question underneath is whether a Canvas on this vendor is the whole display
+or the part of it a game may draw in. It is not a question about this one
+archive: **nothing in the corpus asks for full screen** — `setFullScreenMode` is
+called by none of the ninety-one — so whatever a Canvas reports is what all
+sixty-one titles that read it lay out against.
+
+This vendor publishes both numbers. `com.xce.lcdui.XDisplay` carries `width`,
+`height` and `height2`, and the corpus is emphatic about which one it draws in:
+of the archives that name `XDisplay` at all, **forty-nine name `height2` and five
+name `height`**. `height2` is what they size their back buffer with, what they
+pass to `repaint`, and what they clear with `fillRect`.
+
+**Two archives then say what `height2` is, and they say it as a constraint
+rather than an opinion.** Each of them clears its whole screen in two different
+places, once through each pair:
+
+```java
+g.setColor(0xffffff);
+g.fillRect(0, 0, XDisplay.width, XDisplay.height2);   // one place
+...
+g.setColor(0xff000000);
+g.fillRect(0, 0, getWidth(), getHeight());            // another, on the Canvas
+```
+
+Both are `(0, 0, <full width>, <full height>)`. If the two pairs differed, one
+clear would leave a strip the other did not, visible every time the title
+switched between them — so on the handsets these two shipped for,
+`XDisplay.width` is `getWidth()` and **`XDisplay.height2` is `getHeight()`**.
+
+That settles the reading of the third archive, the one that computes
+`height2 - height` and adds it to `getHeight()`. It cannot be a correction from
+the display to the drawable, because `getHeight()` is already the drawable; it
+is the idiom that is a no-op exactly when the two `XDisplay` heights are equal,
+and on a handset where they are not it centres a dialogue half a bar high. An
+idiom that is harmless when it is wrong is weak evidence beside two clears that
+have to agree.
+
+**So a Canvas here is the drawable area, and this platform still gives it the
+whole framebuffer** — which is a handset that reserved no rows, and which is
+self-consistent: `height`, `height2` and `getHeight()` are one number and every
+title agrees with every other. Modelling a handset that *did* reserve rows would
+mean shrinking the game area of all seventy-nine titles to make room for chrome
+this project does not draw, to fix the one archive that wants a 196-row drawable.
+That is worse for seventy-eight to help one, so the archive keeps its flag: with
+no `-screen` it draws nothing, and with `-screen 176x196` it draws — which is a
+title packaged for a phone smaller than the default, the same class of archive
+the rule above already exists for.
+
+**The reference implementation reaches the same arrangement**, which is worth
+knowing before anyone reopens this: it declares the same three `XDisplay` fields
+and fills them with 240, 320 and 320, its `Displayable.getHeight` forwards to the
+display's height with no full-screen distinction, drawing the chrome for a
+Displayable that is not full screen is an unimplemented note there, and it has no
+per-archive screen selection at all — one 240x320 window for everything. Two
+implementations landing on one number for all three is not proof; the two clears
+above are the reason.
 
 ## Ninety archives, and the pass that made room for eleven of them
 
@@ -1348,15 +1449,69 @@ A half a title leaves out is now its default, which is the reading the zero
 anchor already had. Naming *two* bits from one group is still refused, because
 that is a title asking for two places at once rather than leaving one unsaid.
 
-All three reach their title screen; one reaches its main menu. What the three
-still want from this surface, and what is answered how, is in the package
-comment of `internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
+All three reach their title screen, and once they are given keys they can read
+— the section after next — all three reach play. What the three still want from
+this surface, and what is answered how, is in the package comment of
+`internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
 things there are declared and not built, for the reasons this project applies
 everywhere: `org.kwis.msf.io` has no radio behind it (`network.md`), and
 `Graphics.setAlpha` keeps its blend factor and reports it back without drawing
 with it — honouring it means blending every primitive rather than only the
 images that carry their own alpha, and all three titles set it once, to the
 opaque value.
+
+### The key codes a Jlet reads are not the ones a MIDlet reads
+
+All three reached a title screen and none of them answered a key. A Card is
+handed its keys through `keyNotify(type, key)`, which this layer bridges from
+MIDP's three callbacks, and the bridge forwarded the code unchanged — this
+vendor's MIDP device codes, 141 and 142 and 145 and 146 and 148 for the pad and
+fire. No Jlet compares against those.
+
+**The specification declines to say what it should be.** `EventQueue` says only
+that an ITU key arrives as its ASCII value, that a control key arrives negative,
+that the numbers differ from handset to handset, and that a title should
+therefore ask `getGameAction` rather than compare. So the numbers had to come
+from the titles.
+
+**Two of the three answer, and they agree.** One keeps a key map as a resource,
+one table per handset, and its SKT table is a list of byte pairs: the ASCII
+digits, `*` and `#`, and then `1`, `2`, `5`, `6`, `8`, `90`, `92` and `99` —
+which are `EventQueue.UP`, `LEFT`, `RIGHT`, `DOWN`, `FIRE`, `SOFT1`, `SOFT3` and
+`CLEAR`. The other switches on the key it was handed over the same set, and
+calls `getGameAction` only in the branch where the code it got was negative,
+which on this handset it never is. This vendor answered the specification's
+"different on every handset" with the game keys themselves.
+
+So a Jlet session translates once, at the point a Host key enters it
+(`wipiKeyOfDevice`), and `Display.getGameAction`, `getKeyCode` and `getKeyName`
+speak the same vocabulary — a pad code *is* its game action, so naming one
+answers itself, and the ITU keys a handset lets stand in for the pad answer the
+key they stand in for. A MIDlet in the same container is untouched and still
+reads this platform's MIDP codes.
+
+**Two more things a Jlet's keys are not.** Its soft keys are keys: MIDP diverts
+SOFT1 and SOFT2 to a Displayable's commands because a MIDP Canvas has no other
+way to reach them, and a WIPI Card reads them itself — one of the three switches
+on 90 beside the pad. And a Jlet's `keyNotify` returns whether to pass the event
+down, which nothing here has a lower Card to pass it to.
+
+**All three reach play.** One is an isometric strategy game with its map, its
+resource counters and its build cursor; one is a vertical shooter in its first
+mission; one is a farming game in its opening scene, having gone through its
+main menu and its save-slot screen. Sound and saving are still untouched by any
+of them within the ticks these runs reach.
+
+**One of them is drawn for a smaller handset than it is given.** The shooter
+lays its playfield out from the screen it is told about — the HUD sits on the
+bottom edge and the play area is centred — but its scrolling background is
+tiled at the size it was authored for, so on the 240x320 default the terrain
+covers the upper two thirds and the rest of the field is black. At `-screen
+176x220` it fills. The archive declares no width: its resource names end in
+`_0` and `_1`, which are frames and not widths, so the rule in "The handset a
+title was packaged for is in its resource names" correctly declines to read
+them. It is playable either way, which is what separates it from the archive
+that rule was written for.
 
 ### The class library, again
 

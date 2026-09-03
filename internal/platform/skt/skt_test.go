@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -448,4 +449,183 @@ func TestOpenReadsAnArchiveInsideAFolder(t *testing.T) {
 	if owner := skt.SaveOwner(archive.Descriptor); owner != "0056194389" {
 		t.Fatalf("SaveOwner() = %q, want the program number", owner)
 	}
+}
+
+// The audio timeline is part of the runtime, not part of having a speaker. A
+// run with no Host sink used to have no timeline at all, so nothing decoded and
+// no clip had a length — and a title whose music thread waits on `play` spun
+// instead, at a rate no frame count would show. Opening a clip has to decode
+// and answer a length whether or not anyone is listening, and `play` from the
+// Host's own pass has to come straight back.
+func TestAudioClipsDecodeAndPlayWithoutASpeaker(t *testing.T) {
+	runtime := startFixture(t, nil)
+
+	format := jvm.ReferenceValue(runtime.VM.NewString("audio/midi"))
+	result, err := runtime.VM.InvokeStatic("com/skt/m/AudioSystem", "getAudioClip",
+		"(Ljava/lang/String;)Lcom/skt/m/AudioClip;", format)
+	if err != nil {
+		t.Fatalf("getAudioClip() error = %v", err)
+	}
+	clip, err := result.Reference()
+	if err != nil || clip == nil {
+		t.Fatalf("getAudioClip() = %v, %v; want a clip", clip, err)
+	}
+
+	sound := oneNoteSMAF()
+	if _, err := runtime.VM.InvokeVirtual(clip, "open", "([BII)V",
+		jvm.ReferenceValue(jvm.NewByteArray(sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))); err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+
+	// Decoding really happens with no sink attached, which is what makes the
+	// length — and so the wait — real: data that is not a sound is refused
+	// here rather than accepted and silently dropped.
+	noise := []byte("this is not a sound")
+	if _, err := runtime.VM.InvokeVirtual(clip, "open", "([BII)V",
+		jvm.ReferenceValue(jvm.NewByteArray(noise)), jvm.IntValue(0), jvm.IntValue(int32(len(noise)))); err == nil {
+		t.Fatal("open() accepted data that is not a sound, so nothing decoded")
+	}
+
+	// This is the Host's pass, so play returns rather than waiting the clip
+	// out; a wait here would stop the screen and the timers with it.
+	started := time.Now()
+	if _, err := runtime.VM.InvokeVirtual(clip, "play", "()V"); err != nil {
+		t.Fatalf("play() error = %v", err)
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("play() on the Host pass took %v, want it to return at once", took)
+	}
+	if _, err := runtime.VM.InvokeVirtual(clip, "stop", "()V"); err != nil {
+		t.Fatalf("stop() error = %v", err)
+	}
+}
+
+// A sound has to reach the sink. The instant a clip starts from and the reading
+// the timeline is advanced to are two answers that have to be the same clock,
+// and they were not: the start was an absolute wall-clock stamp, decades ahead
+// of the elapsed time a Host advances with, so no event was ever due and this
+// platform never emitted a note through a sink on either Host.
+func TestASoundStartedReachesTheSink(t *testing.T) {
+	runtime := startFixture(t, nil)
+	sink := backend.NewRecordingSink(nil)
+	runtime.AttachAudioSink(sink)
+
+	format := jvm.ReferenceValue(runtime.VM.NewString("audio/midi"))
+	result, err := runtime.VM.InvokeStatic("com/skt/m/AudioSystem", "getAudioClip",
+		"(Ljava/lang/String;)Lcom/skt/m/AudioClip;", format)
+	if err != nil {
+		t.Fatalf("getAudioClip() error = %v", err)
+	}
+	clip, err := result.Reference()
+	if err != nil || clip == nil {
+		t.Fatalf("getAudioClip() = %v, %v; want a clip", clip, err)
+	}
+	sound := oneNoteSMAF()
+	if _, err := runtime.VM.InvokeVirtual(clip, "open", "([BII)V",
+		jvm.ReferenceValue(jvm.NewByteArray(sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))); err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+	if _, err := runtime.VM.InvokeVirtual(clip, "play", "()V"); err != nil {
+		t.Fatalf("play() error = %v", err)
+	}
+
+	// The note is a few milliseconds in; a Host pass or two is enough for it
+	// to fall due, and the runtime's own clock is what decides.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runtime.AdvanceAudio()
+		if messages, _ := sink.Summary(); messages > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a clip that was opened and played reached the sink with nothing")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A loop has no length of its own to end it, so a thread that starts one is
+// parked until the music is stopped — which is how a local title's audio
+// thread is written: open, loop, close, one after the other, with a different
+// thread calling close to stop the music. The close after the loop is the
+// cleanup, not the stop.
+//
+// The end of the program is also the end of the music. A thread left waiting on
+// a loop nothing ever stops would outlive the program it belongs to.
+func TestALoopWaitsUntilTheProgramIsOver(t *testing.T) {
+	runtime := startFixture(t, nil)
+
+	format := jvm.ReferenceValue(runtime.VM.NewString("audio/midi"))
+	result, err := runtime.VM.InvokeStatic("com/skt/m/AudioSystem", "getAudioClip",
+		"(Ljava/lang/String;)Lcom/skt/m/AudioClip;", format)
+	if err != nil {
+		t.Fatalf("getAudioClip() error = %v", err)
+	}
+	clip, err := result.Reference()
+	if err != nil || clip == nil {
+		t.Fatalf("getAudioClip() = %v, %v; want a clip", clip, err)
+	}
+	sound := oneNoteSMAF()
+	if _, err := runtime.VM.InvokeVirtual(clip, "open", "([BII)V",
+		jvm.ReferenceValue(jvm.NewByteArray(sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))); err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+
+	// On the Host's own pass a loop returns rather than parking, or the
+	// screen would stop with it.
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.VM.InvokeVirtual(clip, "loop", "()V")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("loop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop() on the Host pass never came back")
+	}
+
+	// And the sound it started is sounding: a loop that closed itself is what
+	// silenced a local title.
+	sink := backend.NewRecordingSink(nil)
+	runtime.AttachAudioSink(sink)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runtime.AdvanceAudio()
+		if messages, _ := sink.Summary(); messages > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a looping clip reached the sink with nothing")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A minimal SMAF file, the shape internal/backend's own tests use: one note on
+// a four-millisecond timebase, which is enough for the decoder to answer a
+// length.
+func oneNoteSMAF() []byte {
+	sequence := []byte{
+		0x05, 0x90, 60, 100, 0x05,
+		0x00, 0xff, 0x2f, 0x00,
+	}
+	track := append([]byte{2, 0, 2, 2}, make([]byte, 16)...)
+	track = append(track, smafChunk("Mtsq", sequence)...)
+	body := smafChunk("MTR\x00", track)
+	file := make([]byte, 8)
+	copy(file, "MMMD")
+	length := uint32(len(body) + 2)
+	file[4], file[5], file[6], file[7] = byte(length>>24), byte(length>>16), byte(length>>8), byte(length)
+	return append(append(file, body...), 0, 0)
+}
+
+func smafChunk(tag string, payload []byte) []byte {
+	header := make([]byte, 8)
+	copy(header, tag)
+	length := uint32(len(payload))
+	header[4], header[5], header[6], header[7] = byte(length>>24), byte(length>>16), byte(length>>8), byte(length)
+	return append(header, payload...)
 }

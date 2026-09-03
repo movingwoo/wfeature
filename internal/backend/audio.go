@@ -78,6 +78,20 @@ func NewAudio(sink AudioSink) *Audio {
 	return &Audio{sink: sink, sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, volume: maxAudioVolume}
 }
 
+// SetSink swaps the Host output a timeline plays through, keeping everything
+// already loaded and everything already sounding. A Host that attaches its
+// speaker after the program has started — which is when a session learns it has
+// one — would otherwise have to replace the timeline, and with it the clips a
+// title loaded while starting up.
+func (audio *Audio) SetSink(sink AudioSink) {
+	if audio == nil {
+		return
+	}
+	audio.mutex.Lock()
+	defer audio.mutex.Unlock()
+	audio.sink = sink
+}
+
 // maxAudioVolume is the loudest a WIPI or MIDP volume goes; zero is silent.
 const maxAudioVolume = 100
 

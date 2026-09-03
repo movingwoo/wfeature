@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
 )
@@ -98,6 +99,43 @@ type Invocation struct {
 // VM answers the runtime the call is running on, for the services that do not
 // depend on the current execution.
 func (call *Invocation) VM() *VM { return call.vm }
+
+// WaitAsGuestThread waits out a duration on the guest thread this call is
+// running on, and reports whether it waited. It is for a platform call the
+// handset answered by not returning until something finished — a sound played
+// to its end, say — where the game's own loop is written around the wait.
+//
+// **A call that is not on a guest thread does not wait and reports false.**
+// The Host's pass through a paint, a key or a lifecycle callback is not a
+// thread the game owns: blocking it stops the screen, the input and the timers
+// together, which is not what the handset's wait did. A caller that gets false
+// has to answer without waiting.
+//
+// The wait ends early on `until`, which a caller closes when what it is waiting
+// for is over, and on an interrupt — either way the wait is reported as having
+// happened, because the thing being waited for is finished as far as the caller
+// is concerned.
+func (call *Invocation) WaitAsGuestThread(duration time.Duration, until <-chan struct{}) bool {
+	if call == nil || call.state == nil || call.state.thread == nil {
+		return false
+	}
+	state := call.vm.threadState(call.state.thread)
+	// A non-positive duration is a wait with no deadline of its own: it ends
+	// when `until` says the thing is over, or when the thread is interrupted.
+	// A caller with nothing to end it must not ask for one.
+	var deadline <-chan time.Time
+	if duration > 0 {
+		timer := time.NewTimer(duration)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+	select {
+	case <-deadline:
+	case <-until:
+	case <-state.wake:
+	}
+	return true
+}
 
 // InvokeVirtual dispatches on the receiver's own class, as invokevirtual does.
 func (call *Invocation) InvokeVirtual(receiver *Object, name, descriptor string, arguments ...Value) (Value, error) {

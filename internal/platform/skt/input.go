@@ -139,6 +139,11 @@ func (runtime *Runtime) deliverCurrentCanvasKey(eventType KeyEventType, callback
 	if !runtime.recordGameCanvasKey(current, eventType, keyCode) {
 		return nil
 	}
+	// A Jlet's Card is handed the WIPI key code rather than this vendor's MIDP
+	// one, and its soft keys are keys like any other — see wipiKeyOfDevice.
+	if runtime.jlet {
+		return runtime.deliverCardKey(current, callback, wipiKeyOfDevice(keyCode))
+	}
 	// Soft keys are not Canvas keys: MIDP puts commands on every Displayable,
 	// and a Canvas that added one has no other way to reach it.
 	if keyCode == KeyCodeSoft1 || keyCode == KeyCodeSoft2 {
@@ -158,6 +163,10 @@ func (runtime *Runtime) deliverCurrentCanvasKey(eventType KeyEventType, callback
 	if runtime.logger != nil {
 		runtime.logger.Debug("MIDP Canvas key event", "type", eventType, "code", keyCode, "class", current.ClassName)
 	}
+	return runtime.deliverCardKey(current, callback, keyCode)
+}
+
+func (runtime *Runtime) deliverCardKey(current *jvm.Object, callback string, keyCode int32) error {
 	if _, err := runtime.VM.InvokeVirtual(current, callback, "(I)V", jvm.IntValue(keyCode)); err != nil {
 		if absorbed := runtime.absorbUncaughtCallback(fmt.Sprintf("%s on Canvas %s", callback, current.ClassName), err); absorbed != nil {
 			return fmt.Errorf("deliver %s(%d) to Canvas %s: %w", callback, keyCode, current.ClassName, absorbed)

@@ -312,33 +312,94 @@ func (runtime *Runtime) setCardFields(arguments []jvm.Value, first, second strin
 	return jvm.VoidValue(), nil
 }
 
+// The key codes a Jlet reads
+//
+// WIPI leaves the numbers to the handset — the specification says only that a
+// control key arrives negative and that a title should ask `getGameAction`
+// what it was — and this vendor answered with the game-key constants
+// themselves: a Card is handed 1, 2, 5, 6 and 8 for the pad and fire, 90, 91
+// and 92 for the soft keys, 99 for CLEAR, and the ASCII value for an ITU key.
+//
+// **Two local titles say so independently.** One keeps a per-handset key map
+// as a resource, and its SKT table is keyed on exactly those numbers beside
+// the ASCII digits; another switches on the key it is given over the same set
+// and only calls `getGameAction` when the code it got was negative, which on
+// this handset it never is. A MIDlet in the same container still reads this
+// platform's own MIDP codes, so only a Jlet session translates.
+const (
+	wipiKeyUp    int32 = 1
+	wipiKeyLeft  int32 = 2
+	wipiKeyRight int32 = 5
+	wipiKeyDown  int32 = 6
+	wipiKeyFire  int32 = 8
+	wipiKeyGameA int32 = 9
+	wipiKeyGameB int32 = 10
+	wipiKeyGameC int32 = 11
+	wipiKeyGameD int32 = 12
+	wipiKeySoft1 int32 = 90
+	wipiKeySoft2 int32 = 91
+	wipiKeyClear int32 = 99
+	// The send key is one of the few the specification does fix, and it fixes
+	// it negative.
+	wipiKeySend int32 = -10
+)
+
+// wipiKeyOfDevice is that translation, from the code a Host sends to the code
+// a Card is handed. An ITU key is its ASCII value on both sides and passes
+// through.
+func wipiKeyOfDevice(code int32) int32 {
+	switch code {
+	case KeyCodeUp:
+		return wipiKeyUp
+	case KeyCodeLeft:
+		return wipiKeyLeft
+	case KeyCodeRight:
+		return wipiKeyRight
+	case KeyCodeDown:
+		return wipiKeyDown
+	case KeyCodeFire:
+		return wipiKeyFire
+	case KeyCodeSoft1:
+		return wipiKeySoft1
+	case KeyCodeSoft2:
+		return wipiKeySoft2
+	case KeyCodeClear:
+		return wipiKeyClear
+	case KeyCodeCall:
+		return wipiKeySend
+	}
+	return code
+}
+
 // wipiGameAction, wipiKeyCode and wipiKeyName are the statics WIPI puts on
-// Display where MIDP puts them on Canvas. The table is the platform's one
-// table: a Host sends the same device codes whichever vocabulary reads them.
+// Display where MIDP puts them on Canvas. They speak the vocabulary above: the
+// pad and fire codes *are* the game actions, so naming one of them answers
+// itself, and the ITU keys a handset lets stand in for the pad answer the key
+// they stand in for.
 func wipiGameAction(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	code, err := intArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	switch code {
-	case KeyCodeUp, '2':
-		return jvm.IntValue(1), nil
-	case KeyCodeLeft, '4':
-		return jvm.IntValue(2), nil
-	case KeyCodeRight, '6':
-		return jvm.IntValue(5), nil
-	case KeyCodeDown, '8':
-		return jvm.IntValue(6), nil
-	case KeyCodeFire, '5':
-		return jvm.IntValue(8), nil
+	case wipiKeyUp, '2':
+		return jvm.IntValue(wipiKeyUp), nil
+	case wipiKeyLeft, '4':
+		return jvm.IntValue(wipiKeyLeft), nil
+	case wipiKeyRight, '6':
+		return jvm.IntValue(wipiKeyRight), nil
+	case wipiKeyDown, '8':
+		return jvm.IntValue(wipiKeyDown), nil
+	case wipiKeyFire, '5':
+		return jvm.IntValue(wipiKeyFire), nil
 	case '1':
-		return jvm.IntValue(9), nil
+		return jvm.IntValue(wipiKeyGameA), nil
 	case '3':
-		return jvm.IntValue(10), nil
+		return jvm.IntValue(wipiKeyGameB), nil
 	case '7':
-		return jvm.IntValue(11), nil
+		return jvm.IntValue(wipiKeyGameC), nil
 	case '9':
-		return jvm.IntValue(12), nil
+		return jvm.IntValue(wipiKeyGameD), nil
 	}
 	return jvm.IntValue(0), nil
 }
@@ -349,8 +410,10 @@ func wipiKeyCode(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		return jvm.VoidValue(), err
 	}
 	codes := map[int32]int32{
-		1: KeyCodeUp, 2: KeyCodeLeft, 5: KeyCodeRight, 6: KeyCodeDown,
-		8: KeyCodeFire, 9: '1', 10: '3', 11: '7', 12: '9',
+		wipiKeyUp: wipiKeyUp, wipiKeyLeft: wipiKeyLeft,
+		wipiKeyRight: wipiKeyRight, wipiKeyDown: wipiKeyDown,
+		wipiKeyFire: wipiKeyFire, wipiKeyGameA: '1', wipiKeyGameB: '3',
+		wipiKeyGameC: '7', wipiKeyGameD: '9',
 	}
 	code, ok := codes[action]
 	if !ok {
@@ -365,8 +428,10 @@ func wipiKeyName(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		return jvm.VoidValue(), err
 	}
 	names := map[int32]string{
-		KeyCodeUp: "UP", KeyCodeLeft: "LEFT", KeyCodeRight: "RIGHT",
-		KeyCodeDown: "DOWN", KeyCodeFire: "FIRE", '*': "*", '#': "#",
+		wipiKeyUp: "UP", wipiKeyLeft: "LEFT", wipiKeyRight: "RIGHT",
+		wipiKeyDown: "DOWN", wipiKeyFire: "FIRE",
+		wipiKeySoft1: "SOFT1", wipiKeySoft2: "SOFT2", wipiKeyClear: "CLEAR",
+		'*': "*", '#': "#",
 		'0': "0", '1': "1", '2': "2", '3': "3", '4': "4",
 		'5': "5", '6': "6", '7': "7", '8': "8", '9': "9",
 	}

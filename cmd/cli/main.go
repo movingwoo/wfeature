@@ -151,6 +151,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	routePath := ""
 	keyHold := 1
 	diagPath := ""
+	audioPrefix := ""
 	cheatConsole := false
 	ticksChosen := false
 	// The screen is the handset's, and on this vendor it is not the same
@@ -223,6 +224,13 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			}
 			index++
 			diagPath = args[index]
+		case "-audio":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-audio expects an output path prefix")
+				return 2
+			}
+			index++
+			audioPrefix = args[index]
 		case "-screen":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-screen expects <width>x<height>")
@@ -311,6 +319,15 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	logger.Debug("SKT startup dispatch completed", "main_class", archive.Descriptor.MainClass, "state", runtime.State())
+	// The recorder is the CLI's speaker, the same one the other two paths
+	// take. It is attached after Start because that is when the runtime
+	// exists; nothing is lost, because the timeline emits from the first
+	// AdvanceAudio and that is a tick away.
+	var audioSink *backend.RecordingSink
+	if audioPrefix != "" {
+		audioSink = backend.NewRecordingSink(runtime.GuestElapsed)
+		runtime.AttachAudioSink(audioSink)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -333,7 +350,6 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			ticks = 1 << 30
 		}
 	}
-	startedAt := time.Now()
 	// A scripted key is released -hold ticks after its press for the reason it
 	// is on the WIPI paths: a Canvas that samples the keypad once a frame never
 	// sees a press and a release delivered together.
@@ -391,7 +407,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
-		runtime.AdvanceAudio(time.Since(startedAt))
+		runtime.AdvanceAudio()
 		if err := runtime.RunPending(); err != nil {
 			stopped = true
 			return false, err
@@ -478,11 +494,27 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		RouteCompleted bool   `json:"route_completed,omitempty"`
 		RouteStoppedAt int    `json:"route_stopped_at,omitempty"`
 		RouteReason    string `json:"route_reason,omitempty"`
+		// What the run played, when -audio asked for it. The counts are here
+		// because "the file was written" and "there was a sound in it" are
+		// different answers and a sweep reads the summary.
+		AudioMIDIMessages int    `json:"audio_midi_messages,omitempty"`
+		AudioWaveSamples  int    `json:"audio_wave_samples,omitempty"`
+		Audio             string `json:"audio,omitempty"`
 	}{RuntimeSummary: runtime.Summary(), Ticks: ran, Lit: frameLit(frame.RGBA)}
 	if script != nil {
 		summary.RouteCompleted = routeResult.Completed
 		summary.RouteStoppedAt = routeResult.StoppedAt
 		summary.RouteReason = routeResult.Reason
+	}
+	if audioSink != nil {
+		messages, samples := audioSink.Summary()
+		summary.AudioMIDIMessages, summary.AudioWaveSamples = messages, samples
+		written, err := audioSink.Write(audioPrefix)
+		if err != nil {
+			fmt.Fprintf(stderr, "write audio: %v\n", err)
+			return 1
+		}
+		summary.Audio = strings.Join(written, " ")
 	}
 
 	if diagPath != "" {

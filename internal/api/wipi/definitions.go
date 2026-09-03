@@ -221,7 +221,11 @@ func cardDefinition() jvm.ClassDefinition {
 			{Name: "paint", Descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", Access: jvm.AccessProtected | jvm.AccessAbstract},
 			// The other bridge. MIDP delivers three separate callbacks and
 			// WIPI delivers one with the type as its first argument, so each
-			// of the three names the type the specification gives it.
+			// of the three names the type the specification gives it. The key
+			// code that arrives here is already the WIPI one — the platform
+			// translates it on the way in, because which numbers a handset
+			// sends is the platform's answer and not this layer's; see
+			// `wipiKeyOfDevice` in `internal/platform/skt`.
 			{Name: "keyPressed", Descriptor: "(I)V", Access: protectedMethod, Body: cardKeyBridge(1)},
 			{Name: "keyReleased", Descriptor: "(I)V", Access: protectedMethod, Body: cardKeyBridge(2)},
 			{Name: "keyRepeated", Descriptor: "(I)V", Access: protectedMethod, Body: cardKeyBridge(3)},

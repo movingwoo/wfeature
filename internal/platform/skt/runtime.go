@@ -131,6 +131,11 @@ type Runtime struct {
 
 	audioMu sync.Mutex
 	audio   *backend.Audio
+	// audioWaits are the channels a sounding clip's waiters are parked on.
+	// A guest thread blocked in play or loop is waiting for the sound to be
+	// over, and the session ending is one way for it to be over — otherwise
+	// the thread outlives the program it belongs to. See audioClipPlay.
+	audioWaits map[chan struct{}]struct{}
 
 	saveMu    sync.RWMutex
 	saveStore backend.SaveStore
@@ -1043,6 +1048,9 @@ func (runtime *Runtime) transition(event string, next LifecycleState) {
 	runtime.stateMu.Unlock()
 	if runtime.logger != nil {
 		runtime.logger.Debug("MIDlet lifecycle transition", "event", event, "from", previous, "to", next)
+	}
+	if next == StateDestroyed || next == StateError {
+		runtime.endAudioWaits()
 	}
 }
 

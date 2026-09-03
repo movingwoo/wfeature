@@ -507,7 +507,7 @@ func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, err
 		// the Host for the same reason, and on the guest's clock rather than
 		// the wall so that a game running fast hears its music at the pace it
 		// is playing at.
-		s.runtime.AdvanceAudio(s.runtime.GuestElapsed())
+		s.runtime.AdvanceAudio()
 		err := s.runtime.RunPending()
 		// The pace is what the Host comes back at, so it carries the speed the
 		// same way every other platform's wait does.

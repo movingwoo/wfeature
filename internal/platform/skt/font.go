@@ -76,17 +76,29 @@ func (runtime *Runtime) fontObject(face, style, size int32) *jvm.Object {
 	return font
 }
 
+// newFontData reads a font's metrics off the face it draws with, scaled, the
+// way the other two WIPI runtimes here do rather than fixing them by hand.
+//
+// Hand-fixed numbers made a line box that was exactly its own ink. The face is
+// eleven rows with a syllable's nine sitting one row below the top and one
+// above the bottom, and calling that line ten took the bottom row away: a
+// title that steps its menu by `Font.getHeight` then put the next line's ink
+// against this one's, and one that draws each entry twice for a shadow ran
+// them together outright. Reporting the face's own height is what puts the
+// leading back.
+//
+// SMALL and MEDIUM report the same metrics because they draw the same glyphs —
+// there is one Korean face here, and the two sizes differed only in what they
+// claimed. LARGE is the one that draws differently, at twice the scale, and
+// its metrics are the face's doubled with it.
 func newFontData(key fontKey) *fontData {
-	font := &fontData{fontKey: key, scale: 1, height: 10, baseline: 8}
-	switch key.size {
-	case fontSmall:
-		font.height = 8
-		font.baseline = 7
-	case fontLarge:
+	font := &fontData{fontKey: key, scale: 1}
+	if key.size == fontLarge {
 		font.scale = 2
-		font.height = 16
-		font.baseline = 14
 	}
+	face := pixelFace()
+	font.height = face.Height() * font.scale
+	font.baseline = face.Ascent * font.scale
 	return font
 }
 
