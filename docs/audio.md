@@ -235,6 +235,30 @@ exactly like one that works.** What was missing here was not a decoder, a
 format or an API — all of that was built and tested — but the one number that
 decides whether any of it is ever due.
 
+### What is left silent, and why
+
+With the two waits and the clock right, the corpus was asked the question the
+other way round: which archives ask for a sound and never make one. Fifteen do,
+and none of them is a defect.
+
+- **Eleven ask for a clip and never open one** inside four hundred ticks. They
+  are on a title screen; the sound comes later.
+- **Two open clips and never play them.** One opens twenty-four in a row, which
+  is a title loading its sound set before it needs it.
+- **Two play once and end the program.** Both are licence-refusal titles that
+  check the handset's subscriber number, draw the refusal and exit at the first
+  tick, and the run stops with them.
+
+**The decoder is not among the gaps.** Every SMAF resource in every local
+archive decodes, carries a length and reaches a sink with something in it —
+1,693 sounds across the ninety-archive set, none refused, none empty, none
+decoded to silence. `testing.md` has the probe that keeps it that way.
+
+**Looping repeats.** A title whose music thread parks in `loop` records
+messages in proportion to how long the run is — 351, 1,047 and 2,223 at four
+hundred, twelve hundred and twenty-four hundred ticks — and the piece's own
+opening phrase recurs at the interval its length predicts.
+
 ### The timeline is not the speaker
 
 This was invisible for as long as it was, because **the SKT runtime had no

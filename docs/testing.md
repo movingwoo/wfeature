@@ -939,6 +939,22 @@ pass: they check a licence against the handset's subscriber number, draw the
 refusal and call `System.exit`, which is a title behaving correctly on a
 handset that is not the one it was bought for (`docs/skvm.md`).
 
+**A second probe under the same variable asks the decoder the same question of
+every sound**, directly rather than through a run:
+
+```sh
+WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchiveSoundsDecode -v ./internal/platform/skt
+```
+
+Every SMAF resource in every archive under `var/games/skt` has to decode, carry
+a length, and reach a sink with something in it — 432 sounds, 243 with MIDI and
+205 with sampled audio, all passing. It is separate from the boot probe because
+**a sound that will not decode is invisible from a frame**: the title runs, the
+screen is right, and the only difference is silence, which is exactly how this
+platform went its whole life without emitting a note ([`audio.md`](audio.md)).
+The same sweep over the ninety-archive diagnostic set reads 1,693 sounds with
+the same result, so a refusal here is a regression rather than a gap.
+
 LGT has one opt-in probe, and it is the only test in that package that runs a
 real module:
 

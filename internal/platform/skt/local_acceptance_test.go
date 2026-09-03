@@ -104,3 +104,83 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 		t.Skip("no local SKT archives")
 	}
 }
+
+// TestLocalSKTArchiveSoundsDecode is the decoder's net against real data, and
+// it is opt-in for the same reason as the probe above.
+//
+// A sound that will not decode is invisible from a frame: the title runs, the
+// screen is right, and the only difference is silence — which is how this
+// platform went its whole life without emitting a note. So the question is
+// asked of every sound in every archive directly rather than through a run:
+// does it decode, does it carry anything, and does what it carries reach a
+// sink. Every one of the local corpus's sounds passes all three today, so a
+// refusal here is a regression rather than a gap.
+//
+//	WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchiveSoundsDecode -v ./internal/platform/skt
+func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
+	if os.Getenv("WFEATURE_SKT_ACCEPTANCE") != "1" {
+		t.Skip("set WFEATURE_SKT_ACCEPTANCE=1 to read ignored local SKT archives")
+	}
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate SKT acceptance test source")
+	}
+	directory := filepath.Join(filepath.Dir(source), "..", "..", "..", "var", "games", "skt")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read local SKT game directory: %v", err)
+	}
+	sounds, withMIDI, withWave := 0, 0, 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatalf("read archive: %v", err)
+		}
+		archive, err := skt.Open(data)
+		if err != nil {
+			continue
+		}
+		for name, body := range archive.Entries {
+			if len(body) < 4 || string(body[:4]) != "MMMD" {
+				continue
+			}
+			sounds++
+			sink := backend.NewRecordingSink(nil)
+			audio := backend.NewAudio(sink)
+			handle, err := audio.Load(body)
+			if err != nil {
+				t.Errorf("%s %s: %v", entry.Name(), name, err)
+				continue
+			}
+			length, known := audio.Length(handle)
+			if !known || length <= 0 {
+				t.Errorf("%s %s: decoded to nothing", entry.Name(), name)
+				continue
+			}
+			if err := audio.Play(handle, 0, false); err != nil {
+				t.Errorf("%s %s: play: %v", entry.Name(), name, err)
+				continue
+			}
+			audio.Advance(length + time.Second)
+			messages, samples := sink.Summary()
+			switch {
+			case messages > 0 && samples > 0:
+				withMIDI++
+				withWave++
+			case messages > 0:
+				withMIDI++
+			case samples > 0:
+				withWave++
+			default:
+				t.Errorf("%s %s: %v of sound reached the sink as nothing", entry.Name(), name, length)
+			}
+		}
+	}
+	if sounds == 0 {
+		t.Skip("no local SKT archive carries a sound")
+	}
+	t.Logf("%d sounds decoded: %d carry MIDI, %d carry sampled audio", sounds, withMIDI, withWave)
+}
