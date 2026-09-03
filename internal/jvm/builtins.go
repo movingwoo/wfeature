@@ -247,8 +247,22 @@ func (vm *VM) registerThreadBuiltins() {
 		}
 		return IntValue(count), nil
 	})
+	// yield is a hint, and on this runtime it is one the scheduler underneath
+	// does not need. It used to be `runtime.Gosched()`, which is a full
+	// scheduler round trip and, on one host, a futex wake per call.
+	//
+	// **The titles that call it do not call it once.** One local SKT archive
+	// has thirty-eight `Thread.yield()` call sites, which is the idiom of the
+	// handsets these were written for: their scheduler was cooperative, so a
+	// thread that did not yield did not let anything else run, and a game
+	// sprinkled the call through everything it did. Here a guest thread is a
+	// goroutine and Go preempts it whether it asks or not, so every one of
+	// those calls bought nothing and cost a wake — the profile of one such
+	// title spent 63% of its CPU in `runtime.wakep` under this line.
+	//
+	// The platform hook stays: a runtime that really does need to hand a token
+	// over installs `Options.ThreadYield` and gets it. Nothing here does.
 	vm.contextBuiltin(ThreadClass, "yield", "()V", func(vm *VM, _ *execution, _ []Value) (Value, error) {
-		runtime.Gosched()
 		return VoidValue(), vm.threadYield()
 	})
 }

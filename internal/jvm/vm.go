@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -52,7 +53,15 @@ type Options struct {
 	MaxFrames      int
 	MaxArrayLength int
 	Logger         *slog.Logger
-	Clock          func() int64
+	// TraceInstructions writes one log line per bytecode instruction. It is a
+	// tool rather than a log level, and it is off unless a Host asks for it:
+	// the line is on the hottest path there is, and a title that runs for a
+	// second writes millions of them, which costs more than the emulation and
+	// moves every timing the trace was opened to look at. The other execution
+	// core has no equivalent at all — its trace is `runlgt -trace N`, bounded
+	// by a count — and this is the same bargain.
+	TraceInstructions bool
+	Clock             func() int64
 	// Speed is how fast the guest's time runs against the wall, asked each
 	// time a wait is taken so a Host can change it while a game is running.
 	// Nil is the speed the game was written for. It scales what a guest wait
@@ -131,7 +140,11 @@ type VM struct {
 
 	loader *Loader
 	config Options
-	aotMu  sync.RWMutex
+	// traceInstructions is the answer to "is anyone listening to the per
+	// instruction trace", settled once at construction because the logger and
+	// its level are settled once too. See Options.TraceInstructions.
+	traceInstructions bool
+	aotMu             sync.RWMutex
 
 	mu             sync.RWMutex
 	natives        map[methodKey]NativeMethod
@@ -211,8 +224,15 @@ func New(source ClassSource, options Options) *VM {
 		options.MaxArrayLength = 16 * 1024 * 1024
 	}
 	vm := &VM{
-		loader:          NewLoader(source),
-		config:          options,
+		loader: NewLoader(source),
+		config: options,
+		// Asked once here rather than at every instruction. slog evaluates a
+		// call's arguments before the handler decides whether to keep them, so
+		// an ungated Debug on the interpreter loop formats an opcode and boxes
+		// six attributes for every instruction a release build then throws
+		// away. That was most of what this runtime cost.
+		traceInstructions: options.TraceInstructions && options.Logger != nil &&
+			options.Logger.Enabled(context.Background(), slog.LevelDebug),
 		natives:         make(map[methodKey]NativeMethod),
 		contextNatives:  make(map[methodKey]contextNativeMethod),
 		builtinNatives:  make(map[methodKey]bool),
@@ -548,7 +568,28 @@ func (vm *VM) invokeInstance(
 	combined := make([]Value, 0, len(arguments)+1)
 	combined = append(combined, ReferenceValue(receiver))
 	combined = append(combined, arguments...)
+	return vm.invokeInstanceReceived(state, lookupClass, receiver, name, descriptor, combined)
+}
 
+// invokeInstanceReceived is invokeInstance with the receiver already in front
+// of the arguments, which is the shape every callee here wants: a bytecode
+// frame's locals start with `this`, and a native's argument list does too.
+//
+// It exists because building that slice was the single largest allocation in
+// this runtime — eighty per cent of everything a title allocated, one make per
+// guest method call, on top of the one the interpreter had already made to pop
+// the arguments off the stack. The interpreter now pops into a slice with the
+// receiver's slot in front of it and calls this directly, so a call allocates
+// once instead of twice. The wrapper above stays for the callers that hold the
+// receiver and the arguments apart, which is every Host-side entry point.
+func (vm *VM) invokeInstanceReceived(
+	state *execution,
+	lookupClass string,
+	receiver *Object,
+	name string,
+	descriptor string,
+	combined []Value,
+) (Value, error) {
 	class, method, resolveErr := vm.resolveInstanceMethod(lookupClass, name, descriptor)
 	var contextNative contextNativeMethod
 	var native NativeMethod

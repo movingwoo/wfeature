@@ -153,6 +153,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	diagPath := ""
 	audioPrefix := ""
 	cheatConsole := false
+	traceInstructions := false
 	ticksChosen := false
 	// The screen is the handset's, and on this vendor it is not the same
 	// handset for every title: one local archive ships its artwork only in the
@@ -177,6 +178,14 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			ticksChosen = true
 		case "-cheat":
 			cheatConsole = true
+		// One log line per bytecode instruction. It is a flag rather than
+		// something a debug build does on its own: the line sits on the
+		// hottest path there is, a second of play writes millions of them, and
+		// leaving it on cost more than the emulation and moved every timing it
+		// was opened to look at. `runlgt -trace` is the same bargain with a
+		// count on it.
+		case "-trace":
+			traceInstructions = true
 		case "-frame":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-frame expects a path")
@@ -310,7 +319,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		saveRoot = filepath.Join(platformSaveRoot("skt"), skt.SaveOwner(archive.Descriptor))
 	}
 	runtime, err := skt.Start(archive, skt.Options{
-		JVM:         jvm.Options{Logger: logger},
+		JVM:         jvm.Options{Logger: logger, TraceInstructions: traceInstructions},
 		Framebuffer: framebuffer,
 		SaveStore:   backend.NewDirectorySaveStore(saveRoot),
 	})
@@ -1902,7 +1911,7 @@ func importSaves(source string, extra []string, stdout, stderr io.Writer) int {
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
-	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json]")
+	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
 	fmt.Fprintln(output, "                            [-screen WxH] [-cheat]")
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")

@@ -345,7 +345,7 @@ watching — a release build is not, and carries none of the three.
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
                                     [-key tick:name] [-hold N] [-route script]
                                     [-save dir] [-diag report.json] [-audio out]
-                                    [-screen WxH] [-cheat]
+                                    [-screen WxH] [-cheat] [-trace]
 ```
 
 | Flag | What it does |
@@ -361,6 +361,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-audio out` | record what the run played as `out.mid` and `out.wav`, the same recorder `runktf` and `runlgt` take |
 | `-screen WxH` | the handset screen, 240x320 by default |
 | `-cheat` | attach the text cheat console. Without `-ticks` the run continues until it is interrupted |
+| `-trace` | one log line per bytecode instruction. Off unless asked for, in both build profiles — see below |
 
 The summary a run prints carries `ticks` and `lit` — the count of non-black
 pixels — beside the MIDlet's state, because "active with a Canvas shown" and
@@ -372,6 +373,14 @@ Key names are the shared WIPI ones — `up`, `down`, `left`, `right`, `fire`
 `#`. **`clear` is the one worth remembering here**: titles of this era draw
 `BACK:CLR` on every screen that can be left, and leaving a screen is often what
 commits what was changed on it.
+
+**`-trace` is a flag rather than something a debug build does on its own.** The
+line sits on the hottest path there is: a second of play writes on the order of
+a million of them, and leaving it on cost more than the emulation and moved
+every timing it was opened to look at — a debug build ran one title eighteen
+times slower for it, and a release build built the line and threw it away. It is
+the same bargain `runlgt -trace N` makes, without the count. What it cost and
+how that was measured is in [`jvm.md`](jvm.md), "What a guest instruction cost".
 
 `-diag` answers a different question from KTF's report of the same name. There
 is no ordered trace here: what an SKT run is asked is which of the runtime's

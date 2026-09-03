@@ -462,6 +462,18 @@ Answer a KTF throughput question with an interleaved A/B of the probe's
 `ns_per_step` instead, and take the host profile on a machine whose profiler
 works.
 
+### An SKT run is not a throughput measurement
+
+A MIDlet's threads pace themselves against the wall clock, so a fixed number of
+`runskt` ticks is a fixed number of seconds and a faster engine spends them
+doing more work rather than finishing sooner. Wall time is therefore the pacing,
+CPU time is ambiguous — a slower engine burns less of it because it gets less
+done — and **allocation totals rise when the engine improves**. Judge a change
+to this execution core with `go test -bench Guest ./internal/jvm`, where the
+work is fixed, and read a run only for whether its outcome changed. The whole of
+that argument, with the numbers, is in [`jvm.md`](jvm.md), "Why this could not
+be measured end to end".
+
 ### A probe does not measure the binary that ships
 
 **`go test` builds the package's test binary, and a test binary has no
