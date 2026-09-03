@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"path"
@@ -66,24 +67,24 @@ type NativeInfo struct {
 
 // NativeField is one record of a header section.
 //
-// The stride is eight bytes and the tag is the last halfword — which is what
-// two numbers established rather than what the shape suggested. The module's
-// own page-rounded length is in the file, and so is one other size; laying an
-// eight byte record over the section puts them at the same place in
-// consecutive records, with consecutive tags:
+// The stride is eight bytes and the tag is the last halfword, which is what an
+// aligned word scan of the same bytes cannot see: it reads the boundary between
+// two records as a value of its own, and that is how an earlier pass mapped
+// 0x85000 for a module needing 0x25000.
 //
 //	value 0x00060001  extra 1  tag 2
 //	value 0x03e80001  extra 0  tag 4
 //	value 0x00005000  extra 0  tag 5
-//	value 0x00025000  extra 0  tag 6   <- the module's length, rounded to a page
+//	value 0x00025000  extra 0  tag 6
 //
-// An aligned word scan of the same bytes reads the boundaries as values, which
-// is how an earlier pass mapped 0x85000 for a module needing 0x25000. The
-// stride is what stops that.
-//
-// Only tag 6 is established. The rest are carried so a later reading has them,
-// and so a package whose numbers do not look like this one's can be told
-// apart from one that does.
+// **Nothing here is established.** Tag 6 read as the module's page-rounded
+// length for as long as there was one archive of this package: the first one's
+// module rounds to exactly 0x25000. Two later archives carry the same header
+// word for word — the same tags and the same values — while their modules round
+// to 0x2e000 and 0x29000, so tag 6 is a constant of the format and not a size
+// of the module beside it. The records are carried so a later reading has them,
+// and so a package whose numbers do not look like these can be told apart from
+// one that does.
 type NativeField struct {
 	Value uint32
 	Extra uint16
@@ -92,9 +93,6 @@ type NativeField struct {
 
 // nativeFieldStride is how far apart the records are.
 const nativeFieldStride = 8
-
-// NativeFieldModuleLength is the tag on the module's page-rounded length.
-const NativeFieldModuleLength = 6
 
 // Field finds a header record by tag.
 func (info NativeInfo) Field(tag uint16) (NativeField, bool) {
@@ -241,10 +239,17 @@ func OpenNative(data []byte) (*NativeArchive, error) {
 // one. Everything after that end is the identity record, which finishes with
 // the trailer magic.
 func ParseNativeInfo(data []byte) (NativeInfo, error) {
+	// One archive's information file carries CR LF past its trailer, from
+	// something that moved the file in text mode before it was packed. Its zip
+	// entry's CRC is correct, so those two bytes are the package as it was
+	// distributed rather than damage a reader should refuse. Line endings after
+	// the trailer are dropped and the file is read up to it; anything else
+	// after it still is not this format.
+	data = bytes.TrimRight(data, "\r\n")
 	if len(data) < 0x20 {
 		return NativeInfo{}, fmt.Errorf("module information file is %d bytes, too short for its header", len(data))
 	}
-	if !strings.HasSuffix(string(data), nativeInfoTrailerMagic) {
+	if !bytes.HasSuffix(data, []byte(nativeInfoTrailerMagic)) {
 		return NativeInfo{}, fmt.Errorf("module information file does not end with %q", nativeInfoTrailerMagic)
 	}
 	tableOffset := binary.LittleEndian.Uint32(data[0x10:])
@@ -369,35 +374,4 @@ func nativeWords(span []byte) []uint32 {
 		words[index] = binary.LittleEndian.Uint32(span[index*4:])
 	}
 	return words
-}
-
-// ModuleSpan reports the mapped size the information file names for a module of
-// the given length, and whether it names one at all.
-//
-// The value is the module's length rounded up to a page. Finding that number in
-// the header is what identifies the field: a size this platform can compute for
-// itself is a weak thing to read out of a file, but it is the anchor that says
-// which of the header's unlabelled words are sizes at all. The word beside it
-// is the other size, and what it covers has not been established — see
-// docs/ktf.md.
-func (info NativeInfo) ModuleSpan(moduleLength int) (mapped uint32, ok bool) {
-	rounded := (uint64(moduleLength) + nativePageSize - 1) &^ (nativePageSize - 1)
-	if rounded == 0 || rounded > 1<<32 {
-		return 0, false
-	}
-	// The tagged record is what the file means to say, and the search is what
-	// says the record was read on the right stride: a package whose tag 6 does
-	// not match the module beside it is a package this loader has misread, and
-	// mapping what it said anyway is how a wrong stride becomes a wrong map.
-	if field, found := info.Field(NativeFieldModuleLength); found && uint64(field.Value) == rounded {
-		return field.Value, true
-	}
-	for _, section := range info.Sections {
-		for _, word := range section {
-			if uint64(word) == rounded {
-				return word, true
-			}
-		}
-	}
-	return 0, false
 }

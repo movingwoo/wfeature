@@ -3315,10 +3315,9 @@ mistake at one bit of resolution: the later two carry `0x10100000` where the
 first carries `0x00100000`, so an exact match against the image base finds
 nothing and the ClassID beside it goes unread.
 
-Neither is fixed here, because a loader that gets past both stops at the gate
-below and there is nothing yet to see on the far side. What the two readings
-cost is written down so the next pass does not re-derive them: **a number this
-platform can compute is not evidence about a file that also contains it.**
+Both are undone in "The three readings undone" below, and what they cost is
+written down so the next pass does not re-derive them: **a number this platform
+can compute is not evidence about a file that also contains it.**
 
 Reading the rest of the header would need its record stride, which is not four
 bytes — a second size, `0x5000`, sits at an offset that makes the surrounding
@@ -3961,7 +3960,468 @@ trailer, so it refuses. The bytes are in the archive as distributed and its zip
 CRC is correct, so this is a shape to tolerate rather than damage to detect.
 
 Both archives are kept under `var/games/test/errorFile/` with a note saying
-what each one is.
+what each one is. Everything below is what happened when the gate was answered.
+
+### The three readings undone, and what was behind them
+
+All three are undone and both archives run. The order matters, because each one
+hid the next: a loader that refuses the information file never reads a span, one
+that refuses the span never reaches the entry, and one that never gets past the
+entry has nothing to say about the table beyond it.
+
+- **The trailer's two extra bytes.** `ParseNativeInfo` trims CR and LF from the
+  end before it looks for `1fim`. Anything else past the trailer is still not
+  this format — the point is a file that was moved in text mode, not a file that
+  has something after its own end.
+- **The module's mapped length.** `nativeMappedSize` no longer asks the file for
+  it. It maps the module's own page-rounded length, which is what the earlier
+  pass computed *before* comparing it to the tag it thought confirmed it. **A
+  number this side can compute is not evidence about a file that also contains
+  it** — the whole of the check was a coincidence at one archive's size.
+- **The ClassID.** `ApplicationIdentifier` picks the applet record out by its
+  shape — five words whose second and fourth are zero and whose third is `0x3e8`
+  — and takes its first word. In three archives that word is `0x0102e0a9`,
+  `0x010345ec` and `0x0103267f`, and **each module carries its own as a literal**,
+  which is what confirms the reading. The record's *last* word was the anchor
+  before and is not one: it is a property of the applet, `0x00100000` in the 2005
+  archive and `0x10100000` in the two later ones, and the first of those is also
+  where this platform maps an image.
+
+### The version gate is a word the loader had left zero
+
+The loader plants two words below the image now, not one: the platform table
+pointer at `ImageBase-4` that every module of this generation loads, and
+`0x10000` at `ImageBase-8`. That is the whole of the gate — the later module
+compares that word against `0x10000` and returns 4 without touching its out
+parameter when it differs, so what looked like a module refusing the platform
+was a module asking a question the platform never answered. The 2005 archive
+never reads the word and runs the same either way.
+
+### A module reads above its own stack pointer
+
+Past the gate, one of the two faulted immediately: it copies a fixed `0x400`
+bytes out of a frame it declared as `0x58`, and this side started the guest at
+the very top of its stack mapping, so the copy ran off the end at the first byte
+past it.
+
+On the handset an applet is entered from the runtime's own dispatcher and the
+addresses above its stack pointer are that dispatcher's frames. The bytes are
+junk either way — nothing reads back what that copy wrote — but a copy is a
+copy, and the fix is to look like the caller that is not there:
+`nativeStackHeadroom` leaves a page of the mapping above the entry stack
+pointer. **A guest that reads uninitialised memory is not a guest that faults on
+a real device**, and starting it flush against the end of a mapping turns every
+such read into one.
+
+### The resource file, and the number that indexes it
+
+The later modules do not open their data files. They ask the object the entry
+was handed for a numbered resource out of a named one:
+
+```
+ldr  r0, [r7, #0x10]      ; the object
+movs r3, #6               ; the kind
+ldr  r2, [pc, #0x40]      ; 5001, the number
+ldr  r6, [r1, #0x48]      ; the loader
+ldr  r1, [pc, #0x40] ; add r1, pc   ; "rpg_org.bar"
+bl   veneer
+...                       ; allocate 0x400, copy 0x400 from r0 + 0x1c
+ldr  r2, [r1, #0x50]      ; and give the block back
+```
+
+**The call is what settled the format.** The item that number names is `0x41c`
+bytes long and the module copies `0x400` of it from offset `0x1c`, which is the
+whole of the rest — so the loader hands the item back verbatim and what the
+`0x1c` in front of it holds is the title's own business. It holds a MIME name:
+the items are the same typed blobs the information file's icons are, a 16-bit
+length covering itself, `application/octet-stream`, and a terminator. The module
+reads the low byte of that length itself to step over it.
+
+`.bar` is a header, a group table, an index table and the items:
+
+```
+0x00  a version halfword, 0x11 in all eight local files
+0x06  how many groups
+0x08  where the group table is, and how long it is
+0x10  where the index table is
+0x14  how many items there are
+0x18  where the first item is, repeating the index table's first entry
+```
+
+The index table holds one offset per item and then the end of the last one,
+which is the file's own length in all eight. **A group is a run rather than a
+list**: four halfwords — a kind, the first number it covers, how many *further*
+numbers it covers, and the index of the item the first number names. So the item
+for a number is its distance into the run added to that index, and thirteen
+groups cover a hundred and two items. Reading the third halfword as a count of
+items instead makes the group with `0` in it carry nothing, and that group is
+exactly the one the module asks for.
+
+### Four bits a pixel, a second copy, a second clock, and a comparison
+
+Everything else the later module wanted was already here in another form:
+
+- **Four bits a pixel.** The factory decoded eight and twenty-four. A row at
+  four is two pixels to a byte with the left one in the high nibble, and the
+  padding to a word has to be computed from the bits — a byte count has already
+  lost the odd pixel of an odd width.
+- **A second copy at `0xc8`.** One call site: measure a string with the length
+  slot, allocate one byte more, copy the string's own length into it. memcpy,
+  memmove and strncpy all do the same thing there, so which of them the carrier
+  put in that slot cannot be told from the call and does not matter to it.
+  **Everything the title draws as text goes through that block** — the dialog
+  that reads as an empty box with a border is this slot unanswered.
+- **A second clock at `0xb0`.** Fifty-nine call sites and every one of them
+  subtracts a saved reading, compares the difference against an interval of its
+  own and saves a fresh reading when it has passed. It takes nothing: the module
+  reaches it through the veneer that calls through `r0`, which leaves no register
+  for an argument.
+- **A comparison at `0xcc`.** Two call sites, both comparing four bytes of a
+  sound resource against `MMMD` and `cmid`.
+
+### Zero is what worked
+
+The file interface answers **zero on success**, and the opposite reading is what
+had the title asking to authenticate over the network. The later module calls
+the interface's information slot and, on a non-zero answer, asks slot `0x24`
+what went wrong and returns that as its own failure — which is the sense this
+whole specification uses. The 2005 module never looks at the answer, so nothing
+before said which way round it was. `nativeFileLastError` is that slot;
+`nativeFileFailed` is the one non-zero value this platform reports, because the
+module returns what it is told without comparing it.
+
+The same is true of the reference count. Every object in this protocol is a
+pointer to a table whose first two entries raise and drop a count, so
+`InterfaceObject` answers those two for any interface it builds — unless the
+platform has already given that number a handler of its own at that offset,
+which is what says the object is not shaped that way.
+
+### A certificate, and the object both later archives create
+
+Both later modules create one more object, from the **second ClassID their
+information file carries** beside the applet's — `0x103028a` in both, from two
+different publishers, which is what says it is the carrier's rather than either
+title's.
+
+One call on it is reached, and what it is handed names it: the block is the
+archive's own `gbxcerti.dat`, all 74 bytes, loaded through the resource loader
+and freed straight after. The answer is a small signed status the module turns
+into one of ten messages through a table of its own, and the two ends of it are
+visible from outside — **answering zero leaves the title on its own screen, and
+answering one sends it to the dialog offering to authenticate over the
+network.** So zero is the certificate being accepted, which is what a handset
+with a valid one answers.
+
+### Where the two stand, after the first pass
+
+Superseded by "Where the two stand, after the second pass" below; kept because
+what each of them was stopped by is what the sections between here and there
+answer.
+
+- **`[큰화]로맨스소드` reaches its title screen.** Start-up, its data, its
+  publisher screen, its own artwork and its text all come out, and nothing on
+  that route is still a trap. A key is delivered and **taken** — its "press any
+  key" line stops being drawn and never comes back, which no run without a key
+  ever does — but the screen after it has not arrived. That is the next thing to
+  read.
+- **`컴투스_맞고_2006` starts and registers no frame.** It gets through the
+  entry, the factory, its start event and its own files, and then fails inside
+  an initialisation it swallows: it asks a display interface this platform has
+  not met for a font's line height, centres three lines of text on the screen
+  with it, and draws through slots of that interface rather than through the
+  surface the 2005 title draws on. That interface — a font metric, a text draw,
+  and a manager object told about both — is what the title needs next, and none
+  of it is guessable from where the run stops. Its call sites are in the module
+  at `0x10c230` and `0x10c2f0`.
+
+### The file interface answers the generation that asked
+
+The test call — "is this name there" — is read **the opposite ways round by the
+two generations**, and both readings were established by running them rather
+than by reading one of them.
+
+The later modules take **zero** as "the name is there". One reads its
+authentication marker on a zero and puts "인증 요청중입니다 / 이 요청은 한번만 /
+수행됩니다" on the screen on anything else, which is a network authentication it
+does not need: the file it was asking about is in its own archive. The other
+loads its data on a zero. The 2005 module takes **non-zero** as "the name is
+there": it skips the create beside it and opens.
+
+Turning the answer round to suit the later two costs the 2005 archive its save
+and seven eighths of its drawing — 221342 draws to 3010, 65 images to 8, and
+`kenviron.cfg` never written. That is not a subtle regression, and it is what
+says the two are genuinely different rather than one of them being misread.
+
+**So the answer is the asking module's generation, and the module says which
+one it is.** `AsksForInterfaceVersion` looks for the version gate in the first
+sixteen instructions of the entry: a load of `[base - 8]` and a compare against
+`0x10000`. It matches the two instructions rather than their encodings, because
+the offset a module loads its own base through is its own business. It is a
+version check being used as one — the module is asking what AEE it is running
+on, and what a call means on this interface is a property of that AEE.
+
+The information call keeps one answer for both, zero on success, because the
+2005 module never looks at it.
+
+### A later module drives itself by posting
+
+The 2005 module registers a frame — an interval, a function and a context — and
+everything it does happens inside that function. **A later module registers
+nothing.** Its start-up ends like this:
+
+```
+ldr  r2, [r0, #8]         ; a parameter of its own
+adds r3, r6, #0           ; 0x7009, an event number of the title's own
+ldr  r0, [r0, #0x10]      ; the object the entry was handed
+ldr  r4, [r1, #0x54]
+movs r1, #0               ; no flags
+bl   veneer               ; (this, flags, class, event, w, dw)
+```
+
+The class it names is **its own**, the ClassID out of its own information file,
+and the event goes back to the same handler a key goes to. So this generation
+runs by posting to itself, and a platform that drops the post leaves a title
+that has finished starting up with nothing to do next — which is exactly what
+"starts and registers no frame" was.
+
+Two things follow, and both are the difference between a queue and a call:
+
+- **The post is delivered on the next tick, not inside the call.** The module
+  posts from inside the handler that is running; delivering it there would
+  re-enter that handler on its own stack.
+- **A tick has to run whether or not a frame is registered.** The frame is the
+  2005 module's way of running and this is the later one's, so a Tick that
+  returns early when there is no frame never delivers the post that would
+  create one. Once the post arrives, this title registers a frame of its own
+  after all — every 80ms — and the loop is the one this platform already runs.
+
+Beside it, slot `0x30` takes a function and a context and **no interval**,
+which is what separates it from the schedule: the title asks to be called once
+more. It is delivered the same way and not re-armed; the local title asks
+again when it wants another.
+
+### Two colours, recorded rather than drawn
+
+Slot `0x28` of the screen takes an item number and a colour, and a later module
+sets two of them before it draws its own text — item 2 to `0xffffff00` and item
+1 to zero, the same red-green-blue-and-a-spare word the bitmap palette uses.
+Neither answer is read. They are recorded rather than acted on because
+**nothing on this platform draws text for this package**: the 2005 title draws
+its own glyphs as 1x1 rectangles, and the screen's text slot is where a later
+one's dialogs go. A colour recorded is a colour that call is not silently
+losing when that gap is closed.
+
+### Where the two stand, after the second pass
+
+Superseded by "after the third pass" below.
+
+- **`[큰화]로맨스소드` reaches its title screen, with sound.** Reading the file
+  test the later way puts it on the path that loads `lcdinfo.dat` and its own
+  certificate and plays its opening music: four clips set, two started, two
+  stopped, and 400 frames presented. Nothing on that route traps. A key still
+  reaches it — its handler stores the code at `+0x960` of its own object and
+  answers 1, which the disassembly and a run both say — and the state machine
+  that reads that code does not act on it. **That is a state this platform can
+  no longer see the outside of: nothing is unanswered, so the next step is
+  reading the title's own state machine rather than watching for a trap.**
+- **`컴투스_맞고_2006` starts, loads and presents.** It authenticates against
+  its own archive rather than the network, reads its handset record, loads
+  eighteen resources out of `matgo2006.bar`, registers its 80ms frame and
+  presents twice. Its screen is still almost empty: it blits twenty regions out
+  of a surface of its own that it has not drawn into — re-decoding that surface
+  on every blit changes nothing, so the surface really is empty — and its step
+  function is gated on a flag at `+0x1748` of its own state that nothing has
+  set. The two things to look at next are what sets that flag and the screen's
+  text slot, and the second of those is a gap this platform has rather than a
+  question about this title.
+
+### A key is three events, and one title reads only the third
+
+The 2005 module's handler compares against `0x101` and `0x102`, and this
+platform sent those two. **A later module's handler keeps three apart**, and
+puts them in different places:
+
+```
+cmp r2, #0x100 -> strh r1, [r0, #0x18]     ; a slot of its own
+cmp r2, #0x101 -> pressed = 1, code at +4  ; the key is down
+cmp r2, #0x102 -> pressed = 0, code at +2  ; the key is up
+```
+
+Its opening screen reads **only the first of those**. Tracing one frame of that
+screen is what said so — 332 instructions, and the fourth of them is
+
+```
+ldrh r1, [r5, #0x18]      ; the slot event 0x100 writes
+ldr  r0, [r5, #0x28]
+bl   0x11646c             ; hand it to the screen
+```
+
+— while the two getters that read the pressed state never run at all. So a
+platform that sends the press and the release and not the third takes every key
+and acts on none of them, which is exactly what "the key is taken and the screen
+after it never arrives" was. `Key` sends the press and then the typed key, and
+the release on its own. The 2005 module does not handle `0x100`: an event its
+dispatch does not know answers zero and does nothing, and its in-game route is
+byte-identical with the third event being sent.
+
+With it, `[큰화]로맨스소드` plays: title screen, a memory warning, its save-slot
+screen reading the `sav.dat` the archive ships (`SLOT 2 · LV 3 · PLAYTIME
+00:11:54`), the load prompt, and the game itself.
+
+### The factory owns the picture, because the title frees it
+
+The image factory decoded the bitmap it was handed and left the object pointing
+at it. The title frees that bitmap **on the very next call**:
+
+```
+40  platform 0x64  createObject(0x1004001, 0x30016f98)
+41  platform 0x6c  free(0x30016f98)
+```
+
+So the object pointed into the arena's next tenant. Watching the block afterwards
+shows exactly that: its `BM` header zeroed by the allocation that replaced it and
+three fifths of its words written by whoever got it. A blit through that object
+after the block was re-let would have drawn another allocation's bytes as a
+picture.
+
+The factory copies the bitmap into a block of its own now and **the object names
+the copy**, which matters for more than lifetime: the title reads that first word
+and indexes the bitmap through it, so what it draws afterwards lands in the copy.
+A blit re-reads the copy and re-decodes it only when the bytes have changed —
+reading and comparing is what a decode would have to do anyway and is the cheap
+half of it. The 2005 archive is byte-identical through its in-game route.
+
+### Where the two stand, after the third pass
+
+- **`[큰화]로맨스소드` plays.** Start-up, publisher screen, title screen with
+  music, menus, its shipped save, and in-game. Its own layout leaves the top and
+  bottom of a 240x320 screen black — a larger screen only makes the black taller,
+  so that is the title's and not this platform's.
+- **`컴투스_맞고_2006` is still on its loading screen.** What is known about it
+  now: its frame is 163 instructions, its step is gated on a flag at `+0x1748`
+  of its own state that nothing sets, and the state it idles in waits on a word
+  at `+0x3380`. It is not idle underneath — over six hundred frames it sets
+  sixty-two clips, starts sixty and stops five hundred, and asks to be resumed
+  once per clip. It blits from one surface of its own, and that surface is empty:
+  re-reading it on every blit changes nothing, so it is empty rather than stale.
+  Nothing it asks for is unanswered.
+
+### The screen draws text
+
+The slot a title asks this of was read as a status line the handset shows
+somewhere of its own, and recorded rather than drawn. It is not that. It is the
+display's own text call, and **two modules of two generations agree on its
+shape**:
+
+```
+[sp+4] = y ; [sp] = x ; [sp+8] = 0 ; [sp+0xc] = flags
+r0 = display ; r1 = font ; r2 = text ; r3 = -1
+bl veneer
+```
+
+— `DrawText(display, font, text, count, x, y, background, flags)`, which is the
+specification's own. What each argument is comes off the two call sites rather
+than off the name:
+
+- **count is -1 at both**, a run with a terminator rather than a length.
+- **y is the top of the line, not a baseline.** One module lays three lines out
+  with `(screen height - 3 * line height) / 2` and steps by the line height,
+  which only centres a block if the y it passes is the top of it.
+- **the background rectangle is null at both**, so nothing is filled.
+- **the flags are carried and not acted on.** They are `0x8020` at one call site
+  and `0x8220` at the other, and the one bit that differs belongs to the call
+  that passes the exact middle of the screen for both x and y — which reads as
+  an alignment. That is one bit read from two samples, so it is written down
+  here rather than acted on, and text lands at the point it was given.
+
+The slot at `0x08` beside it answers a font's line height and fills in an ascent
+and a descent through two pointers when they are not null, which is what a
+module that centres three lines needs to do so.
+
+#### A terminator is a zero halfword, not a zero byte
+
+Reading it as a byte cost three quarters of a sentence, and the shape of the two
+titles is what says so. One module builds each line a halfword at a time — a
+Korean character is two bytes and fills one, a space is one byte and fills one
+with a zero after it:
+
+```
+c0ce c1f5 2000 bfe4 c3bb c1df c0d4 b4cf b4d9 2e00 0000
+인   증   ' '  요   청   중   입   니   다   '.'  end
+```
+
+A reader that stops at the first zero byte stops at the space and draws
+"인증 " where the title wrote "인증 요청중입니다.". The other module hands over
+plain bytes with a zero after the last one. **One rule reads both**: a zero ends
+the run when it is on a halfword boundary or when the byte after it is zero too,
+and anywhere else it is the pad of a single-byte character. The pads are then
+dropped, which is safe because no byte of an EUC-KR character is zero.
+
+#### The ink is the darker of the two colours a title sets
+
+A module sets item 1 to black and item 2 to white and then clears its screen,
+which comes out white — so item 2 is the ground and item 1 is the ink. The 2005
+module sets neither and clears the same way, so its screen is white too and its
+ink has to be the dark one; the default is therefore dark, not light. **That is a
+pairing read off two titles rather than a numbering anybody documented**, and
+what would say it is wrong is a title whose text comes out the colour of what it
+is drawn on — which is what the first attempt looked like, white on the white a
+clear leaves behind.
+
+The face is the one the descriptor package's runtime already uses, for the same
+reason it gives there: the screen a title declares does not predict the font it
+expects, so there is one face rather than one per size.
+
+**Neither local title's screen changes for this**, which is the point rather
+than a disappointment: the 2005 archive draws one line — a `WAIT..` over its
+loading screen, which its next clear paints over — and its in-game route is
+byte-identical, and the title that plays draws its own glyphs and asks for none
+of this. What the call is for is the screen a third title puts up, and that one
+now reads as its author wrote it.
+
+### What writes this, for a title nothing is unanswered for
+
+`컴투스_맞고_2006` stops with **no trap left**, which is the state a trap list
+cannot say anything about. `TestLocalNativeWatchProbe` is the tool for it: it
+watches words of the title's own state block — the word at `+0x24` of the object
+its factory built, which is where both local titles keep theirs — and reports
+the instruction that wrote each, or that nothing did.
+
+What it says about this title, over three hundred frames:
+
+| word | what it is | who writes it |
+|---|---|---|
+| state `+0x1748` | the step's own gate | **nothing** |
+| state `+0x3380` | what the state it idles in waits on | **nothing** |
+| state `+0x174c` | the state selector | one instruction, twice, ending at 1 |
+| state `+0x176c` | "there is something to draw" | set on a state change, **cleared three times and never set again** |
+| state `+0x1760` | a frame counter | every frame |
+| **every page of both pictures** | the surface it blits from | **nothing** |
+
+The last row is the one that matters, and it is not what "stuck in a state
+machine" predicts. **The title never draws into the surface it blits from.**
+Its start-up fills that surface with `0xff` — index 255 of a palette it builds
+itself, which is black — builds a bitmap header over it, hands it to the factory
+and frees what it handed over. Then it loads eighteen resources, blits twenty
+regions of the surface onto the screen, and the surface still holds nothing but
+the fill. Re-reading it on every blit changes nothing because there is nothing
+to re-read.
+
+So its black screen is not a picture this platform is failing to show. It is a
+picture the title has not drawn, and the thing to find is what fills that
+surface from the eighteen resources it did load — not another unanswered slot,
+because there is not one.
+
+Two smaller things the probe settled on the way:
+
+- **The three flags it idles on are never written by anything**, host or guest.
+  A word that nothing writes is not a word the platform is failing to set.
+- **A caller cannot be read off the value it passes.** Two of the seventeen call
+  sites that reach the state setter run, passing 0 and 3, and the word ends up
+  holding 1. The compiler pushes argument registers as stack space and pops them
+  shifted — a helper called between the argument and the store does not leave
+  the argument where it was. The trace says which callers ran; only the watch
+  says what was stored.
 
 ## A module compiled against a longer superclass
 

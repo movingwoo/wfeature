@@ -26,6 +26,19 @@ const (
 	nativeSlotStringJoin = 0x0c
 	nativeSlotStringSize = 0x14
 	nativeSlotFormat     = 0x20
+	// nativeSlotBoundedCopy is a second copy, and the module reaches it from
+	// one place: it measures a string with the length slot, allocates that many
+	// bytes and one more, and copies the string's own length into the block —
+	// which memcpy, memmove and strncpy all do the same way, so which of them
+	// the carrier put here cannot be told from this call and does not matter to
+	// it. Everything the title draws as text goes through that block, so a
+	// platform that leaves this a trap draws its dialogs empty.
+	nativeSlotBoundedCopy = 0xc8
+	// nativeSlotCompare compares two runs of bytes and answers zero when they
+	// are the same. Its two call sites are what name it: the module reads the
+	// first bytes of a sound resource and compares four of them against the
+	// literals "MMMD" and "cmid", which are the two formats it can play.
+	nativeSlotCompare = 0xcc
 )
 
 // nativeMaxString bounds every string this library reads out of guest memory,
@@ -48,6 +61,8 @@ func (platform *NativePlatform) installLibrary() {
 	client.Serve(NativePlatformTable, nativeSlotStringJoin, platform.stringJoin)
 	client.Serve(NativePlatformTable, nativeSlotStringSize, platform.stringSize)
 	client.Serve(NativePlatformTable, nativeSlotFormat, platform.format)
+	client.Serve(NativePlatformTable, nativeSlotBoundedCopy, platform.memoryCopy)
+	client.Serve(NativePlatformTable, nativeSlotCompare, platform.memoryCompare)
 }
 
 // nativeArguments reads the first four arguments of a trapped call.
@@ -80,6 +95,41 @@ func (platform *NativePlatform) readString(address uint32) ([]byte, error) {
 		text = append(text, buffer[0])
 	}
 	return nil, fmt.Errorf("KTF native string at %#x is not terminated within %d bytes", address, nativeMaxString)
+}
+
+// memoryCompare answers the platform table's comparison. The module only ever
+// asks whether the answer is zero, but the sign is what the library it stands
+// in for returns, so it is what this returns.
+func (platform *NativePlatform) memoryCompare(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 3)
+	if err != nil {
+		return 0, err
+	}
+	first, second, length := arguments[0], arguments[1], arguments[2]
+	if length == 0 {
+		return 0, nil
+	}
+	if uint64(length) > nativeMaxTransfer {
+		return 0, fmt.Errorf("KTF native comparison of %d bytes at %#x", length, first)
+	}
+	memory := platform.client.core.Memory()
+	left, right := make([]byte, length), make([]byte, length)
+	if err := memory.Read(first, left); err != nil {
+		return 0, fmt.Errorf("read %d bytes at %#x: %w", length, first, err)
+	}
+	if err := memory.Read(second, right); err != nil {
+		return 0, fmt.Errorf("read %d bytes at %#x: %w", length, second, err)
+	}
+	for index := range left {
+		if left[index] == right[index] {
+			continue
+		}
+		if left[index] < right[index] {
+			return ^uint32(0), nil
+		}
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (platform *NativePlatform) memoryCopy(thread *armcore.Thread) (uint32, error) {

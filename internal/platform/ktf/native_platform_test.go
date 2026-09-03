@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"image/color"
@@ -164,8 +165,22 @@ func TestNativeFileInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := nativeCall(t, platform.fileInformation, 0, name, record); got != 1 {
-		t.Errorf("information = %d, want 1", got)
+	// Zero is what worked: a later module calls this and treats any other
+	// answer as a failure worth asking nativeFileLastError about.
+	if got := nativeCall(t, platform.fileInformation, 0, name, record); got != 0 {
+		t.Errorf("information = %d, want 0 for a name the package carries", got)
+	}
+	if got := nativeCall(t, platform.fileInformation, 0, missing, record); got == 0 {
+		t.Error("information answered success for a name the package does not carry")
+	}
+	if got := nativeCall(t, platform.lastFileError, 0); got == 0 {
+		t.Error("the error report named no failure after one")
+	}
+	if got := nativeCall(t, platform.fileInformation, 0, name, record); got != 0 {
+		t.Errorf("information = %d, want 0", got)
+	}
+	if got := nativeCall(t, platform.lastFileError, 0); got != 0 {
+		t.Errorf("the error report = %d after a call that worked, want 0", got)
 	}
 	if got := binary.LittleEndian.Uint32(nativeRead(t, platform, record+nativeFileLengthOffset, 4)); got != 10 {
 		t.Errorf("length = %d, want 10", got)
@@ -326,9 +341,15 @@ func TestNativeImageFactoryAndBlit(t *testing.T) {
 		t.Fatal("the factory refused a bitmap")
 	}
 	// The object's first word points at the bitmap, because the title reads
-	// that word itself on one of its paths.
-	if got, err := platform.client.ReadWord(object); err != nil || got != address {
-		t.Errorf("object word 0 = %#x (%v), want the bitmap at %#x", got, err, address)
+	// that word itself on one of its paths — at this platform's own copy of
+	// it rather than at what it was handed, which the title frees. See
+	// TestNativeImageKeepsItsOwnBitmap.
+	kept, err := platform.client.ReadWord(object)
+	if err != nil || kept == 0 || kept == address {
+		t.Errorf("object word 0 = %#x (%v), want a copy of the bitmap at %#x", kept, err, address)
+	}
+	if got := nativeRead(t, platform, kept, len(bitmap)); !bytes.Equal(got, bitmap) {
+		t.Error("the copy the object names does not hold the bitmap")
 	}
 	decoded := platform.images[object].frame
 	if got := decoded.RGBAAt(0, 0); got != palette[0] {
@@ -359,7 +380,7 @@ func TestNativeImageFactoryAndBlit(t *testing.T) {
 func TestNativeImageRefusesWhatItCannotDecode(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	bitmap := buildBitmap(2, 2, []color.RGBA{{}}, []byte{0, 0, 0, 0, 0, 0, 0, 0})
-	binary.LittleEndian.PutUint16(bitmap[bitmapBitsPerPixelField:], 4)
+	binary.LittleEndian.PutUint16(bitmap[bitmapBitsPerPixelField:], 2)
 	address, err := platform.client.Allocate(uint32(len(bitmap)))
 	if err != nil {
 		t.Fatal(err)
@@ -679,21 +700,36 @@ func (store *countingSaveStore) LoadSave(name string) ([]byte, bool) {
 	return data, ok
 }
 
-// TestNativeMappedSizeNeedsTheNamedSize keeps the loader from mapping a size it
-// worked out for itself: the information file naming the module's own length is
-// the anchor that says the file and the module belong together.
-func TestNativeMappedSizeNeedsTheNamedSize(t *testing.T) {
-	archive := &NativeArchive{Module: make([]byte, 8), Info: NativeInfo{Sections: [][]uint32{{0x2000}}}}
-	if _, err := nativeMappedSize(archive); err == nil {
-		t.Fatal("an information file naming a size the module is not parsed")
-	}
-	archive.Info.Sections = [][]uint32{{nativePageSize}}
-	mapped, err := nativeMappedSize(archive)
-	if err != nil {
-		t.Fatalf("mapped size: %v", err)
-	}
-	if mapped != nativePageSize {
-		t.Errorf("mapped = %#x, want %#x", mapped, nativePageSize)
+// TestNativeMappedSizeIsTheModuleSOwnLength keeps the loader from asking the
+// information file for a number it can compute. An earlier pass required the
+// file to name the module's page-rounded length and refused a package that did
+// not; the tag it matched carries the same constant in three archives whose
+// modules are three different sizes, so the requirement only turned two of them
+// away.
+func TestNativeMappedSizeIsTheModuleSOwnLength(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		length int
+		want   uint32
+	}{
+		{name: "a module inside one page", length: 8, want: nativePageSize},
+		{name: "a module over a page boundary", length: nativePageSize + 1, want: 2 * nativePageSize},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// The header says 0x25000 whatever the module is, the way all three
+			// local archives do.
+			archive := &NativeArchive{
+				Module: make([]byte, testCase.length),
+				Info:   NativeInfo{Sections: [][]uint32{{0x25000}}},
+			}
+			mapped, err := nativeMappedSize(archive)
+			if err != nil {
+				t.Fatalf("mapped size: %v", err)
+			}
+			if mapped != testCase.want {
+				t.Errorf("mapped = %#x, want %#x", mapped, testCase.want)
+			}
+		})
 	}
 }
 
@@ -828,5 +864,528 @@ func TestNativeFrameDigestTracksTheScreen(t *testing.T) {
 
 	if drawn := platform.FrameDigest(); drawn == blank {
 		t.Error("the screen was drawn into and the digest did not move; a route would wait forever")
+	}
+}
+
+// TestNativeReallocateKeepsWhatFits covers the platform table's third
+// allocator. The module reads a pointer out of its own structure, asks for one
+// byte more than the string it is about to write, stores the answer back and
+// gives up if it is null — so what this has to get right is that the bytes
+// already there survive the move.
+func TestNativeReallocateKeepsWhatFits(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	first, err := platform.client.Allocate(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.client.core.Memory().Write(first, []byte("12345678")); err != nil {
+		t.Fatal(err)
+	}
+	grown := nativeCall(t, platform.reallocate, first, 16)
+	if grown == 0 {
+		t.Fatal("growing a block answered nothing")
+	}
+	if got := nativeRead(t, platform, grown, 8); string(got) != "12345678" {
+		t.Errorf("the grown block holds %q, want what was there", got)
+	}
+	// Growing gives the old block back, and the tail past what was carried is
+	// clear the way a fresh allocation is.
+	if _, ok := platform.client.blocks[first]; ok {
+		t.Error("the block that was grown was not given back")
+	}
+	for _, value := range nativeRead(t, platform, grown+8, 8) {
+		if value != 0 {
+			t.Errorf("the tail of a grown block holds %#x, want it clear", value)
+			break
+		}
+	}
+	// Shrinking keeps the front, a null pointer allocates, and a zero size is
+	// a free — which is what the library it stands in for does.
+	shrunk := nativeCall(t, platform.reallocate, grown, 4)
+	if got := nativeRead(t, platform, shrunk, 4); string(got) != "1234" {
+		t.Errorf("the shrunk block holds %q, want the front of it", got)
+	}
+	if fresh := nativeCall(t, platform.reallocate, 0, 8); fresh == 0 {
+		t.Error("reallocating a null pointer answered nothing")
+	}
+	if got := nativeCall(t, platform.reallocate, shrunk, 0); got != 0 {
+		t.Errorf("reallocating to nothing answered %#x, want 0", got)
+	}
+	if _, ok := platform.client.blocks[shrunk]; ok {
+		t.Error("reallocating to nothing did not give the block back")
+	}
+}
+
+// TestNativeImageDecodesFourBitsPerPixel covers the depth a later module's
+// artwork is at. Two pixels share a byte and the left one is the high nibble,
+// and an odd width still occupies a whole byte before the row is padded — which
+// is why the padding is computed from the bits rather than from a byte count.
+func TestNativeImageDecodesFourBitsPerPixel(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	palette := []color.RGBA{
+		{R: 0x10, G: 0x20, B: 0x30, A: 0xff},
+		{R: 0x40, G: 0x50, B: 0x60, A: 0xff},
+		{R: 0x70, G: 0x80, B: 0x90, A: 0xff},
+	}
+	// Three pixels a row, bottom-up: the first row of the file is the bottom
+	// row of the picture.
+	bitmap := buildBitmap(3, 2, palette, []byte{
+		0x12, 0x00, 0x00, 0x00,
+		0x01, 0x20, 0x00, 0x00,
+	})
+	binary.LittleEndian.PutUint16(bitmap[bitmapBitsPerPixelField:], 4)
+
+	address, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.client.core.Memory().Write(address, bitmap); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := platform.decodeBitmap(address)
+	if err != nil {
+		t.Fatalf("decode a four bit bitmap: %v", err)
+	}
+	for _, want := range []struct {
+		x, y  int
+		index int
+	}{
+		{x: 0, y: 0, index: 0}, {x: 1, y: 0, index: 1}, {x: 2, y: 0, index: 2},
+		{x: 0, y: 1, index: 1}, {x: 1, y: 1, index: 2}, {x: 2, y: 1, index: 0},
+	} {
+		if got := decoded.RGBAAt(want.x, want.y); got != palette[want.index] {
+			t.Errorf("pixel %d,%d = %v, want palette entry %d %v", want.x, want.y, got, want.index, palette[want.index])
+		}
+	}
+}
+
+// TestNativeFileStatusAnswersTheOpenFile covers the record a later module asks
+// an open file for. It reads the length out of the third word and then reads
+// that many bytes in a loop, so a platform that leaves this unanswered does not
+// fail — it loops for ever.
+func TestNativeFileStatusAnswersTheOpenFile(t *testing.T) {
+	platform := newTestNativePlatform(t, map[string][]byte{"a title/data.bin": []byte("0123456789")})
+	name := nativeString(t, platform, "data.bin")
+	file := nativeCall(t, platform.openFile, 0, name, nativeModeRead)
+	if file == 0 {
+		t.Fatal("opening a name the package carries was refused")
+	}
+	record, err := platform.client.Allocate(nativeFileRecordSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nativeCall(t, platform.fileStatus, file, record); got == 0 {
+		t.Error("the status of an open file answered nothing")
+	}
+	if got := binary.LittleEndian.Uint32(nativeRead(t, platform, record+nativeFileLengthOffset, 4)); got != 10 {
+		t.Errorf("length = %d, want 10", got)
+	}
+}
+
+// TestNativeInterfaceObjectAnswersItsReferenceCount covers the two slots every
+// object in this protocol carries. A module that drops an interface it is done
+// with reaches the second of them, and a trap there ends the run.
+func TestNativeInterfaceObjectAnswersItsReferenceCount(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	client := platform.client
+	// A number nothing else serves, so what answers is what this builds.
+	const identifier = 0x0103028a
+	if _, err := client.InterfaceObject(identifier); err != nil {
+		t.Fatalf("build the interface object: %v", err)
+	}
+	surface := nativeInterfaceSurface(identifier)
+	for _, offset := range []uint32{nativeObjectAddRef, nativeObjectRelease} {
+		handler, ok := client.served[nativeSlotKey{surface: surface, slot: offset / 4}]
+		if !ok {
+			t.Fatalf("offset %#x of a new interface object is a trap", offset)
+		}
+		if got := nativeCall(t, handler); got == 0 {
+			t.Errorf("offset %#x answered 0, want the count", offset)
+		}
+	}
+	// A slot the platform serves itself is not replaced. The file interface's
+	// drop is that: it is served before any module runs.
+	if _, err := client.InterfaceObject(nativeInterfaceSound); err != nil {
+		t.Fatalf("build the sound interface object: %v", err)
+	}
+	if _, ok := client.served[nativeSlotKey{
+		surface: nativeInterfaceSurface(nativeInterfaceSound),
+		slot:    nativeSoundSetClip / 4,
+	}]; !ok {
+		t.Error("building the object took a slot the platform had already served")
+	}
+}
+
+// TestNativeLoaderPlantsWhatAModuleLooksForBelowItself covers the two words
+// under the image and the room above the stack pointer. All three are things a
+// module reads without asking, so nothing in a run names them when they are
+// wrong: a later module compares the version word against 0x10000 and returns
+// without writing its out parameter when it differs, and one copies a fixed
+// 0x400 bytes out of a frame it declared as 0x58.
+func TestNativeLoaderPlantsWhatAModuleLooksForBelowItself(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	memory := platform.client.core.Memory()
+
+	below := make([]byte, 8)
+	if err := memory.Read(ImageBase-8, below); err != nil {
+		t.Fatalf("read the words below the image: %v", err)
+	}
+	if got := binary.LittleEndian.Uint32(below); got != nativeInterfaceVersion {
+		t.Errorf("the word at ImageBase-8 = %#x, want %#x", got, nativeInterfaceVersion)
+	}
+	if got := binary.LittleEndian.Uint32(below[4:]); got == 0 {
+		t.Error("the word at ImageBase-4 names no platform table")
+	}
+
+	stack, err := platform.client.thread.Register(armcore.RegisterSP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ThreadStackBase + uint32(ThreadStackSize) - stack; got != nativeStackHeadroom {
+		t.Errorf("the entry stack pointer leaves %#x above it, want %#x", got, nativeStackHeadroom)
+	}
+	// The room has to be mapped as well as reserved: what a module does with it
+	// is read it.
+	if err := memory.Read(stack, make([]byte, nativeStackHeadroom)); err != nil {
+		t.Errorf("read the room above the entry stack pointer: %v", err)
+	}
+}
+
+// nativeGateModule is a module that opens the way the later generation opens:
+// it loads the word two below its own image and compares it against the
+// version this loader plants. Nothing executes it — what it is for is the
+// question "which generation is asking", which is answered from the bytes.
+func nativeGateModule() []byte {
+	module := make([]byte, 0x40)
+	for _, instruction := range []struct {
+		at   int
+		word uint32
+	}{
+		{at: 0x00, word: 0xe92d400e}, // push {r1, r2, r3, lr}
+		{at: 0x04, word: 0xe1a0c002}, // mov ip, r2
+		{at: 0x08, word: 0xe59f2038}, // ldr r2, [pc, #0x38]
+		{at: 0x0c, word: 0xe08f2002}, // add r2, pc, r2
+		{at: 0x10, word: 0xe5122008}, // ldr r2, [r2, #-8]
+		{at: 0x14, word: 0xe3520b40}, // cmp r2, #0x10000
+		{at: 0x18, word: 0xe12fff1e}, // bx lr
+	} {
+		binary.LittleEndian.PutUint32(module[instruction.at:], instruction.word)
+	}
+	return module
+}
+
+// TestAsksForInterfaceVersionTellsTheGenerationsApart covers the question the
+// file interface's answer depends on. The two generations of this package
+// disagree about what a call means, and the module that asks what AEE it is
+// running on is the one that means the later thing.
+func TestAsksForInterfaceVersionTellsTheGenerationsApart(t *testing.T) {
+	later := &NativeArchive{Module: nativeGateModule()}
+	if !later.AsksForInterfaceVersion() {
+		t.Error("a module that gates on the version was read as one that does not")
+	}
+	// The 2005 module's own opening, which never reads the word.
+	earlier := make([]byte, 0x40)
+	for index, word := range []uint32{
+		0xe92d400e, // push {r1, r2, r3, lr}
+		0xe3a03000, // mov r3, #0
+		0xe58d3000, // str r3, [sp]
+		0xe58d3004, // str r3, [sp, #4]
+		0xe1a03002, // mov r3, r2
+		0xe1a02001, // mov r2, r1
+		0xe1a01000, // mov r1, r0
+		0xe3a00014, // mov r0, #0x14
+	} {
+		binary.LittleEndian.PutUint32(earlier[index*4:], word)
+	}
+	if (&NativeArchive{Module: earlier}).AsksForInterfaceVersion() {
+		t.Error("a module that never reads the word was read as one that gates on it")
+	}
+	// A module too short to hold the pair is the earlier answer rather than a
+	// read past its end.
+	if (&NativeArchive{Module: []byte{1, 2, 3}}).AsksForInterfaceVersion() {
+		t.Error("a module shorter than the pair answered as though it carried it")
+	}
+	if (*NativeArchive)(nil).AsksForInterfaceVersion() {
+		t.Error("no archive answered as though it carried the gate")
+	}
+}
+
+// TestNativeFileTestAnswersTheGenerationThatAsked covers the call the two
+// generations read the opposite ways round. Both readings were checked by
+// running them: the later modules take zero as "the name is there", and the
+// 2005 module takes non-zero as "the name is there" and loses its save when it
+// is told otherwise.
+func TestNativeFileTestAnswersTheGenerationThatAsked(t *testing.T) {
+	files := map[string][]byte{"a title/data.bin": []byte("0123456789")}
+	for _, testCase := range []struct {
+		name           string
+		module         []byte
+		there, missing uint32
+	}{
+		{name: "the 2005 module", module: nil, there: 1, missing: 0},
+		{name: "a module that asks for a version", module: nativeGateModule(), there: 0, missing: nativeFileFailed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			platform := newTestNativePlatform(t, files)
+			if testCase.module != nil {
+				platform.archive.Module = testCase.module
+			}
+			there := nativeString(t, platform, "data.bin")
+			missing := nativeString(t, platform, "nothing.bin")
+			if got := nativeCall(t, platform.fileExists, 0, there); got != testCase.there {
+				t.Errorf("a name the package carries answered %d, want %d", got, testCase.there)
+			}
+			if got := nativeCall(t, platform.fileExists, 0, missing); got != testCase.missing {
+				t.Errorf("a name it does not answered %d, want %d", got, testCase.missing)
+			}
+		})
+	}
+}
+
+// TestNativePostedEventsComeBackOnTheNextTick covers how the later generation
+// runs at all. Its start-up ends by posting an event to itself, and a platform
+// that drops the post leaves a title that has finished starting up with
+// nothing to do next. Delivery is on the next tick and not inside the call:
+// the module posts from inside the handler that is running.
+func TestNativePostedEventsComeBackOnTheNextTick(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	thread := armcore.NewThread(armcore.NewContext())
+	// The first four arguments are in registers and the last two on the stack,
+	// which is where the calling standard puts them.
+	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x100
+	for index, value := range []uint32{0, 0, 0x103267f, 0x7009} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
+		t.Fatal(err)
+	}
+	spilled := make([]byte, 8)
+	binary.LittleEndian.PutUint32(spilled, 1)
+	binary.LittleEndian.PutUint32(spilled[4:], 0x2a)
+	if err := platform.client.core.Memory().Write(stack, spilled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.postEvent(thread); err != nil {
+		t.Fatalf("post an event: %v", err)
+	}
+	if len(platform.posted) != 1 {
+		t.Fatalf("posted %d events, want 1", len(platform.posted))
+	}
+	want := nativePostedEvent{Class: 0x103267f, Event: 0x7009, First: 1, Secon: 0x2a}
+	if platform.posted[0] != want {
+		t.Errorf("posted %+v, want %+v", platform.posted[0], want)
+	}
+	// Delivery needs an application to deliver to, and a run that has none is
+	// a run that has not created one yet rather than one to fail.
+	if err := platform.deliverPosted(context.Background()); err != nil {
+		t.Fatalf("deliver with no application: %v", err)
+	}
+	if len(platform.posted) != 1 {
+		t.Error("the queue was emptied with nothing to deliver it to")
+	}
+	// The bound is what turns a title posting to itself for ever into a report
+	// rather than memory that never comes back.
+	platform.posted = make([]nativePostedEvent, maxNativePostedEvents)
+	if _, err := platform.postEvent(thread); err == nil {
+		t.Error("a title posting past the bound was not reported")
+	}
+}
+
+// TestNativeResumeRunsOnceAndIsNotRearmed covers the other half of the same
+// contract. The title asks to be called once more; a platform that kept
+// calling would be running a frame the title never asked for.
+func TestNativeResumeRunsOnceAndIsNotRearmed(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	// The module's own entry is `bx lr`, so it is something this can call.
+	if got := nativeCall(t, platform.resume, 0, ImageBase, 0x1234); got == 0 {
+		t.Fatal("asking to be resumed was refused")
+	}
+	if len(platform.resumes) != 1 || platform.resumes[0] != (nativeResume{Function: ImageBase, Context: 0x1234}) {
+		t.Fatalf("resumes = %+v, want the one that was asked for", platform.resumes)
+	}
+	if err := platform.deliverResumes(context.Background()); err != nil {
+		t.Fatalf("deliver a resume: %v", err)
+	}
+	if len(platform.resumes) != 0 {
+		t.Error("a resume was left queued after it ran")
+	}
+	// A null function is nothing to call rather than a jump to zero.
+	if got := nativeCall(t, platform.resume, 0, 0, 0); got != 0 {
+		t.Errorf("a resume with no function answered %d, want 0", got)
+	}
+	if len(platform.resumes) != 0 {
+		t.Error("a resume with no function was queued")
+	}
+}
+
+// TestNativeScreenColourIsRecorded covers the pair a later module sets before
+// it draws its own text. Nothing draws with them yet, so what this pins is
+// that the call is not silently losing them.
+func TestNativeScreenColourIsRecorded(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	nativeCall(t, platform.screenColour, 0, 2, 0xffffff00)
+	nativeCall(t, platform.screenColour, 0, 1, 0)
+	if got := platform.Colours(); len(got) != 2 || got[2] != 0xffffff00 || got[1] != 0 {
+		t.Errorf("colours = %v, want the two the title set", got)
+	}
+}
+
+// nativeRecordingApplication plants an application object whose handler counts
+// the events it is given and keeps the last one, so a test can ask what a key
+// actually sent. The handler is the third word of the object's table, which is
+// where this protocol puts an object's dispatch.
+//
+// It answers in the object itself: +0x10 is the last event and +0x14 is how
+// many there have been.
+func nativeRecordingApplication(t *testing.T, platform *NativePlatform) uint32 {
+	t.Helper()
+	memory := platform.client.core.Memory()
+	// ldr r2, [r0, #0x14] / add r2, r2, #1 / str r2, [r0, #0x14]
+	// str r1, [r0, #0x10] / bx lr
+	handler := make([]byte, 0, 20)
+	for _, instruction := range []uint32{0xe5902014, 0xe2822001, 0xe5802014, 0xe5801010, 0xe12fff1e} {
+		word := make([]byte, 4)
+		binary.LittleEndian.PutUint32(word, instruction)
+		handler = append(handler, word...)
+	}
+	body := ImageBase + 0x100
+	if err := memory.Write(body, handler); err != nil {
+		t.Fatalf("plant the handler: %v", err)
+	}
+	table, err := platform.client.Allocate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	word := make([]byte, 4)
+	binary.LittleEndian.PutUint32(word, body)
+	if err := memory.Write(table+8, word); err != nil {
+		t.Fatalf("plant the dispatch: %v", err)
+	}
+	object, err := platform.client.Allocate(0x20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(word, table)
+	if err := memory.Write(object, word); err != nil {
+		t.Fatalf("plant the object: %v", err)
+	}
+	return object
+}
+
+// TestNativeKeySendsTheTypedEventBesideThePress covers the third key event.
+// The press and the release are not the whole contract: a later module keeps a
+// separate slot for the key that was *struck*, and one local title's opening
+// screen reads only that one — so a platform that sends the pair and not this
+// takes every key and acts on none of them.
+func TestNativeKeySendsTheTypedEventBesideThePress(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	platform.application = nativeRecordingApplication(t, platform)
+	object := platform.application
+	last := func() (uint32, uint32) {
+		t.Helper()
+		return binary.LittleEndian.Uint32(nativeRead(t, platform, object+0x10, 4)),
+			binary.LittleEndian.Uint32(nativeRead(t, platform, object+0x14, 4))
+	}
+
+	if err := platform.Key(context.Background(), NativeKeySelect, true); err != nil {
+		t.Fatalf("key down: %v", err)
+	}
+	event, count := last()
+	if count != 2 {
+		t.Errorf("a press sent %d events, want the down and the typed key", count)
+	}
+	if event != nativeEventKeyTyped {
+		t.Errorf("the last event of a press was %#x, want the typed key %#x", event, nativeEventKeyTyped)
+	}
+
+	if err := platform.Key(context.Background(), NativeKeySelect, false); err != nil {
+		t.Fatalf("key up: %v", err)
+	}
+	event, count = last()
+	if count != 3 {
+		t.Errorf("a release sent %d events in all, want one more", count)
+	}
+	if event != nativeEventKeyUp {
+		t.Errorf("a release sent %#x, want the up event %#x", event, nativeEventKeyUp)
+	}
+
+	// A key before the title has an object of its own is a refusal rather than
+	// a call into nothing.
+	platform.application = 0
+	if err := platform.Key(context.Background(), NativeKeySelect, true); err == nil {
+		t.Error("a key before the application existed was not refused")
+	}
+}
+
+// TestNativeImageKeepsItsOwnBitmap covers what the factory owns. The title
+// builds a bitmap, hands it over and **frees it on the next call**, so an
+// object left pointing at what it was handed points into the arena's next
+// tenant. The picture has to be this platform's copy, and the object has to
+// name that copy, because the title reads the object's first word and draws
+// through it.
+func TestNativeImageKeepsItsOwnBitmap(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	palette := []color.RGBA{
+		{R: 0xff, G: 0x00, B: 0xff, A: 0xff}, // the colour that is not drawn
+		{R: 0x10, G: 0x20, B: 0x30, A: 0xff},
+		{R: 0x40, G: 0x50, B: 0x60, A: 0xff},
+	}
+	bitmap := buildBitmap(2, 2, palette, []byte{1, 1, 0, 0, 1, 1, 0, 0})
+	handed, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := platform.client.core.Memory()
+	if err := memory.Write(handed, bitmap); err != nil {
+		t.Fatal(err)
+	}
+	object := nativeCall(t, platform.createObject, nativeClassImage, handed)
+	if object == 0 {
+		t.Fatal("the factory refused a bitmap it decodes")
+	}
+	kept := binary.LittleEndian.Uint32(nativeRead(t, platform, object, 4))
+	if kept == handed {
+		t.Fatal("the object names the bitmap it was handed, which the title frees")
+	}
+	if got := nativeRead(t, platform, kept, len(bitmap)); !bytes.Equal(got, bitmap) {
+		t.Error("the copy does not hold what was handed over")
+	}
+
+	// The title frees what it handed over, and the arena lets the block again.
+	platform.client.Free(handed)
+	reused, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != handed {
+		t.Logf("the arena let a different block (%#x, was %#x); the picture is what matters", reused, handed)
+	}
+	if err := memory.Write(reused, make([]byte, len(bitmap))); err != nil {
+		t.Fatal(err)
+	}
+	source := platform.images[object]
+	if source == nil {
+		t.Fatal("the platform kept no image for the object it built")
+	}
+	if err := platform.refresh(source); err != nil {
+		t.Fatalf("refresh after the title freed what it handed over: %v", err)
+	}
+	if got := source.frame.RGBAAt(0, 0); got != palette[1] {
+		t.Errorf("the picture is %v after the block it came in was re-let, want %v", got, palette[1])
+	}
+
+	// What the title draws into the copy afterwards is what a blit reads.
+	pixels := binary.LittleEndian.Uint32(bitmap[bitmapPixelOffsetField:])
+	if err := memory.Write(kept+pixels, []byte{2, 2, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.refresh(source); err != nil {
+		t.Fatalf("refresh after the title drew: %v", err)
+	}
+	// The rows are bottom-up, so the row written first is the bottom one.
+	if got := source.frame.RGBAAt(0, 1); got != palette[2] {
+		t.Errorf("what the title drew reads as %v, want %v", got, palette[2])
 	}
 }
