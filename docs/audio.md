@@ -274,6 +274,27 @@ sampled pops on every one of them.
 The fix costs nothing: the same multiply, a shift of eight instead of six, and
 the two nibbles swapped.
 
+### The two wave forms that are not compressed at all
+
+A score track can hang a sample off a channel and trigger it with note zero,
+and the gate in front of that let only 4-bit Yamaha ADPCM through. **Everything
+else was dropped without a word**, which is the right default for a format
+nobody has a reading of and the wrong one for a format that is bytes.
+
+A scan of every SMAF file in the local archives — 9,065 of them, from 557
+packages — says how much this is: 5,789 attached waves are ADPCM and **four are
+not**. All four are 8-bit offset-binary mono at 8 kHz, they are the four songs
+of one rhythm title, and two of those songs trigger theirs 138 and 114 times.
+So the melody played and the sample the beat is built on did not.
+
+Offset binary is what the format field says and what the bytes say: the wave's
+lead-in is `0x80` bytes, its silence, and read as offset binary the sample sits
+at a mean of -115 with a symmetric range where two's complement puts it at
+-9,221 against a rail. Both 8-bit forms are read now. **Sixteen-bit and stereo
+stay unplayed rather than guessed at** — no local archive carries one, so there
+is nothing to check a reading against, and a wave played wrong is worse than a
+wave not played.
+
 ### A clip a title refills is not a longer sound
 
 The specification says a clip's data "shrinks as the media player plays it and
