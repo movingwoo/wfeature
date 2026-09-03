@@ -451,6 +451,64 @@ func TestADPCMStepTableIsCarriedIn256ths(t *testing.T) {
 	}
 }
 
+// The two uncompressed wave forms a score track can hang off a channel. One
+// local title's four songs carry nothing else, and the gate that let only
+// ADPCM through played none of them. Offset binary puts silence at 0x80;
+// two's complement puts it at 0.
+func TestStreamWaveDecodesTheUncompressedForms(t *testing.T) {
+	for _, probe := range []struct {
+		name     string
+		wave     WaveData
+		want     []int16
+		playable bool
+	}{
+		{
+			name: "offset binary, eight bit",
+			wave: WaveData{Format: OffsetBinaryPCM, BaseBit: Bit8, Channels: Mono,
+				Data: []byte{0x80, 0xff, 0x00, 0xc0}},
+			want:     []int16{0, 32512, -32768, 16384},
+			playable: true,
+		},
+		{
+			name: "two's complement, eight bit",
+			wave: WaveData{Format: TwosComplementPCM, BaseBit: Bit8, Channels: Mono,
+				Data: []byte{0x00, 0x7f, 0x80, 0x40}},
+			want:     []int16{0, 32512, -32768, 16384},
+			playable: true,
+		},
+		{
+			// Nothing local carries one, so it stays unplayed rather than
+			// guessed at: a wave played wrong is worse than a wave not played.
+			name:     "sixteen bit is not read",
+			wave:     WaveData{Format: OffsetBinaryPCM, BaseBit: Bit16, Channels: Mono, Data: []byte{0, 0, 0, 0}},
+			playable: false,
+		},
+		{
+			name:     "stereo is not read",
+			wave:     WaveData{Format: OffsetBinaryPCM, BaseBit: Bit8, Channels: Stereo, Data: []byte{0x80, 0x80}},
+			playable: false,
+		},
+	} {
+		samples, playable := decodeStreamWave(probe.wave)
+		if playable != probe.playable {
+			t.Errorf("%s: playable = %v, want %v", probe.name, playable, probe.playable)
+			continue
+		}
+		if !playable {
+			continue
+		}
+		if len(samples) != len(probe.want) {
+			t.Errorf("%s: %d samples, want %d", probe.name, len(samples), len(probe.want))
+			continue
+		}
+		for index, want := range probe.want {
+			if samples[index] != want {
+				t.Errorf("%s: sample %d = %d, want %d", probe.name, index, samples[index], want)
+			}
+		}
+	}
+}
+
 // Helpers.
 
 type bitWriter struct {

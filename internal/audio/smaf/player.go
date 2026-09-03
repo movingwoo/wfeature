@@ -174,7 +174,11 @@ func sequenceEvents(
 				// Note zero plays the score track's attached wave rather than
 				// a pitch. The wave numbering is one-based against channels.
 				wave, ok := waves[channel+1]
-				if !ok || wave.Format != YamahaADPCM || wave.BaseBit != Bit4 || wave.Channels != Mono {
+				if !ok {
+					continue
+				}
+				samples, playable := decodeStreamWave(wave)
+				if !playable {
 					continue
 				}
 				events = append(events, Event{
@@ -182,7 +186,7 @@ func sequenceEvents(
 					Type:         EventWave,
 					WaveChannels: waveChannelCount(wave.Channels),
 					SamplingRate: uint32(wave.SamplingFreq),
-					Wave:         DecodeADPCM(wave.Data),
+					Wave:         samples,
 				})
 				continue
 			}
@@ -364,4 +368,41 @@ func saturatingAdd(value, increment uint8) uint8 {
 		return 0xff
 	}
 	return value + increment
+}
+
+// decodeStreamWave expands the wave a score track attached to a channel, and
+// reports whether this runtime can play it at all.
+//
+// **The two uncompressed forms are here because one title's are the only wave
+// its songs carry.** A rhythm title packages four songs whose score tracks each
+// hang an eight-bit sample off a channel, and the gate that let only ADPCM
+// through dropped all four: the melody played and the sample the beat is built
+// on did not. Offset binary is what the format field says and what the bytes
+// say — its silence is 0x80, and read as two's complement the same sample sits
+// at a mean of -9,221 against a rail instead of -115 centred.
+//
+// Sixteen-bit and stereo waves stay unplayable rather than guessed at: no local
+// archive carries one, so there is nothing to check a reading against, and a
+// wave played wrong is worse than a wave not played.
+func decodeStreamWave(wave WaveData) ([]int16, bool) {
+	if wave.Channels != Mono {
+		return nil, false
+	}
+	switch {
+	case wave.Format == YamahaADPCM && wave.BaseBit == Bit4:
+		return DecodeADPCM(wave.Data), true
+	case wave.Format == OffsetBinaryPCM && wave.BaseBit == Bit8:
+		samples := make([]int16, len(wave.Data))
+		for index, encoded := range wave.Data {
+			samples[index] = int16(int32(encoded)-128) << 8
+		}
+		return samples, true
+	case wave.Format == TwosComplementPCM && wave.BaseBit == Bit8:
+		samples := make([]int16, len(wave.Data))
+		for index, encoded := range wave.Data {
+			samples[index] = int16(int8(encoded)) << 8
+		}
+		return samples, true
+	}
+	return nil, false
 }
