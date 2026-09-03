@@ -17,6 +17,15 @@ var (
 	ErrFrameLimit = errors.New("JVM frame limit exceeded")
 )
 
+// NativeMethod is a method body written in Go.
+//
+// **The arguments are borrowed for the length of the call.** The interpreter
+// pops them into a slice it takes from the execution and gives back when the
+// call returns, so a body that keeps the slice would be reading a later call's
+// arguments. Keep the values, not the slice; every native in this repository
+// already does, which is what made the borrow possible. The slice is emptied
+// when it is given back, so a body that breaks this reads zero values and fails
+// on its own argument check rather than quietly answering with someone else's.
 type NativeMethod func(vm *VM, arguments []Value) (Value, error)
 
 // AOTInvoker executes a platform-owned AOT method when interpreted bytecode
@@ -512,7 +521,7 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 	vm.mu.RUnlock()
 	contextNative, native := entry.context, entry.plain
 	if contextNative != nil {
-		result, err := contextNative(vm, state, append([]Value(nil), arguments...))
+		result, err := contextNative(vm, state, arguments)
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
 		}
@@ -523,7 +532,7 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 		return result, nil
 	}
 	if native != nil {
-		result, err := native(vm, append([]Value(nil), arguments...))
+		result, err := native(vm, arguments)
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
 		}
@@ -625,16 +634,10 @@ func (vm *VM) invokeInstanceReceived(
 		}
 		var result Value
 		var err error
-		// A native is given its own copy, the way the static path has always
-		// given one: the interpreter borrows the slice it popped into from the
-		// execution and takes it back when the call returns, so a native that
-		// kept the slice it was handed would be reading the next call's
-		// arguments. See takeValues.
-		own := append([]Value(nil), combined...)
 		if contextNative != nil {
-			result, err = contextNative(vm, state, own)
+			result, err = contextNative(vm, state, combined)
 		} else {
-			result, err = native(vm, own)
+			result, err = native(vm, combined)
 		}
 		if synchronizedNative {
 			if exitErr := receiver.monitor.exit(state.id); err == nil && exitErr != nil {

@@ -595,11 +595,11 @@ bytecode callee does.
 
 | | before | after | |
 |---|---|---|---|
-| instance call | 442 ns, 1.01 allocs | **405 ns, 0.02 allocs** | -8% |
-| static call | 390 ns, 1.01 allocs | **347 ns, 0.01 allocs** | -11% |
-| call that also allocates an object | 1237 ns, 6.01 allocs | **1100 ns, 4.01 allocs** | -11% |
-| static native | 330 ns, 2.01 allocs | **310 ns, 1.01 allocs** | -6% |
-| instance native | 354 ns, 2.01 allocs | 358 ns, 2.01 allocs | +1% |
+| instance call | 442 ns, 1.01 allocs | **406 ns, 0.02 allocs** | -8% |
+| static call | 390 ns, 1.01 allocs | **340 ns, 0.01 allocs** | -13% |
+| call that also allocates an object | 1237 ns, 6.01 allocs | **1112 ns, 3.01 allocs** | -10% |
+| static native | 330 ns, 2.01 allocs | **287 ns, 0.01 allocs** | -13% |
+| instance native | 354 ns, 2.01 allocs | **341 ns, 1.01 allocs** | -4% |
 
 **There were two tables of registered natives and the interpreter asked both**,
 on every call, for an answer that is almost always "neither" — two hashes of a
@@ -613,13 +613,21 @@ is all a frame ever wanted. The cached parse stays where the parameters are
 wanted, which is the interpreter deciding how much to pop.
 
 **The argument slice is borrowed from the execution now**, the way frames
-already were. It can be, because nothing keeps it: a bytecode callee's frame
-copies it into locals before the first instruction runs, and a native is handed
-a copy — the static path always made one, and the instance path makes one too,
-so what a native may do with its arguments is now the same question on both
-paths. That is the row where a native pays: it trades the slice the interpreter
-used to allocate for a copy of its own, which is why the static native row
-improves and the instance native row does not.
+already were, and **a native is lent it rather than given a copy of it**.
+
+The first shape of this did copy, on the reasoning that a native is arbitrary Go
+code. Then a real title said what that costs: over five seconds of one archive
+the copy was **82% of everything allocated**, because a title's calls into the
+platform are its drawing, and drawing takes arguments. The question the copy was
+answering — does any native keep the slice it was handed — is one that can be
+asked of the repository instead of guessed at, and the answer is no: every one
+reads its arguments by index and keeps the values, not the slice.
+
+So the contract is written down on `NativeMethod` instead: **the arguments are
+borrowed for the length of the call.** A body that broke it would read zero
+values rather than someone else's, because the slice is emptied when it goes
+back, and fail on its own argument check. Removing the copy took the same
+archive's five seconds from 388MB allocated to 76MB.
 
 **And one `defer` in the wrong function cost a fifth of a call.** Returning the
 slice on every way out is one deferred call, and `step` is the largest function
@@ -629,7 +637,30 @@ than the allocation it was there to avoid: 406 ns to 512. The four invoke
 instructions are their own function now, which is where the defer is cheap, and
 which leaves `step`'s switch smaller besides.
 
-**What is left is `step` itself.** The profile is the switch (18%), the frame's
+**And what a title allocates is no longer the call path at all.** Reading a
+guest byte array copied it twice: once into a `[]Value` — twenty-four bytes an
+element — and once into the `[]byte` the caller wanted, so a 64KB array cost
+1.5MB to look at. `ByteArraySnapshot` fills the bytes under one read lock now,
+through `ByteArrayReader` where a storage can do it directly. The default heap
+storage skips the middle slice; **KTF's guest-memory storage skips the decode
+as well**, because a byte array in guest memory already is the bytes — one
+`Memory().Read` into the caller's slice.
+
+The same archive over the same five seconds, across the four passes:
+
+| | allocated |
+|---|---|
+| before any of this | 615 MB |
+| frames and the call path | 388 MB |
+| natives lent their arguments | 76 MB |
+| byte arrays read once | **21 MB** |
+
+A storage that does not implement `ByteArrayReader` still goes through
+`LoadRange`, because one that keeps its elements elsewhere may have a reason to
+fetch a run at once rather than an element at a time — which is exactly what
+KTF's does for every other component width.
+
+**What is left in a call is `step` itself.** The profile is the switch (18%), the frame's
 own push, pop and local access (11%), the remaining map lookups (5%), and
 garbage collection driven by what a title allocates rather than by what a call
 does. The first two are what a bytecode interpreter is, so **a resolution
