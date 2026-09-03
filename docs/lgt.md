@@ -3860,6 +3860,33 @@ resolves classes — including, on the way through its own members, the one bein
 laid out. Answering that re-entry with a half-built class hands back a null,
 and the null surfaces at an allocation several calls later.
 
+### The application asks the platform for itself
+
+The object the launcher builds is the one thing a title cannot reach on its
+own. A `Card`'s `paint` and a listener's callback are entered with no reference
+to the application, so a title that needs one asks for it by name — and the
+call it uses is a *static* one, which is why the launcher's local variable was
+not enough. One title's title screen calls
+`Jlet.getCurrentJlet()Lorg/kwis/msp/lcdui/Jlet;` from inside `GameCanvas.paint`
+the first time a key is pressed there, and until the platform kept the object
+that stopped the title with an unimplemented static entry — the screen before
+its opening.
+
+So the launcher records the instance it allocated, before `<init>` runs rather
+than after: the constructor is the first guest code that can ask. The
+specification has two spellings — `getActiveJlet` for "the Jlet at the top" and
+`getCurrentJlet` for "the Jlet running now" — and a handset that runs several
+programs can tell them apart. **This one runs a single program**, so they are
+one object and both answer it, which is the reading the KTF runtime already
+took for the same pair. Before the launcher has built one the answer is null,
+which is the honest answer there rather than a stop: nothing has been started.
+
+What the call site does with it is a type check — it reads the object's vtable
+word in front of slot 0, which is the class, and hands that to the module's own
+comparison — so a wrong object here would not have failed at the call. That is
+the ordinary reason to answer a slot with the platform's own record of what it
+handed out rather than with anything reconstructed.
+
 ### Reading a module without running it
 
 The findings above came out of the ELF rather than a run, because the metadata

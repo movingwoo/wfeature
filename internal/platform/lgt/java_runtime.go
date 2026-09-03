@@ -151,6 +151,10 @@ type javaRuntime struct {
 	// serial is what `Display.callSerially` has been handed and not yet run.
 	// See java_frame.go.
 	serial []uint32
+	// jlet is the application object the launcher built: the one instance of
+	// the title's own Jlet subclass, which is what `getCurrentJlet` answers.
+	// See java_launcher.go.
+	jlet uint32
 }
 
 func newJavaRuntime() *javaRuntime {

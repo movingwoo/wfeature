@@ -307,6 +307,14 @@ type initializationRuntime struct {
 	// itself owns the screen for that round, and painting its card on top of
 	// it is what wiped one title's picture once a frame.
 	guestFlushedOwnFrame bool
+	// guestHasPainted records that the guest has painted a frame itself —
+	// Card.repaint and then Card.serviceRepaints — and roundsSinceGuestPaint
+	// how many Host rounds ago. A title that drives its own painting is asking
+	// for exactly the frames it wants, and the Host's own unconditional round
+	// paint stops being a service and becomes an extra frame. See paintTopCard
+	// for the window these are read against and why there is one.
+	guestHasPainted       bool
+	roundsSinceGuestPaint int
 	// events is the WIPI event queue a game drains itself with
 	// EventQueue.getNextEvent; guestEventLoop records that it does, which moves
 	// key delivery from the Host's direct card dispatch to the queue.
