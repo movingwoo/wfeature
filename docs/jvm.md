@@ -470,3 +470,95 @@ running, so destroying the MIDlet is what stops a runaway guest thread. That is
 the same shape the WIPI platforms use for ARM guests, where one window's
 exhaustion is a renewal request and cancelling the context is the only stop
 (`docs/ktf.md`).
+
+## What a guest instruction cost, and the two things that were not emulation
+
+A player reported that the same title is far slower on this vendor than on
+either WIPI platform, and it was — but most of the difference was not the
+interpreter. Two lines were.
+
+### A log line per bytecode instruction
+
+The interpreter loop carried an ungated `Logger.Debug("jvm instruction", …)`.
+The other execution core has no per-instruction log at all, so this was the
+whole of the asymmetry, and it charged twice over:
+
+- **A debug build wrote it.** Its level is `Debug`, so every instruction a title
+  executed became a formatted line on stderr — 55,329 of them in three ticks of
+  one archive, which is on the order of a million lines a second of play. The
+  server a person runs at home is a debug build.
+- **A release build built it and threw it away.** `slog` evaluates a call's
+  arguments before the handler decides whether to keep them, so the
+  `fmt.Sprintf` for the opcode and the boxing of six attributes happened for
+  every instruction at every level.
+
+One archive, 300 ticks, CPU:
+
+| profile | before | after |
+|---|---|---|
+| release | 3.90s | 1.25s |
+| debug | 12.74s | 0.70s |
+
+The gate is asked once, in `New`, because the logger and its level are settled
+once; the loop reads a bool. **And the trace is now a flag rather than something
+a debug build does on its own** — `runskt -trace`, the bargain `runlgt -trace N`
+already made. A trace that is on by default is not a diagnostic: it costs more
+than the thing it is watching and moves every timing it was opened to look at.
+
+### Thread.yield was a scheduler round trip
+
+`java.lang.Thread.yield()` was `runtime.Gosched()`. The titles that call it do
+not call it once: one local archive has **thirty-eight call sites**, which is
+the idiom of a handset whose scheduler was cooperative — a thread that did not
+yield did not let anything else run, so a game sprinkled the call through
+everything it did.
+
+Here a guest thread is a goroutine and Go preempts it whether it asks or not, so
+every one of those calls bought nothing and cost a wake. A CPU profile of such a
+title spent **63% of its samples in `runtime.wakep`** under that line. Removing
+it took a title's CPU from 7.35s to 5.52s over the same 300 ticks with the same
+number of frames produced. `Options.ThreadYield` stays for a platform that
+really does have a token to hand over; none here does.
+
+### One allocation per call instead of two
+
+The interpreter popped a call's arguments into one slice and `invokeInstance`
+then copied them into a second with the receiver in front — and that second
+`make` was **eighty per cent of everything a title allocated**. The interpreter
+now pops into a slice with the receiver's slot already in front of it.
+
+It is worth having and it is not the answer: 21 to 19 allocations per call, and
+about 1.8% of the time. **A guest method call still allocates nineteen times and
+takes 1.8µs**, which is half a million calls a second, and that is where the
+remaining budget is.
+
+### Why this could not be measured end to end
+
+A MIDlet has no tick of its own: its threads pace themselves against the wall
+clock, and the Host tick presents what they drew. So a fixed number of ticks is
+a fixed number of *seconds*, and a faster engine spends them doing more work
+rather than finishing sooner. Every end-to-end number lies in a different
+direction:
+
+- wall time is flat, because it is the pacing;
+- CPU time is ambiguous — a *slower* engine can burn less of it, because it gets
+  less done in the same seconds;
+- allocation totals go **up** when the engine improves. The same archive over
+  the same five seconds allocated 208MB, then 355MB, then 615MB as each fix
+  landed.
+
+So the judgement instrument is a benchmark where the work is fixed and the clock
+is the answer: `BenchmarkGuestInstanceCall`, `BenchmarkGuestInterfaceCall` and
+`BenchmarkGuestLoop` in `internal/jvm`, which is the shape `internal/armcore`
+already uses. `TestLocalSKTArchiveCost` in `internal/platform/skt` is the
+profiling harness beside them, and the macOS warning in
+[`testing.md`](testing.md) applies to what it produces.
+
+**The regression net for a change like this is not the frame.** A title that
+animates reaches a different point of its animation in the same wall second once
+the engine is faster, so a frame diff reports every such title. What is read
+instead is the run's outcome: over all ninety-one local archives the state and
+the error text are unchanged, one title that destroys itself reaches its own
+exit eleven ticks sooner, and the one archive whose lit-pixel count moved is a
+cross-fade that both builds agree on when it is run on its own rather than six
+at a time.

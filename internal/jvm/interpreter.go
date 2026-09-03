@@ -44,7 +44,7 @@ func (vm *VM) execute(
 		opcodePC := frame.pc
 		opcode, _ := frame.byte()
 		state.steps++
-		if vm.config.Logger != nil {
+		if vm.traceInstructions {
 			vm.config.Logger.Debug("jvm instruction",
 				"class", class.Name,
 				"method", method.Name,
@@ -401,7 +401,14 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		if err != nil {
 			return stepResult{}, err
 		}
-		arguments := make([]Value, len(methodType.Parameters))
+		// One slice with the receiver's slot in front of the arguments. A
+		// bytecode frame's locals and a native's argument list both start with
+		// `this`, so building the arguments alone and prepending the receiver
+		// afterwards allocated twice per guest method call — and that was
+		// eighty per cent of everything a title allocated. A static call spends
+		// the leading slot and hands over the rest.
+		slots := make([]Value, len(methodType.Parameters)+1)
+		arguments := slots[1:]
 		for argumentIndex := len(arguments) - 1; argumentIndex >= 0; argumentIndex-- {
 			arguments[argumentIndex], err = frame.pop()
 			if err != nil {
@@ -432,7 +439,8 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		if opcode == 0xb7 {
 			lookupClass = reference.Class
 		}
-		result, err := vm.invokeInstance(state, lookupClass, receiver, reference.Name, reference.Descriptor, arguments)
+		slots[0] = ReferenceValue(receiver)
+		result, err := vm.invokeInstanceReceived(state, lookupClass, receiver, reference.Name, reference.Descriptor, slots)
 		if err != nil {
 			return stepResult{}, err
 		}
