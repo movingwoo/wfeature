@@ -1043,3 +1043,184 @@ func TestNativeLoaderPlantsWhatAModuleLooksForBelowItself(t *testing.T) {
 		t.Errorf("read the room above the entry stack pointer: %v", err)
 	}
 }
+
+// nativeGateModule is a module that opens the way the later generation opens:
+// it loads the word two below its own image and compares it against the
+// version this loader plants. Nothing executes it — what it is for is the
+// question "which generation is asking", which is answered from the bytes.
+func nativeGateModule() []byte {
+	module := make([]byte, 0x40)
+	for _, instruction := range []struct {
+		at   int
+		word uint32
+	}{
+		{at: 0x00, word: 0xe92d400e}, // push {r1, r2, r3, lr}
+		{at: 0x04, word: 0xe1a0c002}, // mov ip, r2
+		{at: 0x08, word: 0xe59f2038}, // ldr r2, [pc, #0x38]
+		{at: 0x0c, word: 0xe08f2002}, // add r2, pc, r2
+		{at: 0x10, word: 0xe5122008}, // ldr r2, [r2, #-8]
+		{at: 0x14, word: 0xe3520b40}, // cmp r2, #0x10000
+		{at: 0x18, word: 0xe12fff1e}, // bx lr
+	} {
+		binary.LittleEndian.PutUint32(module[instruction.at:], instruction.word)
+	}
+	return module
+}
+
+// TestAsksForInterfaceVersionTellsTheGenerationsApart covers the question the
+// file interface's answer depends on. The two generations of this package
+// disagree about what a call means, and the module that asks what AEE it is
+// running on is the one that means the later thing.
+func TestAsksForInterfaceVersionTellsTheGenerationsApart(t *testing.T) {
+	later := &NativeArchive{Module: nativeGateModule()}
+	if !later.AsksForInterfaceVersion() {
+		t.Error("a module that gates on the version was read as one that does not")
+	}
+	// The 2005 module's own opening, which never reads the word.
+	earlier := make([]byte, 0x40)
+	for index, word := range []uint32{
+		0xe92d400e, // push {r1, r2, r3, lr}
+		0xe3a03000, // mov r3, #0
+		0xe58d3000, // str r3, [sp]
+		0xe58d3004, // str r3, [sp, #4]
+		0xe1a03002, // mov r3, r2
+		0xe1a02001, // mov r2, r1
+		0xe1a01000, // mov r1, r0
+		0xe3a00014, // mov r0, #0x14
+	} {
+		binary.LittleEndian.PutUint32(earlier[index*4:], word)
+	}
+	if (&NativeArchive{Module: earlier}).AsksForInterfaceVersion() {
+		t.Error("a module that never reads the word was read as one that gates on it")
+	}
+	// A module too short to hold the pair is the earlier answer rather than a
+	// read past its end.
+	if (&NativeArchive{Module: []byte{1, 2, 3}}).AsksForInterfaceVersion() {
+		t.Error("a module shorter than the pair answered as though it carried it")
+	}
+	if (*NativeArchive)(nil).AsksForInterfaceVersion() {
+		t.Error("no archive answered as though it carried the gate")
+	}
+}
+
+// TestNativeFileTestAnswersTheGenerationThatAsked covers the call the two
+// generations read the opposite ways round. Both readings were checked by
+// running them: the later modules take zero as "the name is there", and the
+// 2005 module takes non-zero as "the name is there" and loses its save when it
+// is told otherwise.
+func TestNativeFileTestAnswersTheGenerationThatAsked(t *testing.T) {
+	files := map[string][]byte{"a title/data.bin": []byte("0123456789")}
+	for _, testCase := range []struct {
+		name           string
+		module         []byte
+		there, missing uint32
+	}{
+		{name: "the 2005 module", module: nil, there: 1, missing: 0},
+		{name: "a module that asks for a version", module: nativeGateModule(), there: 0, missing: nativeFileFailed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			platform := newTestNativePlatform(t, files)
+			if testCase.module != nil {
+				platform.archive.Module = testCase.module
+			}
+			there := nativeString(t, platform, "data.bin")
+			missing := nativeString(t, platform, "nothing.bin")
+			if got := nativeCall(t, platform.fileExists, 0, there); got != testCase.there {
+				t.Errorf("a name the package carries answered %d, want %d", got, testCase.there)
+			}
+			if got := nativeCall(t, platform.fileExists, 0, missing); got != testCase.missing {
+				t.Errorf("a name it does not answered %d, want %d", got, testCase.missing)
+			}
+		})
+	}
+}
+
+// TestNativePostedEventsComeBackOnTheNextTick covers how the later generation
+// runs at all. Its start-up ends by posting an event to itself, and a platform
+// that drops the post leaves a title that has finished starting up with
+// nothing to do next. Delivery is on the next tick and not inside the call:
+// the module posts from inside the handler that is running.
+func TestNativePostedEventsComeBackOnTheNextTick(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	thread := armcore.NewThread(armcore.NewContext())
+	// The first four arguments are in registers and the last two on the stack,
+	// which is where the calling standard puts them.
+	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x100
+	for index, value := range []uint32{0, 0, 0x103267f, 0x7009} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
+		t.Fatal(err)
+	}
+	spilled := make([]byte, 8)
+	binary.LittleEndian.PutUint32(spilled, 1)
+	binary.LittleEndian.PutUint32(spilled[4:], 0x2a)
+	if err := platform.client.core.Memory().Write(stack, spilled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.postEvent(thread); err != nil {
+		t.Fatalf("post an event: %v", err)
+	}
+	if len(platform.posted) != 1 {
+		t.Fatalf("posted %d events, want 1", len(platform.posted))
+	}
+	want := nativePostedEvent{Class: 0x103267f, Event: 0x7009, First: 1, Secon: 0x2a}
+	if platform.posted[0] != want {
+		t.Errorf("posted %+v, want %+v", platform.posted[0], want)
+	}
+	// Delivery needs an application to deliver to, and a run that has none is
+	// a run that has not created one yet rather than one to fail.
+	if err := platform.deliverPosted(context.Background()); err != nil {
+		t.Fatalf("deliver with no application: %v", err)
+	}
+	if len(platform.posted) != 1 {
+		t.Error("the queue was emptied with nothing to deliver it to")
+	}
+	// The bound is what turns a title posting to itself for ever into a report
+	// rather than memory that never comes back.
+	platform.posted = make([]nativePostedEvent, maxNativePostedEvents)
+	if _, err := platform.postEvent(thread); err == nil {
+		t.Error("a title posting past the bound was not reported")
+	}
+}
+
+// TestNativeResumeRunsOnceAndIsNotRearmed covers the other half of the same
+// contract. The title asks to be called once more; a platform that kept
+// calling would be running a frame the title never asked for.
+func TestNativeResumeRunsOnceAndIsNotRearmed(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	// The module's own entry is `bx lr`, so it is something this can call.
+	if got := nativeCall(t, platform.resume, 0, ImageBase, 0x1234); got == 0 {
+		t.Fatal("asking to be resumed was refused")
+	}
+	if len(platform.resumes) != 1 || platform.resumes[0] != (nativeResume{Function: ImageBase, Context: 0x1234}) {
+		t.Fatalf("resumes = %+v, want the one that was asked for", platform.resumes)
+	}
+	if err := platform.deliverResumes(context.Background()); err != nil {
+		t.Fatalf("deliver a resume: %v", err)
+	}
+	if len(platform.resumes) != 0 {
+		t.Error("a resume was left queued after it ran")
+	}
+	// A null function is nothing to call rather than a jump to zero.
+	if got := nativeCall(t, platform.resume, 0, 0, 0); got != 0 {
+		t.Errorf("a resume with no function answered %d, want 0", got)
+	}
+	if len(platform.resumes) != 0 {
+		t.Error("a resume with no function was queued")
+	}
+}
+
+// TestNativeScreenColourIsRecorded covers the pair a later module sets before
+// it draws its own text. Nothing draws with them yet, so what this pins is
+// that the call is not silently losing them.
+func TestNativeScreenColourIsRecorded(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	nativeCall(t, platform.screenColour, 0, 2, 0xffffff00)
+	nativeCall(t, platform.screenColour, 0, 1, 0)
+	if got := platform.Colours(); len(got) != 2 || got[2] != 0xffffff00 || got[1] != 0 {
+		t.Errorf("colours = %v, want the two the title set", got)
+	}
+}

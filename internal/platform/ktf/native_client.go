@@ -172,6 +172,46 @@ type nativeSurfaceTable struct {
 	stubs uint32
 }
 
+// AsksForInterfaceVersion reports whether a module gates on the version word
+// two below its image, which is what tells the two generations of this package
+// apart from the module alone.
+//
+// The later generation opens by loading `[base - 8]` and comparing it against
+// the version this loader plants; the 2005 module never reads the word. Both
+// are ARM at their entry and both put the pair within their first sixteen
+// instructions, so this is a fixed-size look rather than a scan — and it
+// matches the two instructions rather than their exact encodings, because the
+// literal offset the module loads its own base through is its own business.
+//
+// It is a version check and it is used as one: where the two generations
+// disagree about what a call means, this is what says which one is asking. See
+// docs/ktf.md, "The file interface answers the generation that asked".
+func (archive *NativeArchive) AsksForInterfaceVersion() bool {
+	if archive == nil {
+		return false
+	}
+	const (
+		// ldr rD, [rN, #-8]
+		loadBelowBase = 0xE5100008
+		loadBelowMask = 0xFFF00FFF
+		// cmp rN, #0x10000
+		compareVersion     = 0xE3500B40
+		compareVersionMask = 0xFFF0FFFF
+	)
+	const window = 16
+	for index := 0; index+2 <= window; index++ {
+		if (index+2)*4 > len(archive.Module) {
+			break
+		}
+		word := binary.LittleEndian.Uint32(archive.Module[index*4:])
+		next := binary.LittleEndian.Uint32(archive.Module[index*4+4:])
+		if word&loadBelowMask == loadBelowBase && next&compareVersionMask == compareVersion {
+			return true
+		}
+	}
+	return false
+}
+
 // LoadNativeClient maps a module and plants a fully trapping platform table
 // below it.
 func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*NativeClient, error) {

@@ -4112,7 +4112,11 @@ answering one sends it to the dialog offering to authenticate over the
 network.** So zero is the certificate being accepted, which is what a handset
 with a valid one answers.
 
-### Where the two stand
+### Where the two stand, after the first pass
+
+Superseded by "Where the two stand, after the second pass" below; kept because
+what each of them was stopped by is what the sections between here and there
+answer.
 
 - **`[큰화]로맨스소드` reaches its title screen.** Start-up, its data, its
   publisher screen, its own artwork and its text all come out, and nothing on
@@ -4129,6 +4133,105 @@ with a valid one answers.
   and a manager object told about both — is what the title needs next, and none
   of it is guessable from where the run stops. Its call sites are in the module
   at `0x10c230` and `0x10c2f0`.
+
+### The file interface answers the generation that asked
+
+The test call — "is this name there" — is read **the opposite ways round by the
+two generations**, and both readings were established by running them rather
+than by reading one of them.
+
+The later modules take **zero** as "the name is there". One reads its
+authentication marker on a zero and puts "인증 요청중입니다 / 이 요청은 한번만 /
+수행됩니다" on the screen on anything else, which is a network authentication it
+does not need: the file it was asking about is in its own archive. The other
+loads its data on a zero. The 2005 module takes **non-zero** as "the name is
+there": it skips the create beside it and opens.
+
+Turning the answer round to suit the later two costs the 2005 archive its save
+and seven eighths of its drawing — 221342 draws to 3010, 65 images to 8, and
+`kenviron.cfg` never written. That is not a subtle regression, and it is what
+says the two are genuinely different rather than one of them being misread.
+
+**So the answer is the asking module's generation, and the module says which
+one it is.** `AsksForInterfaceVersion` looks for the version gate in the first
+sixteen instructions of the entry: a load of `[base - 8]` and a compare against
+`0x10000`. It matches the two instructions rather than their encodings, because
+the offset a module loads its own base through is its own business. It is a
+version check being used as one — the module is asking what AEE it is running
+on, and what a call means on this interface is a property of that AEE.
+
+The information call keeps one answer for both, zero on success, because the
+2005 module never looks at it.
+
+### A later module drives itself by posting
+
+The 2005 module registers a frame — an interval, a function and a context — and
+everything it does happens inside that function. **A later module registers
+nothing.** Its start-up ends like this:
+
+```
+ldr  r2, [r0, #8]         ; a parameter of its own
+adds r3, r6, #0           ; 0x7009, an event number of the title's own
+ldr  r0, [r0, #0x10]      ; the object the entry was handed
+ldr  r4, [r1, #0x54]
+movs r1, #0               ; no flags
+bl   veneer               ; (this, flags, class, event, w, dw)
+```
+
+The class it names is **its own**, the ClassID out of its own information file,
+and the event goes back to the same handler a key goes to. So this generation
+runs by posting to itself, and a platform that drops the post leaves a title
+that has finished starting up with nothing to do next — which is exactly what
+"starts and registers no frame" was.
+
+Two things follow, and both are the difference between a queue and a call:
+
+- **The post is delivered on the next tick, not inside the call.** The module
+  posts from inside the handler that is running; delivering it there would
+  re-enter that handler on its own stack.
+- **A tick has to run whether or not a frame is registered.** The frame is the
+  2005 module's way of running and this is the later one's, so a Tick that
+  returns early when there is no frame never delivers the post that would
+  create one. Once the post arrives, this title registers a frame of its own
+  after all — every 80ms — and the loop is the one this platform already runs.
+
+Beside it, slot `0x30` takes a function and a context and **no interval**,
+which is what separates it from the schedule: the title asks to be called once
+more. It is delivered the same way and not re-armed; the local title asks
+again when it wants another.
+
+### Two colours, recorded rather than drawn
+
+Slot `0x28` of the screen takes an item number and a colour, and a later module
+sets two of them before it draws its own text — item 2 to `0xffffff00` and item
+1 to zero, the same red-green-blue-and-a-spare word the bitmap palette uses.
+Neither answer is read. They are recorded rather than acted on because
+**nothing on this platform draws text for this package**: the 2005 title draws
+its own glyphs as 1x1 rectangles, and the screen's text slot is where a later
+one's dialogs go. A colour recorded is a colour that call is not silently
+losing when that gap is closed.
+
+### Where the two stand, after the second pass
+
+- **`[큰화]로맨스소드` reaches its title screen, with sound.** Reading the file
+  test the later way puts it on the path that loads `lcdinfo.dat` and its own
+  certificate and plays its opening music: four clips set, two started, two
+  stopped, and 400 frames presented. Nothing on that route traps. A key still
+  reaches it — its handler stores the code at `+0x960` of its own object and
+  answers 1, which the disassembly and a run both say — and the state machine
+  that reads that code does not act on it. **That is a state this platform can
+  no longer see the outside of: nothing is unanswered, so the next step is
+  reading the title's own state machine rather than watching for a trap.**
+- **`컴투스_맞고_2006` starts, loads and presents.** It authenticates against
+  its own archive rather than the network, reads its handset record, loads
+  eighteen resources out of `matgo2006.bar`, registers its 80ms frame and
+  presents twice. Its screen is still almost empty: it blits twenty regions out
+  of a surface of its own that it has not drawn into — re-decoding that surface
+  on every blit changes nothing, so the surface really is empty — and its step
+  function is gated on a flag at `+0x1748` of its own state that nothing has
+  set. The two things to look at next are what sets that flag and the screen's
+  text slot, and the second of those is a gap this platform has rather than a
+  question about this title.
 
 ## A module compiled against a longer superclass
 

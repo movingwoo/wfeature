@@ -103,6 +103,18 @@ type NativePlatform struct {
 	// fileFailure is what the file interface's error report answers. See
 	// nativeFileLastError.
 	fileFailure uint32
+	// posted holds the events the title has sent itself and not yet been given
+	// back. See nativeObjectPostEvent.
+	posted []nativePostedEvent
+	// resumes holds the calls the title asked to have run once more. See
+	// nativeObjectResume.
+	resumes []nativeResume
+	// colours holds what the title set through nativeScreenColour, by the item
+	// number it named. Nothing draws with them yet; they are kept because the
+	// call that sets them is on the route to a screen this platform can not
+	// yet put text on, and a colour recorded is a colour that call is not
+	// silently losing.
+	colours map[uint32]uint32
 }
 
 // The flat platform table, by the byte offset the module indexes it with.
@@ -273,6 +285,8 @@ func (platform *NativePlatform) Install() error {
 	client.ServeQueryInterface(NativeEntryObject, nativeObjectQueryInterface)
 	client.Serve(NativeEntryObject, nativeObjectDisplayInfo, platform.displayInfo)
 	client.Serve(NativeEntryObject, nativeObjectSchedule, platform.schedule)
+	client.Serve(NativeEntryObject, nativeObjectPostEvent, platform.postEvent)
+	client.Serve(NativeEntryObject, nativeObjectResume, platform.resume)
 	client.Serve(NativeEntryObject, nativeObjectLoadResource, platform.loadResource)
 	client.Serve(NativeEntryObject, nativeObjectFreeResource, platform.freeResource)
 
@@ -463,6 +477,12 @@ const nativeSlotDestroyObject = 0xbc
 const (
 	nativeScreenMessage   = 0x10
 	nativeScreenKeepAwake = 0x24
+	// nativeScreenColour takes an item number and a colour, and a later module
+	// sets two of them before it draws its own text: item 2 to 0xffffff00 and
+	// item 1 to 0. The low byte is not part of the colour in either — this is
+	// the same red-green-blue-and-a-spare word the bitmap palette uses — and
+	// neither answer is read.
+	nativeScreenColour = 0x28
 )
 
 // The later modules create one more object, and both of them create the same
@@ -507,6 +527,7 @@ func (platform *NativePlatform) installRemaining() {
 	screen := nativeInterfaceSurface(nativeInterfaceApplication)
 	client.Serve(screen, nativeScreenMessage, platform.screenMessage)
 	client.Serve(screen, nativeScreenKeepAwake, nativeAnswerOne)
+	client.Serve(screen, nativeScreenColour, platform.screenColour)
 
 	certificate := nativeInterfaceSurface(nativeInterfaceCertificate)
 	client.Serve(certificate, nativeCertificateCheck, nativeAnswerCertificate)
@@ -553,6 +574,22 @@ func (platform *NativePlatform) screenMessage(thread *armcore.Thread) (uint32, e
 
 // Messages reports the status lines the title asked the handset to show.
 func (platform *NativePlatform) Messages() []string { return platform.messages }
+
+// screenColour records one of the colours the title set.
+func (platform *NativePlatform) screenColour(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 3)
+	if err != nil {
+		return 0, err
+	}
+	if platform.colours == nil {
+		platform.colours = map[uint32]uint32{}
+	}
+	platform.colours[arguments[1]] = arguments[2]
+	return 0, nil
+}
+
+// Colours reports what the title set, by item number.
+func (platform *NativePlatform) Colours() map[uint32]uint32 { return platform.colours }
 
 // ResourceNotes reports every resource request that went unanswered.
 func (platform *NativePlatform) ResourceNotes() []string { return platform.resourceNotes }

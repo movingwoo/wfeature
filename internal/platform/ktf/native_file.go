@@ -29,6 +29,15 @@ const (
 	// those creates — it makes a scratch file to find out whether the handset
 	// has room, and puts "not enough file system memory" on the screen when
 	// the answer is no.
+	//
+	// **The two generations of this package disagree about the answer**, and
+	// both readings were checked by running them. The later modules take zero
+	// as "the name is there" — one reads the file on a zero and authenticates
+	// over the network on anything else, the other loads its data on a zero —
+	// and the 2005 module takes non-zero as "the name is there", skipping the
+	// create beside it and, when the answer is turned round, losing its save
+	// and seven eighths of its drawing. So the answer is the asking module's
+	// generation, and AsksForInterfaceVersion is what says which one that is.
 	nativeFileExists = 0x1c
 	nativeFileCreate = 0x10
 	// nativeFileInformation takes a name and a record to fill. The module
@@ -339,7 +348,14 @@ func (platform *NativePlatform) fileExists(thread *armcore.Thread) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	if _, ok := platform.contents(name); ok {
+	_, ok := platform.contents(name)
+	if platform.archive.AsksForInterfaceVersion() {
+		return platform.fileResult(ok), nil
+	}
+	// The older generation reads it the other way round, and its own create
+	// call beside this one is what says so.
+	platform.fileFailure = 0
+	if ok {
 		return 1, nil
 	}
 	return 0, nil
@@ -358,7 +374,7 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 	if _, ok := platform.contents(name); !ok {
 		platform.create(strings.ToLower(path.Base(name)))
 	}
-	return 1, nil
+	return platform.fileResult(true), nil
 }
 
 // create makes an empty file, and keep records what the title wrote. Both go
