@@ -1633,35 +1633,98 @@ They hold a `.mod` or an `.inf` beside a `.SGS`, and the `.mod` says what they
 are in its own header: `application/x-gnex-sgs`. An `.inf` beside one carries
 the string `GVM`. That is this vendor's *other* runtime — the script platform
 that ran beside the Java one on the same carrier — and it is not a MIDlet JAR,
-so nothing here claims the archive. Four of the twelve ship a Windows
-executable beside the module, byte-identical across all four, which is the PC
-player of the day.
+so nothing here claims the archive.
 
-They were investigated rather than started, and what an investigation is worth
-is knowing what building it would cost:
+**Those twelve are most of what no platform claims, but not all of it.** A sweep
+over every zip under the games tree leaves fifteen unclaimed, and the other
+three are not a platform question at all: two are the same bag of games (a zip
+whose entries are three whole archives, which `ArchiveOfArchives` already
+answers in its own words) and one is a RAR wearing a `.zip` name, which
+`ContainerError` already names. So the message "the archive is not a KTF, LGT or
+SKT game" reaches exactly the twelve script archives and nothing else.
 
-- **The images are complete.** Two of them carry an `.inf` that declares the
-  program's byte count, and in both it matches the `.SGS` exactly. The six
-  looked at weigh between 125,022 and 131,022 bytes, which is a program budget
-  rather than a truncated download.
-- **The header is a small fixed table of sixteen-byte name slots.** Every one
-  of the six carries the name `SWAPSCRIPT` at the same offset, and two carry a
-  second name one slot earlier.
-- **The body is not ARM and not Thumb.** A byte census says so: the commonest
-  bytes are `0x33`, `0x44`, `0x22`, `0x55`, `0x11` and `0xAA` — nibble pairs —
-  and taking every fourth byte gives the same distribution as taking all of
-  them, where ARM would put its condition and class nibble there and flood it
-  with `0xE`. It is a byte-oriented instruction stream for a script machine.
-- **So the ARM core does not help.** Supporting these would mean a new archive
-  shape in `detect`, a loader for the container, an interpreter for an
-  instruction set with no published documentation available here, and the
-  platform call table underneath it — the whole of what the two WIPI platforms
-  needed, minus the one part of it this project already has. And unlike WIPI,
-  where a published standard settles a contract that a single caller cannot,
-  there is no specification to fall back on: every opcode and every platform
-  call would come from the images themselves.
+### What building the script platform would cost, and what answers the questions
 
-That is the estimate. Nothing is built.
+The first estimate said the whole instruction set and platform surface would
+have to come out of the images, because no specification for either is
+published — and searching in English and Korean still finds none. **That premise
+was wrong, and the thing that makes it wrong ships inside the archives.**
+
+**Seven of the twelve carry the vendor's own PC player**, one file, byte
+identical across all seven (1,056,768 bytes, SHA-256 `755666796891c415…`). It is
+a PE32 x86 build, not packed, with its strings in the clear, and it says what it
+is: a 2x emulator for this script format, naming the format in its own file
+dialog. That is the original runtime, and this project is allowed to consult one
+for behaviour and file formats. It replaces what a specification would have
+done: where a single caller cannot settle a contract, the runtime that shipped
+with the game can.
+
+What it already gives up to a `strings` pass is the loader's own vocabulary. It
+refuses a bad module with messages that name the header's fields —
+`Open: Application Size error`, `Open: Script LCD class error`,
+`Open: Script audio type error`, `Open: Out of SSB memory error`,
+`Open: Out of SSB size error` — beside the field names themselves: `ScriptSize`,
+`ScriptType`, `ScriptID`, `ScriptCPID`. A header field's meaning is therefore a
+cross-reference away rather than a guess from twelve samples.
+
+What the containers look like, measured across all twelve:
+
+- **The `.mod` is a length-prefixed string table**, not a binary header: a
+  32-bit count before each string, carrying the content type
+  (`application/x-gnex-sgs`), the body's extension (`SGS`), a version (`1.0.0`),
+  the carrier's download URLs, and the word `EXECUTABLE`. The `.inf` the other
+  two carry is a different, tighter shape with `GVM` and two dotted-quad
+  addresses in it.
+- **The `.SGS` header is one shape across eleven of the twelve**, and the
+  game's own title sits in it in EUC-KR at offset 10 — so the loader can name a
+  title before anything is decoded. The twelfth begins `0x20` and then zeros,
+  which is a different revision or an obfuscated one; it is the sample to look
+  at last, not first.
+- The bodies weigh 125,022 to 131,022 bytes, a program budget rather than a
+  truncated download, and the two `.inf` archives declare a byte count that
+  matches their `.SGS` exactly.
+- The body is not ARM and not Thumb — the byte census in the first pass settles
+  that — so the ARM core does not help.
+
+**Where the interpreter is has not been found yet, and the first guess at it was
+wrong.** The two biggest switches in the binary are not it: the one at
+`0x402cae` takes a dword argument over the range 12..190 and folds it into 25
+targets through a byte index table, and the cluster of nine around `0x4124ff`
+belongs to one function that switches on a dword read from a structure. Both are
+the PC shell's own command and event handling. The interpreter dispatches on a
+byte read from a script pointer, and neither of those does.
+
+The best standing candidate is a **table of 279 consecutive code pointers, 266
+of them distinct, at `0x4949d8` in `.data`** — statically initialised, far too
+large to be a vtable, and no instruction in `.text` names its address directly,
+which is what a table indexed through a base register looks like. Whether it is
+the opcode table, the platform call table, or both is unanswered.
+
+So the order of work, if this is ever picked up:
+
+1. **The container and the header**, from the loader's error strings backwards:
+   they name the fields, and cross-referencing each string finds the code that
+   checks it. A dump tool comes out of this, the way `ktfdump` did for KTF, and
+   nothing can be read without one.
+2. **The dispatch loop**, from the loader's exit: whatever the loader hands the
+   body to is the interpreter. Finding the entry is worth more than any number
+   of table censuses from the outside — the two above were both wrong.
+3. **The opcodes**, one at a time out of the handlers the loop reaches.
+4. **The platform surface** underneath them — screen, keys, sound, storage —
+   which is the same job the two WIPI platforms needed and the part this
+   project already knows how to shape.
+
+That is still the whole of a platform. For scale, `internal/platform/ktf` is
+about 32,000 lines beside 17,000 of tests and `lgt` about 21,000 beside 11,000,
+and neither of those had to build an instruction set. What the player changes is
+not the size of the work but its shape: **there are no dead ends in it.** The
+expensive part of the two WIPI platforms was never the typing, it was the
+stretches spent guessing a contract from one caller and telling the guesses
+apart by A/B. Here every question has something to ask.
+
+**Nothing is built, and this is not the next thing to build.** The decision is
+about scope rather than feasibility, and it is the user's; it was taken again
+after the estimate above was measured.
 
 ## Deliberately incomplete
 
