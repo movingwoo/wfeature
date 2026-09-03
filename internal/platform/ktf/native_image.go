@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -51,12 +52,53 @@ const (
 const maxNativeBitmap = 4 << 20
 
 // nativeImage is one image the title built and the platform decoded.
+//
+// **The platform keeps the bitmap, not the title.** The title builds one, hands
+// it to the factory and frees it on the next call — so an object left pointing
+// at what it was handed points into the arena's next tenant, and the picture a
+// later blit reads is whatever that tenant wrote. `data` is this platform's own
+// copy, and it is the copy the object's first word names, because the title
+// reads that word and indexes the bitmap through it: what it draws afterwards
+// lands in the copy and a blit sees it.
 type nativeImage struct {
-	// data is the guest bitmap the title built. The object's first word points
-	// at it because the title reads that word itself on one path and indexes
-	// the bitmap through it.
-	data  uint32
+	// data is the platform's copy of the bitmap, in the guest's own address
+	// space so the title can write into it.
+	data uint32
+	// length is how much of it there is.
+	length uint32
+	// bytes is the copy the decode below was made from, and what says whether
+	// the title has drawn into the bitmap since.
+	bytes []byte
 	frame *image.RGBA
+}
+
+// nativeBitmapLength reports how long a bitmap the title built is, from its
+// own header. The file header names it, and the pixels bound it: a length that
+// covers neither is not one this platform will copy.
+func nativeBitmapLength(header []byte) (uint32, bool) {
+	if len(header) < bitmapFileHeaderSize+0x28 || header[0] != 'B' || header[1] != 'M' {
+		return 0, false
+	}
+	named := binary.LittleEndian.Uint32(header[2:])
+	pixels := binary.LittleEndian.Uint32(header[bitmapPixelOffsetField:])
+	width := int(int32(binary.LittleEndian.Uint32(header[bitmapWidthField:])))
+	height := int(int32(binary.LittleEndian.Uint32(header[bitmapHeightField:])))
+	depth := int(binary.LittleEndian.Uint16(header[bitmapBitsPerPixelField:]))
+	if height < 0 {
+		height = -height
+	}
+	if width <= 0 || height <= 0 || depth <= 0 || width > maxNativeBitmap || height > maxNativeBitmap {
+		return 0, false
+	}
+	stride := (width*depth + 31) / 32 * 4
+	needed := uint64(pixels) + uint64(stride)*uint64(height)
+	if uint64(named) > needed {
+		needed = uint64(named)
+	}
+	if needed == 0 || needed > maxNativeBitmap {
+		return 0, false
+	}
+	return uint32(needed), true
 }
 
 // createObject answers the platform table's factory.
@@ -72,7 +114,27 @@ func (platform *NativePlatform) createObject(thread *armcore.Thread) (uint32, er
 		// here would report the factory instead of what wanted the object.
 		return 0, nil
 	}
-	decoded, err := platform.decodeBitmap(data)
+	memory := platform.client.core.Memory()
+	header := make([]byte, bitmapFileHeaderSize+0x28)
+	if err := memory.Read(data, header); err != nil {
+		return 0, fmt.Errorf("read KTF native bitmap header at %#x: %w", data, err)
+	}
+	length, ok := nativeBitmapLength(header)
+	if !ok {
+		return 0, fmt.Errorf("KTF native image at %#x is not a bitmap this platform can keep", data)
+	}
+	kept, err := platform.client.Allocate(length)
+	if err != nil {
+		return 0, err
+	}
+	bytes := make([]byte, length)
+	if err := memory.Read(data, bytes); err != nil {
+		return 0, fmt.Errorf("read the %d bytes of the KTF native bitmap at %#x: %w", length, data, err)
+	}
+	if err := memory.Write(kept, bytes); err != nil {
+		return 0, fmt.Errorf("keep the KTF native bitmap at %#x: %w", kept, err)
+	}
+	decoded, err := platform.decodeBitmap(kept)
 	if err != nil {
 		return 0, err
 	}
@@ -81,12 +143,38 @@ func (platform *NativePlatform) createObject(thread *armcore.Thread) (uint32, er
 		return 0, err
 	}
 	word := make([]byte, 4)
-	binary.LittleEndian.PutUint32(word, data)
-	if err := platform.client.core.Memory().Write(object, word); err != nil {
+	binary.LittleEndian.PutUint32(word, kept)
+	if err := memory.Write(object, word); err != nil {
 		return 0, fmt.Errorf("write KTF native image object at %#x: %w", object, err)
 	}
-	platform.images[object] = &nativeImage{data: data, frame: decoded}
+	platform.images[object] = &nativeImage{data: kept, length: length, bytes: bytes, frame: decoded}
 	return object, nil
+}
+
+// refresh re-reads an image whose bitmap the title has drawn into since it was
+// decoded, and reports whether it could be read at all.
+//
+// The comparison is the whole bitmap rather than a mark the title sets, because
+// there is no mark: the title writes pixels through the word this platform put
+// in its object and tells nobody. Reading and comparing is what a decode would
+// have to do anyway, and it is the cheap half of it.
+func (platform *NativePlatform) refresh(source *nativeImage) error {
+	if source.length == 0 {
+		return nil
+	}
+	current := make([]byte, source.length)
+	if err := platform.client.core.Memory().Read(source.data, current); err != nil {
+		return fmt.Errorf("read the KTF native bitmap at %#x: %w", source.data, err)
+	}
+	if bytes.Equal(current, source.bytes) {
+		return nil
+	}
+	decoded, err := platform.decodeBitmap(source.data)
+	if err != nil {
+		return err
+	}
+	source.bytes, source.frame = current, decoded
+	return nil
 }
 
 // decodeBitmap reads one bitmap out of guest memory.

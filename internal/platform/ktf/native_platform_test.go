@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"image/color"
@@ -340,9 +341,15 @@ func TestNativeImageFactoryAndBlit(t *testing.T) {
 		t.Fatal("the factory refused a bitmap")
 	}
 	// The object's first word points at the bitmap, because the title reads
-	// that word itself on one of its paths.
-	if got, err := platform.client.ReadWord(object); err != nil || got != address {
-		t.Errorf("object word 0 = %#x (%v), want the bitmap at %#x", got, err, address)
+	// that word itself on one of its paths — at this platform's own copy of
+	// it rather than at what it was handed, which the title frees. See
+	// TestNativeImageKeepsItsOwnBitmap.
+	kept, err := platform.client.ReadWord(object)
+	if err != nil || kept == 0 || kept == address {
+		t.Errorf("object word 0 = %#x (%v), want a copy of the bitmap at %#x", kept, err, address)
+	}
+	if got := nativeRead(t, platform, kept, len(bitmap)); !bytes.Equal(got, bitmap) {
+		t.Error("the copy the object names does not hold the bitmap")
 	}
 	decoded := platform.images[object].frame
 	if got := decoded.RGBAAt(0, 0); got != palette[0] {
@@ -1222,5 +1229,163 @@ func TestNativeScreenColourIsRecorded(t *testing.T) {
 	nativeCall(t, platform.screenColour, 0, 1, 0)
 	if got := platform.Colours(); len(got) != 2 || got[2] != 0xffffff00 || got[1] != 0 {
 		t.Errorf("colours = %v, want the two the title set", got)
+	}
+}
+
+// nativeRecordingApplication plants an application object whose handler counts
+// the events it is given and keeps the last one, so a test can ask what a key
+// actually sent. The handler is the third word of the object's table, which is
+// where this protocol puts an object's dispatch.
+//
+// It answers in the object itself: +0x10 is the last event and +0x14 is how
+// many there have been.
+func nativeRecordingApplication(t *testing.T, platform *NativePlatform) uint32 {
+	t.Helper()
+	memory := platform.client.core.Memory()
+	// ldr r2, [r0, #0x14] / add r2, r2, #1 / str r2, [r0, #0x14]
+	// str r1, [r0, #0x10] / bx lr
+	handler := make([]byte, 0, 20)
+	for _, instruction := range []uint32{0xe5902014, 0xe2822001, 0xe5802014, 0xe5801010, 0xe12fff1e} {
+		word := make([]byte, 4)
+		binary.LittleEndian.PutUint32(word, instruction)
+		handler = append(handler, word...)
+	}
+	body := ImageBase + 0x100
+	if err := memory.Write(body, handler); err != nil {
+		t.Fatalf("plant the handler: %v", err)
+	}
+	table, err := platform.client.Allocate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	word := make([]byte, 4)
+	binary.LittleEndian.PutUint32(word, body)
+	if err := memory.Write(table+8, word); err != nil {
+		t.Fatalf("plant the dispatch: %v", err)
+	}
+	object, err := platform.client.Allocate(0x20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(word, table)
+	if err := memory.Write(object, word); err != nil {
+		t.Fatalf("plant the object: %v", err)
+	}
+	return object
+}
+
+// TestNativeKeySendsTheTypedEventBesideThePress covers the third key event.
+// The press and the release are not the whole contract: a later module keeps a
+// separate slot for the key that was *struck*, and one local title's opening
+// screen reads only that one — so a platform that sends the pair and not this
+// takes every key and acts on none of them.
+func TestNativeKeySendsTheTypedEventBesideThePress(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	platform.application = nativeRecordingApplication(t, platform)
+	object := platform.application
+	last := func() (uint32, uint32) {
+		t.Helper()
+		return binary.LittleEndian.Uint32(nativeRead(t, platform, object+0x10, 4)),
+			binary.LittleEndian.Uint32(nativeRead(t, platform, object+0x14, 4))
+	}
+
+	if err := platform.Key(context.Background(), NativeKeySelect, true); err != nil {
+		t.Fatalf("key down: %v", err)
+	}
+	event, count := last()
+	if count != 2 {
+		t.Errorf("a press sent %d events, want the down and the typed key", count)
+	}
+	if event != nativeEventKeyTyped {
+		t.Errorf("the last event of a press was %#x, want the typed key %#x", event, nativeEventKeyTyped)
+	}
+
+	if err := platform.Key(context.Background(), NativeKeySelect, false); err != nil {
+		t.Fatalf("key up: %v", err)
+	}
+	event, count = last()
+	if count != 3 {
+		t.Errorf("a release sent %d events in all, want one more", count)
+	}
+	if event != nativeEventKeyUp {
+		t.Errorf("a release sent %#x, want the up event %#x", event, nativeEventKeyUp)
+	}
+
+	// A key before the title has an object of its own is a refusal rather than
+	// a call into nothing.
+	platform.application = 0
+	if err := platform.Key(context.Background(), NativeKeySelect, true); err == nil {
+		t.Error("a key before the application existed was not refused")
+	}
+}
+
+// TestNativeImageKeepsItsOwnBitmap covers what the factory owns. The title
+// builds a bitmap, hands it over and **frees it on the next call**, so an
+// object left pointing at what it was handed points into the arena's next
+// tenant. The picture has to be this platform's copy, and the object has to
+// name that copy, because the title reads the object's first word and draws
+// through it.
+func TestNativeImageKeepsItsOwnBitmap(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	palette := []color.RGBA{
+		{R: 0xff, G: 0x00, B: 0xff, A: 0xff}, // the colour that is not drawn
+		{R: 0x10, G: 0x20, B: 0x30, A: 0xff},
+		{R: 0x40, G: 0x50, B: 0x60, A: 0xff},
+	}
+	bitmap := buildBitmap(2, 2, palette, []byte{1, 1, 0, 0, 1, 1, 0, 0})
+	handed, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := platform.client.core.Memory()
+	if err := memory.Write(handed, bitmap); err != nil {
+		t.Fatal(err)
+	}
+	object := nativeCall(t, platform.createObject, nativeClassImage, handed)
+	if object == 0 {
+		t.Fatal("the factory refused a bitmap it decodes")
+	}
+	kept := binary.LittleEndian.Uint32(nativeRead(t, platform, object, 4))
+	if kept == handed {
+		t.Fatal("the object names the bitmap it was handed, which the title frees")
+	}
+	if got := nativeRead(t, platform, kept, len(bitmap)); !bytes.Equal(got, bitmap) {
+		t.Error("the copy does not hold what was handed over")
+	}
+
+	// The title frees what it handed over, and the arena lets the block again.
+	platform.client.Free(handed)
+	reused, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != handed {
+		t.Logf("the arena let a different block (%#x, was %#x); the picture is what matters", reused, handed)
+	}
+	if err := memory.Write(reused, make([]byte, len(bitmap))); err != nil {
+		t.Fatal(err)
+	}
+	source := platform.images[object]
+	if source == nil {
+		t.Fatal("the platform kept no image for the object it built")
+	}
+	if err := platform.refresh(source); err != nil {
+		t.Fatalf("refresh after the title freed what it handed over: %v", err)
+	}
+	if got := source.frame.RGBAAt(0, 0); got != palette[1] {
+		t.Errorf("the picture is %v after the block it came in was re-let, want %v", got, palette[1])
+	}
+
+	// What the title draws into the copy afterwards is what a blit reads.
+	pixels := binary.LittleEndian.Uint32(bitmap[bitmapPixelOffsetField:])
+	if err := memory.Write(kept+pixels, []byte{2, 2, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.refresh(source); err != nil {
+		t.Fatalf("refresh after the title drew: %v", err)
+	}
+	// The rows are bottom-up, so the row written first is the bottom one.
+	if got := source.frame.RGBAAt(0, 1); got != palette[2] {
+		t.Errorf("what the title drew reads as %v, want %v", got, palette[2])
 	}
 }

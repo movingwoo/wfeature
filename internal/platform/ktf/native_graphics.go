@@ -222,6 +222,11 @@ func (platform *NativePlatform) blit(thread *armcore.Thread) (uint32, error) {
 		platform.screen.missed++
 		return 0, nil
 	}
+	// The title draws into the bitmap this platform kept for it and says
+	// nothing, so what it has drawn is read here rather than when it was made.
+	if err := platform.refresh(source); err != nil {
+		return 0, err
+	}
 	platform.drawImage(source, record)
 	platform.screen.draws++
 	return 1, nil

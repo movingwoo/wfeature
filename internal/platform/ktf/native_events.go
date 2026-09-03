@@ -42,6 +42,16 @@ const (
 	// first parameter.
 	nativeEventKeyDown = 0x101
 	nativeEventKeyUp   = 0x102
+	// nativeEventKeyTyped carries the same code and is a **third** event, not
+	// another name for the first. A later module's handler keeps all three
+	// apart and puts them in different places: the down sets a pressed flag and
+	// a code, the up clears them, and this one writes a code into a slot of its
+	// own. Which one a screen reads is the screen's business — the title screen
+	// of one local title reads only this one, so a platform that sends the pair
+	// and not this one has a title that takes every key and acts on none of
+	// them. The 2005 module does not handle it at all, which costs nothing: an
+	// event its dispatch does not know answers zero and does nothing.
+	nativeEventKeyTyped = 0x100
 
 	// nativeKeyBase is the high half of every key code the title acts on.
 	nativeKeyBase = 0xe000
@@ -207,12 +217,16 @@ func (platform *NativePlatform) Key(ctx context.Context, code uint32, pressed bo
 	if platform.application == 0 {
 		return fmt.Errorf("KTF native key %#x before the application was created", code)
 	}
-	event := uint32(nativeEventKeyUp)
+	events := []uint32{nativeEventKeyUp}
 	if pressed {
-		event = nativeEventKeyDown
+		// The press first and the typed key after it, which is the order the
+		// two mean: one says the key is down and the other that it was struck.
+		events = []uint32{nativeEventKeyDown, nativeEventKeyTyped}
 	}
-	if _, err := platform.client.SendEvent(ctx, platform.application, event, code, 0); err != nil {
-		return fmt.Errorf("KTF native key %#x: %w", code, err)
+	for _, event := range events {
+		if _, err := platform.client.SendEvent(ctx, platform.application, event, code, 0); err != nil {
+			return fmt.Errorf("KTF native key %#x: %w", code, err)
+		}
 	}
 	return nil
 }

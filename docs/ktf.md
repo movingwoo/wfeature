@@ -4213,6 +4213,8 @@ losing when that gap is closed.
 
 ### Where the two stand, after the second pass
 
+Superseded by "after the third pass" below.
+
 - **`[큰화]로맨스소드` reaches its title screen, with sound.** Reading the file
   test the later way puts it on the path that loads `lcdinfo.dat` and its own
   certificate and plays its opening music: four clips set, two started, two
@@ -4232,6 +4234,77 @@ losing when that gap is closed.
   set. The two things to look at next are what sets that flag and the screen's
   text slot, and the second of those is a gap this platform has rather than a
   question about this title.
+
+### A key is three events, and one title reads only the third
+
+The 2005 module's handler compares against `0x101` and `0x102`, and this
+platform sent those two. **A later module's handler keeps three apart**, and
+puts them in different places:
+
+```
+cmp r2, #0x100 -> strh r1, [r0, #0x18]     ; a slot of its own
+cmp r2, #0x101 -> pressed = 1, code at +4  ; the key is down
+cmp r2, #0x102 -> pressed = 0, code at +2  ; the key is up
+```
+
+Its opening screen reads **only the first of those**. Tracing one frame of that
+screen is what said so — 332 instructions, and the fourth of them is
+
+```
+ldrh r1, [r5, #0x18]      ; the slot event 0x100 writes
+ldr  r0, [r5, #0x28]
+bl   0x11646c             ; hand it to the screen
+```
+
+— while the two getters that read the pressed state never run at all. So a
+platform that sends the press and the release and not the third takes every key
+and acts on none of them, which is exactly what "the key is taken and the screen
+after it never arrives" was. `Key` sends the press and then the typed key, and
+the release on its own. The 2005 module does not handle `0x100`: an event its
+dispatch does not know answers zero and does nothing, and its in-game route is
+byte-identical with the third event being sent.
+
+With it, `[큰화]로맨스소드` plays: title screen, a memory warning, its save-slot
+screen reading the `sav.dat` the archive ships (`SLOT 2 · LV 3 · PLAYTIME
+00:11:54`), the load prompt, and the game itself.
+
+### The factory owns the picture, because the title frees it
+
+The image factory decoded the bitmap it was handed and left the object pointing
+at it. The title frees that bitmap **on the very next call**:
+
+```
+40  platform 0x64  createObject(0x1004001, 0x30016f98)
+41  platform 0x6c  free(0x30016f98)
+```
+
+So the object pointed into the arena's next tenant. Watching the block afterwards
+shows exactly that: its `BM` header zeroed by the allocation that replaced it and
+three fifths of its words written by whoever got it. A blit through that object
+after the block was re-let would have drawn another allocation's bytes as a
+picture.
+
+The factory copies the bitmap into a block of its own now and **the object names
+the copy**, which matters for more than lifetime: the title reads that first word
+and indexes the bitmap through it, so what it draws afterwards lands in the copy.
+A blit re-reads the copy and re-decodes it only when the bytes have changed —
+reading and comparing is what a decode would have to do anyway and is the cheap
+half of it. The 2005 archive is byte-identical through its in-game route.
+
+### Where the two stand, after the third pass
+
+- **`[큰화]로맨스소드` plays.** Start-up, publisher screen, title screen with
+  music, menus, its shipped save, and in-game. Its own layout leaves the top and
+  bottom of a 240x320 screen black — a larger screen only makes the black taller,
+  so that is the title's and not this platform's.
+- **`컴투스_맞고_2006` is still on its loading screen.** What is known about it
+  now: its frame is 163 instructions, its step is gated on a flag at `+0x1748`
+  of its own state that nothing sets, and the state it idles in waits on a word
+  at `+0x3380`. It is not idle underneath — over six hundred frames it sets
+  sixty-two clips, starts sixty and stops five hundred, and asks to be resumed
+  once per clip. It blits from one surface of its own, and that surface is empty:
+  re-reading it on every blit changes nothing, so it is empty rather than stale.
+  Nothing it asks for is unanswered.
 
 ## A module compiled against a longer superclass
 
