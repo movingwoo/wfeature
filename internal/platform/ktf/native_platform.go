@@ -89,8 +89,20 @@ type NativePlatform struct {
 	clipRefusals int
 	// messages holds the status lines the title asked the handset to show.
 	messages []string
+	// resources holds the title's parsed resource files by the name it asked
+	// for them under, with a nil entry for a name that is not one. See
+	// native_resource.go.
+	resources map[string]*nativeResourceFile
+	// resourceNotes records every resource request this platform could not
+	// answer, in order. A title that asks for a number its file does not carry
+	// reads whatever the platform handed back, so the note is what turns the
+	// fault that follows into the request that caused it.
+	resourceNotes []string
 	// storeFailures counts writes the store refused.
 	storeFailures int
+	// fileFailure is what the file interface's error report answers. See
+	// nativeFileLastError.
+	fileFailure uint32
 }
 
 // The flat platform table, by the byte offset the module indexes it with.
@@ -102,6 +114,12 @@ const (
 	nativeSlotAllocate = 0x68
 	// nativeSlotFree gives one back.
 	nativeSlotFree = 0x6c
+	// nativeSlotReallocate takes a block and a size and answers a block of the
+	// new size holding what fits. Its call site is what names it: the module
+	// reads a pointer out of its own structure, asks for one byte more than the
+	// string it is about to copy in, stores the answer back over the pointer
+	// and gives up if it is null.
+	nativeSlotReallocate = 0x74
 	// nativeSlotInitial is called once, with three zeroes, immediately after
 	// the module caches the platform table, and its result is kept in the
 	// application object. What it answers is not established; answering zero
@@ -111,6 +129,15 @@ const (
 	// a reading and spins until a later one is 2,000 higher; another seeds the
 	// module's own generator with it.
 	nativeSlotMilliseconds = 0xac
+	// nativeSlotElapsed answers the same millisecond clock as the slot beside
+	// it, and is the one a later module reads. It takes nothing — the module
+	// reaches it through the veneer that calls through r0, which leaves no
+	// register for an argument — and every one of its 59 call sites does the
+	// same thing with the answer: subtract a reading it saved, compare the
+	// difference against an interval of its own, and save a fresh reading when
+	// the interval has passed. So what it has to be is monotonic milliseconds,
+	// and this platform has one of those already.
+	nativeSlotElapsed = 0xb0
 	// nativeSlotCurrentApplication answers with the object the module's
 	// factory built. The module asks for it from thirty-nine call sites rather
 	// than carrying it, and reads the fields it set on it itself.
@@ -234,8 +261,10 @@ func (platform *NativePlatform) Install() error {
 	client := platform.client
 	client.Serve(NativePlatformTable, nativeSlotAllocate, platform.allocate)
 	client.Serve(NativePlatformTable, nativeSlotFree, platform.free)
+	client.Serve(NativePlatformTable, nativeSlotReallocate, platform.reallocate)
 	client.Serve(NativePlatformTable, nativeSlotInitial, nativeAnswerZero)
 	client.Serve(NativePlatformTable, nativeSlotMilliseconds, platform.milliseconds)
+	client.Serve(NativePlatformTable, nativeSlotElapsed, platform.milliseconds)
 	client.Serve(NativePlatformTable, nativeSlotCurrentApplication, platform.currentApplication)
 	client.Serve(NativePlatformTable, nativeSlotCreateObject, platform.createObject)
 
@@ -244,6 +273,8 @@ func (platform *NativePlatform) Install() error {
 	client.ServeQueryInterface(NativeEntryObject, nativeObjectQueryInterface)
 	client.Serve(NativeEntryObject, nativeObjectDisplayInfo, platform.displayInfo)
 	client.Serve(NativeEntryObject, nativeObjectSchedule, platform.schedule)
+	client.Serve(NativeEntryObject, nativeObjectLoadResource, platform.loadResource)
+	client.Serve(NativeEntryObject, nativeObjectFreeResource, platform.freeResource)
 
 	memory := nativeInterfaceSurface(nativeInterfaceMemory)
 	client.Serve(memory, nativeMemoryFits, platform.memoryFits)
@@ -261,7 +292,12 @@ func (platform *NativePlatform) Install() error {
 }
 
 func nativeAnswerZero(*armcore.Thread) (uint32, error) { return 0, nil }
-func nativeAnswerOne(*armcore.Thread) (uint32, error)  { return 1, nil }
+
+// nativeAnswerCertificate accepts the certificate the module presents.
+func nativeAnswerCertificate(*armcore.Thread) (uint32, error) {
+	return nativeCertificateAccepted, nil
+}
+func nativeAnswerOne(*armcore.Thread) (uint32, error) { return 1, nil }
 
 // allocate answers the platform table's allocator.
 func (platform *NativePlatform) allocate(thread *armcore.Thread) (uint32, error) {
@@ -276,6 +312,14 @@ func (platform *NativePlatform) allocate(thread *armcore.Thread) (uint32, error)
 // handed out is ignored rather than refused: the module frees what it built
 // during a failed start-up too, and a run that stops on a stray free reports
 // the free instead of what failed before it.
+func (platform *NativePlatform) reallocate(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 2)
+	if err != nil {
+		return 0, err
+	}
+	return platform.client.Reallocate(arguments[0], arguments[1])
+}
+
 func (platform *NativePlatform) free(thread *armcore.Thread) (uint32, error) {
 	address, err := thread.Register(0)
 	if err != nil {
@@ -421,6 +465,25 @@ const (
 	nativeScreenKeepAwake = 0x24
 )
 
+// The later modules create one more object, and both of them create the same
+// one: the second ClassID their information file carries beside the applet's.
+// Two archives from two publishers naming the same number is what says it is
+// the carrier's rather than either title's.
+//
+// One call is reached, and what it is handed names it: the block is the
+// archive's own `gbxcerti.dat`, all 74 bytes of it, loaded through the resource
+// loader and freed straight afterwards. The answer is a small signed status —
+// the module turns it into one of ten messages through a table of its own — and
+// the two ends of it are visible from the outside: answering zero leaves the
+// title on its own screen, and answering one sends it to the dialog that offers
+// to authenticate over the network. So zero is the certificate being accepted,
+// which is what a handset with a valid one answers.
+const (
+	nativeInterfaceCertificate = 0x103028a
+	nativeCertificateCheck     = 0x08
+	nativeCertificateAccepted  = 0
+)
+
 // nativeInterfaceHandset is the object the title queries for a record it turns
 // into a 26-character identifier, padding whatever the record leaves empty
 // with `X`. Its two methods fill that record and drop the object.
@@ -444,6 +507,9 @@ func (platform *NativePlatform) installRemaining() {
 	screen := nativeInterfaceSurface(nativeInterfaceApplication)
 	client.Serve(screen, nativeScreenMessage, platform.screenMessage)
 	client.Serve(screen, nativeScreenKeepAwake, nativeAnswerOne)
+
+	certificate := nativeInterfaceSurface(nativeInterfaceCertificate)
+	client.Serve(certificate, nativeCertificateCheck, nativeAnswerCertificate)
 
 	handset := nativeInterfaceSurface(nativeInterfaceHandset)
 	client.Serve(handset, nativeHandsetRecord, platform.handsetRecord)
@@ -487,6 +553,14 @@ func (platform *NativePlatform) screenMessage(thread *armcore.Thread) (uint32, e
 
 // Messages reports the status lines the title asked the handset to show.
 func (platform *NativePlatform) Messages() []string { return platform.messages }
+
+// ResourceNotes reports every resource request that went unanswered.
+func (platform *NativePlatform) ResourceNotes() []string { return platform.resourceNotes }
+
+// note records one unanswered resource request.
+func (platform *NativePlatform) note(text string) {
+	platform.resourceNotes = append(platform.resourceNotes, text)
+}
 
 // handsetRecord fills the record the title turns into its identifier.
 //

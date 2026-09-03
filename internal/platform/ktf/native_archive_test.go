@@ -78,24 +78,28 @@ func nativeNumericSpan(words ...uint32) []byte {
 // the header sections are written at. Reading them as bare aligned words is
 // what made an earlier pass map four times the module's size: the boundary
 // between two records reads as a value of its own.
+//
+// What the records *mean* is not asserted, and that is the point. Tag 6 read as
+// the module's page-rounded length until two more archives arrived carrying the
+// same header beside modules of two other sizes.
 func TestParseNativeInfoReadsHeaderFieldsOnTheirStride(t *testing.T) {
 	data := buildNativeInfo(t, [][]byte{nativeNumericSpan(1)}, []uint32{0, 1})
-	// Two records in the second section: one carrying nothing established,
-	// and the module's page-rounded length under its own tag.
+	// Two records in the second section, written the way a real file writes
+	// them: a value, a halfword the format leaves spare, and the tag.
 	binary.LittleEndian.PutUint32(data[0x28:], 0x03e80001)
 	binary.LittleEndian.PutUint16(data[0x2c:], 0)
 	binary.LittleEndian.PutUint16(data[0x2e:], 4)
 	binary.LittleEndian.PutUint32(data[0x30:], 2*nativePageSize)
 	binary.LittleEndian.PutUint16(data[0x34:], 0)
-	binary.LittleEndian.PutUint16(data[0x36:], NativeFieldModuleLength)
+	binary.LittleEndian.PutUint16(data[0x36:], 6)
 
 	info, err := ParseNativeInfo(data)
 	if err != nil {
 		t.Fatalf("parse native info: %v", err)
 	}
-	field, ok := info.Field(NativeFieldModuleLength)
+	field, ok := info.Field(6)
 	if !ok || field.Value != 2*nativePageSize {
-		t.Fatalf("tag %d = %+v (%v), want the module length", NativeFieldModuleLength, field, ok)
+		t.Fatalf("tag 6 = %+v (%v), want the value written under it", field, ok)
 	}
 	if other, ok := info.Field(4); !ok || other.Value != 0x03e80001 {
 		t.Errorf("tag 4 = %+v (%v), want the record beside it", other, ok)
@@ -103,11 +107,60 @@ func TestParseNativeInfoReadsHeaderFieldsOnTheirStride(t *testing.T) {
 	if _, ok := info.Field(3); ok {
 		t.Error("a tag no record carries was answered")
 	}
-	// The size the loader maps comes from the tag, and the search that used to
-	// find it still corroborates: both answer the same number.
-	mapped, ok := info.ModuleSpan(2*nativePageSize - 8)
-	if !ok || mapped != 2*nativePageSize {
-		t.Fatalf("ModuleSpan = %#x (%v), want %#x", mapped, ok, 2*nativePageSize)
+}
+
+// TestParseNativeInfoTolerantOfLineEndingsPastItsTrailer covers the shape one
+// archive is distributed in: its information file carries CR LF after the
+// trailer, from something that moved it in text mode before it was packed. The
+// zip entry's CRC is correct, so refusing it turns a whole title away over two
+// bytes nothing reads.
+func TestParseNativeInfoTolerantOfLineEndingsPastItsTrailer(t *testing.T) {
+	good := buildNativeInfo(t, [][]byte{nativeNumericSpan(1, 2, ImageBase)}, []uint32{0x1234, 18933, 0xff})
+	info, err := ParseNativeInfo(append(append([]byte{}, good...), '\r', '\n'))
+	if err != nil {
+		t.Fatalf("parse an information file with line endings past its trailer: %v", err)
+	}
+	if info.ApplicationID != 18933 {
+		t.Errorf("application id = %d, want %d", info.ApplicationID, 18933)
+	}
+	// Anything else after the trailer is still not this format.
+	if _, err := ParseNativeInfo(append(append([]byte{}, good...), 'x')); err == nil {
+		t.Error("a file with a byte of its own past the trailer parsed")
+	}
+}
+
+// TestApplicationIdentifierReadsTheAppletRecord covers what CreateApplication
+// is given. The record is picked out by its shape rather than by the word that
+// follows the identifier: that word is the image base in one archive and one
+// bit away from it in two others, which is what kept those two out.
+func TestApplicationIdentifierReadsTheAppletRecord(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		last uint32
+	}{
+		{name: "the 2005 archive's word", last: ImageBase},
+		{name: "the later archives' word", last: 0x10100000},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			data := buildNativeInfo(t, [][]byte{
+				// The file's first record opens with a round number the module
+				// refuses, and it is not the applet record.
+				nativeNumericSpan(0x1000, 0, 0, 0, 0, 0, 0x141, 1, 0, 0),
+				nativeNumericSpan(0x0102e0a9, 0, 0x3e8, 0, testCase.last),
+				// A second, shorter record names an extension rather than the
+				// applet.
+				nativeNumericSpan(0x0103028a, 0),
+			}, []uint32{0x1234, 18933, 0xff})
+			archive := &NativeArchive{}
+			var err error
+			if archive.Info, err = ParseNativeInfo(data); err != nil {
+				t.Fatalf("parse native info: %v", err)
+			}
+			identifier, ok := archive.ApplicationIdentifier()
+			if !ok || identifier != 0x0102e0a9 {
+				t.Fatalf("ApplicationIdentifier() = %#x (%v), want %#x", identifier, ok, 0x0102e0a9)
+			}
+		})
 	}
 }
 

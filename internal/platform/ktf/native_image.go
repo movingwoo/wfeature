@@ -112,7 +112,7 @@ func (platform *NativePlatform) decodeBitmap(address uint32) (*image.RGBA, error
 	if compression != 0 {
 		return nil, fmt.Errorf("KTF native bitmap at %#x uses compression %d", address, compression)
 	}
-	if depth != 8 && depth != 24 {
+	if depth != 4 && depth != 8 && depth != 24 {
 		return nil, fmt.Errorf("KTF native bitmap at %#x is %d bits per pixel", address, depth)
 	}
 	// A negative height is a top-down bitmap.
@@ -123,18 +123,22 @@ func (platform *NativePlatform) decodeBitmap(address uint32) (*image.RGBA, error
 	if width <= 0 || height <= 0 || width > maxNativeBitmap || height > maxNativeBitmap {
 		return nil, fmt.Errorf("KTF native bitmap at %#x is %dx%d", address, width, height)
 	}
-	stride := (width*depth/8 + 3) &^ 3
+	// A row is padded to a whole number of words, and at four bits a pixel an
+	// odd width still occupies a whole byte — so the padding is computed from
+	// the bits rather than from a byte count that has already lost the odd
+	// pixel.
+	stride := (width*depth + 31) / 32 * 4
 	if uint64(stride)*uint64(height) > maxNativeBitmap {
 		return nil, fmt.Errorf("KTF native bitmap at %#x needs %d bytes", address, stride*height)
 	}
 
 	palette := make([]color.RGBA, 0, 256)
-	if depth == 8 {
+	if depth == 4 || depth == 8 {
 		count := int(binary.LittleEndian.Uint32(header[bitmapPaletteSizeField:]))
 		if count == 0 {
-			count = 256
+			count = 1 << depth
 		}
-		if count > 256 {
+		if count > 1<<depth {
 			return nil, fmt.Errorf("KTF native bitmap at %#x names %d palette entries", address, count)
 		}
 		entries := make([]byte, count*4)
@@ -167,8 +171,17 @@ func (platform *NativePlatform) decodeBitmap(address uint32) (*image.RGBA, error
 		for x := 0; x < width; x++ {
 			var pixel color.RGBA
 			switch depth {
-			case 8:
-				index := int(row[x])
+			case 4, 8:
+				index := 0
+				if depth == 8 {
+					index = int(row[x])
+				} else {
+					// Two pixels to a byte, the left one in the high nibble.
+					index = int(row[x/2] >> 4)
+					if x%2 == 1 {
+						index = int(row[x/2] & 0xf)
+					}
+				}
 				if index >= len(palette) {
 					return nil, fmt.Errorf("KTF native bitmap at %#x indexes palette entry %d", address, index)
 				}

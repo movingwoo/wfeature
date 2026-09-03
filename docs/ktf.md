@@ -3315,10 +3315,9 @@ mistake at one bit of resolution: the later two carry `0x10100000` where the
 first carries `0x00100000`, so an exact match against the image base finds
 nothing and the ClassID beside it goes unread.
 
-Neither is fixed here, because a loader that gets past both stops at the gate
-below and there is nothing yet to see on the far side. What the two readings
-cost is written down so the next pass does not re-derive them: **a number this
-platform can compute is not evidence about a file that also contains it.**
+Both are undone in "The three readings undone" below, and what they cost is
+written down so the next pass does not re-derive them: **a number this platform
+can compute is not evidence about a file that also contains it.**
 
 Reading the rest of the header would need its record stride, which is not four
 bytes — a second size, `0x5000`, sits at an offset that makes the surrounding
@@ -3961,7 +3960,175 @@ trailer, so it refuses. The bytes are in the archive as distributed and its zip
 CRC is correct, so this is a shape to tolerate rather than damage to detect.
 
 Both archives are kept under `var/games/test/errorFile/` with a note saying
-what each one is.
+what each one is. Everything below is what happened when the gate was answered.
+
+### The three readings undone, and what was behind them
+
+All three are undone and both archives run. The order matters, because each one
+hid the next: a loader that refuses the information file never reads a span, one
+that refuses the span never reaches the entry, and one that never gets past the
+entry has nothing to say about the table beyond it.
+
+- **The trailer's two extra bytes.** `ParseNativeInfo` trims CR and LF from the
+  end before it looks for `1fim`. Anything else past the trailer is still not
+  this format — the point is a file that was moved in text mode, not a file that
+  has something after its own end.
+- **The module's mapped length.** `nativeMappedSize` no longer asks the file for
+  it. It maps the module's own page-rounded length, which is what the earlier
+  pass computed *before* comparing it to the tag it thought confirmed it. **A
+  number this side can compute is not evidence about a file that also contains
+  it** — the whole of the check was a coincidence at one archive's size.
+- **The ClassID.** `ApplicationIdentifier` picks the applet record out by its
+  shape — five words whose second and fourth are zero and whose third is `0x3e8`
+  — and takes its first word. In three archives that word is `0x0102e0a9`,
+  `0x010345ec` and `0x0103267f`, and **each module carries its own as a literal**,
+  which is what confirms the reading. The record's *last* word was the anchor
+  before and is not one: it is a property of the applet, `0x00100000` in the 2005
+  archive and `0x10100000` in the two later ones, and the first of those is also
+  where this platform maps an image.
+
+### The version gate is a word the loader had left zero
+
+The loader plants two words below the image now, not one: the platform table
+pointer at `ImageBase-4` that every module of this generation loads, and
+`0x10000` at `ImageBase-8`. That is the whole of the gate — the later module
+compares that word against `0x10000` and returns 4 without touching its out
+parameter when it differs, so what looked like a module refusing the platform
+was a module asking a question the platform never answered. The 2005 archive
+never reads the word and runs the same either way.
+
+### A module reads above its own stack pointer
+
+Past the gate, one of the two faulted immediately: it copies a fixed `0x400`
+bytes out of a frame it declared as `0x58`, and this side started the guest at
+the very top of its stack mapping, so the copy ran off the end at the first byte
+past it.
+
+On the handset an applet is entered from the runtime's own dispatcher and the
+addresses above its stack pointer are that dispatcher's frames. The bytes are
+junk either way — nothing reads back what that copy wrote — but a copy is a
+copy, and the fix is to look like the caller that is not there:
+`nativeStackHeadroom` leaves a page of the mapping above the entry stack
+pointer. **A guest that reads uninitialised memory is not a guest that faults on
+a real device**, and starting it flush against the end of a mapping turns every
+such read into one.
+
+### The resource file, and the number that indexes it
+
+The later modules do not open their data files. They ask the object the entry
+was handed for a numbered resource out of a named one:
+
+```
+ldr  r0, [r7, #0x10]      ; the object
+movs r3, #6               ; the kind
+ldr  r2, [pc, #0x40]      ; 5001, the number
+ldr  r6, [r1, #0x48]      ; the loader
+ldr  r1, [pc, #0x40] ; add r1, pc   ; "rpg_org.bar"
+bl   veneer
+...                       ; allocate 0x400, copy 0x400 from r0 + 0x1c
+ldr  r2, [r1, #0x50]      ; and give the block back
+```
+
+**The call is what settled the format.** The item that number names is `0x41c`
+bytes long and the module copies `0x400` of it from offset `0x1c`, which is the
+whole of the rest — so the loader hands the item back verbatim and what the
+`0x1c` in front of it holds is the title's own business. It holds a MIME name:
+the items are the same typed blobs the information file's icons are, a 16-bit
+length covering itself, `application/octet-stream`, and a terminator. The module
+reads the low byte of that length itself to step over it.
+
+`.bar` is a header, a group table, an index table and the items:
+
+```
+0x00  a version halfword, 0x11 in all eight local files
+0x06  how many groups
+0x08  where the group table is, and how long it is
+0x10  where the index table is
+0x14  how many items there are
+0x18  where the first item is, repeating the index table's first entry
+```
+
+The index table holds one offset per item and then the end of the last one,
+which is the file's own length in all eight. **A group is a run rather than a
+list**: four halfwords — a kind, the first number it covers, how many *further*
+numbers it covers, and the index of the item the first number names. So the item
+for a number is its distance into the run added to that index, and thirteen
+groups cover a hundred and two items. Reading the third halfword as a count of
+items instead makes the group with `0` in it carry nothing, and that group is
+exactly the one the module asks for.
+
+### Four bits a pixel, a second copy, a second clock, and a comparison
+
+Everything else the later module wanted was already here in another form:
+
+- **Four bits a pixel.** The factory decoded eight and twenty-four. A row at
+  four is two pixels to a byte with the left one in the high nibble, and the
+  padding to a word has to be computed from the bits — a byte count has already
+  lost the odd pixel of an odd width.
+- **A second copy at `0xc8`.** One call site: measure a string with the length
+  slot, allocate one byte more, copy the string's own length into it. memcpy,
+  memmove and strncpy all do the same thing there, so which of them the carrier
+  put in that slot cannot be told from the call and does not matter to it.
+  **Everything the title draws as text goes through that block** — the dialog
+  that reads as an empty box with a border is this slot unanswered.
+- **A second clock at `0xb0`.** Fifty-nine call sites and every one of them
+  subtracts a saved reading, compares the difference against an interval of its
+  own and saves a fresh reading when it has passed. It takes nothing: the module
+  reaches it through the veneer that calls through `r0`, which leaves no register
+  for an argument.
+- **A comparison at `0xcc`.** Two call sites, both comparing four bytes of a
+  sound resource against `MMMD` and `cmid`.
+
+### Zero is what worked
+
+The file interface answers **zero on success**, and the opposite reading is what
+had the title asking to authenticate over the network. The later module calls
+the interface's information slot and, on a non-zero answer, asks slot `0x24`
+what went wrong and returns that as its own failure — which is the sense this
+whole specification uses. The 2005 module never looks at the answer, so nothing
+before said which way round it was. `nativeFileLastError` is that slot;
+`nativeFileFailed` is the one non-zero value this platform reports, because the
+module returns what it is told without comparing it.
+
+The same is true of the reference count. Every object in this protocol is a
+pointer to a table whose first two entries raise and drop a count, so
+`InterfaceObject` answers those two for any interface it builds — unless the
+platform has already given that number a handler of its own at that offset,
+which is what says the object is not shaped that way.
+
+### A certificate, and the object both later archives create
+
+Both later modules create one more object, from the **second ClassID their
+information file carries** beside the applet's — `0x103028a` in both, from two
+different publishers, which is what says it is the carrier's rather than either
+title's.
+
+One call on it is reached, and what it is handed names it: the block is the
+archive's own `gbxcerti.dat`, all 74 bytes, loaded through the resource loader
+and freed straight after. The answer is a small signed status the module turns
+into one of ten messages through a table of its own, and the two ends of it are
+visible from outside — **answering zero leaves the title on its own screen, and
+answering one sends it to the dialog offering to authenticate over the
+network.** So zero is the certificate being accepted, which is what a handset
+with a valid one answers.
+
+### Where the two stand
+
+- **`[큰화]로맨스소드` reaches its title screen.** Start-up, its data, its
+  publisher screen, its own artwork and its text all come out, and nothing on
+  that route is still a trap. A key is delivered and **taken** — its "press any
+  key" line stops being drawn and never comes back, which no run without a key
+  ever does — but the screen after it has not arrived. That is the next thing to
+  read.
+- **`컴투스_맞고_2006` starts and registers no frame.** It gets through the
+  entry, the factory, its start event and its own files, and then fails inside
+  an initialisation it swallows: it asks a display interface this platform has
+  not met for a font's line height, centres three lines of text on the screen
+  with it, and draws through slots of that interface rather than through the
+  surface the 2005 title draws on. That interface — a font metric, a text draw,
+  and a manager object told about both — is what the title needs next, and none
+  of it is guessable from where the run stops. Its call sites are in the module
+  at `0x10c230` and `0x10c2f0`.
 
 ## A module compiled against a longer superclass
 

@@ -33,7 +33,18 @@ const (
 	nativeFileCreate = 0x10
 	// nativeFileInformation takes a name and a record to fill. The module
 	// keeps the record and reads the file's length out of its third word.
+	//
+	// **It answers zero when it worked.** A later module is what says so: it
+	// calls this, and on a non-zero answer asks nativeFileLastError and returns
+	// that as its own failure — which is the sense the whole of this package's
+	// specification uses, and the opposite of what a reader expects from a call
+	// that fills a record. The 2005 module never looks at the answer.
 	nativeFileInformation = 0x0c
+	// nativeFileLastError says why the last call on this interface failed. Two
+	// call sites establish it and they are the same shape: a call fails, this
+	// is asked with nothing but the interface itself, and its answer becomes
+	// the module's own return value.
+	nativeFileLastError = 0x24
 )
 
 // The file object's own table, by byte offset.
@@ -53,7 +64,21 @@ const (
 	// wrapper computes its own position from them and then passes them
 	// straight through.
 	nativeFileSeek = 0x1c
+	// nativeFileStatus fills the same record the interface's information call
+	// fills, for a file that is already open. The call site is what says it is
+	// the same record: the module hands it a twelve byte area on its own stack,
+	// then reads the length out of the third word and reads that many bytes in
+	// a loop. Answering nothing leaves the length zero, and the loop reads
+	// until it has as many bytes as it was told to expect — which is a loop
+	// that never ends rather than a call that failed.
+	nativeFileStatus = 0x18
 )
+
+// nativeFileFailed is the error this platform reports for a call that did not
+// work. Nothing establishes the carrier's own numbering — the module returns
+// what it is told without comparing it — so one non-zero value stands for every
+// failure rather than a table of invented codes.
+const nativeFileFailed = 1
 
 // The whence codes the module's own seek wrapper switches on.
 const (
@@ -132,11 +157,13 @@ func (platform *NativePlatform) installFiles() error {
 	platform.client.Serve(files, nativeFileInformation, platform.fileInformation)
 	platform.client.Serve(files, nativeFileExists, platform.fileExists)
 	platform.client.Serve(files, nativeFileCreate, platform.createFile)
+	platform.client.Serve(files, nativeFileLastError, platform.lastFileError)
 
 	platform.client.Serve(nativeFileSurface, nativeFileClose, platform.closeFile)
 	platform.client.Serve(nativeFileSurface, nativeFileRead, platform.readFile)
 	platform.client.Serve(nativeFileSurface, nativeFileWrite, platform.writeFile)
 	platform.client.Serve(nativeFileSurface, nativeFileSeek, platform.seekFile)
+	platform.client.Serve(nativeFileSurface, nativeFileStatus, platform.fileStatus)
 	return nil
 }
 
@@ -283,10 +310,23 @@ func (platform *NativePlatform) fileInformation(thread *armcore.Thread) (uint32,
 	if err := platform.client.core.Memory().Write(out, record); err != nil {
 		return 0, fmt.Errorf("write KTF native file record for %q at %#x: %w", name, out, err)
 	}
-	if !ok {
-		return 0, nil
+	return platform.fileResult(ok), nil
+}
+
+// fileResult turns an outcome into the answer this interface gives for one,
+// and remembers a failure for nativeFileLastError to report.
+func (platform *NativePlatform) fileResult(worked bool) uint32 {
+	if worked {
+		platform.fileFailure = 0
+		return 0
 	}
-	return 1, nil
+	platform.fileFailure = nativeFileFailed
+	return nativeFileFailed
+}
+
+// lastFileError answers the interface's own error report.
+func (platform *NativePlatform) lastFileError(*armcore.Thread) (uint32, error) {
+	return platform.fileFailure, nil
 }
 
 // fileExists answers whether a name is there.
@@ -397,6 +437,24 @@ func (platform *NativePlatform) closeFile(thread *armcore.Thread) (uint32, error
 }
 
 // readFile answers the file object's read.
+// fileStatus answers the open file's own record.
+func (platform *NativePlatform) fileStatus(thread *armcore.Thread) (uint32, error) {
+	file, err := platform.openFileFor(thread)
+	if err != nil {
+		return 0, err
+	}
+	out, err := thread.Register(1)
+	if err != nil {
+		return 0, err
+	}
+	record := make([]byte, nativeFileRecordSize)
+	binary.LittleEndian.PutUint32(record[nativeFileLengthOffset:], uint32(len(file.data)))
+	if err := platform.client.core.Memory().Write(out, record); err != nil {
+		return 0, fmt.Errorf("write KTF native file record for %q at %#x: %w", file.name, out, err)
+	}
+	return 1, nil
+}
+
 func (platform *NativePlatform) readFile(thread *armcore.Thread) (uint32, error) {
 	file, err := platform.openFileFor(thread)
 	if err != nil {

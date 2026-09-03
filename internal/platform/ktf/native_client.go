@@ -40,6 +40,31 @@ const (
 	// starts at the image base.
 	nativeHeaderBase = ImageBase - nativePageSize
 
+	// nativeStackHeadroom is how much of the stack mapping is left *above* the
+	// module's first stack pointer.
+	//
+	// On the handset an applet is entered from the runtime's own dispatcher, so
+	// the addresses above its stack pointer are the frames of whoever called
+	// it, and they are mapped. A module of this generation reads them: one
+	// copies a fixed 0x400 bytes out of a frame it declared as 0x58, which is
+	// junk either way — the bytes it copies are never read back — but a copy is
+	// a copy, and starting the guest at the very top of its mapping turns that
+	// into a fault at the first byte past the end. Reserving a page above the
+	// entry stack pointer is what makes this side look like the caller that is
+	// not there.
+	nativeStackHeadroom = nativePageSize
+
+	// nativeInterfaceVersion goes in the word *two* below the image, and it is
+	// what a later module of this generation asks for before it will hand over
+	// anything at all. Its first six instructions take its own base PC-
+	// relatively, load `[base - 8]`, compare it against 0x10000 and return 4
+	// having written nothing if it differs — a version gate, answered before
+	// the entry is worth calling. The first archive of this package never reads
+	// the word and runs the same with it planted or zero; the two that do read
+	// it go from refusing the platform to running under it. See docs/ktf.md,
+	// "A later module refuses the platform before it does anything".
+	nativeInterfaceVersion = 0x10000
+
 	// A surface is one trapped table of function pointers. Two exist before
 	// the module runs — the platform table below the image, and the object
 	// handed to the entry — and the rest are created as the module asks for
@@ -216,14 +241,17 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 		return nil, fmt.Errorf("plant KTF native entry object: %w", err)
 	}
 
-	pointer := make([]byte, 4)
-	binary.LittleEndian.PutUint32(pointer, platformTable)
-	if err := memory.Load(ImageBase-4, pointer); err != nil {
-		return nil, fmt.Errorf("plant KTF native platform table pointer: %w", err)
+	// Two words sit below the image: the version a module may gate on, and the
+	// platform table pointer every module of this generation loads from -4.
+	header := make([]byte, 8)
+	binary.LittleEndian.PutUint32(header, nativeInterfaceVersion)
+	binary.LittleEndian.PutUint32(header[4:], platformTable)
+	if err := memory.Load(ImageBase-8, header); err != nil {
+		return nil, fmt.Errorf("plant the words below the KTF native module: %w", err)
 	}
 
 	initial := armcore.NewContext()
-	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize) - nativeStackHeadroom
 	client.thread = armcore.NewThread(initial)
 	client.archive = archive
 	return client, nil
@@ -281,15 +309,15 @@ func (client *NativeClient) addSurface(name NativeSurface) (uint32, error) {
 // module. If a module of this generation ever does need space past its image,
 // it faults on the first access rather than running on quietly, and the fault
 // names the address — which is the report that would say so.
+//
+// It also asks the information file for nothing. An earlier pass required the
+// file to name this same rounded length and refused a package that did not,
+// which read as a check and was a coincidence: the tag it matched carries the
+// same constant in three archives whose modules are three different sizes. A
+// number this side can compute is not evidence about a file that also contains
+// it, and requiring the two to agree only turns the other two archives away.
 func nativeMappedSize(archive *NativeArchive) (uint32, error) {
 	rounded := (uint64(len(archive.Module)) + nativePageSize - 1) &^ (nativePageSize - 1)
-	named, ok := archive.Info.ModuleSpan(len(archive.Module))
-	if !ok {
-		return 0, fmt.Errorf("KTF module information file names no size matching a %d byte module", len(archive.Module))
-	}
-	if uint64(named) != rounded {
-		return 0, fmt.Errorf("KTF module information file names %#x for a %d byte module, want %#x", named, len(archive.Module), rounded)
-	}
 	if rounded > maxClientMappedSize {
 		return 0, fmt.Errorf("KTF native module maps %d bytes, limit %d", rounded, maxClientMappedSize)
 	}
@@ -620,6 +648,42 @@ func (client *NativeClient) Free(address uint32) {
 	client.arena.release(address, size)
 }
 
+// Reallocate grows or shrinks a block, keeping what fits.
+//
+// The arena hands out blocks it can only give back whole, so this is an
+// allocate, a copy and a free rather than an extension in place — which is
+// what the C library it stands in for is allowed to do, and what a module
+// that stores the result back over its own pointer already handles. A null
+// pointer allocates and a zero size frees, both the way the library does,
+// because the module's call site passes whatever it holds: it reads a pointer
+// out of its own structure, asks for one byte more than the string it is about
+// to write, and stores the answer back.
+func (client *NativeClient) Reallocate(address, size uint32) (uint32, error) {
+	if size == 0 {
+		client.Free(address)
+		return 0, nil
+	}
+	grown, err := client.Allocate(size)
+	if err != nil {
+		return 0, err
+	}
+	if kept, ok := client.blocks[address]; ok {
+		if kept > uint64(size) {
+			kept = uint64(size)
+		}
+		carried := make([]byte, kept)
+		memory := client.core.Memory()
+		if err := memory.Read(address, carried); err != nil {
+			return 0, fmt.Errorf("read the %d bytes at %#x a reallocation keeps: %w", kept, address, err)
+		}
+		if err := memory.Write(grown, carried); err != nil {
+			return 0, fmt.Errorf("carry %d bytes to %#x: %w", kept, grown, err)
+		}
+	}
+	client.Free(address)
+	return grown, nil
+}
+
 // AvailableMemory reports what a further allocation could still claim, which
 // is the number the module asks the platform for before sizing its own caches.
 func (client *NativeClient) AvailableMemory() uint64 { return client.arena.available() }
@@ -686,6 +750,19 @@ func (client *NativeClient) InterfaceObject(identifier uint32) (uint32, error) {
 		return 0, fmt.Errorf("write KTF native interface object %#x: %w", identifier, err)
 	}
 	client.interfaces[identifier] = address
+	// Every object in this protocol is a pointer to a table whose first two
+	// entries raise and drop a reference count, which is how the entry object
+	// and the module's own factory are both built. So an interface object
+	// answers those two here — unless the platform has already given this
+	// number a handler of its own at that offset, which is what says the
+	// object is not shaped that way after all.
+	for _, offset := range []uint32{nativeObjectAddRef, nativeObjectRelease} {
+		key := nativeSlotKey{surface: NativeSurface(fmt.Sprintf("interface %#x", identifier)), slot: offset / 4}
+		if _, ok := client.served[key]; ok {
+			continue
+		}
+		client.served[key] = nativeAnswerOne
+	}
 	return address, nil
 }
 
@@ -714,25 +791,42 @@ func (client *NativeClient) InterfaceObject(identifier uint32) (uint32, error) {
 // the out parameter, so a caller reading the result alone sees zero and calls
 // it success. Both cost a session here. See docs/ktf.md.
 
-// ApplicationIdentifier is the number the information file and the module
-// agree on, and the one CreateApplication needs.
+// ApplicationIdentifier is the ClassID of the applet in the package, and the
+// one CreateApplication needs.
 //
-// Which of the file's unlabelled numbers it is comes from two anchors landing
-// in the same record: that record's last word is the image base, and its first
-// word is the constant the module's own dispatch compares its argument
-// against. Neither anchor alone would pick it out — the file has other round
-// numbers, and taking the first record's first word picks up a 0x1000 that the
-// module refuses.
+// It is the first word of the information file's applet record, and the record
+// is picked out by its shape: five words, of which the second and fourth are
+// zero and the third is the same 0x3e8 in every archive of this package. In
+// three archives the first word of that record is a ClassID the module beside
+// it carries as a literal — 0x0102e0a9, 0x010345ec and 0x0103267f — and it is
+// what the module's own dispatch compares its argument against.
+//
+// The record's *last* word is not an anchor, and reading it as one is what kept
+// two archives out. It is 0x00100000 in the first archive, which is also where
+// this platform maps a KTF image, so a search for the image base landed in the
+// right record for one sample and made a coincidence look like a contract. The
+// two later archives carry 0x10100000 there — one bit apart, in a word that is
+// a property of the applet rather than an address. What that word means is not
+// established.
+//
+// The shape is what has to do the work, because the first record in the file
+// also opens with a number (0x1000) and the module refuses it. A package
+// carrying two applets would have two records of this shape; this takes the
+// first, and a wrong one is a loud failure rather than a quiet one — the module
+// checks the identifier and refuses to build anything from one it does not know.
 func (archive *NativeArchive) ApplicationIdentifier() (uint32, bool) {
+	const (
+		appletRecordWords = 5
+		appletRecordMark  = 0x3e8
+	)
 	for _, record := range archive.Info.Records {
-		if len(record) < 2 || record[0] == 0 {
+		if len(record) != appletRecordWords || record[0] == 0 {
 			continue
 		}
-		for _, word := range record[1:] {
-			if word == ImageBase {
-				return record[0], true
-			}
+		if record[1] != 0 || record[2] != appletRecordMark || record[3] != 0 {
+			continue
 		}
+		return record[0], true
 	}
 	return 0, false
 }
