@@ -1263,10 +1263,22 @@ It is the Canvas-shaped number.
 
 So each title is self-consistent and the two disagree, and neither the
 descriptors nor the specification says which. **What would settle it is one real
-handset's `height` beside its `height2`** — a number the original runtime has
-and this corpus does not. Until then the Canvas stays the whole framebuffer,
-`height2` stays equal to `height`, and the flag is what runs the one archive
-that needs the other answer.
+handset's `height` beside its `height2`.**
+
+**The reference implementation does not have that pair either.** Its `XDisplay`
+declares the same three fields and fills them with 240, 320 and 320 under a
+comment marking the values temporary; its `Displayable.getHeight` forwards to
+the display's height with no full-screen distinction; and drawing a title bar
+and a soft-key bar for a Displayable that is not full screen is an unimplemented
+note there. It also has no per-archive screen selection at all — one window,
+240x320, for everything. So the other implementation parked this in the same
+place and at the same value, which is worth knowing before spending on it again:
+the missing number is not one that a second reading of somebody else's source
+produces. It comes from a handset.
+
+Until then the Canvas stays the whole framebuffer, `height2` stays equal to
+`height`, and the flag is what runs the one archive that needs the other
+answer.
 
 ## Ninety archives, and the pass that made room for eleven of them
 
