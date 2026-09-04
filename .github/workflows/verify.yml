@@ -9,6 +9,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes anything back: the checks read the tree, build it and run
+# it. A pull request from a fork gets a read token regardless, but a push to a
+# branch here does not, and the default is every scope the repository allows.
+permissions:
+  contents: read
+
 jobs:
   checks:
     uses: ./.github/workflows/checks.yml
