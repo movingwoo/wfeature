@@ -438,20 +438,35 @@ nothing in the Go tree is platform-specific enough to fail to compile or to trip
 `vet`, and that the paths and process handling the server depends on were
 written for all three.
 
-What CI does not open is the archives themselves, so that is done by hand
-before a release. The 0.3.1 set was built on macOS and all five extracted and
-read: each holds the server, its three launchers, both READMEs, the licence and
-the notices, and the empty `games/{ktf,lgt,skt}` tree. The Windows archive's
-five text files are CRLF throughout, the two Korean READMEs open with a UTF-8
-BOM and the three `.bat` launchers do not; the Unix archives carry no CR at all
-and their launchers and binary keep their executable bit. Every binary is
-stamped with the version — the native one answers `wfeature-server 0.3.1
-(release)` — and `SHA256SUMS` checks out against the five files beside it. The
-native one was also run out of the extracted folder: it serves the page from
-the client it carries (`client=embedded`, saves `beside the executable`),
-answers `/api/status` with the stamped version, and drains on `/api/shutdown`.
-The 0.3.0 set was read the same way and differed in nothing but the stamp,
-which is what a `make dist` recipe unchanged between the two should produce.
+Opening the archives themselves used to be a check somebody had to remember:
+
+```sh
+make dist VERSION=0.4.0
+make dist-check
+```
+
+`dist-check` reads all five back — `internal/tools/distcheck` — and the release
+workflow runs the same command before it publishes anything. It asks what the
+0.3.0 and 0.3.1 sets were read by hand for. That every entry extracts inside
+the archive's own folder, and that none of them is a link. That each holds the
+server, its three launchers, both READMEs, the licence and the notices, and the
+empty `games/{ktf,lgt,skt}` tree, and nothing else. That the launchers and the
+binary in a Unix archive keep their executable bit and nothing else in it does.
+That the Windows text is converted and the Unix text is not: the two Korean
+READMEs there open with a UTF-8 BOM and are CRLF throughout, the three `.bat`
+launchers are CRLF and ASCII without one, and no file in a `.tar.gz` carries a
+CR. That the licence, the notices and both READMEs are the files this
+repository holds, byte for byte, rather than files with those names. That
+`SHA256SUMS` covers every archive beside it and every hash matches. And that
+the one archive built for the machine running the check unpacks a server that
+answers with the version stamped into it — cross-compiling proves a build, and
+only a run proves the stamp took.
+
+What it does not answer is what that server then does, which is the smoke job
+below and, for a release, the same thing by hand: the 0.3.1 native archive was
+run out of its extracted folder and served the page from the client it carries
+(`client=embedded`, saves `beside the executable`), answered `/api/status` with
+the stamped version, and drained on `/api/shutdown`.
 
 **Talk to the server you started, and prove it before you stop it.** The
 port this is done on is one a developer's machine tends to have several

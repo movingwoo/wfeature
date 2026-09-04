@@ -1,4 +1,4 @@
-.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist mobile checksums pgo
+.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist dist-check acceptance mobile checksums pgo
 
 # Each profile owns its own output directory so a debug and a release build can
 # coexist. Rebuilding one never silently replaces the other, and which binary
@@ -180,6 +180,16 @@ dist:
 	@$(MAKE) --no-print-directory checksums
 	@ls -l $(DIST)
 
+# dist-check reads the archives back. `make dist` says the files were written;
+# this says what is in them — that every entry extracts inside its own folder,
+# that the launchers kept their executable bit, that the Windows text kept the
+# line endings and byte order mark it is converted for, that the licence and
+# the notices are the ones in this repository, and that the server built for
+# this machine answers with the version that was stamped into it. All of that
+# was a manual check before a tag; the release workflow runs this command now.
+dist-check:
+	go run ./internal/tools/distcheck -dir $(DIST)
+
 # The phone builds. They are not part of `dist` and not in the release archive:
 # each needs a toolchain the desktop build does not (an Android SDK, and Xcode
 # for the iOS one), and a machine that has neither should still be able to cut
@@ -226,6 +236,18 @@ serve-release:
 test:
 	go test ./...
 	node --test web/*.test.mjs
+
+# acceptance runs every local archive probe — six for KTF, one for LGT, two for
+# SKT — and writes what they answered to var/acceptance/<date>.md. It needs the
+# ignored local corpus under var/games and runs nowhere else, which is why it
+# is not part of `make test`: no archive in this repository is a real game.
+#
+# The report is where a count belongs. A number typed into a document is a
+# sentence about one afternoon, and the corpus changes underneath it; the file
+# carries its date and the archive that produced every row. It stays under
+# var/ because those rows are the games' names.
+acceptance:
+	go run ./internal/tools/acceptance $(ARGS)
 
 test-debug:
 	go test -tags debug ./...
