@@ -70,30 +70,31 @@ func TestLocalKTFArchivesParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read local KTF game directory: %v", err)
 	}
-	parsed, native := 0, 0
+	// One subtest per archive, like the four probes below it. What the ladder
+	// answers is where an archive stops rather than whether one did, and a
+	// loop of `t.Errorf` says a number where the report needs a name.
+	found := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
-		if err != nil {
-			t.Errorf("read %q: %v", entry.Name(), err)
-			continue
-		}
-		if isNativePackageArchive(data) {
-			native++
-			continue
-		}
-		if _, err := Open(data); err != nil {
-			t.Errorf("parse %q: %v", entry.Name(), err)
-			continue
-		}
-		parsed++
+		found++
+		t.Run(entry.Name(), func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(gameDirectory, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if isNativePackageArchive(data) {
+				t.Skip("the earlier KTF package, which carries no JAR to parse")
+			}
+			if _, err := Open(data); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+		})
 	}
-	if parsed == 0 {
-		t.Fatal("no local KTF archives parsed")
+	if found == 0 {
+		t.Fatal("no local KTF archives to parse")
 	}
-	t.Logf("parsed %d local KTF archives, and passed over %d of the earlier package", parsed, native)
 }
 
 // TestLocalKTFArchivesInitialize is a separate opt-in probe because it runs
@@ -440,83 +441,85 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 			continue
 		}
 		name := entry.Name()
-		data, err := os.ReadFile(filepath.Join(gameDirectory, name))
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		// The earlier native package carries no JAR and no main class, so it
-		// has nothing for this probe to start; TestLocalKTFNativePackageRuns
-		// is what exercises that generation. Counting it here would leave the
-		// ratio below understating itself by one archive of that shape.
-		if isNativePackageArchive(data) {
-			skipped++
-			continue
-		}
-		attempted++
-		// A probe measures what the guest computes, not how long it takes, so
-		// it runs a manual clock it jumps to each next deadline: the same
-		// sequence of guest work at no real cost. This is what `runktf` does
-		// without -play.
-		clock := NewManualClock(time.Time{})
-		session, err := StartSession(context.Background(), data, SessionOptions{
-			MaxSteps: localAcceptanceMaxSteps(t),
-			Clock:    clock,
-		})
-		if err != nil {
-			t.Errorf("%s start: %v", name, err)
-			continue
-		}
-		ran := 0
-		var tickErr error
-		for ; ran < ticks; ran++ {
-			frame, _, _, flushes := session.Frame()
-			if flushes > 0 && frameHasContent(frame) {
-				break
-			}
-			progressed, err := session.Tick(context.Background())
+		// One subtest per archive, like the rungs below this one. **An
+		// archive that draws nothing fails here rather than being logged**:
+		// this probe used to pass as long as any archive drew, which made a
+		// title that stopped painting a line in a log nobody reads. The
+		// count it printed is what `make acceptance` writes down now, per
+		// archive and with the date on it.
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(gameDirectory, name))
 			if err != nil {
-				// A game that ended on its own terms is not a failure, and
-				// what it drew before it did still counts.
-				if !errors.Is(err, ErrGuestExited) {
-					tickErr = err
-				}
-				break
+				t.Fatal(err)
 			}
-			session.SkipToNextDeadline()
-			if !progressed {
-				// A round that did nothing is only an idle game when nothing
-				// is due: a title whose loop is one repeating timer spends
-				// every round before the first one is due doing nothing.
-				if _, pending := session.NextDeadline(); !pending {
+			// The earlier native package carries no JAR and no main class, so
+			// it has nothing for this probe to start;
+			// TestLocalKTFNativePackageRuns is what exercises that generation.
+			if isNativePackageArchive(data) {
+				skipped++
+				t.Skip("the earlier KTF package, which this probe does not drive")
+			}
+			attempted++
+			// A probe measures what the guest computes, not how long it takes,
+			// so it runs a manual clock it jumps to each next deadline: the
+			// same sequence of guest work at no real cost. This is what
+			// `runktf` does without -play.
+			clock := NewManualClock(time.Time{})
+			session, err := StartSession(context.Background(), data, SessionOptions{
+				MaxSteps: localAcceptanceMaxSteps(t),
+				Clock:    clock,
+			})
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			defer session.Close()
+			ran := 0
+			var tickErr error
+			for ; ran < ticks; ran++ {
+				frame, _, _, flushes := session.Frame()
+				if flushes > 0 && frameHasContent(frame) {
 					break
 				}
+				progressed, err := session.Tick(context.Background())
+				if err != nil {
+					// A game that ended on its own terms is not a failure, and
+					// what it drew before it did still counts.
+					if !errors.Is(err, ErrGuestExited) {
+						tickErr = err
+					}
+					break
+				}
+				session.SkipToNextDeadline()
+				if !progressed {
+					// A round that did nothing is only an idle game when
+					// nothing is due: a title whose loop is one repeating timer
+					// spends every round before the first one is due doing
+					// nothing.
+					if _, pending := session.NextDeadline(); !pending {
+						break
+					}
+				}
 			}
-		}
-		frame, width, height, flushes := session.Frame()
-		drawn := 0
-		for offset := 0; offset+3 < len(frame); offset += 4 {
-			if frame[offset] != 0 || frame[offset+1] != 0 || frame[offset+2] != 0 {
-				drawn++
+			frame, width, height, flushes := session.Frame()
+			drawn := 0
+			for offset := 0; offset+3 < len(frame); offset += 4 {
+				if frame[offset] != 0 || frame[offset+1] != 0 || frame[offset+2] != 0 {
+					drawn++
+				}
 			}
-		}
-		if flushes > 0 && drawn > 0 {
+			if flushes == 0 || drawn == 0 {
+				t.Fatalf("no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)\ncounts:\n%s",
+					ran, flushes, drawn, tickErr, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60))
+			}
 			rendered++
-			t.Logf("%s: %dx%d frame after %d ticks, %d flushes, %d lit pixels", name, width, height, ran, flushes, drawn)
+			t.Logf("%dx%d frame after %d ticks, %d flushes, %d lit pixels", width, height, ran, flushes, drawn)
 			if directory := os.Getenv("WFEATURE_KTF_FRAME_DIR"); directory != "" {
 				writeFramePNG(t, filepath.Join(directory, strings.TrimSuffix(name, ".zip")+".png"), frame, width, height)
 			}
-		} else {
-			t.Logf("%s: no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)\ncounts:\n%s",
-				name, ran, flushes, drawn, tickErr, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60))
-		}
-		session.Close()
+		})
 	}
 	if attempted == 0 {
 		t.Fatal("no local KTF archives attempted")
-	}
-	if rendered == 0 && only == "" {
-		t.Fatal("no local KTF game rendered a first frame")
 	}
 	// The denominator is the archives this probe can start. Archives of the
 	// earlier generation are reported beside it rather than inside it.

@@ -5,11 +5,18 @@
 ```sh
 make test          # go test ./... and the Node tests, the usual run
 make test-debug    # the same Go tests under the debug build tag
+make acceptance    # every local archive probe, written to var/acceptance/<date>.md
+make dist-check    # what the release archives `make dist` wrote actually carry
 ```
 
 `make test` is what a change is expected to pass. The debug tag compiles the
 detailed logging and diagnostics in, so `make test-debug` is what catches a
 change that only builds in one profile.
+
+The two below it need something the repository does not carry. `acceptance`
+needs the ignored local corpus under `var/games` and is the subject of "One
+command, one date" further down; `dist-check` needs archives, so it follows a
+`make dist`.
 
 Every push runs both of those, `go vet`, `gofmt` and `go test -race` on an
 Ubuntu runner, and then starts the release server on Ubuntu, Windows and macOS
@@ -794,10 +801,9 @@ Real game archives are not stored in the repository and are read from
 `var/games`. Reference projects' own `test_data/*.zip` files are not used as
 fixtures until their redistribution status is known.
 
-The local SKT archive currently provides a non-committed compatibility probe:
-startup reaches the unimplemented RMS `RecordStore` boundary on a guest thread,
-and its foreground DRM loop reaches the configured instruction limit. It is not
-used as a pass/fail repository fixture and is never copied into tracked data.
+The local SKT archives are a probe rather than a fixture: they are never
+copied into tracked data, and what they answer on any given day is the
+acceptance report rather than a sentence here.
 
 KTF parsing has a separate opt-in local probe. It never executes game code:
 
@@ -805,8 +811,9 @@ KTF parsing has a separate opt-in local probe. It never executes game code:
 WFEATURE_KTF_ACCEPTANCE=1 go test -run TestLocalKTFArchivesParse -v ./internal/platform/ktf
 ```
 
-All 33 ignored KTF archives currently present under `var/games/ktf` pass the
-outer archive, ADF, nested JAR, and client-image detection boundary.
+Each archive is a subtest, and what it answers about the outer archive, the
+ADF, the nested JAR and client-image detection is a row in the acceptance
+report rather than a number typed here.
 
 Executing third-party client code is a separate opt-in acceptance probe:
 
@@ -940,7 +947,7 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 
 Every archive under `var/games/skt` is started, ticked for 300 ticks and
 required to end somewhere other than the error state with something lit in its
-frame. **All 15 currently pass.** That directory is the set the probe holds to,
+frame. That directory is the set the probe holds to,
 not the whole local corpus: the ninety-archive set is `var/games/test_skt`, it
 is swept with the CLI rather than with `go test`, and what the sweep found is
 `var/games/test_skt/NOT-WORKING.md` and "Ninety archives" in
@@ -975,8 +982,8 @@ WFEATURE_LGT_ACCEPTANCE=1 go test -run TestLocalLGTArchivesBootAndPaint -v ./int
 ```
 
 Every archive under `var/games/lgt` is started, ticked, and required to present
-a frame with something lit in it. **All 28 currently pass, and nothing skips.**
-The skip path is still there and still names its reason — a Java title that
+a frame with something lit in it. The skip path is still there and still names
+its reason — a Java title that
 stops at something the AOT bridge does not implement yet reports
 `ErrJavaAppUnsupported` — but no local archive takes it any more. It once took
 three: Java titles were the platform's open boundary, and closing it is what
@@ -1002,6 +1009,40 @@ change, and questioned with `-trace-live`. It is a method rather than a test
 because its pass condition is a person recognising the screen. [`lgt.md`](lgt.md)
 has it in full, and [`cli.md`](cli.md) has the flags.
 
+## One command, one date
+
+The probes above are nine `go test` runs behind eight environment variables,
+which is why every count in this document used to be a sentence somebody typed
+after an afternoon of running them. A sentence like that has no date on it, and
+the corpus underneath it changes: "all 28 currently pass" was written when
+`var/games/lgt` held 28 archives.
+
+```sh
+make acceptance                      # all three platforms
+make acceptance ARGS="-platform ktf" # one of them
+```
+
+`internal/tools/acceptance` runs each probe with the variable that lets it run,
+reads the results out of `go test -json` rather than out of its printed output —
+which is what keeps a subtest's name and its reason together when several fail
+at once — and writes `var/acceptance/<date>.md`: what was in each corpus
+directory, a row per stage, and then every archive that did not pass with the
+line that says why. It takes about a minute for all nine.
+
+**The report is not committed and cannot be**: its rows are archive file names,
+and those are the games' names. `var/` is ignored for that reason, so what this
+document can carry is the command, and what a claim about the corpus can carry
+is the report's date.
+
+Two things follow from a report having to be readable per archive. **Each probe
+is one subtest per archive**, including the three that used to loop with
+`t.Errorf` and print a count at the end — a count says a number where a report
+needs a name. And **the KTF frame probe fails the archive that draws nothing**
+rather than logging it: it used to pass as long as *any* archive drew, so a
+title that stopped painting became a line in a log nobody reads. The exit code
+of `make acceptance` says whether a stage could run at all, not whether every
+archive passed; a report that lists failures is a successful run of it.
+
 ## Repository-wide audit on 2026-09-01
 
 This audit is a dated baseline, not a claim that every title plays correctly.
@@ -1014,10 +1055,10 @@ files and their checksums verified.
 The opt-in local probes also passed for all 15 SKT archives and all 35 LGT
 archives. The KTF frame probe rendered 43 of the 44 JAR-packaged archives and
 skipped one earlier package; the remaining archive contains a malformed nested
-JAR and fails before execution. These counts supersede undated uses of
-"currently" elsewhere in this document. They should eventually come from one
-generated, dated acceptance report so that prose cannot drift as the ignored
-local corpus changes.
+JAR and fails before execution. **Those counts are this audit's date and no
+later one** — they come from one afternoon in September 2026, and the corpus
+has grown since. `make acceptance` is where a current one comes from now; see
+"One command, one date" above.
 
 The review found the following boundaries that the passing suites do not yet
 cover:
@@ -1045,23 +1086,35 @@ cover:
   SKT**, whose program number is the same kind of self-declared, copyable id.
   That is covered now too. See [cli.md](cli.md), "checkgames".
 - The release smoke job stages a fresh directory and runs a freshly built
-  executable; it does not extract and validate the archives that users
-  download. File presence, modes, line endings, embedded notices, version
-  output, launcher behavior, and traversal-safe extraction therefore remain a
-  manual release check. The archives also retain builder owner/group and time
-  metadata, so identical source does not currently produce byte-identical
-  packages.
+  executable; it did not extract and validate the archives that users
+  download, so file presence, modes, line endings, embedded notices, version
+  output and traversal-safe extraction were a manual release check. **Since
+  fixed**: `make dist-check` reads all five archives back and the release
+  workflow runs it before publishing — see [running.md](running.md), "What was
+  verified, and where". Reproducibility is not addressed: the archives still
+  carry builder owner/group and time metadata, so identical source does not
+  produce byte-identical packages.
 - The primary distribution is a PWA, but its automated acceptance stops at Go
   HTTP/WebSocket tests and Node tests of browser modules. No real browser test
-  currently covers installation, service-worker update behavior, canvas,
-  audio, touch input, reconnect, or save restoration.
+  covers installation, service-worker update behavior, canvas, audio, touch
+  input, reconnect, or save restoration. Still open: what a browser in CI would
+  cost has to be weighed against what the manual sweep already covers.
 - At the audit date, the workflows used `checkout@v4`, `setup-go@v5`,
   `setup-node@v4`, and `upload-artifact@v4`, while their official examples had
   moved to major version 7. Actions were tag-pinned rather than full-SHA-pinned,
   the verify workflow had no explicit least-privilege `permissions`, and there
-  was no Dependabot configuration for Actions or Go modules. This is a dated
-  supply-chain observation; re-check the official action repositories and
-  GitHub security guidance before changing it.
+  was no Dependabot configuration for Actions or Go modules. **Since fixed**,
+  on 2026-09-04: the four actions are at `checkout@v7.0.1`, `setup-go@v7.0.0`,
+  `setup-node@v7.0.0` and `upload-artifact@v7.0.1`, each pinned to the commit
+  that tag pointed at with the version in a comment beside it; `verify.yml` and
+  `checks.yml` declare `contents: read`; and `.github/dependabot.yml` groups
+  weekly updates for Actions and Go modules, which is what moves a commit pin
+  when it goes stale. `setup-node` is told `package-manager-cache: false`,
+  because from v5 it caches by itself when a `package.json` names a package
+  manager and there is no lock file here to key one on. `govulncheck` is
+  deliberately still installed `@latest`: what it reports moves with its
+  vulnerability database, and pinning the tool would pin the question rather
+  than the answer.
 - The LAN server bounds individual save and debug-log bodies, but it has no
   whole-request read deadline and no cap on simultaneously live sessions. It
   also intentionally has no authentication. The first two are operational
@@ -1070,8 +1123,13 @@ cover:
 - The release-facing Korean text still needs a publication pass. The README's
   third-party component table omitted `golang.org/x/sys`, although it is linked
   on amd64 targets and was correctly included in the embedded notices — **since
-  fixed**; the pending and 0.3.1 changelog sections still contain proofreading
-  defects.
+  fixed**, and since made to fail: the bundled components are named in three
+  places (the README's table, the notices' summary table, the notices' own
+  sections) and `TestEveryListOfBundledComponentsNamesTheSameOnes` in
+  `internal/licenses` compares all three, in both directions. Only the first
+  column is compared, because what each list says about a component is written
+  for its own reader. The pending and 0.3.1 changelog sections still contain
+  proofreading defects; those are the author's to make.
 
 The audit also read the constraint "use the same runtime data and save format
 for both profiles" as requiring one save root, and reported the per-profile

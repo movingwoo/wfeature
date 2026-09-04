@@ -24,6 +24,10 @@ build artifact.
   can pick it up once the platform that claims it lands.
 - `logs/`: the reports a debug session writes, and the page logs posted beside
   them. A release server writes none.
+- `acceptance/<date>.md`: what `make acceptance` found when it ran every local
+  archive probe. One file per day it is run, because the answer is only ever
+  true of a date and of the corpus that was in `games/` at the time. Its rows
+  are archive file names, which is why it lives here rather than in `docs/`.
 
 Everything above except this file is excluded from Git — the archives are not
 ours to publish, saves belong to whoever played, and a run's reports are that
