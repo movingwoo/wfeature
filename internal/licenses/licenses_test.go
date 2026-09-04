@@ -63,3 +63,102 @@ func TestNoticesReproduceTheFontLicenceInFull(t *testing.T) {
 		t.Error("the notices no longer reproduce fonts/LICENSE-neodgm in full")
 	}
 }
+
+// The bundled components are listed in three places, and the release-facing
+// one is the easiest to forget: the notices carry a summary table and a
+// section per component, and the README has a table of its own for a reader
+// who has not downloaded anything yet. `golang.org/x/sys` was in the notices
+// and in the binary and missing from the README's table for as long as it had
+// been linked, which nothing here could have failed on. This is what fails on
+// the next one.
+//
+// Only the first column is compared. What each list says about a component is
+// written for its own reader — the README's is Korean and says which targets
+// link x/sys, the summary's is English — and a test that demanded the same
+// words in both would be a test that stops either from being rewritten.
+func TestEveryListOfBundledComponentsNamesTheSameOnes(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range []struct {
+		what  string
+		named []string
+	}{
+		{"the notices' summary table", componentsInTable(ThirdParty)},
+		{"the README's component table", componentsInTable(string(readme))},
+	} {
+		compareComponents(t, pair.what, pair.named, componentSections(ThirdParty))
+	}
+}
+
+// compareComponents reports each component one list has and the other does not,
+// in both directions, so one run names every drift rather than the first.
+func compareComponents(t *testing.T, what string, named, sections []string) {
+	t.Helper()
+	if len(named) == 0 {
+		t.Fatalf("%s: no component table found; has its shape changed?", what)
+	}
+	held := map[string]bool{}
+	for _, component := range sections {
+		held[component] = true
+	}
+	listed := map[string]bool{}
+	for _, component := range named {
+		listed[component] = true
+		if !held[component] {
+			t.Errorf("%s names %q, which has no section in the notices", what, component)
+		}
+	}
+	for _, component := range sections {
+		if !listed[component] {
+			t.Errorf("%s does not name %q, which the notices reproduce a licence for", what, component)
+		}
+	}
+}
+
+// componentSections is what the notices actually reproduce: one `## ` heading
+// per component, plus the summary heading, which is not one.
+func componentSections(notices string) []string {
+	var components []string
+	for _, line := range strings.Split(notices, "\n") {
+		heading, ok := strings.CutPrefix(line, "## ")
+		if !ok || strings.TrimSpace(heading) == "Summary" {
+			continue
+		}
+		components = append(components, strings.TrimSpace(heading))
+	}
+	return components
+}
+
+// componentsInTable reads the first column of the one table in a document whose
+// heading row is a component list, in either language. A cell may name more
+// than one component — the two Go modules under the same terms share a row in
+// the README — and may wrap each in backticks.
+func componentsInTable(document string) []string {
+	var components []string
+	inside := false
+	for _, line := range strings.Split(document, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			inside = false
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		first := strings.TrimSpace(cells[0])
+		if first == "Component" || first == "구성 요소" {
+			inside = true
+			continue
+		}
+		if !inside || strings.HasPrefix(first, "---") {
+			continue
+		}
+		for _, name := range strings.Split(first, ",") {
+			name = strings.TrimSpace(strings.Trim(strings.TrimSpace(name), "`"))
+			if name != "" {
+				components = append(components, name)
+			}
+		}
+	}
+	return components
+}
