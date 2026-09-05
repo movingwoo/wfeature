@@ -5,7 +5,7 @@
 ```sh
 make test          # go test ./... and the Node tests, the usual run
 make test-debug    # the same Go tests under the debug build tag
-make acceptance    # every local archive probe, written to var/acceptance/<date>.md
+make acceptance    # every local archive probe, written to var/acceptance/<date>.{md,ndjson}
 make dist-check    # what the release archives `make dist` wrote actually carry
 ```
 
@@ -947,6 +947,48 @@ The ratio is still not the number that says what plays. Nothing here is: what
 plays is found by driving a title with keys and looking at the frames, one
 title at a time. A first frame is a first frame.
 
+### Two rungs above a first frame
+
+A first frame is a first frame, and two of the questions it leaves open can be
+asked without a person watching:
+
+```sh
+WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalKTFArchivesSustainAFrame -v ./internal/platform/ktf
+WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalKTFArchivesAnswerAKey -v ./internal/platform/ktf
+WFEATURE_SKT_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalSKTArchivesSustainAFrame -v ./internal/platform/skt
+WFEATURE_SKT_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalSKTArchivesAnswerAKey -v ./internal/platform/skt
+```
+
+**sustained** is the title still running a window past its first frame, with no
+error and without ending itself. It is not the same claim as "it ticked a
+thousand times without failing": that one is true of a loop that has stopped
+doing anything, and it was true of titles this project later found frozen. A
+title that ends itself during the window fails the rung and the reason says so,
+which is how the two SKT titles that paint their opening screen and destroy
+themselves in the same breath became visible — the boot rung passes both,
+because painting and then ending is still painting.
+
+**interactive** is a key changing what the title draws. The judgment is:
+
+1. reach a first frame;
+2. wait for the screen to settle — unchanged for eight consecutive ticks;
+3. press a key and **hold it**, then release it and keep ticking;
+4. compare what is on the screen with what was on it before the key.
+
+Step 2 is what makes step 4 mean anything: a change measured against a screen
+that was already animating would have happened anyway, so a title that is still
+changing at the end of the settle window is reported as *unanswerable* rather
+than as a failure. Step 3's hold matters as much — **a press of a single tick
+is missed**, because a title of this era reads the pad on its own schedule
+rather than on the one the event arrived by. Several keys are tried in turn and
+the one that moved the screen is logged, because that is the key a route for
+that archive has to start with.
+
+What the rungs answer for the local corpus today is in the acceptance report;
+the shape of the answer is that KTF's ladder is now eight rungs and SKT's is
+three, and that the archives which stop below the top do so for reasons that
+group into a handful of causes rather than into one per archive.
+
 SKT has the same shape of probe, and it is the only test in that package that
 runs a real title:
 
@@ -1020,11 +1062,11 @@ has it in full, and [`cli.md`](cli.md) has the flags.
 
 ## One command, one date
 
-The probes above are nine `go test` runs behind eight environment variables,
-which is why every count in this document used to be a sentence somebody typed
-after an afternoon of running them. A sentence like that has no date on it, and
-the corpus underneath it changes: "all 28 currently pass" was written when
-`var/games/lgt` held 28 archives.
+The probes above are thirteen `go test` runs behind twelve environment
+variables, which is why every count in this document used to be a sentence
+somebody typed after an afternoon of running them. A sentence like that has no
+date on it, and the corpus underneath it changes: "all 28 currently pass" was
+written when `var/games/lgt` held 28 archives.
 
 ```sh
 make acceptance                      # all three platforms
@@ -1036,12 +1078,73 @@ reads the results out of `go test -json` rather than out of its printed output �
 which is what keeps a subtest's name and its reason together when several fail
 at once — and writes `var/acceptance/<date>.md`: what was in each corpus
 directory, a row per stage, and then every archive that did not pass with the
-line that says why. It takes about a minute for all nine.
+line that says why. It takes about four minutes for all thirteen.
 
-**The report is not committed and cannot be**: its rows are archive file names,
-and those are the games' names. `var/` is ignored for that reason, so what this
-document can carry is the command, and what a claim about the corpus can carry
-is the report's date.
+**Neither file it writes is committed and neither can be**: their rows are
+archive file names, and those are the games' names. `var/` is ignored for that
+reason, so what this document can carry is the command, and what a claim about
+the corpus can carry is the report's date.
+
+### One archive, one line
+
+The report is prose, and prose does not subtract. Two of them differ in their
+wording everywhere the corpus is unchanged, and the one archive that lost a
+rung is a line somewhere in the middle of that. So the same run also writes
+`var/acceptance/<date>.ndjson`: one JSON object per line, a run line and then
+one line per file in every corpus directory — **including the files no probe
+ever picked up**, because a download that did not finish is invisible in a pass
+count and a file no loader claimed is invisible in a failure count.
+
+Every line begins with a `schema` number, and a file written by a newer tool is
+refused rather than half-read. An archive line carries:
+
+| field | what it is |
+|---|---|
+| `schema`, `kind`, `run` | the version, `archive`, and the run's timestamp |
+| `platform`, `archive` | the corpus directory and the file name in it |
+| `sha256`, `size` | the bytes that were graded, so a replaced file is not read as a regression |
+| `detected`, `detect_reason`, `detect_error` | what detection made of the file, and why nothing claimed it |
+| `grade`, `rung`, `ladder` | the highest rung reached, its number, and how many rungs that platform had |
+| `stopped`, `stopped_outcome`, `why` | the lowest rung it did not pass, whether it was refused or declined, and the reason the probe printed |
+| `why_class` | that reason with the counts and addresses taken out of it, which is what a grouping counts |
+| `stages` | every stage that answered, as `pass`, `skip` or `fail` with its reason |
+
+Three grades are not rungs and mean different things: `none` is a file refused
+at the first rung it was asked, `skipped` is one every rung knowingly declined —
+a package of a shape the ladder does not drive is not a failure — and `unrun` is
+one no ladder stage answered for at all. A comparison must not read any of them
+as a fall from another, and it does not.
+
+The rows are joined to the files through the name `go test` prints rather than
+the name on disk, because a subtest name has its spaces rewritten to
+underscores. Joining on the wrong one reports every archive with a space in its
+name as a file no probe ever ran.
+
+### What changed, and what they have in common
+
+Both are readings of that file rather than new measurements, and both are
+written into the report:
+
+- **Where they stopped, grouped by cause.** The reason a probe prints is
+  written for the archive in front of it, so two archives failing the same way
+  print two different lines. Grouping on `why_class` turns a list of failures
+  into a count per cause, and the largest count is where the next fix is. This
+  used to be done by hand after a sweep.
+- **Since \<the previous run>.** Which archives got further, which got worse,
+  which arrived, which left, and which are the same name over different bytes.
+  A run that moved nothing says so in one line, which is the answer a release
+  check asks for most often.
+
+```sh
+make acceptance                                   # compares with the newest report already there
+make acceptance ARGS="-since var/acceptance/2026-09-01.ndjson"
+make acceptance ARGS="-since ''"                  # no comparison
+go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
+```
+
+`-compare` runs no probes: it reads two record files and writes the difference
+to standard output, which is what a release check reaches for when both runs
+have already happened.
 
 Two things follow from a report having to be readable per archive. **Each probe
 is one subtest per archive**, including the three that used to loop with

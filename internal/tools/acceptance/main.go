@@ -10,15 +10,23 @@
 // and writes a dated report, so prose can point at a file instead of carrying
 // a number it cannot keep.
 //
-// **The report is not committed and cannot be.** Its rows are the archive file
-// names, and those are the games' names; it lands under `var/`, which is
+// Beside the report it writes one JSON object per line per archive, which is
+// what two runs are compared with. The report is prose and prose does not
+// subtract: two of them differ everywhere the corpus is unchanged, and the one
+// archive that lost a rung is a line in the middle of that. The records are
+// read back by this same command to say what changed and what every failure in
+// a run had in common.
+//
+// **Neither file is committed and neither can be.** Their rows are the archive
+// file names, and those are the games' names; they land under `var/`, which is
 // ignored for exactly that reason.
 //
 // Usage:
 //
 //	go run ./internal/tools/acceptance [-out var/acceptance] [-platform ktf,lgt,skt]
+//	go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
 //
-// `make acceptance` is the same run.
+// `make acceptance` is the first of those.
 package main
 
 import (
@@ -47,28 +55,55 @@ type stage struct {
 	pkg      string
 	test     string
 	env      string
+	// rung is where this stage sits on its platform's ladder, counting from
+	// one, and zero for a stage that is not a rung at all. A ladder is what
+	// lets a run be compared with the one before it as "this archive got
+	// further" rather than as a set of independent yes and no answers, and a
+	// check that asks something else of the same archive — whether its sounds
+	// decode, say — has no place on it.
+	rung int
 }
 
 var stages = []stage{
 	{"ktf", "parse", "the archive opens and its module parses",
-		"./internal/platform/ktf", "TestLocalKTFArchivesParse", "WFEATURE_KTF_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesParse", "WFEATURE_KTF_ACCEPTANCE", 1},
 	{"ktf", "initialize", "the module runs its own initialisation",
-		"./internal/platform/ktf", "TestLocalKTFArchivesInitialize", "WFEATURE_KTF_EXECUTE_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesInitialize", "WFEATURE_KTF_EXECUTE_ACCEPTANCE", 2},
 	{"ktf", "load", "the main class loads",
-		"./internal/platform/ktf", "TestLocalKTFArchivesLoadMainClass", "WFEATURE_KTF_LIFECYCLE_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesLoadMainClass", "WFEATURE_KTF_LIFECYCLE_ACCEPTANCE", 3},
 	{"ktf", "construct", "the main class is constructed",
-		"./internal/platform/ktf", "TestLocalKTFArchivesConstructMainClass", "WFEATURE_KTF_CONSTRUCT_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesConstructMainClass", "WFEATURE_KTF_CONSTRUCT_ACCEPTANCE", 4},
 	{"ktf", "start", "the title's start method returns",
-		"./internal/platform/ktf", "TestLocalKTFArchivesStartMainClass", "WFEATURE_KTF_START_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesStartMainClass", "WFEATURE_KTF_START_ACCEPTANCE", 5},
 	{"ktf", "frame", "the title paints a first frame",
-		"./internal/platform/ktf", "TestLocalKTFArchivesRenderFirstFrame", "WFEATURE_KTF_FRAME_ACCEPTANCE"},
+		"./internal/platform/ktf", "TestLocalKTFArchivesRenderFirstFrame", "WFEATURE_KTF_FRAME_ACCEPTANCE", 6},
+	{"ktf", "sustained", "the title keeps running past its first frame",
+		"./internal/platform/ktf", "TestLocalKTFArchivesSustainAFrame", "WFEATURE_KTF_SUSTAINED_ACCEPTANCE", 7},
+	{"ktf", "interactive", "a key changes what the title draws",
+		"./internal/platform/ktf", "TestLocalKTFArchivesAnswerAKey", "WFEATURE_KTF_INTERACTIVE_ACCEPTANCE", 8},
 	{"lgt", "boot", "the module boots and asks to present a frame",
-		"./internal/platform/lgt", "TestLocalLGTArchivesBootAndPaint", "WFEATURE_LGT_ACCEPTANCE"},
+		"./internal/platform/lgt", "TestLocalLGTArchivesBootAndPaint", "WFEATURE_LGT_ACCEPTANCE", 1},
 	{"skt", "boot", "the title boots and paints",
-		"./internal/platform/skt", "TestLocalSKTArchivesBootAndPaint", "WFEATURE_SKT_ACCEPTANCE"},
+		"./internal/platform/skt", "TestLocalSKTArchivesBootAndPaint", "WFEATURE_SKT_ACCEPTANCE", 1},
+	{"skt", "sustained", "the title keeps running past its first frame",
+		"./internal/platform/skt", "TestLocalSKTArchivesSustainAFrame", "WFEATURE_SKT_SUSTAINED_ACCEPTANCE", 2},
+	{"skt", "interactive", "a key changes what the title draws",
+		"./internal/platform/skt", "TestLocalSKTArchivesAnswerAKey", "WFEATURE_SKT_INTERACTIVE_ACCEPTANCE", 3},
+	// Not a rung: it asks something else of the same archive, and a title
+	// whose sounds do not decode has not fallen down the ladder.
 	{"skt", "sound", "every sound the archive carries decodes",
-		"./internal/platform/skt", "TestLocalSKTArchiveSoundsDecode", "WFEATURE_SKT_ACCEPTANCE"},
+		"./internal/platform/skt", "TestLocalSKTArchiveSoundsDecode", "WFEATURE_SKT_ACCEPTANCE", 0},
 }
+
+// recordExtension is what the machine-readable half of a run is written as:
+// one JSON object per line, so a comparison can read it a record at a time and
+// a shell can grep it.
+const recordExtension = ".ndjson"
+
+// wholeCorpusRow is the row a probe that checks a whole corpus in one test
+// produces. It names no file, so it is a stage's count rather than an
+// archive's record.
+const wholeCorpusRow = "the whole corpus, in one test"
 
 // Where each platform's corpus lives, relative to the repository root. The
 // probes read these directories themselves; they are counted here so the
@@ -83,7 +118,17 @@ func main() {
 	out := flag.String("out", filepath.Join("var", "acceptance"), "the directory the report is written to")
 	only := flag.String("platform", "ktf,lgt,skt", "which platforms to run, comma separated")
 	timeout := flag.String("timeout", "60m", "the `go test` timeout for one stage")
+	since := flag.String("since", "auto", "the record `file` this run is compared with: a path, `auto` for the newest already in the output directory, or empty for none")
+	compareOnly := flag.Bool("compare", false, "compare two record files and write the difference to standard output, running no probes")
 	flag.Parse()
+
+	if *compareOnly {
+		if err := compareFiles(flag.Args()); err != nil {
+			fmt.Fprintln(os.Stderr, "acceptance:", err)
+			os.Exit(2)
+		}
+		return
+	}
 
 	root, err := repositoryRoot()
 	if err != nil {
@@ -93,6 +138,12 @@ func main() {
 	wanted := map[string]bool{}
 	for _, platform := range strings.Split(*only, ",") {
 		wanted[strings.TrimSpace(strings.ToLower(platform))] = true
+	}
+	var platforms []string
+	for _, platform := range []string{"ktf", "lgt", "skt"} {
+		if wanted[platform] {
+			platforms = append(platforms, platform)
+		}
 	}
 
 	started := time.Now()
@@ -108,7 +159,6 @@ func main() {
 			len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.elapsed.Round(time.Second))
 	}
 
-	report := write(root, results, started)
 	directory := *out
 	if !filepath.IsAbs(directory) {
 		directory = filepath.Join(root, directory)
@@ -118,11 +168,24 @@ func main() {
 		os.Exit(2)
 	}
 	file := filepath.Join(directory, started.Format("2006-01-02")+".md")
+	records := filepath.Join(directory, started.Format("2006-01-02")+recordExtension)
+
+	runOf, archives := buildRecords(root, results, started, platforms)
+	// The run this one is compared with is read before the new one is written,
+	// so a second run on the same day compares with the day before it rather
+	// than with itself.
+	previousFile, previousRun, previous := load(*since, directory, records)
+	report := write(root, results, started) + analysis(archives, previousFile, previousRun, previous)
 	if err := os.WriteFile(file, []byte(report), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
 		os.Exit(2)
 	}
+	if err := writeRecords(records, runOf, archives); err != nil {
+		fmt.Fprintln(os.Stderr, "acceptance:", err)
+		os.Exit(2)
+	}
 	fmt.Println(file)
+	fmt.Println(records)
 
 	// A failing archive is a finding rather than a broken run, so the exit
 	// code says whether a stage could not be run at all. A report that lists
@@ -132,6 +195,61 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// load reads the run this one is compared with. A missing or unreadable file
+// is reported and then dropped: a comparison is worth having and is not worth
+// losing a run's own report over.
+func load(since, directory, except string) (string, runRecord, []archiveRecord) {
+	switch since {
+	case "":
+		return "", runRecord{}, nil
+	case "auto":
+		since = newestRecords(directory, except)
+		if since == "" {
+			return "", runRecord{}, nil
+		}
+	}
+	previousRun, previous, err := readRecords(since)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "acceptance:", err)
+		return "", runRecord{}, nil
+	}
+	return since, previousRun, previous
+}
+
+// analysis is the part of the report that is read out of the records rather
+// than measured: what every failure in this run has in common, and what moved
+// since the run before it.
+func analysis(archives []archiveRecord, previousFile string, previousRun runRecord, previous []archiveRecord) string {
+	report := &strings.Builder{}
+	writeClusters(report, archives)
+	if previousFile != "" {
+		writeDelta(report, previousRun, previousFile, compare(previous, archives))
+	}
+	return report.String()
+}
+
+// compareFiles is the command without a run behind it: two record files in,
+// the difference between them out. It is what a release check reaches for when
+// the two runs it wants to compare have both already happened.
+func compareFiles(paths []string) error {
+	if len(paths) != 2 {
+		return fmt.Errorf("-compare takes two record files, got %d", len(paths))
+	}
+	previousRun, previous, err := readRecords(paths[0])
+	if err != nil {
+		return err
+	}
+	_, current, err := readRecords(paths[1])
+	if err != nil {
+		return err
+	}
+	report := &strings.Builder{}
+	writeClusters(report, current)
+	writeDelta(report, previousRun, paths[0], compare(previous, current))
+	fmt.Print(report.String())
+	return nil
 }
 
 // result is one stage's run: which archives passed, which were skipped and
@@ -238,7 +356,7 @@ func collect(stream io.Reader, current stage) result {
 	if len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 {
 		// A probe that checks the whole corpus in one test — its rows are the
 		// lines it logged, and what the report can say is whether it passed.
-		row := note{"the whole corpus, in one test", last[current.test]}
+		row := note{wholeCorpusRow, last[current.test]}
 		switch {
 		case whole["fail"]:
 			outcome.failed = append(outcome.failed, row)
