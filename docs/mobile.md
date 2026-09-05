@@ -45,10 +45,19 @@ Neither is part of `make dist`: each needs a toolchain the desktop build does
 not, and a machine with neither should still be able to cut a release.
 
 ```sh
-make mobile VERSION=0.4.0     # both, into build/dist/ beside the archives
-mobile/android/build.sh       # just the APK
-mobile/ios/build.sh           # just the IPA
+make mobile VERSION=0.4.0          # both, into build/dist/ beside the archives
+make mobile-android VERSION=0.4.0  # just the APK
+make mobile-ios VERSION=0.4.0      # just the IPA
+mobile/android/build.sh            # the script the target runs
+mobile/ios/build.sh
 ```
+
+**A release builds both in CI.** They used to be made here and uploaded to the
+release afterwards, which is a step that gets forgotten — and did. The two
+targets are separate because the release workflow runs them on different
+machines: the Android SDK is on its Linux runner and Xcode on its macOS one,
+and no runner has both. Nothing is published unless all seven files are there.
+See [`running.md`](running.md), "The release archives".
 
 **There is no Gradle and no Xcode project.** Each app is one source file and
 one linked artifact, and the platform's own tools do that in a handful of
@@ -74,6 +83,22 @@ installed, so whoever holds this key can build an APK that installs over
 somebody's and inherits its games and saves. Keeping it out costs nothing —
 one person cuts the releases — and keeping it in would hand that to anyone who
 cloned the repository.
+
+The release workflow needs that same key, or every release would be signed with
+a different one and no phone could update onto it. It is the repository secret
+`ANDROID_KEYSTORE_BASE64`, which is the keystore file and nothing else — the
+passwords are the literal `android` in `build.sh`. A secret is not a
+compromise on the paragraph above: a fork's pull request is not given it, so it
+stays with whoever can push here.
+
+```sh
+base64 -i mobile/android/debug.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+```
+
+The workflow **fails** when it is missing rather than letting `build.sh` make a
+key. A build that quietly signs with a new one produces an APK that installs
+fine on a fresh phone and cannot update anybody's — the worst of the three
+outcomes, and the one that is invisible until a tester reports it.
 
 The `versionCode` is the repository's commit count, because Android refuses to
 install an older one over a newer and a number that never moved would make

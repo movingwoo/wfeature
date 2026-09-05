@@ -312,18 +312,23 @@ wfeature-<version>-darwin-amd64.tar.gz     wfeature-<version>-linux-amd64.tar.gz
 SHA256SUMS                                 checksums for everything beside it
 ```
 
-The phone builds are not among them. `make mobile` writes an APK and an IPA
-into the same directory and rewrites `SHA256SUMS` over whatever is there, so a
-release that has them lists seven files rather than five. They are a separate
-command because each needs a toolchain the desktop build does not — an Android
-SDK, and Xcode — and a machine with neither still has to be able to cut a
-release. The release workflow builds the five; the two are uploaded to the
-release afterwards from a machine that can make them. See
-[`mobile.md`](mobile.md).
+The phone builds are the other two. `make mobile` writes an APK and an IPA into
+the same directory and rewrites `SHA256SUMS` over whatever is there, so a
+release lists seven files rather than five. They are a separate command because
+each needs a toolchain the desktop build does not — an Android SDK, and Xcode —
+and a machine with neither still has to be able to cut a release. **The release
+workflow builds all seven**, on three machines, and publishes nothing until
+every one of them is there. See [`mobile.md`](mobile.md).
+
+That is a change from how the first releases were made: the workflow built the
+five and the two were uploaded afterwards by hand, which is a step that gets
+forgotten — and did, on the release that prompted this. `make dist-check
+DISTCHECK_FLAGS=-phones` is the check that now refuses a set without them.
 
 **A tag with a suffix publishes as a pre-release.** `v0.4.0-pre` and
-`v0.5.0-rc1` are marked as such and `v0.4.0` is not, which is what keeps a
-release still waiting for half its files off the top of the downloads page.
+`v0.5.0-rc1` are marked as such and `v0.4.0` is not. It says how ready the
+thing is; it no longer says anything about which files arrived, because every
+release now carries the same seven.
 
 ```text
 wfeature-server[.exe]      the release binary, ~12 MB, stamped with the version
@@ -348,12 +353,32 @@ version into a report depend on.
 **A pushed tag publishes them.** `.github/workflows/release.yml` runs on a tag
 matching `v*`. It waits on `checks.yml` — the same gate every push runs, which
 is `gofmt`, `vet`, both test profiles, the race detector, and a real run of the
-server on Ubuntu, Windows and macOS — and only then builds the five archives
-with `make dist VERSION=<tag without its v>`, verifies the checksums it just
-wrote, and creates the GitHub release with the archives and `SHA256SUMS`
-attached. The per-OS run is the reason for the dependency rather than a copy of
-the test steps: four of the five archives are cross-compiled, and a build that
-succeeds is not a binary that starts.
+server on Ubuntu, Windows and macOS — and only then builds, on three machines
+at once:
+
+| job | machine | what it builds |
+|---|---|---|
+| `desktop` | Ubuntu | the five archives, `make dist` |
+| `android` | Ubuntu | the APK, `make mobile-android` |
+| `ios` | macOS | the IPA, `make mobile-ios` |
+
+The split is not a preference: the Android SDK is on the Linux runner and Xcode
+is on the macOS one, and no runner has both. A fourth job gathers the seven
+files, writes `SHA256SUMS` over all of them, reads the archives back, and
+creates the GitHub release. **A failure in any of the three publishes nothing.**
+A release missing its APK is the failure this shape is for, and tagging again
+costs less than a download page that is half a release.
+
+The per-OS run in `checks.yml` is the reason for the dependency rather than a
+copy of the test steps: four of the five archives are cross-compiled, and a
+build that succeeds is not a binary that starts.
+
+The `android` job needs the signing key, which is not in the repository — it is
+`ANDROID_KEYSTORE_BASE64`, a repository secret holding
+`mobile/android/debug.keystore`. Without it the job **fails** rather than
+letting `build.sh` make a fresh key: a new key each release is an app no phone
+can update onto, only reinstall. It also checks out the full history, because
+the `versionCode` is the commit count and a shallow checkout counts one.
 
 The release is titled `W-Feature <tag>`, which is the project's own name and
 the tag's — a release page shows its title above the notes, and the tag alone
@@ -363,8 +388,8 @@ The release notes are that version's section of [`CHANGELOG.md`](../CHANGELOG.md
 read out of the file by the tag's number. A tag whose version has no section
 fails the release instead of publishing an empty one, which is what keeps the
 file current. The workflow adds nothing to an archive — it runs the same
-`make dist` — so a release can still be built and published by hand if it is
-ever unavailable.
+`make dist` and `make mobile` — so a release can still be built and published
+by hand if it is ever unavailable.
 
 Running it from the Actions tab instead of pushing a tag builds and checks
 everything and publishes nothing: the archives are left as a run artifact,

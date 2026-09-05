@@ -19,7 +19,7 @@
 //
 // Usage:
 //
-//	go run ./internal/tools/distcheck [-dir build/dist] [-root .] [-run=false]
+//	go run ./internal/tools/distcheck [-dir build/dist] [-root .] [-run=false] [-phones]
 //
 // `make dist-check` runs it over what `make dist` just wrote, and the release
 // workflow runs the same command before it publishes anything.
@@ -49,6 +49,7 @@ func main() {
 	directory := flag.String("dir", filepath.Join("build", "dist"), "the directory `make dist` wrote")
 	root := flag.String("root", "", "the repository the archives were built from (default: the tree this source is in)")
 	run := flag.Bool("run", true, "unpack the archive built for this machine and ask the server its version")
+	phones := flag.Bool("phones", false, "require the APK and the IPA beside the archives, as a release has them")
 	flag.Parse()
 
 	repository := *root
@@ -61,7 +62,7 @@ func main() {
 		repository = found
 	}
 
-	problems, err := check(repository, *directory, *run)
+	problems, err := check(repository, *directory, *run, *phones)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "distcheck:", err)
 		os.Exit(2)
@@ -95,7 +96,7 @@ type platform struct {
 // it. It returns an error only when it cannot look at all; a package that is
 // wrong comes back as a problem so that one run reports every one of them
 // rather than the first.
-func check(repository, directory string, run bool) ([]string, error) {
+func check(repository, directory string, run, phones bool) ([]string, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
@@ -167,6 +168,7 @@ func check(repository, directory string, run bool) ([]string, error) {
 	if len(versions) > 1 {
 		report("the archives carry %d different versions: %s", len(versions), strings.Join(sortedKeys(versions), ", "))
 	}
+	problems = append(problems, checkPhones(packages, versions, phones)...)
 
 	if run {
 		problems = append(problems, runTheNativeArchive(directory, seen)...)
@@ -211,6 +213,54 @@ func checkChecksums(directory string, packages map[string]string) []string {
 		if !listed[name] {
 			problems = append(problems, fmt.Sprintf("%s is not in SHA256SUMS", name))
 		}
+	}
+	return problems
+}
+
+// The phone builds `make mobile` writes, named for the same version as the
+// archives beside them. Most local builds have none — `make dist` alone is a
+// valid thing to check — so their absence is a problem only when this was
+// asked to require them, which the release workflow does. That flag is the
+// whole point of this check: a release that went out without the APK is a
+// thing that happened, and it happened quietly, because SHA256SUMS is written
+// over whatever is in the directory and agrees with five files as readily as
+// with seven.
+//
+// One of the pair present and the other missing is reported either way. That
+// is not a release built without the phone builds; it is one whose phone
+// builds were half done.
+func checkPhones(packages map[string]string, versions map[string]bool, required bool) []string {
+	var problems []string
+	present := map[string]string{} // extension -> file name
+	for name := range packages {
+		for _, extension := range []string{".apk", ".ipa"} {
+			if strings.HasSuffix(name, extension) {
+				present[extension] = name
+			}
+		}
+	}
+	if !required && len(present) == 0 {
+		return nil
+	}
+	// Which version to expect them at comes from the archives, so a stale APK
+	// left behind by an earlier `make mobile` is named as missing rather than
+	// counted as the one this release needs.
+	if len(versions) != 1 {
+		return nil // already reported: there is no one version to name them for
+	}
+	stamp := sortedKeys(versions)[0]
+	for _, want := range []struct{ extension, name string }{
+		{".apk", "wfeature-" + stamp + "-android-arm64.apk"},
+		{".ipa", "wfeature-" + stamp + "-ios-arm64.ipa"},
+	} {
+		if _, ok := packages[want.name]; ok {
+			continue
+		}
+		if stray, ok := present[want.extension]; ok {
+			problems = append(problems, fmt.Sprintf("%s is here but %s is what this release needs", stray, want.name))
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("no %s; a release carries the phone builds beside the archives", want.name))
 	}
 	return problems
 }

@@ -20,7 +20,7 @@ import (
 // and what a real one answers is what the release workflow's smoke job asks.
 func TestAWellFormedReleaseDirectoryPasses(t *testing.T) {
 	repository, directory := stageRelease(t, nil)
-	problems, err := check(repository, directory, false)
+	problems, err := check(repository, directory, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestEachWayAPackageCanBeWrongIsReported(t *testing.T) {
 		},
 	} {
 		repository, directory := stageRelease(t, probe.damage)
-		problems, err := check(repository, directory, false)
+		problems, err := check(repository, directory, false, false)
 		if err != nil {
 			t.Fatalf("%s: %v", probe.name, err)
 		}
@@ -141,7 +141,7 @@ func TestTheChecksumsAndTheDirectoryHaveToAgree(t *testing.T) {
 	if err := os.WriteFile(archive, []byte("not the archive that was hashed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	problems, err := check(repository, directory, false)
+	problems, err := check(repository, directory, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestTheChecksumsAndTheDirectoryHaveToAgree(t *testing.T) {
 	if err := os.WriteFile(unlisted, []byte("an archive nobody hashed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	problems, err = check(repository, directory, false)
+	problems, err = check(repository, directory, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,12 +170,66 @@ func TestAMissingPlatformIsReported(t *testing.T) {
 	if err := os.Remove(filepath.Join(directory, "wfeature-9.9.9-linux-arm64.tar.gz")); err != nil {
 		t.Fatal(err)
 	}
-	problems, err := check(repository, directory, false)
+	problems, err := check(repository, directory, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reported(problems, "no archive for linux/arm64") {
 		t.Errorf("the missing platform was not named:\n%s", strings.Join(problems, "\n"))
+	}
+}
+
+// The phone builds are published beside the archives, and the thing that used
+// to go wrong is that they were not: they are built by a different command on
+// a different machine, and SHA256SUMS agrees with five files as readily as
+// with seven. A release asks for them by name.
+func TestTheReleaseNeedsThePhoneBuilds(t *testing.T) {
+	apk := "wfeature-" + fixtureVersion + "-android-arm64.apk"
+	ipa := "wfeature-" + fixtureVersion + "-ios-arm64.ipa"
+
+	// Nothing asked for them, so a directory `make dist` alone wrote is fine.
+	repository, directory := stageRelease(t, nil)
+	problems, err := check(repository, directory, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("a desktop-only build reported %d problem(s):\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+
+	// A release asked for them and they are not here.
+	problems, err = check(repository, directory, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{apk, ipa} {
+		if !reported(problems, "no "+want) {
+			t.Errorf("the missing %s was not named:\n%s", want, strings.Join(problems, "\n"))
+		}
+	}
+
+	// With both beside the archives it passes.
+	addPackage(t, directory, apk, []byte("dex\n"))
+	addPackage(t, directory, ipa, []byte("Payload\n"))
+	problems, err = check(repository, directory, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("a release with its phone builds reported %d problem(s):\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+
+	// An APK left over from an earlier version is not this release's APK, and
+	// saying so by name is the difference between a stale file and no file.
+	repository, directory = stageRelease(t, nil)
+	addPackage(t, directory, "wfeature-9.9.8-android-arm64.apk", []byte("dex\n"))
+	addPackage(t, directory, ipa, []byte("Payload\n"))
+	problems, err = check(repository, directory, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reported(problems, "wfeature-9.9.8-android-arm64.apk is here but "+apk+" is what this release needs") {
+		t.Errorf("the stale APK was not named:\n%s", strings.Join(problems, "\n"))
 	}
 }
 
@@ -399,6 +453,25 @@ func buildZip(t *testing.T, top string, staged []file) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+// addPackage drops a file into the release directory and adds it to
+// SHA256SUMS, which is what `make checksums` does for whatever is there.
+func addPackage(t *testing.T, directory, name string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, name), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sums := filepath.Join(directory, "SHA256SUMS")
+	existing, err := os.ReadFile(sums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	line := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), name)
+	if err := os.WriteFile(sums, append(existing, line...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func without(staged []file, name string) []file {

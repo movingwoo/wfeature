@@ -1,4 +1,4 @@
-.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist dist-check acceptance mobile checksums pgo
+.PHONY: debug release run run-release serve serve-release server server-release test test-debug dist dist-check acceptance mobile mobile-android mobile-ios checksums pgo
 
 # Each profile owns its own output directory so a debug and a release build can
 # coexist. Rebuilding one never silently replaces the other, and which binary
@@ -188,21 +188,30 @@ dist:
 # this machine answers with the version that was stamped into it. All of that
 # was a manual check before a tag; the release workflow runs this command now.
 dist-check:
-	go run ./internal/tools/distcheck -dir $(DIST)
+	go run ./internal/tools/distcheck -dir $(DIST) $(DISTCHECK_FLAGS)
 
-# The phone builds. They are not part of `dist` and not in the release archive:
-# each needs a toolchain the desktop build does not (an Android SDK, and Xcode
-# for the iOS one), and a machine that has neither should still be able to cut
-# a release. Run this where the toolchains are, and the artifacts land beside
-# the desktop archives to be published with them.
-mobile:
+# The phone builds. They are not part of `dist`: each needs a toolchain the
+# desktop build does not (an Android SDK, and Xcode for the iOS one), and a
+# machine that has neither should still be able to cut a release. Run this
+# where the toolchains are, and the artifacts land beside the desktop archives
+# to be published with them.
+mobile: mobile-android mobile-ios
+	@$(MAKE) --no-print-directory checksums
+	@ls -l $(DIST)
+
+# The two halves are separate targets because the release workflow builds them
+# on different machines — an Android SDK is on the Linux runner and Xcode is on
+# the macOS one, and neither runner has both. `make mobile` on a developer's
+# machine is still one command.
+mobile-android:
 	@mkdir -p $(DIST)
 	VERSION=$(VERSION) mobile/android/build.sh
 	cp mobile/android/build/wfeature.apk $(DIST)/wfeature-$(VERSION)-android-arm64.apk
+
+mobile-ios:
+	@mkdir -p $(DIST)
 	VERSION=$(VERSION) mobile/ios/build.sh
 	cp mobile/ios/build/wfeature.ipa $(DIST)/wfeature-$(VERSION)-ios-arm64.ipa
-	@$(MAKE) --no-print-directory checksums
-	@ls -l $(DIST)
 
 # Every archive in the release directory, whichever command wrote it. The list
 # is gathered first because most releases have no phone builds beside the
