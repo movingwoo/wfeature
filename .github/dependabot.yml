@@ -1,0 +1,37 @@
+# What keeps the pins above from going stale.
+#
+# The workflows pin every action to a commit rather than a tag, which is the
+# only pin an action's owner cannot move afterwards — and a pin nobody updates
+# is a build that never gets a fix. Dependabot reads the `# v7.0.1` comment
+# beside each SHA, so the pull request it opens moves both together and says
+# which version the new commit is.
+#
+# Two ecosystems, because those are the two that end up inside a release: the
+# actions that build the archives, and the Go modules linked into the binary
+# they contain. There is no npm entry — package.json declares no dependencies,
+# and the Node tests import nothing but `node:test`.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    # One pull request for the lot. The actions here move together — a runner
+    # Node bump lands in all four at once — and four pull requests that each
+    # fail until the others land is a worse week than one.
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    # `govulncheck` in the checks workflow reports what a vulnerability in one
+    # of these can actually reach; this is what offers the update that clears
+    # it. The two decoders a game archive reaches live here, so a finding
+    # against them is this project's to carry.
+    groups:
+      go-modules:
+        patterns: ["*"]

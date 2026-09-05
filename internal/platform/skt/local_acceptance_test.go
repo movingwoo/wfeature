@@ -130,54 +130,65 @@ func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read local SKT game directory: %v", err)
 	}
+	// One subtest per archive, so a refusal names the archive it came from
+	// rather than a count at the end of a log. `make acceptance` writes that
+	// down; see internal/tools/acceptance.
 	sounds, withMIDI, withWave := 0, 0, 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
-		if err != nil {
-			t.Fatalf("read archive: %v", err)
-		}
-		archive, err := skt.Open(data)
-		if err != nil {
-			continue
-		}
-		for name, body := range archive.Entries {
-			if len(body) < 4 || string(body[:4]) != "MMMD" {
-				continue
-			}
-			sounds++
-			sink := backend.NewRecordingSink(nil)
-			audio := backend.NewAudio(sink)
-			handle, err := audio.Load(body)
+		t.Run(entry.Name(), func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
 			if err != nil {
-				t.Errorf("%s %s: %v", entry.Name(), name, err)
-				continue
+				t.Fatalf("read archive: %v", err)
 			}
-			length, known := audio.Length(handle)
-			if !known || length <= 0 {
-				t.Errorf("%s %s: decoded to nothing", entry.Name(), name)
-				continue
+			archive, err := skt.Open(data)
+			if err != nil {
+				t.Skipf("the archive does not open: %v", err)
 			}
-			if err := audio.Play(handle, 0, false); err != nil {
-				t.Errorf("%s %s: play: %v", entry.Name(), name, err)
-				continue
+			carried := 0
+			for name, body := range archive.Entries {
+				if len(body) < 4 || string(body[:4]) != "MMMD" {
+					continue
+				}
+				carried++
+				sounds++
+				sink := backend.NewRecordingSink(nil)
+				audio := backend.NewAudio(sink)
+				handle, err := audio.Load(body)
+				if err != nil {
+					t.Errorf("%s: %v", name, err)
+					continue
+				}
+				length, known := audio.Length(handle)
+				if !known || length <= 0 {
+					t.Errorf("%s: decoded to nothing", name)
+					continue
+				}
+				if err := audio.Play(handle, 0, false); err != nil {
+					t.Errorf("%s: play: %v", name, err)
+					continue
+				}
+				audio.Advance(length + time.Second)
+				messages, samples := sink.Summary()
+				switch {
+				case messages > 0 && samples > 0:
+					withMIDI++
+					withWave++
+				case messages > 0:
+					withMIDI++
+				case samples > 0:
+					withWave++
+				default:
+					t.Errorf("%s: %v of sound reached the sink as nothing", name, length)
+				}
 			}
-			audio.Advance(length + time.Second)
-			messages, samples := sink.Summary()
-			switch {
-			case messages > 0 && samples > 0:
-				withMIDI++
-				withWave++
-			case messages > 0:
-				withMIDI++
-			case samples > 0:
-				withWave++
-			default:
-				t.Errorf("%s %s: %v of sound reached the sink as nothing", entry.Name(), name, length)
+			if carried == 0 {
+				t.Skip("the archive carries no sound")
 			}
-		}
+			t.Logf("%d sounds decoded", carried)
+		})
 	}
 	if sounds == 0 {
 		t.Skip("no local SKT archive carries a sound")

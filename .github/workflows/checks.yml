@@ -5,10 +5,24 @@
 #
 # This is called rather than triggered: it has no `on:` of its own beyond
 # workflow_call. See docs/running.md, "What was verified, and where".
+#
+# **Every action is pinned to a commit, with the version it was at in a comment
+# beside it.** A tag is a name its owner can move: `@v7` is whatever that
+# repository decides `v7` means the next time this runs, and the release
+# workflow calls this one, so an action that changed under a tag would be
+# building the binaries people download. The comment is what Dependabot reads
+# to offer the next version — see .github/dependabot.yml.
 name: checks
 
 on:
   workflow_call:
+
+# The job needs the checkout and nothing else. A reusable workflow is handed
+# the caller's token, and the caller here is the release workflow, whose own
+# job writes releases; declaring the floor here means that token cannot reach
+# this far even if the caller's grows.
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -20,9 +34,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The newest released Go rather than the one go.mod names. go.mod's
           # directive is the floor a checkout has to clear; what CI builds
@@ -34,9 +48,16 @@ jobs:
           go-version: stable
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+          # This repository has no npm dependencies — the Node tests import
+          # nothing but `node:test` — so there is nothing to restore and no
+          # lock file to key a cache on. Said explicitly because the action
+          # caches by itself when a package.json declares a package manager,
+          # and a cache step that fails for want of a lock file would fail a
+          # job that does not need one.
+          package-manager-cache: false
 
       - name: Check gofmt
         run: |
@@ -81,9 +102,9 @@ jobs:
             binary: wfeature-server
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The newest released Go rather than the one go.mod names. go.mod's
           # directive is the floor a checkout has to clear; what CI builds
