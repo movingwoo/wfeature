@@ -28,10 +28,11 @@ func (vm *VM) execute(
 	state.frames++
 	defer func() { state.frames-- }()
 
-	frame, err := newFrame(class, method, code, arguments)
+	frame, err := newFrame(state, class, method, code, arguments)
 	if err != nil {
 		return VoidValue(), fmt.Errorf("create frame for %s.%s%s: %w", class.Name, method.Name, method.Descriptor, err)
 	}
+	defer state.releaseFrame(frame)
 	for {
 		if frame.pc < 0 || frame.pc >= len(frame.code.Bytecode) {
 			return VoidValue(), fmt.Errorf("method %s.%s%s fell off bytecode at pc %d", class.Name, method.Name, method.Descriptor, frame.pc)
@@ -338,12 +339,15 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 			}
 			// The key is the resolved one, because that is the slot the write
 			// went to: an observer answering "what wrote this" has to name the
-			// field it can read back.
-			resolved := vm.resolveFieldReference(reference)
-			vm.observeStore(StoreEvent{
-				Class: resolved.Class, Key: fieldReferenceKey(resolved), Index: -1, Value: value,
-				SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
-			})
+			// field it can read back. Composing it is a concatenation, so it
+			// waits until there is somebody to read it.
+			if vm.watchingStores() {
+				resolved := vm.resolveFieldReference(reference)
+				vm.observeStore(StoreEvent{
+					Class: resolved.Class, Key: fieldReferenceKey(resolved), Index: -1, Value: value,
+					SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
+				})
+			}
 			return stepResult{}, nil
 		}
 		if opcode == 0xb4 {
@@ -370,10 +374,12 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		}
 		// Reported after the store and only when it happened: an observer is
 		// answering "what wrote this", and a store that threw wrote nothing.
-		vm.observeStore(StoreEvent{
-			Object: object, Key: fieldReferenceKey(vm.resolveFieldReference(reference)), Index: -1, Value: value,
-			SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
-		})
+		if vm.watchingStores() {
+			vm.observeStore(StoreEvent{
+				Object: object, Key: fieldReferenceKey(vm.resolveFieldReference(reference)), Index: -1, Value: value,
+				SiteClass: frame.class.Name, SiteMethod: frame.method.Name, SitePC: frame.pc,
+			})
+		}
 		return stepResult{}, nil
 	case opcode == 0xb6 || opcode == 0xb7 || opcode == 0xb8 || opcode == 0xb9:
 		index, err := frame.u2()

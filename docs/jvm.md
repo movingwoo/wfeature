@@ -532,6 +532,60 @@ about 1.8% of the time. **A guest method call still allocates nineteen times and
 takes 1.8µs**, which is half a million calls a second, and that is where the
 remaining budget is.
 
+### Four allocations a guest call became one
+
+The item the numbers above left open was the call itself: nineteen allocations
+and 1.8µs. Most of that turned out to be the measurement rather than the call.
+
+**A benchmark that enters through `InvokeStatic` measures a *Host* call**, and a
+Host call starts a fresh execution — anything an execution carries across the
+calls it makes is cold every iteration. A title does not run that way: one guest
+thread is one execution for a whole session and makes millions of calls inside
+it. `testdata/CallLoop.java` is that shape, and the numbers below are per guest
+call rather than per Host call:
+
+| | before | after |
+|---|---|---|
+| instance call | 597 ns, 4.0 allocs | **465 ns, 1.0 allocs** |
+| static call | 470 ns, 4.0 allocs | **408 ns, 1.0 allocs** |
+| call that also allocates an object | 1650 ns, 14.0 allocs | **1279 ns, 6.0 allocs** |
+
+(medians of five; the run-to-run spread on this machine is about 5%)
+
+Three things, in the order the profile named them.
+
+**A frame came from the heap, three allocations at a time** — the frame, its
+locals and its operand stack, which was half of everything a title allocated. A
+frame lives exactly as long as the `execute` that made it, calls nest, and
+nothing keeps one afterwards: an `ExecutionError` copies the four fields it
+names. So the execution lends them now, from a free list bounded at 64. One
+execution is one guest thread, so the list needs no lock. The locals are cleared
+on the way in and the operand stack on the way out, because a stale `Value` of
+the right kind would read as an initialized local and a stale reference would
+keep an object alive for as long as the list held the frame.
+
+**Every invoke instruction decoded its own operand out of the constant pool
+again**, and a quarter of the run was in there. Nothing was cached and nothing
+needed to be: `constant` returned the entry *by value* — fifty-six bytes — and
+took its accepted tags as a variadic, so one `ReferenceAt` copied the struct
+five times and built five tag slices to read four strings the pool already held.
+It returns a pointer now, into a pool nothing writes to after it is parsed, and
+the accessors on the hot path check their own tag inline.
+
+**A field access composed its own name.** `object.Fields` is keyed by
+`Class.name:Descriptor`, and that five-part concatenation ran on every `getfield`
+and every `putfield` — and once more on every `putfield` to fill in a
+`StoreEvent` that, with no observer installed, nobody read. The composed key is
+cached beside the field resolution that was already cached next to it, and the
+event is built only when something is watching. That is what takes the object
+loop from fourteen allocations a call to six.
+
+**What is left is one allocation per call**, and it is the slice the interpreter
+pops the arguments into. It cannot simply be pooled: for a bytecode callee it is
+dead as soon as the frame copies it into locals, but a native is arbitrary Go
+code that may keep it. Popping straight into the callee's locals would close it,
+and that means resolving the method before popping rather than after.
+
 ### Why this could not be measured end to end
 
 A MIDlet has no tick of its own: its threads pace themselves against the wall

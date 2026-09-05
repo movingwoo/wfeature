@@ -162,7 +162,7 @@ type VM struct {
 	// declaringFields caches field resolution: which class in a reference's
 	// chain actually declares the field it names. It is cleared whenever a
 	// class is defined, because a class that arrives later can be the answer.
-	declaringFields map[fieldKey]string
+	declaringFields map[fieldKey]fieldResolution
 	classMonitors   map[string]*monitor
 	nextExecution   atomic.Uint64
 	nextObject      atomic.Uint32
@@ -194,6 +194,10 @@ type execution struct {
 	id           uint64
 	initializing map[string]bool
 	thread       *Object
+	// framePool is this execution's finished frames, waiting to be lent to the
+	// next call it makes. One execution is one guest thread, so nothing here
+	// needs a lock. See newFrame.
+	framePool []*frame
 }
 
 type ExecutionError struct {
@@ -237,7 +241,7 @@ func New(source ClassSource, options Options) *VM {
 		contextNatives:  make(map[methodKey]contextNativeMethod),
 		builtinNatives:  make(map[methodKey]bool),
 		statics:         make(map[fieldKey]Value),
-		declaringFields: make(map[fieldKey]string),
+		declaringFields: make(map[fieldKey]fieldResolution),
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
 		aotClasses:      make(map[string]AOTClassMetadata),
@@ -921,12 +925,11 @@ func (vm *VM) instanceValue(object *Object, reference classfile.Reference) (Valu
 	if object == nil {
 		return VoidValue(), guestException("java/lang/NullPointerException", "get field "+reference.Class+"."+reference.Name)
 	}
-	reference = vm.resolveFieldReference(reference)
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
 	if err != nil {
 		return VoidValue(), err
 	}
-	key := fieldReferenceKey(reference)
+	key := vm.resolveField(reference.Class, reference.Name, reference.Descriptor).key
 	object.fieldMu.RLock()
 	value, ok := object.Fields[key]
 	object.fieldMu.RUnlock()
@@ -940,7 +943,6 @@ func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, va
 	if object == nil {
 		return guestException("java/lang/NullPointerException", "put field "+reference.Class+"."+reference.Name)
 	}
-	reference = vm.resolveFieldReference(reference)
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
 	if err != nil {
 		return err
@@ -948,11 +950,12 @@ func (vm *VM) setInstanceValue(object *Object, reference classfile.Reference, va
 	if err := validateValue(value, typeInfo); err != nil {
 		return err
 	}
+	key := vm.resolveField(reference.Class, reference.Name, reference.Descriptor).key
 	object.fieldMu.Lock()
 	if object.Fields == nil {
 		object.Fields = make(map[string]Value)
 	}
-	object.Fields[fieldReferenceKey(reference)] = value
+	object.Fields[key] = value
 	object.fieldMu.Unlock()
 	return nil
 }
@@ -992,7 +995,21 @@ func (vm *VM) resolveFieldReference(reference classfile.Reference) classfile.Ref
 // the chain does — a field an object carries without any class declaring it is
 // the arrangement a platform's own objects use, and it keeps the name it was
 // written under.
+// fieldResolution is what a field reference resolves to, cached together
+// because the two are wanted together. The key is the string an object's field
+// map is keyed by, and composing it is a five-part concatenation and an
+// allocation — on a path that runs on every `getfield` and every `putfield`,
+// which was 5% of a guest call loop on its own.
+type fieldResolution struct {
+	class string
+	key   string
+}
+
 func (vm *VM) declaringFieldClass(className, name, descriptor string) string {
+	return vm.resolveField(className, name, descriptor).class
+}
+
+func (vm *VM) resolveField(className, name, descriptor string) fieldResolution {
 	key := fieldKey{class: className, name: name, descriptor: descriptor}
 	vm.mu.RLock()
 	cached, ok := vm.declaringFields[key]
@@ -1020,10 +1037,14 @@ func (vm *VM) declaringFieldClass(className, name, descriptor string) string {
 		}
 		current = class.SuperName
 	}
+	resolution := fieldResolution{
+		class: declaring,
+		key:   declaring + "." + name + ":" + descriptor,
+	}
 	vm.mu.Lock()
-	vm.declaringFields[key] = declaring
+	vm.declaringFields[key] = resolution
 	vm.mu.Unlock()
-	return declaring
+	return resolution
 }
 
 // declaringInterfaceField searches a class's superinterfaces for the field.
@@ -1288,4 +1309,13 @@ func (vm *VM) observeStore(event StoreEvent) {
 	if observe := vm.storeObserver.Load(); observe != nil {
 		(*observe)(event)
 	}
+}
+
+// watchingStores answers whether building a StoreEvent is worth anything. A
+// caller that has to compose the event's key first asks this instead of paying
+// for a key nobody reads: the point of the observer being a nil pointer is that
+// a title nobody is investigating pays a nil check, and a `putfield` that
+// composed its own name on the way past was paying rather more.
+func (vm *VM) watchingStores() bool {
+	return vm != nil && vm.storeObserver.Load() != nil
 }
