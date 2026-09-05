@@ -4688,6 +4688,114 @@ crossings were the same call with the same arguments and the same answer. It was
 not slow. It was stuck, the same distinction the hang two sections above turned
 on, and the same tool found it.
 
+## Reclaiming what a Java title stopped holding
+
+Until now nothing on this path reclaimed anything. `java_stream.go` said so in
+as many words — *"nothing here ever reclaims, because the Java path has no
+collector"* — and the note beside the decoded-image cache in `java_runtime.go`
+said it again. A session held every object a title had ever allocated, and one
+title that reloads its sprite sheets from inside `paint` filled the surface
+region and ended its own run.
+
+`collect.go` is the collector. Its design is the one in
+`internal/platform/ktf/collect.go`, which is already carrying titles on the
+other platform, and the reasoning transfers unchanged: the guest side is
+conservative — every word of registers, stacks and committed read-write memory
+is a candidate pointer, because over-retention is safe and freeing a live object
+corrupts the guest — and an object is never freed in the cycle that first finds
+it unreachable.
+
+Two things are this platform's own.
+
+**An object is two allocations.** The three-word object and the block its fields
+live in are separate blocks in the arena, and a field access loads the block's
+address first, so the guest holds either one. Both spans are indexed, both name
+the same object, and freeing one frees the other.
+
+**An object's references are not all in its payload.** What a stream, an image,
+a file, a vector, a widget or a wrapper stands for lives in the maps in
+`javaRuntime`, keyed by the object that holds it, and three kinds of edge exist
+there that no guest word expresses:
+
+1. **the surface** an Image or a Graphics draws into, which is in a different
+   arena and has to go back with the object that held it;
+2. **the open file** a `File` object stands for, which has to be *closed* — with
+   its buffered writes flushed to the store — rather than merely forgotten,
+   which is what the language would have done for it on a handset;
+3. **aliases**, where two guest objects name one native thing: two Images over
+   one decoded surface, a `DataOutputStream` over another object's sink, a
+   stream bound to the `File` it was opened on. A native payload goes back only
+   once nothing live names it, which for a surface includes the decode cache.
+
+`walkJavaPayload` is the reference-carrying half of that and
+`releaseJavaPayloads` the owning half. Missing either is how a live object gets
+freed, because nothing in guest memory would have named it.
+
+The platform's own handles are roots and not edges: the application object, the
+card on the display, the Graphics a paint is handed, the singletons a title asks
+for by name, work `callSerially` is holding, a started thread and what it was
+given to run, and an object whose monitor is held. None of those is named by a
+guest word between frames.
+
+The surface region is not scanned for roots. A Java title never receives a
+surface's address and never writes a pixel through guest memory — the same fact
+`framebuffer.drawnHere` exists for — so the region holds pixels and nothing
+else, and walking sixteen megabytes of them would buy only false retention.
+
+### Two triggers, and why the second one is needed twice over
+
+The first is arena growth, a fixed 256 KiB ahead of what survived the last
+cycle. Growing the trigger with the arena instead lets the arena keep climbing,
+because an object is only freed a cycle after it stops being reachable.
+
+The second is **a refused allocation**. A title that reaches the end of a region
+between two cycles is told the arena is full while the objects that would have
+made room are already unreachable and merely waiting for the next round, so
+`client.allocate` and `client.allocateSurface` run a cycle and ask once more.
+That cycle runs from inside a platform call rather than at the end of a service
+round, and two things make it safe: the grace cycle, which cannot free anything
+allocated since the last cycle, and a **call-scoped pin set** — every object a
+platform call allocates is a root until that call returns, because the objects a
+half-finished call is holding live in Go locals the scan cannot see. The pins are
+taken and released at the supervisor-call boundary, so they nest with the calls
+and are empty at the end of a round. The same trigger is now on the KTF path,
+where the Go-side weak binding already answers the question the pins answer
+here.
+
+There is a third condition, and it is not a trigger so much as the grace cycle
+finishing. A condemned object's bytes are still outstanding, so a title that
+fills the arena with garbage and then stops allocating never grows the arena
+again and never reaches the cycle that would have freed it: measured on one
+title the first cycle condemned 980 objects of 2168 and the arena then sat still
+for the rest of the run — 296 KiB growth alone was never going to give back. So a
+cycle that condemned anything arms another, eight service rounds later. The
+interval is what keeps that from becoming a cycle every tick: a title that
+allocates steadily always has something condemned, and coming back every round
+cost one of them about a millisecond a tick, against 0.13 ms at an interval of
+eight and the same bytes reclaimed.
+
+### What it reclaims, and the frames that say it changed nothing
+
+Four of the 35 local archives are Java titles; the rest are Clets, where no
+collector runs. Each was run twice out of one build — collector off, collector
+on — with the frame the title presented compared at every tick of both. Over
+3000 ticks:
+
+| title | tracked | freed | bytes | arena, off → on | collector cost |
+|---|---|---|---|---|---|
+| A | 2168 | 980 | 296,461 | 571,808 → 270,784 | 5.6 ms |
+| B | 472 | 59 | 10,148 | 82,824 → 72,336 | 3.8 ms |
+| C | 228 | 8963 | 289,428 | 410,688 → 49,608 | 393 ms |
+
+The frames are identical, tick for tick, in every one. That is the judgement
+that matters: a byte count is not evidence that a title still draws the same
+thing, and `collect_probe_test.go` is what asks the question the right way
+round.
+
+No surface and no open file was reclaimed in those runs — no local Java title
+drops an `Image` or a `File` inside 3000 ticks — so those three payload edges
+are carried by `collect_test.go` rather than by the corpus.
+
 ## Deliberately incomplete
 
 - **LGT Java apps play, and the platform API behind them is partial.** The

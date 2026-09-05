@@ -155,6 +155,23 @@ type javaRuntime struct {
 	// the title's own Jlet subclass, which is what `getCurrentJlet` answers.
 	// See java_launcher.go.
 	jlet uint32
+	// objects is every instance and array this platform has handed the title,
+	// and what the collector reclaims them from. pins are the ones a platform
+	// call is part way through building, and collectAt the arena size the next
+	// cycle is due at. See collect.go.
+	objects   map[uint32]javaObjectRecord
+	pins      []uint32
+	collectAt uint64
+	// condemned is how many tracked objects the last cycle left condemned,
+	// which is what the next cycle would free, and sinceCollection how many
+	// service rounds have passed since a cycle ran. See javaCollectionDue.
+	condemned       int
+	sinceCollection int
+	// collected is what every cycle so far reclaimed, and collections how many
+	// there have been. Tracked and Marked are the last cycle's rather than a
+	// sum, because a running total of a population is not one.
+	collected   CollectionStats
+	collections int
 }
 
 func newJavaRuntime() *javaRuntime {
@@ -180,6 +197,7 @@ func newJavaRuntime() *javaRuntime {
 		streamFiles: map[uint32]uint32{},
 		dates:       map[uint32]int64{},
 		databases:   map[uint32]*javaDatabase{},
+		objects:     map[uint32]javaObjectRecord{},
 	}
 }
 
@@ -577,7 +595,12 @@ func (client *Client) allocateJavaObject(class *javaRuntimeClass) (uint32, error
 	if err := client.core.Memory().Write(block, make([]byte, words*4)); err != nil {
 		return 0, err
 	}
-	return client.allocateWords([]uint32{class.VTable, 0, block})
+	object, err := client.allocateWords([]uint32{class.VTable, 0, block})
+	if err != nil {
+		return 0, err
+	}
+	client.trackJavaObject(object, block, words*4)
+	return object, nil
 }
 
 // initializeJavaClass runs a class's static initialiser, once. The module gates

@@ -283,14 +283,9 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		if err != nil {
 			return err
 		}
-		file := client.files[handle]
-		if file == nil {
+		if !client.closeFileHandle(handle) {
 			return answer(wipiError)
 		}
-		if file.dirty {
-			client.writeFile(file.name, file.data)
-		}
-		delete(client.files, handle)
 		return answer(wipiSuccess)
 
 	case slotFsRead, slotFsWrite:
@@ -449,6 +444,23 @@ const (
 // fileOpenReadWrite is named for the same reason the others are: the flag set
 // is only legible as a whole, and it is the one a title opens its save with.
 var _ = fileOpenReadWrite
+
+// closeFileHandle flushes an open file and drops it, and reports whether there
+// was one to close. It is the body of MC_fsClose, and the collector reaches it
+// too: a File object nothing holds any more is one the language would have
+// closed on the handset, and its buffered writes have to reach the store the
+// same way a close's do.
+func (client *Client) closeFileHandle(handle uint32) bool {
+	file := client.files[handle]
+	if file == nil {
+		return false
+	}
+	if file.dirty {
+		client.writeFile(file.name, file.data)
+	}
+	delete(client.files, handle)
+	return true
+}
 
 func (client *Client) transferFile(slot, handle, buffer, length uint32) int32 {
 	file := client.files[handle]

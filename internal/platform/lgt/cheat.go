@@ -137,3 +137,29 @@ func (session *Session) serviceCheat() error {
 	}
 	return nil
 }
+
+// frozenAddresses lists the guest addresses the cheat engine rewrites every
+// tick. The collector treats them as roots: a freeze on an object's field has
+// to keep that object alive, or the rewrite would land in whatever took its
+// place.
+func (session *Session) frozenAddresses() []uint32 {
+	if session == nil || session.cheat == nil {
+		return nil
+	}
+	entries := session.cheat.Freezes().Entries()
+	addresses := make([]uint32, 0, len(entries))
+	for _, entry := range entries {
+		addresses = append(addresses, entry.Address)
+	}
+	return addresses
+}
+
+// collectJavaObjects reclaims dead Java objects at the end of a service round,
+// where no platform call is running on this goroutine.
+func (session *Session) collectJavaObjects() error {
+	if session == nil || session.client == nil {
+		return nil
+	}
+	_, err := session.client.CollectJavaObjects(session.frozenAddresses())
+	return err
+}
