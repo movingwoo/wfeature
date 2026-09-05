@@ -299,6 +299,41 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 	return stats, nil
 }
 
+// collectForAllocation runs a cycle because the arena has just refused a block,
+// and reports whether it released anything so the caller only retries when the
+// arena actually changed.
+//
+// Arena growth is the other trigger, and it does not cover this: a title that
+// reaches the end of the region between two cycles is asked to stop while the
+// objects that would have made room are already unreachable and merely waiting
+// for the next round.
+//
+// Unlike the growth trigger this runs from inside a platform call, with Go
+// frames holding objects no guest word names yet. Those are exactly what the Go
+// side of this collector is precise about — an object a Go frame holds is
+// retained, so the sweep drops the Host's strong reference and stops — and the
+// grace cycle covers the rest, because nothing is freed in the cycle that first
+// finds it unreachable. The caller already holds the run lock, so the cycle is
+// entered directly rather than through CollectGuestObjects.
+func (runtime *initializationRuntime) collectForAllocation() bool {
+	if runtime == nil || runtime.collecting {
+		return false
+	}
+	runtime.collecting = true
+	defer func() { runtime.collecting = false }()
+	stats, err := runtime.collectGuestObjects(nil)
+	if err != nil {
+		// The allocation reports its own failure. This one is worth a line of
+		// its own, because a scan that cannot read guest memory is a fault in
+		// itself rather than a full arena.
+		runtime.client.log("KTF collection on allocation failure failed", "error", err)
+		return false
+	}
+	runtime.client.log("KTF collected on allocation failure",
+		"tracked", stats.Tracked, "freed", stats.Freed, "bytes", stats.Bytes)
+	return stats.Freed > 0
+}
+
 // referencedObjects reads one object's guest payload and answers the tracked
 // objects its words name — the guest-side edges of the graph, in the form Go
 // can hold. The lookup does not pin anything: pinning here is exactly what the

@@ -22,6 +22,11 @@ type arena struct {
 	cursor uint64
 	free   []arenaBlock
 	sizes  map[uint32]uint64
+	// outstanding is the total of sizes. It is kept rather than summed because
+	// the collector asks for it once a tick to decide whether a cycle is due,
+	// and summing a map of every live allocation to answer that would cost
+	// more than the cycle it is deciding about. See collect.go.
+	outstanding uint64
 }
 
 type arenaBlock struct {
@@ -61,6 +66,7 @@ func (a *arena) allocate(size uint64) (uint32, bool) {
 			a.free = append(a.free[:index], a.free[index+1:]...)
 		}
 		a.sizes[address] = size
+		a.outstanding += size
 		return address, true
 	}
 	start := (a.cursor + arenaAlignment - 1) &^ uint64(arenaAlignment-1)
@@ -70,6 +76,7 @@ func (a *arena) allocate(size uint64) (uint32, bool) {
 	}
 	a.cursor = end
 	a.sizes[uint32(start)] = size
+	a.outstanding += size
 	return uint32(start), true
 }
 
@@ -82,6 +89,7 @@ func (a *arena) release(address uint32) bool {
 		return false
 	}
 	delete(a.sizes, address)
+	a.outstanding -= size
 	a.insert(arenaBlock{start: uint64(address), end: uint64(address) + size})
 	return true
 }
@@ -111,12 +119,6 @@ func (a *arena) insert(block arenaBlock) {
 
 // used reports how many bytes are outstanding, which the kernel's memory
 // queries answer with.
-func (a *arena) used() uint64 {
-	total := uint64(0)
-	for _, size := range a.sizes {
-		total += size
-	}
-	return total
-}
+func (a *arena) used() uint64 { return a.outstanding }
 
 func (a *arena) capacity() uint64 { return a.limit - uint64(a.base) }

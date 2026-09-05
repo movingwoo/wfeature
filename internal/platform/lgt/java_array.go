@@ -151,7 +151,12 @@ func (client *Client) allocateJavaArray(object, length uint32) (uint32, error) {
 	if err := client.writeWord(block, length); err != nil {
 		return 0, err
 	}
-	return client.allocateWords([]uint32{class.VTable, 0, block})
+	array, err := client.allocateWords([]uint32{class.VTable, 0, block})
+	if err != nil {
+		return 0, err
+	}
+	client.trackJavaObject(array, block, uint32(size))
+	return array, nil
 }
 
 // javaArrayClassByName answers the array class one dimension in from another —

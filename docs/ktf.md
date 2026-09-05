@@ -157,6 +157,19 @@ Three things about the shape of that failure are worth keeping:
   the allocation that finally failed — a timer, here — several hundred thousand
   successful allocations after the one that should have been released.
 
+The allocation that finally fails now runs a collection of its own before it
+gives up, and asks the arena once more — see `collectForAllocation`. Growth is
+the ordinary trigger and does not cover this shape: a title that reaches the end
+of the region between two cycles is stopped while the objects that would have
+made room are already unreachable and merely waiting for the next round. This
+runs from inside a platform call rather than at the end of a service round, and
+what makes that safe is the Go side of this collector being precise. An object a
+Go frame is still holding is retained, so the sweep drops the Host's strong
+reference and stops there, and the grace cycle covers the rest: nothing is freed
+in the cycle that first finds it unreachable. The LGT Java path has the same
+trigger and reaches the same guarantee a different way, because its objects are
+not bound to Go objects at all — see `docs/lgt.md`.
+
 `MC_knlFree` now releases the block, and `allocateWIPIC` records every block's
 arena size against the identifier it handed out, because the guest's free is
 given the identifier and nothing else. An identifier this platform did not

@@ -45,13 +45,20 @@ func (state ThreadState) String() string {
 type CoreOptions struct {
 	Quantum  uint32
 	MaxSteps uint64
+	// Backend and BackendName are the single injection point for the execution
+	// strategy; see backend.go. An explicit Backend wins, a registered name is
+	// next, and anything else is the interpreter — including a name nothing
+	// registered, because a build that does not carry a strategy still has to
+	// run the game.
+	Backend     Backend
+	BackendName string
 }
 
 type Core struct {
 	debug debugState
 
 	memory   *Memory
-	engine   Engine
+	engine   Backend
 	quantum  uint32
 	maxSteps uint64
 	execute  sync.Mutex
@@ -72,9 +79,20 @@ func NewCore(options CoreOptions) *Core {
 	}
 	return &Core{
 		memory:   NewMemory(),
+		engine:   backendFor(options),
 		quantum:  options.Quantum,
 		maxSteps: options.MaxSteps,
 	}
+}
+
+// BackendName reports which execution strategy this core resolved to, which is
+// not always the one that was asked for: an unregistered name falls back to the
+// interpreter, and only this says so.
+func (core *Core) BackendName() string {
+	if core == nil || core.engine == nil {
+		return ""
+	}
+	return core.engine.Name()
 }
 
 // SetFastSupervisorCall installs a handler for supervisor calls that can be

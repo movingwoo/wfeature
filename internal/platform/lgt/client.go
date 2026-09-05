@@ -250,6 +250,17 @@ type Client struct {
 	// same call from the platform's own thread has nothing. See java_thread.go.
 	activeJavaWorker   *javaWorker
 	javaThreadsStopped bool
+	// collecting guards the collector against being entered from inside
+	// itself. It releases guest memory, and a release is not an allocation, so
+	// this only ever fires if a future edit makes one. See collect.go.
+	collecting bool
+	// collectNanos is what every collection cycle in this session has cost,
+	// which is the figure that says whether the trigger runs too often.
+	collectNanos int64
+	// collectorOff runs a session with no collection at all. A change to what
+	// is reclaimed is judged by comparing frames with it on and against it off,
+	// and that comparison needs both arms out of one build.
+	collectorOff bool
 
 	// applicationIDAddress is the archive's AID as a guest string, allocated
 	// on first use. A title asks for it once per boot, but a fresh copy per
@@ -697,6 +708,12 @@ func (client *Client) handleSupervisorCall(ctx context.Context, thread *armcore.
 	if err != nil {
 		return fmt.Errorf("read LGT SVC slot: %w", err)
 	}
+	// Objects this call builds are roots until it returns. A collection can be
+	// raised from inside it — the arena refusing a block runs one — and the
+	// scan cannot see a Go frame, so what the call has allocated and not yet
+	// handed to the guest is named here instead. See collect.go.
+	pins := client.javaPinMark()
+	defer client.releaseJavaPins(pins)
 	// The slot is named on the way out as well as on the way in: a slot that
 	// fails part way through reports a fault at the stub's address, which says
 	// nothing about which platform function was running.
@@ -862,6 +879,14 @@ func (client *Client) allocate(size uint64) (uint32, error) {
 	}
 	address, ok := client.arena.allocate(size)
 	if !ok {
+		// The region being full is the other trigger the collector has: what
+		// would have made room may already be unreachable and merely waiting
+		// for the next cycle. See collectForAllocation.
+		if client.collectForAllocation() {
+			address, ok = client.arena.allocate(size)
+		}
+	}
+	if !ok {
 		return 0, fmt.Errorf("LGT platform data space exhausted")
 	}
 	return address, nil
@@ -875,6 +900,15 @@ func (client *Client) allocateSurface(size uint64) (uint32, error) {
 		return 0, fmt.Errorf("LGT surface allocation %d exceeds %d bytes", size, maxPlatformAllocation)
 	}
 	address, ok := client.surfaces.allocate(size)
+	if !ok {
+		// The surface region is what a title that reloads its pictures fills
+		// first, and the collector is what gives those surfaces back. See
+		// collectForAllocation, and newSharedJavaImage for the shape of title
+		// this happens to.
+		if client.collectForAllocation() {
+			address, ok = client.surfaces.allocate(size)
+		}
+	}
 	if !ok {
 		return 0, fmt.Errorf("LGT surface space exhausted")
 	}
