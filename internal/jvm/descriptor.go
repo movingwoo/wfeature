@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -159,6 +160,29 @@ func parseMethodDescriptor(descriptor string) (MethodDescriptor, error) {
 		return MethodDescriptor{}, fmt.Errorf("invalid method descriptor %q: trailing input", descriptor)
 	}
 	result.Return = returnType
+	return result, nil
+}
+
+// ReturnTypeOf reads only what a method gives back.
+//
+// A frame wants the return type and nothing else, and asking
+// ParseMethodDescriptor for it means a hash of the descriptor and a walk of
+// the cache on every call — for a parse that is a `LastIndexByte` and one
+// type. The cached parse is still the right answer for a caller that wants the
+// parameters, which is the interpreter deciding how much to pop.
+func ReturnTypeOf(descriptor string) (Type, error) {
+	close := strings.LastIndexByte(descriptor, ')')
+	if close < 0 {
+		return Type{}, fmt.Errorf("invalid method descriptor %q: missing )", descriptor)
+	}
+	offset := close + 1
+	result, err := parseType(descriptor, &offset, true)
+	if err != nil {
+		return Type{}, fmt.Errorf("invalid method descriptor %q: %w", descriptor, err)
+	}
+	if offset != len(descriptor) {
+		return Type{}, fmt.Errorf("invalid method descriptor %q: trailing characters after return type", descriptor)
+	}
 	return result, nil
 }
 

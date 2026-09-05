@@ -58,9 +58,6 @@ func TestEveryCoreLibraryNativeDeclarationHasABody(t *testing.T) {
 			if _, ok := vm.natives[key]; ok {
 				continue
 			}
-			if _, ok := vm.contextNatives[key]; ok {
-				continue
-			}
 			member := definition.Name + "." + method.Name + method.Descriptor
 			if platformAnswered[member] {
 				continue

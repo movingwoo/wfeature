@@ -813,11 +813,10 @@ func parsedText(arguments []Value) (string, error) {
 // contextBuiltin installs one of the runtime's own bodies that needs the
 // execution it was called on. It replaces whatever was registered for the
 // method before, including a class definition's body, so the last registration
-// is the one that runs whichever registry it landed in.
+// is the one that runs.
 func (vm *VM) contextBuiltin(class, name, descriptor string, method contextNativeMethod) {
 	key := methodKey{class: class, name: name, descriptor: descriptor}
-	delete(vm.natives, key)
-	vm.contextNatives[key] = method
+	vm.natives[key] = nativeEntry{context: method}
 	vm.builtinNatives[key] = true
 }
 
@@ -1725,12 +1724,12 @@ func indexUTF16(value, needle []uint16, from int) int {
 	return -1
 }
 
-// builtin installs one of the runtime's own bodies. See contextBuiltin for why
-// it clears the other registry.
+// builtin installs one of the runtime's own bodies. See contextBuiltin: an
+// entry holds one kind or the other, so writing it replaces whichever was
+// there.
 func (vm *VM) builtin(class, name, descriptor string, method NativeMethod) {
 	key := methodKey{class: class, name: name, descriptor: descriptor}
-	delete(vm.contextNatives, key)
-	vm.natives[key] = method
+	vm.natives[key] = nativeEntry{plain: method}
 	vm.builtinNatives[key] = true
 }
 

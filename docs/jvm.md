@@ -586,6 +586,98 @@ dead as soon as the frame copies it into locals, but a native is arbitrary Go
 code that may keep it. Popping straight into the callee's locals would close it,
 and that means resolving the method before popping rather than after.
 
+### The three lookups a call did not need, and its last allocation
+
+What the section above left open was the one allocation a call still made and
+the map lookups around it. Both are closed, and the benchmarks gained two
+members so the trade is visible: a native does not take the same path a
+bytecode callee does.
+
+| | before | after | |
+|---|---|---|---|
+| instance call | 442 ns, 1.01 allocs | **406 ns, 0.02 allocs** | -8% |
+| static call | 390 ns, 1.01 allocs | **340 ns, 0.01 allocs** | -13% |
+| call that also allocates an object | 1237 ns, 6.01 allocs | **1112 ns, 3.01 allocs** | -10% |
+| static native | 330 ns, 2.01 allocs | **287 ns, 0.01 allocs** | -13% |
+| instance native | 354 ns, 2.01 allocs | **341 ns, 1.01 allocs** | -4% |
+
+**There were two tables of registered natives and the interpreter asked both**,
+on every call, for an answer that is almost always "neither" — two hashes of a
+three-string key. They are one table with one entry type now, and the two
+chain walks that looked for an inherited native are one walk.
+
+**A frame parsed a whole method descriptor to keep the return type.** The parse
+is cached, but the cache is a `sync.Map` and the lookup is a hash of the
+descriptor and a walk; `ReturnTypeOf` is a `LastIndexByte` and one type, and it
+is all a frame ever wanted. The cached parse stays where the parameters are
+wanted, which is the interpreter deciding how much to pop.
+
+**The argument slice is borrowed from the execution now**, the way frames
+already were, and **a native is lent it rather than given a copy of it**.
+
+The first shape of this did copy, on the reasoning that a native is arbitrary Go
+code. Then a real title said what that costs: over five seconds of one archive
+the copy was **82% of everything allocated**, because a title's calls into the
+platform are its drawing, and drawing takes arguments. The question the copy was
+answering — does any native keep the slice it was handed — is one that can be
+asked of the repository instead of guessed at, and the answer is no: every one
+reads its arguments by index and keeps the values, not the slice.
+
+So the contract is written down on `NativeMethod` instead: **the arguments are
+borrowed for the length of the call.** A body that broke it would read zero
+values rather than someone else's, because the slice is emptied when it goes
+back, and fail on its own argument check. Removing the copy took the same
+archive's five seconds from 388MB allocated to 76MB.
+
+**And one `defer` in the wrong function cost a fifth of a call.** Returning the
+slice on every way out is one deferred call, and `step` is the largest function
+in this package — large enough that the compiler stops open-coding defers and
+each one becomes a heap record. Measured, putting the defer in `step` cost more
+than the allocation it was there to avoid: 406 ns to 512. The four invoke
+instructions are their own function now, which is where the defer is cheap, and
+which leaves `step`'s switch smaller besides.
+
+**And what a title allocates is no longer the call path at all.** Reading a
+guest byte array copied it twice: once into a `[]Value` — twenty-four bytes an
+element — and once into the `[]byte` the caller wanted, so a 64KB array cost
+1.5MB to look at. `ByteArraySnapshot` fills the bytes under one read lock now,
+through `ByteArrayReader` where a storage can do it directly. The default heap
+storage skips the middle slice; **KTF's guest-memory storage skips the decode
+as well**, because a byte array in guest memory already is the bytes — one
+`Memory().Read` into the caller's slice.
+
+The same archive over the same five seconds, across the four passes:
+
+| | allocated |
+|---|---|
+| before any of this | 615 MB |
+| frames and the call path | 388 MB |
+| natives lent their arguments | 76 MB |
+| byte arrays read once | **21 MB** |
+
+A storage that does not implement `ByteArrayReader` still goes through
+`LoadRange`, because one that keeps its elements elsewhere may have a reason to
+fetch a run at once rather than an element at a time — which is exactly what
+KTF's does for every other component width.
+
+**What is left in a call is `step` itself.** The profile is the switch (18%), the frame's
+own push, pop and local access (11%), the remaining map lookups (5%), and
+garbage collection driven by what a title allocates rather than by what a call
+does. The first two are what a bytecode interpreter is, so **a resolution
+cached per call site would be reaching for five to eight per cent**, and that is
+the number the design has to be worth.
+
+Where to keep one is answered: a call site is a constant-pool index in a class,
+so `map[*classfile.Class][]atomic.Pointer[site]` found **once per frame** in
+`newFrame` and carried on the frame turns three lookups per call site into one
+per call, and `classfile` stays a parse result that the execution layer does not
+have to own. What it costs is three new debts — a monomorphic guard, because a
+virtual call's answer depends on the receiver's class; an invalidation
+generation, because a platform registers natives while a title is starting and a
+site cached before that would be stale; and atomic publication, because guest
+threads run the same class at once. Recorded rather than built: the debts are
+larger than the number.
+
 ### Why this could not be measured end to end
 
 A MIDlet has no tick of its own: its threads pace themselves against the wall

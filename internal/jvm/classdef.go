@@ -233,13 +233,10 @@ func (vm *VM) defineClass(definition ClassDefinition, builtin bool) error {
 		if _, exists := vm.natives[key]; exists {
 			return fmt.Errorf("native method already registered: %s.%s%s", key.class, key.name, key.descriptor)
 		}
-		if _, exists := vm.contextNatives[key]; exists {
-			return fmt.Errorf("native method already registered: %s.%s%s", key.class, key.name, key.descriptor)
-		}
 		body := method.Body
-		vm.contextNatives[key] = func(vm *VM, state *execution, arguments []Value) (Value, error) {
+		vm.natives[key] = nativeEntry{context: func(vm *VM, state *execution, arguments []Value) (Value, error) {
 			return body(&Invocation{vm: vm, state: state}, arguments)
-		}
+		}}
 		if builtin {
 			vm.builtinNatives[key] = true
 		}

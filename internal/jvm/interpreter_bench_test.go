@@ -48,6 +48,16 @@ func BenchmarkGuestCallLoopStatic(b *testing.B) { benchmarkCallLoop(b, "staticCa
 // of a title's frame loop rather than of a tight arithmetic one.
 func BenchmarkGuestCallLoopAllocating(b *testing.B) { benchmarkCallLoop(b, "allocatingCalls") }
 
+// BenchmarkGuestCallLoopStaticNative and BenchmarkGuestCallLoopInstanceNative
+// reach a body this runtime implements in Go. They are the other side of the
+// borrowed argument slice: a native is handed a copy, so it pays for one where
+// a bytecode callee no longer does.
+func BenchmarkGuestCallLoopStaticNative(b *testing.B) { benchmarkCallLoop(b, "staticNativeCalls") }
+
+func BenchmarkGuestCallLoopInstanceNative(b *testing.B) {
+	benchmarkCallLoop(b, "instanceNativeCalls")
+}
+
 // BenchmarkGuestInstanceCall is the interpreter's method-call path, which is
 // what a title spends its time in: `objectMath` makes an object and calls an
 // instance method on it, so one iteration is an invokestatic, an invokespecial

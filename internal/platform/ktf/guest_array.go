@@ -84,6 +84,23 @@ func (storage *guestArrayStorage) LoadRange(offset, count int) ([]jvm.Value, err
 	return values, nil
 }
 
+// ReadBytes fills bytes straight out of guest memory, which for a byte array is
+// what the memory already holds: one read, no decode, and no `[]Value` in
+// between. See jvm.ByteArrayReader. A component of any other width is left to
+// LoadRange, which is where the decode belongs.
+func (storage *guestArrayStorage) ReadBytes(offset int, into []byte) error {
+	if storage.size != 1 {
+		return fmt.Errorf("KTF array element is %d bytes, not one", storage.size)
+	}
+	if len(into) == 0 {
+		return nil
+	}
+	if err := storage.runtime.client.core.Memory().Read(storage.address(offset), into); err != nil {
+		return fmt.Errorf("read KTF array elements %d..%d: %w", offset, offset+len(into)-1, err)
+	}
+	return nil
+}
+
 func (storage *guestArrayStorage) StoreRange(offset int, values []jvm.Value) error {
 	if len(values) == 0 {
 		return nil

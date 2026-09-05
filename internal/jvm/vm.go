@@ -17,6 +17,15 @@ var (
 	ErrFrameLimit = errors.New("JVM frame limit exceeded")
 )
 
+// NativeMethod is a method body written in Go.
+//
+// **The arguments are borrowed for the length of the call.** The interpreter
+// pops them into a slice it takes from the execution and gives back when the
+// call returns, so a body that keeps the slice would be reading a later call's
+// arguments. Keep the values, not the slice; every native in this repository
+// already does, which is what made the borrow possible. The slice is emptied
+// when it is given back, so a body that breaks this reads zero values and fails
+// on its own argument check rather than quietly answering with someone else's.
 type NativeMethod func(vm *VM, arguments []Value) (Value, error)
 
 // AOTInvoker executes a platform-owned AOT method when interpreted bytecode
@@ -118,6 +127,15 @@ func (vm *VM) encodePlatformString(value string) []byte {
 
 type contextNativeMethod func(vm *VM, state *execution, arguments []Value) (Value, error)
 
+// nativeEntry is one registered body. A method has one kind or the other and
+// never both, so they share a table: the interpreter asks once per call
+// instead of hashing a three-string key twice for an answer that is almost
+// always "neither".
+type nativeEntry struct {
+	plain   NativeMethod
+	context contextNativeMethod
+}
+
 type methodKey struct {
 	class      string
 	name       string
@@ -146,9 +164,11 @@ type VM struct {
 	traceInstructions bool
 	aotMu             sync.RWMutex
 
-	mu             sync.RWMutex
-	natives        map[methodKey]NativeMethod
-	contextNatives map[methodKey]contextNativeMethod
+	mu sync.RWMutex
+	// natives holds both kinds of registered body in one table. It was two,
+	// and the interpreter asked both on every call — two hashes of a
+	// three-string key for an answer that is almost always "neither".
+	natives map[methodKey]nativeEntry
 	// builtinNatives marks the entries of natives that came from the
 	// runtime's own implementations. A platform may replace one of those —
 	// KTF answers Class.getName from its guest class records — while two
@@ -198,6 +218,9 @@ type execution struct {
 	// next call it makes. One execution is one guest thread, so nothing here
 	// needs a lock. See newFrame.
 	framePool []*frame
+	// valuePool is the same for the slice an invoke pops its arguments into.
+	// See takeValues.
+	valuePool [][]Value
 }
 
 type ExecutionError struct {
@@ -237,8 +260,7 @@ func New(source ClassSource, options Options) *VM {
 		// away. That was most of what this runtime cost.
 		traceInstructions: options.TraceInstructions && options.Logger != nil &&
 			options.Logger.Enabled(context.Background(), slog.LevelDebug),
-		natives:         make(map[methodKey]NativeMethod),
-		contextNatives:  make(map[methodKey]contextNativeMethod),
+		natives:         make(map[methodKey]nativeEntry),
 		builtinNatives:  make(map[methodKey]bool),
 		statics:         make(map[fieldKey]Value),
 		declaringFields: make(map[fieldKey]fieldResolution),
@@ -288,9 +310,7 @@ func (vm *VM) RegisterNative(class, name, descriptor string, method NativeMethod
 	key := methodKey{class: class, name: name, descriptor: descriptor}
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
-	_, plain := vm.natives[key]
-	_, context := vm.contextNatives[key]
-	if (plain || context) && !vm.builtinNatives[key] {
+	if _, exists := vm.natives[key]; exists && !vm.builtinNatives[key] {
 		// A body is already here and it is not the runtime's own, so it is a
 		// library's — the method is implemented, and registering over it would
 		// replace behavior a caller of this API did not know was there.
@@ -298,9 +318,8 @@ func (vm *VM) RegisterNative(class, name, descriptor string, method NativeMethod
 	}
 	// A platform registration overrides the built-in implementation,
 	// including context builtins such as the real-time Thread.sleep.
-	delete(vm.contextNatives, key)
 	delete(vm.builtinNatives, key)
-	vm.natives[key] = method
+	vm.natives[key] = nativeEntry{plain: method}
 	return nil
 }
 
@@ -318,16 +337,13 @@ func (vm *VM) RegisterContextNative(class, name, descriptor string, method Conte
 	key := methodKey{class: class, name: name, descriptor: descriptor}
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
-	_, plain := vm.natives[key]
-	_, context := vm.contextNatives[key]
-	if (plain || context) && !vm.builtinNatives[key] {
+	if _, exists := vm.natives[key]; exists && !vm.builtinNatives[key] {
 		return fmt.Errorf("native method already registered: %s.%s%s", class, name, descriptor)
 	}
-	delete(vm.natives, key)
 	delete(vm.builtinNatives, key)
-	vm.contextNatives[key] = func(vm *VM, state *execution, arguments []Value) (Value, error) {
+	vm.natives[key] = nativeEntry{context: func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		return method(&Invocation{vm: vm, state: state}, arguments)
-	}
+	}}
 	return nil
 }
 
@@ -340,9 +356,8 @@ func (vm *VM) HasMethodBody(class, name, descriptor string) bool {
 	key := methodKey{class: class, name: name, descriptor: descriptor}
 	vm.mu.RLock()
 	_, native := vm.natives[key]
-	_, context := vm.contextNatives[key]
 	vm.mu.RUnlock()
-	if native || context {
+	if native {
 		return true
 	}
 	if _, method, err := vm.resolveStaticMethod(class, name, descriptor); err == nil {
@@ -502,11 +517,11 @@ func (vm *VM) IsSubclassOf(className, superName string) (bool, error) {
 func (vm *VM) invokeStatic(state *execution, className, name, descriptor string, arguments []Value) (Value, error) {
 	key := methodKey{class: className, name: name, descriptor: descriptor}
 	vm.mu.RLock()
-	contextNative := vm.contextNatives[key]
-	native := vm.natives[key]
+	entry := vm.natives[key]
 	vm.mu.RUnlock()
+	contextNative, native := entry.context, entry.plain
 	if contextNative != nil {
-		result, err := contextNative(vm, state, append([]Value(nil), arguments...))
+		result, err := contextNative(vm, state, arguments)
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
 		}
@@ -517,7 +532,7 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 		return result, nil
 	}
 	if native != nil {
-		result, err := native(vm, append([]Value(nil), arguments...))
+		result, err := native(vm, arguments)
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
 		}
@@ -606,12 +621,12 @@ func (vm *VM) invokeInstanceReceived(
 	if resolveErr == nil {
 		synchronizedNative = method.AccessFlags&0x0020 != 0
 		vm.mu.RLock()
-		contextNative = vm.contextNatives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
-		native = vm.natives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
+		entry := vm.natives[methodKey{class: class.Name, name: name, descriptor: descriptor}]
 		vm.mu.RUnlock()
+		contextNative, native = entry.context, entry.plain
 	} else {
-		contextNative = vm.resolveContextNativeInstance(lookupClass, name, descriptor)
-		native = vm.resolveNativeInstance(lookupClass, name, descriptor)
+		entry := vm.resolveNativeEntry(lookupClass, name, descriptor)
+		contextNative, native = entry.context, entry.plain
 	}
 	if contextNative != nil || native != nil {
 		if synchronizedNative {
@@ -759,14 +774,16 @@ func (vm *VM) classMonitor(className string) *monitor {
 	return result
 }
 
-func (vm *VM) resolveNativeInstance(className, name, descriptor string) NativeMethod {
+// resolveNativeEntry walks a class chain for a registered body. It was two
+// walks, one per kind, which asked the same chain the same question twice.
+func (vm *VM) resolveNativeEntry(className, name, descriptor string) nativeEntry {
 	for className != "" {
 		key := methodKey{class: className, name: name, descriptor: descriptor}
 		vm.mu.RLock()
-		native := vm.natives[key]
+		entry := vm.natives[key]
 		vm.mu.RUnlock()
-		if native != nil {
-			return native
+		if entry.plain != nil || entry.context != nil {
+			return entry
 		}
 		class, err := vm.loader.Load(className)
 		if err != nil {
@@ -778,37 +795,11 @@ func (vm *VM) resolveNativeInstance(className, name, descriptor string) NativeMe
 				className = "java/lang/Object"
 				continue
 			}
-			return nil
+			return nativeEntry{}
 		}
 		className = class.SuperName
 	}
-	return nil
-}
-
-func (vm *VM) resolveContextNativeInstance(className, name, descriptor string) contextNativeMethod {
-	for className != "" {
-		key := methodKey{class: className, name: name, descriptor: descriptor}
-		vm.mu.RLock()
-		native := vm.contextNatives[key]
-		vm.mu.RUnlock()
-		if native != nil {
-			return native
-		}
-		class, err := vm.loader.Load(className)
-		if err != nil {
-			if parent := runtimeClassParent(className); parent != "" {
-				className = parent
-				continue
-			}
-			if className != "java/lang/Object" {
-				className = "java/lang/Object"
-				continue
-			}
-			return nil
-		}
-		className = class.SuperName
-	}
-	return nil
+	return nativeEntry{}
 }
 
 // StaticField reads a static field from outside the interpreter, running the

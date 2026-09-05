@@ -40,6 +40,27 @@ public final class CallLoop {
         return sum;
     }
 
+    // staticNativeCalls and instanceNativeCalls reach a body the runtime
+    // implements in Go rather than one the class file carries. They are here
+    // because the two paths pay differently: a native is handed a copy of its
+    // arguments, so it does not get the borrowed slice a bytecode callee does.
+    public static int staticNativeCalls(int count) {
+        int sum = 0;
+        for (int index = 0; index < count; index++) {
+            sum += Math.abs(index - count);
+        }
+        return sum;
+    }
+
+    public static int instanceNativeCalls(int count) {
+        String text = "abcdefgh";
+        int sum = 0;
+        for (int index = 0; index < count; index++) {
+            sum += text.length();
+        }
+        return sum;
+    }
+
     // allocatingCalls makes `count` objects as well, which is the shape of a
     // title's frame loop rather than of a tight arithmetic one.
     public static int allocatingCalls(int count) {

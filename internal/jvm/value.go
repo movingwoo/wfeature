@@ -60,6 +60,20 @@ type ArrayStorage interface {
 	StoreRange(offset int, values []Value) error
 }
 
+// ByteArrayReader is the fast path for reading a byte array. A storage
+// implements it when it can fill bytes without going through `[]Value`, which
+// is the difference between one copy and three: reading a guest byte array used
+// to build a `[]Value` — twenty-four bytes an element — and then walk it into
+// the `[]byte` the caller wanted. On one archive that was 62% of everything
+// allocated in five seconds of play.
+//
+// A storage that does not implement it is read through LoadRange as before,
+// because a storage that keeps its elements somewhere else may have a reason to
+// fetch a run at once rather than an element at a time.
+type ByteArrayReader interface {
+	ReadBytes(offset int, into []byte) error
+}
+
 type Array struct {
 	Component Type
 	storage   ArrayStorage
@@ -80,6 +94,17 @@ func (storage valueStorage) Store(index int, value Value) error {
 
 func (storage valueStorage) LoadRange(offset, count int) ([]Value, error) {
 	return append([]Value(nil), storage[offset:offset+count]...), nil
+}
+
+func (storage valueStorage) ReadBytes(offset int, into []byte) error {
+	for index := range into {
+		integer, err := storage[offset+index].Int32()
+		if err != nil {
+			return fmt.Errorf("byte array element %d: %w", offset+index, err)
+		}
+		into[index] = byte(integer)
+	}
+	return nil
 }
 
 func (storage valueStorage) StoreRange(offset int, values []Value) error {
@@ -230,14 +255,30 @@ func NewByteArray(data []byte) *Object {
 
 // ByteArraySnapshot copies a guest byte array into Host memory.
 func ByteArraySnapshot(object *Object) ([]byte, error) {
-	component, values, err := ArraySnapshot(object)
+	array, err := objectArray(object)
 	if err != nil {
 		return nil, err
 	}
-	if component.Kind != TypeByte {
-		return nil, fmt.Errorf("array component is %s, not byte", component.Descriptor())
+	array.mu.RLock()
+	defer array.mu.RUnlock()
+	if array.Component.Kind != TypeByte {
+		return nil, fmt.Errorf("array component is %s, not byte", array.Component.Descriptor())
 	}
-	data := make([]byte, len(values))
+	length := array.storage.Len()
+	data := make([]byte, length)
+	if length == 0 {
+		return data, nil
+	}
+	if reader, ok := array.storage.(ByteArrayReader); ok {
+		if err := reader.ReadBytes(0, data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+	values, err := array.storage.LoadRange(0, length)
+	if err != nil {
+		return nil, err
+	}
 	for index, value := range values {
 		integer, err := value.Int32()
 		if err != nil {

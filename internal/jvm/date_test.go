@@ -76,11 +76,11 @@ func call(t *testing.T, vm *VM, class, name, descriptor string, arguments ...Val
 	if !vm.HasMethodBody(class, name, descriptor) {
 		t.Fatalf("%s.%s%s has no body", class, name, descriptor)
 	}
-	native, ok := vm.natives[methodKey{class: class, name: name, descriptor: descriptor}]
-	if !ok {
+	entry, ok := vm.natives[methodKey{class: class, name: name, descriptor: descriptor}]
+	if !ok || entry.plain == nil {
 		t.Fatalf("%s.%s%s is not a builtin", class, name, descriptor)
 	}
-	result, err := native(vm, arguments)
+	result, err := entry.plain(vm, arguments)
 	if err != nil {
 		t.Fatalf("%s.%s%s error = %v", class, name, descriptor, err)
 	}
