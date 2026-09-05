@@ -263,6 +263,10 @@ type initializationRuntime struct {
 	// and checkedBlocks also stay zero.
 	arenaShadow  *arenaShadow
 	shadowWindow []byte
+	// hookWindow is the scratch space the hooked C library routines copy
+	// through, kept between calls because they were this platform's largest
+	// allocation; see hookBuffer in binary_hooks.go.
+	hookWindow []byte
 	// inputModeTableAddress is the `M_Char **` the input-method table answers
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
@@ -1144,7 +1148,7 @@ func (runtime *initializationRuntime) resumeAOTException(thread *armcore.Thread,
 }
 
 func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id uint32) (uint32, error) {
-	runtime.countDiagnostic(fmt.Sprintf("wipic %#x", id))
+	runtime.recordDiagnostic(diagEvent{kind: diagWIPICCall, nums: [5]uint32{id}})
 	if id >= 1<<16 {
 		return runtime.handleWIPICTableCall(thread, id>>16, id&0xffff)
 	}

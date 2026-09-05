@@ -94,7 +94,7 @@ func classifyARM(instruction uint32) armForm {
 // the engine reaches the same handlers through executeARMForm with a form the
 // decode cache already holds, and the two cannot answer differently because
 // this one is that one with a classify in front.
-func executeARM(context *Context, memory *Memory, pc, instruction uint32) (*SupervisorCall, error) {
+func executeARM(context *Context, memory *Memory, pc, instruction uint32) (SupervisorCall, error) {
 	return executeARMForm(classifyARM(instruction), context, memory, pc, instruction)
 }
 
@@ -103,7 +103,7 @@ func executeARM(context *Context, memory *Memory, pc, instruction uint32) (*Supe
 // The condition test lives here rather than in the classifier because it reads
 // flags, which change under an encoding that does not: a cached form says what
 // an instruction *is*, never whether this execution of it runs.
-func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruction uint32) (*SupervisorCall, error) {
+func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruction uint32) (SupervisorCall, error) {
 	switch form {
 	case armBLXImmediate:
 		offset := int32(instruction<<8) >> 6
@@ -112,38 +112,38 @@ func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruct
 		halfword := instruction >> 24 & 1
 		context.Registers[RegisterLR] = pc + 4
 		context.setThumbPC(uint32(int64(pc+8)+int64(offset)) + halfword*2)
-		return nil, nil
+		return noSupervisorCall, nil
 	case armUnconditionalUndefined:
-		return nil, ErrUndefinedInstruction
+		return noSupervisorCall, ErrUndefinedInstruction
 	}
 	if !conditionPassed(context.CPSR, instruction>>28) {
-		return nil, nil
+		return noSupervisorCall, nil
 	}
 	switch form {
 	case armDataProcessing:
-		return nil, executeARMDataProcessing(context, pc, instruction)
+		return noSupervisorCall, executeARMDataProcessing(context, pc, instruction)
 	case armSingleTransfer:
-		return nil, executeARMSingleTransfer(context, memory, pc, instruction)
+		return noSupervisorCall, executeARMSingleTransfer(context, memory, pc, instruction)
 	case armBranch:
 		executeARMBranch(context, pc, instruction)
-		return nil, nil
+		return noSupervisorCall, nil
 	case armBlockTransfer:
-		return nil, executeARMBlockTransfer(context, memory, pc, instruction)
+		return noSupervisorCall, executeARMBlockTransfer(context, memory, pc, instruction)
 	case armBranchExchange:
 		executeARMBranchExchange(context, pc, instruction)
-		return nil, nil
+		return noSupervisorCall, nil
 	case armHalfwordSignedTransfer:
-		return nil, executeARMHalfwordSignedTransfer(context, memory, pc, instruction)
+		return noSupervisorCall, executeARMHalfwordSignedTransfer(context, memory, pc, instruction)
 	case armMultiply:
-		return nil, executeARMMultiply(context, pc, instruction)
+		return noSupervisorCall, executeARMMultiply(context, pc, instruction)
 	case armLongMultiply:
-		return nil, executeARMLongMultiply(context, instruction)
+		return noSupervisorCall, executeARMLongMultiply(context, instruction)
 	case armSupervisorCall:
-		return &SupervisorCall{Immediate: instruction & 0x00ffffff, Address: pc, ResumePC: pc + 4}, nil
+		return SupervisorCall{Immediate: instruction & 0x00ffffff, Address: pc, ResumePC: pc + 4}, nil
 	case armStatusTransfer:
-		return nil, executeARMProgramStatusTransfer(context, instruction)
+		return noSupervisorCall, executeARMProgramStatusTransfer(context, instruction)
 	case armSwap:
-		return nil, executeARMSwap(context, memory, instruction)
+		return noSupervisorCall, executeARMSwap(context, memory, instruction)
 	case armCacheMaintenance:
 		// A write to CP15 c7 is cache or write-buffer maintenance, which is
 		// nothing here: there is no cache to flush, and every path that
@@ -151,9 +151,9 @@ func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruct
 		// self-modifying code is coherent whether the guest asks or not.
 		// Modules do this right after copying code into RAM, which is why
 		// ignoring it is correct rather than merely convenient.
-		return nil, nil
+		return noSupervisorCall, nil
 	}
-	return nil, ErrUndefinedInstruction
+	return noSupervisorCall, ErrUndefinedInstruction
 }
 
 // executeARMBranch is B and BL. It is a function rather than an arm of the
