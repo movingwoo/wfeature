@@ -14,7 +14,9 @@ rather than a binary it runs. Android needs no such thing — it executes the
 same binary a desktop does.
 
 Neither is built by `make dist`. `make mobile` builds both into `build/dist/`
-where the desktop archives land, and needs an Android SDK and Xcode to do it.
+where the desktop archives land, and needs an Android SDK and Xcode to do it —
+`make mobile-android` and `make mobile-ios` are the halves, which is how the
+release workflow builds them on the two machines that have one toolchain each.
 
 **Why these are here and not in a repository of their own:** the APK and the
 IPA carry a server built from the source above them, and a mismatched pair is

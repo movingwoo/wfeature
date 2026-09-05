@@ -1,22 +1,26 @@
-# A pushed tag is what makes a release. The archives are the same five
-# `make dist` writes on a developer's machine — the workflow adds nothing to
-# them, so a release can still be built and published by hand if this is
-# unavailable. See docs/running.md, "The release archives".
+# A pushed tag is what makes a release. The archives are the five `make dist`
+# writes and the two `make mobile` writes beside them — this workflow adds
+# nothing to any of them, so a release can still be built and published by hand
+# if it is unavailable. See docs/running.md, "The release archives".
 #
-# The phone builds are not here. An APK needs an Android SDK and an IPA needs
-# Xcode, and a workflow that carried both would be two toolchain installs on
-# every desktop release for artifacts most releases do not have. They are built
-# with `make mobile` where those toolchains live and uploaded to the release
-# afterwards; see docs/mobile.md.
+# The phone builds are here rather than uploaded afterwards, which is what they
+# used to be. Each needs a toolchain the desktop build does not — an Android
+# SDK, and Xcode — and no runner carries both, so they are two jobs on two
+# machines instead of two steps in one. That was the argument for leaving them
+# out, and it is answered by a second job rather than by a second toolchain on
+# the machine building the archives.
+#
+# **Nothing is published until all three have built.** A release that is
+# missing its APK is the failure this is for, and one that goes out with five
+# files and a promise is worse than one that fails loudly and is tagged again.
 name: release
 
 on:
   push:
     tags:
       - "v*"
-  # A dry run builds the archives and keeps them as artifacts without
-  # publishing anything, which is how the packaging is checked before a tag
-  # exists.
+  # A dry run builds everything and keeps it as artifacts without publishing,
+  # which is how the packaging is checked before a tag exists.
   workflow_dispatch:
     inputs:
       version:
@@ -24,9 +28,13 @@ on:
         required: true
         default: "0.0.0-dev"
 
-# Writing the release is the release job's alone; the checks it depends on read.
+# Writing the release is the publish job's alone; everything else reads.
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   # The gate, and the same one every push runs: the tests on both profiles and
@@ -37,11 +45,31 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
-  release:
-    needs: checks
+  # The version is the tag without its v, so the archive names and the binary's
+  # -version agree with what the release is called. Four jobs need it and each
+  # deriving it again is four places it could differ, so it is resolved once
+  # and passed on.
+  version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            version='${{ inputs.version }}'
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "building $version"
+
+  # The five desktop archives. Cross-compiling them from one machine is why the
+  # core stays free of cgo; setting CGO_ENABLED explicitly keeps a runner with a
+  # C toolchain from quietly building a host-only binary.
+  desktop:
+    needs: [checks, version]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -57,45 +85,150 @@ jobs:
           go-version: stable
           cache: true
 
-      # The version is the tag without its v, so the archive names and the
-      # binary's -version agree with what the release is called.
-      - name: Resolve version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            version='${{ inputs.version }}'
-          else
-            version="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "building $version"
-
-      # Cross-compiling five targets from one machine is why the core stays
-      # free of cgo; setting it explicitly keeps a runner with a C toolchain
-      # from quietly building a host-only binary.
       - name: Build the archives
         env:
           CGO_ENABLED: "0"
-        run: make dist VERSION=${{ steps.version.outputs.version }}
+        run: make dist VERSION=${{ needs.version.outputs.version }}
 
-      # What is in the archives, not just that they were written: the entries
+      # SHA256SUMS is deliberately left behind: it covers the five files this
+      # job wrote, and the release has seven. The publish job writes the one
+      # that ships, over everything.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            build/dist/*.tar.gz
+            build/dist/*.zip
+
+  # The APK. The Linux runner already carries an Android SDK and a JDK, which
+  # is the whole of what mobile/android/build.sh asks for besides Go.
+  android:
+    needs: [checks, version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The versionCode is the repository's commit count, and a shallow
+          # checkout counts one. Android refuses to install an older
+          # versionCode over a newer one, so a release built from depth 1
+          # would be an APK nobody with the previous one can install.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+
+      # Android accepts an update only when it carries the same signature as
+      # the copy already installed, so the key is the app's identity rather
+      # than a formality. build.sh makes one when there is none, which is right
+      # on a developer's machine and wrong here: it would sign every release
+      # with a different key and every update would have to be an uninstall.
+      # Failing is the only honest option when the secret is missing.
+      - name: Restore the signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 is not set." >&2
+            echo "It is mobile/android/debug.keystore, base64-encoded:" >&2
+            echo "  base64 -i mobile/android/debug.keystore | gh secret set ANDROID_KEYSTORE_BASE64" >&2
+            echo "Without it this job would sign the APK with a new key, and" >&2
+            echo "no phone with the previous release could install the update." >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE" | base64 -d > mobile/android/debug.keystore
+          # A truncated or mistyped secret decodes to something, and apksigner
+          # would be the one to say so several minutes later.
+          keytool -list -keystore mobile/android/debug.keystore -storepass android > /dev/null
+
+      - name: Build the APK
+        run: make mobile-android VERSION=${{ needs.version.outputs.version }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android
+          if-no-files-found: error
+          retention-days: 1
+          path: build/dist/*.apk
+
+  # The IPA, which needs Xcode for the iPhoneOS SDK — not just the command line
+  # tools — and so needs the macOS runner. It is unsigned on purpose: whoever
+  # installs it re-signs it with their own Apple ID on the way onto the phone,
+  # so there is no key here to keep.
+  ios:
+    needs: [checks, version]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build the IPA
+        run: make mobile-ios VERSION=${{ needs.version.outputs.version }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios
+          if-no-files-found: error
+          retention-days: 1
+          path: build/dist/*.ipa
+
+  publish:
+    needs: [version, desktop, android, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+
+      # The three jobs' output into one directory, which is the shape the rest
+      # of this job — and a developer's build/dist — has.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: build/dist
+          merge-multiple: true
+
+      # Over all seven, here rather than in the jobs that wrote them: a
+      # checksum file is a statement about a release, and no single job has
+      # seen one.
+      - name: Checksum everything together
+        run: make checksums
+
+      # What is in the archives, not just that they arrived: the entries
       # extract inside their own folder, the launchers are executable, the
       # Windows text carries the line endings and byte order mark it is
       # converted for, the licence and notices are this repository's, and the
-      # Linux server is unpacked and asked for its version. `make dist-check`
-      # is the same command a release built by hand runs.
+      # Linux server is unpacked and asked for its version. `-phones` is what
+      # says the APK and the IPA are here and are named for this version;
+      # `make dist-check` without it is what a desktop-only build runs.
       - name: Check the archives
-        run: make dist-check
+        run: make dist-check DISTCHECK_FLAGS=-phones
 
-      # A dry run stops here: the archives are downloadable from the run.
+      - name: What is being published
+        run: ls -l build/dist && cat build/dist/SHA256SUMS
+
+      # A dry run stops here: everything is downloadable from the run.
       - name: Keep the archives
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wfeature-${{ steps.version.outputs.version }}
+          name: wfeature-${{ needs.version.outputs.version }}
           path: |
             build/dist/*.tar.gz
             build/dist/*.zip
+            build/dist/*.apk
+            build/dist/*.ipa
             build/dist/SHA256SUMS
 
       # The notes are this version's CHANGELOG section rather than a generated
@@ -133,11 +266,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # A tag with a suffix — v0.4.0-pre, v0.5.0-rc1 — is published as a
-          # pre-release. The phone builds are why the distinction earns its
-          # keep: they need toolchains this workflow does not carry, so they
-          # are uploaded afterwards by hand, and a release that is still
-          # waiting for half its files should not sit at the top of the
-          # downloads page as the one to take.
+          # pre-release. What it now means is narrower than it was: every
+          # release carries all seven files, so the distinction is about how
+          # ready the thing is rather than about which files arrived.
           prerelease=
           case "${GITHUB_REF_NAME#v}" in
             *-*) prerelease=--prerelease ;;
@@ -145,4 +276,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $prerelease \
             --title "W-Feature $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            build/dist/*.tar.gz build/dist/*.zip build/dist/SHA256SUMS
+            build/dist/*.tar.gz build/dist/*.zip \
+            build/dist/*.apk build/dist/*.ipa build/dist/SHA256SUMS

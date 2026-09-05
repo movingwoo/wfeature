@@ -40,7 +40,7 @@ KTF·LGT·SKT 게임을 지원합니다.
 
 압축 안의 `README.txt`를 읽어주세요.  
 아카이브를 직접 만들려면 `make dist` 명령어를 사용합니다.  
-폰 빌드는 `make mobile`이고, 안드로이드 SDK와 Xcode가 필요해 릴리스 CI에는 없습니다.  
+폰 빌드는 `make mobile`이며 안드로이드 SDK와 Xcode가 필요합니다. 릴리스 CI가 대신 만들어 붙입니다.  
 자세한 내용은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.  
 버전별 변경 내역은 [`CHANGELOG.md`](CHANGELOG.md) 문서에 있습니다.
 
