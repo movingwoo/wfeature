@@ -246,15 +246,17 @@ test:
 	go test ./...
 	node --test web/*.test.mjs
 
-# acceptance runs every local archive probe — six for KTF, one for LGT, two for
-# SKT — and writes what they answered to var/acceptance/<date>.md. It needs the
-# ignored local corpus under var/games and runs nowhere else, which is why it
-# is not part of `make test`: no archive in this repository is a real game.
+# acceptance runs every local archive probe — eight for KTF, one for LGT, four
+# for SKT — and writes what they answered to var/acceptance/<date>.md, with a
+# record per archive beside it in <date>.ndjson. It needs the ignored local
+# corpus under var/games and runs nowhere else, which is why it is not part of
+# `make test`: no archive in this repository is a real game.
 #
 # The report is where a count belongs. A number typed into a document is a
 # sentence about one afternoon, and the corpus changes underneath it; the file
-# carries its date and the archive that produced every row. It stays under
-# var/ because those rows are the games' names.
+# carries its date and the archive that produced every row. The records beside
+# it are what two runs are compared with, and the run says what moved since the
+# one before it. Both stay under var/ because those rows are the games' names.
 acceptance:
 	go run ./internal/tools/acceptance $(ARGS)
 
