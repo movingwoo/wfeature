@@ -31,6 +31,12 @@ func NewConsole(session *Session) *Console {
 // can be placed. It is free text: nothing enforces it.
 func (console *Console) SetGame(name string) { console.game = name }
 
+// SetTableKey names what the session is running by hash, which is what lets a
+// saved table be matched against a later run rather than only read. The name a
+// SetGame call carries is a label beside it: two archives of one title have
+// two names and one image.
+func (console *Console) SetTableKey(key TableKey) { console.session.SetTableKey(key) }
+
 // Session exposes the wrapped session.
 func (console *Console) Session() *Session { return console.session }
 
@@ -89,6 +95,12 @@ func (console *Console) execute(args []string) (string, error) {
 		return console.unwatch(args[1:])
 	case "hits":
 		return console.hits(args[1:])
+	case "patch":
+		return console.patch(args[1:])
+	case "unpatch":
+		return console.unpatch(args[1:])
+	case "patches":
+		return console.listPatches()
 	case "save":
 		return console.save(args[1:])
 	case "load":
@@ -115,7 +127,14 @@ const consoleHelp = `commands:
   watch <addr>                record what writes an address
   unwatch <addr>|all
   hits [n]                    instructions that wrote the watched addresses
-  save <file>                 write frozen values and watches to a cheat table
+  patch <name> <addr> <expect> <replace>
+                              replace guest bytes, refusing unless <expect> is
+                              what is there; hex, spacing ignored
+  unpatch <name>|all          put back what a patch replaced
+  unpatch -forget <name>      drop the record without writing
+  patches                     list the patches now applied
+  save <file>                 write frozen values, watches and patches to a
+                              cheat table
   load <file>                 apply a cheat table`
 
 // watch, unwatch, and hits expose the store instrumentation. A scan answers
@@ -194,18 +213,110 @@ func (console *Console) hits(args []string) (string, error) {
 	return strings.TrimRight(builder.String(), "\n"), nil
 }
 
+// patch, unpatch and patches are the way past a gate. A scan and a watch say
+// what the guest is doing; a patch is the only thing here that changes what it
+// decides, which is what a run stopped at a check needs before anything behind
+// the check can be looked at.
+func (console *Console) patch(args []string) (string, error) {
+	if len(args) != 4 {
+		return "", fmt.Errorf("usage: patch <name> <addr> <expect-hex> <replace-hex>")
+	}
+	address, err := parseAddress(args, 1)
+	if err != nil {
+		return "", err
+	}
+	expect, err := parseHexSpan("expect", args[2])
+	if err != nil {
+		return "", err
+	}
+	replace, err := parseHexSpan("replace", args[3])
+	if err != nil {
+		return "", err
+	}
+	entry := PatchEntry{
+		Name:    args[0],
+		Patches: []Patch{{Address: Address(address), Expect: expect, Replace: replace}},
+	}
+	if err := console.session.ApplyPatch(entry); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("patched 0x%08x: %x -> %x [%s]", address, []byte(expect), []byte(replace), entry.Name), nil
+}
+
+func (console *Console) unpatch(args []string) (string, error) {
+	if len(args) == 2 && args[0] == "-forget" {
+		if !console.session.ForgetPatch(args[1]) {
+			return "", fmt.Errorf("no patch named %q is applied", args[1])
+		}
+		return fmt.Sprintf("forgot %s without writing", args[1]), nil
+	}
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: unpatch <name>|all, or unpatch -forget <name>")
+	}
+	if args[0] == "all" {
+		reverted, err := console.session.RevertAllPatches()
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("reverted %d patch(es)", reverted), nil
+	}
+	if err := console.session.RevertPatch(args[0]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("reverted %s", args[0]), nil
+}
+
+func (console *Console) listPatches() (string, error) {
+	entries := console.session.Patches()
+	if len(entries) == 0 {
+		return "nothing patched", nil
+	}
+	var builder strings.Builder
+	for _, entry := range entries {
+		fmt.Fprintf(&builder, "  %s", entry.Name)
+		if entry.Note != "" {
+			fmt.Fprintf(&builder, " — %s", entry.Note)
+		}
+		builder.WriteByte('\n')
+		for _, patch := range entry.Patches {
+			fmt.Fprintf(&builder, "    0x%08x  %x -> %x\n",
+				uint32(patch.Address), []byte(patch.Expect), []byte(patch.Replace))
+		}
+	}
+	return strings.TrimRight(builder.String(), "\n"), nil
+}
+
+func parseHexSpan(what, text string) (HexBytes, error) {
+	var span HexBytes
+	if err := span.UnmarshalJSON([]byte(strconv.Quote(text))); err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	if len(span) == 0 {
+		return nil, fmt.Errorf("%s is empty", what)
+	}
+	return span, nil
+}
+
 func (console *Console) save(args []string) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("save expects a file path")
 	}
-	data, err := MarshalTable(console.session.SaveTable(console.game))
+	table := console.session.SaveTable(console.game)
+	data, err := MarshalTable(table)
 	if err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(args[0], data, 0o644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("saved %d frozen value(s) to %s", console.session.Freezes().Len(), args[0]), nil
+	saved := fmt.Sprintf("saved %d frozen value(s) and %d patch(es) to %s",
+		console.session.Freezes().Len(), len(table.Patches), args[0])
+	if table.Image == "" && table.File == "" {
+		// A table nothing can be matched against still loads; it just cannot
+		// say whether it was meant for what is running.
+		saved += "\n(this session has no image hash, so the table is unkeyed)"
+	}
+	return saved, nil
 }
 
 func (console *Console) load(args []string) (string, error) {
@@ -220,11 +331,29 @@ func (console *Console) load(args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A table that was made against something else is worth saying so about
+	// before its addresses are written, not after: the values would read as
+	// nonsense and a patch would be refused, but neither says which of the two
+	// files was the wrong one.
+	warning := ""
+	switch table.Match(console.session.TableKey()) {
+	case MatchNone:
+		warning = "\n(this table was made against a different image; its addresses may mean nothing here)"
+	case MatchUnkeyed:
+		warning = "\n(nothing identifies what this table was made against)"
+	}
 	applied, err := console.session.LoadTable(table)
 	if err != nil {
+		// The key is most worth saying when the load failed: a refused patch
+		// and a mismatched image are the same finding seen from two sides, and
+		// only one of them names the cause.
+		if warning != "" {
+			return "", fmt.Errorf("%w%s", err, warning)
+		}
 		return "", err
 	}
-	return fmt.Sprintf("applied %d frozen value(s) from %s", applied, args[0]), nil
+	return fmt.Sprintf("applied %d frozen value(s) and %d patch(es) from %s%s",
+		applied, len(console.session.Patches()), args[0], warning), nil
 }
 
 func (console *Console) regions() (string, error) {
@@ -234,11 +363,20 @@ func (console *Console) regions() (string, error) {
 	}
 	var builder strings.Builder
 	total := uint64(0)
+	scanned := 0
 	for _, region := range regions {
-		fmt.Fprintf(&builder, "  0x%08x-0x%08x  %8d  %s\n", region.Base, uint64(region.Base)+uint64(region.Size), region.Size, region.Label)
-		total += uint64(region.Size)
+		note := region.Label
+		if region.Code {
+			// It is still readable and writable; a patch reaches it. What it
+			// is not is somewhere a value search should walk.
+			note += " (code, not scanned)"
+		} else {
+			scanned++
+			total += uint64(region.Size)
+		}
+		fmt.Fprintf(&builder, "  0x%08x-0x%08x  %8d  %s\n", region.Base, uint64(region.Base)+uint64(region.Size), region.Size, note)
 	}
-	fmt.Fprintf(&builder, "%d region(s), %d bytes total", len(regions), total)
+	fmt.Fprintf(&builder, "%d region(s), %d scanned, %d bytes total", len(regions), scanned, total)
 	return builder.String(), nil
 }
 

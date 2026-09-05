@@ -160,6 +160,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-park tick[:ms]` | park the game at a tick the way a server does when the page goes away, and resume it. `-park 40` runs the Jlet's `pauseApp` and `resumeApp` back to back; `-park 40:5000` leaves it parked for five seconds first, which under `-play` is five seconds of guest clock the title is about to discover it lost. It is the only way to drive the lifecycle from a terminal — see [`ktf.md`](ktf.md), "The park the guest is told about" |
 | `-hold N` | how many ticks a `-key` press — or a route's `key` step — is held before its release, 1 by default |
 | `-route script` | replay a scripted way back to a scene (below); works on both generations of package |
+| `-serve` | drive the run a command at a time over stdin and stdout (below); works on both generations of package |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted, on both generations of package |
 | `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port` |
 | `-diag report.json` | write the runtime-boundary diagnostics (below) |
@@ -306,6 +307,109 @@ player did. That is how a fault reported from a phone gets reproduced here: one
 title's crash needed 1,891 ticks of somebody else's play to reach, and no
 hand-written route found it.
 
+### Driving a run from outside
+
+A route is a script: it is written before the run and replays the same way
+every time, which is what makes it a repro. What it cannot do is look at the
+screen and decide the next move — that decision was taken when the file was
+written. Finding the way through a title nobody has a route for is the other
+shape of the same work: press something, look, press something else, and write
+the route down only once the way is known.
+
+`-serve` is that loop with the screen answered as a number. **One JSON command
+per line on stdin, one JSON answer per line on stdout.** It is on `runktf`
+(both generations of package), `runskt` and `runlgt`.
+
+```
+$ printf '%s\n' \
+    '{"id":1,"cmd":"step","ticks":400,"screen":true}' \
+    '{"id":2,"cmd":"key","key":"fire","hold":20}' \
+    '{"id":3,"cmd":"screen"}' \
+    '{"id":4,"cmd":"quit"}' | wfeature runktf game.zip -serve
+{"id":1,"ok":true,"cmd":"step","ticks":400,"total_ticks":400,"progressed":true,
+ "digest":"801bbe1714a3dcc1","screen":{"width":240,"height":320,
+ "rgba_sha256":"782768ca…","non_black_pixels":73746,"visible_pixels":76800,
+ "flushes":399,"digest":"801bbe1714a3dcc1"}}
+```
+
+**A bad command is answered, not fatal.** An unknown command, a key name that
+is not in the table, a script that does not parse, a path that cannot be
+written: each comes back as `{"ok":false,"error":"…"}` and the run carries on.
+An exploratory session is minutes of guest execution deep by the time a typo
+happens, and losing it to a typo is losing the whole point. The one input that
+does end the session is a line longer than 1 MiB, because there is no way to
+resynchronize in the middle of one.
+
+Every request may carry an `id` of any JSON shape, and it comes back on the
+answer unchanged, so a caller that pipelines can pair them up.
+
+| Command | Fields | What it does |
+|---|---|---|
+| `step` | `ticks` (default 1, max 1000000), `screen` | advance the run. Stops early when the guest ends or when a tick that did nothing is followed by nothing due |
+| `key` | `key`, `hold`, `repeat`, `action` | one key from the shared table. `action` is `tap` (default), `press` or `release` |
+| `touch` | `action` (`press`/`drag`/`release`), `x`, `y` | one pointer event in the guest's own coordinates |
+| `park` | `ms` | park the game the way a Host does when the page goes away, hold it for `ms`, and resume |
+| `screen` | — | the screen report below |
+| `pixel` | `x`, `y` | one pixel in the guest's own coordinates |
+| `diag` | `path` | write the diagnostics report `-diag` writes |
+| `shot` | `path` | write the frame `-frame` writes, through the same encoder |
+| `route` | `path` | replay a route script from where the run is now |
+| `quit` | — | answer, then end the session |
+
+Every answer carries `ok`, `total_ticks` (what the serve session has spent
+altogether) and, where a command spent any, `ticks`. `step`, `key`, `touch`,
+`park` and `route` also carry `digest`, the cheap frame identity a route waits
+on, which is all a caller needs to ask "did anything change". `progressed` and
+`stalled` say whether the last tick ran guest work and whether anything is left
+that would. A guest that ends is reported as `"ended":true` with an
+`end_reason`; the session stays open afterwards, because a screen, a shot and a
+diagnostics report are exactly what is wanted about a run that just ended.
+
+**`key` holds its press for the ticks it was given**, and those ticks are the
+caller's, the way a route's are. Without `hold` the run's own `-hold` applies.
+The names are the table above — the one `-key` and a route script read, so
+`fire` cannot mean two things. `press` and `release` are the two halves on their
+own, for a hold that has to span other commands.
+
+A capability a platform does not have is refused by name rather than ignored:
+the earlier KTF package answers `this platform writes no diagnostics` and
+`this platform has no park to run`, and `runlgt` answers `this platform has no
+pointer`.
+
+#### The screen report
+
+```json
+{"width":240,"height":320,
+ "rgba_sha256":"782768ca6e428e1b478b4210e7454e4399f602756caa9401d2cf5bb08d484dae",
+ "non_black_pixels":73746,"visible_pixels":76800,"flushes":399,
+ "digest":"801bbe1714a3dcc1"}
+```
+
+**`rgba_sha256` is the identity a regression assertion is written against.** A
+PNG of a frame is not one: the encoder picks filters and a compression level,
+so two runs that drew the same picture can write different files, and an
+assertion on the file is an assertion about the encoder as well as about the
+game. This hashes the pixels instead — the geometry first as two little-endian
+64-bit words, then the normalized RGBA bytes row by row. A fully transparent
+pixel contributes four zero bytes whatever colour was left under it, because
+what is under a transparent pixel is not part of the picture. Two runs of the
+same commands against the same archive answer the same hash.
+
+`non_black_pixels` is the same first-frame signal the probes read — a title
+that reached its title screen and one that painted nothing are otherwise the
+same JSON — and `visible_pixels` is how much of the screen is not transparent.
+
+**`-serve` does not imply `-play`**, for the reason `-route` does not: a caller
+that steps and then looks wants its ticks as fast as the guest can be driven,
+and gets them from the manual clock. Add `-play` when the point is to watch it,
+or when the title is one that busy-waits on the clock.
+
+`-cheat`, `-route`, `-key`, `-touch`, `-park`, `-framedir` and `-ticks` are
+refused alongside `-serve`. Each of them instructs the loop `-serve` replaces,
+and the cheat console and a serve session both want stdin and stdout. The
+summary a run normally prints at the end is not printed either: on a serve
+session stdout is the protocol, one line per answer.
+
 ### Reading a diagnostics report
 
 `-diag` writes JSON. `counts` says how many times the game crossed each runtime
@@ -339,6 +443,85 @@ into memory it had given back. The two coverage counts are there so that a
 report without the third one can be told apart from a build that was not
 watching — a release build is not, and carries none of the three.
 
+### Byte patches and cheat tables
+
+`-cheat` attaches a console whose `help` lists its commands. Two of them are
+about going through a gate rather than watching one, and are worth reading
+here; they work on every platform `-cheat` does.
+
+```
+patch <name> <addr> <expect> <replace>   replace guest bytes
+unpatch <name>|all                       put back what a patch replaced
+unpatch -forget <name>                   drop the record without writing
+patches                                  what is applied now
+```
+
+Everything else the console offers observes. A scan says where a value is, a
+watch says what writes it, a trace says what the guest asked the platform for
+— and none of them answers the question a title stopped at a check actually
+raises, which is what it would do if the check had passed. The only way to see
+behind a gate is to go through it.
+
+**A patch declares the bytes it replaces, and is refused when they are not
+there.** An address is only an address under the layout it was found in, and
+layouts move between builds and between titles. The refusal says what it found
+instead, which is often the fastest way to learn the bytes in the first place:
+
+```
+> patch gate 0x00150000 deadbeef 00000000
+cheat: patch "gate" span 1 at 0x00150000 expects deadbeef but memory holds 90011500
+```
+
+**An entry applies as a unit.** Skipping a check is rarely one word — it is a
+branch and the constant it compares against — so every span of an entry is
+verified before any is written, and a write that fails part of the way through
+puts back what it had already replaced. Multi-span entries come from a table
+file rather than from the one-span `patch` command.
+
+Guest code is writable, so a patch reaches it. What it is not is somewhere a
+value search walks: an arena of platform veneers decodes as thousands of
+plausible candidates at any width. `regions` marks those `(code, not scanned)`.
+The client image is one span of instructions and data with no boundary recorded
+between them, so it is swept whole and stays so.
+
+`save <file>` writes the frozen values, the watches and the patches as JSON,
+and `load <file>` applies them — patches first, because a patch is usually what
+makes the rest reachable, and a refused one stops the load before any value is
+written.
+
+```json
+{
+  "image": "1b114584dce8216dd2fae93722feb49f88eb7b8989920caf91903cdef78c8929",
+  "game": "the title's main class",
+  "entries": [ … ],
+  "patches": [
+    {"name": "gate", "note": "why", "patches": [
+      {"address": "0x00150000", "expect": "90011500", "replace": "00000000"}
+    ]}
+  ]
+}
+```
+
+**The key is a hash, not a name.** The same title arrives as several archives —
+repacked, renamed, one container swapped for another around the same executable
+— and a patch is true of the image rather than of what the file was called.
+`image` is the SHA-256 of the loaded executable image; `file` is the SHA-256 of
+the archive it was read from, and is the fallback for a platform with no single
+image to hash. Loading checks the image first and then the file, and says so
+when neither matches:
+
+```
+> load table.json
+cheat: table patch 1: patch "gate" span 1 at 0x00150000 expects 90011500 but memory holds 311c1635
+(this table was made against a different image; its addresses may mean nothing here)
+```
+
+`game` is a label beside the key rather than the key. A table written before
+the hashes existed carries only that, and still loads — the addresses in it
+were expensive to find, and it just cannot say what it was made for. Addresses
+in `entries` stay plain numbers, as they always were; a patch address is hex
+because it is read off a disassembly, and a plain number is accepted there too.
+
 ## runskt
 
 ```
@@ -361,6 +544,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-audio out` | record what the run played as `out.mid` and `out.wav`, the same recorder `runktf` and `runlgt` take |
 | `-screen WxH` | the handset screen, 240x320 by default |
 | `-cheat` | attach the text cheat console. Without `-ticks` the run continues until it is interrupted |
+| `-serve` | drive the run a command at a time over stdin and stdout, as `runktf -serve` does |
 | `-trace` | one log line per bytecode instruction. Off unless asked for, in both build profiles — see below |
 
 The summary a run prints carries `ticks` and `lit` — the count of non-black
@@ -454,6 +638,7 @@ wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
 | `-route script` | replay a scripted way back to a scene, the same script format `runktf` takes |
 | `-cheat` | attach the text cheat console, paced to about real time |
+| `-serve` | drive the run a command at a time over stdin and stdout, as `runktf -serve` does. This platform has no pointer, so `touch` is refused |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
 | `-trace N` | keep the last N platform calls and dump them at the end, or on a failure |
 | `-trace-live filter` | stream platform calls to stderr as they happen, keeping the lines that contain `filter`. `""` keeps every call |

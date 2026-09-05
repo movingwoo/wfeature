@@ -1,6 +1,8 @@
 package ktf
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -30,30 +32,43 @@ func (target cheatTarget) Regions() []cheat.Region {
 	committed := target.client.core.Memory().CommittedRegions(armcore.PermissionWrite)
 	regions := make([]cheat.Region, 0, len(committed))
 	for _, region := range committed {
+		label, code := target.label(region.Base)
 		regions = append(regions, cheat.Region{
 			Base:  region.Base,
 			Size:  uint32(min(region.Size, 0xffffffff)),
-			Label: target.label(region.Base),
+			Label: label,
+			Code:  code,
 		})
 	}
 	return regions
 }
 
-func (target cheatTarget) label(base uint32) string {
+// label names a region and says whether it holds instructions rather than
+// state. The two answers come together because the same range decides both.
+//
+// Only the stub arena can be told apart here. The client image is one span of
+// code, read-only data and initialized data with no boundary recorded between
+// them — the archive carries a length and a BSS size and nothing else — so a
+// scan sweeps it whole and a search that lands in its code is narrowed the way
+// any other coincidence is. Splitting it would need section information the
+// image does not carry.
+func (target cheatTarget) label(base uint32) (string, bool) {
 	image := target.client.image
 	switch {
 	case base >= ImageBase && uint64(base) < uint64(ImageBase)+uint64(len(image.Data))+uint64(image.BSSSize):
-		return "client"
+		return "client", false
 	case base >= ThreadStackBase && base < platformDataBase:
-		return "stack"
+		return "stack", false
 	case base >= platformCodeBase && uint64(base) < uint64(platformCodeBase)+platformCodeSize:
 		// The 64 MiB data arena overlaps the read/execute stub arena, so the
-		// stub pages scan as writable; label them so hits there read as code.
-		return "stubs"
+		// stub pages scan as writable. They are the platform's own veneers:
+		// nothing a game's state is ever in, and a whole arena of instructions
+		// for a sweep to walk.
+		return "stubs", true
 	case base >= platformDataBase && uint64(base) < uint64(platformDataBase)+platformDataSize:
-		return "platform"
+		return "platform", false
 	default:
-		return "data"
+		return "data", false
 	}
 }
 
@@ -92,6 +107,26 @@ func writeOrigin(origin armcore.WriteOrigin) cheat.WriteOrigin {
 	return cheat.OriginGuest
 }
 
+// ImageHash is the SHA-256 of the client image this session loaded, in
+// lower-case hex. It identifies what is running across the archives a title
+// arrives in: repackaging changes the file and leaves the image alone.
+func (session *Session) ImageHash() string {
+	if session == nil || session.Client == nil {
+		return ""
+	}
+	return imageHash(session.Client.image.Data)
+}
+
+// imageHash is the shared spelling of that identity, so the two generations of
+// package answer the same kind of value.
+func imageHash(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func (session *Session) Cheat() *cheat.Session {
 	if session == nil || session.Client == nil {
 		return nil
@@ -110,10 +145,14 @@ func (session *Session) CheatConsole() *cheat.Console {
 	if session.cheatConsole == nil {
 		session.cheatConsole = cheat.NewConsole(session.Cheat())
 		// A saved table names the game it was made against, which is the only
-		// thing that lets one be placed months later.
+		// thing that lets one be placed months later. The name is the label;
+		// the key beside it is the hash of the image actually loaded, because
+		// an address — and a byte patch above all — is true of the image and
+		// not of what the archive around it was called.
 		if session.Archive != nil {
 			session.cheatConsole.SetGame(session.Archive.Descriptor.MainClass)
 		}
+		session.cheatConsole.SetTableKey(cheat.TableKey{Image: session.ImageHash()})
 	}
 	return session.cheatConsole
 }

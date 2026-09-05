@@ -15,6 +15,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/route"
+	"github.com/movingwoo/wfeature/internal/serve"
 )
 
 // The carrier shipped two generations of download package, and `runktf` takes
@@ -25,7 +26,10 @@ import (
 // and the options that only mean something to the other are refused by name
 // rather than ignored. See docs/ktf.md, "An earlier KTF package".
 type nativeRun struct {
-	ticks int
+	// archivePath is what the package was read from, which is the second half
+	// of a cheat table's key beside the hash of the module itself.
+	archivePath string
+	ticks       int
 	// ticksChosen says the count came from -ticks rather than from the probe
 	// default, which is what decides whether a cheat session may run past it.
 	ticksChosen  bool
@@ -37,6 +41,7 @@ type nativeRun struct {
 	keyHold      int
 	audioPrefix  string
 	cheatConsole bool
+	serveSession bool
 	script       *route.Route
 	screenWidth  int
 	screenHeight int
@@ -103,6 +108,7 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 		if !run.ticksChosen {
 			run.ticks = 1 << 30
 		}
+		keyCheatTable(session.CheatConsole(), run.archivePath)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	ran := 0
@@ -110,6 +116,54 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 	keyReleases := map[int][]int32{}
 	var tickError error
 	var routeResult route.Result
+	if run.serveSession {
+		// The earlier package has no pointer, no lifecycle to park and no
+		// diagnostics, which is the same list `runktf` already refuses for it
+		// by name. Those three commands answer that they do not apply here.
+		driver := &serve.Driver{
+			Advance: func(ctx context.Context) (bool, error) {
+				progressed, err := session.Tick(ctx)
+				if err != nil {
+					return progressed, err
+				}
+				ran++
+				nativePace(ctx, session, probeClock)
+				return progressed, nil
+			},
+			Frame: func() ([]byte, int, int) {
+				frame, width, height, _ := session.Frame()
+				return frame, width, height
+			},
+			Digest:    session.FrameDigest,
+			Flushes:   func() uint64 { return uint64(session.Flushes()) },
+			LookupKey: ktf.KeyCodeByName,
+			SendKey: func(ctx context.Context, pressed bool, key int32) error {
+				eventType := ktf.KeyPressed
+				if !pressed {
+					eventType = ktf.KeyReleased
+				}
+				return session.SendKey(ctx, eventType, key)
+			},
+			Stalled: func() bool {
+				_, pending := session.NextDeadline()
+				return !pending
+			},
+			Shot: func(path string) error {
+				frame, width, height, _ := session.Frame()
+				return shootFrame(path, frame, width, height)
+			},
+			RunRoute: func(ctx context.Context, script *route.Route) (route.Result, error) {
+				return runNativeRoute(ctx, session, script, nativeRouteRun{
+					frameDir: run.frameDir, hold: run.keyHold, probeClock: probeClock, stderr: stderr,
+				})
+			},
+			DefaultHold: run.keyHold,
+		}
+		if err := serve.Serve(ctx, driver, os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+	}
 	if run.script != nil {
 		// A route runs until it arrives, so it does not inherit the tick count
 		// that bounds an unscripted probe; an explicit -ticks still caps it.
@@ -129,7 +183,7 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 			fmt.Fprintf(stderr, "route: %v\n", tickError)
 		}
 	}
-	for ; run.script == nil && ran < run.ticks; ran++ {
+	for ; !run.serveSession && run.script == nil && ran < run.ticks; ran++ {
 		if ctx.Err() != nil {
 			break
 		}
@@ -244,11 +298,16 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 	if tickError != nil && !errors.Is(tickError, context.Canceled) {
 		summary["tick_error"] = tickError.Error()
 	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(summary); err != nil {
-		fmt.Fprintf(stderr, "write result: %v\n", err)
-		return 1
+	// A serve session owns stdout: one line on it is one answer to one
+	// command, and a summary after the last of them is a line nothing asked
+	// for.
+	if !run.serveSession {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(summary); err != nil {
+			fmt.Fprintf(stderr, "write result: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
