@@ -263,6 +263,10 @@ type initializationRuntime struct {
 	// and checkedBlocks also stay zero.
 	arenaShadow  *arenaShadow
 	shadowWindow []byte
+	// collecting guards the collector against being entered from inside itself.
+	// It releases guest memory, and a release is not an allocation, so this only
+	// ever fires if a future edit makes one. See collect.go.
+	collecting bool
 	// inputModeTableAddress is the `M_Char **` the input-method table answers
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
@@ -2444,6 +2448,14 @@ func (runtime *initializationRuntime) allocate(size uint64) (uint32, error) {
 		return 0, fmt.Errorf("KTF platform allocation %d exceeds %d bytes", size, maxPlatformAllocation)
 	}
 	address, ok := runtime.arena.allocate(size)
+	if !ok {
+		// The arena being full is the collector's second trigger: what would
+		// have made room may already be unreachable and merely waiting for the
+		// growth trigger to come round. See collectForAllocation.
+		if runtime.collectForAllocation() {
+			address, ok = runtime.arena.allocate(size)
+		}
+	}
 	if !ok {
 		return 0, fmt.Errorf("KTF platform initialization data space exhausted")
 	}

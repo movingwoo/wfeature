@@ -2353,6 +2353,86 @@ Tests execute newly authored A32 and Thumb programs, including base-in-list
 load/store multiple transfers and the exact shape of the original KTF SVC
 stub.
 
+## The backend seam, and the corpus that guards it
+
+`Engine` used to be the implementation rather than an implementation of
+anything: `Core` held one by its concrete type and called it. That left nowhere
+to put a second execution strategy and — the part that matters more — nowhere to
+stand a second one next to the first and ask whether the two agree.
+
+`Backend` is that seam. It is one method wider than the call `Core` was already
+making:
+
+```go
+type Backend interface {
+	Run(context *Context, memory *Memory, end uint32, count uint32) (RunResult, error)
+	Name() string
+}
+```
+
+`CoreOptions.Backend` and `CoreOptions.BackendName` are the only injection
+point, and `RegisterBackend` is a process-wide registry so a strategy that only
+builds on some targets can register itself from a build-tagged file without
+anything importing it elsewhere. A name nothing registered resolves to the
+interpreter rather than failing, because a build that does not carry the
+strategy a configuration asks for still has to run the game; `Core.BackendName`
+is what says which one it actually got. Nothing outside the package asserts a
+`Backend`'s concrete type, and a runtime that did would be a runtime the second
+strategy could not run.
+
+The interface call is once per quantum — a thousand instructions on KTF, sixteen
+thousand on LGT — so it does not appear in any of the benchmarks above.
+
+Three rules come with the seam. The interpreter is the oracle and stays. A
+backend is a black box only between synchronisation points: where it returns —
+a supervisor call, a spent budget, a fault, the end address — all seventeen
+guest-visible words, every byte of mapped memory and the whole of `RunResult`
+have to be exactly what the interpreter would have left. `RunResult.Steps` is
+part of that rather than a diagnostic, because it is the unit a Host paces
+frames on and detects a runaway guest with: a strategy that retires an
+instruction without counting it moves the guest's own clock. "The charge a
+quantum could not hold" above is the same lesson arriving from the other side.
+
+### What the corpus asks
+
+`internal/armcore/conformance` is the corpus and its harness. Each case sets up
+registers, condition flags, an instruction image and a scratch window, runs one
+backend, and compares the whole result: sixteen registers and CPSR, the scratch
+bytes, and the stop reason, retired count and supervisor-call immediate.
+
+**The expectations are the architecture's, not a recording.** Every case names
+the rule it exists for and its `Want` is worked out from that rule and written
+down. A corpus that records the answer it was given can only catch a change; one
+written from the manual can also catch the current answer being wrong. Twenty-one
+cases cover the edges an execution strategy gets wrong:
+
+| edge | what the case pins |
+|---|---|
+| flag survival | a carry from `ADDS` is still there for a later `ADC`, across an instruction that writes no flag |
+| ADC chain | the two halves of a 64-bit add |
+| shifter carry, immediate | `LSR #0` and `ASR #0` mean 32; `ROR #0` is RRX and rotates through the carry |
+| shifter carry, register | a shift of exactly 32, one past 32, and one of zero, which must not touch the carry at all |
+| multiply | `MULS` writes N and Z and leaves the caller's C and V alone |
+| condition codes | all fourteen against one compare's flags, in one case, with the failing ones still retiring |
+| LDM/STM base in list | the base written back before the transfers: a store of the lowest register still sends the original base, and a load of the base keeps what memory gave it |
+| R15 read as data | instruction + 8 in ARM, instruction + 12 out of `STM`, and word-aligned instruction + 4 for the Thumb PC-relative forms |
+| ARM/Thumb | `BX` in both directions on bit 0 of the target |
+| transfers | the six load and store widths, sign extension, and pre- and post-indexed writeback |
+| run results | a supervisor call's immediate, address and resume point, and a spent budget stopping on exactly the instruction it ran out at |
+
+With one backend registered the corpus is a regression net against the
+architecture. The test also compares every registered backend against every
+other one, so the day a second arrives it is a differential test with no further
+work — including for the case where both are wrong the same way, which is asked
+separately from the case where one is wrong.
+
+The corpus deliberately holds no loops. A backward Thumb branch is where the
+loop recognisers (`fill_loop.go` and the shapes after it) stand in for a whole
+loop and charge for every instruction it would have retired, and a case whose
+expected retired count came out of a stand-in would be pinning the stand-in
+rather than the architecture. What the stand-ins retire is pinned by
+`step_charge_test.go` instead.
+
 ## Deliberately incomplete
 
 - architectural exception modes, banked registers, interrupts, and exception
