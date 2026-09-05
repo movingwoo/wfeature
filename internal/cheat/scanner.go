@@ -22,6 +22,13 @@ type Region struct {
 	Base  uint32
 	Size  uint32
 	Label string
+	// Code marks a region a scan must not sweep. It stays readable and
+	// writable — a byte patch has to reach it, and that is the point of
+	// having one — but a search for an unknown value has no business walking
+	// executable bytes: every instruction that happens to decode as the width
+	// being searched becomes a candidate, and the addresses that survive are
+	// noise the search then has to be narrowed against.
+	Code bool
 }
 
 // MemoryTarget is memory that a cheat session can inspect and modify.
@@ -229,6 +236,9 @@ func (scanner *Scanner) sweep(target MemoryTarget, filter ScanFilter) []Candidat
 	align := uint32(scanner.align)
 	var result []Candidate
 	for _, region := range target.Regions() {
+		if region.Code {
+			continue
+		}
 		regionSize := int(region.Size)
 		if regionSize < size {
 			continue

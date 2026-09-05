@@ -6,6 +6,8 @@ type Session struct {
 	target  MemoryTarget
 	scanner *Scanner
 	freezes FreezeList
+	patches []AppliedPatch
+	key     TableKey
 }
 
 // NewSession attaches a session to target with the default u32 scanner.
@@ -15,6 +17,23 @@ func NewSession(target MemoryTarget) *Session {
 		scanner: NewScanner(ValueType{Kind: KindU32, Endian: Little}),
 	}
 }
+
+// SetTableKey names what this session is running, so a table saved from it
+// can be matched against the next run rather than only read. Non-empty fields
+// replace what is held and empty ones leave it alone, because the two halves
+// of the key are known in different places: a platform knows the image it
+// loaded, and the Host knows the file it read.
+func (session *Session) SetTableKey(key TableKey) {
+	if key.Image != "" {
+		session.key.Image = key.Image
+	}
+	if key.File != "" {
+		session.key.File = key.File
+	}
+}
+
+// TableKey reports what this session is running.
+func (session *Session) TableKey() TableKey { return session.key }
 
 // Scanner exposes the progressive search state.
 func (session *Session) Scanner() *Scanner { return session.scanner }
