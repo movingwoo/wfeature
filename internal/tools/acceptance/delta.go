@@ -17,11 +17,11 @@ import (
 
 // A change is one archive read twice.
 type change struct {
-	kind     changeKind
-	platform string
-	archive  string
-	before   archiveRecord
-	after    archiveRecord
+	kind    changeKind
+	corpus  string
+	archive string
+	before  archiveRecord
+	after   archiveRecord
 }
 
 type changeKind int
@@ -45,54 +45,59 @@ const (
 	unrunEither
 )
 
-// compare lines two runs up by platform and file name.
+// compare lines two runs up by corpus and file name.
+//
+// The corpus rather than the platform: a run may sweep several group
+// directories with one platform's ladder, and two groups can hold a file of
+// the same name. Lining those up by platform alone would report one file's
+// grade as the other's regression.
 func compare(previous, current []archiveRecord) []change {
-	type key struct{ platform, archive string }
+	type key struct{ corpus, archive string }
 	before := map[key]archiveRecord{}
 	for _, record := range previous {
-		before[key{record.Platform, record.Archive}] = record
+		before[key{record.Corpus, record.Archive}] = record
 	}
 	seen := map[key]bool{}
 	var changes []change
 	for _, record := range current {
-		at := key{record.Platform, record.Archive}
+		at := key{record.Corpus, record.Archive}
 		seen[at] = true
 		was, existed := before[at]
 		if !existed {
-			changes = append(changes, change{kind: added, platform: at.platform, archive: at.archive, after: record})
+			changes = append(changes, change{kind: added, corpus: at.corpus, archive: at.archive, after: record})
 			continue
 		}
 		switch {
 		case was.Grade == gradeUnrun || record.Grade == gradeUnrun:
-			changes = append(changes, change{kind: unrunEither, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: unrunEither, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		case was.SHA256 != "" && record.SHA256 != "" && was.SHA256 != record.SHA256:
-			changes = append(changes, change{kind: replaced, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: replaced, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		case record.Rung > was.Rung:
-			changes = append(changes, change{kind: better, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: better, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		case record.Rung < was.Rung:
-			changes = append(changes, change{kind: worse, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: worse, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		// Two files can sit on no rung at all for different reasons: one was
 		// refused at the rung it was asked, the other was knowingly declined
 		// by every rung. Moving between those two is a real change with no
 		// change of rung behind it, so a comparison that only looks at the
 		// number would report nothing.
 		case was.Grade == gradeNone && record.Grade == gradeSkipped:
-			changes = append(changes, change{kind: better, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: better, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		case was.Grade == gradeSkipped && record.Grade == gradeNone:
-			changes = append(changes, change{kind: worse, platform: at.platform, archive: at.archive, before: was, after: record})
+			changes = append(changes, change{kind: worse, corpus: at.corpus, archive: at.archive, before: was, after: record})
 		}
 	}
 	for at, record := range before {
 		if !seen[at] {
-			changes = append(changes, change{kind: removed, platform: at.platform, archive: at.archive, before: record})
+			changes = append(changes, change{kind: removed, corpus: at.corpus, archive: at.archive, before: record})
 		}
 	}
 	sort.Slice(changes, func(one, two int) bool {
 		if changes[one].kind != changes[two].kind {
 			return changes[one].kind < changes[two].kind
 		}
-		if changes[one].platform != changes[two].platform {
-			return changes[one].platform < changes[two].platform
+		if changes[one].corpus != changes[two].corpus {
+			return changes[one].corpus < changes[two].corpus
 		}
 		return changes[one].archive < changes[two].archive
 	})
@@ -142,11 +147,11 @@ func writeDelta(report *strings.Builder, previousRun runRecord, from string, cha
 func describeChange(entry change) string {
 	switch entry.kind {
 	case added:
-		return fmt.Sprintf("- `%s` (%s) — %s\n", entry.archive, entry.platform, gradeAndReason(entry.after))
+		return fmt.Sprintf("- `%s` (%s) — %s\n", entry.archive, entry.corpus, gradeAndReason(entry.after))
 	case removed:
-		return fmt.Sprintf("- `%s` (%s) — was %s\n", entry.archive, entry.platform, gradeAndReason(entry.before))
+		return fmt.Sprintf("- `%s` (%s) — was %s\n", entry.archive, entry.corpus, gradeAndReason(entry.before))
 	default:
-		return fmt.Sprintf("- `%s` (%s) — %s → %s\n", entry.archive, entry.platform,
+		return fmt.Sprintf("- `%s` (%s) — %s → %s\n", entry.archive, entry.corpus,
 			entry.before.Grade, gradeAndReason(entry.after))
 	}
 }
@@ -212,7 +217,11 @@ func writeClusters(report *strings.Builder, archives []archiveRecord) {
 	for _, entry := range grouped {
 		rungs := map[string]bool{}
 		for _, record := range entry.archives {
-			rungs[record.Platform+" "+record.Stopped] = true
+			where := record.Platform
+			if where == "" {
+				where = record.Corpus
+			}
+			rungs[where+" "+record.Stopped] = true
 		}
 		where := make([]string, 0, len(rungs))
 		for rung := range rungs {

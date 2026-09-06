@@ -26,8 +26,12 @@
 //	go run ./internal/tools/acceptance [-out var/acceptance] [-platform ktf,lgt,skt]
 //	go run ./internal/tools/acceptance -cache=false        # measure everything again
 //	go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
+//	go run ./internal/tools/acceptance -games dir[,dir] [-exclude name[,name]]
 //
-// `make acceptance` is the first of those.
+// `make acceptance` is the first of those. The last points the same ladders at
+// a tree this repository does not keep, with the platform of every file
+// decided by its bytes rather than by the folder it is filed in; see sweep.go
+// for what that costs and why the exclusions are the caller's to name.
 package main
 
 import (
@@ -43,6 +47,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/platform/detect"
 )
 
 // A stage is one probe: a test, the variable that lets it run, and how far
@@ -119,27 +125,36 @@ var corpus = map[string]string{
 	"skt": filepath.Join("var", "games", "skt"),
 }
 
-func main() {
+func main() { os.Exit(command()) }
+
+// command is main with a return value, so that every failure leaves through
+// one door. The tool builds a temporary directory it has to remove, and
+// `os.Exit` runs no deferred call: an exit in the middle of a sweep would
+// leave a shadow root behind in the temporary directory every time a stage
+// could not run.
+func command() int {
 	out := flag.String("out", filepath.Join("var", "acceptance"), "the directory the report is written to")
 	only := flag.String("platform", "ktf,lgt,skt", "which platforms to run, comma separated")
 	timeout := flag.String("timeout", "60m", "the `go test` timeout for one stage")
 	since := flag.String("since", "auto", "the record `file` this run is compared with: a path, `auto` for the newest already in the output directory, or empty for none")
 	compareOnly := flag.Bool("compare", false, "compare two record files and write the difference to standard output, running no probes")
 	cache := flag.Bool("cache", true, "carry an archive's answer forward from the run -since names, when the file's bytes and this build are both unchanged")
+	games := flag.String("games", "", "sweep these `directories` instead of the three platform folders, recursively, with each file's platform decided by its bytes")
+	exclude := flag.String("exclude", "", "directory `names` -games must not descend into, by base name or by path")
 	flag.Parse()
 
 	if *compareOnly {
 		if err := compareFiles(flag.Args()); err != nil {
 			fmt.Fprintln(os.Stderr, "acceptance:", err)
-			os.Exit(2)
+			return 2
 		}
-		return
+		return 0
 	}
 
 	root, err := repositoryRoot()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
-		os.Exit(2)
+		return 2
 	}
 	wanted := map[string]bool{}
 	for _, platform := range strings.Split(*only, ",") {
@@ -159,7 +174,7 @@ func main() {
 	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
-		os.Exit(2)
+		return 2
 	}
 	file := filepath.Join(directory, started.Format("2006-01-02")+".md")
 	records := filepath.Join(directory, started.Format("2006-01-02")+recordExtension)
@@ -172,11 +187,29 @@ func main() {
 	// The corpus is read once: the same bytes answer what is in front of the
 	// run, what the loaders make of each file, and whether an earlier answer
 	// still applies.
-	survey := surveyCorpus(root, platforms)
+	var corpora []corpusDir
+	var survey map[string][]corpusEntry
+	if *games == "" {
+		corpora = defaultCorpora(platforms)
+		survey = surveyCorpus(root, corpora)
+	} else {
+		corpora, survey, err = sweepTrees(root, split(*games), split(*exclude))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acceptance:", err)
+			return 2
+		}
+		// -platform still selects, because a sweep of a mixed tree is often
+		// worth running one ladder at a time. A corpus of files nothing
+		// claimed is kept whatever is selected: it is the half of the answer
+		// that no platform was ever going to give.
+		corpora = onlyPlatforms(corpora, wanted)
+	}
 	planned := map[string][]stage{}
-	for _, current := range stages {
-		if wanted[current.platform] {
-			planned[current.platform] = append(planned[current.platform], current)
+	for _, at := range corpora {
+		for _, current := range stages {
+			if current.platform == at.platform && wanted[current.platform] {
+				planned[at.name] = append(planned[at.name], current)
+			}
 		}
 	}
 	header := runHeader(root, started)
@@ -187,30 +220,59 @@ func main() {
 	// does not. It is read before this run overwrites it.
 	plan := planCache(*cache, sourceOf(records, previousFile, previousRun, previous), survey, planned, header)
 
-	var results []result
-	for _, current := range stages {
-		if !wanted[current.platform] {
+	// A swept corpus is not where a probe looks, so the probes are compiled
+	// against a module root whose `var` this tool owns. Nothing under the
+	// checkout is written; see sweep.go.
+	var shadow *shadowRoot
+	for _, at := range corpora {
+		if !at.staged {
 			continue
 		}
-		selection := plan.selection(current.platform, survey[current.platform])
-		fmt.Fprintf(os.Stderr, "%s %s: ", current.platform, current.name)
-		outcome := run(root, current, *timeout, selection)
-		outcome.cached = plan.carriedCount(current.platform, survey[current.platform])
-		results = append(results, outcome)
-		fmt.Fprintf(os.Stderr, "%d passed, %d skipped, %d failed, %d carried forward (%s)\n",
-			len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.cached,
-			outcome.elapsed.Round(time.Second))
+		shadow, err = newShadowRoot(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acceptance:", err)
+			return 2
+		}
+		defer shadow.close()
+		break
 	}
 
-	runOf, archives := buildRecords(header, results, platforms, survey, plan)
-	report := write(root, results, started, plan) + analysis(archives, previousFile, previousRun, previous)
+	var results []result
+	for _, at := range corpora {
+		want := planned[at.name]
+		if len(want) == 0 {
+			continue
+		}
+		entries := survey[at.name]
+		if at.staged {
+			if err := shadow.stage(at.platform, entries); err != nil {
+				fmt.Fprintln(os.Stderr, "acceptance:", err)
+				return 2
+			}
+		}
+		for _, current := range want {
+			selection := plan.selection(at.name, entries)
+			fmt.Fprintf(os.Stderr, "%s %s: ", at.name, current.name)
+			outcome := run(shadow.dirOf(root, at), current, *timeout, selection)
+			outcome.corpus = at
+			outcome.cached = plan.carriedCount(at.name, entries)
+			results = append(results, outcome)
+			fmt.Fprintf(os.Stderr, "%d passed, %d skipped, %d failed, %d carried forward (%s)\n",
+				len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.cached,
+				outcome.elapsed.Round(time.Second))
+		}
+	}
+
+	runOf, archives := buildRecords(header, results, corpora, survey, plan)
+	report := write(root, corpora, survey, results, started, plan) +
+		writeUnclaimed(archives) + analysis(archives, previousFile, previousRun, previous)
 	if err := os.WriteFile(file, []byte(report), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
-		os.Exit(2)
+		return 2
 	}
 	if err := writeRecords(records, runOf, archives); err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
-		os.Exit(2)
+		return 2
 	}
 	fmt.Println(file)
 	fmt.Println(records)
@@ -220,9 +282,10 @@ func main() {
 	// eleven failures is a successful run of this command.
 	for _, outcome := range results {
 		if outcome.err != "" {
-			os.Exit(1)
+			return 1
 		}
 	}
+	return 0
 }
 
 // cacheSource is the run whose answers may be carried forward.
@@ -299,6 +362,10 @@ func compareFiles(paths []string) error {
 // result is one stage's run: which archives passed, which were skipped and
 // why, and which failed with what.
 type result struct {
+	// corpus is the directory this stage was run over. One platform's ladder
+	// may be run several times in a sweep, once per group directory, so a
+	// stage alone no longer names a run.
+	corpus  corpusDir
 	stage   stage
 	passed  []string
 	skipped []note
@@ -332,7 +399,7 @@ type note struct {
 // started. The selection reaches the probe as `go test`'s own subtest filter,
 // because a subtest here is an archive and `go test` already knows how to pick
 // them — a flag on the probe would be a second way of saying the same thing.
-func run(root string, current stage, timeout string, selection []string) result {
+func run(directory string, current stage, timeout string, selection []string) result {
 	outcome := result{stage: current}
 	if selection != nil && len(selection) == 0 {
 		outcome.notRun = true
@@ -342,7 +409,7 @@ func run(root string, current stage, timeout string, selection []string) result 
 
 	command := exec.Command("go", "test", "-json", "-count=1",
 		"-timeout", timeout, "-run", runPattern(current.test, selection), current.pkg)
-	command.Dir = root
+	command.Dir = directory
 	command.Env = append(os.Environ(), current.env+"=1")
 	pipe, err := command.StdoutPipe()
 	if err != nil {
@@ -362,7 +429,8 @@ func run(root string, current stage, timeout string, selection []string) result 
 	// outcome here; a stage that produced no rows at all is the one worth
 	// reporting as broken, because that is a probe that never ran.
 	if err != nil && len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 {
-		outcome.err = fmt.Sprintf("%v (is %s set, and is there a corpus in %s?)", err, current.env, corpus[current.platform])
+		outcome.err = fmt.Sprintf("%v (is %s set, and is there a corpus under %s?)", err, current.env,
+			filepath.Join(directory, corpus[current.platform]))
 	}
 	return outcome
 }
@@ -474,7 +542,8 @@ func tidy(line string) string {
 	return line
 }
 
-func write(root string, results []result, started time.Time, plan cachePlan) string {
+func write(root string, corpora []corpusDir, survey map[string][]corpusEntry,
+	results []result, started time.Time, plan cachePlan) string {
 	report := &strings.Builder{}
 	fmt.Fprintf(report, "# Local acceptance, %s\n\n", started.Format("2006-01-02"))
 	fmt.Fprintf(report, "Written by `make acceptance` on %s/%s with %s.\n\n",
@@ -482,27 +551,35 @@ func write(root string, results []result, started time.Time, plan cachePlan) str
 	report.WriteString("Every row is one archive in the ignored local corpus. " +
 		"A skip is an archive this platform knowingly does not claim; a failure is one it does.\n\n")
 
-	fmt.Fprintf(report, "## What was in front of it\n\n| corpus | archives | other files |\n|---|---|---|\n")
-	for _, platform := range []string{"ktf", "lgt", "skt"} {
-		archives, others := countCorpus(filepath.Join(root, corpus[platform]))
-		fmt.Fprintf(report, "| `%s` | %d | %d |\n", corpus[platform], archives, others)
+	fmt.Fprintf(report, "## What was in front of it\n\n| corpus | directory | platform | archives | other files |\n|---|---|---|---|---|\n")
+	for _, at := range corpora {
+		// The corpus's own files rather than the directory's. One directory
+		// can be several corpora — a group holding two platforms' archives
+		// and the files nothing claimed — and re-counting the directory for
+		// each of them would report the same files three times.
+		archives, others := countEntries(survey[at.name])
+		platform := at.platform
+		if platform == "" {
+			platform = "—"
+		}
+		fmt.Fprintf(report, "| `%s` | `%s` | %s | %d | %d |\n", at.name, at.directory, platform, archives, others)
 	}
 	report.WriteString("\n")
 
 	report.WriteString("## What they answered\n\n")
 	report.WriteString(plan.describe(results))
-	report.WriteString("| platform | stage | ran | passed | skipped | failed | carried forward |\n|---|---|---|---|---|---|---|\n")
+	report.WriteString("| corpus | platform | stage | ran | passed | skipped | failed | carried forward |\n|---|---|---|---|---|---|---|---|\n")
 	for _, outcome := range results {
 		ran := len(outcome.passed) + len(outcome.skipped) + len(outcome.failed)
-		fmt.Fprintf(report, "| %s | %s | %d | %d | %d | %d | %d |\n",
-			strings.ToUpper(outcome.stage.platform), outcome.stage.name,
+		fmt.Fprintf(report, "| %s | %s | %s | %d | %d | %d | %d | %d |\n",
+			outcome.corpus.name, strings.ToUpper(outcome.stage.platform), outcome.stage.name,
 			ran, len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.cached)
 	}
 	report.WriteString("\n")
 
 	for _, outcome := range results {
-		fmt.Fprintf(report, "## %s — %s\n\n%s. `%s=1 go test -run %s %s`\n\n",
-			strings.ToUpper(outcome.stage.platform), outcome.stage.name,
+		fmt.Fprintf(report, "## %s — %s — %s\n\n%s. `%s=1 go test -run %s %s`\n\n",
+			outcome.corpus.name, strings.ToUpper(outcome.stage.platform), outcome.stage.name,
 			upperFirst(outcome.stage.what), outcome.stage.env, outcome.stage.test, outcome.stage.pkg)
 		if outcome.err != "" {
 			fmt.Fprintf(report, "**This stage did not run**: %s\n\n", outcome.err)
@@ -537,26 +614,22 @@ func writeNotes(report *strings.Builder, heading string, notes []note) {
 	report.WriteString("\n")
 }
 
-// countCorpus says how many archives a directory holds and how many other
-// files are sitting in it. The second number is the one worth looking at: a
-// file that is not an archive is a download that did not finish or a container
-// this project does not read, and neither shows up as a failure because no
-// probe ever picks it up.
-func countCorpus(directory string) (archives, others int) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return 0, 0
-	}
+// countEntries says how many of a corpus's files are archives by their name
+// and how many are not. The second number is the one worth looking at: a file
+// that is not an archive is a download that did not finish or a container this
+// project does not read, and neither shows up as a failure because no probe
+// ever picks it up.
+//
+// It counts what the survey found rather than listing the directory again,
+// because a directory can be several corpora — a group holding two platforms'
+// archives, and the files nothing claimed — and the survey is what already
+// divided them. Dot files are the operating system's and were never in it: a
+// Finder window leaves one in every directory it is opened in, and counting it
+// as something that did not run would be a finding about nothing.
+func countEntries(entries []corpusEntry) (archives, others int) {
 	for _, entry := range entries {
-		// A dot file is the operating system's, not the corpus's: a Finder
-		// window leaves .DS_Store in every directory it is opened in, and
-		// counting it as something that did not run would be a finding about
-		// nothing.
-		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if strings.EqualFold(filepath.Ext(entry.Name()), ".zip") ||
-			strings.EqualFold(filepath.Ext(entry.Name()), ".jad") {
+		if strings.EqualFold(filepath.Ext(entry.name), ".zip") ||
+			strings.EqualFold(filepath.Ext(entry.name), ".jad") {
 			archives++
 			continue
 		}
@@ -593,5 +666,111 @@ func repositoryRoot() (string, error) {
 			return "", fmt.Errorf("no go.mod above %s", filepath.Dir(source))
 		}
 		directory = parent
+	}
+}
+
+// split reads a comma-separated flag as the list it names, dropping empties so
+// a trailing comma is not a directory called "".
+func split(value string) []string {
+	var parts []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+// onlyPlatforms drops the corpora whose platform `-platform` did not name. The
+// unclaimed corpora are kept whatever was named: what nothing claimed is not
+// any platform's answer, and it is half of what a sweep of an unsorted tree is
+// for.
+func onlyPlatforms(corpora []corpusDir, wanted map[string]bool) []corpusDir {
+	kept := make([]corpusDir, 0, len(corpora))
+	for _, at := range corpora {
+		if at.platform == "" || wanted[at.platform] {
+			kept = append(kept, at)
+		}
+	}
+	return kept
+}
+
+// writeUnclaimed is the other half of a sweep: the files no platform claimed,
+// grouped by the reason nothing did.
+//
+// A count of files that did not run says nothing on its own, because only one
+// of the reasons behind it is work this project can do. A package that was
+// locked before it was distributed is not reachable by any amount of work on
+// the loaders; a container of another format is a file somebody has to unpack;
+// a zip of whole packages is a choice rather than a game. What is left — a
+// readable archive carrying no marker any platform recognises — is the number
+// worth acting on, and it is the one this table exists to separate out.
+func writeUnclaimed(archives []archiveRecord) string {
+	counted := map[string]int{}
+	total := 0
+	for _, record := range archives {
+		if record.Platform != "" {
+			continue
+		}
+		reason := record.DetectReason
+		if reason == "" {
+			reason = "no reason recorded"
+		}
+		counted[reason]++
+		total++
+	}
+	if total == 0 {
+		return ""
+	}
+	report := &strings.Builder{}
+	report.WriteString("## What nothing claimed\n\n")
+	fmt.Fprintf(report, "%d file(s) reached no ladder, because no platform claimed them. "+
+		"Only `no-marker` is this project's work to do; the rest are what the file is.\n\n", total)
+	report.WriteString("| files | reason | what it means |\n|---|---|---|\n")
+	reasons := make([]string, 0, len(counted))
+	for reason := range counted {
+		reasons = append(reasons, reason)
+	}
+	sort.Slice(reasons, func(one, two int) bool {
+		if counted[reasons[one]] != counted[reasons[two]] {
+			return counted[reasons[one]] > counted[reasons[two]]
+		}
+		return reasons[one] < reasons[two]
+	})
+	for _, reason := range reasons {
+		fmt.Fprintf(report, "| %d | `%s` | %s |\n", counted[reason], reason, meaningOf(reason))
+	}
+	report.WriteString("\n")
+	// The names behind the one count that is ours, so the next investigation
+	// starts from a list rather than from another sweep.
+	var ours []string
+	for _, record := range archives {
+		if record.Platform == "" && record.DetectReason == string(detect.ReasonNoMarker) {
+			ours = append(ours, "`"+record.Archive+"`")
+		}
+	}
+	if len(ours) > 0 {
+		sort.Strings(ours)
+		fmt.Fprintf(report, "- **`no-marker`** — %s\n\n", strings.Join(ours, ", "))
+	}
+	return report.String()
+}
+
+// meaningOf is the one-line gloss the report carries beside a detection
+// reason, so a table of counts can be read without the package beside it.
+func meaningOf(reason string) string {
+	switch detect.Reason(reason) {
+	case detect.ReasonNoMarker:
+		return "a readable archive carrying no marker any platform recognises — either not one of these packages, or one whose shape is not known here yet"
+	case detect.ReasonDRMWrapped:
+		return "locked before it was distributed; the key is not this project's to have"
+	case detect.ReasonKnownFormatUnsupported:
+		return "an archive of a format this does not read, so any package is one unpacking away"
+	case detect.ReasonArchiveOfArchives:
+		return "a bag of whole packages; the choice of which to run belongs to the person holding it"
+	case detect.ReasonNotAnArchive:
+		return "not an archive at all: a truncated download, a document, a program"
+	default:
+		return ""
 	}
 }

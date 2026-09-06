@@ -17,7 +17,7 @@ func TestAnArchiveIsCarriedForwardOnlyWhenItsBytesAndTheBuildAreUnchanged(t *tes
 	root := corpusRoot(t, map[string]map[string][]byte{
 		"lgt": {"steady.zip": steady, "moved.zip": moved, "new.zip": []byte("PK\x03\x04 never seen")},
 	})
-	survey := surveyCorpus(root, []string{"lgt"})
+	survey := surveyCorpus(root, defaultCorpora([]string{"lgt"}))
 	planned := map[string][]stage{"lgt": stagesOf("lgt")}
 	now := buildOf("a-commit", false)
 	before := buildOf("a-commit", false)
@@ -55,7 +55,7 @@ func TestAnArchiveIsCarriedForwardOnlyWhenItsBytesAndTheBuildAreUnchanged(t *tes
 func TestAnArchiveWithASpaceInItsNameIsCarriedForward(t *testing.T) {
 	data := []byte("PK\x03\x04 unchanged")
 	root := corpusRoot(t, map[string]map[string][]byte{"lgt": {"a title with spaces.zip": data}})
-	survey := surveyCorpus(root, []string{"lgt"})
+	survey := surveyCorpus(root, defaultCorpora([]string{"lgt"}))
 	planned := map[string][]stage{"lgt": stagesOf("lgt")}
 	then := buildOf("a-commit", false)
 	then.Run = "2026-09-01T00:00:00Z"
@@ -77,7 +77,7 @@ func TestAnArchiveWithASpaceInItsNameIsCarriedForward(t *testing.T) {
 func TestNothingIsCarriedForwardWhenTheBuildCannotBeIdentified(t *testing.T) {
 	data := []byte("PK\x03\x04 unchanged")
 	root := corpusRoot(t, map[string]map[string][]byte{"lgt": {"one.zip": data}})
-	survey := surveyCorpus(root, []string{"lgt"})
+	survey := surveyCorpus(root, defaultCorpora([]string{"lgt"}))
 	planned := map[string][]stage{"lgt": stagesOf("lgt")}
 	clean := buildOf("a-commit", false)
 	clean.Run = "2026-09-01T00:00:00Z"
@@ -114,7 +114,7 @@ func TestNothingIsCarriedForwardWhenTheBuildCannotBeIdentified(t *testing.T) {
 func TestARowIsNotCarriedWhenItDoesNotAnswerEveryStageThisRunAsks(t *testing.T) {
 	data := []byte("PK\x03\x04 unchanged")
 	root := corpusRoot(t, map[string]map[string][]byte{"lgt": {"one.zip": data}})
-	survey := surveyCorpus(root, []string{"lgt"})
+	survey := surveyCorpus(root, defaultCorpora([]string{"lgt"}))
 	planned := map[string][]stage{"lgt": stagesOf("lgt")}
 	then := buildOf("a-commit", false)
 	then.Run = "2026-09-01T00:00:00Z"
@@ -142,7 +142,7 @@ func TestARowIsNotCarriedWhenItDoesNotAnswerEveryStageThisRunAsks(t *testing.T) 
 func TestACarriedLineSaysItWasCarriedAndNamesTheRunThatMeasuredIt(t *testing.T) {
 	data := []byte("PK\x03\x04 unchanged")
 	root := corpusRoot(t, map[string]map[string][]byte{"lgt": {"one.zip": data}})
-	survey := surveyCorpus(root, []string{"lgt"})
+	survey := surveyCorpus(root, defaultCorpora([]string{"lgt"}))
 	planned := map[string][]stage{"lgt": stagesOf("lgt")}
 	then := buildOf("a-commit", false)
 	then.Run = "2026-09-01T00:00:00Z"
@@ -151,8 +151,10 @@ func TestACarriedLineSaysItWasCarriedAndNamesTheRunThatMeasuredIt(t *testing.T) 
 
 	plan := planCache(true, cacheSource{"2026-09-01.ndjson", then, rows}, survey, planned, now)
 	header := runHeader(root, time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC))
-	run, archives := buildRecords(header, []result{{stage: stageNamed(t, "lgt", "boot"), cached: 1, notRun: true}},
-		[]string{"lgt"}, survey, plan)
+	corpora := defaultCorpora([]string{"lgt"})
+	run, archives := buildRecords(header,
+		[]result{{corpus: corpora[0], stage: stageNamed(t, "lgt", "boot"), cached: 1, notRun: true}},
+		corpora, survey, plan)
 	if len(archives) != 1 {
 		t.Fatalf("%d records, want one", len(archives))
 	}
@@ -242,11 +244,13 @@ func digestOf(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// answered is a row from an earlier run that climbed the whole ladder.
+// answered is a row from an earlier run that climbed the whole ladder. Its
+// corpus is the platform's own directory, which is what the default sweep
+// files a row under.
 func answered(platform, archive, digest, run string) archiveRecord {
 	record := archiveRecord{
 		Schema: recordSchema, Kind: archiveKind, Run: run, MeasuredRun: run,
-		Platform: platform, Archive: archive, SHA256: digest,
+		Corpus: platform, Platform: platform, Archive: archive, SHA256: digest,
 		Stages: map[string]stageOutcome{},
 	}
 	rungs := 0

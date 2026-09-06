@@ -95,7 +95,9 @@ func TestTheReportCarriesTheDateTheCorpusAndEveryArchiveThatDidNotPass(t *testin
 	place("lgt", "half-a-download.zip.part")
 
 	day := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	report := write(root, []result{{
+	corpora := defaultCorpora([]string{"lgt"})
+	report := write(root, corpora, surveyCorpus(root, corpora), []result{{
+		corpus:  corpora[0],
 		stage:   stageNamed(t, "lgt", "boot"),
 		passed:  []string{"one.zip"},
 		failed:  []note{{"two.zip", "the title never asked to present a frame"}},
@@ -104,8 +106,8 @@ func TestTheReportCarriesTheDateTheCorpusAndEveryArchiveThatDidNotPass(t *testin
 
 	for _, wanted := range []string{
 		"# Local acceptance, 2026-09-04",
-		"| `var/games/lgt` | 2 | 1 |",
-		"| LGT | boot | 2 | 1 | 0 | 1 | 0 |",
+		"| `lgt` | `var/games/lgt` | lgt | 2 | 1 |",
+		"| lgt | LGT | boot | 2 | 1 | 0 | 1 | 0 |",
 		"`two.zip` — the title never asked to present a frame",
 		"WFEATURE_LGT_ACCEPTANCE=1",
 	} {
@@ -119,9 +121,12 @@ func TestTheReportCarriesTheDateTheCorpusAndEveryArchiveThatDidNotPass(t *testin
 // failed, and the report has to say which it was: the first is a probe that
 // never started, the second is a platform with work to do.
 func TestAStageThatCouldNotRunSaysSo(t *testing.T) {
-	report := write(t.TempDir(), []result{{
-		stage: stageNamed(t, "ktf", "parse"),
-		err:   "exit status 2 (is WFEATURE_KTF_ACCEPTANCE set, and is there a corpus in var/games/ktf?)",
+	corpora := defaultCorpora([]string{"ktf"})
+	root := t.TempDir()
+	report := write(root, corpora, surveyCorpus(root, corpora), []result{{
+		corpus: corpora[0],
+		stage:  stageNamed(t, "ktf", "parse"),
+		err:    "exit status 2 (is WFEATURE_KTF_ACCEPTANCE set, and is there a corpus in var/games/ktf?)",
 	}}, time.Now(), cachePlan{})
 	if !strings.Contains(report, "**This stage did not run**") {
 		t.Errorf("a stage that did not run was reported as one that did:\n%s", report)
