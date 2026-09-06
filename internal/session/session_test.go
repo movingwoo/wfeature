@@ -1,7 +1,10 @@
 package session
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -141,6 +144,71 @@ func TestInspectRefusesSomethingThatIsNoArchive(t *testing.T) {
 	if _, err := Inspect([]byte("not an archive")); err == nil {
 		t.Fatal("nonsense bytes were accepted")
 	}
+}
+
+// A package whose payload was locked before it was distributed is refused by
+// name, the way a zip of zips is. Both are files a Host should say a sentence
+// about rather than pass a loader's complaint along: neither is damaged, and
+// what a person does next differs for each.
+func TestInspectNamesALockedPackageForWhatItIs(t *testing.T) {
+	_, err := Inspect(lockedPackage(t))
+	if err == nil {
+		t.Fatal("a locked package was accepted")
+	}
+	if !errors.Is(err, ErrDRMWrapped) {
+		t.Fatalf("Inspect = %v, want it to answer %v", err, ErrDRMWrapped)
+	}
+	// The two other refusals are the ones this must not be mistaken for: they
+	// send a person looking for a different file or a fix that does not exist.
+	if errors.Is(err, ErrUnsupportedArchive) || errors.Is(err, ErrArchiveOfArchives) {
+		t.Errorf("a locked package answered another refusal as well: %v", err)
+	}
+	// The loader's own sentence names the entry that is locked, which is what
+	// makes the error worth reading in a log.
+	if !strings.Contains(err.Error(), lockedPayloadName) {
+		t.Errorf("Inspect = %q, want it to name the locked entry", err)
+	}
+}
+
+// The name of the entry a lockedPackage locks, which is the payload name a
+// descriptor points at.
+const lockedPayloadName = "AI0000.jar"
+
+// lockedPackage builds what one of these actually is: an ordinary archive,
+// with an ordinary descriptor, whose payload entry is a locked container
+// instead of the JAR the descriptor names. There is no encrypted content in
+// this repository and none is needed — what is read is the header on the
+// front, and the rest is filler.
+func lockedPackage(t *testing.T) []byte {
+	t.Helper()
+	container := []byte{'o', 'd', 'c', 'f', 0, 2, 0, 0}
+	box := make([]byte, 16)
+	// A 32-bit size of one says the real size is the 64-bit field that follows
+	// the type.
+	binary.BigEndian.PutUint32(box, 1)
+	copy(box[4:], "odrm")
+	binary.BigEndian.PutUint64(box[8:], uint64(16+(8<<10)))
+	container = append(container, box...)
+	container = append(container, make([]byte, 8<<10)...)
+
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for name, body := range map[string][]byte{
+		"__adf__":         []byte("aid:AI0000\n"),
+		lockedPayloadName: container,
+	} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatalf("build the archive: %v", err)
+		}
+		if _, err := entry.Write(body); err != nil {
+			t.Fatalf("build the archive: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("build the archive: %v", err)
+	}
+	return buffer.Bytes()
 }
 
 func TestStartTickAndFrameSpeakOnePlatformNeutralShape(t *testing.T) {

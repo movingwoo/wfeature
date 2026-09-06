@@ -69,8 +69,16 @@ type Summary struct {
 // archive and it is damaged" is a different problem from "I cannot tell what
 // this is", and a Host should be able to say which.
 func Inspect(archive []byte) (Summary, error) {
-	platform, err := detect.Archive(archive)
+	platform, reason, err := detect.Classify(archive)
 	if err != nil {
+		// A locked package is refused by what it is rather than by the read
+		// error it produced, for the same reason a zip of zips is: the remedy
+		// is not the one a read error sends a person looking for. The loader's
+		// sentence is kept behind it because it names the entry that is
+		// locked, which is worth having in a log.
+		if reason == detect.ReasonDRMWrapped {
+			return Summary{}, fmt.Errorf("%w: %s", ErrDRMWrapped, err)
+		}
 		return Summary{}, err
 	}
 	summary := Summary{Platform: string(platform)}
@@ -475,6 +483,14 @@ var ErrUnsupportedArchive = errors.New("session: the archive is not a KTF, LGT o
 // remedy: there is nothing wrong with the file, it is a bag of games rather
 // than a game, and unpacking it gives the person one archive per game.
 var ErrArchiveOfArchives = errors.New("session: this zip contains only other zips; unpack it and add each game separately")
+
+// ErrDRMWrapped is returned for a package whose payload was locked before it
+// was distributed. It is a separate answer from "this archive is damaged" and
+// from "no vendor claimed it" because both of those send a person to look for
+// a remedy that does not exist here: the file is intact and it is the format
+// it claims to be, and the key that decrypts what is inside it belongs to the
+// network that issued the file rather than to anyone holding it.
+var ErrDRMWrapped = errors.New("session: this package is locked; the key that opens it is not this emulator's to have")
 
 // Tick advances the game by at most budget of guest execution. The budget
 // bounds how many service rounds are started rather than how long one takes:

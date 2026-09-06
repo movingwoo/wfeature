@@ -561,6 +561,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 				Message: "이 zip 안에는 다른 zip만 들어 있습니다. 게임이 아니라 게임 여러 개를 담은 묶음이니, 압축을 풀어 하나씩 추가하세요."})
 			return
 		}
+		// A locked package is the other refusal a person can act on, and the
+		// one thing they must not be told is that the file is broken: it is
+		// whole, and what it needs is a copy that was never locked.
+		if errors.Is(err, session.ErrDRMWrapped) {
+			r.send(serverMessage{Kind: serverError, ID: message.ID,
+				Message: "이 파일은 잠긴 게임입니다. 파일이 손상되었거나 지원하지 않는 형식인 것이 아니라, 배포될 때 걸린 잠금을 푸는 열쇠가 이 에뮬레이터에 없습니다. 잠기지 않은 파일을 구해야 실행할 수 있습니다."})
+			return
+		}
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
 		return
 	}
