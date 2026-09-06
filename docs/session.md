@@ -734,6 +734,46 @@ over. What follows the catch — clearing the thread's alive flag, releasing the
 monitors it held — runs either way, because a title waiting on `isAlive` or on
 a lock would otherwise wait for the whole session.
 
+### The one goroutine that had no boundary was the Host's own
+
+The section above is about the goroutines guest code runs on *beside* the
+session loop, and it says in passing that a panic in an HTTP handler is caught
+— which is why the handler's own goroutine never got a boundary of its own.
+Being caught by `net/http` is not the same as being handled.
+
+Most guest code runs on that goroutine. `Tick` enters the guest on every
+platform, and so does a key, a touch, and each half of the pause pair. A panic
+in any of them unwound `sessionRunner.loop` and `run` and landed in
+`net/http`'s recover, which logs "http: panic serving" and closes the socket.
+The process survived; the session did not clean up. **Nothing past the tick
+loop ran.** The game was never closed, so its guest memory — a KTF arena alone
+is 64 MiB — and its worker goroutines were held for as long as the server
+lived. The frame encoder was left blocked on a channel nobody closed. And the
+save directory kept a claim released nowhere, so **that one game could not be
+started again until the server was restarted**, while every other game on the
+same server went on working. A page asking for it got "another session is
+playing this game", naming a session that had already died.
+
+So the boundary is in `internal/session`, which is the layer both Hosts drive a
+game through, rather than in either of them: `guard.go` converts a panic into
+the error the caller already handles, and the server's loop then ends the game
+the way it ends a failed one — post-mortem written, claim released, page told.
+The CLI gets the same conversion from the same place.
+
+Two details are the reason it is not just a `recover`. The failure is
+**remembered**: a recovered panic leaves the guest halfway through whatever it
+was doing, so every later call answers with the same error instead of being let
+back into a machine that cannot answer. And `Close` is the exception to that —
+it runs *because* the session failed, since it is what lets go of the memory
+and the goroutines the panic left running, and it takes each platform out of
+the session before closing it so a second `Close` cannot enter a half-closed
+game.
+
+What a panicking *start* leaves behind is not recovered and cannot be from
+here: a platform session is handed over only once it is built, so one that
+panicked halfway is unreachable, guest threads included. That is a bounded loss
+per refused archive, against a process that used to end.
+
 ## A game outlives its socket
 
 Switching to another app on a phone suspends the page, and the browser drops
@@ -834,6 +874,17 @@ Three rules hold across the platforms:
   the runtime rather than from here.
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and
   what that feels like on a real network has not been established.
+- **Nothing bounds how many live sessions there are**, and that half of the
+  resource question is still open — see the last entry here. The other half is
+  closed: **the server now has a read timeout**, so a request that stops making
+  progress no longer holds its connection and its goroutine until the operating
+  system gives up. It was left off because setting it was believed to kill the
+  session websocket; it does not. `net/http` clears both connection deadlines
+  when a handler hijacks, so nothing set before the upgrade reaches the socket
+  after it, and `TestTheSessionSocketOutlivesTheServersReadTimeout` keeps that
+  as a test rather than as a belief — a Go release that stopped clearing the
+  deadline would end every session after ten minutes of play, and on a phone
+  that is indistinguishable from the network.
 - **Two tabs on two different games are two sessions**, and nothing bounds how
   many. The same game twice is arbitrated, and so is the save API — see "One
   game's saves belong to one session" — but a save the native CLI writes while

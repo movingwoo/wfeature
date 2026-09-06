@@ -230,6 +230,11 @@ type Session struct {
 	// — a tick, a key, a touch — and is read later by a Host writing a report,
 	// by which time the session is closed and the platform is gone.
 	exitReason string
+
+	// failed is the panic a guest raised on the Host's own goroutine, kept so
+	// that every later call answers with it rather than re-entering a machine
+	// that is halfway through something. See guard.go.
+	failed error
 }
 
 // Start loads the archive, works out what it is, and runs it up to the point
@@ -238,7 +243,31 @@ type Session struct {
 // KTF's sliced start is not used here. It exists so a browser can keep
 // painting during the tens of seconds a real startApp takes; a Host that can
 // run this on its own goroutine has nothing to keep alive.
+//
+// A start runs the archive's own initialization and its entry point, which is
+// the least exercised guest code there is: an archive this emulator cannot run
+// at all fails here rather than later. So a panic raised in there becomes the
+// start's error, the same way it does for a KTF start running on a goroutine
+// of its own; see guard.go and `backend.GuestPanic`.
+//
+// **What a panicking start leaves behind is not recovered**, and cannot be
+// from here: a platform session is handed over only once it has been built, so
+// one that panicked halfway is unreachable — including whatever guest threads
+// it had already started. That is a bounded loss per refused archive, against
+// a process that used to end.
 func Start(ctx context.Context, archive []byte, options Options) (*Session, error) {
+	started, err := func() (started *Session, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				started, err = nil, backend.GuestPanic(options.Logger, "session start", recovered)
+			}
+		}()
+		return start(ctx, archive, options)
+	}()
+	return started, err
+}
+
+func start(ctx context.Context, archive []byte, options Options) (*Session, error) {
 	platform, err := detect.Archive(archive)
 	if err != nil {
 		return nil, err
@@ -451,7 +480,20 @@ var ErrArchiveOfArchives = errors.New("session: this zip contains only other zip
 // bounds how many service rounds are started rather than how long one takes:
 // guest code cannot be suspended mid-call, so a tick routinely runs past it by
 // the length of its last round.
+//
+// It runs guest code, so a panic raised in there becomes this tick's error;
+// see guard.go.
 func (s *Session) Tick(ctx context.Context, budget time.Duration) (Progress, error) {
+	var progress Progress
+	err := s.guarded("session tick", func() error {
+		var err error
+		progress, err = s.tick(ctx, budget)
+		return err
+	})
+	return progress, err
+}
+
+func (s *Session) tick(ctx context.Context, budget time.Duration) (Progress, error) {
 	// A parked game does not run. It was told nobody is watching and a title
 	// that answered by stopping its own animation is entitled to be left
 	// alone until it is told otherwise — and ticking one would be the Host
@@ -562,6 +604,10 @@ var ErrExited = errors.New("session: the game exited")
 // player looking at an error over the last frame of a game that simply
 // finished. Tick has always reported this; the input paths had not.
 func (s *Session) SendKey(ctx context.Context, action string, code int32) error {
+	return s.guarded("session key", func() error { return s.sendKey(ctx, action, code) })
+}
+
+func (s *Session) sendKey(ctx context.Context, action string, code int32) error {
 	if action == KeyRepeat {
 		// A Host's repeat is the operating system repeating a held keyboard
 		// key, thirty a second at a cadence the user configured, and no
@@ -626,6 +672,10 @@ func (s *Session) SendKey(ctx context.Context, action string, code int32) error 
 // those is ErrNoPointer rather than a failure, so a Host learns to stop asking
 // instead of concluding the session is broken.
 func (s *Session) SendPointer(ctx context.Context, action string, x, y int32) error {
+	return s.guarded("session pointer", func() error { return s.sendPointer(ctx, action, x, y) })
+}
+
+func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) error {
 	eventType, ok := ktfPointerEventType(action)
 	if !ok {
 		return fmt.Errorf("session: unknown pointer action %q", action)
@@ -820,7 +870,24 @@ func (s *Session) ExitReason() string { return s.exitReason }
 // keep it as the last thing shown — none of which is safe against a live
 // buffer, and all of which is what a Host does with a frame. It also means a
 // Host has no reason to copy one on the way out.
+//
+// Taking a frame converts what the guest drew — a palette lookup, a 565 unpack,
+// a magnification pass — so it reads guest state and carries the same boundary
+// the calls that run guest code do. A session a panic already ended has no
+// picture to give: the Host's loop asks for one before it looks at the error
+// its tick answered with, and the last thing it should do there is walk a
+// half-written surface.
 func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
+	if err := s.guarded("session frame", func() error {
+		rgba, width, height, ok = s.frame()
+		return nil
+	}); err != nil {
+		return nil, 0, 0, false
+	}
+	return rgba, width, height, ok
+}
+
+func (s *Session) frame() (rgba []byte, width, height int, ok bool) {
 	switch {
 	case s.ktf != nil:
 		frame, frameWidth, frameHeight, _ := s.ktf.Frame()
@@ -1012,6 +1079,10 @@ func (s *Session) Paused() bool { return s.paused }
 // call here, and both run guest code: a Host must not park a game while a tick
 // is in flight.
 func (s *Session) Pause(ctx context.Context) error {
+	return s.guarded("session pause", func() error { return s.pause(ctx) })
+}
+
+func (s *Session) pause(ctx context.Context) error {
 	if !s.Running() {
 		return ErrNotRunning
 	}
@@ -1035,6 +1106,10 @@ func (s *Session) Pause(ctx context.Context) error {
 }
 
 func (s *Session) Resume(ctx context.Context) error {
+	return s.guarded("session resume", func() error { return s.resume(ctx) })
+}
+
+func (s *Session) resume(ctx context.Context) error {
 	if !s.Running() {
 		return ErrNotRunning
 	}
@@ -1057,22 +1132,35 @@ func (s *Session) Resume(ctx context.Context) error {
 
 // Close ends the session. It is safe to call more than once, and safe to call
 // on a session whose game already exited.
+// **Closing runs guest code too**, on every platform that has threads to
+// unwind, so it carries the same panic boundary the rest of the calls here do
+// — with two differences that matter. It runs even for a session a panic
+// already ended, because that is exactly the session whose guest memory and
+// worker goroutines still have to be let go of; and each platform is taken out
+// of the session *before* it is closed, so a panic on the way out cannot leave
+// a half-closed game that a second Close would enter again.
 func (s *Session) Close() {
-	if s.ktf != nil {
-		s.ktf.Close()
-		s.ktf = nil
+	ktfSession, nativeSession, lgtSession, runtime := s.ktf, s.ktfNative, s.lgt, s.runtime
+	s.ktf, s.ktfNative, s.lgt, s.runtime = nil, nil, nil, nil
+	closing := func(where string, run func()) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				_ = backend.GuestPanic(s.options.Logger, where, recovered)
+			}
+		}()
+		run()
 	}
-	if s.ktfNative != nil {
-		s.ktfNative.Close()
-		s.ktfNative = nil
+	if ktfSession != nil {
+		closing("session close", ktfSession.Close)
 	}
-	if s.lgt != nil {
-		_ = s.lgt.Close(context.Background())
-		s.lgt = nil
+	if nativeSession != nil {
+		closing("session close", nativeSession.Close)
 	}
-	if s.runtime != nil {
-		_ = s.runtime.Destroy(true)
-		s.runtime = nil
+	if lgtSession != nil {
+		closing("session close", func() { _ = lgtSession.Close(context.Background()) })
+	}
+	if runtime != nil {
+		closing("session close", func() { _ = runtime.Destroy(true) })
 	}
 	// Nothing is held once there is no game to hold it, and a repeat that
 	// outlived its session would name a key on a platform that is gone.

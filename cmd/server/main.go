@@ -430,9 +430,23 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 	httpServer := &http.Server{
 		Handler: handler,
 		// A game archive is tens of megabytes over a home network, so the
-		// write timeout has to leave a slow phone time to finish downloading
-		// one.
+		// read and write timeouts both have to leave a slow phone time to
+		// finish carrying one. They are the bound on a request that stops
+		// making progress rather than a rate anyone is held to: a phone that
+		// walks out of range mid-upload used to hold its connection and its
+		// goroutine until the operating system gave up, and there was no
+		// bound at all on the read half.
+		//
+		// **ReadTimeout does not reach the session socket**, which is the
+		// reason this was left off for as long as it was. `net/http` clears
+		// both connection deadlines when a handler hijacks — see
+		// `hijackLocked` — so a websocket keeps none of this, and a session
+		// idling many times past the timeout still reads and writes both
+		// ways. `TestTheSessionSocketOutlivesTheServersReadTimeout` in
+		// `internal/webhost` is that fact, kept as a test rather than as a
+		// belief.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
 	}
 

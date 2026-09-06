@@ -106,8 +106,11 @@ func Start(options Options) (*Server, error) {
 	httpServer := &http.Server{
 		Handler:           host,
 		ReadHeaderTimeout: 10 * time.Second,
-		// A game archive being added from the page is the longest write there
-		// is, and it is the same minutes the desktop allows.
+		// A game archive being added from the page is the longest transfer
+		// there is, in either direction, and these are the same minutes the
+		// desktop allows. The session socket keeps neither: a hijack clears
+		// both connection deadlines. See cmd/server for the whole of it.
+		ReadTimeout:  10 * time.Minute,
 		WriteTimeout: 10 * time.Minute,
 	}
 	go func() { _ = httpServer.Serve(listener) }()
