@@ -141,6 +141,12 @@ type serverMessage struct {
 	// freeze list.
 	Cheat *cheatResult `json:"cheat,omitempty"`
 
+	// Vibrate is one vibration the guest asked for. It is sent when the guest
+	// makes a request rather than every tick: the core reports a request that
+	// stands until the next one, and re-sending it sixty times a second would
+	// make a single buzz into a stutter.
+	Vibrate *vibrateMessage `json:"vibrate,omitempty"`
+
 	// Resumed answers a "resume": false says there was no game under that
 	// token, which is the ordinary answer after a long absence rather than a
 	// failure. A true answer arrives as "started" instead, because a page that
@@ -193,7 +199,23 @@ const (
 	serverStats   = "stats"
 	serverResult  = "result"
 	serverResumed = "resumed"
+	serverVibrate = "vibrate"
 )
+
+// vibrateMessage is one request of the handset's motor.
+//
+// The level is the guest's own 0..100 scale and travels unchanged, even though
+// the browser's `navigator.vibrate` has no strength at all: what a Host does
+// with a request is the Host's business, and an Android build has an amplitude
+// to give it. Throwing the number away here would make it unrecoverable there.
+//
+// A duration of zero with a level above zero means the guest wants the motor
+// running until it says otherwise; the page reads that rather than being sent
+// a made-up length. A level of zero is the guest turning it off.
+type vibrateMessage struct {
+	Level        int `json:"level"`
+	Milliseconds int `json:"ms"`
+}
 
 type startedMessage struct {
 	Platform  string `json:"platform"`

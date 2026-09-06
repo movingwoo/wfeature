@@ -116,6 +116,13 @@ type Runtime struct {
 	skvmOnce  sync.Once
 	skvmState *skvmState
 
+	// vibrator holds what the guest has asked the handset's motor to do. It
+	// sits on the runtime rather than on skvmState because a Host reads it
+	// every tick and the SKVM state is built on the title's first call into
+	// that library — reading it would otherwise be what created it. See
+	// internal/backend/vibration.go.
+	vibrator backend.Vibrator
+
 	// The cheat engine and the synthetic address space it searches. heapMu
 	// guards the map's own structure — the fields behind it are guarded by the
 	// interpreter — and is held for the whole of one engine operation, which
@@ -313,7 +320,7 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	// a Jlet, because it is a class library: a MIDlet that names one of these
 	// classes resolves it, and a class this runtime does not have is
 	// `class not found` at the moment the title first touches it.
-	if err := wipi.Define(machine); err != nil {
+	if err := wipi.Define(machine, &runtime.vibrator); err != nil {
 		return nil, err
 	}
 	*runtime = Runtime{

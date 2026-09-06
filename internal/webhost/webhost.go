@@ -185,6 +185,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveGameArchive(writer, request)
 	case requestPath == "/api/games":
 		s.serveGameUpload(writer, request)
+	case requestPath == "/api/savepack":
+		s.serveSavePack(writer, request)
 	case requestPath == "/api/status":
 		s.serveStatus(writer, request)
 	case requestPath == "/api/shutdown":

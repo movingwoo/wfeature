@@ -25,7 +25,7 @@ export const sessionAvailable = () =>
   typeof WebSocket === "function" && typeof createImageBitmap === "function";
 
 export class GameSession {
-  // handlers: onFrame(bitmap), onAudio(events), onStarted(info), onExited(reason),
+  // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onStarted(info), onExited(reason),
   // onError(message), onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
@@ -134,6 +134,12 @@ export class GameSession {
         break;
       case "stats":
         this.handlers.onStats?.(message.stats);
+        break;
+      case "vibrate":
+        // One request of the handset's motor, sent when the guest makes one
+        // rather than every tick. What to do with it — including nothing —
+        // belongs to the page; see vibrate.js.
+        this.handlers.onVibrate?.(message.vibrate ?? {});
         break;
       case "error":
         this.handlers.onError?.(message.message ?? "세션 오류");

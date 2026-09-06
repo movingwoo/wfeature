@@ -188,6 +188,14 @@ body {
   opacity: 0.65;
 }
 
+/* Two more buttons at the weight of 게임 추가 would make the first screen read
+   as four equal choices. Backing a save up is the rarer errand of the four, so
+   the pair is smaller rather than louder. */
+.save-backup {
+  padding: 8px 16px;
+  font-size: 0.9em;
+}
+
 .game-select {
   width: min(100%, 300px);
   padding: 13px 12px;
@@ -295,6 +303,14 @@ body {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+/* A row the page removes. The rule above sets `display: flex`, which beats the
+   browser's own `[hidden] { display: none }`, so a row hidden by script would
+   otherwise stay on screen — which is how the vibration switch would show up on
+   a browser that has no vibrator to switch. */
+.settings-panel label[hidden] {
+  display: none;
 }
 
 .settings-panel input[type="range"] {

@@ -629,3 +629,30 @@ func smafChunk(tag string, payload []byte) []byte {
 	header[4], header[5], header[6], header[7] = byte(length>>24), byte(length>>16), byte(length>>8), byte(length)
 	return append(header, payload...)
 }
+
+// The guest's vibration used to set a flag that nothing read, with both
+// arguments discarded. What a Host needs is the request itself, so this drives
+// the fixture's own `Vibration.start` / `Vibration.stop` and reads it back
+// through the boundary a Host reads.
+func TestVibrationRequestReachesTheBoundary(t *testing.T) {
+	runtime := startFixture(t, nil)
+
+	if state := runtime.Vibration(); state.Request != 0 || state.Active() {
+		t.Fatalf("a title that has not asked reports %+v", state)
+	}
+
+	// deviceState calls Vibration.start(10, 5) and then Vibration.stop().
+	if state := fixtureString(t, runtime, "deviceState"); state == "" {
+		t.Fatalf("the fixture did not run")
+	}
+
+	state := runtime.Vibration()
+	// Two requests: the start and the stop. The stop is a request of its own so
+	// that a Host watching the counter learns the motor was turned off.
+	if state.Request != 2 {
+		t.Errorf("request = %d, want 2", state.Request)
+	}
+	if state.Level != 0 || state.Active() {
+		t.Errorf("the motor was left running after stop: %+v", state)
+	}
+}

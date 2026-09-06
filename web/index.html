@@ -59,6 +59,19 @@
               <input type="file" id="game-file" class="game-file" accept=".zip,.jar,application/zip,application/java-archive" multiple />
               <button id="game-add" class="game-add">＋ 게임 추가</button>
             </div>
+            <!-- The save tree lives beside the server, so from here a player's
+                 progress is somewhere they cannot point at — and on a phone it
+                 is unreachable for the same reason a game has to arrive through
+                 this page. Both buttons act on the game chosen above.
+
+                 They sit here rather than in the settings panel because an
+                 import replaces a save, and this is the screen where the game
+                 it would replace is not running. -->
+            <div class="prestart-row">
+              <input type="file" id="save-import-file" class="game-file" accept=".wfsave" />
+              <button id="save-export" class="game-add save-backup">세이브 내보내기</button>
+              <button id="save-import" class="game-add save-backup">세이브 가져오기</button>
+            </div>
           </div>
         </div>
 
@@ -179,6 +192,12 @@
             </select>
           </label>
           <p id="screen-note" class="settings-note hidden"></p>
+          <!-- The guest asks the handset to vibrate and the server passes the
+               request on; this is where it is decided whether anything
+               happens. The row is removed on a browser with no vibrator,
+               because a switch that cannot do anything reads as a broken one.
+               -->
+          <label id="vibrate-row">📳 진동 <input type="checkbox" id="vibrate-toggle" checked /></label>
           <label>⏩ 속도
             <select id="game-speed" class="game-speed">
               <option value="0.25">0.25배</option>

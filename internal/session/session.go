@@ -877,6 +877,35 @@ func (s *Session) ExitReason() string { return s.exitReason }
 // picture to give: the Host's loop asks for one before it looks at the error
 // its tick answered with, and the last thing it should do there is walk a
 // half-written surface.
+// Vibration reports what the guest has asked the handset's motor to do, and
+// whether this platform answers the question at all.
+//
+// The second return is the whole of how "the core does not implement vibration"
+// is said. A Host that reads false does nothing — which is the same as what it
+// does for a guest that has not asked, and correctly so: neither is a reason to
+// buzz. It is false rather than a zero request because the two are different
+// facts and a later reader deserves to be able to tell them apart.
+//
+// It does not go through the guard the tick calls use. Reading a request the
+// guest already recorded touches no guest memory and runs no guest code, so
+// there is nothing here for a panic in the interpreter to catch; the vibrator's
+// own mutex is what makes it safe beside a running tick.
+func (s *Session) Vibration() (backend.Vibration, bool) {
+	switch {
+	case s.ktf != nil:
+		return s.ktf.Vibration(), true
+	case s.runtime != nil:
+		return s.runtime.Vibration(), true
+	default:
+		// The earlier KTF package and LGT have no vibration recorded on this
+		// side yet: the earlier package's native table has no vibrator call at
+		// all, and LGT's two entry points still answer without reading their
+		// arguments. Saying so is what keeps a Host from buzzing on a request
+		// nobody made.
+		return backend.Vibration{}, false
+	}
+}
+
 func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 	if err := s.guarded("session frame", func() error {
 		rgba, width, height, ok = s.frame()

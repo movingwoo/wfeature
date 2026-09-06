@@ -547,6 +547,102 @@ time, so an interrupted overwrite would otherwise leave the front of the new
 save on the back of the old one — a file the game reads as a save, not as
 damage.
 
+### A save that leaves this machine
+
+The arbitration above solves one install's problem: two writers on one save
+directory. **Between installs nothing holds at all.** The files under
+`savedata/<profile>/<platform>/<owner>/` say nothing about what they are — not
+which game they belong to, and not whether they arrived whole — so a save
+copied to another machine can land in the wrong game's directory, and a
+transfer that stopped halfway leaves a file the game reads as a save rather
+than as damage. The owner is not even unique within one install:
+`SaveOwnerCollisions` exists on all three platforms because more than one
+distinct title can claim one owner directory.
+
+That matters here more than on a desktop emulator, because the page cannot see
+the save tree at all. On a phone it cannot be reached by any other means
+either — Android since 11 does not let a file manager open the directory an app
+keeps its files in, the same wall that made a game have to arrive through the
+page.
+
+So a save that leaves travels as one self-describing file, little-endian:
+
+```
+magic     8B   "WFSAVEBK"
+version   1B   1
+reserved  1B   0
+identity  32B  raw SHA-256 of the game archive these saves belong to
+length    4B   payload length
+crc32     4B   IEEE, over the payload
+payload   length B
+```
+
+The payload is the title's whole writable storage — on every platform that is
+the owner directory, a tree of files keyed the way `SaveStore` keys them — as
+a list in key order: a `uint16` key length, the key, a `uint32` data length,
+the data. It is deliberately not a zip. A zip carries timestamps and file
+modes, so exporting one untouched directory twice would produce two different
+checksums, and nobody could tell a re-export from a change.
+
+**The two refusals are kept apart**, because the person holding the file can
+act on each and the actions are different:
+
+- **The identity does not match** — the container is intact and is somebody's
+  real backup, of another game. The fix is to find the right file. Answered as
+  409, naming the first four bytes of both identities.
+- **The checksum does not match, or the container does not parse** — the file
+  itself is no longer usable and the transfer has to be made again. Answered as
+  422.
+
+A file that is not one of these at all is a third answer (400), because the
+fix there is to pick a different file entirely rather than to look for a copy
+of this one. `internal/backend/savepack.go` holds the codec and the reasoning;
+the routes are `internal/webhost/savepack.go`.
+
+Two consequences worth stating because they are chosen rather than incidental:
+
+- **A repacked archive is a different input**, so its own backups are refused.
+  This build cannot tell a repack that changed nothing from one that changed
+  the save format, and refusing is the answer that cannot silently ruin a save.
+- **An import replaces rather than merges.** The container is the whole of the
+  writable storage, so an entry in the tree that the container does not name
+  came from a later point in the story; leaving it beside the restored entries
+  builds a state the game never wrote. The page asks before it runs, and the
+  answer says how many entries were written and how many removed.
+
+**A dotted file name is not a temporary file.** This is the trap the feature
+had to get right and the one the save API had already got wrong. Every platform
+keeps load-bearing state under a dotted name — `rms/.index` is what says a MIDP
+record store exists at all (`docs/rms.md`), and the file layers keep
+`.removed`, `.created` and `.dirs`. `DirectorySaveStore` also leaves dotted
+files behind on its way to a rename. Skipping every dotted name loses the first
+set to catch the second, and the result is a save that restores and then
+appears to have lost everything. `backend.ReadSaveTree` skips the temporary
+*shape* instead — a leading dot and a trailing run of digits, which is what
+`os.CreateTemp` writes — and `GET /api/saves/<owner>` now goes through it too,
+having had the same defect.
+
+### Exporting and importing under a live session
+
+**An export is not arbitrated. An import is, exactly as a save API write is.**
+
+The claim exists for one defect: a session reads the save files when the guest
+asks and writes them back whole, so a second writer's entry is gone at the next
+commit with nothing reported anywhere. An export writes nothing, so that defect
+cannot reach it. Refusing one would refuse the page against its own running
+game — the sequence the two second grace above exists to prevent — and no grace
+helps here, because the game is deliberately still running. What an
+unarbitrated export can catch is a set of files spanning one commit: every
+individual file is whole, since `StoreSave` replaces by rename, so the worst
+case is one entry from before a commit beside one from after, and that is a
+save the player can export again a moment later.
+
+An import writes, so it takes `holdSaveDirectory` for the length of the write
+and is refused with the holder's name — including when the holder is *parked*,
+which it does not take over. Nobody would trade a player's parked game for a
+restore that can be repeated in a moment. This is the same rule the save API's
+`PUT` follows, applied unchanged rather than as a third policy.
+
 ## Cheats
 
 The panel's operations are defined in one place: `internal/cheat`'s panel API
@@ -857,6 +953,99 @@ Three rules hold across the platforms:
 - **A parked game refuses to tick.** `Tick` answers `ErrPaused` rather than
   running a game it has just told to stop, which is also what makes a forgotten
   resume loud instead of silent.
+
+## Vibration
+
+The guest asks the handset to vibrate on all three platforms, and until now
+none of those requests reached anything: KTF counted them as a diagnostic, LGT
+returned success without reading the arguments, and SKT set a flag that was
+written in two places and read nowhere. The browser has `navigator.vibrate` and
+there is an Android build, so what was missing was not the ability to vibrate
+but a boundary to carry the request across.
+
+**The core reports; the Host decides.** A platform runtime owns
+`backend.Vibrator`, which records what the guest asked for and nothing else. It
+does not know whether there is a motor, whether this Host can drive one, or
+whether the person wants it — and it must not, because a core that took the
+action would have to be told about every Host, and a Host that could not act
+would have no way to say so.
+
+`session.Session.Vibration()` answers `(backend.Vibration, bool)`, and the
+second value is the whole of how "this platform does not implement vibration"
+is said. A Host that reads false does nothing, which is also what it does for a
+guest that has not asked — both are silence on the wire, correctly, since
+neither is a reason to buzz.
+
+Two rules of the guest's contract are not what a reader would guess, and both
+are places where getting it wrong loses the vibration silently:
+
+- **`level` is a percentage from 0 to 100, not an index.** Zero is off, 100 is
+  the strongest the hardware has. It is *not* the units of the `VIBRATORLEVEL`
+  handset property, which is a count of the strength steps a handset has: a
+  title reads `"3"` there and still passes 1..100.
+- **A duration of zero with a level above zero means until stopped**, not "do
+  nothing". A title asking for a continuous rumble and getting a no-op is a
+  vibration that never happens.
+
+A request made while one is running replaces it and restarts the clock, which
+is also specified. The vibrator measures with the wall clock rather than the
+guest's: a vibration is felt in the room, so a game running at a quarter speed
+still asked for the milliseconds it asked for, and scaling them would make the
+speed control silently change how the handset feels.
+
+### How one request becomes one message
+
+The core reports a *request that stands* until the guest makes another, so the
+edge is made on the Host side. `Vibration.Request` counts the requests, and the
+session sends when that number moves. Comparing the level and duration instead
+would swallow the second of two identical buzzes, which the guest asked for
+twice on purpose.
+
+The message is `{"kind":"vibrate","vibrate":{"level":0..100,"ms":N}}`. The
+level travels unchanged even though `navigator.vibrate` has no strength at all:
+what a Host does with a request is the Host's business, and an Android build has
+an amplitude to give it. A request that turns the motor *off* is sent like any
+other, because an indefinite buzz the page already started is still running
+until something says otherwise.
+
+On the page (`web/vibrate.js`) the level decides only whether to vibrate,
+because scaling the duration by the strength would be an invention — a weak
+buzz is not a short one. An indefinite request becomes a five second call, since
+the API takes a length and a page that asked for an hour would leave a phone
+buzzing long after the game stopped caring. A game that ends and a socket that
+drops both stop the motor, because the guest that would have stopped it is
+gone. The setting is a checkbox in the settings panel, on by default where the
+browser has a vibrator and removed entirely where it does not: a switch that
+cannot do anything reads as a broken one.
+
+### Where it reaches, and where it does not
+
+| | Guest entry point | Reaches the Host |
+|---|---|---|
+| KTF | `org.kwis.msp.media.Vibrator.on/off`, and `MC_mdaVibrator` (media call 16) | yes |
+| SKT | `com.skt.m.Vibration.start/stop`, and `org.kwis.msp.media.Vibrator.on/off` in Jlet mode | yes |
+| LGT | `org.kwis.msp.media.Vibrator.on`, and WIPI C slot `0x4c1` | **no** |
+
+LGT is unfinished rather than decided: both of its entry points still answer
+without reading their arguments, so `Vibration()` reports false for it and the
+page does nothing. The earlier KTF package generation has no vibrator call in
+its native table at all, and reports false for the same reason.
+
+Two things are recorded here rather than guessed at in code:
+
+- **`VIBRATORLEVEL` is still answered `"0"`** (`internal/wipic/properties.go`),
+  which by the specification's table means "this handset has no vibration
+  steps". That was right when nothing could vibrate and is now a title's reason
+  not to ask. Changing it is a guest-visible change across the whole corpus, so
+  it wants an A/B sweep rather than a decision taken here.
+- **SKT's `com.skt.m.Vibration` argument units are not settled.** The class is
+  the vendor's and nothing in this repository states its contract, so the
+  arguments are read as WIPI's — level 0..100, milliseconds — because that is
+  the only documented convention within reach. The one call in the local
+  fixture is `start(10, 5)`, which fits that reading only awkwardly: five
+  milliseconds is below what a person feels. Reading them wrong costs a buzz of
+  the wrong length; not reading them at all cost every buzz, which is where
+  this started.
 
 ## What is not solved
 

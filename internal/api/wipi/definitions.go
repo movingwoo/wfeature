@@ -1,7 +1,10 @@
 package wipi
 
 import (
+	"fmt"
+
 	"github.com/movingwoo/wfeature/internal/api/midp"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -9,7 +12,7 @@ import (
 // nothing beyond it. Each class names its MIDP counterpart as its superclass,
 // so a member the two share is inherited rather than declared twice: the whole
 // of `Graphics` below is the handful of calls MIDP does not have.
-func definitions() []jvm.ClassDefinition {
+func definitions(vibrator *backend.Vibrator) []jvm.ClassDefinition {
 	return []jvm.ClassDefinition{
 		eventQueueDefinition(),
 		jletDefinition(),
@@ -24,7 +27,7 @@ func definitions() []jvm.ClassDefinition {
 		clipDefinition(),
 		playListenerDefinition(),
 		playerDefinition(),
-		vibratorDefinition(),
+		vibratorDefinition(vibrator),
 		networkDefinition(),
 		socketDefinition(),
 		urlDefinition(),
@@ -555,15 +558,50 @@ func playerDefinition() jvm.ClassDefinition {
 	}
 }
 
-func vibratorDefinition() jvm.ClassDefinition {
+// vibratorDefinition serves `Vibrator.on(level, duration)` and `Vibrator.off()`.
+//
+// `level` is a percentage from 0 to 100 where zero is off, `duration` is
+// milliseconds, and a duration of zero with a level above zero means until the
+// guest stops it — the rules the vibrator holds. `off()` is not in the
+// specification, whose way to stop is `on(0, ...)`, but the guests call it, so
+// it is served and records the same request.
+//
+// These bodies used to do nothing, on the reasoning that there is no hardware
+// to drive. Whether there is any is the Host's answer rather than a class
+// library's: a browser has `navigator.vibrate`. A nil vibrator restores the
+// old behavior exactly, which is what a caller that has no state to record
+// into gets.
+func vibratorDefinition(vibrator *backend.Vibrator) jvm.ClassDefinition {
+	on := doNothing
+	off := doNothing
+	if vibrator != nil {
+		on = func(_ *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+			if len(arguments) < 2 {
+				return jvm.VoidValue(), fmt.Errorf("Vibrator.on expected a level and a duration, got %d", len(arguments))
+			}
+			level, err := arguments[0].Int32()
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+			duration, err := arguments[1].Int32()
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+			vibrator.Vibrate(int(level), int(duration))
+			return jvm.VoidValue(), nil
+		}
+		off = func(*jvm.Invocation, []jvm.Value) (jvm.Value, error) {
+			vibrator.Stop()
+			return jvm.VoidValue(), nil
+		}
+	}
 	return jvm.ClassDefinition{
 		Name:      VibratorClass,
 		SuperName: "java/lang/Object",
 		Access:    jvm.AccessPublic | jvm.AccessFinal,
 		Methods: []jvm.MethodDefinition{
-			// No hardware to drive, the decision the SKVM Vibration takes.
-			{Name: "on", Descriptor: "(II)V", Access: publicStatic, Body: doNothing},
-			{Name: "off", Descriptor: "()V", Access: publicStatic, Body: doNothing},
+			{Name: "on", Descriptor: "(II)V", Access: publicStatic, Body: on},
+			{Name: "off", Descriptor: "()V", Access: publicStatic, Body: off},
 		},
 	}
 }

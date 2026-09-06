@@ -31,7 +31,6 @@ type skvmState struct {
 	mu             sync.Mutex
 	backlightColor int32
 	backlightOn    bool
-	vibrating      bool
 	keyToneOn      bool
 	audioVolume    int32
 	smsListener    *jvm.Object
@@ -696,31 +695,54 @@ func (runtime *Runtime) setBackLightColor(_ *jvm.VM, arguments []jvm.Value) (jvm
 	return jvm.VoidValue(), nil
 }
 
+// vibrationStart records what the guest asked the motor to do, where the Host
+// can read it.
+//
+// It used to set a `vibrating` flag that nothing ever read and to discard both
+// arguments, which is why the second one had never even been decoded.
+//
+// **What the two arguments mean here is not settled.** The class is the
+// vendor's rather than WIPI's and nothing in this repository states its
+// contract, so they are read as WIPI's — a strength from 0 to 100 and a time in
+// milliseconds — because that is the only documented convention within reach
+// and every sibling API on this handset follows it. The one call in the local
+// fixture is `start(10, 5)`, which fits that reading only awkwardly: five
+// milliseconds is below what a person feels. So this is the defensible reading
+// and not a confirmed one, and `docs/session.md` records that a real title has
+// to settle it. Reading them wrong costs a buzz of the wrong length; not
+// reading them at all costs every buzz, which is where this started.
 func (runtime *Runtime) vibrationStart(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if _, err := intArgument(arguments, 0); err != nil {
+	level, err := intArgument(arguments, 0)
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	state := runtime.skvm()
-	state.mu.Lock()
-	state.vibrating = true
-	state.mu.Unlock()
+	// The descriptor is (II)V, but a title that hands over one argument is
+	// asking for a vibration all the same: the duration it did not give is the
+	// one the guest's own contract calls "until stopped".
+	duration := int32(0)
+	if len(arguments) > 1 {
+		duration, err = intArgument(arguments, 1)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
+	runtime.vibrator.Vibrate(int(level), int(duration))
 	return jvm.VoidValue(), nil
 }
 
 func (runtime *Runtime) vibrationStop(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	state := runtime.skvm()
-	state.mu.Lock()
-	state.vibrating = false
-	state.mu.Unlock()
+	runtime.vibrator.Stop()
 	return jvm.VoidValue(), nil
 }
 
 // vibrationSupported and vibrationLevels answer the two questions a title asks
-// before it vibrates. There is no motor here and Vibration.start only records
-// that it was asked, but a vibration is fire-and-forget: nothing comes back
-// that a title could be misled by, and one that is told the handset cannot
-// vibrate hides the setting rather than leaving it switched off. The level
-// count is the handset's ten.
+// before it vibrates. Answering yes was already the right call when nothing
+// could vibrate — a title told the handset cannot hides the setting rather than
+// leaving it switched off — and it is plainly right now that the request
+// reaches a Host that may have a motor. The level count is the handset's ten,
+// which by WIPI's reading of the same property is a count of strength steps
+// rather than the range of the argument: a title reads ten here and still
+// passes 1 to 100 to start.
 func (runtime *Runtime) vibrationSupported(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	return jvm.IntValue(1), nil
 }
@@ -2158,4 +2180,13 @@ func (runtime *Runtime) sisRequiredBufferSize(_ *jvm.VM, arguments []jvm.Value) 
 		return jvm.VoidValue(), err
 	}
 	return jvm.IntValue(0), nil
+}
+
+// Vibration reports what the guest has asked the handset's motor to do. The
+// Host decides what to do about it; this runtime only records the request.
+func (runtime *Runtime) Vibration() backend.Vibration {
+	if runtime == nil {
+		return backend.Vibration{}
+	}
+	return runtime.vibrator.State()
 }

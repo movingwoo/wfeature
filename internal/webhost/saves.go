@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -98,30 +96,25 @@ func (s *Server) serveSaves(writer http.ResponseWriter, request *http.Request) {
 func (s *Server) listSaves(writer http.ResponseWriter, ownerRoot string) {
 	saves := map[string]string{}
 	// A game with no saves yet is the normal first run, so a missing
-	// directory is an empty answer rather than a 404 the page has to handle.
-	_ = filepath.WalkDir(ownerRoot, func(name string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		// A store writes each entry through a dotted temporary file that is
-		// renamed into place, so a dotted name here is either one a killed
-		// process left behind or something that is not a save at all. Listing
-		// it would hand the caller a key no guest ever wrote.
-		if strings.HasPrefix(entry.Name(), ".") {
-			return nil
-		}
-		content, err := os.ReadFile(name)
-		if err != nil {
-			s.logger.Warn("save entry unreadable", "path", name, "error", err)
-			return nil
-		}
-		relative, err := filepath.Rel(ownerRoot, name)
-		if err != nil {
-			return nil
-		}
-		saves[filepath.ToSlash(relative)] = base64.StdEncoding.EncodeToString(content)
-		return nil
-	})
+	// directory is an empty answer rather than a 404 the page has to handle,
+	// which is what ReadSaveTree answers for a directory that is not there.
+	//
+	// This used to walk the tree here and skip every dotted name, on the
+	// reasoning that a dotted file is one a killed process left behind on its
+	// way to a rename. Half of that is right, and the half that is wrong loses
+	// data: every platform keeps load-bearing state under a dotted name —
+	// MIDP's `rms/.index` is what says a record store exists at all
+	// (docs/rms.md), and the file layers keep `.removed`, `.created` and
+	// `.dirs` — so this answered with a save whose stores the reader cannot
+	// find. ReadSaveTree skips the temporary shape specifically instead; see
+	// backend/savepack.go.
+	entries, err := backend.ReadSaveTree(ownerRoot)
+	if err != nil {
+		s.logger.Warn("save directory unreadable", "path", ownerRoot, "error", err)
+	}
+	for _, entry := range entries {
+		saves[entry.Key] = base64.StdEncoding.EncodeToString(entry.Data)
+	}
 	body, err := json.Marshal(saveResponse{Saves: saves})
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")

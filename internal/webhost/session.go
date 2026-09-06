@@ -159,6 +159,12 @@ type sessionRunner struct {
 	// saves of its own.
 	saveDirectory string
 
+	// vibrationRequest is the last request number this session has sent on.
+	// It is what turns the core's standing request into one message per
+	// request; see flushVibration. It is reset with the game rather than kept,
+	// because a new game's first request is one this page has not seen.
+	vibrationRequest uint64
+
 	// started is what the page was told when the game came up, kept so a page
 	// that reconnects can be told the same thing without the game restarting.
 	started startedMessage
@@ -366,6 +372,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			r.pushFrame()
 		}
 		r.flushAudio()
+		r.flushVibration()
 		r.reportStats()
 
 		if err != nil {
@@ -389,6 +396,34 @@ func (r *sessionRunner) loop(ctx context.Context) {
 		// wait out the guest's idle time to be delivered.
 		r.drainCommands(ctx, progress.Wait)
 	}
+}
+
+// flushVibration sends the guest's vibration request on, once per request.
+//
+// The core reports a *request* rather than an event — it stands until the guest
+// makes another one — so the edge has to be made here, and the request counter
+// is what makes it. Comparing the level and duration instead would swallow the
+// second of two identical buzzes, which the guest asked for twice on purpose.
+//
+// A platform whose core does not report vibration answers false and nothing is
+// sent, so a Host that cannot tell "not implemented" from "not asked for" never
+// arises: both are silence on the wire.
+func (r *sessionRunner) flushVibration() {
+	if r.game == nil {
+		return
+	}
+	state, ok := r.game.Vibration()
+	if !ok || state.Request == r.vibrationRequest {
+		return
+	}
+	r.vibrationRequest = state.Request
+	// The whole request travels, including the one that turns the motor off:
+	// a level of zero is a thing the guest asked for and the page has to be
+	// told about it to stop an indefinite buzz it already started.
+	r.sendDroppable(serverMessage{Kind: serverVibrate, Vibrate: &vibrateMessage{
+		Level:        state.Level,
+		Milliseconds: int(state.Duration / time.Millisecond),
+	}})
 }
 
 // endedByExit is the cause line for a game that ended itself. The reason is the
@@ -594,6 +629,11 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	r.label = label
 	r.platform = summary.Platform
 	r.presented = 0
+	// A new game's first vibration request is one this page has not seen, so
+	// the counter starts where the core's does. A request the guest made
+	// inside its own start reaches the page on the first pass of the loop,
+	// which is what a title that buzzes on its splash screen expects.
+	r.vibrationRequest = 0
 	r.postMortem = ""
 	if r.server.traceLimit > 0 {
 		// The phase costs say which part of a round is expensive; only the
@@ -726,6 +766,17 @@ func (r *sessionRunner) resumeGame(message clientMessage) {
 	r.started = parked.started
 	r.postMortem = parked.postMortem
 	r.presented = parked.presented
+	// The vibration counter is adopted rather than reset. A parked game's last
+	// request was made before this page existed — possibly minutes ago, since
+	// what parks a game is its page going away — and starting from zero would
+	// make the resumed page buzz once for a vibration that is long over. What
+	// the player gets back is the game, not the request it made while nobody
+	// was watching.
+	if state, ok := parked.game.Vibration(); ok {
+		r.vibrationRequest = state.Request
+	} else {
+		r.vibrationRequest = 0
+	}
 	r.token = message.Token
 
 	// The other half of the pause above, and the half that matters most: the

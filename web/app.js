@@ -6,6 +6,8 @@ import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { initAddGame } from "./add-game.js";
+import { initSaveBackup } from "./save-backup.js";
+import { createVibration, initVibrationSetting } from "./vibrate.js";
 import {
   assign,
   bindable,
@@ -184,6 +186,12 @@ const rememberScreen = (path, value) => {
 // chosenGame is the game the screen setting is about: whatever the list is
 // showing, and the last game played once the list is gone.
 const chosenGame = () => document.getElementById("game-select")?.value || lastGame() || "";
+
+// The handset's motor. The guest asks, the server passes the request on, and
+// this is where it is decided whether anything happens — including on a
+// browser that has no vibrator and for a person who switched it off. It is
+// built once because the setting outlives any one game.
+const vibration = createVibration({ navigator: globalThis.navigator, storage: localStore });
 
 const rememberGame = path => localStore.setItem(LAST_GAME_KEY, path);
 
@@ -520,8 +528,12 @@ const openSession = async () => {
   const opening = new GameSession({
     onFrame: drawFrame,
     onAudio: events => playAudioEvents(pageAudio, events),
+    onVibrate: request => vibration.request(request),
     onExited: reason => {
       gameRunning = false;
+      // A game that ended must not leave a phone buzzing: the guest that would
+      // have stopped an indefinite vibration is gone.
+      vibration.stop();
       // A game that ended has nothing to come back to.
       rememberResumeToken("");
       // The reason is for the run log, not for the player: it names a guest
@@ -544,6 +556,9 @@ const openSession = async () => {
       // is a socket again, so the page stops sending it and starts trying to
       // get its game back.
       gameRunning = false;
+      // The socket is what a stop would have arrived on, so nothing can stop a
+      // running vibration until there is one again.
+      vibration.stop();
       recordEvent("session connection lost");
       void reconnectSession();
     },
@@ -699,6 +714,14 @@ const initGameSelect = async () => {
       document,
       onStatus: setStatus,
       onAdded: () => initGameSelect(),
+    });
+    // The picker is what says which game the two save buttons act on, so
+    // chosenGame is handed over rather than read once: a player changes the
+    // selection between pressing them.
+    initSaveBackup({
+      document,
+      chosenGame,
+      onStatus: setStatus,
     });
   }
 
@@ -1502,6 +1525,7 @@ const main = async () => {
   initRestart();
   initModalBackdrop();
   initSettings();
+  initVibrationSetting({ document, vibration });
   initKeyBindings();
 
   session = await openSession();
