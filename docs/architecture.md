@@ -90,12 +90,40 @@ The acceptance records carry it per file; see [`testing.md`](testing.md).
 `drm-wrapped` is read from the container's header and nothing else.
 `detect.DCFHeader` recognises both layouts a locked package uses — the one with
 the media type and content identifier declared in the clear at the front, and
-the box structure whose brand names the wrapper — and reports what they
-declare. **Nothing decrypts and no key is read**: the payload is encrypted, the
+the box structure whose brand names the wrapper, whether that brand is in a
+brand box or at offset zero — and reports what they declare. **Nothing decrypts and no key is read**: the payload is encrypted, the
 key belongs to the network that issued it, and the only question worth asking
 here is whether a file is a container that was locked or one this project has
 never seen the shape of. A person holding the first is told to find another
 copy; a person holding a damaged zip is told to download it again.
+
+**The wrapper is one level in, and looking only at the outer file found none
+of it.** A locked package is not a locked zip: the outer archive is untouched
+and still opens, the descriptor and the icons and the data directory are all
+still there, and what changed is the payload JAR beside them, which stopped
+being an archive and became an encrypted container. So the marker still named
+its platform, detection still answered it, and the file was counted not as
+locked but as a package this project had failed to load. A `drm-wrapped` count
+of zero over a whole corpus meant "not looked for" and read as "none here".
+
+`detect.Classify` now reads the front of the payload before it answers a
+platform. All three vendors package the same way — a descriptor beside a JAR
+that is the game — so one rule covers them, and a wrapper that keeps the
+payload's name is caught wherever it appears. The corpus holds exactly one such
+file, in the older KTF collection; the LGT and SKT trees have none, and the
+same check runs over them anyway because the shape is theirs too.
+
+Two things it does not do. It asks only of an archive some platform has already
+claimed, because an entry named `.jar` in a zip nobody claimed is not a payload
+anybody declared. And it reads the front of the entry rather than the entry: a
+box declares its size against the file it is in, so the walk is measured
+against the length the zip's own directory gives, and megabytes of encrypted
+content are never inflated to read a kilobyte of header. That still costs
+what a deflate reader costs — measured at 182µs a file against 4µs, because
+such a reader fills its window before returning a first byte, so asking for
+sixteen bytes and asking for a thousand cost the same. It is a large multiple
+of a small number and small beside anything done with an archive after
+classifying it.
 
 `internal/gameroot` is the other Host-side tool of that kind: it names the
 depth a game library is discovered at — the root and one group below it — so
