@@ -31,6 +31,18 @@ import (
 //     it settles first, because a change measured against a screen that was
 //     already animating says nothing about the key.
 //
+// **A title is allowed to end its first launch.** Several here put the
+// handset's own restart notice up before anything else: they write their save,
+// tell the player to start the title again, and end. That is correct
+// behaviour, and at this rung it is indistinguishable from a title that died —
+// both stop the session. So an archive that ends itself is given the second
+// launch the notice asked for, against the same save directory, and only an
+// ending on that launch is reported. A probe that judged every title on a
+// launch the platform treats as an installation would be measuring its own
+// fresh directory. This is the same rule the sibling platform's ladder
+// applies, and for the same reason: two platforms must not answer one question
+// differently.
+//
 // Both are opt-in like the rest of the local probes: real archives are ignored
 // local data rather than fixtures.
 
@@ -59,6 +71,9 @@ const (
 	// How long to keep ticking after the key is released. What a key starts is
 	// often a transition rather than an immediate redraw.
 	localLadderReleaseTicks = 48
+	// How many launches an archive gets. Two, because the first one is what
+	// the platform's restart notice ends; a third would be a probe hoping.
+	localLadderLaunches = 2
 )
 
 // The keys tried, in the order they are tried. A title of this era answers a
@@ -77,30 +92,38 @@ func TestLocalKTFArchivesSustainAFrame(t *testing.T) {
 		t.Skip("set WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1 to run ignored local KTF archives past their first frame")
 	}
 	sustain := localLadderTicks(t, "WFEATURE_KTF_SUSTAIN_TICKS", localLadderSustainTicks)
-	eachLocalKTFArchive(t, func(t *testing.T, session *Session) {
-		painted, ticks, why := tickToFirstFrame(t, session)
-		if !painted {
-			// The frame rung already reports this archive, and reporting it
-			// twice would count one defect as two.
-			t.Skipf("%s in %d ticks, which the frame rung below this one reports", why, ticks)
-		}
-		before := session.Flushes()
-		ran, err := tickFor(session, sustain)
-		if err != nil {
-			if errors.Is(err, ErrGuestExited) {
-				t.Fatalf("the title ended itself %d ticks after its first frame", ran)
+	eachLocalKTFArchive(t, func(t *testing.T, launch func(*testing.T) *Session) {
+		for launched := 1; ; launched++ {
+			session := launch(t)
+			painted, ticks, why := tickToFirstFrame(t, session)
+			if !painted {
+				// The frame rung already reports this archive, and reporting
+				// it twice would count one defect as two.
+				t.Skipf("%s in %d ticks, which the frame rung below this one reports", why, ticks)
 			}
-			t.Fatalf("tick %d after the first frame: %v\ncounts:\n%s",
-				ran, err, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40))
+			before := session.Flushes()
+			ran, err := tickFor(session, sustain)
+			if errors.Is(err, ErrGuestExited) {
+				if launched < localLadderLaunches {
+					continue
+				}
+				t.Fatalf("the title ended itself %d ticks after its first frame, on its second launch", ran)
+			}
+			if err != nil {
+				t.Fatalf("tick %d after the first frame: %v\ncounts:\n%s",
+					ran, err, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40))
+			}
+			if ran < sustain {
+				t.Fatalf("nothing left to do %d ticks after the first frame, of %d asked for%s",
+					ran, sustain, afterRestart(launched))
+			}
+			// A title that is still flushing is drawing; one that is not may
+			// still be running a loop that draws only when something changes,
+			// so this is logged rather than required.
+			t.Logf("ran %d ticks past its first frame (which took %d), flushes %d → %d%s",
+				ran, ticks, before, session.Flushes(), afterRestart(launched))
+			return
 		}
-		if ran < sustain {
-			t.Fatalf("nothing left to do %d ticks after the first frame, of %d asked for", ran, sustain)
-		}
-		// A title that is still flushing is drawing; one that is not may still
-		// be running a loop that draws only when something changes, so this is
-		// logged rather than required.
-		t.Logf("ran %d ticks past its first frame (which took %d), flushes %d → %d",
-			ran, ticks, before, session.Flushes())
 	})
 }
 
@@ -114,52 +137,92 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 		t.Skip("set WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1 to send keys to ignored local KTF archives")
 	}
 	hold := localLadderTicks(t, "WFEATURE_KTF_HOLD_TICKS", localLadderHoldTicks)
-	eachLocalKTFArchive(t, func(t *testing.T, session *Session) {
-		painted, ticks, why := tickToFirstFrame(t, session)
-		if !painted {
-			t.Skipf("%s in %d ticks, which the frame rung below this one reports", why, ticks)
-		}
-		settled, waited := tickUntilSettled(session)
-		if !settled {
-			// A screen that never stops changing on its own cannot answer this
-			// question: a change after a key would have happened anyway.
-			t.Skipf("the screen was still changing after %d ticks, so a change after a key would prove nothing", waited)
-		}
-		baseline := session.FrameDigest()
-		presents := session.Flushes()
-		var tried []string
-		for _, name := range localLadderKeys {
-			code, known := KeyCodeByName(name)
-			if !known {
-				t.Fatalf("no key called %q", name)
+	eachLocalKTFArchive(t, func(t *testing.T, launch func(*testing.T) *Session) {
+		for launched := 1; ; launched++ {
+			session := launch(t)
+			painted, ticks, why := tickToFirstFrame(t, session)
+			if !painted {
+				t.Skipf("%s in %d ticks, which the frame rung below this one reports", why, ticks)
 			}
-			tried = append(tried, name)
-			changed, after, err := pressAndWatch(session, code, baseline, hold, localLadderReleaseTicks)
-			if err != nil {
-				if errors.Is(err, ErrGuestExited) {
-					t.Fatalf("the title ended itself while %s was held", name)
+			settled, waited, err := tickUntilSettled(session)
+			if errors.Is(err, ErrGuestExited) {
+				if launched < localLadderLaunches {
+					continue
 				}
-				t.Fatalf("holding %s: %v", name, err)
+				t.Fatalf("the title ended itself %d ticks after its first frame on its second launch, before the screen settled", waited)
 			}
-			if changed {
-				t.Logf("%s changed the screen after %d ticks (settled after %d, flushes %d → %d)",
-					name, after, waited, presents, session.Flushes())
-				return
+			if err != nil {
+				t.Fatalf("tick %d while waiting for the screen to settle: %v", waited, err)
 			}
+			if !settled {
+				// A screen that never stops changing on its own cannot answer
+				// this question: a change after a key would have happened
+				// anyway.
+				//
+				// The launch is named here as well as on the outcomes below,
+				// because this is where a title that ended its first launch
+				// and then played on its second lands, and a report that left
+				// the relaunch off this line would say a title was never asked
+				// rather than that it had to be restarted first.
+				t.Skipf("the screen was still changing after %d ticks, so a change after a key would prove nothing%s",
+					waited, afterRestart(launched))
+			}
+			baseline := session.FrameDigest()
+			presents := session.Flushes()
+			var tried []string
+			ended := ""
+			for _, name := range localLadderKeys {
+				code, known := KeyCodeByName(name)
+				if !known {
+					t.Fatalf("no key called %q", name)
+				}
+				tried = append(tried, name)
+				changed, after, err := pressAndWatch(session, code, baseline, hold, localLadderReleaseTicks)
+				if errors.Is(err, ErrGuestExited) {
+					ended = name
+					break
+				}
+				if err != nil {
+					t.Fatalf("holding %s: %v", name, err)
+				}
+				if changed {
+					t.Logf("%s changed the screen after %d ticks (settled after %d, flushes %d → %d)%s",
+						name, after, waited, presents, session.Flushes(), afterRestart(launched))
+					return
+				}
+			}
+			if ended != "" {
+				if launched < localLadderLaunches {
+					continue
+				}
+				t.Fatalf("the title ended itself while %s was held, on its second launch", ended)
+			}
+			t.Fatalf("no key changed the screen: tried %s, held %d ticks each, %d flushes since it settled%s",
+				strings.Join(tried, ", "), hold, session.Flushes()-presents, afterRestart(launched))
 		}
-		t.Fatalf("no key changed the screen: tried %s, held %d ticks each, %d flushes since it settled",
-			strings.Join(tried, ", "), hold, session.Flushes()-presents)
 	})
 }
 
-// eachLocalKTFArchive runs one subtest per archive in the local corpus with a
-// started session in front of it, so a rung is written as the question it
-// asks rather than as another copy of the walk to it.
+// afterRestart says, in a log line, that what is being reported is the second
+// launch rather than the first. A rung that quietly relaunched would hide a
+// title's first-launch behaviour from whoever reads the report.
+func afterRestart(launched int) string {
+	if launched < 2 {
+		return ""
+	}
+	return ", on its second launch"
+}
+
+// eachLocalKTFArchive runs one subtest per archive in the local corpus, and
+// hands the rung a way to launch it rather than a launched session, so that a
+// rung meeting the restart notice can take the launch it asked for. Every
+// launch of one archive shares one save directory, which is what makes the
+// second one a second run rather than another first.
 //
 // One subtest per archive is what lets a report name the archive a refusal
 // came from; a count at the end of a log says a number where a report needs a
 // name.
-func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, session *Session)) {
+func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, launch func(*testing.T) *Session)) {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
@@ -188,22 +251,28 @@ func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, session *Session))
 			if isNativePackageArchive(data) {
 				t.Skip("the earlier KTF package, which these rungs do not drive")
 			}
-			// A probe measures what the guest computes, not how long it takes,
-			// so it runs a manual clock jumped to each next deadline: the same
-			// sequence of guest work at no real cost.
-			session, err := StartSession(context.Background(), data, SessionOptions{
-				MaxSteps: localAcceptanceMaxSteps(t),
-				Clock:    NewManualClock(time.Time{}),
-				// Saves go to the test's own directory. These rungs run long
-				// enough for a title to reach a write, and a probe must not
-				// read or write the progress a person made playing.
-				SaveRoot: t.TempDir(),
+			// Saves go to the test's own directory. These rungs run long
+			// enough for a title to reach a write, and a probe must not read
+			// or write the progress a person made playing. One directory for
+			// every launch of this archive: a second launch has to see what
+			// the first one wrote or it is not a second run.
+			saves := t.TempDir()
+			ask(t, func(t *testing.T) *Session {
+				t.Helper()
+				// A probe measures what the guest computes, not how long it
+				// takes, so it runs a manual clock jumped to each next
+				// deadline: the same sequence of guest work at no real cost.
+				session, err := StartSession(context.Background(), data, SessionOptions{
+					MaxSteps: localAcceptanceMaxSteps(t),
+					Clock:    NewManualClock(time.Time{}),
+					SaveRoot: saves,
+				})
+				if err != nil {
+					t.Fatalf("start: %v", err)
+				}
+				t.Cleanup(func() { session.Close() })
+				return session
 			})
-			if err != nil {
-				t.Fatalf("start: %v", err)
-			}
-			defer session.Close()
-			ask(t, session)
 		})
 		ran++
 	}
@@ -263,12 +332,18 @@ func tickFor(session *Session, ticks int) (int, error) {
 }
 
 // tickUntilSettled waits for the screen to stop changing on its own.
-func tickUntilSettled(session *Session) (settled bool, waited int) {
+//
+// A refusal is answered rather than folded into "it never settled": a title
+// that ends here is the restart notice, and the caller relaunches it. Reported
+// as an unsettled screen it would have been skipped instead — which is the
+// same title recorded as a question nobody asked rather than as a title that
+// needed its second launch.
+func tickUntilSettled(session *Session) (settled bool, waited int, err error) {
 	digest := session.FrameDigest()
 	steady := 0
 	for ; waited < localLadderSettleLimit; waited++ {
 		if _, err := session.Tick(context.Background()); err != nil {
-			return false, waited
+			return false, waited, err
 		}
 		session.SkipToNextDeadline()
 		current := session.FrameDigest()
@@ -279,10 +354,10 @@ func tickUntilSettled(session *Session) (settled bool, waited int) {
 		}
 		steady++
 		if steady >= localLadderSettleRuns {
-			return true, waited
+			return true, waited, nil
 		}
 	}
-	return false, waited
+	return false, waited, nil
 }
 
 // pressAndWatch holds one key down, releases it, and reports whether what the

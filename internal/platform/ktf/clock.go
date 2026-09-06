@@ -339,6 +339,22 @@ func (client *Client) NextDeadline() (time.Time, bool) {
 	if client.clientWakeAt.After(client.now()) {
 		consider(client.clientWakeAt)
 	}
+	// The Host's own round paint is work the guest has waiting, so the frame it
+	// is next due at is a deadline like any other: leaving it out reports a
+	// title whose only work is that paint as having nothing left to do, and a
+	// batch Host stops at the first gated frame.
+	//
+	// **Unlike the wait above it counts when it is already past**, because it
+	// is the one deadline here that a round clears by itself: a batch Host
+	// skips to a deadline and then asks again, so a paint reported only while
+	// it is still ahead disappears exactly when it comes due. That is safe
+	// only while the round paint could actually run, which is why it waits on
+	// the client thread — reported through a client wait that has not elapsed,
+	// it is a deadline level with the clock that no round can clear, and the
+	// clock never moves again.
+	if client.runtime != nil && len(client.runtime.displayCards) > 0 && client.clientThreadDue() {
+		consider(client.nextRoundPaint)
+	}
 	for _, worker := range client.workers {
 		consider(worker.wakeAt)
 	}
@@ -372,6 +388,25 @@ func (client *Client) NextDeadline() (time.Time, bool) {
 			// reached it.
 			if timer.callback == 0 && timer.task == nil {
 				continue
+			}
+			// **A task whose Timer is already running one is not due**, however
+			// long its own deadline has been past. ServiceTimers runs one task
+			// per Timer at a time and re-queues the rest unchanged, so a task
+			// queued behind a running one keeps a deadline in the past for as
+			// long as that run lasts. Reporting it answers "work is due now"
+			// every round, which on a manual clock means the clock can never
+			// be skipped forward — and the running task is usually parked on a
+			// sleep that only the clock could end. One local title deadlocks
+			// exactly there: its second scheduled task pins the clock while
+			// its first waits out a second and a half that never passes.
+			//
+			// When such a task becomes due is the running task's business, and
+			// the running task is a worker whose own wake-up is already
+			// considered above.
+			if timer.task != nil {
+				if _, running := client.runningTimerTasks[timer.owner]; running {
+					continue
+				}
 			}
 			consider(timer.due)
 		}

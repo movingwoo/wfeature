@@ -1787,6 +1787,63 @@ it exactly where a title that never declared one has always been: no deadline,
 so a Host ticks rather than sleeps, and whatever else is parked becomes the
 next deadline instead of being hidden behind a stale one.
 
+### Work that cannot run is not work that is due
+
+The stale wait above was the first of a family, and two more of it turned up
+together as the only two local titles whose screen never answered a key. Both
+looked identical from outside — a screen that had settled, redrawn several
+hundred times, and moved for nothing — and neither had anything to do with
+input. In both, guest time had stopped at the instant of the first frame, and
+in both the thing that stopped it was a queue entry that `NextDeadline`
+reported as due now and that no round could ever take.
+
+**A task queued behind a running task of its own `Timer`.** `ServiceTimers`
+runs one task per `java.util.Timer` at a time and puts the rest back unchanged,
+so the one behind keeps a deadline that fell due long ago. Reported, it answers
+"something is due now" every round for as long as the run in front of it lasts
+— and that run is a worker parked on a sleep that only the clock could end. One
+local title deadlocks there before its title screen: the first task waits out a
+second and a half of guest time, the second pins the clock, and neither moves
+again. Such a task is now left out; when it becomes due is the running task's
+business, and that task's own wake-up is already in the answer.
+
+**A thread the guest starts from inside its paint.** A started thread is
+runnable now and belongs in the answer (above) — but the Host's round paint
+costs no guest time, so a title that draws only from the round paint gets one
+paint per round and no time passes between them. One local title starts a sound
+thread from its `paint`, which means the queue is refilled every round, "due
+now" is the answer for ever, and the game's own loop waits out a 2.4-second
+sleep that can never elapse. The paint is what was wrong here, not the thread:
+**the round paint stands in for the handset's display refresh, and a refresh
+has a rate.** It is now held to `minGuestFramePeriod`, so a round paint costs a
+frame of guest time like every other frame on this platform does.
+
+Three things had to be true for that rate not to break the titles it was not
+about, and each was a corpus failure before it was a rule:
+
+- **Only the paint nobody asked for is rated.** A repaint the guest requested
+  is the guest asking for a frame now, and holding one back stalls more than
+  the screen: the serial-Runnable queue waits on an outstanding repaint and the
+  repaint is cleared by the paint, so a gated one leaves both parked on each
+  other. Three archives of one title stopped drawing entirely.
+- **The next frame is armed whether or not this one drew.** `paintTopCard`
+  declines a round while the guest is publishing its own frames, and the rule
+  that declines it counts rounds; a declined round with no deadline to come
+  back at leaves a title with nothing else running reporting no work pending,
+  and a batch Host stops on the frame before the handover.
+- **The paint deadline counts when it is already past, but only while the
+  client thread is due.** It is the one deadline here that a round clears by
+  itself, and a batch Host skips to a deadline and then asks again — so a paint
+  reported only while it is still ahead disappears exactly when it comes due.
+  Reported through a client wait that has *not* elapsed, though, it is a
+  deadline level with the clock that no round can clear, and the clock never
+  moves again.
+
+The rule underneath all of these is one sentence: **`NextDeadline` reports work
+that could run, not work that is queued.** Everything it reports as due now is
+a claim that a round will take it, and a claim a round cannot honour stops a
+manual clock dead.
+
 ### What frame skipping cannot pay for
 
 Dropping a paint (`session.md`) trades the picture for the logic in the same

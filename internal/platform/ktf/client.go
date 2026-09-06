@@ -134,6 +134,15 @@ type Client struct {
 	skipPaint  bool
 	lastPaint  time.Time
 	paintsDrop uint64
+	// nextRoundPaint is the guest instant the Host's own round paint is next
+	// due at. **The round paint stands in for the handset's display refresh,
+	// and a refresh has a rate**; without one it is free, so a title that
+	// draws only from the round paint gets as many frames as the Host has
+	// rounds and no guest time passes between them. On a manual clock that is
+	// not merely fast: the clock only moves when nothing is due, a round paint
+	// that costs nothing is always due, and a title whose own loop is asleep
+	// waits out a sleep that can never elapse. See ServicePaint.
+	nextRoundPaint time.Time
 	// uncaughtCallbacks counts the guest exceptions that ended a callback this
 	// Host started, and uncaughtFirst keeps what the first one said. Absorbing
 	// one keeps the session alive, so without a count a title that fails every
@@ -487,13 +496,32 @@ func (client *Client) ServicePaint(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	runtime := client.runtime
+	// **The rate belongs to the paint nobody asked for.** A repaint the guest
+	// requested is the guest asking for a frame now, and holding one back
+	// stalls more than the screen: the serial queue waits on an outstanding
+	// repaint, and the repaint is cleared by the paint, so a gated one leaves
+	// both parked on each other. See NextDeadline.
+	if !runtime.repaintQueued() && client.now().Before(client.nextRoundPaint) {
+		return false, nil
+	}
 	defer client.beginHostService(ctx)()
 	previousThread, previousContext := runtime.currentThread, runtime.currentContext
 	runtime.currentThread, runtime.currentContext = client.thread, ctx
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
-	return runtime.paintTopCard()
+	painted, err := runtime.paintTopCard()
+	// **The next frame is armed whether or not this one drew.** paintTopCard
+	// declines a round while the guest is publishing its own frames, and a
+	// declined round is still a round the Host has to come back from: the rule
+	// that declined it counts rounds, so without a deadline to come back at, a
+	// title with nothing else running reports no work pending and a batch Host
+	// stops on the frame before the handover. Only the absence of a card means
+	// there is no frame to arm.
+	if len(runtime.displayCards) > 0 {
+		client.nextRoundPaint = client.waitDeadline(minGuestFramePeriod)
+	}
+	return painted, err
 }
 
 // ServiceEvents delivers the events a game posted to its own queue and reports
