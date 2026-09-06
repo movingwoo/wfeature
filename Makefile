@@ -246,7 +246,7 @@ test:
 	go test ./...
 	node --test web/*.test.mjs
 
-# acceptance runs every local archive probe — eight for KTF, one for LGT, four
+# acceptance runs every local archive probe — eight for KTF, three for LGT, four
 # for SKT — and writes what they answered to var/acceptance/<date>.md, with a
 # record per archive beside it in <date>.ndjson. It needs the ignored local
 # corpus under var/games and runs nowhere else, which is why it is not part of
@@ -257,6 +257,12 @@ test:
 # carries its date and the archive that produced every row. The records beside
 # it are what two runs are compared with, and the run says what moved since the
 # one before it. Both stay under var/ because those rows are the games' names.
+#
+# An archive whose bytes this build already answered for is carried forward
+# from the run being compared with rather than measured again, so a sweep of a
+# corpus this size is worth running often. That only happens from a clean
+# checkout, because a commit names a build only when the tree was that commit;
+# `ARGS=-cache=false` measures everything again regardless.
 acceptance:
 	go run ./internal/tools/acceptance $(ARGS)
 

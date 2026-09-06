@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -33,7 +34,12 @@ import (
 // The schema version is the first field of every line. A reader that meets a
 // number it does not know is reading a file written by a newer tool, and it
 // should say so rather than quietly ignoring fields it cannot see.
-const recordSchema = 1
+// Version 2 added the fields that say a line was carried forward from an
+// earlier run rather than measured in this one, and the flag that says whether
+// the checkout behind a run was modified. Both change what a line means, so a
+// tool that cannot see them must refuse the file rather than read a copy as a
+// measurement.
+const recordSchema = 2
 
 // A record file's lines are one run record followed by one archive record per
 // file in the corpus — including the files no probe ever picked up. A download
@@ -48,29 +54,47 @@ const (
 // runRecord is the first line of a record file: what ran, on what, and what
 // was in front of it.
 type runRecord struct {
-	Schema   int            `json:"schema"`
-	Kind     string         `json:"kind"`
-	Run      string         `json:"run"`
-	GOOS     string         `json:"goos"`
-	GOARCH   string         `json:"goarch"`
-	Go       string         `json:"go"`
-	Revision string         `json:"revision,omitempty"`
-	Stages   []stageRecord  `json:"stages"`
-	Corpus   []corpusRecord `json:"corpus"`
+	Schema   int    `json:"schema"`
+	Kind     string `json:"kind"`
+	Run      string `json:"run"`
+	GOOS     string `json:"goos"`
+	GOARCH   string `json:"goarch"`
+	Go       string `json:"go"`
+	Revision string `json:"revision,omitempty"`
+	// Modified says the checkout had uncommitted changes, which is why the
+	// revision on its own does not identify what ran.
+	Modified bool `json:"modified,omitempty"`
+	// Build is what two runs are compared by when one is deciding whether the
+	// other's answers still apply: the revision when the checkout was clean,
+	// and the revision with a digest of what differs from it when it was not.
+	// Empty means this run cannot be identified at all, and nothing may be
+	// carried into or out of it.
+	Build string `json:"build,omitempty"`
+	// CachedFrom names the record file whose answers this run carried
+	// forward, when it carried any.
+	CachedFrom string         `json:"cached_from,omitempty"`
+	Stages     []stageRecord  `json:"stages"`
+	Corpus     []corpusRecord `json:"corpus"`
 }
 
 // stageRecord is one probe's run, which is what says whether a missing archive
 // record means "it passed nothing" or "the stage never ran at all".
 type stageRecord struct {
-	Platform string  `json:"platform"`
-	Stage    string  `json:"stage"`
-	Rung     int     `json:"rung,omitempty"`
-	Ran      int     `json:"ran"`
-	Passed   int     `json:"passed"`
-	Skipped  int     `json:"skipped"`
-	Failed   int     `json:"failed"`
-	Seconds  float64 `json:"seconds"`
-	Error    string  `json:"error,omitempty"`
+	Platform string `json:"platform"`
+	Stage    string `json:"stage"`
+	Rung     int    `json:"rung,omitempty"`
+	Ran      int    `json:"ran"`
+	Passed   int    `json:"passed"`
+	Skipped  int    `json:"skipped"`
+	Failed   int    `json:"failed"`
+	// Cached is how many of this stage's archives were not measured in this
+	// run at all. Ran counts only what was.
+	Cached  int     `json:"cached"`
+	Seconds float64 `json:"seconds"`
+	Error   string  `json:"error,omitempty"`
+	// NotRun says the stage was never started, because every archive on its
+	// platform was carried forward. It is not the same answer as Error.
+	NotRun bool `json:"not_run,omitempty"`
 }
 
 type corpusRecord struct {
@@ -114,6 +138,17 @@ type archiveRecord struct {
 	// of the same failure taken out of it, which is what a grouping counts.
 	WhyClass string                  `json:"why_class,omitempty"`
 	Stages   map[string]stageOutcome `json:"stages,omitempty"`
+	// Cached says this line was not measured in this run: the file's bytes and
+	// the build were both what an earlier run already answered for, so that
+	// run's answer was carried forward. MeasuredRun names the run that
+	// actually asked, which survives being carried more than once — a line
+	// copied twice still names the run that measured it.
+	//
+	// A record that reads like a measurement and is a copy of one turns a
+	// report into a claim nobody made, so these two fields are the price of
+	// the cache being allowed to exist at all.
+	Cached      bool   `json:"cached,omitempty"`
+	MeasuredRun string `json:"measured_run,omitempty"`
 }
 
 type stageOutcome struct {
@@ -144,18 +179,88 @@ const (
 	gradeSkipped = "skipped"
 )
 
-// buildRecords turns a run into its lines: the run itself, then every file in
-// every corpus directory that was in front of it.
-func buildRecords(root string, results []result, started time.Time, platforms []string) (runRecord, []archiveRecord) {
-	run := runRecord{
+// corpusEntry is one file in a corpus directory, read once. The same bytes
+// answer three questions — what was in front of the run, what the loaders make
+// of the file, and whether an earlier run's answer still applies to it — and
+// reading them once is what keeps those three from disagreeing.
+type corpusEntry struct {
+	name    string // the file name on disk
+	subtest string // the name `go test` gives the subtest for it
+	path    string
+	facts   fileFacts
+}
+
+// fileFacts is what a corpus file says about itself before any probe runs.
+type fileFacts struct {
+	sha256       string
+	size         int64
+	detected     string
+	detectReason string
+	detectError  string
+}
+
+// surveyCorpus reads every file in every corpus directory this run covers.
+func surveyCorpus(root string, platforms []string) map[string][]corpusEntry {
+	survey := map[string][]corpusEntry{}
+	for _, platform := range platforms {
+		directory := filepath.Join(root, corpus[platform])
+		var entries []corpusEntry
+		for _, name := range corpusFiles(directory) {
+			entry := corpusEntry{
+				name: name,
+				// A subtest is named after the archive, but `go test` rewrites
+				// that name before it prints it or matches it: a space becomes
+				// an underscore. Rows come back under the rewritten name and
+				// the file is on disk under the original, so every join and
+				// every selection is made on the rewritten one.
+				subtest: subtestName(name),
+				path:    filepath.Join(directory, name),
+			}
+			entry.facts = readFacts(entry.path)
+			entries = append(entries, entry)
+		}
+		survey[platform] = entries
+	}
+	return survey
+}
+
+func readFacts(path string) fileFacts {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fileFacts{detectError: err.Error()}
+	}
+	digest := sha256.Sum256(data)
+	facts := fileFacts{sha256: hex.EncodeToString(digest[:]), size: int64(len(data))}
+	detected, reason, err := detect.Classify(data)
+	facts.detected = string(detected)
+	facts.detectReason = string(reason)
+	if err != nil {
+		facts.detectError = err.Error()
+	}
+	return facts
+}
+
+// runHeader is what a run says about itself before it has measured anything,
+// which is also what the cache compares two runs by.
+func runHeader(root string, started time.Time) runRecord {
+	commit, modified, identity := build(root)
+	return runRecord{
 		Schema:   recordSchema,
 		Kind:     runKind,
 		Run:      started.UTC().Format(time.RFC3339),
 		GOOS:     runtime.GOOS,
 		GOARCH:   runtime.GOARCH,
 		Go:       runtime.Version(),
-		Revision: revision(),
+		Revision: commit,
+		Modified: modified,
+		Build:    identity,
 	}
+}
+
+// buildRecords turns a run into its lines: the run itself, then every file in
+// every corpus directory that was in front of it.
+func buildRecords(run runRecord, results []result, platforms []string,
+	survey map[string][]corpusEntry, plan cachePlan) (runRecord, []archiveRecord) {
 	for _, outcome := range results {
 		run.Stages = append(run.Stages, stageRecord{
 			Platform: outcome.stage.platform,
@@ -165,8 +270,10 @@ func buildRecords(root string, results []result, started time.Time, platforms []
 			Passed:   len(outcome.passed),
 			Skipped:  len(outcome.skipped),
 			Failed:   len(outcome.failed),
+			Cached:   outcome.cached,
 			Seconds:  outcome.elapsed.Seconds(),
 			Error:    outcome.err,
+			NotRun:   outcome.notRun,
 		})
 	}
 
@@ -203,25 +310,27 @@ func buildRecords(root string, results []result, started time.Time, platforms []
 	// finding of its own.
 	seen := map[key]bool{}
 	var archives []archiveRecord
+	carried := 0
 	for _, platform := range platforms {
-		directory := filepath.Join(root, corpus[platform])
-		names := corpusFiles(directory)
+		entries := survey[platform]
 		run.Corpus = append(run.Corpus, corpusRecord{
 			Platform:  platform,
 			Directory: corpus[platform],
-			Files:     len(names),
+			Files:     len(entries),
 		})
-		for _, name := range names {
-			// A subtest is named after the archive, but `go test` rewrites
-			// that name before it prints it: a space becomes an underscore.
-			// The rows come back under the rewritten name and the file is on
-			// disk under the original, so the join has to be made on the
-			// rewritten one or every archive with a space in its name looks
-			// like a file no probe ever answered for.
-			at := key{platform, subtestName(name)}
+		for _, entry := range entries {
+			at := key{platform, entry.subtest}
 			seen[at] = true
-			archives = append(archives, archiveRecordFor(run.Run, platform, filepath.Join(directory, name), name, rows[at], results))
+			if was, ok := plan.carried[cacheKey(at)]; ok {
+				archives = append(archives, carriedRecord(run.Run, was))
+				carried++
+				continue
+			}
+			archives = append(archives, archiveRecordFor(run.Run, platform, entry.name, entry.facts, rows[at], results))
 		}
+	}
+	if carried > 0 {
+		run.CachedFrom = plan.from
 	}
 	// A row for an archive that is no longer in the directory still belongs in
 	// the file: a probe answered for it, and dropping it would make the run
@@ -232,7 +341,7 @@ func buildRecords(root string, results []result, started time.Time, platforms []
 		}
 		// The name here is the rewritten one, which is the only name this run
 		// ever saw for a file that is no longer in the directory.
-		archives = append(archives, archiveRecordFor(run.Run, at.platform, "", at.archive, stages, results))
+		archives = append(archives, archiveRecordFor(run.Run, at.platform, at.archive, fileFacts{}, stages, results))
 	}
 	sort.Slice(archives, func(one, two int) bool {
 		if archives[one].Platform != archives[two].Platform {
@@ -245,33 +354,47 @@ func buildRecords(root string, results []result, started time.Time, platforms []
 
 // archiveRecordFor fills in one file's line: what the file is, what detection
 // said about it, and how far up the ladder it got.
-func archiveRecordFor(run, platform, path, name string, stages map[string]stageOutcome, results []result) archiveRecord {
+func archiveRecordFor(run, platform, name string, facts fileFacts, stages map[string]stageOutcome, results []result) archiveRecord {
 	record := archiveRecord{
-		Schema:   recordSchema,
-		Kind:     archiveKind,
-		Run:      run,
-		Platform: platform,
-		Archive:  name,
-		Stages:   stages,
-	}
-	if path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			digest := sha256.Sum256(data)
-			record.SHA256 = hex.EncodeToString(digest[:])
-			record.Size = int64(len(data))
-			detected, reason, err := detect.Classify(data)
-			record.Detected = string(detected)
-			record.DetectReason = string(reason)
-			if err != nil {
-				record.DetectError = err.Error()
-			}
-		} else {
-			record.DetectError = err.Error()
-		}
+		Schema:       recordSchema,
+		Kind:         archiveKind,
+		Run:          run,
+		Platform:     platform,
+		Archive:      name,
+		SHA256:       facts.sha256,
+		Size:         facts.size,
+		Detected:     facts.detected,
+		DetectReason: facts.detectReason,
+		DetectError:  facts.detectError,
+		Stages:       stages,
+		// A line this run measured names itself as the run that measured it,
+		// so a reader never has to know which fields were added when.
+		MeasuredRun: run,
 	}
 	record.Grade, record.Rung, record.Ladder, record.Stopped, record.StoppedOutcome, record.Why = grade(platform, stages, results)
 	record.WhyClass = classify(record.Why)
 	return record
+}
+
+// carriedRecord is an earlier run's answer written into this run's file. Every
+// measured field is the earlier one's, untouched: the point of carrying a line
+// forward is that nothing about it was measured again, and re-deriving a grade
+// here would be this run making a claim out of a copy.
+//
+// What changes is the provenance. Run is this run, because that is the file
+// the line is in; MeasuredRun is the run that asked, which is carried rather
+// than overwritten so a line copied a second time still names the run that
+// measured it rather than the one that copied it.
+func carriedRecord(run string, was archiveRecord) archiveRecord {
+	measured := was.MeasuredRun
+	if measured == "" {
+		measured = was.Run
+	}
+	was.Schema = recordSchema
+	was.Run = run
+	was.Cached = true
+	was.MeasuredRun = measured
+	return was
 }
 
 // grade reads one archive's stage outcomes as a position on its platform's
@@ -465,18 +588,107 @@ func subtestName(name string) string {
 	return rewritten.String()
 }
 
-// revision is the commit the tool was built from, when it was built from a
-// checkout. Two runs of different builds over the same corpus are not the same
-// measurement, and the record has to be able to say so.
-func revision() string {
+// build says what code this run is. Two runs over the same corpus are the same
+// measurement only when this is the same, and the record has to be able to say
+// so.
+//
+// The checkout is asked rather than the binary. `debug.ReadBuildInfo` carries
+// a revision and a modified flag, but only for a binary `go build` stamped,
+// and this command is run with `go run` — which stamps nothing, and which
+// compiles the probes out of whatever is in the tree at the moment they run.
+// So the tree is the honest source, and the build stamp is the fallback for a
+// copy of this tool that was built elsewhere.
+//
+// **A commit is not enough on its own.** It names a build only while the
+// working tree is that commit, and a modified tree is precisely the state a
+// person is in while changing the thing being measured — which is also exactly
+// when a sweep is worth re-running often. So a modified tree is identified by
+// the commit plus a digest of everything that differs from it: the diff
+// against HEAD, and the content of every untracked file git would not ignore.
+//
+// That digest is a superset of what decides an answer — editing a document
+// invalidates a corpus sweep — and the over-counting is the direction to err
+// in. The alternative, ignoring a change because it looked unrelated, is a
+// report claiming an answer this code never gave.
+func build(root string) (commit string, modified bool, identity string) {
+	commit, ok := gitOutput(root, "rev-parse", "HEAD")
+	if !ok {
+		return stampedBuild()
+	}
+	difference := sha256.New()
+	fmt.Fprintf(difference, "commit %s\n", commit)
+	diff, ok := gitBytes(root, "diff", "HEAD")
+	if !ok {
+		// git answered the first question and not the second, so nothing here
+		// can be trusted to describe the tree.
+		return commit, true, ""
+	}
+	fmt.Fprintf(difference, "diff %d\n", len(diff))
+	difference.Write(diff)
+	untracked, ok := gitOutput(root, "ls-files", "--others", "--exclude-standard")
+	if !ok {
+		return commit, true, ""
+	}
+	changed := len(diff) > 0
+	for _, name := range strings.Split(untracked, "\n") {
+		if name == "" {
+			continue
+		}
+		changed = true
+		fmt.Fprintf(difference, "untracked %s ", name)
+		// An untracked path that cannot be read — a symbolic link to a
+		// directory, a file removed since git listed it — still has to change
+		// the identity, because what it would have contributed is unknown.
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			fmt.Fprintf(difference, "unreadable %v\n", err)
+			continue
+		}
+		content := sha256.Sum256(data)
+		fmt.Fprintf(difference, "%s\n", hex.EncodeToString(content[:]))
+	}
+	if !changed {
+		return commit, false, commit
+	}
+	return commit, true, commit + "+" + hex.EncodeToString(difference.Sum(nil))[:16]
+}
+
+// stampedBuild is what a binary built by `go build` knows about itself, for a
+// copy of this tool run outside the checkout it came from. A modified tree
+// leaves nothing to identify the build with, because the stamp records that
+// the tree differed and not how.
+func stampedBuild() (commit string, modified bool, identity string) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return ""
+		return "", false, ""
 	}
 	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" {
-			return setting.Value
+		switch setting.Key {
+		case "vcs.revision":
+			commit = setting.Value
+		case "vcs.modified":
+			modified = setting.Value == "true"
 		}
 	}
-	return ""
+	if modified {
+		return commit, true, ""
+	}
+	return commit, false, commit
+}
+
+// gitOutput asks git one question about the checkout, and answers whether it
+// could. A tree that is not a checkout at all is not an error here: it means
+// this run cannot be identified, which the cache reads as "measure everything".
+func gitOutput(root string, arguments ...string) (string, bool) {
+	output, ok := gitBytes(root, arguments...)
+	return strings.TrimSpace(string(output)), ok
+}
+
+func gitBytes(root string, arguments ...string) ([]byte, bool) {
+	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
+	output, err := command.Output()
+	if err != nil {
+		return nil, false
+	}
+	return output, true
 }

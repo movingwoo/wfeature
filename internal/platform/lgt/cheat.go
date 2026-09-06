@@ -1,6 +1,8 @@
 package lgt
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -96,6 +98,34 @@ func writeOrigin(origin armcore.WriteOrigin) cheat.WriteOrigin {
 	return cheat.OriginGuest
 }
 
+// ImageHash is the SHA-256 of the executable image this session loaded, in
+// lower-case hex. It identifies what is running across the archives a title
+// arrives in: repackaging changes the file and leaves the image alone, and an
+// address — a byte patch above all — is true of the image rather than of what
+// the container around it was called.
+//
+// This platform has exactly one such image, the module inside the JAR, which
+// is what makes the answer meaningful here. A platform whose title is a bag of
+// class files has no single loaded image, and the file it was read from is
+// what identifies it instead; that is not a gap to be filled in with a hash of
+// something arbitrary.
+func (session *Session) ImageHash() string {
+	if session == nil || session.archive == nil {
+		return ""
+	}
+	return imageHash(session.archive.Module)
+}
+
+// imageHash is the shared spelling of that identity, so every caller answers
+// the same kind of value.
+func imageHash(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // Cheat returns the session's attached cheat engine, creating it on first use.
 // Session.Tick reapplies its frozen values after every round.
 func (session *Session) Cheat() *cheat.Session {
@@ -121,6 +151,11 @@ func (session *Session) CheatConsole() *cheat.Console {
 		if session.archive != nil {
 			session.cheatConsole.SetGame(SaveOwner(session.archive.Descriptor))
 		}
+		// The name is the label; the key beside it is the hash of the image
+		// actually loaded, so a table made against one packaging of a title is
+		// found again by another. The Host fills in the other half of the key,
+		// which is the file it read.
+		session.cheatConsole.SetTableKey(cheat.TableKey{Image: session.ImageHash()})
 	}
 	return session.cheatConsole
 }

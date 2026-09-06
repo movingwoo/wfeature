@@ -34,7 +34,7 @@ func TestAStageIsReadOutOfTheTestStream(t *testing.T) {
 		{Action: "fail", Test: ""},
 	})
 
-	outcome := collect(strings.NewReader(stream), probe)
+	outcome := collect(strings.NewReader(stream), probe, false)
 	if got := strings.Join(outcome.passed, ","); got != "a.zip" {
 		t.Errorf("passed = %q, want a.zip", got)
 	}
@@ -100,12 +100,12 @@ func TestTheReportCarriesTheDateTheCorpusAndEveryArchiveThatDidNotPass(t *testin
 		passed:  []string{"one.zip"},
 		failed:  []note{{"two.zip", "the title never asked to present a frame"}},
 		elapsed: 42 * time.Second,
-	}}, day)
+	}}, day, cachePlan{})
 
 	for _, wanted := range []string{
 		"# Local acceptance, 2026-09-04",
 		"| `var/games/lgt` | 2 | 1 |",
-		"| LGT | boot | 2 | 1 | 0 | 1 |",
+		"| LGT | boot | 2 | 1 | 0 | 1 | 0 |",
 		"`two.zip` — the title never asked to present a frame",
 		"WFEATURE_LGT_ACCEPTANCE=1",
 	} {
@@ -122,7 +122,7 @@ func TestAStageThatCouldNotRunSaysSo(t *testing.T) {
 	report := write(t.TempDir(), []result{{
 		stage: stageNamed(t, "ktf", "parse"),
 		err:   "exit status 2 (is WFEATURE_KTF_ACCEPTANCE set, and is there a corpus in var/games/ktf?)",
-	}}, time.Now())
+	}}, time.Now(), cachePlan{})
 	if !strings.Contains(report, "**This stage did not run**") {
 		t.Errorf("a stage that did not run was reported as one that did:\n%s", report)
 	}

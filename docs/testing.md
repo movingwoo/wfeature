@@ -955,9 +955,15 @@ asked without a person watching:
 ```sh
 WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalKTFArchivesSustainAFrame -v ./internal/platform/ktf
 WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalKTFArchivesAnswerAKey -v ./internal/platform/ktf
+WFEATURE_LGT_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalLGTArchivesSustainAFrame -v ./internal/platform/lgt
+WFEATURE_LGT_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalLGTArchivesAnswerAKey -v ./internal/platform/lgt
 WFEATURE_SKT_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalSKTArchivesSustainAFrame -v ./internal/platform/skt
 WFEATURE_SKT_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalSKTArchivesAnswerAKey -v ./internal/platform/skt
 ```
+
+Each platform's pair takes `WFEATURE_<platform>_SUSTAIN_TICKS` and
+`WFEATURE_<platform>_HOLD_TICKS`, which widen the two windows for the
+investigation that follows a rung nobody expected an archive to miss.
 
 **sustained** is the title still running a window past its first frame, with no
 error and without ending itself. It is not the same claim as "it ticked a
@@ -984,10 +990,27 @@ rather than on the one the event arrived by. Several keys are tried in turn and
 the one that moved the screen is logged, because that is the key a route for
 that archive has to start with.
 
+**All three platforms ask it the same way, deliberately.** A grade is only worth
+comparing across platforms if it means the same thing on each of them, so the
+judgment — settle, hold, release, compare, and *unanswerable* rather than failed
+when the screen never settles — is one design written three times against three
+session APIs rather than three designs. Where the platforms differ is in what
+they are made of: a KTF or LGT tick moves a virtual clock and costs guest work
+rather than seconds, while an SKT tick is real time because a MIDlet's threads
+sleep against the wall clock, so only the SKT probe runs its archives in
+parallel. LGT's key names are resolved through the same table the CLI's LGT
+route path resolves a route's keys with — `fire` must not mean one thing to a
+route and another to a rung. And LGT titles are allowed to end their first
+launch: the handset's restart notice writes a save, tells the player to start
+the title again and ends, which at this rung looks exactly like a title that
+died. So an LGT archive that ends itself gets the second launch the notice
+asked for against the same save directory, and only an ending on that launch is
+reported ([lgt.md](lgt.md), "Two rungs above a first frame").
+
 What the rungs answer for the local corpus today is in the acceptance report;
-the shape of the answer is that KTF's ladder is now eight rungs and SKT's is
-three, and that the archives which stop below the top do so for reasons that
-group into a handful of causes rather than into one per archive.
+the shape of the answer is that KTF's ladder is now eight rungs and LGT's and
+SKT's are three, and that the archives which stop below the top do so for
+reasons that group into a handful of causes rather than into one per archive.
 
 SKT has the same shape of probe, and it is the only test in that package that
 runs a real title:
@@ -1062,7 +1085,7 @@ has it in full, and [`cli.md`](cli.md) has the flags.
 
 ## One command, one date
 
-The probes above are thirteen `go test` runs behind twelve environment
+The probes above are fifteen `go test` runs behind fourteen environment
 variables, which is why every count in this document used to be a sentence
 somebody typed after an afternoon of running them. A sentence like that has no
 date on it, and the corpus underneath it changes: "all 28 currently pass" was
@@ -1078,7 +1101,7 @@ reads the results out of `go test -json` rather than out of its printed output �
 which is what keeps a subtest's name and its reason together when several fail
 at once — and writes `var/acceptance/<date>.md`: what was in each corpus
 directory, a row per stage, and then every archive that did not pass with the
-line that says why. It takes about four minutes for all thirteen.
+line that says why.
 
 **Neither file it writes is committed and neither can be**: their rows are
 archive file names, and those are the games' names. `var/` is ignored for that
@@ -1108,6 +1131,7 @@ refused rather than half-read. An archive line carries:
 | `stopped`, `stopped_outcome`, `why` | the lowest rung it did not pass, whether it was refused or declined, and the reason the probe printed |
 | `why_class` | that reason with the counts and addresses taken out of it, which is what a grouping counts |
 | `stages` | every stage that answered, as `pass`, `skip` or `fail` with its reason |
+| `cached`, `measured_run` | whether this line was carried forward rather than measured, and the run that did measure it |
 
 Three grades are not rungs and mean different things: `none` is a file refused
 at the first rung it was asked, `skipped` is one every rung knowingly declined —
@@ -1145,6 +1169,65 @@ go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
 `-compare` runs no probes: it reads two record files and writes the difference
 to standard output, which is what a release check reaches for when both runs
 have already happened.
+
+### Not measuring again what has not changed
+
+A sweep of a corpus this size is mostly spent re-answering questions whose
+inputs did not move: the same bytes, driven by the same build, produce the same
+answer. So a run may carry an archive's line forward from the run `-since`
+names instead of measuring it again, which is what makes the sweep cheap enough
+to run often.
+
+Two rules keep that from becoming a lie.
+
+**The identity has to cover everything that decides the answer.** The archive's
+SHA-256 is the input and the build identity is the code that reads it, so a
+line is carried only when the file's bytes are the same *and* both runs have
+the same build identity, operating system, architecture and Go version.
+
+A commit alone is not that identity: it names a build only while the tree *is*
+that commit, and a modified tree is precisely the state a person is in while
+changing the thing being measured — which is also when a sweep is most worth
+re-running. So a modified checkout is identified by the commit plus a digest of
+everything differing from it: the diff against `HEAD`, and the content of every
+untracked file the ignore rules do not cover. That digest is a superset of what
+decides an answer, and the over-counting is the direction to err in — editing a
+document costs a needless sweep, whereas ignoring a change because it looked
+unrelated would mean reporting an answer this code never gave. A tree that
+cannot be described at all carries nothing either way.
+
+The identity is read from the checkout rather than from `debug.ReadBuildInfo`,
+because the command runs under `go run` — which stamps no revision, and which
+compiles the probes out of whatever is in the tree at the moment they run. The
+build stamp is the fallback for a copy of the tool built elsewhere.
+
+The report says in a line why nothing was carried when nothing was, and
+`ARGS="-cache=false"` measures everything again regardless.
+
+**A carried line has to say that it was carried.** A record that reads like a
+measurement and is a copy of one turns a report into a claim nobody made, so
+every carried line sets `cached` and names the run that actually measured it in
+`measured_run`. That name is carried rather than rewritten, so a line copied a
+second time still points at the run that asked. The run line names the file its
+carried rows came from in `cached_from`, the stage table has a **carried
+forward** column beside `ran`, and a stage with nothing left to measure is
+recorded as `not_run` rather than as one that answered for nobody. An archive
+is carried whole rather than a rung at a time: a line whose earlier run did not
+answer every stage this one intends to ask is measured again, so a line is one
+thing or the other.
+
+The answers come from the most recent run there is — including the current
+day's own file, which the comparison deliberately steps over. Comparing a run
+with itself says nothing, which is why the delta skips it; reusing its answers
+is the whole point, which is why this does not.
+
+The selection reaches a probe as `go test`'s own subtest filter, because a
+subtest here *is* an archive and the runner already runs a whole test function
+at a time. A flag on the probes would be a second way of saying what `-run`
+already says; what it did need is one guard on the reader — a filter that
+matches no subtest leaves the parent test passing with nothing under it, and
+reading that as "the whole corpus passed" would invent a row out of the absence
+of one.
 
 Two things follow from a report having to be readable per archive. **Each probe
 is one subtest per archive**, including the three that used to loop with
