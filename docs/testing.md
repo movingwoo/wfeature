@@ -943,6 +943,22 @@ what it answers for is the path a Host takes — a paint a round skips, a wait
 the client thread declared, a guest that exits — and the whole corpus runs in
 about five seconds instead of hundreds of hand-driven rounds per archive.
 
+**A ladder has to be monotone**, and this one was not. The four rungs between
+"the archive parses" and "the title paints" walk a client by hand — run its
+entry, initialise it, load the main class, construct it, start it — and they
+only ever walked the current generation's route. The earlier relocatable module
+does not take that route: its entry is handed the platform's callback table and
+publishes its own classes, where the current generation relocates itself,
+returns an executable descriptor and meets a platform in `Initialize`. So an
+archive of the earlier shape was refused at rungs two to five with a read of
+unmapped guest memory, and then passed at six, seven and eight, which go
+through `StartSession` and take the right branch. The record said `grade:
+interactive` and `stopped: initialize` about the same file — one row
+contradicting itself rather than two facts. The hand-walked rungs now make the
+same branch `StartSession` makes, so they measure that generation instead of
+reporting it as a fault; rung two asks it only what it can answer, since it has
+no executable descriptor to read.
+
 The ratio is still not the number that says what plays. Nothing here is: what
 plays is found by driving a title with keys and looking at the frames, one
 title at a time. A first frame is a first frame.
@@ -1012,6 +1028,43 @@ blinking screen has no single frame to compare against, since half its ticks
 differ from the other half whether or not a key did anything. A screen still
 producing new content stays *unanswerable* — the point is to shrink "I do not
 know", not to spell it as something else.
+
+**A screen that a key did not move is not always a screen that answers no
+key.** The rung settles a screen and presses; a title whose opening runs longer
+than the press window answers nothing, because at that moment there is nothing
+to answer — the opening is still playing. One title measured here holds its
+logo for about twenty-four thousand ticks and then keeps animating, against a
+press window of five keys times sixty-four ticks.
+
+The obvious repair, widening the press window, is the wrong one. A window long
+enough to outlast an opening is a window the opening's own next screen arrives
+inside, and the rung credits it to the key: it would report that `fire` changed
+the screen about a title that ignored `fire` and simply reached the end of its
+logo. That is the error the settle step exists to prevent — a change measured
+against a screen that was already moving — moved from before the press to after
+it. So the screen is **settled again** instead: when no key moved it, the rung
+waits with nothing held for the screen to leave the set it settled on, and if
+it does, that is a title whose opening is still running and what it moved to is
+a new screen to settle and ask. A screen that does not move at all while
+nothing is held is a screen that answers no key. The cost falls where the
+evidence is — a title whose first key answers pays nothing.
+
+**A second launch has to be a second run.** The rungs already give an archive
+two launches because the handset's first-run notice ends the first one, and
+that was recognised by the session ending, which is the only thing a rung could
+see. It is not the only shape the notice takes: one title puts the notice up
+and *waits* on it — it settles on a still screen and no key moves it — and
+launched a second time against the same save directory it plays and `fire`
+answers. Widening "it ended itself" to "it did not get past its first screen"
+risks a free retry for a title that is legitimately stuck, and what bounds that
+risk is that a rerun which reads the same bytes is not a second run at all: over
+an unchanged save directory the guest takes the same branch on the same input.
+So a title that did not end itself gets its second launch only when the first
+one **wrote something for the second to read**, which is exactly what the notice
+does. That is also what keeps "a third would be a probe hoping" true — a second
+launch over unchanged bytes is already hoping, and this is the test that says
+so. Both judgments live in `internal/ladder` beside the settle rule, for the
+same reason it does.
 
 **All three platforms ask it the same way, deliberately.** A grade is only worth
 comparing across platforms if it means the same thing on each of them, so the

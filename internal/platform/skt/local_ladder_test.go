@@ -62,6 +62,22 @@ const (
 	// How long to keep ticking after the key is released, because what a key
 	// starts is often a transition rather than an immediate redraw.
 	localLadderReleaseTicks = 48
+	// How long a screen that answered no key is given to move on its own
+	// before the rung reports that it answers no key.
+	//
+	// A title whose opening runs longer than the press window has not refused
+	// the keys: it has not yet been asked a question it can answer, and the
+	// evidence for that is a screen that keeps moving with nothing held. See
+	// `internal/ladder` for why this is waited out rather than folded into the
+	// press window — a press window long enough to outlast an opening credits
+	// the opening's own next screen to the key.
+	//
+	// It is smaller here than on the two platforms whose clock is virtual, for
+	// the same reason this platform's settle window is: a tick here is real
+	// time, because a MIDlet's threads sleep against the wall clock. The
+	// judgment is the one all three make; what a tick costs is what each
+	// platform is made of.
+	localLadderOpeningTicks = 1024
 	// The pause between ticks, which is the boot probe's.
 	localLadderTickPause = 16 * time.Millisecond
 )
@@ -130,29 +146,88 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 		if !painted {
 			t.Skipf("%s in %d ticks, which the boot rung below this one reports", why, ticks)
 		}
-		screen, settled, waited := tickUntilSettled(t, session, framebuffer)
-		if !settled {
-			t.Skipf("%s", screen.Unsettled(waited))
-		}
 		_, presented := framebuffer.Snapshot()
+		// The screen is settled and asked, and if it answers nothing and then
+		// moves on its own, the screen it moved to is settled and asked in
+		// turn: a title whose opening outlasts the press window answered
+		// nothing because its opening was still playing. See
+		// `internal/ladder`.
 		var tried []string
-		for _, key := range localLadderKeys {
-			tried = append(tried, key.name)
-			changed, after, err := pressAndWatch(t, session, framebuffer, key.code, screen, hold)
-			if err != nil {
-				t.Fatalf("holding %s: %v", key.name, err)
+		rounds, moved := 0, 0
+		for round := 1; round <= ladder.SettleRounds; round++ {
+			rounds = round
+			screen, settled, waited := tickUntilSettled(t, session, framebuffer)
+			if !settled {
+				t.Skipf("%s", screen.Unsettled(waited))
 			}
-			if changed {
-				_, now := framebuffer.Snapshot()
-				t.Logf("%s changed the screen after %d ticks (settled after %d, presented %d → %d)",
-					key.name, after, waited, presented, now)
+			tried = nil
+			answered := false
+			for _, key := range localLadderKeys {
+				tried = append(tried, key.name)
+				changed, after, err := pressAndWatch(t, session, framebuffer, key.code, screen, hold)
+				if err != nil {
+					t.Fatalf("holding %s: %v", key.name, err)
+				}
+				if changed {
+					_, now := framebuffer.Snapshot()
+					t.Logf("%s changed the screen after %d ticks (settled after %d on round %d of %d, %d screens into its opening, presented %d → %d)",
+						key.name, after, waited, round, ladder.SettleRounds, moved, presented, now)
+					answered = true
+					break
+				}
+			}
+			if answered {
 				return
 			}
+			if round == ladder.SettleRounds {
+				break
+			}
+			if !tickUntilScreenMoves(t, session, framebuffer, screen, localLadderOpeningTicks) {
+				break
+			}
+			moved++
 		}
 		_, now := framebuffer.Snapshot()
-		t.Fatalf("no key changed the screen: tried %s, held %d ticks each, %d presents since it settled",
-			strings.Join(tried, ", "), hold, now-presented)
+		t.Fatalf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d presents since it settled",
+			openingMovedOn(moved), strings.Join(tried, ", "), hold, rounds, screens(rounds), now-presented)
 	})
+}
+
+// tickUntilScreenMoves ticks with nothing held and reports whether the screen
+// leaves the set it settled on. That is a title whose opening is still
+// running: what it moves to is a screen the rung has not asked yet.
+func tickUntilScreenMoves(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer, screen *ladder.Watcher, budget int) bool {
+	t.Helper()
+	for waited := 0; waited < budget; waited++ {
+		session.AdvanceAudio()
+		if err := session.RunPending(); err != nil {
+			return false
+		}
+		time.Sleep(localLadderTickPause)
+		if screen.Changed(presentedFrame(framebuffer)) {
+			return true
+		}
+	}
+	return false
+}
+
+// openingMovedOn says, in a failure, whether the screen that answered no key
+// was the one the title booted to or one its opening moved on to. The two are
+// different defects and a line that spelled them the same way would send
+// whoever read it to the wrong place.
+func openingMovedOn(moved int) string {
+	if moved == 0 {
+		return fmt.Sprintf(", and it did not move on its own in the %d ticks after", localLadderOpeningTicks)
+	}
+	return fmt.Sprintf(", over %d %s its opening moved on to", moved, screens(moved))
+}
+
+// screens is "screen" or "screens", so a count reads as a sentence.
+func screens(count int) string {
+	if count == 1 {
+		return "screen"
+	}
+	return "screens"
 }
 
 // eachLocalSKTArchive runs one subtest per archive with a started session in

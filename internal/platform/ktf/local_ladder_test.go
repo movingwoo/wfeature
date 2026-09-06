@@ -43,6 +43,14 @@ import (
 // cycles through, and a key changed the screen when it draws something that
 // set never held.
 //
+// **A screen that a key did not move is not always a screen that answers no
+// key.** A title whose opening runs longer than the press window answers
+// nothing because its opening is still playing, so a screen that answered no
+// key is watched with nothing held, and if it moves on its own, what it moved
+// to is settled and asked in turn. Widening the press window instead would
+// have let the opening's own next screen land inside it and be credited to the
+// key; `internal/ladder` has the argument.
+//
 // **A title is allowed to end its first launch.** Several here put the
 // handset's own restart notice up before anything else: they write their save,
 // tell the player to start the title again, and end. That is correct
@@ -51,8 +59,11 @@ import (
 // launch the notice asked for, against the same save directory, and only an
 // ending on that launch is reported. A probe that judged every title on a
 // launch the platform treats as an installation would be measuring its own
-// fresh directory. This is the same rule the sibling platform's ladder
-// applies, and for the same reason: two platforms must not answer one question
+// fresh directory. The notice does not always end the launch — one title on
+// the sibling platform waits on it — so an archive that answered no key gets
+// that second launch too, but only when the first one wrote something for the
+// second to read. This is the same rule the sibling platform's ladder applies,
+// and for the same reason: two platforms must not answer one question
 // differently.
 //
 // Both are opt-in like the rest of the local probes: real archives are ignored
@@ -79,6 +90,21 @@ const (
 	// How long to keep ticking after the key is released. What a key starts is
 	// often a transition rather than an immediate redraw.
 	localLadderReleaseTicks = 48
+	// How long a screen that answered no key is given to move on its own
+	// before the rung reports that it answers no key.
+	//
+	// A title whose opening runs longer than the press window has not refused
+	// the keys: it has not yet been asked a question it can answer, and the
+	// evidence for that is a screen that keeps moving with nothing held. See
+	// `internal/ladder` for why this is waited out rather than folded into the
+	// press window — a press window long enough to outlast an opening credits
+	// the opening's own next screen to the key.
+	//
+	// Sized from the corpus rather than chosen: the openings measured here
+	// move again within a few hundred ticks of the press window closing, and
+	// this is an order above the largest of them, which costs nothing because
+	// only a title that has already answered no key ever spends it.
+	localLadderOpeningTicks = 4096
 	// How many launches an archive gets. Two, because the first one is what
 	// the platform's restart notice ends; a third would be a probe hoping.
 	localLadderLaunches = 2
@@ -100,7 +126,7 @@ func TestLocalKTFArchivesSustainAFrame(t *testing.T) {
 		t.Skip("set WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1 to run ignored local KTF archives past their first frame")
 	}
 	sustain := localLadderTicks(t, "WFEATURE_KTF_SUSTAIN_TICKS", localLadderSustainTicks)
-	eachLocalKTFArchive(t, func(t *testing.T, launch func(*testing.T) *Session) {
+	eachLocalKTFArchive(t, func(t *testing.T, _ string, launch func(*testing.T) *Session) {
 		for launched := 1; ; launched++ {
 			session := launch(t)
 			painted, ticks, why := tickToFirstFrame(t, session)
@@ -145,68 +171,173 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 		t.Skip("set WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1 to send keys to ignored local KTF archives")
 	}
 	hold := localLadderTicks(t, "WFEATURE_KTF_HOLD_TICKS", localLadderHoldTicks)
-	eachLocalKTFArchive(t, func(t *testing.T, launch func(*testing.T) *Session) {
+	eachLocalKTFArchive(t, func(t *testing.T, saves string, launch func(*testing.T) *Session) {
 		for launched := 1; ; launched++ {
+			// What the save directory held before this launch. A launch that
+			// answers no key is only worth repeating if it wrote something for
+			// the repeat to read; see the relaunch below.
+			had := ladder.Footprint(saves)
 			session := launch(t)
 			painted, ticks, why := tickToFirstFrame(t, session)
 			if !painted {
 				t.Skipf("%s in %d ticks, which the frame rung below this one reports", why, ticks)
 			}
-			screen, settled, waited, err := tickUntilSettled(session)
-			if errors.Is(err, ErrGuestExited) {
-				if launched < localLadderLaunches {
-					continue
-				}
-				t.Fatalf("the title ended itself %d ticks after its first frame on its second launch, before the screen settled", waited)
-			}
-			if err != nil {
-				t.Fatalf("tick %d while waiting for the screen to settle: %v", waited, err)
-			}
-			if !settled {
-				// A screen that never stops changing on its own cannot answer
-				// this question: a change after a key would have happened
-				// anyway.
-				//
-				// The launch is named here as well as on the outcomes below,
-				// because this is where a title that ended its first launch
-				// and then played on its second lands, and a report that left
-				// the relaunch off this line would say a title was never asked
-				// rather than that it had to be restarted first.
-				t.Skipf("%s%s", screen.Unsettled(waited), afterRestart(launched))
-			}
 			presents := session.Flushes()
-			var tried []string
-			ended := ""
-			for _, name := range localLadderKeys {
-				code, known := KeyCodeByName(name)
-				if !known {
-					t.Fatalf("no key called %q", name)
-				}
-				tried = append(tried, name)
-				changed, after, err := pressAndWatch(session, code, screen, hold, localLadderReleaseTicks)
+			// The screen is settled and asked, and if it answers nothing and
+			// then moves on its own, the screen it moved to is settled and
+			// asked in turn: a title whose opening outlasts the press window
+			// answered nothing because its opening was still playing. See
+			// `internal/ladder`.
+			//
+			// A title that ends itself does so in three places now — waiting
+			// to settle, under a held key, and waiting for its opening to move
+			// on — and each is said differently, because "it ended itself" is
+			// the same sentence about three different moments.
+			ended, tried, rounds, moved := "", []string(nil), 0, 0
+			for round := 1; round <= ladder.SettleRounds; round++ {
+				rounds = round
+				screen, settled, waited, err := tickUntilSettled(session)
 				if errors.Is(err, ErrGuestExited) {
-					ended = name
+					ended = fmt.Sprintf("%d ticks after its first frame, before the screen settled", waited)
 					break
 				}
 				if err != nil {
-					t.Fatalf("holding %s: %v", name, err)
+					t.Fatalf("tick %d while waiting for the screen to settle: %v", waited, err)
 				}
-				if changed {
-					t.Logf("%s changed the screen after %d ticks (settled after %d, flushes %d → %d)%s",
-						name, after, waited, presents, session.Flushes(), afterRestart(launched))
+				if !settled {
+					// A screen that never stops changing on its own cannot
+					// answer this question: a change after a key would have
+					// happened anyway.
+					//
+					// The launch is named here as well as on the outcomes
+					// below, because this is where a title that ended its
+					// first launch and then played on its second lands, and a
+					// report that left the relaunch off this line would say a
+					// title was never asked rather than that it had to be
+					// restarted first.
+					t.Skipf("%s%s", screen.Unsettled(waited), afterRestart(launched))
+				}
+				answer, after, stopped, err := pressEachKey(t, session, screen, hold)
+				if err != nil {
+					t.Fatalf("holding a key: %v", err)
+				}
+				tried = answer.tried
+				if answer.key != "" {
+					t.Logf("%s changed the screen after %d ticks (settled after %d on round %d of %d, %d screens into its opening, flushes %d → %d)%s",
+						answer.key, after, waited, round, ladder.SettleRounds, moved, presents, session.Flushes(), afterRestart(launched))
 					return
 				}
+				if stopped != "" {
+					ended = fmt.Sprintf("while %s was held", stopped)
+					break
+				}
+				if round == ladder.SettleRounds {
+					break
+				}
+				left, opening, err := tickUntilScreenMoves(session, screen, localLadderOpeningTicks)
+				if errors.Is(err, ErrGuestExited) {
+					ended = fmt.Sprintf("%d ticks into waiting for its opening to move on", opening)
+					break
+				}
+				if err != nil {
+					t.Fatalf("tick %d while waiting for the opening to move on: %v", opening, err)
+				}
+				if !left {
+					break
+				}
+				moved++
 			}
 			if ended != "" {
 				if launched < localLadderLaunches {
 					continue
 				}
-				t.Fatalf("the title ended itself while %s was held, on its second launch", ended)
+				t.Fatalf("the title ended itself %s, on its second launch", ended)
 			}
-			t.Fatalf("no key changed the screen: tried %s, held %d ticks each, %d flushes since it settled%s",
-				strings.Join(tried, ", "), hold, session.Flushes()-presents, afterRestart(launched))
+			// A title that put the handset's first-run notice up and **waited
+			// on it** rather than ending is a title asked its question before
+			// it was ready to be asked, and it looks like this: no key moves
+			// it, and the launch wrote a save. It gets the second launch the
+			// notice asked for. Over an unchanged save directory it does not,
+			// because a rerun that reads the same bytes is the same run. See
+			// `internal/ladder`.
+			if launched < localLadderLaunches && ladder.Footprint(saves) != had {
+				t.Logf("no key changed the screen and this launch wrote to its save directory, so it is being launched again")
+				continue
+			}
+			t.Fatalf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d flushes since it settled%s",
+				openingMovedOn(moved), strings.Join(tried, ", "), hold, rounds, screens(rounds),
+				session.Flushes()-presents, afterRestart(launched))
 		}
 	})
+}
+
+// A keyAnswer is which key moved a settled screen, and which were put to it.
+type keyAnswer struct {
+	key   string
+	tried []string
+}
+
+// pressEachKey holds each key in turn against one settled screen and reports
+// the first that drew something the screen never held. The third value names
+// the key the title ended itself under, which is a different answer from "no
+// key moved it" and is the caller's to relaunch on.
+func pressEachKey(t *testing.T, session *Session, screen *ladder.Watcher, hold int) (keyAnswer, int, string, error) {
+	t.Helper()
+	answer := keyAnswer{}
+	for _, name := range localLadderKeys {
+		code, known := KeyCodeByName(name)
+		if !known {
+			t.Fatalf("no key called %q", name)
+		}
+		answer.tried = append(answer.tried, name)
+		changed, after, err := pressAndWatch(session, code, screen, hold, localLadderReleaseTicks)
+		if errors.Is(err, ErrGuestExited) {
+			return answer, after, name, nil
+		}
+		if err != nil {
+			return answer, after, "", err
+		}
+		if changed {
+			answer.key = name
+			return answer, after, "", nil
+		}
+	}
+	return answer, 0, "", nil
+}
+
+// tickUntilScreenMoves ticks with nothing held and reports whether the screen
+// leaves the set it settled on. That is a title whose opening is still
+// running: what it moves to is a screen the rung has not asked yet.
+func tickUntilScreenMoves(session *Session, screen *ladder.Watcher, budget int) (moved bool, waited int, err error) {
+	for ; waited < budget; waited++ {
+		if _, err := session.Tick(context.Background()); err != nil {
+			return false, waited, err
+		}
+		session.SkipToNextDeadline()
+		if screen.Changed(session.FrameDigest()) {
+			return true, waited, nil
+		}
+	}
+	return false, waited, nil
+}
+
+// openingMovedOn says, in a failure, whether the screen that answered no key
+// was the one the title booted to or one its opening moved on to. The two are
+// different defects and a line that spelled them the same way would send
+// whoever read it to the wrong place.
+func openingMovedOn(moved int) string {
+	if moved == 0 {
+		return fmt.Sprintf(", and it did not move on its own in the %d ticks after", localLadderOpeningTicks)
+	}
+	return fmt.Sprintf(", over %d %s its opening moved on to", moved, screens(moved))
+}
+
+// screens is "screen" or "screens", so a count reads as a sentence.
+func screens(count int) string {
+	if count == 1 {
+		return "screen"
+	}
+	return "screens"
 }
 
 // afterRestart says, in a log line, that what is being reported is the second
@@ -228,7 +359,7 @@ func afterRestart(launched int) string {
 // One subtest per archive is what lets a report name the archive a refusal
 // came from; a count at the end of a log says a number where a report needs a
 // name.
-func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, launch func(*testing.T) *Session)) {
+func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, saves string, launch func(*testing.T) *Session)) {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
@@ -263,7 +394,7 @@ func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, launch func(*testi
 			// every launch of this archive: a second launch has to see what
 			// the first one wrote or it is not a second run.
 			saves := t.TempDir()
-			ask(t, func(t *testing.T) *Session {
+			ask(t, saves, func(t *testing.T) *Session {
 				t.Helper()
 				// A probe measures what the guest computes, not how long it
 				// takes, so it runs a manual clock jumped to each next

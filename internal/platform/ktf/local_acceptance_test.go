@@ -54,6 +54,34 @@ func isNativePackageArchive(data []byte) bool {
 	return IsNativePackage(files)
 }
 
+// runClientEntry brings a loaded client up to the point where its classes can
+// be reached, by whichever of the two routes its image takes.
+//
+// The two generations reach the same runtime differently. The current one
+// relocates itself with no platform underneath it, hands back an executable
+// descriptor and meets a platform in Initialize; the older relocatable module
+// is handed the platform's callback table by its entry and publishes its own
+// classes for this side to link. This is the branch StartSession makes, and it
+// is written here for the same reason: the rungs between "the archive parses"
+// and "the title paints" ran only the current generation's route, so the older
+// shape was refused at rungs two to five and then passed at six, seven and
+// eight by the probes that go through a session. **A ladder has to be
+// monotone** — a rung below a rung an archive reached cannot be a rung it
+// failed — and a grade of `interactive` beside a `stopped` of `initialize` is
+// one record contradicting itself rather than two facts about one archive.
+func runClientEntry(ctx context.Context, client *Client) error {
+	if client.IsModule() {
+		_, err := client.ExecuteModuleEntry(ctx)
+		return err
+	}
+	summary, err := client.ExecuteEntry(ctx, nil)
+	if err != nil {
+		return err
+	}
+	_, err = client.Initialize(ctx, summary.Context.Registers[0])
+	return err
+}
+
 // TestLocalKTFArchivesParse is opt-in because real games are ignored local
 // data, not repository fixtures. It validates every local KTF outer archive
 // without executing third-party guest code.
@@ -136,6 +164,21 @@ func TestLocalKTFArchivesInitialize(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if client.IsModule() {
+				// The older module has no executable descriptor to read: its
+				// entry is handed the platform's callback table and returns
+				// having published what it has. Running that entry is the
+				// whole of what this rung can ask of it, and asking the
+				// current generation's question of it would report a
+				// difference between two module formats as a fault in one.
+				summary, err := client.ExecuteModuleEntry(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("the earlier relocatable module ran its own entry: steps=%d callbacks=%+v",
+					summary.Steps, client.runtime.callbacks)
+				return
+			}
 			summary, err := client.ExecuteEntry(context.Background(), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -208,11 +251,7 @@ func TestLocalKTFArchivesLoadMainClass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			entrySummary, err := client.ExecuteEntry(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.Initialize(context.Background(), entrySummary.Context.Registers[0]); err != nil {
+			if err := runClientEntry(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
 			loaded, err := client.LoadClass(context.Background(), archive.Descriptor.MainClass)
@@ -275,11 +314,7 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 			}
 			client.AttachResources(archive.JAR.Entries)
 			client.AttachFilesystem(archive.GuestFiles())
-			entrySummary, err := client.ExecuteEntry(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.Initialize(context.Background(), entrySummary.Context.Registers[0]); err != nil {
+			if err := runClientEntry(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
 			object, constructed, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
@@ -343,11 +378,7 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
 			client.AttachResources(archive.JAR.Entries)
 			client.AttachFilesystem(archive.GuestFiles())
-			entrySummary, err := client.ExecuteEntry(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.Initialize(context.Background(), entrySummary.Context.Registers[0]); err != nil {
+			if err := runClientEntry(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
 			object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
