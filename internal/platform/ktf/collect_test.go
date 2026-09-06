@@ -197,3 +197,31 @@ func TestCollectorTreatsFrozenCheatAddressesAsRoots(t *testing.T) {
 		t.Error("collected an object whose field the cheat engine freezes")
 	}
 }
+
+// The second trigger. Growth alone leaves a title that reaches the end of the
+// arena between two cycles with an allocation it cannot make and objects that
+// are already unreachable, so a refused block runs a cycle of its own.
+func TestAllocationFailureRunsACollectionAndTheRetrySucceeds(t *testing.T) {
+	_, runtime := newCollectorRuntime(t)
+	const length = 256
+	allocateTestArray(t, runtime, length)
+
+	// One cycle to drop the Host's strong reference; the allocation below is
+	// what runs the second.
+	runtime.collectAt = 0
+	if _, err := runtime.collectGuestObjects(nil); err != nil {
+		t.Fatal(err)
+	}
+	goruntime.GC()
+
+	// Nothing left above the cursor, so the only room the arena has is what
+	// the collector gives back.
+	runtime.arena.limit = runtime.arena.cursor
+	address, err := runtime.allocate(uint64(length) * 4)
+	if err != nil {
+		t.Fatalf("an allocation a collection would have made room for failed: %v", err)
+	}
+	if address == 0 {
+		t.Fatal("the retry answered a null address")
+	}
+}

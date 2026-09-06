@@ -229,7 +229,13 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 	client.serviceAudio()
 	// Frozen values are rewritten after the game has drawn, so a cheat wins
 	// over whatever the tick just wrote rather than racing it.
-	return span, session.serviceCheat()
+	if err := session.serviceCheat(); err != nil {
+		return span, err
+	}
+	// The collector runs last, where the round's guest work is finished: no
+	// platform call is in flight on this goroutine and every guest thread is
+	// parked with its ARM stack intact. See collect.go.
+	return span, session.collectJavaObjects()
 }
 
 // tickSpan is how much guest time the next tick stands for: the wait until the
