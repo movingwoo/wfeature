@@ -181,9 +181,22 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 		Words: 2, Implementat: javaPlayerPlay},
 	"org/kwis/msp/media/Player.stop(Lorg/kwis/msp/media/Clip;)Z":   {Words: 1, Implementat: javaPlayerStop},
 	"org/kwis/msp/media/Player.resume(Lorg/kwis/msp/media/Clip;)Z": {Words: 1, Implementat: javaPlayerResume},
-	// No vibrator here, and nothing observable is lost by saying so — the same
-	// answer the WIPI C call gives.
-	"org/kwis/msp/media/Vibrator.on(II)V": {Words: 2, Implementat: javaNoResult},
+	// The motor, which records what the guest asked for and drives nothing —
+	// the same answer the WIPI C call now gives. See javaVibratorOn.
+	"org/kwis/msp/media/Vibrator.on(II)V": {Words: 2, Implementat: javaVibratorOn},
+	// `off` is not in the specification, whose way to stop is `on(0, ...)`,
+	// but it is the other half of the class the platform beside this one
+	// declares, whose guests do call it. It records the request a zero level
+	// makes.
+	//
+	// **No local module names it.** Every archive here that reaches this class
+	// resolves a run of three static entries and names exactly one of them,
+	// `on(II)V`; the other two carry neither a name nor a descriptor. That
+	// makes this entry inert rather than a guess placed by number — the table
+	// is keyed by name, so only a module that asks for `off()V` can reach it,
+	// and the descriptor-shape fallback needs a descriptor these entries do
+	// not have.
+	"org/kwis/msp/media/Vibrator.off()V": {Implementat: javaVibratorOff},
 
 	// The date, which a title reads rather than the clock; see java_calendar.go.
 	"java/util/Calendar.getInstance()Ljava/util/Calendar;": {Implementat: javaCalendarGetInstance},
@@ -993,6 +1006,27 @@ func javaSetVolume(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	client.volume = clampVolume(int32(arguments[0]))
+	return 0, nil
+}
+
+// javaVibratorOn records the requested vibration where the Host can read it.
+//
+// `level` is a percentage from 0 to 100 and `duration` is milliseconds, and a
+// duration of zero with a level above zero means until the guest stops it — so
+// a title that asks for a continuous buzz gets one rather than a no-op. The
+// vibrator holds those rules; this only hands the two numbers over.
+func javaVibratorOn(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	client.vibrator.Vibrate(int(int32(arguments[0])), int(int32(arguments[1])))
+	return 0, nil
+}
+
+// javaVibratorOff stops the motor, which is the request a zero level makes.
+func javaVibratorOff(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	client.vibrator.Stop()
 	return 0, nil
 }
 

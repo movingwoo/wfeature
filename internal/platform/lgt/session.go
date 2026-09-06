@@ -164,6 +164,17 @@ func (failure *StartFailure) Unwrap() error { return failure.Err }
 // Archive is the loaded game.
 func (session *Session) Archive() *Archive { return session.archive }
 
+// Vibration reports what the guest has asked the handset's motor to do. The
+// Host decides what to do about it; this runtime only records the request. A
+// title that has never asked reports a zero request, which a Host reads as
+// nothing to do.
+func (session *Session) Vibration() backend.Vibration {
+	if session == nil || session.client == nil {
+		return backend.Vibration{}
+	}
+	return session.client.vibrator.State()
+}
+
 // SVCTrace returns the platform calls recorded for this session, oldest
 // first, or nil when the session was started without a trace.
 func (session *Session) SVCTrace() []SVCCall {

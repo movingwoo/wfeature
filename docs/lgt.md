@@ -1912,6 +1912,45 @@ send.
 this was checked without a speaker: `out.mid` for the MIDI events and
 `out.wav` for the sampled ones.
 
+### Vibration is recorded, not driven
+
+This platform has two doors onto the handset's motor and both of them used to
+answer success without reading their arguments: `MC_mdaVibrator` at `0x4c1`,
+and `Vibrator.on(int, int)` on the Java side. The reasoning was that there is
+no motor here — but **whether there is one is the Host's answer rather than
+this runtime's.** A browser has `navigator.vibrate`, so what was missing was
+not the hardware but a boundary to carry the request across.
+
+Both now hand the two numbers to the same `backend.Vibrator`, which a Host
+reads through `Session.Vibration`. Nothing in this package acts on it: it does
+not know whether there is a motor, whether the person turned vibration off, or
+whether this Host can vibrate at all. See `internal/backend/vibration.go` for
+the contract, which has two rules a reader would not guess — `level` is a
+percentage from 0 to 100 rather than an index, and a duration of zero at a
+level above zero means *until stopped* rather than "do nothing".
+
+**Four local archives ask for the Java class, and all four name the same one
+method.** Each resolves a run of three static entries on
+`org/kwis/msp/media/Vibrator` and names exactly one of them, `on(II)V`; the
+other two carry neither a name nor a descriptor, so nothing here says what they
+are. `Vibrator.off()` is served alongside `on` because it is the other half of
+the class the platform beside this one declares, whose guests do call it — but
+no module here names it. That costs nothing: this table is keyed by name, so an
+entry no module asks for is inert rather than misdirected, and the fallback
+that resolves an unnamed entry by its descriptor cannot reach these two, which
+have no descriptor to match. Nothing on this surface is placed by number.
+
+None of the four reaches the call. Each was started against a fresh save
+directory, ticked well past its first frame, and then driven with every key on
+the pad held and released in turn for several rounds; all four presented
+several hundred frames, none ended itself, and the request counter stayed at
+zero throughout. That is where the neighbouring platforms' titles stopped when
+the same question was asked of them, so it is the expected answer rather than a
+surprising one — a title that buzzes does it in play, not on the screen a boot
+reaches. The path is therefore wired and tested against its own contract, and
+the first title observed to buzz will be the first evidence that the arguments
+arrive the way the specification says they do.
+
 ## Images
 
 An `MC_GrpImage` is a framebuffer with a transparency mask beside it. That is
