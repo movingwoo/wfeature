@@ -32,36 +32,44 @@ func (target nativeCheatTarget) Regions() []cheat.Region {
 	committed := target.client.core.Memory().CommittedRegions(armcore.PermissionWrite)
 	regions := make([]cheat.Region, 0, len(committed))
 	for _, region := range committed {
+		label, code := target.label(region.Base)
 		regions = append(regions, cheat.Region{
 			Base:  region.Base,
 			Size:  uint32(min(region.Size, 0xffffffff)),
-			Label: target.label(region.Base),
+			Label: label,
+			Code:  code,
 		})
 	}
 	return regions
 }
 
-// label names a region by where it starts. Adjacent pages are reported as one
-// region, so a label has to be right for the run rather than for the page: the
-// word the loader plants sits immediately below the module and comes back
-// merged with it, and the entry scratch sits immediately below the arena.
-func (target nativeCheatTarget) label(base uint32) string {
+// label names a region by where it starts and says whether it holds
+// instructions rather than state. Adjacent pages are reported as one region,
+// so a label has to be right for the run rather than for the page: the word
+// the loader plants sits immediately below the module and comes back merged
+// with it, and the entry scratch sits immediately below the arena.
+//
+// Only the stub arena is code a scan can be kept out of. The module is one
+// span of instructions and data with no boundary recorded between them, and it
+// stays swept for that reason; it also stays writable, which is what a byte
+// patch into a check needs.
+func (target nativeCheatTarget) label(base uint32) (string, bool) {
 	switch {
 	case base == nativeHeaderBase || (base >= ImageBase && uint64(base) < uint64(ImageBase)+uint64(target.client.mapped)):
-		return "module"
+		return "module", false
 	case uint64(base) >= uint64(ThreadStackBase) && uint64(base) < uint64(ThreadStackBase)+ThreadStackSize:
-		return "stack"
+		return "stack", false
 	case base >= nativeStubBase && base < nativeStubBase+maxNativeSurfaces*nativePageSize:
-		return "stubs"
+		return "stubs", true
 	case base >= nativeScratchBase:
 		// Everything the title works on is here: it has no writable data of
 		// its own, so its whole state was allocated out of the arena that
 		// starts just above the entry scratch.
-		return "arena"
+		return "arena", false
 	case base >= nativeTableBase:
-		return "platform"
+		return "platform", false
 	default:
-		return "data"
+		return "data", false
 	}
 }
 
@@ -87,6 +95,16 @@ func (target nativeCheatTarget) WatchHitsOverflowed() bool {
 }
 
 // Cheat returns the session's attached cheat engine, creating it on first use.
+// ImageHash is the SHA-256 of the module this session loaded, in lower-case
+// hex — the same identity the other generation of package answers with, so a
+// cheat table is keyed the same way whichever one a title arrived as.
+func (session *NativeSession) ImageHash() string {
+	if session == nil || session.Client == nil || session.Client.archive == nil {
+		return ""
+	}
+	return imageHash(session.Client.archive.Module)
+}
+
 // Tick reapplies its frozen values after every frame.
 func (session *NativeSession) Cheat() *cheat.Session {
 	if session == nil || session.Client == nil {
@@ -107,8 +125,11 @@ func (session *NativeSession) CheatConsole() *cheat.Console {
 		session.cheatConsole = cheat.NewConsole(session.Cheat())
 		// A saved table names the game it was made against, which is the only
 		// thing that lets one be placed months later. There is no main class
-		// here, so the title's own name is what names it.
+		// here, so the title's own name is what names it. The key beside the
+		// name is the hash of the module actually loaded, which is what a byte
+		// patch is true of whatever the package around it was called.
 		session.cheatConsole.SetGame(session.Name())
+		session.cheatConsole.SetTableKey(cheat.TableKey{Image: session.ImageHash()})
 	}
 	return session.cheatConsole
 }

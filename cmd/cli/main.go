@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/filter/hqx"
 	"github.com/movingwoo/wfeature/internal/gdbstub"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -27,6 +30,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 	"github.com/movingwoo/wfeature/internal/route"
+	"github.com/movingwoo/wfeature/internal/serve"
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -153,6 +157,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	diagPath := ""
 	audioPrefix := ""
 	cheatConsole := false
+	serveSession := false
 	traceInstructions := false
 	ticksChosen := false
 	// The screen is the handset's, and on this vendor it is not the same
@@ -178,6 +183,8 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			ticksChosen = true
 		case "-cheat":
 			cheatConsole = true
+		case "-serve":
+			serveSession = true
 		// One log line per bytecode instruction. It is a flag rather than
 		// something a debug build does on its own: the line sits on the
 		// hottest path there is, a second of play writes millions of them, and
@@ -271,6 +278,18 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	if serveSession {
+		if reason := serveConflict(map[string]bool{
+			"-cheat":    cheatConsole,
+			"-route":    routePath != "",
+			"-key":      len(keyEvents) > 0,
+			"-framedir": frameDir != "",
+			"-ticks":    ticksChosen,
+		}); reason != "" {
+			fmt.Fprintln(stderr, reason)
+			return 2
+		}
+	}
 	logger.Debug("starting SKT title", "profile", backend.BuildProfile(), "path", path)
 	// The script is parsed before the archive is read, so a typo is reported
 	// now rather than after the guest execution it takes to reach the step
@@ -358,6 +377,9 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		if !ticksChosen {
 			ticks = 1 << 30
 		}
+		// This platform's title is a bag of classes rather than one executable
+		// image, so the archive file is what keys a table saved from it.
+		keyCheatTable(runtime.CheatConsole(), path)
 	}
 	// A scripted key is released -hold ticks after its press for the reason it
 	// is on the WIPI paths: a Canvas that samples the keypad once a frame never
@@ -442,21 +464,21 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 		return sum
 	}
-	var routeResult route.Result
-	if script != nil {
-		runner := &route.Runner{
-			MaxTicks: ticks,
+	sendKey := func(_ context.Context, pressed bool, key int32) error {
+		eventType := skt.KeyPressed
+		if !pressed {
+			eventType = skt.KeyReleased
+		}
+		return runtime.SendKey(eventType, key)
+	}
+	newRunner := func(maxTicks int) *route.Runner {
+		return &route.Runner{
+			MaxTicks: maxTicks,
 			Hold:     keyHold,
 			Digest:   digest,
 			Advance:  advance,
-			SendKey: func(_ context.Context, pressed bool, key int32) error {
-				eventType := skt.KeyPressed
-				if !pressed {
-					eventType = skt.KeyReleased
-				}
-				return runtime.SendKey(eventType, key)
-			},
-			Stalled: func() bool { return stopped },
+			SendKey:  sendKey,
+			Stalled:  func() bool { return stopped },
 			Checkpoint: func(label string, _ int, _ bool) error {
 				if frameDir == "" {
 					return nil
@@ -465,6 +487,47 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 				return writePNG(filepath.Join(frameDir, label+".png"), frame.RGBA, frame.Width, frame.Height)
 			},
 		}
+	}
+	var routeResult route.Result
+	if serveSession {
+		driver := &serve.Driver{
+			Advance: advance,
+			Frame: func() ([]byte, int, int) {
+				frame, _ := framebuffer.Snapshot()
+				return frame.RGBA, frame.Width, frame.Height
+			},
+			Digest: digest,
+			Flushes: func() uint64 {
+				_, presents := framebuffer.Snapshot()
+				return presents
+			},
+			LookupKey: skt.KeyCodeByName,
+			SendKey:   sendKey,
+			Stalled:   func() bool { return stopped },
+			SendTouch: func(_ context.Context, action string, x, y int) error {
+				return runtime.SendPointer(skt.PointerEventType(action), int32(x), int32(y))
+			},
+			Park: func(ctx context.Context, hold time.Duration) error {
+				return parkFor(ctx, hold,
+					func(context.Context) error { return runtime.Pause() },
+					func(context.Context) error { return runtime.Resume() })
+			},
+			Diag: func(path string) error { return writeSKTDiagnostics(path, runtime) },
+			Shot: func(path string) error {
+				frame, _ := framebuffer.Snapshot()
+				return shootFrame(path, frame.RGBA, frame.Width, frame.Height)
+			},
+			RunRoute: func(ctx context.Context, script *route.Route) (route.Result, error) {
+				return newRunner(0).Run(ctx, script)
+			},
+			DefaultHold: keyHold,
+		}
+		if err := serve.Serve(ctx, driver, os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+	} else if script != nil {
+		runner := newRunner(ticks)
 		result, err := runner.Run(ctx, script)
 		routeResult = result
 		if err != nil {
@@ -533,11 +596,16 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(summary); err != nil {
-		fmt.Fprintf(stderr, "write result: %v\n", err)
-		return 1
+	// A serve session owns stdout: one line on it is one answer to one
+	// command, and a summary after the last of them is a line nothing asked
+	// for.
+	if !serveSession {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(summary); err != nil {
+			fmt.Fprintf(stderr, "write result: %v\n", err)
+			return 1
+		}
 	}
 	return exitForRun(runErr, nil)
 }
@@ -659,6 +727,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	play := false
 	speed := 1.0
 	cheatConsole := false
+	serveSession := false
 	diagPath := ""
 	profilePath := ""
 	profileFoldedPath := ""
@@ -795,6 +864,13 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			index++
 		case "-play":
 			play = true
+		case "-serve":
+			// -serve does not imply -play, for the reason -route does not: a
+			// caller that steps and then looks wants the ticks it asked for as
+			// fast as the guest can be driven, and gets them from the manual
+			// clock. Add -play when the point is to watch, or when the title
+			// is one that busy-waits on the clock.
+			serveSession = true
 		case "-speed":
 			if index+1 >= len(extra) {
 				fmt.Fprintln(stderr, "-speed expects a multiplier")
@@ -866,6 +942,20 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	if serveSession {
+		if reason := serveConflict(map[string]bool{
+			"-cheat":    cheatConsole,
+			"-route":    routePath != "",
+			"-key":      len(keyEvents) > 0,
+			"-touch":    len(touchEvents) > 0,
+			"-park":     parkAt > 0,
+			"-framedir": frameDir != "",
+			"-ticks":    ticksChosen,
+		}); reason != "" {
+			fmt.Fprintln(stderr, reason)
+			return 2
+		}
+	}
 	// The route is parsed before the archive is even read: a typo in a script
 	// should be reported now, not after the minutes of guest execution it takes
 	// to reach the step that contains it.
@@ -914,6 +1004,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			}
 		}
 		return runKTFNative(ctx, data, nativeRun{
+			archivePath:  path,
 			ticks:        ticks,
 			ticksChosen:  ticksChosen,
 			script:       script,
@@ -925,6 +1016,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			keyHold:      keyHold,
 			audioPrefix:  audioPrefix,
 			cheatConsole: cheatConsole,
+			serveSession: serveSession,
 			screenWidth:  screenWidth,
 			screenHeight: screenHeight,
 			logger:       logger,
@@ -1029,6 +1121,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		if !ticksChosen {
 			ticks = 1 << 30
 		}
+		keyCheatTable(session.CheatConsole(), path)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	ran := 0
@@ -1036,6 +1129,63 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	keyReleases := map[int][]int32{}
 	var tickError error
 	var routeResult route.Result
+	if serveSession {
+		driver := &serve.Driver{
+			Advance: func(ctx context.Context) (bool, error) {
+				progressed, err := session.Tick(ctx)
+				if err != nil {
+					return progressed, err
+				}
+				ran++
+				pace(ctx, session, probeClock, false)
+				return progressed, nil
+			},
+			Frame: func() ([]byte, int, int) {
+				frame, width, height, _ := session.Frame()
+				return frame, width, height
+			},
+			Digest:    session.FrameDigest,
+			Flushes:   func() uint64 { return uint64(session.Flushes()) },
+			LookupKey: ktf.KeyCodeByName,
+			SendKey: func(ctx context.Context, pressed bool, key int32) error {
+				eventType := ktf.KeyPressed
+				if !pressed {
+					eventType = ktf.KeyReleased
+				}
+				return session.SendKey(ctx, eventType, key)
+			},
+			Stalled: func() bool {
+				_, pending := session.NextDeadline()
+				return !pending
+			},
+			SendTouch: func(ctx context.Context, action string, x, y int) error {
+				eventType, ok := ktfPointerEventType(action)
+				if !ok {
+					return fmt.Errorf("unknown pointer action %q", action)
+				}
+				return session.SendPointer(ctx, eventType, int32(x), int32(y))
+			},
+			Park: func(ctx context.Context, hold time.Duration) error {
+				return parkFor(ctx, hold, session.Pause, session.Resume)
+			},
+			Diag: func(path string) error { return writeDiagnostics(path, session, map[string]any{"ticks": ran}) },
+			Shot: func(path string) error {
+				frame, width, height, _ := session.Frame()
+				return shootFrame(path, frame, width, height)
+			},
+			RunRoute: func(ctx context.Context, script *route.Route) (route.Result, error) {
+				return runRoute(ctx, session, script, routeRun{
+					frameDir: frameDir, profiling: profiling, hold: keyHold,
+					probeClock: probeClock, stderr: stderr,
+				})
+			},
+			DefaultHold: keyHold,
+		}
+		if err := serve.Serve(ctx, driver, os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+	}
 	if script != nil {
 		// A route runs until it arrives, so it does not inherit the default
 		// tick count that bounds an unscripted probe; an explicit -ticks still
@@ -1057,7 +1207,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "route: %v\n", tickError)
 		}
 	}
-	for ; script == nil && ran < ticks; ran++ {
+	for ; !serveSession && script == nil && ran < ticks; ran++ {
 		if ctx.Err() != nil {
 			break
 		}
@@ -1261,11 +1411,17 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		}
 		summary["audio"] = written
 	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(summary); err != nil {
-		fmt.Fprintf(stderr, "write result: %v\n", err)
-		return 1
+	// A serve session owns stdout: every line on it is one answer to one
+	// command, and a summary appended after the last of them would be a line
+	// nothing asked for. The caller already read whatever it wanted through
+	// the protocol.
+	if !serveSession {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(summary); err != nil {
+			fmt.Fprintf(stderr, "write result: %v\n", err)
+			return 1
+		}
 	}
 	// The summary is printed either way, because a failed run is exactly the
 	// one worth reading. What the exit code adds is a batch answer: a sweep
@@ -1453,6 +1609,74 @@ func runRoute(ctx context.Context, session *ktf.Session, script *route.Route, op
 		fmt.Fprintf(options.stderr, "route stopped at step %d (%s)\n", result.StoppedAt+1, result.Reason)
 	}
 	return result, runError
+}
+
+// serveConflict names the first option that cannot be combined with -serve.
+//
+// Every one of them belongs to the loop -serve replaces: a scripted key, a
+// scripted touch, a park at a tick, a frame per tick and a tick count are all
+// instructions to a run that steps itself, and -serve is a run that is stepped
+// from outside. The cheat console and a serve session both own stdin and
+// stdout, so they cannot share a terminal at all. Refusing them by name is the
+// difference between a caller who fixes the command and one who spends the
+// afternoon wondering why their keys never arrived.
+func serveConflict(options map[string]bool) string {
+	for _, name := range []string{"-cheat", "-route", "-key", "-touch", "-park", "-framedir", "-ticks"} {
+		if options[name] {
+			return fmt.Sprintf("%s cannot be combined with -serve, which is driven a command at a time instead", name)
+		}
+	}
+	return ""
+}
+
+// parkFor is the lifecycle a Host runs when the page goes away and comes back.
+// The hold is what makes the time the game was away real, which under the wall
+// clock is time it is about to discover it lost.
+func parkFor(ctx context.Context, hold time.Duration, pause, resume func(context.Context) error) error {
+	if err := pause(ctx); err != nil {
+		return err
+	}
+	if hold > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(hold):
+		}
+	}
+	return resume(ctx)
+}
+
+// fileDigest is the SHA-256 of an archive file, in lower-case hex.
+//
+// It is the second half of a cheat table's key. The first half is the hash of
+// the loaded executable image, which is the identity a repackaged archive
+// keeps and the one a byte patch is true of; a platform whose title is a bag
+// of classes rather than one image has no such hash, and the file it was read
+// from is what identifies it instead. Reading the file again costs a moment
+// and only happens where a cheat console is attached.
+func fileDigest(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// keyCheatTable names the archive a console's saved table was made against.
+func keyCheatTable(console *cheat.Console, path string) {
+	if console == nil {
+		return
+	}
+	console.SetTableKey(cheat.TableKey{File: fileDigest(path)})
+}
+
+// shootFrame writes the frame a `shot` command asked for, through the same
+// encoder -frame uses so the two capture the same file.
+func shootFrame(path string, frame []byte, width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("nothing has been drawn yet, so there is no frame to capture")
+	}
+	return writePNG(path, frame, width, height)
 }
 
 // pace holds a tick loop to the game's own speed. Whatever the game is waiting
@@ -1912,13 +2136,13 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
 	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
-	fmt.Fprintln(output, "                            [-screen WxH] [-cheat]")
+	fmt.Fprintln(output, "                            [-screen WxH] [-cheat] [-serve]")
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
-	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script]")
+	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script] [-serve]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")
 	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-gdb host:port]")
-	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick] [-route script]")
+	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick] [-route script] [-serve]")
 	fmt.Fprintln(output, "  wfeature invoke <game.jar> <method> <descriptor> [arguments...]")
 	fmt.Fprintln(output, "  wfeature importsaves <external savedata dir> [-save dir] [-games dir] [-dry-run]")
 	fmt.Fprintln(output, "  wfeature checkgames [-games dir]")
@@ -1943,6 +2167,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	frameDir := ""
 	saveRoot := ""
 	cheatConsole := false
+	serveSession := false
 	ticksChosen := false
 	traceSVC := 0
 	traceLive := ""
@@ -1960,6 +2185,8 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		switch args[index] {
 		case "-cheat":
 			cheatConsole = true
+		case "-serve":
+			serveSession = true
 		case "-screen":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-screen expects <width>x<height>")
@@ -2107,6 +2334,18 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	if serveSession {
+		if reason := serveConflict(map[string]bool{
+			"-cheat":    cheatConsole,
+			"-route":    routePath != "",
+			"-key":      len(keyEvents) > 0,
+			"-framedir": frameDir != "",
+			"-ticks":    ticksChosen,
+		}); reason != "" {
+			fmt.Fprintln(stderr, reason)
+			return 2
+		}
+	}
 	// The script is parsed before the archive is read, so a typo is reported
 	// now rather than after the minutes of guest execution it takes to reach
 	// the step holding it.
@@ -2197,6 +2436,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		if !ticksChosen {
 			ticks = 1 << 30
 		}
+		keyCheatTable(session.CheatConsole(), path)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	// A scripted key is pressed on its tick and released -hold ticks later. A
@@ -2312,17 +2552,17 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 		return true, nil
 	}
-	var routeResult route.Result
-	if script != nil {
-		runner := &route.Runner{
-			MaxTicks: ticks,
+	sendKey := func(_ context.Context, pressed bool, key int32) error {
+		session.SendKey(pressed, uint32(key))
+		return nil
+	}
+	newRunner := func(maxTicks int) *route.Runner {
+		return &route.Runner{
+			MaxTicks: maxTicks,
 			Hold:     keyHold,
 			Digest:   session.FrameDigest,
 			Advance:  advance,
-			SendKey: func(_ context.Context, pressed bool, key int32) error {
-				session.SendKey(pressed, uint32(key))
-				return nil
-			},
+			SendKey:  sendKey,
 			// A tick that failed, or a guest that exited, is the end of the
 			// run whatever step the route was on: without this the route
 			// keeps asking a dead session for ticks until its budget is
@@ -2339,6 +2579,41 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 				return writePNG(filepath.Join(frameDir, label+".png"), frame, width, height)
 			},
 		}
+	}
+	var routeResult route.Result
+	if serveSession {
+		driver := &serve.Driver{
+			Advance: advance,
+			Frame: func() ([]byte, int, int) {
+				frame, width, height, _ := session.Frame()
+				return frame, width, height
+			},
+			Digest:  session.FrameDigest,
+			Flushes: func() uint64 { return uint64(session.Flushes()) },
+			// A route script reads the same key names on every platform, and a
+			// serve command reads them from the same table for the same
+			// reason: `fire` must not mean two things.
+			LookupKey: ktf.KeyCodeByName,
+			SendKey:   sendKey,
+			Stalled:   func() bool { return stopped },
+			Park: func(ctx context.Context, hold time.Duration) error {
+				return parkFor(ctx, hold, session.Pause, session.Resume)
+			},
+			Shot: func(path string) error {
+				frame, width, height, _ := session.Frame()
+				return shootFrame(path, frame, width, height)
+			},
+			RunRoute: func(ctx context.Context, script *route.Route) (route.Result, error) {
+				return newRunner(0).Run(ctx, script)
+			},
+			DefaultHold: keyHold,
+		}
+		if err := serve.Serve(ctx, driver, os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+	} else if script != nil {
+		runner := newRunner(ticks)
 		result, err := runner.Run(ctx, script)
 		routeResult = result
 		if err != nil {
@@ -2455,11 +2730,16 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 		summary["audio"] = written
 	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(summary); err != nil {
-		fmt.Fprintf(stderr, "write result: %v\n", err)
-		return 1
+	// A serve session owns stdout: one line on it is one answer to one
+	// command, and a summary after the last of them is a line nothing asked
+	// for.
+	if !serveSession {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(summary); err != nil {
+			fmt.Fprintf(stderr, "write result: %v\n", err)
+			return 1
+		}
 	}
 	// A failed tick is the run's answer rather than the tool's, so the summary
 	// is printed first and the exit code carries the failure — see runKTF.
