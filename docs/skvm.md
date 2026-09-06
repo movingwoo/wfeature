@@ -1249,6 +1249,72 @@ rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
 both draw an empty screen and `-screen 176x196` draws the title, which is why
 the flag is the answer here and the rule is not.
 
+### The sizes of the pictures do not say what the names say
+
+The obvious next move, once the names are read, is to read the **pictures**: a
+full-screen picture is the display's width wide and the display's height less a
+status bar tall, so counting the sizes in a package should say which handset it
+was built for. It was measured across every local archive that opens — ninety-four
+of them — before any of it was built, and **the signal is not there**.
+
+**A quarter of the corpus has nothing to measure.** Twenty-three of the ninety-four
+hold no picture a decoder can size at all: their artwork lives in packed
+resources the title unpacks itself, and a scan sees opaque bytes. Of the
+pictures the rest do hold, the two hundred and sixty-seven distinct widths are
+dominated by sprites — the twenty-five most common widths are almost all under
+fifty pixels. Screen-shaped pictures are the exception, not the rule.
+
+**Where the hypothesis can be tested it mostly contradicts itself.** Scoring
+each archive against the handsets this project offers — a picture counts when it
+is exactly a handset wide and within a status bar of that handset's height —
+and taking the loosest form of the rule, one matching picture within forty rows,
+twenty-one archives answer. **Thirteen of the twenty-one are contradicted by the
+archive that produced them**, which holds a picture *wider* than the handset it
+just inferred; one infers a 128-wide handset while holding a 936-wide picture.
+Tightening to two pictures within twenty-four rows leaves six answers, five of
+them contradicted the same way. A wide picture is a sprite sheet or a scrolling
+backdrop, and neither is a screen.
+
+**The one archive whose answer is known answers nothing.** The title the rule in
+the section above exists for — the one that cannot start on the default — has a
+widest picture of 169 and a most common width of 120, and neither is a handset.
+Its handset is declared in its names and is *not* recoverable from its sizes, so
+the corpus offers no case where this rule is right and independent evidence
+agrees.
+
+**The best rule the data supports is a wash.** That rule is the narrow one:
+infer a handset when the widest picture in the archive is exactly a handset
+width, nothing in the archive is wider, and the answer is narrower than the
+default — never wider, since nothing supports promoting a title. It moves eight
+of the seventy-nine. Run against the default at a matched twelve hundred ticks
+and judged on frames, the eight come back **two better, two worse and four
+unchanged**: one title that drew its title art torn across a black gap draws it
+whole, and one that left the framebuffer either side of a narrow splash showing
+what had been there before comes back clean; against that, one loses the bottom
+of its copyright line off the screen and one has its title screen cramped until
+the artwork is cut by the edges. Of the four unchanged, one is a licence refusal
+at either size, two lay out correctly at either, and one draws the identical
+picture either way and differs only in whether it is letterboxed.
+
+**And it clears the known-bad case by one pixel.** The archive that declares its
+width as an `img_176/` directory, and that needs `-screen 176x196` because
+176x220 draws it an empty screen, escapes this rule only because its widest
+picture is 177 rather than 176. Had that one picture been a pixel narrower the
+rule would have handed it the size already measured as blank. A rule that avoids
+a known-bad outcome by one pixel is not a rule.
+
+So this is **measured and not built**. The flag stays the way a Host asks for a
+size, `PackagedScreen` stays the only thing that answers without being asked,
+and the default is unchanged.
+
+**One method note, because it reversed two readings.** The first pass judged
+these at three hundred ticks and called two titles broken that were merely
+mid-transition — one was on a publisher splash it leaves at around a thousand
+ticks, and another was between two screens. Both looked like layout failures and
+neither was. A screen-size comparison has to be run long enough that both sides
+have arrived somewhere, and a difference at three hundred ticks is a question
+rather than a finding.
+
 ### A Canvas here is sixteen rows shorter than the display
 
 The question underneath is whether a Canvas on this vendor is the whole display
