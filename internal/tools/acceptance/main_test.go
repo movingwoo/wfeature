@@ -34,7 +34,7 @@ func TestAStageIsReadOutOfTheTestStream(t *testing.T) {
 		{Action: "fail", Test: ""},
 	})
 
-	outcome := collect(strings.NewReader(stream), probe, false)
+	outcome, _ := collect(strings.NewReader(stream), probe, false)
 	if got := strings.Join(outcome.passed, ","); got != "a.zip" {
 		t.Errorf("passed = %q, want a.zip", got)
 	}
@@ -169,4 +169,65 @@ func testStream(t *testing.T, parent string, events []event) string {
 		lines.WriteString("\n")
 	}
 	return lines.String()
+}
+
+// A stage that stops being read is not a smaller stage.
+//
+// `go test -json` is a stream, and a stream can end early — a read that fails,
+// a line past the scanner's ceiling, a process killed under load. Everything
+// gathered before that point looks exactly like a complete stage: rows that
+// passed, rows that failed, and no sign that more were coming. A sweep that
+// answered for twenty-five of two hundred and sixty archives was written down
+// twice as a successful run of twenty-five before this was noticed.
+func TestATruncatedStreamIsNotASmallerStage(t *testing.T) {
+	probe := stage{platform: "ktf", test: "TestLocalKTFArchivesParse"}
+	whole := testStream(t, probe.test, []event{
+		{Action: "run", Test: "a.zip"},
+		{Action: "pass", Test: "a.zip"},
+		{Action: "run", Test: "b.zip"},
+		{Action: "pass", Test: "b.zip"},
+	})
+
+	// The stream is cut mid-line, which is what a reader that stops early
+	// leaves behind.
+	cut := whole[:len(whole)-12]
+	if _, err := collect(strings.NewReader(cut), probe, false); err != nil {
+		t.Fatalf("a stream cut between lines is still readable to its last whole line: %v", err)
+	}
+
+	// A line longer than the scanner's ceiling is the failure that actually
+	// ends a read, and it must not be mistaken for the end of the corpus.
+	long := strings.Repeat("x", 9*1024*1024)
+	overflowing := whole + `{"Action":"output","Test":"c.zip","Output":"` + long + "\"}\n"
+	outcome, err := collect(strings.NewReader(overflowing), probe, false)
+	if err == nil {
+		t.Fatalf("a stream that could not be read to its end reported %d passing archive(s) and no error",
+			len(outcome.passed))
+	}
+	if !strings.Contains(err.Error(), "read the probe's output") {
+		t.Errorf("the error is %q, and it has to say the output could not be read", err)
+	}
+}
+
+// The rows a selection asks about are countable in advance, so fewer of them
+// is a gap rather than a smaller question.
+func TestASelectionHearsBackAboutEveryArchiveItNamed(t *testing.T) {
+	probe := stage{platform: "ktf", test: "TestLocalKTFArchivesParse"}
+	stream := testStream(t, probe.test, []event{
+		{Action: "run", Test: "a.zip"},
+		{Action: "pass", Test: "a.zip"},
+	})
+	outcome, err := collect(strings.NewReader(stream), probe, true)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	rows := len(outcome.passed) + len(outcome.skipped) + len(outcome.failed)
+	if rows != 1 {
+		t.Fatalf("rows = %d, want 1", rows)
+	}
+	// run() compares that count against the selection it was given; this pins
+	// the shape the comparison relies on.
+	if len(outcome.passed) != 1 || outcome.passed[0] != "a.zip" {
+		t.Errorf("passed = %v, want [a.zip]", outcome.passed)
+	}
 }

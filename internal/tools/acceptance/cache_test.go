@@ -204,10 +204,10 @@ func TestAFilteredStageWithNoRowsDoesNotInventOne(t *testing.T) {
 	stream := `{"Action":"run","Test":"TestSomething"}` + "\n" +
 		`{"Action":"pass","Test":"TestSomething"}` + "\n"
 	probe := stage{platform: "lgt", name: "boot", test: "TestSomething"}
-	if outcome := collect(strings.NewReader(stream), probe, true); len(outcome.passed) != 0 {
+	if outcome, _ := collect(strings.NewReader(stream), probe, true); len(outcome.passed) != 0 {
 		t.Errorf("a filtered stage invented %v", outcome.passed)
 	}
-	if outcome := collect(strings.NewReader(stream), probe, false); len(outcome.passed) != 1 {
+	if outcome, _ := collect(strings.NewReader(stream), probe, false); len(outcome.passed) != 1 {
 		t.Errorf("an unfiltered whole-corpus probe lost its only row: %+v", outcome)
 	}
 }
