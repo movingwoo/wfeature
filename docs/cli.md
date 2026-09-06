@@ -141,7 +141,7 @@ faster.
 wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
                            [-play] [-speed N] [-key tick:name] [-hold N] [-route script]
                            [-touch tick:action:x,y] [-park tick[:ms]]
-                           [-cheat] [-gdb host:port] [-screen WxH]
+                           [-cheat] [-patch table.json] [-gdb host:port] [-screen WxH]
                            [-diag report.json] [-audio out] [-scale N]
                            [-profile report.txt] [-profile-folded stacks.txt]
                            [-profile-from tick]
@@ -162,6 +162,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-route script` | replay a scripted way back to a scene (below); works on both generations of package |
 | `-serve` | drive the run a command at a time over stdin and stdout (below); works on both generations of package |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted, on both generations of package |
+| `-patch table.json` | apply a cheat table's byte patches before the first tick (below). Repeatable; works on both generations of package, and combines with everything else including `-serve` and `-route` |
 | `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port` |
 | `-diag report.json` | write the runtime-boundary diagnostics (below) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
@@ -410,6 +411,10 @@ and the cheat console and a serve session both want stdin and stdout. The
 summary a run normally prints at the end is not printed either: on a serve
 session stdout is the protocol, one line per answer.
 
+`-patch` is not among them. It is the byte-patch mechanism reached from a file
+rather than from the console — see [below](#-patch-for-the-runs-nobody-is-sitting-in-front-of)
+— so it wants no terminal and combines with a serve session.
+
 ### Reading a diagnostics report
 
 `-diag` writes JSON. `counts` says how many times the game crossed each runtime
@@ -522,13 +527,101 @@ were expensive to find, and it just cannot say what it was made for. Addresses
 in `entries` stay plain numbers, as they always were; a patch address is hex
 because it is read off a disassembly, and a plain number is accepted there too.
 
+### `-patch`, for the runs nobody is sitting in front of
+
+Everything above happens inside the `-cheat` console, down to loading a table.
+The console reads stdin, so it cannot share a terminal with `-serve` and it is
+refused beside it — and a `-route` replay or a plain tick budget has no console
+at all. That left the one mechanism here that changes what a title decides
+reachable from exactly one of the ways this binary is driven, and the runs that
+most want a gate opened are the scripted ones: a route replaying past a check, a
+`-serve` session stepping and looking, a sweep over the whole library.
+
+`-patch <table.json>` applies a table's byte patches at the start of a run. It
+is on `runktf` (both generations of package), `runskt` and `runlgt`, it reads a
+file rather than a terminal, and it combines with everything — `-serve`,
+`-route`, `-cheat`, a bare `-ticks`.
+
+```
+$ wfeature runktf game.zip -patch gate.json -route past-the-notice.route
+patch: applied 1 entry from gate.json
+{"aid":"…","route_completed":true,"ticks":41, … }
+```
+
+Only the `patches` of the table are applied. A table saved from a console
+session also carries its frozen values and its watches, and those need a tick
+loop maintaining them, which is the console's job; the flag says on stderr that
+it left them, rather than dropping them quietly. Notices go to stderr because a
+run's stdout is one JSON summary a sweep parses.
+
+**It is repeatable.** A table is a unit of provenance rather than a unit of use:
+a gate patch found last month and a scratch patch written this morning are two
+files with two notes and two key hashes, and merging them by hand to run them
+together would throw both away. `-patch a.json -patch b.json` applies them in
+order, and the rules that already refuse a name applied twice and a span
+overlapping something applied are what stop two tables that disagree from
+being layered.
+
+**With `-cheat` the console picks up where the flag left off.** The two do not
+compete for anything — one reads a file before the run, the other reads stdin
+during it — so the entries the flag put in are listed by `patches` and can be
+reverted by `unpatch`, which is the shape investigation actually takes: open the
+known gate on the way in, then explore from there. The one thing to know is that
+the console's `load` replaces what the session holds rather than adding to it,
+so loading a table there reverts what `-patch` applied first.
+
+**A patch that does not apply stops the run.** The declared bytes not being
+there is reported and the run does not start:
+
+```
+$ wfeature runktf game.zip -patch gate.json -ticks 400
+gate.json: table patch 1: patch "gate" span 1 at 0x00120000 expects deadbeef but memory holds 504416f0
+(the run is refused rather than continued: a run whose patch did not apply observes exactly what the patch was written to change)
+$ echo $?
+1
+```
+
+Warning and carrying on was the alternative and it is the worse one. A run
+whose patch did not apply shows exactly what the patch was written to change —
+the gate still closed, the scene still unreached, the same frame as before. A
+person watching a terminal would read the warning; a sweep over hundreds of
+archives writes this run's summary beside every other one and nobody reads the
+line above it. The non-zero exit is the signal every other unrunnable command
+already gives a batch driver.
+
+**A table that names a different image stops the run too**, which is where the
+flag decides differently from the console. The console warns and carries on
+because somebody is about to see the result and can say "wrong file"; here there
+is nobody to say it. The declared bytes would usually catch the mismatch a
+moment later, but a table applied to an image it was not found in can match at
+those addresses by coincidence, and that is the silent corruption the declared
+bytes exist to prevent arriving through the one door they cannot close. Dropping
+the `image` and `file` keys from a copy of the table applies it anyway, which is
+the deliberate act that decision is meant to require.
+
+A table that carries no key at all — a hand-written one, which is how the first
+patch against a title always starts, or one saved on a platform whose title is a
+bag of classes rather than a single image — is not a mismatch. Nothing was
+asserted, so it applies with a note saying its addresses were taken on trust.
+
+A file with no `patches` in it is refused before the archive is opened, as is a
+malformed span: this is the same argument `-route` makes for parsing a script
+first, and a table that would apply nothing is a run that looks patched and is
+not.
+
+**Patches land after the title's start-up call and before the first tick.**
+That is the earliest a Host can reach guest memory — the loader has to have run
+for there to be memory to verify against — and it is earlier than any patch a
+person could have typed into the console. A check a title makes inside its own
+start-up, before the first tick, is not reachable this way.
+
 ## runskt
 
 ```
 wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
                                     [-key tick:name] [-hold N] [-route script]
                                     [-save dir] [-diag report.json] [-audio out]
-                                    [-screen WxH] [-cheat] [-trace]
+                                    [-screen WxH] [-cheat] [-patch table.json] [-trace]
 ```
 
 | Flag | What it does |
@@ -544,6 +637,7 @@ wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir]
 | `-audio out` | record what the run played as `out.mid` and `out.wav`, the same recorder `runktf` and `runlgt` take |
 | `-screen WxH` | the handset screen, 240x320 by default |
 | `-cheat` | attach the text cheat console. Without `-ticks` the run continues until it is interrupted |
+| `-patch table.json` | apply a cheat table's byte patches before the first Host pass (below). Repeatable |
 | `-serve` | drive the run a command at a time over stdin and stdout, as `runktf -serve` does |
 | `-trace` | one log line per bytecode instruction. Off unless asked for, in both build profiles — see below |
 
@@ -620,6 +714,7 @@ guessed at.
 ```
 wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save dir]
                            [-key tick:name] [-hold N] [-steps N] [-cheat] [-screen WxH]
+                           [-patch table.json]
                            [-audio out] [-trace N] [-trace-live filter]
                            [-route script]
                            [-profile report.txt] [-profile-folded stacks.txt]
@@ -638,6 +733,7 @@ wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
 | `-route script` | replay a scripted way back to a scene, the same script format `runktf` takes |
 | `-cheat` | attach the text cheat console, paced to about real time |
+| `-patch table.json` | apply a cheat table's byte patches before the first tick (below). Repeatable |
 | `-serve` | drive the run a command at a time over stdin and stdout, as `runktf -serve` does. This platform has no pointer, so `touch` is refused |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
 | `-trace N` | keep the last N platform calls and dump them at the end, or on a failure |

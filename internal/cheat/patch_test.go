@@ -271,6 +271,73 @@ func TestSweepSkipsCodeRegions(t *testing.T) {
 	}
 }
 
+// ApplyTablePatches is what a table's patches mean, whether they arrive with
+// the rest of a table through `load` or on their own through `-patch`. The
+// count it answers with is the part a start flag depends on: a caller that
+// refuses the run has to be able to say whether anything went in first.
+func TestApplyTablePatchesReportsWhatWentInBeforeARefusal(t *testing.T) {
+	memory := newTestMemory()
+	session := NewSession(memory)
+	if err := memory.WriteMemory(0x1000, []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}); err != nil {
+		t.Fatal(err)
+	}
+	table := Table{Patches: []PatchEntry{
+		{Name: "first", Patches: []Patch{{Address: 0x1000, Expect: span(0x01, 0x02), Replace: span(0xaa, 0xbb)}}},
+		{Name: "second", Patches: []Patch{{Address: 0x1004, Expect: span(0xde, 0xad), Replace: span(0x00, 0x00)}}},
+		{Name: "third", Patches: []Patch{{Address: 0x1006, Expect: span(0x07, 0x08), Replace: span(0xcc, 0xdd)}}},
+	}}
+
+	applied, err := session.ApplyTablePatches(table)
+	if err == nil {
+		t.Fatal("a table whose second entry does not match was applied")
+	}
+	if applied != 1 {
+		t.Fatalf("ApplyTablePatches reported %d entries applied, want 1", applied)
+	}
+	if !strings.Contains(err.Error(), "table patch 2") {
+		t.Fatalf("the refusal does not name the entry that failed: %v", err)
+	}
+	// The first entry stays applied and the third never ran: an entry is the
+	// unit, not the table.
+	if names := session.Patches(); len(names) != 1 || names[0].Name != "first" {
+		t.Fatalf("held patches = %+v, want only the first entry", names)
+	}
+	held := make([]byte, 8)
+	if err := memory.ReadMemory(0x1000, held); err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte{0xaa, 0xbb, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}; string(held) != string(want) {
+		t.Fatalf("memory = % x, want % x", held, want)
+	}
+}
+
+func TestApplyTablePatchesAppliesEveryEntryInOrder(t *testing.T) {
+	memory := newTestMemory()
+	session := NewSession(memory)
+	if err := memory.WriteMemory(0x1000, []byte{0x01, 0x02, 0x03, 0x04}); err != nil {
+		t.Fatal(err)
+	}
+	table := Table{Patches: []PatchEntry{
+		{Name: "first", Patches: []Patch{{Address: 0x1000, Expect: span(0x01, 0x02), Replace: span(0xaa, 0xbb)}}},
+		{Name: "second", Patches: []Patch{{Address: 0x1002, Expect: span(0x03, 0x04), Replace: span(0xcc, 0xdd)}}},
+	}}
+
+	applied, err := session.ApplyTablePatches(table)
+	if err != nil {
+		t.Fatalf("a table whose entries all match was refused: %v", err)
+	}
+	if applied != 2 {
+		t.Fatalf("ApplyTablePatches reported %d entries applied, want 2", applied)
+	}
+	held := make([]byte, 4)
+	if err := memory.ReadMemory(0x1000, held); err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte{0xaa, 0xbb, 0xcc, 0xdd}; string(held) != string(want) {
+		t.Fatalf("memory = % x, want % x", held, want)
+	}
+}
+
 // codeRegionMemory reports its upper half as code, which is what a platform
 // does for an arena that holds veneers rather than state.
 type codeRegionMemory struct{ *testMemory }

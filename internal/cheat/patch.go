@@ -300,6 +300,24 @@ func (session *Session) ForgetPatch(name string) bool {
 	return true
 }
 
+// ApplyTablePatches applies the byte patches a table carries, in the order it
+// carries them, and reports how many entries went in.
+//
+// It is the whole of what applying a table's patches means, and both callers
+// go through it: LoadTable, which applies them before the table's frozen
+// values, and the `-patch` start flag, which applies them and nothing else. A
+// second loop would be a second set of rules about what a refused entry leaves
+// behind, and the count it returns — the entries that went in before the
+// refusal — is what tells a caller whether "refused" means "nothing happened".
+func (session *Session) ApplyTablePatches(table Table) (int, error) {
+	for index, entry := range table.Patches {
+		if err := session.ApplyPatch(entry); err != nil {
+			return index, fmt.Errorf("table patch %d: %w", index+1, err)
+		}
+	}
+	return len(table.Patches), nil
+}
+
 func (session *Session) restore(patches []Patch, original [][]byte) {
 	for index := len(patches) - 1; index >= 0; index-- {
 		_ = session.target.WriteMemory(uint32(patches[index].Address), original[index])
