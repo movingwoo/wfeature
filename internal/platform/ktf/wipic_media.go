@@ -151,7 +151,21 @@ func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Threa
 		return 0, nil
 
 	case wipicMediaVibrator:
-		// No vibrator here, and nothing observable is lost by saying so.
+		// MC_mdaVibrator(level, timeout): a strength from 0 to 100 where zero
+		// is off, and a time in milliseconds that only means anything above
+		// zero. The arguments used to go unread on the reasoning that there is
+		// no vibrator here — but whether there is one is the Host's answer, not
+		// this runtime's, and a browser has `navigator.vibrate`. So the request
+		// is recorded where a Host can read it and this still returns success.
+		level, err := thread.Register(0)
+		if err != nil {
+			return 0, err
+		}
+		timeout, err := thread.Register(1)
+		if err != nil {
+			return 0, err
+		}
+		runtime.client.vibrator.Vibrate(int(int32(level)), int(int32(timeout)))
 		return 0, nil
 
 	case wipicMediaSetMuteState:

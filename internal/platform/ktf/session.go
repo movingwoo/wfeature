@@ -29,6 +29,17 @@ type Session struct {
 	cheatConsole *cheat.Console
 }
 
+// Vibration reports what the guest has asked the handset's motor to do. The
+// Host decides what to do about it; this runtime only records the request. A
+// title that has never asked reports a zero request, which a Host reads as
+// nothing to do.
+func (session *Session) Vibration() backend.Vibration {
+	if session == nil || session.Client == nil {
+		return backend.Vibration{}
+	}
+	return session.Client.vibrator.State()
+}
+
 // SessionOptions bound guest execution for one session.
 type SessionOptions struct {
 	// MaxSteps caps the ARM instructions of each bounded guest run. Zero

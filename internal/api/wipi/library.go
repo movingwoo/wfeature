@@ -27,6 +27,8 @@ package wipi
 import (
 	"fmt"
 
+	"github.com/movingwoo/wfeature/internal/backend"
+
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -55,8 +57,14 @@ const (
 
 // Define installs the library on a machine that already has MIDP, because
 // every class here names a MIDP class as its superclass.
-func Define(machine *jvm.VM) error {
-	for _, definition := range definitions() {
+//
+// `vibrator` is where `Vibrator.on` and `Vibrator.off` record what the guest
+// asked for; a nil one makes them the no-ops they were. It is a parameter
+// rather than something the library reaches for because this is a class
+// library with no runtime of its own: the platform that installs it is the one
+// that owns the state and the one a Host reads it from.
+func Define(machine *jvm.VM, vibrator *backend.Vibrator) error {
+	for _, definition := range definitions(vibrator) {
 		if err := machine.DefineClass(definition); err != nil {
 			return fmt.Errorf("WIPI Java library: %w", err)
 		}

@@ -186,6 +186,11 @@ type Client struct {
 	// clock the guest runs on, so a Host batching ticks hears the same
 	// sequence a real-time Host does, only faster. See serviceAudio.
 	audio *backend.Audio
+	// vibrator holds what the guest has asked the handset's motor to do. The
+	// runtime records the request and nothing here acts on it: whether there is
+	// a motor, and whether the person wants it used, are the Host's to know.
+	// See internal/backend/vibration.go.
+	vibrator backend.Vibrator
 }
 
 // serviceAudio moves audio playback to where the guest's clock now is. It runs

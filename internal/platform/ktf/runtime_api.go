@@ -76,9 +76,16 @@ func runtimeVibratorClassDefinition() runtimeJavaClass {
 	}
 }
 
-// runtimeVibratorOn records the requested vibration. Browsers and the CLI have
-// no shared vibration boundary yet, so the request is counted as a diagnostic
-// rather than silently discarded.
+// runtimeVibratorOn records the requested vibration where the Host can read it.
+//
+// `level` is a percentage from 0 to 100 and `duration` is milliseconds, and a
+// duration of zero with a level above zero means until the guest stops it — so
+// a title that asks for a continuous buzz gets one rather than a no-op. The
+// vibrator holds those rules; this only hands the two numbers over.
+//
+// The diagnostic count stays. It is what a run report is read for, and it now
+// says how many requests a title made rather than standing in for acting on
+// them.
 func runtimeVibratorOn(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 2 {
 		return jvm.VoidValue(), fmt.Errorf("Vibrator.on expected level and duration, got %d arguments", len(arguments))
@@ -92,11 +99,16 @@ func runtimeVibratorOn(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 		return jvm.VoidValue(), err
 	}
 	runtime.countDiagnostic(fmt.Sprintf("vibrate level=%d ms=%d", level, duration))
+	runtime.client.vibrator.Vibrate(int(level), int(duration))
 	return jvm.VoidValue(), nil
 }
 
+// runtimeVibratorOff stops the motor. The specification has no `off` — its way
+// to stop is `on(0, ...)` — but the guests call this one, so it is served and
+// it records the same request a zero level makes.
 func runtimeVibratorOff(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	runtime.countDiagnostic("vibrate off")
+	runtime.client.vibrator.Stop()
 	return jvm.VoidValue(), nil
 }
 

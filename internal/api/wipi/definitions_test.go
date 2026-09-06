@@ -13,7 +13,7 @@ import (
 // rather than at a title's first call.
 func TestDefineInstallsTheSurfaceOverMIDP(t *testing.T) {
 	machine := newMachine(t)
-	if err := Define(machine); err == nil {
+	if err := Define(machine, nil); err == nil {
 		t.Fatal("defining the library twice succeeded")
 	}
 }
@@ -68,7 +68,7 @@ func newMachine(t *testing.T) *jvm.VM {
 	if err := midp.Define(machine); err != nil {
 		t.Fatalf("midp.Define() error = %v", err)
 	}
-	if err := Define(machine); err != nil {
+	if err := Define(machine, nil); err != nil {
 		t.Fatalf("Define() error = %v", err)
 	}
 	return machine
