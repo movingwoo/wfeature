@@ -129,6 +129,92 @@ func TestALockedContainerIsRecognisedFromItsHeaderAlone(t *testing.T) {
 			t.Fatal("a wrapped container was not recognised")
 		}
 	})
+
+	// The container that turned up in a local set of packages wears its brand
+	// at offset zero rather than in a brand box, and its container box declares
+	// a 64-bit size. Neither of those is exotic; both were enough to make the
+	// file unrecognisable, which is how a locked package came to be counted as
+	// a package this project had failed to load.
+	t.Run("the box layout is recognised by a brand at offset zero", func(t *testing.T) {
+		header, ok := detect.DCFHeader(dcfSigned(t, 64))
+		if !ok {
+			t.Fatal("a wrapped container was not recognised")
+		}
+		if header.Version != 2 {
+			t.Errorf("version = %d, want 2", header.Version)
+		}
+	})
+}
+
+// The payload of one of these packages is a JAR beside the descriptor, and a
+// wrapper takes its place and keeps its name. Everything else in the archive
+// survives, so the marker still says the platform and detection used to answer
+// it — which sends a person to a loader that cannot read the bytes, and counts
+// the file among the ones this project has work left to do on. It has none.
+func TestAPackageWhoseOwnPayloadIsLockedIsNotClaimedForAPlatform(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		marker  string
+		payload string
+	}{
+		{"the descriptor one vendor names exactly", "__adf__", "AI0000.jar"},
+		{"the descriptor the other vendor names exactly", "app_info", "AI0000.jar"},
+		{"the descriptor named after the title", "TITLE.msd", "TITLE.jar"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// The container is larger than the front of it detection reads, so
+			// this also asks the question the real files ask: whether a header
+			// answers the same from a prefix as it would from the whole file.
+			data := buildZIP(t, map[string][]byte{
+				testCase.marker:  []byte("aid:AI0000\n"),
+				testCase.payload: dcfSigned(t, 8<<10),
+			})
+			platform, reason, err := detect.Classify(data)
+			if reason != detect.ReasonDRMWrapped {
+				t.Errorf("reason = %q, want %q", reason, detect.ReasonDRMWrapped)
+			}
+			if platform != detect.Unknown {
+				t.Errorf("platform = %q, want %q", platform, detect.Unknown)
+			}
+			// A person holding one of these is owed the reason it cannot be
+			// opened rather than a loader's complaint about the bytes.
+			if err == nil {
+				t.Fatal("a locked package came back without an error")
+			}
+			if _, err := detect.Archive(data); err == nil {
+				t.Error("Archive opened a locked package without complaint")
+			}
+		})
+	}
+}
+
+// The other half of the same claim: a package whose payload is the archive it
+// is supposed to be keeps the platform it always had. A detector that reads
+// the front of every payload is only worth having if it reads them correctly.
+func TestAPackageWhosePayloadIsAnArchiveKeepsItsPlatform(t *testing.T) {
+	inner := buildZIP(t, map[string][]byte{"client.bin0": []byte("a game")})
+	for _, testCase := range []struct {
+		marker string
+		want   detect.Platform
+	}{
+		{"__adf__", detect.KTF},
+		{"app_info", detect.LGT},
+		{"TITLE.msd", detect.SKT},
+	} {
+		t.Run(testCase.marker, func(t *testing.T) {
+			data := buildZIP(t, map[string][]byte{
+				testCase.marker: []byte("aid:AI0000\n"),
+				"AI0000.jar":    inner,
+			})
+			platform, reason, err := detect.Classify(data)
+			if err != nil {
+				t.Fatalf("classify: %v", err)
+			}
+			if platform != testCase.want || reason != detect.ReasonClaimed {
+				t.Errorf("classify = (%q, %q), want (%q, no reason)", platform, reason, testCase.want)
+			}
+		})
+	}
 }
 
 // Three bytes is far too little to claim a file on, so the header has to be
@@ -171,6 +257,23 @@ func dcfVersion1(t testing.TB, mediaType, identifier string) []byte {
 	// The two lengths that follow say how large the headers and the payload
 	// are. Nothing reads them, but a real file has them.
 	return append(file, 0x00, 0x00)
+}
+
+// dcfSigned builds the layout the packages in hand actually use: the brand at
+// offset zero rather than in a brand box, then a container box whose size is
+// declared in the 64-bit field. The contents are filler — there is no
+// encrypted content in this repository and none is needed to answer what these
+// ask, which is only what the header says.
+func dcfSigned(t testing.TB, contents int) []byte {
+	t.Helper()
+	file := []byte{'o', 'd', 'c', 'f', 0, 2, 0, 0}
+	box := make([]byte, 16)
+	// A size of one says the real size is the 64-bit value after the type.
+	binary.BigEndian.PutUint32(box, 1)
+	copy(box[4:], "odrm")
+	binary.BigEndian.PutUint64(box[8:], uint64(16+contents))
+	file = append(file, box...)
+	return append(file, make([]byte, contents)...)
 }
 
 func dcfBox(t testing.TB, kind string, body []byte) []byte {

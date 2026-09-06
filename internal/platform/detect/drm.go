@@ -60,11 +60,43 @@ const (
 // discrete and the streamed layout of the same wrapper.
 var dcfBrands = []string{"odcf", "opf2"}
 
+// A container of the box layout may wear its brand at offset zero instead of
+// declaring it in a brand box: the four characters, then a version and two
+// bytes nobody reads, and then the boxes. Four characters at the front of a
+// file are not on their own evidence of anything, so a file wearing them is
+// claimed only when the boxes that follow are the wrapper's own -- which the
+// walk below already insists on.
+const dcfSignature = 8
+
+// dcfMaxContainer bounds the length a holder may claim for a container it is
+// asked about. The length comes off a zip entry's own header in the nested
+// case, so it is whatever the file says; a box walk measured against a length
+// nobody checked would step wherever that number pointed.
+const dcfMaxContainer = int64(1) << 40
+
 // DCFHeader reads the header of a DRM-wrapped container and reports whether
 // the bytes are one. It reads no further than the declarations at the front of
 // the file.
 func DCFHeader(data []byte) (DCF, bool) {
-	if header, ok := dcfVersion2(data); ok {
+	return dcfHeader(data, int64(len(data)))
+}
+
+// dcfHeader is DCFHeader asked of however much of the front of a container is
+// in hand, with total the whole length its holder declares for it.
+//
+// The distinction matters because the payload of a package is a container the
+// rest of which is a decompression away, and decompressing it to answer this
+// would cost what the header exists to avoid. Box sizes are checked against
+// total rather than against what was read, so the front of a file answers the
+// same as the whole of it would.
+func dcfHeader(data []byte, total int64) (DCF, bool) {
+	if total < int64(len(data)) {
+		total = int64(len(data))
+	}
+	if total > dcfMaxContainer {
+		total = dcfMaxContainer
+	}
+	if header, ok := dcfVersion2(data, total); ok {
 		return header, true
 	}
 	return dcfVersion1Header(data)
@@ -116,10 +148,16 @@ func dcfVersion1Header(data []byte) (DCF, bool) {
 // dcfVersion2 walks the top-level boxes far enough to recognise the wrapper:
 // either the brand box declares one of the wrapper's brands, or the container
 // box the wrapper is built out of is present.
-func dcfVersion2(data []byte) (DCF, bool) {
+func dcfVersion2(data []byte, total int64) (DCF, bool) {
 	offset := 0
+	// A signature at offset zero says what a brand box says, and the boxes
+	// begin after it. Stepping over it costs nothing when it is absent: the
+	// four bytes are then not a brand, and the walk starts where it did.
+	if len(data) >= dcfSignature && brandsInclude(data[:4]) {
+		offset = dcfSignature
+	}
 	for boxes := 0; boxes < dcfMaxTopBoxes; boxes++ {
-		kind, body, next, ok := dcfBox(data, offset)
+		kind, body, next, ok := dcfBox(data, offset, total)
 		if !ok {
 			return DCF{}, false
 		}
@@ -134,10 +172,8 @@ func dcfVersion2(data []byte) (DCF, bool) {
 					// number rather than a brand.
 					continue
 				}
-				for _, brand := range dcfBrands {
-					if string(body[at:at+4]) == brand {
-						return DCF{Version: 2}, true
-					}
+				if brandsInclude(body[at : at+4]) {
+					return DCF{Version: 2}, true
 				}
 			}
 		case "odrm":
@@ -149,8 +185,10 @@ func dcfVersion2(data []byte) (DCF, bool) {
 }
 
 // dcfBox reads one box header and returns the box's type, its contents, and
-// where the next box starts.
-func dcfBox(data []byte, offset int) (kind string, body []byte, next int, ok bool) {
+// where the next box starts. Sizes are measured against total, the length of
+// the whole container: a box declares itself against the file it is in rather
+// than against however much of that file was read.
+func dcfBox(data []byte, offset int, total int64) (kind string, body []byte, next int, ok bool) {
 	if offset < 0 || offset+dcfBoxHeader > len(data) {
 		return "", nil, 0, false
 	}
@@ -164,7 +202,7 @@ func dcfBox(data []byte, offset int) (kind string, body []byte, next int, ok boo
 	case 0:
 		// A size of zero means the box runs to the end of the file, so there
 		// is no box after it.
-		size = int64(len(data)) - int64(offset)
+		size = total - int64(offset)
 	case 1:
 		// A size of one means the real size is the 64-bit value after the
 		// type. A file this large is not one of these, but the field still has
@@ -175,11 +213,28 @@ func dcfBox(data []byte, offset int) (kind string, body []byte, next int, ok boo
 		size = int64(binary.BigEndian.Uint64(data[offset+dcfBoxHeader : offset+dcfBoxHeader+8]))
 		header += 8
 	}
-	if size < header || int64(offset)+size > int64(len(data)) {
+	if size < header || int64(offset)+size > total {
 		return "", nil, 0, false
 	}
-	body = data[int64(offset)+header : int64(offset)+size]
+	// A box runs past what was read when only the front of the container is in
+	// hand. Its contents are then read as far as they are here and no further,
+	// and the walk ends at the first box header that is not.
+	end := int64(offset) + size
+	if end > int64(len(data)) {
+		end = int64(len(data))
+	}
+	body = data[int64(offset)+header : end]
 	return kind, body, offset + int(size), true
+}
+
+// brandsInclude reports whether four bytes are one of the wrapper's brands.
+func brandsInclude(code []byte) bool {
+	for _, brand := range dcfBrands {
+		if string(code) == brand {
+			return true
+		}
+	}
+	return false
 }
 
 func printableASCII(text string) bool {

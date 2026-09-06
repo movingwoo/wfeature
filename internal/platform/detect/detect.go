@@ -177,11 +177,11 @@ func Classify(data []byte) (Platform, Reason, error) {
 		// this is the same rule at detection, and the names are distinctive
 		// enough that nothing else wears one.
 		case strings.EqualFold(path.Base(name), ktfEntry):
-			return KTF, ReasonClaimed, nil
+			return claim(reader, KTF)
 		case strings.EqualFold(path.Base(name), lgtEntry):
-			return LGT, ReasonClaimed, nil
+			return claim(reader, LGT)
 		case strings.EqualFold(path.Ext(name), sktExtension):
-			return SKT, ReasonClaimed, nil
+			return claim(reader, SKT)
 		}
 	}
 	// Evidence before a guess. The pair below is a shape rather than a marker,
@@ -195,10 +195,10 @@ func Classify(data []byte) (Platform, Reason, error) {
 		return "", ReasonNoMarker, err
 	}
 	if skvm {
-		return SKT, ReasonClaimed, nil
+		return claim(reader, SKT)
 	}
 	if isKTFNativePackage(names, wrapper) {
-		return KTF, ReasonClaimed, nil
+		return claim(reader, KTF)
 	}
 	// A zip of zips is refused by its own shape rather than by a marker it has
 	// no room for, and saying so is the difference between "there is a choice
@@ -207,6 +207,101 @@ func Classify(data []byte) (Platform, Reason, error) {
 		return Unknown, ReasonArchiveOfArchives, nil
 	}
 	return Unknown, ReasonNoMarker, nil
+}
+
+// claim answers for an archive a platform named itself in, once the one thing
+// a marker cannot say has been checked: whether the package the marker points
+// at was locked before it was distributed.
+//
+// A wrapper leaves the outer archive alone. The descriptor, the icons and the
+// data directory are all still there and still readable, so every marker
+// detection has says the platform it always said; what changed is the payload
+// beside them, which stopped being an archive and became an encrypted
+// container with a header on the front. Answering the platform for one of
+// these sends a person to a loader that will fail on bytes no loader can read,
+// and counts the file among the ones this project has work to do on. It has
+// none: the key belongs to the network that issued the file.
+func claim(reader *zip.Reader, platform Platform) (Platform, Reason, error) {
+	if name, wrapped := wrappedPayload(reader); wrapped {
+		return Unknown, ReasonDRMWrapped, fmt.Errorf(
+			"read archive: the %s package inside it, %q, is a locked container rather than an archive; the key that opens it is not this emulator's to have",
+			platform, name)
+	}
+	return platform, ReasonClaimed, nil
+}
+
+// The payload of every one of these packages is a JAR beside the descriptor,
+// which is what makes one rule enough for three platforms. A wrapper takes
+// that entry's place and keeps its name, so the question is asked of the
+// entries that could be a payload and of nothing else.
+const (
+	payloadExtension = ".jar"
+	// A header declares itself at the front of the file, and this is more than
+	// enough of the front for either layout: the longest the header-prefixed
+	// one can be is its three-byte prefix and two strings of 255.
+	maxPayloadHeader = 1 << 10
+	// A package has one payload. The bound is for an archive that is not one
+	// and happens to be full of JARs, so that a strange file costs a fixed
+	// number of small reads rather than one per entry.
+	maxPayloadsProbed = 4
+)
+
+// wrappedPayload reports whether a claimed archive's payload is a locked
+// container, and names the entry it found one in.
+//
+// Only the front of the entry is read: the entry is the whole game, tens of
+// megabytes of it, and the declaration this looks for is in the first
+// kilobyte of it — sixteen bytes for the box layout, and never more than 514
+// for the other. Nothing here decrypts and nothing here reads a key.
+//
+// Reading the front of it is not free even so, and the reason is worth writing
+// down because it is not the one it looks like. Almost every payload is
+// deflated, and a deflate reader fills its whole window before it hands back a
+// first byte: asking for sixteen bytes costs the same as asking for a
+// thousand, measured. Over a corpus of 553 files that is 100ms against 2ms,
+// 182µs per file against 4µs — a large multiple of a small number, and small
+// beside anything a sweep does with an archive after classifying it. The
+// cheaper gate available if that ever stops being true is the payload's
+// compression ratio, which the central directory gives away for nothing:
+// encrypted content does not compress, so a wrapped payload is always within a
+// fraction of a percent of its own size, and on this corpus that gate would
+// skip four fifths of the reads. It is not taken here because it is an
+// inference about the content rather than a reading of it, and a detector that
+// infers its way past a wrapped file is back to counting it as something else.
+func wrappedPayload(reader *zip.Reader) (string, bool) {
+	probed := 0
+	for _, file := range reader.File {
+		if !strings.EqualFold(path.Ext(entryName(file.Name)), payloadExtension) {
+			continue
+		}
+		if probed >= maxPayloadsProbed {
+			break
+		}
+		probed++
+		opened, err := file.Open()
+		if err != nil {
+			// An entry that will not open says nothing about what it holds,
+			// and a loader asked for it later will say so itself.
+			continue
+		}
+		head := make([]byte, maxPayloadHeader)
+		read, err := io.ReadFull(opened, head)
+		opened.Close()
+		if err != nil && read == 0 {
+			continue
+		}
+		// The entry's own length is what the container's boxes are declared
+		// against; only its front was read, and inflating the rest to check a
+		// header would cost what reading a header exists to avoid.
+		total := int64(read)
+		if declared := file.UncompressedSize64; declared <= uint64(dcfMaxContainer) && int64(declared) > total {
+			total = int64(declared)
+		}
+		if _, wrapped := dcfHeader(head[:read], total); wrapped {
+			return file.Name, true
+		}
+	}
+	return "", false
 }
 
 // unreadableReason says what a file the zip reader refused was instead. The
