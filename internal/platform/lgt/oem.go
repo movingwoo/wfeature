@@ -9,8 +9,8 @@ import (
 
 // Table 0x1f8 is LGT's own, and unlike the WIPI C table there is no
 // specification for it: the slot numbers below are the ones modules here are
-// observed to resolve, and neither the original runtime's symbols nor the
-// reference implementation's name says what they do.
+// observed to resolve, and the original runtime's symbols do not say what they
+// do.
 const (
 	// oemSlotConfigure is what every non-Java module resolves and calls, twice,
 	// as the first thing its initializer does. It takes four arguments and its

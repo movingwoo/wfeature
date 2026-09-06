@@ -2525,8 +2525,7 @@ func (runtime *initializationRuntime) readBoundedString(address, limit uint32) (
 // nothing installed under that name.
 //
 // **The listing's layout is reconstructed from its one caller**, because
-// nothing describes it: not the specification, not the original runtime, not
-// the reference implementation, which does not serve this slot at all. That
+// nothing describes it: neither the specification nor the original runtime. That
 // caller reads the last 21 characters of what it gets, requires an eight
 // character token to appear there twice nine apart, and keeps the token as the
 // program's identity — which it then compares with the application id compiled

@@ -2081,8 +2081,8 @@ ahead of time to the same native ARM the rest of the module is, and the class
 metadata a class file would carry is handed to the platform through table
 `0x64` instead. None of them runs here. What follows is what they were
 observed to say, because the table is named by nothing — not the
-specification, not the original runtime, not the reference implementation —
-and reading it out of a running title is the only way it gets known.
+specification and not the original runtime — and reading it out of a running
+title is the only way it gets known.
 
 They all take the same path, in this order, and stop in the same place:
 
@@ -2239,8 +2239,7 @@ the application's Java having never acknowledged its classes.
 No name for it was found. The specification's list of supported ANSI-C
 functions has nothing that runs a callback, and the slot sits past the end of
 that list in this table, so it is named in the code for what it was watched
-doing. The reference implementation calls its equivalent the same way and does
-not name it either.
+doing.
 
 `stdlib_run_test.go` pins it against a function the fixture plants, since the
 difference between the two readings is invisible in the answer and only shows
@@ -4695,8 +4694,7 @@ on, and the same tool found it.
   and the drawing surface are implemented. What is not implemented is whatever a
   title has not asked for yet: a method that is missing stops the title with its
   own name rather than a wrong answer, which is what makes the next one cheap to
-  add. See "What the running titles say now". The reference implementation stops
-  before any of this.
+  add. See "What the running titles say now".
 
   Where each stands, and what each is waiting on:
 

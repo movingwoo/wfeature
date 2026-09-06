@@ -1330,13 +1330,14 @@ was already dark — and the third is a map that now stops short of the bottom
 edge. That is what the handset looked like, and it is three against the fifty
 that were losing a dialogue box.
 
-**The reference implementation does not do this**, which is worth knowing before
-anyone reopens it: it declares the same three `XDisplay` fields and fills them
-with 240, 320 and 320, and its `Displayable.getHeight` forwards to the display
-with no reservation. It also has no per-archive screen selection at all — one
-240x320 window for everything — and the titles above draw sixteen rows off the
-bottom of it. Two implementations agreeing is not evidence when the corpus
-disagrees with both.
+**The simpler answer is worth naming before anyone reopens this.** It is to fill
+all three `XDisplay` fields with the full height, forward `Displayable.getHeight`
+to the display with no reservation, and give every archive the same window — and
+it is what this platform did until the corpus was asked. It is also what a reader
+arrives at from the specification alone, which is exactly why it keeps looking
+right. The titles above are the ones that then draw sixteen rows off the bottom
+of it. **A reading that the specification supports is not evidence when the
+corpus disagrees with it.**
 
 ## Ninety archives, and the pass that made room for eleven of them
 
@@ -1741,7 +1742,7 @@ after the estimate above was measured.
 - **`Graphics3D` has no rasterizer.** It keeps and reports its render state
   truthfully; `Object3D` keeps a real mesh and a real transform (the matrix a
   game reads back after `translate`/`rotate`/`scale` is correct), but nothing
-  draws it. The reference implementation is in the same position.
+  draws it.
 - **`SMS`, `Call`, `PhoneBook` have no radio.** Reads answer empty and sends
   are refused. Reporting a delivered message a game can never receive a reply
   to is worse than reporting none. `docs/network.md` carries the same decision
