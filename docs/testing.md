@@ -977,9 +977,9 @@ because painting and then ending is still painting.
 **interactive** is a key changing what the title draws. The judgment is:
 
 1. reach a first frame;
-2. wait for the screen to settle — unchanged for eight consecutive ticks;
+2. wait for the screen to settle;
 3. press a key and **hold it**, then release it and keep ticking;
-4. compare what is on the screen with what was on it before the key.
+4. compare what is on the screen with what the settled screen was showing.
 
 Step 2 is what makes step 4 mean anything: a change measured against a screen
 that was already animating would have happened anyway, so a title that is still
@@ -990,11 +990,40 @@ rather than on the one the event arrived by. Several keys are tried in turn and
 the one that moved the screen is logged, because that is the key a route for
 that archive has to start with.
 
+**A blinking prompt is a screen waiting for input.** Settling was once asked as
+"the same frame eight ticks in a row", and a screen drawing a caret, an arrow
+or a "press any key" line in two phases never answers that however long it is
+waited for. In a sweep of 457 archives it refused the question to 46 of
+them — 21 KTF, 17 LGT, 8 SKT — the largest single cause left in that sweep.
+Measuring those 46 first, and counting the distinct frames each cycled through,
+divided them cleanly: 31 repeat at most four frames and introduce nothing new,
+with periods between 2 and 16 ticks, while 15 keep producing frames never seen
+before or cycle through six to thirty-two of them. Nothing fell between four
+and six.
+
+So a screen is settled when it is **still** — the same frame for eight ticks,
+unchanged — **or cycling**: over the last 64 ticks it showed at most four
+distinct frames, and the most recent 32 introduced none the 32 before them had
+not already shown. The still test is checked first and is untouched, so no
+archive changes its answer because of a rule written for the ones that had
+none. What the settled screen leaves behind is the *set* of frames it cycles
+through, and step 4 asks whether the key drew something that set never held: a
+blinking screen has no single frame to compare against, since half its ticks
+differ from the other half whether or not a key did anything. A screen still
+producing new content stays *unanswerable* — the point is to shrink "I do not
+know", not to spell it as something else.
+
 **All three platforms ask it the same way, deliberately.** A grade is only worth
 comparing across platforms if it means the same thing on each of them, so the
 judgment — settle, hold, release, compare, and *unanswerable* rather than failed
-when the screen never settles — is one design written three times against three
-session APIs rather than three designs. Where the platforms differ is in what
+when the screen never settles — now lives in `internal/ladder` and the three
+probes call it, rather than being one design written three times against three
+session APIs. It was the three copies that made this worth moving: one question
+answered in three places drifts into three answers the first time it has to
+change, and this one had to. What each probe still owns is what its platform is
+made of — how a tick is spent, how a key is sent, what a frame is read from —
+and all `internal/ladder` is given is one number per tick, the identity of what
+is on the screen. Where the platforms differ is in what
 they are made of: a KTF or LGT tick moves a virtual clock and costs guest work
 rather than seconds, while an SKT tick is real time because a MIDlet's threads
 sleep against the wall clock, so only the SKT probe runs its archives in

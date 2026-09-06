@@ -1,7 +1,6 @@
 package skt_test
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/ladder"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 )
 
@@ -31,6 +31,16 @@ import (
 //     it settles first, because a change measured against a screen that was
 //     already animating says nothing about the key.
 //
+// What counts as settled, and what a key is then compared against, is one
+// judgment shared by all three platforms rather than three copies of one
+// design: `internal/ladder`. A screen is settled when it is still, or when it
+// cycles through a handful of frames and shows nothing it had not already
+// shown — a blinking prompt is a screen waiting for input, and asking for the
+// same frame several ticks in a row refused 46 archives that were doing
+// exactly that. What the settled screen leaves behind is the set of frames it
+// cycles through, and a key changed the screen when it draws something that
+// set never held.
+//
 // A tick here is real time — a MIDlet's threads sleep against the wall clock
 // and there is no guest clock to multiply — so the windows are counted in
 // ticks of the same length the boot probe uses, and the archives run in
@@ -42,9 +52,6 @@ const (
 	localLadderBootTicks = 300
 	// How long it then has to keep running.
 	localLadderSustainTicks = 200
-	// A screen counts as settled once its pixels are unchanged for this many
-	// consecutive ticks.
-	localLadderSettleRuns = 8
 	// How long to wait for that before deciding the title is animating and
 	// cannot answer this question from a frame.
 	localLadderSettleLimit = 150
@@ -123,15 +130,15 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 		if !painted {
 			t.Skipf("%s in %d ticks, which the boot rung below this one reports", why, ticks)
 		}
-		settled, waited := tickUntilSettled(t, session, framebuffer)
+		screen, settled, waited := tickUntilSettled(t, session, framebuffer)
 		if !settled {
-			t.Skipf("the screen was still changing after %d ticks, so a change after a key would prove nothing", waited)
+			t.Skipf("%s", screen.Unsettled(waited))
 		}
-		baseline, presented := framebuffer.Snapshot()
+		_, presented := framebuffer.Snapshot()
 		var tried []string
 		for _, key := range localLadderKeys {
 			tried = append(tried, key.name)
-			changed, after, err := pressAndWatch(t, session, framebuffer, key.code, baseline, hold)
+			changed, after, err := pressAndWatch(t, session, framebuffer, key.code, screen, hold)
 			if err != nil {
 				t.Fatalf("holding %s: %v", key.name, err)
 			}
@@ -237,37 +244,39 @@ func tickToFirstFrame(t *testing.T, session *skt.Runtime, framebuffer *backend.M
 	return false, ticks, "nothing was painted"
 }
 
-// tickUntilSettled waits for the screen to stop changing on its own.
-func tickUntilSettled(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) (settled bool, waited int) {
+// tickUntilSettled waits for the screen to stop changing on its own, by the
+// judgment all three platforms share.
+func tickUntilSettled(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) (screen *ladder.Watcher, settled bool, waited int) {
 	t.Helper()
-	previous, _ := framebuffer.Snapshot()
-	steady := 0
+	screen = &ladder.Watcher{}
+	screen.Observe(presentedFrame(framebuffer))
 	for ; waited < localLadderSettleLimit; waited++ {
 		session.AdvanceAudio()
 		if err := session.RunPending(); err != nil {
-			return false, waited
+			return screen, false, waited
 		}
 		time.Sleep(localLadderTickPause)
-		current, _ := framebuffer.Snapshot()
-		// The pixels rather than a digest of them: this is one comparison of
-		// one frame per tick, and a comparison that stops at the first
-		// differing byte costs less than a hash of the whole screen.
-		if !bytes.Equal(current.RGBA, previous.RGBA) {
-			previous = current
-			steady = 0
-			continue
-		}
-		steady++
-		if steady >= localLadderSettleRuns {
-			return true, waited
+		if screen.Observe(presentedFrame(framebuffer)) {
+			return screen, true, waited
 		}
 	}
-	return false, waited
+	return screen, false, waited
 }
 
-// pressAndWatch holds one key down, releases it, and reports whether what the
-// title draws differs from what it was drawing before the key.
-func pressAndWatch(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer, key int32, baseline backend.Frame, hold int) (bool, int, error) {
+// presentedFrame identifies what is on the screen. The pixels are hashed
+// rather than compared, because what a settled screen is compared against is a
+// set of frames rather than one of them: a blinking prompt is settled and half
+// its ticks differ from the other half.
+func presentedFrame(framebuffer *backend.MemoryFramebuffer) uint64 {
+	frame, _ := framebuffer.Snapshot()
+	return ladder.Digest(frame.RGBA)
+}
+
+// pressAndWatch holds one key down, releases it, and reports whether the title
+// draws content the settled screen never held. The comparison is against the
+// set the screen was cycling through rather than against one frame of it: a
+// blinking prompt differs from any single frame of itself.
+func pressAndWatch(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer, key int32, screen *ladder.Watcher, hold int) (bool, int, error) {
 	t.Helper()
 	if err := session.SendKey(skt.KeyPressed, key); err != nil {
 		return false, 0, err
@@ -281,8 +290,7 @@ func pressAndWatch(t *testing.T, session *skt.Runtime, framebuffer *backend.Memo
 			}
 			time.Sleep(localLadderTickPause)
 			elapsed++
-			current, _ := framebuffer.Snapshot()
-			if !bytes.Equal(current.RGBA, baseline.RGBA) {
+			if screen.Changed(presentedFrame(framebuffer)) {
 				return true, nil
 			}
 		}
