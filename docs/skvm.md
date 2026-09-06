@@ -109,10 +109,34 @@ business.
 ## The frame loop
 
 A MIDlet has no tick of its own. It runs on the callbacks the Host makes and on
-whatever those callbacks deferred, and an SKT title defers its whole game. Three
+whatever those callbacks deferred, and an SKT title defers its whole game. Four
 contracts decide whether it runs at all, and each of them fails silently when it
 is missing: the title starts, shows a Canvas, reports no error, and never paints
 a second frame.
+
+**A Canvas is told when it arrives on the screen and when it leaves.** MIDP
+calls `showNotify` on the Canvas becoming current *before* it is painted, and
+`hideNotify` on the one that left. Neither was declared on `Canvas` here and
+neither was called, and the two archives that depended on it were dead in
+different ways for the same reason. One starts the thread that is its whole
+game inside `showNotify`: without the call it painted exactly one frame and
+then sat still for as long as anything watched, taking keys it had nothing left
+running to act on. The other keeps a paint counter that only `showNotify` sets,
+and the paint that sees that value is the one that reads its opening picture
+out of the archive; with the counter never set the load never ran and the next
+paint drew a null image. That second one shows why the symptom is so far from
+the cause: the throw is absorbed as a callback that did not happen (below), but
+the title's own `paint` ends with the `notify` its drawing thread is blocked
+on, so a throw anywhere before that leaves the thread waiting for a repaint
+nobody will ask for. One missing callback, and the title is over — with no
+error, on a screen holding a picture.
+
+The order is the contract as much as the call is: a `showNotify` delivered
+after the first paint is the same defect wearing a different face, which is
+what `TestACanvasIsToldItIsShownBeforeItPaints` and the two tests beside it
+hold. Becoming current when already current is not an arrival and is not
+announced. A throw out of either callback is absorbed the way every other
+guest callback's is.
 
 **`Display.callSerially` runs one Runnable per Host pass.** MIDP says a serial
 Runnable follows the events already on the loop. The common frame loop here is a

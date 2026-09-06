@@ -791,7 +791,60 @@ func (runtime *Runtime) applyCurrentDisplayable() error {
 	if runtime.logger != nil {
 		runtime.logger.Debug("MIDP current Displayable changed", "from", objectClass(previous), "to", objectClass(next))
 	}
+	if err := runtime.notifyDisplayableChanged(previous, next); err != nil {
+		return err
+	}
 	return runtime.repaintNewCurrentCanvas(next)
+}
+
+// A Canvas is told when it is shown
+//
+// MIDP calls `hideNotify` on the Canvas leaving the screen and `showNotify` on
+// the one arriving, and it calls the second one *before* the first paint. That
+// is not decoration: a Canvas has no constructor moment late enough to know it
+// is about to be seen, so the callback is where a title puts the work it must
+// do once per appearance — and the shape this found is a title that loads its
+// first picture there and counts paints from it.
+//
+// Its `showNotify` sets a paint counter to a value only that callback
+// produces, and the paint that sees that value is the one that reads its
+// opening picture out of the archive; every later paint draws the picture the
+// counter says it has. With no `showNotify` the counter never takes that
+// value, the load never runs, and the first paint that wants the picture is
+// handed a null. The paint that throws is one this platform absorbs — see
+// uncaught.go — but the *title* loses more than a frame: its own paint ends
+// with the `notify` its drawing thread is waiting for, and a throw before that
+// point leaves the thread waiting for a paint nothing will ask for again. One
+// missing callback stops the whole title, silently, several calls away from
+// itself.
+//
+// **These run before the paint is queued**, which is the order the
+// specification gives and the order that title depends on. A throw out of one
+// is absorbed the way any other guest callback's is: a `showNotify` that
+// failed is a callback that did not happen, not a session that ends.
+func (runtime *Runtime) notifyDisplayableChanged(previous, next *jvm.Object) error {
+	if previous == next {
+		return nil
+	}
+	if err := runtime.notifyCanvasVisibility(previous, "hideNotify"); err != nil {
+		return err
+	}
+	return runtime.notifyCanvasVisibility(next, "showNotify")
+}
+
+func (runtime *Runtime) notifyCanvasVisibility(canvas *jvm.Object, callback string) error {
+	if canvas == nil {
+		return nil
+	}
+	isCanvas, err := runtime.VM.IsSubclassOf(canvas.ClassName, midp.CanvasClass)
+	if err != nil {
+		return fmt.Errorf("validate Canvas for %s: %w", callback, err)
+	}
+	if !isCanvas {
+		return nil
+	}
+	_, err = runtime.VM.InvokeVirtual(canvas, callback, "()V")
+	return runtime.absorbUncaughtCallback(callback+" on Canvas "+canvas.ClassName, err)
 }
 
 // maxPendingSerialRunnables bounds the callSerially queue. A game hands the
