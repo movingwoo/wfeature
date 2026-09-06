@@ -3,6 +3,7 @@ package webhost
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"image"
 	"image/png"
@@ -365,6 +366,74 @@ func TestSessionNamesABagOfGamesForWhatItIs(t *testing.T) {
 	refusal := expectMessage(t, connection, serverError)
 	if !strings.Contains(refusal.Message, "zip") {
 		t.Errorf("refusal = %q, want it to name what the file is", refusal.Message)
+	}
+}
+
+// A package that was locked before it was distributed is the other refusal a
+// person can act on, and it is said in the same language for the same reason.
+// What it must not say is that the file is damaged or of a format this does
+// not read: the file is whole, and those two sentences send someone looking
+// for a fix that is not the one they need.
+func TestSessionNamesALockedPackageForWhatItIs(t *testing.T) {
+	root := t.TempDir()
+	gameRoot := filepath.Join(root, "games", "skt")
+	if err := os.MkdirAll(gameRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The payload entry the descriptor names is a locked container rather than
+	// the JAR it should be. The contents are filler: what is read is the
+	// header on the front of it.
+	container := []byte{'o', 'd', 'c', 'f', 0, 2, 0, 0}
+	box := make([]byte, 16)
+	binary.BigEndian.PutUint32(box, 1)
+	copy(box[4:], "odrm")
+	binary.BigEndian.PutUint64(box[8:], uint64(16+(8<<10)))
+	container = append(container, box...)
+	container = append(container, make([]byte, 8<<10)...)
+
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for name, body := range map[string][]byte{
+		"__adf__":    []byte("aid:AI0000\n"),
+		"AI0000.jar": container,
+	} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gameRoot, "locked.zip"), buffer.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, Options{
+		GameRoot: filepath.Join(root, "games"),
+		SaveRoot: filepath.Join(root, "savedata", "ktf"),
+		LogRoot:  filepath.Join(root, "logs"),
+	})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
+	if err != nil {
+		t.Fatalf("dial the session: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	expectMessage(t, connection, serverReady)
+
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/locked.zip"})
+	refusal := expectMessage(t, connection, serverError)
+	if !strings.Contains(refusal.Message, "잠긴") {
+		t.Errorf("refusal = %q, want it to say the file is locked", refusal.Message)
+	}
+	// The loader's own English complaint reaching a page is the failure this
+	// replaced: it is written for a log, not for the person holding the file.
+	if strings.Contains(refusal.Message, "read archive") {
+		t.Errorf("refusal = %q, want the page's sentence rather than the loader's", refusal.Message)
 	}
 }
 

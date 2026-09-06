@@ -774,6 +774,38 @@ then lost the sentence:
 What the server sends was already right: `startGame` answers `err.Error()`, so
 the text existed on the page the whole time.
 
+### Two refusals the server words itself
+
+`err.Error()` is written for a log. It is the right answer for a refusal
+nobody can act on — a truncated archive, a descriptor that will not parse —
+because there is nothing to say beyond what went wrong. Two refusals are not
+like that: the file is intact, the person holding it can act, and what they
+should do differs. Both get a sentence of their own in `startGame`, in the
+language the rest of the page's refusals are in.
+
+- **A zip of zips** is a bag of games rather than a game. There is nothing to
+  fix and nothing to load: each entry is a whole archive, and which one to add
+  is the person's choice rather than a loader's. `detect.ArchiveOfArchives` is
+  the test and `session.ErrArchiveOfArchives` is the answer.
+- **A locked package** was wrapped before it was distributed: the payload the
+  descriptor names is an OMA DRM container instead of the JAR it should be.
+  The archive around it is ordinary and readable, which is why the refusal has
+  to be worded — the loader's complaint is about bytes it could not read, and
+  reads as damage. `detect.ReasonDRMWrapped` is the finding and
+  `session.ErrDRMWrapped` is the answer.
+
+The sentence for the locked one has to avoid two things a person would act on
+wrongly. **It is not damage** — re-downloading gets the same file — and **it is
+not a format this does not read yet**, which would say the work is on this side.
+The key belongs to the network that issued the file, so the only remedy is a
+copy that was never locked, and that is what it says.
+
+Neither needs a message kind of its own: they are `error` answers to the start
+request like every other refusal, and the page shows the text it is given. What
+changed is the text. `Inspect` is where both are decided, so the CLI and the
+page refuse the same file for the same reason, and the loader's own sentence
+stays behind `ErrDRMWrapped` for a log, where it names the entry that is locked.
+
 ### A start can be refused by a game that ended, not a game that broke
 
 The previous section is about a start that failed. **A start can also be
