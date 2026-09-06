@@ -192,6 +192,13 @@ type Client struct {
 	sourceVolume map[uint32]int32
 	sourceMuted  map[uint32]bool
 
+	// vibrator holds what the guest has asked the handset's motor to do. Both
+	// surfaces that reach it — the WIPI C media block and the Java class —
+	// record the request and nothing here acts on it:
+	// whether there is a motor, and whether the person wants it used, are the
+	// Host's to know. See internal/backend/vibration.go.
+	vibrator backend.Vibrator
+
 	files map[uint32]*openFile
 	// removed is the set of paths MC_fsRemove has deleted, loaded from the
 	// store on first use. See fileRemovedKey for why a delete needs a list.

@@ -250,7 +250,22 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		return answerInt(wipiSuccess)
 
 	case slotVibrator:
-		// No vibrator here, and nothing observable is lost by saying so.
+		// MC_mdaVibrator(level, timeout): a strength from 0 to 100 where zero
+		// is off, and a time in milliseconds that only means anything above
+		// zero. The arguments used to go unread on the reasoning that there is
+		// no vibrator here — but whether there is one is the Host's answer
+		// rather than this runtime's, and a browser has `navigator.vibrate`.
+		// So the request is recorded where a Host can read it and the call
+		// still answers success.
+		level, err := argument(0)
+		if err != nil {
+			return err
+		}
+		timeout, err := argument(1)
+		if err != nil {
+			return err
+		}
+		client.vibrator.Vibrate(int(int32(level)), int(int32(timeout)))
 		return answerInt(wipiSuccess)
 
 	case slotClipSetWaterMark:

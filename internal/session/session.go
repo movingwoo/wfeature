@@ -896,12 +896,12 @@ func (s *Session) Vibration() (backend.Vibration, bool) {
 		return s.ktf.Vibration(), true
 	case s.runtime != nil:
 		return s.runtime.Vibration(), true
+	case s.lgt != nil:
+		return s.lgt.Vibration(), true
 	default:
-		// The earlier KTF package and LGT have no vibration recorded on this
-		// side yet: the earlier package's native table has no vibrator call at
-		// all, and LGT's two entry points still answer without reading their
-		// arguments. Saying so is what keeps a Host from buzzing on a request
-		// nobody made.
+		// The earlier KTF package has no vibration recorded on this side: its
+		// native table has no vibrator call at all. Saying so is what keeps a
+		// Host from buzzing on a request nobody made.
 		return backend.Vibration{}, false
 	}
 }
