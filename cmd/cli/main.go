@@ -156,6 +156,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	keyHold := 1
 	diagPath := ""
 	audioPrefix := ""
+	patchPaths := []string{}
 	cheatConsole := false
 	serveSession := false
 	traceInstructions := false
@@ -207,6 +208,13 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			}
 			index++
 			frameDir = args[index]
+		case "-patch":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-patch expects a cheat table path")
+				return 2
+			}
+			index++
+			patchPaths = append(patchPaths, args[index])
 		case "-save":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-save expects a directory")
@@ -311,6 +319,12 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 			ticks = 0
 		}
 	}
+	// Patch tables are read here for the same reason.
+	patchTables, err := readPatchTables(patchPaths)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 
 	archive, err := openSKT(path)
 	if err != nil {
@@ -359,6 +373,12 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	// Patches go in before the first Host pass — the earliest the object graph
+	// can be reached, and earlier than any patch a person could have typed.
+	if patchErr := applyStartPatches(runtime.CheatConsole(), path, patchTables, stderr); patchErr != nil {
+		fmt.Fprintln(stderr, patchErr)
+		return 1
+	}
 	// Reading stdin on its own goroutine keeps the tick loop paced; the
 	// commands run between Host passes, which is the only time reading and
 	// freezing the object graph is safe.
@@ -734,6 +754,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	profileFrom := 0
 	routePath := ""
 	audioPrefix := ""
+	patchPaths := []string{}
 	keyEvents := map[int][]int32{}
 	touchEvents := map[int][]touchEvent{}
 	// parkAt is the tick a park happens at, counted from one so that zero
@@ -790,6 +811,13 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			frameDir = extra[index+1]
+			index++
+		case "-patch":
+			if index+1 >= len(extra) {
+				fmt.Fprintln(stderr, "-patch expects a cheat table path")
+				return 2
+			}
+			patchPaths = append(patchPaths, extra[index+1])
 			index++
 		case "-gdb":
 			if index+1 >= len(extra) {
@@ -972,6 +1000,13 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	// Patch tables are read here for the same reason, and both generations of
+	// package take them.
+	patchTables, err := readPatchTables(patchPaths)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	logger := backend.NewLogger(stderr)
 	logger.Debug("starting KTF archive", "profile", backend.BuildProfile(), "path", path)
 	data, err := os.ReadFile(path)
@@ -1016,6 +1051,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			keyHold:      keyHold,
 			audioPrefix:  audioPrefix,
 			cheatConsole: cheatConsole,
+			patchTables:  patchTables,
 			serveSession: serveSession,
 			screenWidth:  screenWidth,
 			screenHeight: screenHeight,
@@ -1104,6 +1140,12 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	profiling := profilePath != "" || profileFoldedPath != ""
 	if profiling {
 		session.EnableProfile(0)
+	}
+	// Patches go in before the first tick — the earliest a Host can reach
+	// guest memory, and earlier than any patch a person could have typed.
+	if patchErr := applyStartPatches(session.CheatConsole(), path, patchTables, stderr); patchErr != nil {
+		fmt.Fprintln(stderr, patchErr)
+		return 1
 	}
 	var cheatCommands chan string
 	if cheatConsole {
@@ -2136,12 +2178,12 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
 	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
-	fmt.Fprintln(output, "                            [-screen WxH] [-cheat] [-serve]")
+	fmt.Fprintln(output, "                            [-screen WxH] [-cheat] [-patch table.json] [-serve]")
 	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
-	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script] [-serve]")
+	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script] [-patch table.json] [-serve]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")
 	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
-	fmt.Fprintln(output, "                            [-gdb host:port]")
+	fmt.Fprintln(output, "                            [-gdb host:port] [-patch table.json]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick] [-route script] [-serve]")
 	fmt.Fprintln(output, "  wfeature invoke <game.jar> <method> <descriptor> [arguments...]")
 	fmt.Fprintln(output, "  wfeature importsaves <external savedata dir> [-save dir] [-games dir] [-dry-run]")
@@ -2177,6 +2219,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	keyHold := 1
 	maxSteps := uint64(0)
 	audioPrefix := ""
+	patchPaths := []string{}
 	profilePath := ""
 	profileFoldedPath := ""
 	profileFrom := 0
@@ -2185,6 +2228,13 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		switch args[index] {
 		case "-cheat":
 			cheatConsole = true
+		case "-patch":
+			if index+1 >= len(args) {
+				fmt.Fprintln(stderr, "-patch expects a cheat table path")
+				return 2
+			}
+			index++
+			patchPaths = append(patchPaths, args[index])
 		case "-serve":
 			serveSession = true
 		case "-screen":
@@ -2367,6 +2417,12 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 			ticks = 0
 		}
 	}
+	// Patch tables are read here for the same reason.
+	patchTables, err := readPatchTables(patchPaths)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2417,6 +2473,12 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	if audioSink != nil {
 		audioSink.Clock = session.GuestElapsed
+	}
+	// Patches go in before the first tick — the earliest a Host can reach
+	// guest memory, and earlier than any patch a person could have typed.
+	if patchErr := applyStartPatches(session.CheatConsole(), path, patchTables, stderr); patchErr != nil {
+		fmt.Fprintln(stderr, patchErr)
+		return 1
 	}
 	// Reading stdin on its own goroutine keeps the tick loop paced; the
 	// commands run between ticks so a scan observes the guest at a frame

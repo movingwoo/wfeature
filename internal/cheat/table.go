@@ -137,10 +137,8 @@ func (session *Session) LoadTable(table Table) (applied int, err error) {
 	session.freezes.Clear()
 	_ = session.ClearWatches()
 
-	for index, entry := range table.Patches {
-		if patchErr := session.ApplyPatch(entry); patchErr != nil {
-			return 0, fmt.Errorf("table patch %d: %w", index+1, patchErr)
-		}
+	if _, patchErr := session.ApplyTablePatches(table); patchErr != nil {
+		return 0, patchErr
 	}
 	for index, entry := range table.Entries {
 		valueType, ok := ParseValueType(entry.Type)

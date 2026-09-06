@@ -41,6 +41,10 @@ type nativeRun struct {
 	keyHold      int
 	audioPrefix  string
 	cheatConsole bool
+	// patchTables are the byte-patch tables named by -patch, already read and
+	// checked. This package has the cheat engine, so it takes them like the
+	// other generation does.
+	patchTables  []patchTable
 	serveSession bool
 	script       *route.Route
 	screenWidth  int
@@ -88,6 +92,12 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 		audioSink.Clock = session.GuestElapsed
 	}
 
+	// Patches go in before the first frame is run — the earliest a Host can
+	// reach guest memory, and earlier than any patch a person could have typed.
+	if patchErr := applyStartPatches(session.CheatConsole(), run.archivePath, run.patchTables, stderr); patchErr != nil {
+		fmt.Fprintln(stderr, patchErr)
+		return 1
+	}
 	var cheatCommands chan string
 	if run.cheatConsole {
 		// Reading stdin on its own goroutine keeps the frame loop paced; the
