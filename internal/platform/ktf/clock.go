@@ -408,7 +408,22 @@ func (client *Client) NextDeadline() (time.Time, bool) {
 					continue
 				}
 			}
-			consider(timer.due)
+			// **A timer is dispatched from the client thread, so it is never
+			// due before the wait that thread declared is over** — the same
+			// clamp the serial queue above carries, and for the same reason:
+			// `ServiceTimers` refuses every timer outright while
+			// `clientThreadDue` is false. Reported at its own deadline, a
+			// timer that fell due during such a wait answers "work is due
+			// now" at an instant no round would take it, a manual clock can
+			// never be skipped past it, and the wait it is waiting on is
+			// exactly the one that will never end. One local title stops on
+			// its first screen there: a scheduled task comes due 168ms into a
+			// wait of 816ms, and neither side ever moves again.
+			due := timer.due
+			if client.clientWakeAt.After(due) {
+				due = client.clientWakeAt
+			}
+			consider(due)
 		}
 	}
 	return earliest, found
