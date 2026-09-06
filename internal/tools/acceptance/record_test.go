@@ -20,7 +20,7 @@ func TestARecordCarriesTheFileTheGradeAndWhereItStopped(t *testing.T) {
 		},
 	})
 	day := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	run, archives := buildRecords(root, []result{
+	run, archives := recordsFor(root, day, []string{"ktf"}, cachePlan{}, []result{
 		{
 			stage:  stageNamed(t, "ktf", "parse"),
 			passed: []string{"reaches-a-frame.zip", "stops-at-load.zip"},
@@ -34,7 +34,7 @@ func TestARecordCarriesTheFileTheGradeAndWhereItStopped(t *testing.T) {
 			stage:  stageNamed(t, "ktf", "frame"),
 			passed: []string{"reaches-a-frame.zip"},
 		},
-	}, day, []string{"ktf"})
+	})
 
 	if run.Schema != recordSchema || run.Kind != runKind {
 		t.Errorf("the run line is %+v", run)
@@ -82,7 +82,7 @@ func TestAFileNoProbeRanIsStillARecordWithWhyNothingClaimedIt(t *testing.T) {
 	root := corpusRoot(t, map[string]map[string][]byte{
 		"ktf": {"half-a-download.zip": []byte("PK\x03\x04 and then the connection dropped")},
 	})
-	_, archives := buildRecords(root, []result{{stage: stageNamed(t, "ktf", "parse")}}, time.Now(), []string{"ktf"})
+	_, archives := recordsFor(root, time.Now(), []string{"ktf"}, cachePlan{}, []result{{stage: stageNamed(t, "ktf", "parse")}})
 	if len(archives) != 1 {
 		t.Fatalf("%d records, want one", len(archives))
 	}
@@ -108,11 +108,11 @@ func TestARungDecliningAnArchiveIsNotTheSameAsRefusingIt(t *testing.T) {
 			"refused.zip":  []byte("PK\x03\x04"),
 		},
 	})
-	_, archives := buildRecords(root, []result{{
+	_, archives := recordsFor(root, time.Now(), []string{"ktf"}, cachePlan{}, []result{{
 		stage:   stageNamed(t, "ktf", "parse"),
 		skipped: []note{{"declined.zip", "a package this probe does not drive"}},
 		failed:  []note{{"refused.zip", "parse: not a valid zip file"}},
-	}}, time.Now(), []string{"ktf"})
+	}})
 	grades := map[string]string{}
 	for _, record := range archives {
 		grades[record.Archive] = record.Grade
@@ -133,10 +133,10 @@ func TestARowIsJoinedToItsFileThroughTheNameGoTestPrints(t *testing.T) {
 	root := corpusRoot(t, map[string]map[string][]byte{
 		"ktf": {"a title with spaces.zip": []byte("PK\x03\x04")},
 	})
-	_, archives := buildRecords(root, []result{{
+	_, archives := recordsFor(root, time.Now(), []string{"ktf"}, cachePlan{}, []result{{
 		stage:  stageNamed(t, "ktf", "parse"),
 		passed: []string{"a_title_with_spaces.zip"},
-	}}, time.Now(), []string{"ktf"})
+	}})
 	if len(archives) != 1 {
 		t.Fatalf("%d records, want one: %+v", len(archives), archives)
 	}
@@ -310,4 +310,11 @@ func corpusRoot(t *testing.T, files map[string]map[string][]byte) string {
 		}
 	}
 	return root
+}
+
+// recordsFor is buildRecords with the corpus survey in front of it, which is
+// the order the command itself runs them in.
+func recordsFor(root string, day time.Time, platforms []string, plan cachePlan, results []result) (runRecord, []archiveRecord) {
+	header := runHeader(root, day)
+	return buildRecords(header, results, platforms, surveyCorpus(root, platforms), plan)
 }

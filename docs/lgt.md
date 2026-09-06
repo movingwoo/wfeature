@@ -5917,6 +5917,56 @@ rendering as `%.*s`, and two titles losing their whole opening sequence to a
 delete that did not delete — sailed through it. Each title booted, painted,
 reached the world and saved. The screens were simply wrong.
 
+Two of those questions are now asked without a person watching, by the two
+rungs above this one.
+
+### 2a. Two rungs above a first frame
+
+```sh
+WFEATURE_LGT_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalLGTArchivesSustainAFrame -v ./internal/platform/lgt
+WFEATURE_LGT_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalLGTArchivesAnswerAKey -v ./internal/platform/lgt
+```
+
+**sustained** is the title still running a window past its first frame, without
+an error and without ending itself. **interactive** is a key changing what it
+draws: reach a first frame, wait for the screen to settle, hold a key down,
+release it, keep ticking, and compare. A title still animating at the end of
+the settle window is reported as *unanswerable* rather than as a failure — a
+change measured against a screen that was already moving would have happened
+anyway. `WFEATURE_LGT_SUSTAIN_TICKS` and `WFEATURE_LGT_HOLD_TICKS` widen the two
+windows for the investigation that follows a rung nobody expected an archive to
+miss.
+
+The keys are tried by the names a route uses and resolved through the same
+table `runlgt` resolves a route's keys with, rather than through a second copy
+written beside the probe: `fire` must not mean one thing to a route and another
+to a rung.
+
+**A title here is allowed to end its first launch, and the rungs have to know
+that.** Several put the handset's own restart notice up before anything else:
+they write their save, tell the player to start the title again, and end. Four
+local archives do it the moment `fire` is pressed, and at this rung that is
+indistinguishable from a title that died — both stop the session. Driving one
+of them from the command line shows the whole of it: the first run ends at the
+tick the key arrives and leaves a save behind, and the second run against the
+same `-save` directory keeps going to the end of its budget.
+
+```sh
+wfeature runlgt <game.zip> -ticks 150 -save /tmp/probe -key 60:fire   # "ticks": 61
+wfeature runlgt <game.zip> -ticks 150 -save /tmp/probe -key 60:fire   # "ticks": 150
+```
+
+So each archive's launches share one save directory, an archive that ends
+itself is given the second launch the notice asked for, and only an ending on
+that launch is reported — with the log saying which launch answered, because a
+rung that quietly relaunched would hide a title's first-launch behaviour from
+whoever reads the report. A probe that judged every title on a launch this
+platform treats as an installation would be measuring its own fresh directory.
+
+The design of the judgment is the other platforms' — the whole point is that
+one grade means the same thing on all three — and the reasons for each part of
+it are in [testing.md](testing.md), "Two rungs above a first frame".
+
 ### 3. The scripted run — what the title does with what it was told
 
 This is the layer that catches gameplay defects, and it is a method rather than
@@ -6047,3 +6097,22 @@ space to sweep and answered nil, later grew a synthetic one and needed two lines
 here to reach the same panel (`docs/skvm.md`). Reaching for a platform by name is
 what hid this: the refusal message named the platform it had asked for rather
 than the property it needed, so it read as a decision instead of a gap.
+
+### What a saved table is keyed by
+
+`Session.ImageHash()` is the SHA-256 of the module inside the JAR — the one
+executable image this platform loads — in lower-case hex, and it is the first
+half of a saved table's key. The second half is the archive's own hash, which
+the Host fills in.
+
+The two halves are not redundant. **An address is true of the image, not of the
+container around it.** One title reaches this project in more than one archive —
+a repack, a re-zip, a copy with something added beside the module — and every
+one of them loads the same bytes at the same addresses, so a table made against
+one of them is the table for all of them. Keying only on the file would make a
+person redo the work for every container; keying on the image finds it again.
+
+A platform whose title is a bag of class files has no single loaded image, and
+the file it was read from is what identifies it instead. That is a real
+difference between the platforms rather than a gap, so no hash of something
+arbitrary is invented to fill it.

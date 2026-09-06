@@ -24,6 +24,7 @@
 // Usage:
 //
 //	go run ./internal/tools/acceptance [-out var/acceptance] [-platform ktf,lgt,skt]
+//	go run ./internal/tools/acceptance -cache=false        # measure everything again
 //	go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
 //
 // `make acceptance` is the first of those.
@@ -83,6 +84,10 @@ var stages = []stage{
 		"./internal/platform/ktf", "TestLocalKTFArchivesAnswerAKey", "WFEATURE_KTF_INTERACTIVE_ACCEPTANCE", 8},
 	{"lgt", "boot", "the module boots and asks to present a frame",
 		"./internal/platform/lgt", "TestLocalLGTArchivesBootAndPaint", "WFEATURE_LGT_ACCEPTANCE", 1},
+	{"lgt", "sustained", "the title keeps running past its first frame",
+		"./internal/platform/lgt", "TestLocalLGTArchivesSustainAFrame", "WFEATURE_LGT_SUSTAINED_ACCEPTANCE", 2},
+	{"lgt", "interactive", "a key changes what the title draws",
+		"./internal/platform/lgt", "TestLocalLGTArchivesAnswerAKey", "WFEATURE_LGT_INTERACTIVE_ACCEPTANCE", 3},
 	{"skt", "boot", "the title boots and paints",
 		"./internal/platform/skt", "TestLocalSKTArchivesBootAndPaint", "WFEATURE_SKT_ACCEPTANCE", 1},
 	{"skt", "sustained", "the title keeps running past its first frame",
@@ -120,6 +125,7 @@ func main() {
 	timeout := flag.String("timeout", "60m", "the `go test` timeout for one stage")
 	since := flag.String("since", "auto", "the record `file` this run is compared with: a path, `auto` for the newest already in the output directory, or empty for none")
 	compareOnly := flag.Bool("compare", false, "compare two record files and write the difference to standard output, running no probes")
+	cache := flag.Bool("cache", true, "carry an archive's answer forward from the run -since names, when the file's bytes and this build are both unchanged")
 	flag.Parse()
 
 	if *compareOnly {
@@ -147,18 +153,6 @@ func main() {
 	}
 
 	started := time.Now()
-	var results []result
-	for _, current := range stages {
-		if !wanted[current.platform] {
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "%s %s: ", current.platform, current.name)
-		outcome := run(root, current, *timeout)
-		results = append(results, outcome)
-		fmt.Fprintf(os.Stderr, "%d passed, %d skipped, %d failed (%s)\n",
-			len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.elapsed.Round(time.Second))
-	}
-
 	directory := *out
 	if !filepath.IsAbs(directory) {
 		directory = filepath.Join(root, directory)
@@ -170,12 +164,46 @@ func main() {
 	file := filepath.Join(directory, started.Format("2006-01-02")+".md")
 	records := filepath.Join(directory, started.Format("2006-01-02")+recordExtension)
 
-	runOf, archives := buildRecords(root, results, started, platforms)
-	// The run this one is compared with is read before the new one is written,
-	// so a second run on the same day compares with the day before it rather
-	// than with itself.
+	// The run this one is compared with is read before this one is measured,
+	// because it is also what says which archives still have to be. A second
+	// run on the same day reads the day before it rather than itself.
 	previousFile, previousRun, previous := load(*since, directory, records)
-	report := write(root, results, started) + analysis(archives, previousFile, previousRun, previous)
+
+	// The corpus is read once: the same bytes answer what is in front of the
+	// run, what the loaders make of each file, and whether an earlier answer
+	// still applies.
+	survey := surveyCorpus(root, platforms)
+	planned := map[string][]stage{}
+	for _, current := range stages {
+		if wanted[current.platform] {
+			planned[current.platform] = append(planned[current.platform], current)
+		}
+	}
+	header := runHeader(root, started)
+	// The cache reads the most recent run there is, which on a second run in
+	// one day is that day's own file — the one the comparison deliberately
+	// steps over. Comparing a run with itself says nothing, which is why the
+	// delta skips it; reusing its answers says everything, which is why this
+	// does not. It is read before this run overwrites it.
+	plan := planCache(*cache, sourceOf(records, previousFile, previousRun, previous), survey, planned, header)
+
+	var results []result
+	for _, current := range stages {
+		if !wanted[current.platform] {
+			continue
+		}
+		selection := plan.selection(current.platform, survey[current.platform])
+		fmt.Fprintf(os.Stderr, "%s %s: ", current.platform, current.name)
+		outcome := run(root, current, *timeout, selection)
+		outcome.cached = plan.carriedCount(current.platform, survey[current.platform])
+		results = append(results, outcome)
+		fmt.Fprintf(os.Stderr, "%d passed, %d skipped, %d failed, %d carried forward (%s)\n",
+			len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.cached,
+			outcome.elapsed.Round(time.Second))
+	}
+
+	runOf, archives := buildRecords(header, results, platforms, survey, plan)
+	report := write(root, results, started, plan) + analysis(archives, previousFile, previousRun, previous)
 	if err := os.WriteFile(file, []byte(report), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "acceptance:", err)
 		os.Exit(2)
@@ -195,6 +223,22 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// cacheSource is the run whose answers may be carried forward.
+type cacheSource struct {
+	file string
+	run  runRecord
+	rows []archiveRecord
+}
+
+// sourceOf prefers a record file already written for today over the older one
+// the comparison uses; see where it is called.
+func sourceOf(today, previousFile string, previousRun runRecord, previous []archiveRecord) cacheSource {
+	if run, rows, err := readRecords(today); err == nil {
+		return cacheSource{file: today, run: run, rows: rows}
+	}
+	return cacheSource{file: previousFile, run: previousRun, rows: previous}
 }
 
 // load reads the run this one is compared with. A missing or unreadable file
@@ -261,7 +305,18 @@ type result struct {
 	failed  []note
 	elapsed time.Duration
 	err     string // the stage could not be run at all
+	// cached is how many of this stage's archives were not measured here at
+	// all, because an earlier run already answered for the same bytes under
+	// the same build. See cache.go.
+	cached int
+	// skipped entirely: every archive was carried forward, so `go test` was
+	// never started.
+	notRun bool
 }
+
+// ranNothing reports a stage that was not run at all because there was nothing
+// left for it to measure.
+func (outcome result) ranNothing() bool { return outcome.notRun }
 
 type note struct {
 	archive string
@@ -271,12 +326,22 @@ type note struct {
 // run executes one probe and reads its results out of `go test -json` rather
 // than out of its printed output, which is what keeps a subtest's name and its
 // reason together when several of them fail.
-func run(root string, current stage, timeout string) result {
+//
+// A selection names the archives this run still has to measure; nil means all
+// of them, and an empty one means the stage has nothing left to ask and is not
+// started. The selection reaches the probe as `go test`'s own subtest filter,
+// because a subtest here is an archive and `go test` already knows how to pick
+// them — a flag on the probe would be a second way of saying the same thing.
+func run(root string, current stage, timeout string, selection []string) result {
 	outcome := result{stage: current}
+	if selection != nil && len(selection) == 0 {
+		outcome.notRun = true
+		return outcome
+	}
 	started := time.Now()
 
 	command := exec.Command("go", "test", "-json", "-count=1",
-		"-timeout", timeout, "-run", "^"+current.test+"$", current.pkg)
+		"-timeout", timeout, "-run", runPattern(current.test, selection), current.pkg)
 	command.Dir = root
 	command.Env = append(os.Environ(), current.env+"=1")
 	pipe, err := command.StdoutPipe()
@@ -290,7 +355,7 @@ func run(root string, current stage, timeout string) result {
 		return outcome
 	}
 
-	outcome = collect(pipe, current)
+	outcome = collect(pipe, current, selection != nil)
 	err = command.Wait()
 	outcome.elapsed = time.Since(started)
 	// A failing archive makes `go test` exit non-zero, which is the ordinary
@@ -306,7 +371,7 @@ func run(root string, current stage, timeout string) result {
 // stream rather than the printed output because that is what keeps a subtest's
 // name and its reason together when several of them fail at once — printed
 // output interleaves, and the archive a line belongs to is not in the line.
-func collect(stream io.Reader, current stage) result {
+func collect(stream io.Reader, current stage, filtered bool) result {
 	outcome := result{stage: current}
 	// The last line a subtest printed before it ended. A failure's is the
 	// `t.Fatalf` that ended it and a skip's is the `t.Skip` reason, which is
@@ -353,9 +418,14 @@ func collect(stream io.Reader, current stage) result {
 			outcome.failed = append(outcome.failed, note{archive, last[archive]})
 		}
 	}
-	if len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 {
+	if len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 && !filtered {
 		// A probe that checks the whole corpus in one test — its rows are the
 		// lines it logged, and what the report can say is whether it passed.
+		//
+		// Not when a selection was in force: a filter that matched no subtest
+		// leaves the parent test passing with nothing under it, and reading
+		// that as "the whole corpus passed" would invent a row out of the
+		// absence of one.
 		row := note{wholeCorpusRow, last[current.test]}
 		switch {
 		case whole["fail"]:
@@ -404,7 +474,7 @@ func tidy(line string) string {
 	return line
 }
 
-func write(root string, results []result, started time.Time) string {
+func write(root string, results []result, started time.Time, plan cachePlan) string {
 	report := &strings.Builder{}
 	fmt.Fprintf(report, "# Local acceptance, %s\n\n", started.Format("2006-01-02"))
 	fmt.Fprintf(report, "Written by `make acceptance` on %s/%s with %s.\n\n",
@@ -419,12 +489,14 @@ func write(root string, results []result, started time.Time) string {
 	}
 	report.WriteString("\n")
 
-	report.WriteString("## What they answered\n\n| platform | stage | ran | passed | skipped | failed |\n|---|---|---|---|---|---|\n")
+	report.WriteString("## What they answered\n\n")
+	report.WriteString(plan.describe(results))
+	report.WriteString("| platform | stage | ran | passed | skipped | failed | carried forward |\n|---|---|---|---|---|---|---|\n")
 	for _, outcome := range results {
 		ran := len(outcome.passed) + len(outcome.skipped) + len(outcome.failed)
-		fmt.Fprintf(report, "| %s | %s | %d | %d | %d | %d |\n",
+		fmt.Fprintf(report, "| %s | %s | %d | %d | %d | %d | %d |\n",
 			strings.ToUpper(outcome.stage.platform), outcome.stage.name,
-			ran, len(outcome.passed), len(outcome.skipped), len(outcome.failed))
+			ran, len(outcome.passed), len(outcome.skipped), len(outcome.failed), outcome.cached)
 	}
 	report.WriteString("\n")
 
@@ -434,6 +506,10 @@ func write(root string, results []result, started time.Time) string {
 			upperFirst(outcome.stage.what), outcome.stage.env, outcome.stage.test, outcome.stage.pkg)
 		if outcome.err != "" {
 			fmt.Fprintf(report, "**This stage did not run**: %s\n\n", outcome.err)
+			continue
+		}
+		if outcome.ranNothing() {
+			fmt.Fprintf(report, "Not run: all %d archives were carried forward from an earlier run.\n\n", outcome.cached)
 			continue
 		}
 		fmt.Fprintf(report, "Took %s.\n\n", outcome.elapsed.Round(time.Second))
