@@ -37,6 +37,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -422,24 +423,50 @@ func run(directory string, current stage, timeout string, selection []string) re
 		return outcome
 	}
 
-	outcome = collect(pipe, current, selection != nil)
+	outcome, readErr := collect(pipe, current, selection != nil)
 	err = command.Wait()
 	outcome.elapsed = time.Since(started)
-	// A failing archive makes `go test` exit non-zero, which is the ordinary
-	// outcome here; a stage that produced no rows at all is the one worth
-	// reporting as broken, because that is a probe that never ran.
-	if err != nil && len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 {
+	rows := len(outcome.passed) + len(outcome.skipped) + len(outcome.failed)
+	switch {
+	case readErr != nil:
+		outcome.err = readErr.Error()
+	case err != nil && rows == 0:
 		outcome.err = fmt.Sprintf("%v (is %s set, and is there a corpus under %s?)", err, current.env,
 			filepath.Join(directory, corpus[current.platform]))
+	case err != nil && !ordinaryTestFailure(err, outcome):
+		// A failing archive makes `go test` exit 1 and is the ordinary outcome
+		// here. Any other way of exiting is not: a build that did not compile,
+		// a process that was killed, a run that ended early. Reporting those
+		// only when no rows arrived is how a stage that answered for a quarter
+		// of its corpus is written down as a smaller but successful one.
+		outcome.err = fmt.Sprintf("the probe ended with %v after answering for %d archive(s)", err, rows)
+	case selection != nil && rows != len(selection):
+		// A selection names exactly the archives this stage still has to ask
+		// about, so the rows are countable in advance. Fewer means the stream
+		// was cut, and there is no reading of the difference that is not a
+		// gap in the record.
+		outcome.err = fmt.Sprintf("asked about %d archive(s) and heard back about %d", len(selection), rows)
 	}
 	return outcome
+}
+
+// ordinaryTestFailure reports whether `go test`'s exit is the one a failing
+// archive produces: status 1, with at least one failing row to account for it.
+// A status of 2 is a build or setup problem, and a signal is a process that
+// did not finish; neither leaves a trustworthy stage behind.
+func ordinaryTestFailure(err error, outcome result) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false
+	}
+	return exit.ExitCode() == 1 && len(outcome.failed) > 0
 }
 
 // collect reads a `go test -json` stream into one stage's rows. It reads the
 // stream rather than the printed output because that is what keeps a subtest's
 // name and its reason together when several of them fail at once — printed
 // output interleaves, and the archive a line belongs to is not in the line.
-func collect(stream io.Reader, current stage, filtered bool) result {
+func collect(stream io.Reader, current stage, filtered bool) (result, error) {
 	outcome := result{stage: current}
 	// The last line a subtest printed before it ended. A failure's is the
 	// `t.Fatalf` that ended it and a skip's is the `t.Skip` reason, which is
@@ -486,6 +513,13 @@ func collect(stream io.Reader, current stage, filtered bool) result {
 			outcome.failed = append(outcome.failed, note{archive, last[archive]})
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		// The stream ended before `go test` did. Everything gathered so far
+		// looks like a complete stage and is not one: this is the difference
+		// between a corpus of twenty-five archives and a corpus of two hundred
+		// and sixty that stopped being read.
+		return outcome, fmt.Errorf("read the probe's output: %w", err)
+	}
 	if len(outcome.passed)+len(outcome.skipped)+len(outcome.failed) == 0 && !filtered {
 		// A probe that checks the whole corpus in one test — its rows are the
 		// lines it logged, and what the report can say is whether it passed.
@@ -507,7 +541,7 @@ func collect(stream io.Reader, current stage, filtered bool) result {
 	sort.Strings(outcome.passed)
 	sortNotes(outcome.skipped)
 	sortNotes(outcome.failed)
-	return outcome
+	return outcome, nil
 }
 
 // reason reads one line of test output as what the report should carry, or
