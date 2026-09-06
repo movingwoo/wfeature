@@ -154,9 +154,9 @@ func TestARowIsJoinedToItsFileThroughTheNameGoTestPrints(t *testing.T) {
 // which one to look at first.
 func TestFailuresGroupByCauseWithTheCountsTakenOut(t *testing.T) {
 	archives := []archiveRecord{
-		{Platform: "ktf", Archive: "one.zip", Stopped: "frame", Why: "no frame (ticks=512 flushes=0 drawn=0 tickErr=<nil>)"},
-		{Platform: "ktf", Archive: "two.zip", Stopped: "frame", Why: "no frame (ticks=97 flushes=3 drawn=0 tickErr=<nil>)"},
-		{Platform: "ktf", Archive: "three.zip", Stopped: "load", Why: "load main class: no class named"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "one.zip", Stopped: "frame", Why: "no frame (ticks=512 flushes=0 drawn=0 tickErr=<nil>)"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "two.zip", Stopped: "frame", Why: "no frame (ticks=97 flushes=3 drawn=0 tickErr=<nil>)"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "three.zip", Stopped: "load", Why: "load main class: no class named"},
 	}
 	for index := range archives {
 		archives[index].WhyClass = classify(archives[index].Why)
@@ -178,24 +178,24 @@ func TestFailuresGroupByCauseWithTheCountsTakenOut(t *testing.T) {
 // as a fall from the rung one did.
 func TestTheComparisonNamesWhatMovedAndRefusesToGuessAtWhatDidNot(t *testing.T) {
 	previous := []archiveRecord{
-		{Platform: "ktf", Archive: "refused-then-declined.zip", Grade: gradeNone, SHA256: "99"},
-		{Platform: "ktf", Archive: "declined-then-refused.zip", Grade: gradeSkipped, SHA256: "98"},
-		{Platform: "ktf", Archive: "improved.zip", Grade: "load", Rung: 3, SHA256: "aa"},
-		{Platform: "ktf", Archive: "regressed.zip", Grade: "frame", Rung: 6, SHA256: "bb"},
-		{Platform: "ktf", Archive: "steady.zip", Grade: "frame", Rung: 6, SHA256: "cc"},
-		{Platform: "ktf", Archive: "repacked.zip", Grade: "frame", Rung: 6, SHA256: "dd"},
-		{Platform: "ktf", Archive: "gone.zip", Grade: "frame", Rung: 6, SHA256: "ee"},
-		{Platform: "skt", Archive: "not-run-this-time.zip", Grade: "boot", Rung: 1, SHA256: "ff"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "refused-then-declined.zip", Grade: gradeNone, SHA256: "99"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "declined-then-refused.zip", Grade: gradeSkipped, SHA256: "98"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "improved.zip", Grade: "load", Rung: 3, SHA256: "aa"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "regressed.zip", Grade: "frame", Rung: 6, SHA256: "bb"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "steady.zip", Grade: "frame", Rung: 6, SHA256: "cc"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "repacked.zip", Grade: "frame", Rung: 6, SHA256: "dd"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "gone.zip", Grade: "frame", Rung: 6, SHA256: "ee"},
+		{Corpus: "skt", Platform: "skt", Archive: "not-run-this-time.zip", Grade: "boot", Rung: 1, SHA256: "ff"},
 	}
 	current := []archiveRecord{
-		{Platform: "ktf", Archive: "refused-then-declined.zip", Grade: gradeSkipped, SHA256: "99"},
-		{Platform: "ktf", Archive: "declined-then-refused.zip", Grade: gradeNone, SHA256: "98"},
-		{Platform: "ktf", Archive: "improved.zip", Grade: "frame", Rung: 6, SHA256: "aa"},
-		{Platform: "ktf", Archive: "regressed.zip", Grade: "load", Rung: 3, SHA256: "bb", Stopped: "construct", Why: "construct: out of steps"},
-		{Platform: "ktf", Archive: "steady.zip", Grade: "frame", Rung: 6, SHA256: "cc"},
-		{Platform: "ktf", Archive: "repacked.zip", Grade: "load", Rung: 3, SHA256: "d1"},
-		{Platform: "ktf", Archive: "arrived.zip", Grade: "frame", Rung: 6, SHA256: "11"},
-		{Platform: "skt", Archive: "not-run-this-time.zip", Grade: gradeUnrun, SHA256: "ff"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "refused-then-declined.zip", Grade: gradeSkipped, SHA256: "99"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "declined-then-refused.zip", Grade: gradeNone, SHA256: "98"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "improved.zip", Grade: "frame", Rung: 6, SHA256: "aa"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "regressed.zip", Grade: "load", Rung: 3, SHA256: "bb", Stopped: "construct", Why: "construct: out of steps"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "steady.zip", Grade: "frame", Rung: 6, SHA256: "cc"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "repacked.zip", Grade: "load", Rung: 3, SHA256: "d1"},
+		{Corpus: "ktf", Platform: "ktf", Archive: "arrived.zip", Grade: "frame", Rung: 6, SHA256: "11"},
+		{Corpus: "skt", Platform: "skt", Archive: "not-run-this-time.zip", Grade: gradeUnrun, SHA256: "ff"},
 	}
 	kinds := map[string]changeKind{}
 	for _, entry := range compare(previous, current) {
@@ -239,7 +239,7 @@ func TestTheComparisonNamesWhatMovedAndRefusesToGuessAtWhatDidNot(t *testing.T) 
 // this question far more often than it asks any other, and a report that
 // answers it with the whole corpus again is a report nobody reads.
 func TestARunThatMovedNothingSaysSoInOneLine(t *testing.T) {
-	same := []archiveRecord{{Platform: "ktf", Archive: "one.zip", Grade: "frame", Rung: 6, SHA256: "aa"}}
+	same := []archiveRecord{{Corpus: "ktf", Platform: "ktf", Archive: "one.zip", Grade: "frame", Rung: 6, SHA256: "aa"}}
 	report := &strings.Builder{}
 	writeDelta(report, runRecord{Run: "2026-09-01T00:00:00Z"}, "old.ndjson", compare(same, same))
 	if !strings.Contains(report.String(), "Every archive reached the same rung") {
@@ -316,5 +316,20 @@ func corpusRoot(t *testing.T, files map[string]map[string][]byte) string {
 // the order the command itself runs them in.
 func recordsFor(root string, day time.Time, platforms []string, plan cachePlan, results []result) (runRecord, []archiveRecord) {
 	header := runHeader(root, day)
-	return buildRecords(header, results, platforms, surveyCorpus(root, platforms), plan)
+	corpora := defaultCorpora(platforms)
+	// A result names the corpus it ran over. In the default sweep that is the
+	// platform's own directory, so a test that writes a result for a stage
+	// does not have to say it twice.
+	for index := range results {
+		if results[index].corpus.name != "" {
+			continue
+		}
+		for _, at := range corpora {
+			if at.platform == results[index].stage.platform {
+				results[index].corpus = at
+				break
+			}
+		}
+	}
+	return buildRecords(header, results, corpora, surveyCorpus(root, corpora), plan)
 }

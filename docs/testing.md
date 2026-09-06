@@ -1119,12 +1119,16 @@ ever picked up**, because a download that did not finish is invisible in a pass
 count and a file no loader claimed is invisible in a failure count.
 
 Every line begins with a `schema` number, and a file written by a newer tool is
-refused rather than half-read. An archive line carries:
+refused rather than half-read. Two rows are the same archive only when they are
+the same file in the same corpus, which is why the corpus is on every line: a
+run may sweep several group directories with one platform's ladder, and lining
+those up by platform alone would report one file's grade as another's
+regression. An archive line carries:
 
 | field | what it is |
 |---|---|
 | `schema`, `kind`, `run` | the version, `archive`, and the run's timestamp |
-| `platform`, `archive` | the corpus directory and the file name in it |
+| `corpus`, `platform`, `archive` | what the row is filed under, whose ladder was climbed, and the file name. For the three platform folders the first two are the same word; for a swept tree the corpus is the group directory with its platform beside it, and the platform is empty for a file nothing claimed |
 | `sha256`, `size` | the bytes that were graded, so a replaced file is not read as a regression |
 | `detected`, `detect_reason`, `detect_error` | what detection made of the file, and why nothing claimed it |
 | `grade`, `rung`, `ladder` | the highest rung reached, its number, and how many rungs that platform had |
@@ -1237,6 +1241,97 @@ rather than logging it: it used to pass as long as *any* archive drew, so a
 title that stopped painting became a line in a log nobody reads. The exit code
 of `make acceptance` says whether a stage could run at all, not whether every
 archive passed; a report that lists failures is a successful run of it.
+
+### Sweeping a tree this repository does not keep
+
+The three corpus directories above are the ones a Host reads, and what a
+release is checked against is deliberately fixed to them. They are not the only
+archives on a machine: investigating a platform accumulates a much larger
+unsorted tree, filed under group directories somebody named by hand, and the
+counts over *that* tree are what say which defect is worth fixing next.
+
+```sh
+make acceptance ARGS="-games 'var/games/one,var/games/two' -exclude deliberately-broken,bundles -out var/acceptance/sweep"
+go run ./internal/tools/acceptance -games /some/tree -platform ktf
+```
+
+`-games` is the same flag `checkgames` has and points the same ladders at
+another root. Three things about it follow from what a sweep is for, and each
+of them is a decision rather than a detail.
+
+**The platform is what `detect.Classify` says, not what the folder is called.**
+A group directory's name is a note somebody typed; the bytes are the evidence,
+and this project has told these packages apart by content since before it had a
+picker. A sweep that trusted the folder would file an archive under a ladder
+that cannot load it and then report that loader's refusal as a defect of the
+loader. This is also the first caller to spend `detect.Reason` for what it was
+added for.
+
+**A file no platform claimed is a record, not a discard, and the reasons are
+counted apart.** Half of what a sweep of an unsorted tree is for is the pile
+nothing ran, and the pile is the most misleading number in it: only one of the
+reasons behind it is work this project can do. A package locked before it was
+distributed is not reachable by any amount of work on the loaders; a container
+of another format is one unpacking away from being a question at all; a zip of
+whole packages is a choice that belongs to the person holding it. What is left
+— a readable archive carrying no marker any platform recognises — is the number
+worth acting on. The report divides them under **What nothing claimed** and
+names the files behind that last count, so the next investigation starts from a
+list rather than from another sweep.
+
+**It recurses, and it keeps the group.** The tree files its archives a level or
+two below the root, so a sweep that stopped at the root would find nothing at
+all. (`checkgames` stops at one level for the opposite reason: it answers what a
+Host can *start*, and an archive filed deeper cannot be started. What this asks
+— what does this build make of these bytes — does not change with a file's
+depth.) Each group directory becomes a corpus of its own, named for the
+directory *and* the platform, and that name is what a row is filed under: two
+groups may hold the same file name, and a row naming only the file would name
+both. The platform is part of the name so that a group gaining its first
+archive of a second platform does not rename the rows of the first.
+
+**Nothing is excluded by default.** A tree holds deliberately broken files, bags
+of whole packages, and folders on their way out. Which of those is worth
+sweeping is the caller's judgment on the day rather than a list in this tool
+that an edit would be needed to change, so `-exclude` names directories not to
+descend into — by base name, to skip every folder of that name, or by path
+relative to the root being swept, to skip exactly one.
+
+**Point `-out` somewhere else for a one-off sweep.** A report is one run over
+one corpus, and the delta lines two of them up by the corpus a row is in. A
+sweep of another tree written into the usual directory would be read the next
+day as the whole ordinary corpus arriving and the whole swept tree leaving,
+which is true and useless.
+
+#### How a probe is pointed at a directory it does not know about
+
+Each probe finds its corpus from its own source location — `runtime.Caller`,
+then up to the repository root, then `var/games/<platform>`. That is the right
+thing for a probe to do, and it is worth keeping: a test that took its
+directory from the environment could be run against a corpus nobody recorded,
+and the corpus a release is checked against is not a parameter.
+
+So a sweep does not tell the probe where to look. It changes what "up to the
+repository root" reaches: a temporary module root whose every top-level entry
+is a symbolic link to the checkout's, except `var`, which the sweep owns and
+fills with links to the files it wants asked about. The probes compile from the
+same source and read a corpus this tool assembled.
+
+Two properties are the point of doing it that way rather than by moving files:
+
+- **The real corpus is never written to.** Nothing creates, moves or deletes
+  anything under the checkout; the only directory written is a temporary one,
+  removed when the run ends. A sweep of a diagnostic tree must not be able to
+  disturb the corpus a release is checked against, and this cannot.
+- **The build identity stays the checkout's.** Only `go test`'s working
+  directory moves, so the revision, the diff and the untracked files that say
+  what code answered are still read from the checkout and a carried row still
+  means what it says.
+
+One shadow root is built per run and its staging directory is rewritten between
+corpora, so the compiled test binaries stay cached across a sweep of a hundred
+groups. The links are per file rather than per directory, because a group
+directory holds several platforms' archives and a probe reads one platform's.
 
 ## Repository-wide audit on 2026-09-01
 

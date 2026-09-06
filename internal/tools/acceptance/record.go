@@ -39,7 +39,13 @@ import (
 // the checkout behind a run was modified. Both change what a line means, so a
 // tool that cannot see them must refuse the file rather than read a copy as a
 // measurement.
-const recordSchema = 2
+//
+// Version 3 added the corpus a row belongs to, because a run may now sweep a
+// tree of group directories rather than the three platform folders. Two rows
+// are the same archive only when they are the same file in the same corpus,
+// and a reader that could not see the corpus would line up two different files
+// that happen to share a name.
+const recordSchema = 3
 
 // A record file's lines are one run record followed by one archive record per
 // file in the corpus — including the files no probe ever picked up. A download
@@ -80,6 +86,10 @@ type runRecord struct {
 // stageRecord is one probe's run, which is what says whether a missing archive
 // record means "it passed nothing" or "the stage never ran at all".
 type stageRecord struct {
+	// Corpus is the directory this stage was run over. A run that sweeps a
+	// tree runs one platform's ladder once per group, so the platform alone no
+	// longer names a row.
+	Corpus   string `json:"corpus"`
 	Platform string `json:"platform"`
 	Stage    string `json:"stage"`
 	Rung     int    `json:"rung,omitempty"`
@@ -98,7 +108,11 @@ type stageRecord struct {
 }
 
 type corpusRecord struct {
-	Platform  string `json:"platform"`
+	// Corpus is what rows in it are filed under: the platform, for the three
+	// directories a Host reads, and the group directory with the platform
+	// beside it for a swept tree.
+	Corpus    string `json:"corpus"`
+	Platform  string `json:"platform,omitempty"`
 	Directory string `json:"directory"`
 	Files     int    `json:"files"`
 }
@@ -106,10 +120,14 @@ type corpusRecord struct {
 // archiveRecord is one file in the corpus and everything this run learned
 // about it.
 type archiveRecord struct {
-	Schema   int    `json:"schema"`
-	Kind     string `json:"kind"`
-	Run      string `json:"run"`
-	Platform string `json:"platform"`
+	Schema int    `json:"schema"`
+	Kind   string `json:"kind"`
+	Run    string `json:"run"`
+	// Corpus is the directory this row was found in, under the name the report
+	// and the cache use for it. Platform is whose ladder was climbed, which is
+	// empty when no platform claimed the file and no ladder was asked.
+	Corpus   string `json:"corpus"`
+	Platform string `json:"platform,omitempty"`
 	Archive  string `json:"archive"`
 	// The digest is what makes two runs comparable across a corpus that
 	// changes: a file re-downloaded under the same name is a different file,
@@ -200,10 +218,13 @@ type fileFacts struct {
 }
 
 // surveyCorpus reads every file in every corpus directory this run covers.
-func surveyCorpus(root string, platforms []string) map[string][]corpusEntry {
+func surveyCorpus(root string, corpora []corpusDir) map[string][]corpusEntry {
 	survey := map[string][]corpusEntry{}
-	for _, platform := range platforms {
-		directory := filepath.Join(root, corpus[platform])
+	for _, at := range corpora {
+		directory := at.read
+		if directory == "" {
+			directory = filepath.Join(root, at.directory)
+		}
 		var entries []corpusEntry
 		for _, name := range corpusFiles(directory) {
 			entry := corpusEntry{
@@ -219,7 +240,7 @@ func surveyCorpus(root string, platforms []string) map[string][]corpusEntry {
 			entry.facts = readFacts(entry.path)
 			entries = append(entries, entry)
 		}
-		survey[platform] = entries
+		survey[at.name] = entries
 	}
 	return survey
 }
@@ -259,10 +280,11 @@ func runHeader(root string, started time.Time) runRecord {
 
 // buildRecords turns a run into its lines: the run itself, then every file in
 // every corpus directory that was in front of it.
-func buildRecords(run runRecord, results []result, platforms []string,
+func buildRecords(run runRecord, results []result, corpora []corpusDir,
 	survey map[string][]corpusEntry, plan cachePlan) (runRecord, []archiveRecord) {
 	for _, outcome := range results {
 		run.Stages = append(run.Stages, stageRecord{
+			Corpus:   outcome.corpus.name,
 			Platform: outcome.stage.platform,
 			Stage:    outcome.stage.name,
 			Rung:     outcome.stage.rung,
@@ -277,17 +299,17 @@ func buildRecords(run runRecord, results []result, platforms []string,
 		})
 	}
 
-	// Every stage's rows, keyed by the platform and archive they belong to.
-	type key struct{ platform, archive string }
+	// Every stage's rows, keyed by the corpus and archive they belong to.
+	type key struct{ corpus, archive string }
 	rows := map[key]map[string]stageOutcome{}
-	add := func(platform, archive, stage, outcome, why string) {
+	add := func(corpusName, archive, stage, outcome, why string) {
 		// The row a probe writes for a whole corpus in one test is not an
 		// archive and has no file behind it; the stage counts in the run
 		// record are where it is visible.
 		if archive == wholeCorpusRow {
 			return
 		}
-		at := key{platform, archive}
+		at := key{corpusName, archive}
 		if rows[at] == nil {
 			rows[at] = map[string]stageOutcome{}
 		}
@@ -295,13 +317,13 @@ func buildRecords(run runRecord, results []result, platforms []string,
 	}
 	for _, outcome := range results {
 		for _, archive := range outcome.passed {
-			add(outcome.stage.platform, archive, outcome.stage.name, outcomePassed, "")
+			add(outcome.corpus.name, archive, outcome.stage.name, outcomePassed, "")
 		}
 		for _, entry := range outcome.skipped {
-			add(outcome.stage.platform, entry.archive, outcome.stage.name, outcomeSkipped, entry.why)
+			add(outcome.corpus.name, entry.archive, outcome.stage.name, outcomeSkipped, entry.why)
 		}
 		for _, entry := range outcome.failed {
-			add(outcome.stage.platform, entry.archive, outcome.stage.name, outcomeFailed, entry.why)
+			add(outcome.corpus.name, entry.archive, outcome.stage.name, outcomeFailed, entry.why)
 		}
 	}
 
@@ -311,22 +333,23 @@ func buildRecords(run runRecord, results []result, platforms []string,
 	seen := map[key]bool{}
 	var archives []archiveRecord
 	carried := 0
-	for _, platform := range platforms {
-		entries := survey[platform]
+	for _, at := range corpora {
+		entries := survey[at.name]
 		run.Corpus = append(run.Corpus, corpusRecord{
-			Platform:  platform,
-			Directory: corpus[platform],
+			Corpus:    at.name,
+			Platform:  at.platform,
+			Directory: at.directory,
 			Files:     len(entries),
 		})
 		for _, entry := range entries {
-			at := key{platform, entry.subtest}
-			seen[at] = true
-			if was, ok := plan.carried[cacheKey(at)]; ok {
+			row := key{at.name, entry.subtest}
+			seen[row] = true
+			if was, ok := plan.carried[cacheKey(row)]; ok {
 				archives = append(archives, carriedRecord(run.Run, was))
 				carried++
 				continue
 			}
-			archives = append(archives, archiveRecordFor(run.Run, platform, entry.name, entry.facts, rows[at], results))
+			archives = append(archives, archiveRecordFor(run.Run, at, entry.name, entry.facts, rows[row], results))
 		}
 	}
 	if carried > 0 {
@@ -335,17 +358,21 @@ func buildRecords(run runRecord, results []result, platforms []string,
 	// A row for an archive that is no longer in the directory still belongs in
 	// the file: a probe answered for it, and dropping it would make the run
 	// look as though it never asked.
-	for at, stages := range rows {
-		if seen[at] {
+	known := map[string]corpusDir{}
+	for _, at := range corpora {
+		known[at.name] = at
+	}
+	for row, stages := range rows {
+		if seen[row] {
 			continue
 		}
 		// The name here is the rewritten one, which is the only name this run
 		// ever saw for a file that is no longer in the directory.
-		archives = append(archives, archiveRecordFor(run.Run, at.platform, at.archive, fileFacts{}, stages, results))
+		archives = append(archives, archiveRecordFor(run.Run, known[row.corpus], row.archive, fileFacts{}, stages, results))
 	}
 	sort.Slice(archives, func(one, two int) bool {
-		if archives[one].Platform != archives[two].Platform {
-			return archives[one].Platform < archives[two].Platform
+		if archives[one].Corpus != archives[two].Corpus {
+			return archives[one].Corpus < archives[two].Corpus
 		}
 		return archives[one].Archive < archives[two].Archive
 	})
@@ -354,12 +381,13 @@ func buildRecords(run runRecord, results []result, platforms []string,
 
 // archiveRecordFor fills in one file's line: what the file is, what detection
 // said about it, and how far up the ladder it got.
-func archiveRecordFor(run, platform, name string, facts fileFacts, stages map[string]stageOutcome, results []result) archiveRecord {
+func archiveRecordFor(run string, at corpusDir, name string, facts fileFacts, stages map[string]stageOutcome, results []result) archiveRecord {
 	record := archiveRecord{
 		Schema:       recordSchema,
 		Kind:         archiveKind,
 		Run:          run,
-		Platform:     platform,
+		Corpus:       at.name,
+		Platform:     at.platform,
 		Archive:      name,
 		SHA256:       facts.sha256,
 		Size:         facts.size,
@@ -371,7 +399,7 @@ func archiveRecordFor(run, platform, name string, facts fileFacts, stages map[st
 		// so a reader never has to know which fields were added when.
 		MeasuredRun: run,
 	}
-	record.Grade, record.Rung, record.Ladder, record.Stopped, record.StoppedOutcome, record.Why = grade(platform, stages, results)
+	record.Grade, record.Rung, record.Ladder, record.Stopped, record.StoppedOutcome, record.Why = grade(at, stages, results)
 	record.WhyClass = classify(record.Why)
 	return record
 }
@@ -404,8 +432,8 @@ func carriedRecord(run string, was archiveRecord) archiveRecord {
 // they are not run as one — each is its own probe from a fresh start, and an
 // archive that fails to construct its main class can still be answered for by
 // the frame probe. The highest rung that answered "pass" is what it reached.
-func grade(platform string, stages map[string]stageOutcome, results []result) (name string, rung, ladder int, stopped, stoppedOutcome, why string) {
-	ordered := ladderStages(platform, results)
+func grade(at corpusDir, stages map[string]stageOutcome, results []result) (name string, rung, ladder int, stopped, stoppedOutcome, why string) {
+	ordered := ladderStages(at, results)
 	ladder = len(ordered)
 	name = gradeUnrun
 	answered, refused := false, false
@@ -438,14 +466,18 @@ func grade(platform string, stages map[string]stageOutcome, results []result) (n
 	return name, rung, ladder, stopped, stoppedOutcome, why
 }
 
-// ladderStages are the rungs of one platform's ladder in this run, in order.
-// They come from the run rather than from the table so a run of one platform
-// does not report the ladder of another, and a stage that is not a rung — a
-// check that asks something else of the same archive — is left out.
-func ladderStages(platform string, results []result) []stage {
+// ladderStages are the rungs one corpus was actually climbed by in this run,
+// in order. They come from the run rather than from the table so a run of one
+// platform does not report the ladder of another, and a stage that is not a
+// rung — a check that asks something else of the same archive — is left out.
+//
+// It is the corpus rather than the platform because one platform's ladder may
+// be run several times in a sweep, once per group directory, and counting a
+// rung once per group would report a ladder several times its length.
+func ladderStages(at corpusDir, results []result) []stage {
 	var ordered []stage
 	for _, outcome := range results {
-		if outcome.stage.platform != platform || outcome.stage.rung == 0 {
+		if outcome.corpus.name != at.name || outcome.stage.rung == 0 {
 			continue
 		}
 		ordered = append(ordered, outcome.stage)

@@ -37,9 +37,12 @@ import (
 // one line; requiring the earlier run to have answered every stage this run
 // intends to run keeps a line one thing or the other.
 
-// cacheKey is one archive on one platform, under the name `go test` gives its
+// cacheKey is one archive in one corpus, under the name `go test` gives its
 // subtest — which is what the selection passed back to the probe has to match.
-type cacheKey struct{ platform, archive string }
+// The corpus rather than the platform, because a sweep may ask one platform's
+// ladder of several group directories and two of them can hold a file of the
+// same name.
+type cacheKey struct{ corpus, archive string }
 
 // cachePlan is what this run may take from an earlier one.
 type cachePlan struct {
@@ -79,11 +82,11 @@ func planCache(enabled bool, source cacheSource,
 		// record carries the file name and a selection has to be written in
 		// the rewritten one, so a key that mixed the two would quietly refuse
 		// to carry every archive with a space in its name.
-		before[cacheKey{record.Platform, subtestName(record.Archive)}] = record
+		before[cacheKey{record.Corpus, subtestName(record.Archive)}] = record
 	}
 	plan := cachePlan{from: previousFile, carried: map[cacheKey]archiveRecord{}}
-	for platform, entries := range survey {
-		want := planned[platform]
+	for corpusName, entries := range survey {
+		want := planned[corpusName]
 		if len(want) == 0 {
 			continue
 		}
@@ -94,7 +97,7 @@ func planCache(enabled bool, source cacheSource,
 			}
 		}
 		for _, entry := range entries {
-			at := cacheKey{platform, entry.subtest}
+			at := cacheKey{corpusName, entry.subtest}
 			was, ok := before[at]
 			if !ok || was.SHA256 == "" || was.SHA256 != entry.facts.sha256 {
 				continue
@@ -131,14 +134,14 @@ func planCache(enabled bool, source cacheSource,
 // is all of them. A nil selection means "everything", which is what the probe
 // gets when nothing on its platform was carried; an empty non-nil one means
 // the stage has nothing left to measure and is not run at all.
-func (plan cachePlan) selection(platform string, entries []corpusEntry) []string {
-	carried := plan.carriedCount(platform, entries)
+func (plan cachePlan) selection(corpusName string, entries []corpusEntry) []string {
+	carried := plan.carriedCount(corpusName, entries)
 	if carried == 0 {
 		return nil
 	}
 	names := make([]string, 0, len(entries)-carried)
 	for _, entry := range entries {
-		if _, ok := plan.carried[cacheKey{platform, entry.subtest}]; !ok {
+		if _, ok := plan.carried[cacheKey{corpusName, entry.subtest}]; !ok {
 			names = append(names, entry.subtest)
 		}
 	}
@@ -146,11 +149,11 @@ func (plan cachePlan) selection(platform string, entries []corpusEntry) []string
 	return names
 }
 
-// carriedCount is how many of a platform's archives this run will not measure.
-func (plan cachePlan) carriedCount(platform string, entries []corpusEntry) int {
+// carriedCount is how many of a corpus's archives this run will not measure.
+func (plan cachePlan) carriedCount(corpusName string, entries []corpusEntry) int {
 	carried := 0
 	for _, entry := range entries {
-		if _, ok := plan.carried[cacheKey{platform, entry.subtest}]; ok {
+		if _, ok := plan.carried[cacheKey{corpusName, entry.subtest}]; ok {
 			carried++
 		}
 	}
