@@ -1795,7 +1795,8 @@ looked identical from outside — a screen that had settled, redrawn several
 hundred times, and moved for nothing — and neither had anything to do with
 input. In both, guest time had stopped at the instant of the first frame, and
 in both the thing that stopped it was a queue entry that `NextDeadline`
-reported as due now and that no round could ever take.
+reported as due now and that no round could ever take. A third turned up the
+same way in a later sweep, on a title whose splash never advanced.
 
 **A task queued behind a running task of its own `Timer`.** `ServiceTimers`
 runs one task per `java.util.Timer` at a time and puts the rest back unchanged,
@@ -1838,6 +1839,28 @@ about, and each was a corpus failure before it was a rule:
   Reported through a client wait that has *not* elapsed, though, it is a
   deadline level with the clock that no round can clear, and the clock never
   moves again.
+
+**A timer that fell due inside the client thread's wait.** Timers are
+dispatched from the client thread, and `ServiceTimers` says so in its first
+lines: a wait declared there holds every timer with it, and one that comes due
+meanwhile stays pending rather than running. `NextDeadline` did not say so — it
+reported a task at the task's own deadline whatever the client thread was
+doing. One local title stops on its first screen there: a task falls due 168ms
+into a wait of 816ms, so the session answers "due now" every round at an
+instant no round would take it, a manual clock cannot be skipped past now, and
+the wait the timer is queued behind is exactly the one that will never end.
+Both sides pinned: guest time stopped, no round reported progress, and not one
+counted boundary event moved in three thousand of them. The deadline is now
+clamped to the client wake-up — the same clamp the serial queue two branches
+above already carried, for the same reason — and the title runs: thirty-nine
+flushes became three thousand two hundred.
+
+What made this one findable without taking the title apart is that all three
+members of the family share one signature in the Host's own bookkeeping: **a
+deadline level with the clock, on a round that did nothing.** `NextDeadline`'s
+answer, whether `Tick` progressed, and the clock itself are three numbers a
+probe can print every round, and together they name the defect while knowing
+nothing about the guest.
 
 The rule underneath all of these is one sentence: **`NextDeadline` reports work
 that could run, not work that is queued.** Everything it reports as due now is
