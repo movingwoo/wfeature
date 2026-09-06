@@ -270,6 +270,13 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "hasPointerEvents", Descriptor: "()Z", Access: jvm.AccessPublic, Body: answerBool(true)},
 				{Name: "hasPointerMotionEvents", Descriptor: "()Z", Access: jvm.AccessPublic, Body: answerBool(true)},
 				{Name: "paint", Descriptor: "(Ljavax/microedition/lcdui/Graphics;)V", Access: jvm.AccessProtected | jvm.AccessAbstract},
+				// The two the specification calls either side of a Canvas
+				// becoming what is on the screen. They do nothing here, and
+				// declaring them is what lets a title override one: a Canvas
+				// that loads its pictures in showNotify has no other moment to
+				// be told. See runtime.go, "A Canvas is told when it is shown".
+				{Name: "showNotify", Descriptor: "()V", Access: jvm.AccessProtected, Body: ignore},
+				{Name: "hideNotify", Descriptor: "()V", Access: jvm.AccessProtected, Body: ignore},
 				{Name: "keyPressed", Descriptor: "(I)V", Access: jvm.AccessProtected, Body: ignore},
 				{Name: "keyReleased", Descriptor: "(I)V", Access: jvm.AccessProtected, Body: ignore},
 				{Name: "keyRepeated", Descriptor: "(I)V", Access: jvm.AccessProtected, Body: ignore},
