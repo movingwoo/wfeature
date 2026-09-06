@@ -37,6 +37,48 @@ const (
 	Unknown Platform = "unknown"
 )
 
+// Reason says why no platform claimed a file. `Unknown` on its own is the
+// answer to four different questions, and the comment above it already says
+// what is wrong with that: "I cannot tell what this is" and "this is damaged"
+// are different problems and a Host should be able to say which. Only one of
+// the four is this project's own work to do — a file that is one of these
+// packages and was not recognised — and without a reason beside the answer,
+// a sweep over a corpus cannot say how many of the files it could not open are
+// that one.
+//
+// The reason is a second return value rather than a second set of Platform
+// values, so every caller that switches on the platform keeps working and only
+// a caller that wants to count reaches for it.
+type Reason string
+
+const (
+	// ReasonClaimed is the reason a file that a platform claimed has: none.
+	ReasonClaimed Reason = ""
+	// ReasonNotAnArchive is a file that is not a zip and is not a container
+	// format this recognises either. A truncated download and a text file both
+	// land here, and neither is a package that failed to be understood.
+	ReasonNotAnArchive Reason = "not-an-archive"
+	// ReasonKnownFormatUnsupported is a container this names but does not
+	// read — see containerFormats below. The bytes are an archive of some
+	// kind, so there may well be a package inside it, but not one reachable
+	// from here.
+	ReasonKnownFormatUnsupported Reason = "known-format-unsupported"
+	// ReasonDRMWrapped is a package that was locked before it was distributed.
+	// The header says so in the clear; the content is encrypted and the key is
+	// not this project's to have. Counting these apart matters because no
+	// amount of work on the loaders reaches them.
+	ReasonDRMWrapped Reason = "drm-wrapped"
+	// ReasonArchiveOfArchives is a zip holding nothing but whole packages.
+	// There is no game in the outer file to run, only a choice of the ones
+	// inside it, and that choice belongs to the person holding it.
+	ReasonArchiveOfArchives Reason = "archive-of-archives"
+	// ReasonNoMarker is a readable zip that carries no marker any platform
+	// recognises. **This is the one worth investigating**: either it is not
+	// one of these packages at all, or it is one whose shape is not yet known
+	// here.
+	ReasonNoMarker Reason = "no-marker"
+)
+
 // The entry each platform archive is required to carry. Every one of these
 // loaders fails without it, which is what makes it a discriminator rather than
 // a hint. KTF and LGT name theirs exactly; an SKT archive names its descriptor
@@ -90,9 +132,24 @@ const (
 // the .msd that would have named it. A JAR without that surface is claimed by
 // nobody.
 func Archive(data []byte) (Platform, error) {
+	platform, _, err := Classify(data)
+	return platform, err
+}
+
+// Classify is Archive with the reason no platform claimed the file. A caller
+// that only wants to load a game asks Archive; a caller counting what a
+// directory holds asks this, because the count that matters is not how many
+// files were unclaimed but which of them were unclaimed for a reason this
+// project could do something about.
+//
+// The reason is filled in for a refusal as well as for a plain answer: a file
+// that is not a zip comes back with the error the reader gave and with the
+// reason that says whether it was a container of another kind, a locked
+// package, or nothing recognisable at all.
+func Classify(data []byte) (Platform, Reason, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return "", fmt.Errorf("read archive: %w", ContainerError(data, err))
+		return "", unreadableReason(data), fmt.Errorf("read archive: %w", ContainerError(data, err))
 	}
 	// A repacked copy can carry the whole archive inside a folder named after
 	// the game, which leaves every marker one level down from where the
@@ -120,11 +177,11 @@ func Archive(data []byte) (Platform, error) {
 		// this is the same rule at detection, and the names are distinctive
 		// enough that nothing else wears one.
 		case strings.EqualFold(path.Base(name), ktfEntry):
-			return KTF, nil
+			return KTF, ReasonClaimed, nil
 		case strings.EqualFold(path.Base(name), lgtEntry):
-			return LGT, nil
+			return LGT, ReasonClaimed, nil
 		case strings.EqualFold(path.Ext(name), sktExtension):
-			return SKT, nil
+			return SKT, ReasonClaimed, nil
 		}
 	}
 	// Evidence before a guess. The pair below is a shape rather than a marker,
@@ -135,15 +192,35 @@ func Archive(data []byte) (Platform, error) {
 	// scan at all.
 	skvm, err := referencesSKVM(reader)
 	if err != nil {
-		return "", err
+		return "", ReasonNoMarker, err
 	}
 	if skvm {
-		return SKT, nil
+		return SKT, ReasonClaimed, nil
 	}
 	if isKTFNativePackage(names, wrapper) {
-		return KTF, nil
+		return KTF, ReasonClaimed, nil
 	}
-	return Unknown, nil
+	// A zip of zips is refused by its own shape rather than by a marker it has
+	// no room for, and saying so is the difference between "there is a choice
+	// to make here" and "this is not a package".
+	if archiveOfArchives(names) {
+		return Unknown, ReasonArchiveOfArchives, nil
+	}
+	return Unknown, ReasonNoMarker, nil
+}
+
+// unreadableReason says what a file the zip reader refused was instead. The
+// order is what the bytes at the front of it declare: a locked container names
+// itself, another archive format names itself, and a file that names nothing
+// is a file this does not recognise.
+func unreadableReason(data []byte) Reason {
+	if _, wrapped := DCFHeader(data); wrapped {
+		return ReasonDRMWrapped
+	}
+	if ContainerFormat(data) != "" {
+		return ReasonKnownFormatUnsupported
+	}
+	return ReasonNotAnArchive
 }
 
 // isKTFNativePackage reports whether the entry names are the earlier KTF
@@ -246,9 +323,19 @@ func ArchiveOfArchives(data []byte) bool {
 	if err != nil {
 		return false
 	}
-	inner := 0
+	names := make([]string, 0, len(reader.File))
 	for _, file := range reader.File {
-		name := entryName(file.Name)
+		names = append(names, entryName(file.Name))
+	}
+	return archiveOfArchives(names)
+}
+
+// archiveOfArchives is the same question asked of entry names that have
+// already been read, which is what Classify has in front of it by the time it
+// reaches this.
+func archiveOfArchives(names []string) bool {
+	inner := 0
+	for _, name := range names {
 		if name == "" || strings.HasSuffix(name, "/") {
 			continue
 		}

@@ -72,6 +72,31 @@ derives the JAR name from the descriptor's own so the two move together, and
 files installed files by base name. Nothing there looks up a fixed path. That
 is the shape the other two would have to grow to stop needing the rule at all.
 
+**"Nothing claimed this file" is four answers, and they need telling apart.**
+`detect.Archive` answers a platform or `unknown`, and the comment beside that
+value has always said what is wrong with it: "I cannot tell what this is" and
+"this is damaged" are different problems and a Host should be able to say
+which. Only one of the four is work this project can do — a package of a shape
+this does not yet recognise — and a sweep over a corpus that counts all four
+together reports a number nobody can act on.
+
+`detect.Classify` answers the same platform with the reason beside it:
+`not-an-archive`, `known-format-unsupported`, `drm-wrapped`,
+`archive-of-archives`, or `no-marker`. It is a second return value rather than
+a second set of platform values, so every caller that loads a game keeps asking
+`detect.Archive` and only a caller that wants to count reaches for the rest.
+The acceptance records carry it per file; see [`testing.md`](testing.md).
+
+`drm-wrapped` is read from the container's header and nothing else.
+`detect.DCFHeader` recognises both layouts a locked package uses — the one with
+the media type and content identifier declared in the clear at the front, and
+the box structure whose brand names the wrapper — and reports what they
+declare. **Nothing decrypts and no key is read**: the payload is encrypted, the
+key belongs to the network that issued it, and the only question worth asking
+here is whether a file is a container that was locked or one this project has
+never seen the shape of. A person holding the first is told to find another
+copy; a person holding a damaged zip is told to download it again.
+
 `internal/gameroot` is the other Host-side tool of that kind: it names the
 depth a game library is discovered at — the root and one group below it — so
 that the picker and every command which reasons about "the library" agree on
