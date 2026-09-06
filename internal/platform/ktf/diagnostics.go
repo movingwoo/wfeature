@@ -49,6 +49,11 @@ const (
 	// counted per kind, and there is one of them per key, timer and repaint a
 	// game receives for as long as it runs.
 	diagGuestEvent
+	// diagWIPICCall is one call into the WIPI-C interface, counted by slot.
+	// It is the busiest crossing this platform counts — every graphics, file
+	// and kernel call a title makes arrives through it — and it was still
+	// composing its name per crossing after the kinds above had stopped.
+	diagWIPICCall
 )
 
 // diagEvent identifies one boundary event without composing its name.
@@ -124,6 +129,8 @@ func (event diagEvent) String() string {
 		// field: signed back on the way out so the name is the one this report
 		// has always printed, whatever the value.
 		return fmt.Sprintf("event %d", int32(event.nums[0]))
+	case diagWIPICCall:
+		return fmt.Sprintf("wipic %#x", event.nums[0])
 	}
 	return event.text
 }

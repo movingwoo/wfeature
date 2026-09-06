@@ -101,33 +101,33 @@ func classifyThumb(value uint32) thumbForm {
 	}
 }
 
-func executeThumb(context *Context, memory *Memory, pc uint32, instruction uint16) (*SupervisorCall, error) {
+func executeThumb(context *Context, memory *Memory, pc uint32, instruction uint16) (SupervisorCall, error) {
 	value := uint32(instruction)
 	return executeThumbForm(classifyThumb(value), context, memory, pc, value)
 }
 
-func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint32, value uint32) (*SupervisorCall, error) {
+func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint32, value uint32) (SupervisorCall, error) {
 	switch form {
 	case thumbAddSubtract:
-		return nil, executeThumbAddSubtract(context, value)
+		return noSupervisorCall, executeThumbAddSubtract(context, value)
 	case thumbShift:
-		return nil, executeThumbShift(context, value)
+		return noSupervisorCall, executeThumbShift(context, value)
 	case thumbImmediate:
-		return nil, executeThumbImmediate(context, value)
+		return noSupervisorCall, executeThumbImmediate(context, value)
 	case thumbALU:
-		return nil, executeThumbALU(context, value)
+		return noSupervisorCall, executeThumbALU(context, value)
 	case thumbHighRegister:
-		return nil, executeThumbHighRegister(context, pc, value)
+		return noSupervisorCall, executeThumbHighRegister(context, pc, value)
 	case thumbLiteralLoad:
-		return nil, executeThumbLiteralLoad(context, memory, pc, value)
+		return noSupervisorCall, executeThumbLiteralLoad(context, memory, pc, value)
 	case thumbRegisterTransfer:
-		return nil, executeThumbRegisterTransfer(context, memory, value)
+		return noSupervisorCall, executeThumbRegisterTransfer(context, memory, value)
 	case thumbImmediateTransfer:
-		return nil, executeThumbImmediateTransfer(context, memory, value)
+		return noSupervisorCall, executeThumbImmediateTransfer(context, memory, value)
 	case thumbHalfwordTransfer:
-		return nil, executeThumbHalfwordTransfer(context, memory, value)
+		return noSupervisorCall, executeThumbHalfwordTransfer(context, memory, value)
 	case thumbStackRelativeTransfer:
-		return nil, executeThumbStackRelativeTransfer(context, memory, value)
+		return noSupervisorCall, executeThumbStackRelativeTransfer(context, memory, value)
 	case thumbAddress:
 		rd := value >> 8 & 7
 		base := (pc + 4) &^ 3
@@ -135,9 +135,9 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 			base = context.Registers[RegisterSP]
 		}
 		context.Registers[rd] = base + (value&0xff)*4
-		return nil, nil
+		return noSupervisorCall, nil
 	case thumbHint:
-		return nil, nil
+		return noSupervisorCall, nil
 	case thumbAdjustStack:
 		offset := (value & 0x7f) * 4
 		if value&(1<<7) != 0 {
@@ -145,23 +145,23 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 		} else {
 			context.Registers[RegisterSP] += offset
 		}
-		return nil, nil
+		return noSupervisorCall, nil
 	case thumbPush:
-		return nil, executeThumbPush(context, memory, value)
+		return noSupervisorCall, executeThumbPush(context, memory, value)
 	case thumbPop:
-		return nil, executeThumbPop(context, memory, value)
+		return noSupervisorCall, executeThumbPop(context, memory, value)
 	case thumbMultipleTransfer:
-		return nil, executeThumbMultipleTransfer(context, memory, value)
+		return noSupervisorCall, executeThumbMultipleTransfer(context, memory, value)
 	case thumbConditionalBranch:
 		return executeThumbConditionalBranch(context, pc, value)
 	case thumbBranch:
-		return nil, executeThumbBranch(context, pc, value)
+		return noSupervisorCall, executeThumbBranch(context, pc, value)
 	case thumbLongBranchPrefix:
 		executeThumbLongBranchPrefix(context, pc, value)
-		return nil, nil
+		return noSupervisorCall, nil
 	case thumbLongBranchSuffix:
 		executeThumbLongBranchSuffix(context, pc, value)
-		return nil, nil
+		return noSupervisorCall, nil
 	case thumbLongBranchExchangeSuffix:
 		// The other half of the same pair, and the one that leaves Thumb: the
 		// prefix put the high half of the offset in LR either way, and only
@@ -171,9 +171,9 @@ func executeThumbForm(form thumbForm, context *Context, memory *Memory, pc uint3
 		target := context.Registers[RegisterLR] + (value&0x7ff)*2
 		context.Registers[RegisterLR] = (pc + 2) | 1
 		context.setARMPC(target)
-		return nil, nil
+		return noSupervisorCall, nil
 	default:
-		return nil, ErrUndefinedInstruction
+		return noSupervisorCall, ErrUndefinedInstruction
 	}
 }
 
@@ -212,19 +212,19 @@ func executeThumbLongBranchSuffix(context *Context, pc, instruction uint32) {
 // bodies because the interpreter loop routes the forms real games spend their
 // instructions in directly, and routing can only stay honest while every form's
 // semantics live in exactly one function.
-func executeThumbConditionalBranch(context *Context, pc, instruction uint32) (*SupervisorCall, error) {
+func executeThumbConditionalBranch(context *Context, pc, instruction uint32) (SupervisorCall, error) {
 	condition := instruction >> 8 & 0xf
 	if condition == 0xf {
-		return &SupervisorCall{Immediate: instruction & 0xff, Address: pc, ResumePC: pc + 2}, nil
+		return SupervisorCall{Immediate: instruction & 0xff, Address: pc, ResumePC: pc + 2}, nil
 	}
 	if condition == 0xe {
-		return nil, ErrUndefinedInstruction
+		return noSupervisorCall, ErrUndefinedInstruction
 	}
 	if conditionPassed(context.CPSR, condition) {
 		offset := int32(int8(instruction&0xff)) * 2
 		context.setThumbPC(uint32(int64(pc+4) + int64(offset)))
 	}
-	return nil, nil
+	return noSupervisorCall, nil
 }
 
 func executeThumbBranch(context *Context, pc, instruction uint32) error {

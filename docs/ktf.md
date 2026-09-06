@@ -6881,6 +6881,65 @@ references `hasPointerEvents` or `hasPointerMotionEvents` at all.** 260 carry
 the string `pointerNotify`, which is the base-class method name every `Card`
 subclass links against whether or not it overrides it, and 6 do not read.
 
+## The two allocations a busy session made, and neither was doing anything
+
+An allocation profile of one local title over two thousand ticks — allocation
+rather than time, because the machine was running an unrelated full-corpus
+sweep and every wall-clock number on it was noise — put 72% of the run's 420 MB
+in one line and 63% of its 4.5 million objects in another. Both were scratch
+that nothing kept.
+
+**The hooked C library copied through a buffer it allocated per call.** The
+binary hooks answer a title's own `memcpy`, `memset` and `strcpy` natively
+because interpreting a byte-at-a-time fill is the worst thing this emulator can
+be asked to do (see the section those hooks are described in). A hooked
+`memcpy` reads the source into a buffer and writes that buffer to the
+destination, and the buffer was `make([]byte, length)` — sized by the guest's
+own request, so a title that moves a sprite a few dozen times a frame allocated
+that much a few dozen times a frame, zeroed it, filled it, and dropped it. That
+one line was 302 MB of the 420.
+
+It is scratch space the runtime lends now, for the same reason a frame is
+lent by an execution in the JVM: nothing keeps it. The bytes are read in and
+written out inside one crossing, and no hook here returns a slice or hands one
+to anything that outlives the call. **And nothing else is running** — this
+platform grants one guest thread a slice at a time and blocks until it parks,
+which is the invariant every other map and buffer on the runtime already rests
+on (see `workers.go`). The buffer is not cleared between calls because every
+caller fills the whole of it before reading it, which is also the zeroing
+`make` was doing and nobody needed. Past 256 KiB a call allocates and lets the
+result go, so a title that once moved a megabyte does not leave the session
+holding a megabyte.
+
+**The busiest counter still composed its name per crossing.** `diagEvent`
+exists because composing a formatted name per boundary crossing cost more than
+the crossing did — 6% of host CPU in formatting and most of a further 16% in
+the stack copying that formatting's call depth caused — and the kinds that were
+taken apart for it are listed beside it. The WIPI-C dispatcher was not one of
+them, and it is the busiest crossing this platform counts: every graphics, file
+and kernel call a title makes arrives through `handleWIPICCall`, which opened
+with `fmt.Sprintf("wipic %#x", id)`. It is a `diagWIPICCall` event now, with the
+slot in a numeric field and the name composed once per distinct slot when a
+report asks for one.
+
+Together, on the path a release build actually runs — the profiler that shows
+above these two in the numbers is debug-only and the probe turns it on — the
+run went from **377 MB and 3.06 million objects to 27.5 MB and 46 thousand**.
+
+**The instruction count is the check that matters here**, not a frame
+comparison. `TestLoadCostProbe` runs on a manual clock, so the same guest work
+happens every time and the count is exact rather than a fingerprint; a frame
+A/B cannot say the same thing on this platform, because a run long enough to
+draw more than its first lit frame needs `-play` and `-play` is not
+deterministic. Four local titles were run before and after on the same tick
+counts and every one retired the identical number of instructions
+(1,072,183,468 / 290,899,832 / 167,660,025 / 66,661,016). Two LGT titles were
+run the same way for the engine change, and matched on steps and flushes.
+
+The same profile taken on an LGT title found nothing of the kind — 50 MB over
+1.43 billion instructions, half of it the one-off read of the archive — so this
+was this platform's, not the engine's.
+
 ## Deliberately incomplete
 
 - **showing what the last flush put on the panel, rather than reading the

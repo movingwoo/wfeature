@@ -2137,6 +2137,39 @@ it cannot touch guest memory, cannot re-enter the guest, and cannot take a lock
 either of those can be waiting behind. It answers by writing the `Context` it
 is handed.
 
+### The allocation every crossing made
+
+The boundary above is what a crossing *costs*; this is what one *allocated*,
+and it had been there since the engine was written. The two SVC forms answered
+with `&SupervisorCall{...}` and every other form answered with `nil`, so a
+raised call was one heap object per crossing — read once by `Engine.Run`,
+copied into its `RunResult` by value, and dead before the next instruction.
+Nothing ever kept one.
+
+An allocation profile of one local KTF title over two thousand ticks put
+`executeThumbConditionalBranch` at **2.8 million allocations, 63% of every
+object the run made**, for 43 MB of sixteen-byte structs. It is small per
+crossing and the crossing rate is what makes it: a title that polls the
+platform inside its own loop raises one every few tens of instructions, which
+is the same fact the fast path above exists for — and the allocation happened
+*before* the fast path was consulted, so the slots that never leave the quantum
+were paying for it too.
+
+The forms answer by value now. `SupervisorCall.raised()` takes the place of the
+nil test: a raised call resumes after the instruction that raised it, so its
+`ResumePC` is that instruction's address plus two or four and is never zero,
+which makes the zero value an unambiguous "no call". The engine's two call
+sites lost a dereference along with the allocation.
+
+**This is not a speed measurement.** The machine it was found on was running an
+unrelated full-corpus sweep at a load average of 127, which makes every
+wall-clock number on it noise; what is quoted here is allocation, which is
+counted rather than timed. What says the engine still executes the same program
+is the instruction count: four local KTF titles and two LGT ones were run
+before and after on a manual clock, and every one retired the identical number
+of instructions and flushed the identical number of frames. **What the change
+is worth in time is still unmeasured**, and needs a quiet machine.
+
 ### The hook cannot live on Engine, and the reason is worth keeping
 
 The obvious home for it is a field on `Engine`, which is the type whose loop

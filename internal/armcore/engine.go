@@ -16,6 +16,24 @@ type SupervisorCall struct {
 	ResumePC  uint32
 }
 
+// raised reports whether an instruction answered with a call at all.
+//
+// **The forms answer by value rather than with a pointer**, and this is what
+// takes the place of testing that pointer for nil. It was one heap allocation
+// per crossing, on a boundary a title crosses constantly: measured over two
+// thousand ticks of one local title, the `&SupervisorCall{}` in the two SVC
+// forms was 2.8 million allocations — 63% of every object the run made — for
+// a struct the engine reads once and copies into its result before the next
+// instruction executes. Nothing ever kept one.
+//
+// The zero value cannot be mistaken for a call. A raised one resumes after the
+// instruction that raised it, so its ResumePC is the instruction's address
+// plus two or four and is never zero.
+func (call SupervisorCall) raised() bool { return call.ResumePC != 0 }
+
+// noSupervisorCall is what a form that raised none answers with.
+var noSupervisorCall SupervisorCall
+
 type RunResult struct {
 	Reason         StopReason
 	Steps          uint32
@@ -110,7 +128,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			// pulled out ahead of time. That was built and measured, and it is
 			// slower both ways round; see armcore.md, "A wider decode cache
 			// entry was built and lost, twice over".
-			var supervisorCall *SupervisorCall
+			var supervisorCall SupervisorCall
 			var err error
 			switch decoded.form {
 			case thumbImmediate:
@@ -135,7 +153,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 				// small loops of exactly that kind, and paying a lookup every
 				// few instructions is what made the code the recognisers
 				// cannot help slower than it was before they existed.
-				if err == nil && supervisorCall == nil && !decoded.refusedLoop {
+				if err == nil && !supervisorCall.raised() && !decoded.refusedLoop {
 					if head := context.Registers[RegisterPC]; head < pc && pc-head <= maxRecognisedLoopBytes {
 						stood, loopErr := memory.runStoreLoop(context, head, pc)
 						if loopErr != nil {
@@ -174,11 +192,11 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			if err != nil {
 				return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: uint32(decoded.instruction), Thumb: true, Cause: err}
 			}
-			if supervisorCall != nil {
+			if supervisorCall.raised() {
 				if memory.fastSupervisor != nil && memory.fastSupervisor(context, supervisorCall.Immediate) {
 					continue
 				}
-				return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: *supervisorCall}, nil
+				return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: supervisorCall}, nil
 			}
 			continue
 		}
@@ -192,7 +210,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 		}
 		memory.armSteps++
 		context.Registers[RegisterPC] = pc + 4
-		var supervisorCall *SupervisorCall
+		var supervisorCall SupervisorCall
 		var err error
 		switch form {
 		case armDataProcessing:
@@ -217,11 +235,11 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 		if err != nil {
 			return RunResult{Steps: steps}, &InstructionError{PC: pc, Instruction: instruction, Cause: err}
 		}
-		if supervisorCall != nil {
+		if supervisorCall.raised() {
 			if memory.fastSupervisor != nil && memory.fastSupervisor(context, supervisorCall.Immediate) {
 				continue
 			}
-			return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: *supervisorCall}, nil
+			return RunResult{Reason: StopSupervisorCall, Steps: steps + 1, SupervisorCall: supervisorCall}, nil
 		}
 	}
 
