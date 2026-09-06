@@ -316,6 +316,28 @@ func (client *Client) clientThreadDue() bool {
 // instead of polling, and a batch Host uses it to skip the wait entirely.
 // Work that is already due answers an instant in the past.
 func (client *Client) NextDeadline() (time.Time, bool) {
+	return client.nextDeadline(false)
+}
+
+// nextFutureDeadline answers the earliest deadline that is strictly ahead of
+// the clock, ignoring the work that is due now.
+//
+// **Work that is due now is run by the next round; it is not a reason to hold
+// the clock.** A batch Host has only one way to move time, and every deadline
+// here is reported at the instant it falls due — including the ones that are
+// already past, deliberately, so that a Host on the wall clock does not idle
+// through work that is ready. Answering a batch Host with the earliest of the
+// two mixes the questions: a title with one thread parked on a zero wait — a
+// `Thread.yield`, which asks to be run again rather than to be woken later —
+// reports that instant every round, no round ever clears it because the yield
+// re-parks at the same instant, and the deadlines that would have moved the
+// clock sit behind it unseen. Guest time then stops, and a title whose opening
+// waits by polling the clock in a yield loop can never leave it.
+func (client *Client) nextFutureDeadline() (time.Time, bool) {
+	return client.nextDeadline(true)
+}
+
+func (client *Client) nextDeadline(futureOnly bool) (time.Time, bool) {
 	if client == nil {
 		return time.Time{}, false
 	}
@@ -324,6 +346,9 @@ func (client *Client) NextDeadline() (time.Time, bool) {
 	var earliest time.Time
 	found := false
 	consider := func(deadline time.Time) {
+		if futureOnly && !deadline.After(client.now()) {
+			return
+		}
 		if !found || deadline.Before(earliest) {
 			earliest, found = deadline, true
 		}
@@ -442,7 +467,7 @@ func (client *Client) SkipToNextDeadline() bool {
 	if !ok {
 		return false
 	}
-	deadline, found := client.NextDeadline()
+	deadline, found := client.nextFutureDeadline()
 	if !found || !deadline.After(manual.Now()) {
 		return false
 	}
