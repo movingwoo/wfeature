@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/ladder"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 )
 
@@ -29,6 +30,16 @@ import (
 //   - interactive: a key changed what it draws. The screen is waited on until
 //     it settles first, because a change measured against a screen that was
 //     already animating says nothing about the key.
+//
+// What counts as settled, and what a key is then compared against, is one
+// judgment shared by all three platforms rather than three copies of one
+// design: `internal/ladder`. A screen is settled when it is still, or when it
+// cycles through a handful of frames and shows nothing it had not already
+// shown — a blinking prompt is a screen waiting for input, and asking for the
+// same frame several ticks in a row refused 46 archives that were doing
+// exactly that. What the settled screen leaves behind is the set of frames it
+// cycles through, and a key changed the screen when it draws something that
+// set never held.
 //
 // A screen that never settles is reported as unanswerable rather than as a
 // failure. Not knowing and not working are different answers, and a ladder
@@ -62,10 +73,6 @@ const (
 	// the window most titles take to paint, and a title still going at the end
 	// of it is running rather than coasting to a stop.
 	localLadderSustainTicks = 300
-	// A screen counts as settled once what was last presented is unchanged for
-	// this many consecutive ticks, which is what separates a title waiting for
-	// input from one animating an opening sequence.
-	localLadderSettleRuns = 8
 	// How long to wait for that. A title still animating at the end of this is
 	// one whose answer to a key cannot be read from a frame, so it is reported
 	// as unanswerable rather than as a failure.
@@ -149,7 +156,7 @@ func TestLocalLGTArchivesAnswerAKey(t *testing.T) {
 			if !painted {
 				t.Skipf("%s in %d ticks, which the boot rung below this one reports", why, ticks)
 			}
-			settled, waited, err := tickUntilSettled(session)
+			screen, settled, waited, err := tickUntilSettled(session)
 			if errors.Is(err, ErrGuestExited) {
 				if launched < localLadderLaunches {
 					continue
@@ -163,9 +170,8 @@ func TestLocalLGTArchivesAnswerAKey(t *testing.T) {
 				// A screen that never stops changing on its own cannot answer
 				// this question: a change after a key would have happened
 				// anyway.
-				t.Skipf("the screen was still changing after %d ticks, so a change after a key would prove nothing", waited)
+				t.Skipf("%s", screen.Unsettled(waited))
 			}
-			baseline := session.FrameDigest()
 			presents := session.Flushes()
 			var tried []string
 			ended := ""
@@ -175,7 +181,7 @@ func TestLocalLGTArchivesAnswerAKey(t *testing.T) {
 					t.Fatalf("no key called %q", name)
 				}
 				tried = append(tried, name)
-				changed, after, err := pressAndWatch(session, uint32(code), baseline, hold, localLadderReleaseTicks)
+				changed, after, err := pressAndWatch(session, uint32(code), screen, hold, localLadderReleaseTicks)
 				if errors.Is(err, ErrGuestExited) {
 					ended = name
 					break
@@ -328,30 +334,25 @@ func tickFor(session *Session, ticks int) (int, error) {
 // that ends itself while it is being waited on is a different answer from one
 // that is still animating, so the error travels rather than being folded into
 // "not settled".
-func tickUntilSettled(session *Session) (settled bool, waited int, err error) {
-	digest := session.FrameDigest()
-	steady := 0
+func tickUntilSettled(session *Session) (screen *ladder.Watcher, settled bool, waited int, err error) {
+	screen = &ladder.Watcher{}
+	screen.Observe(session.FrameDigest())
 	for ; waited < localLadderSettleLimit; waited++ {
 		if err := session.Tick(context.Background()); err != nil {
-			return false, waited, err
+			return screen, false, waited, err
 		}
-		current := session.FrameDigest()
-		if current != digest {
-			digest = current
-			steady = 0
-			continue
-		}
-		steady++
-		if steady >= localLadderSettleRuns {
-			return true, waited, nil
+		if screen.Observe(session.FrameDigest()) {
+			return screen, true, waited, nil
 		}
 	}
-	return false, waited, nil
+	return screen, false, waited, nil
 }
 
-// pressAndWatch holds one key down, releases it, and reports whether what the
-// title draws differs from what it was drawing before the key.
-func pressAndWatch(session *Session, key uint32, baseline uint64, hold, after int) (bool, int, error) {
+// pressAndWatch holds one key down, releases it, and reports whether the title
+// draws content the settled screen never held. The comparison is against the
+// set the screen was cycling through rather than against one frame of it: a
+// blinking prompt differs from any single frame of itself.
+func pressAndWatch(session *Session, key uint32, screen *ladder.Watcher, hold, after int) (bool, int, error) {
 	ctx := context.Background()
 	session.SendKey(true, key)
 	elapsed := 0
@@ -369,7 +370,7 @@ func pressAndWatch(session *Session, key uint32, baseline uint64, hold, after in
 				return false, err
 			}
 			elapsed++
-			if session.FrameDigest() != baseline {
+			if screen.Changed(session.FrameDigest()) {
 				return true, nil
 			}
 		}
