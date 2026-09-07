@@ -51,6 +51,18 @@ import (
 // have let the opening's own next screen land inside it and be credited to the
 // key; `internal/ladder` has the argument.
 //
+// **That watch happens on the last round too, and it used to not.** The rung
+// asks a fixed number of screens, and it left the loop at the last one without
+// watching it — so the single screen whose verdict actually gets reported was
+// the single screen nobody had looked at with nothing held. Five archives were
+// failed there for answering no key and not one of them was stopped: each
+// leaves that screen by itself, and four go on to a menu, a title screen or a
+// prologue that answers a key. A screen still moving when the rung runs out of
+// screens is now reported the way a screen that never settles is — as
+// unanswerable rather than as a failure — because "no key changed the screen"
+// is a claim about the title and this is not evidence for it. See
+// `docs/ktf.md`, "Five titles the interactive rung failed".
+//
 // **A title is allowed to end its first launch.** Several here put the
 // handset's own restart notice up before anything else: they write their save,
 // tell the player to start the title again, and end. That is correct
@@ -100,11 +112,17 @@ const (
 	// press window — a press window long enough to outlast an opening credits
 	// the opening's own next screen to the key.
 	//
-	// Sized from the corpus rather than chosen: the openings measured here
-	// move again within a few hundred ticks of the press window closing, and
-	// this is an order above the largest of them, which costs nothing because
-	// only a title that has already answered no key ever spends it.
-	localLadderOpeningTicks = 4096
+	// Sized from the corpus rather than chosen, and re-sized once. The first
+	// number was 4096: the openings measured then moved again within a few
+	// hundred ticks of the press window closing, and 4096 was an order above
+	// the largest of them. Then five archives failed this rung and **not one
+	// of them was stopped** — driven with nothing held they leave the screen
+	// they were failed on after 323, 2123, 4606, 8898 and **23934** ticks, and
+	// four of the five go on to a screen a key plainly answers. So the budget
+	// is a little under three times the largest of those. Widening it costs
+	// nothing measurable, because only a screen that has already answered no
+	// key ever waits here and the wait ends the tick the screen moves.
+	localLadderOpeningTicks = 65536
 	// How many launches an archive gets. Two, because the first one is what
 	// the platform's restart notice ends; a third would be a probe hoping.
 	localLadderLaunches = 2
@@ -144,8 +162,11 @@ func TestLocalKTFArchivesSustainAFrame(t *testing.T) {
 				t.Fatalf("the title ended itself %d ticks after its first frame, on its second launch", ran)
 			}
 			if err != nil {
-				t.Fatalf("tick %d after the first frame: %v\ncounts:\n%s",
-					ran, err, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40))
+				// The reason goes last: the sweep records the final line a
+				// subtest printed, so counts printed after it are what the
+				// report files this archive under. See `docs/testing.md`.
+				t.Fatal(withDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40,
+					"tick %d after the first frame: %v", ran, err))
 			}
 			if ran < sustain {
 				t.Fatalf("nothing left to do %d ticks after the first frame, of %d asked for%s",
@@ -193,7 +214,11 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 			// to settle, under a held key, and waiting for its opening to move
 			// on — and each is said differently, because "it ended itself" is
 			// the same sentence about three different moments.
-			ended, tried, rounds, moved := "", []string(nil), 0, 0
+			// playing is how long the last screen the rung asked took to move
+			// on its own, and negative when it did not move at all. It is the
+			// difference between a screen that answers no key and a screen
+			// that was asked before the title was ready to be asked.
+			ended, tried, rounds, moved, playing := "", []string(nil), 0, 0, -1
 			for round := 1; round <= ladder.SettleRounds; round++ {
 				rounds = round
 				screen, settled, waited, err := tickUntilSettled(session)
@@ -231,9 +256,13 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 					ended = fmt.Sprintf("while %s was held", stopped)
 					break
 				}
-				if round == ladder.SettleRounds {
-					break
-				}
+				// **The last round is watched like every round before it.**
+				// The loop used to leave here, before the watch, so the one
+				// screen whose verdict gets reported was the one screen
+				// nobody looked at with nothing held — and "no key changed the
+				// screen" is a claim about a title, made from a screen that
+				// might have been about to change by itself. Five archives
+				// were reported that way and none of them was stopped.
 				left, opening, err := tickUntilScreenMoves(session, screen, localLadderOpeningTicks)
 				if errors.Is(err, ErrGuestExited) {
 					ended = fmt.Sprintf("%d ticks into waiting for its opening to move on", opening)
@@ -243,6 +272,12 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 					t.Fatalf("tick %d while waiting for the opening to move on: %v", opening, err)
 				}
 				if !left {
+					break
+				}
+				if round == ladder.SettleRounds {
+					// The rung has run out of screens to ask and this one was
+					// still moving, so what it moved to was never asked.
+					playing = opening
 					break
 				}
 				moved++
@@ -264,9 +299,14 @@ func TestLocalKTFArchivesAnswerAKey(t *testing.T) {
 				t.Logf("no key changed the screen and this launch wrote to its save directory, so it is being launched again")
 				continue
 			}
-			t.Fatalf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d flushes since it settled%s",
+			unanswerable, why := openingReport(playing)
+			report := fmt.Sprintf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d flushes since it settled%s, %s",
 				openingMovedOn(moved), strings.Join(tried, ", "), hold, rounds, screens(rounds),
-				session.Flushes()-presents, afterRestart(launched))
+				session.Flushes()-presents, afterRestart(launched), why)
+			if unanswerable {
+				t.Skip(report)
+			}
+			t.Fatal(report)
 		}
 	})
 }
@@ -321,15 +361,64 @@ func tickUntilScreenMoves(session *Session, screen *ladder.Watcher, budget int) 
 	return false, waited, nil
 }
 
-// openingMovedOn says, in a failure, whether the screen that answered no key
-// was the one the title booted to or one its opening moved on to. The two are
+// openingMovedOn says, in a report, whether the screen that answered no key was
+// the one the title booted to or one its opening moved on to. The two are
 // different defects and a line that spelled them the same way would send
 // whoever read it to the wrong place.
 func openingMovedOn(moved int) string {
 	if moved == 0 {
-		return fmt.Sprintf(", and it did not move on its own in the %d ticks after", localLadderOpeningTicks)
+		return ""
 	}
 	return fmt.Sprintf(", over %d %s its opening moved on to", moved, screens(moved))
+}
+
+// openingReport says what a settled screen that no key moved actually is, and
+// whether it is a failure at all. `playing` is how long that screen took to
+// move on its own with nothing held, and negative when it did not.
+//
+// The two answers are not two ways of saying one thing:
+//
+//   - **It moved on its own once the keys were done with it.** Its opening was
+//     still playing, so the title was asked its question before it was ready
+//     to be asked, and what it moved to is a screen nobody has measured. That
+//     is unanswerable — the same answer this rung already gives a screen that
+//     never settles, and for the same reason: not knowing and not working are
+//     different answers.
+//   - **It did not move on its own either.** That is a stopped screen, and "no
+//     key changed it" is a claim about the title.
+//
+// Both sentences end in their reason, because the sweep files a subtest under
+// the last line it printed; see `docs/testing.md`.
+func openingReport(playing int) (unanswerable bool, why string) {
+	if playing >= 0 {
+		return true, fmt.Sprintf("and its opening was still playing: with nothing held it left that screen %d ticks later, so what it answers has not been measured yet", playing)
+	}
+	return false, fmt.Sprintf("and it did not move on its own in the %d ticks after", localLadderOpeningTicks)
+}
+
+// TestAScreenThatLeavesOnItsOwnIsNotAScreenThatAnsweredNoKey pins the judgment
+// the rung's last round used to skip.
+//
+// Unlike the rungs above it this needs no archive, because what it checks is
+// the decision rather than the driving: a screen that leaves by itself has not
+// refused the keys, and reporting it as one is a claim about a title made from
+// a screen that was still playing its opening. Five archives were reported
+// that way before the watch was moved onto the last round.
+func TestAScreenThatLeavesOnItsOwnIsNotAScreenThatAnsweredNoKey(t *testing.T) {
+	unanswerable, why := openingReport(4606)
+	if !unanswerable {
+		t.Fatal("a screen that left on its own 4606 ticks after the keys was reported as a title that answers no key")
+	}
+	if !strings.Contains(why, "4606") {
+		t.Errorf("the reason does not say how long the screen took to leave, so whoever reads it has to measure it again: %q", why)
+	}
+	unanswerable, why = openingReport(-1)
+	if unanswerable {
+		t.Fatal("a screen that did not move on its own was reported as unanswerable, so a stopped screen would be filed as a question nobody asked")
+	}
+	if !strings.Contains(why, strconv.Itoa(localLadderOpeningTicks)) {
+		t.Errorf("the reason does not say how long the screen was watched for: %q", why)
+	}
 }
 
 // screens is "screen" or "screens", so a count reads as a sentence.

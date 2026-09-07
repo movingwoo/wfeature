@@ -13,6 +13,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 //go:embed testdata/skvm.jar
@@ -111,6 +112,41 @@ func TestSKVMTimerRunsATaskBesideTheCaller(t *testing.T) {
 	const want = "true|true|true"
 	if state := fixtureString(t, runtime, "timerState"); state != want {
 		t.Fatalf("timerState() = %q, want %q: %s", state, want, fixtureString(t, runtime, "failure"))
+	}
+}
+
+// The handset facts have to describe one handset.
+//
+// `MIN` carries a line and `m.CARRIER` names the network its prefix belongs
+// to, and titles of this era read the pair together: they strip the leading
+// digits off MIN and put the carrier's prefix back in front. Answering a fixed
+// carrier code therefore does not merely describe the wrong network — it hands
+// a title a *different number* than the one MIN answered, for every line that
+// code does not fit. The fixture does the reconstruction the local corpus
+// does, and what it must come back with is the number this runtime was told to
+// answer with.
+func TestTheCarrierCodeDescribesTheNumberItIsAnsweredBeside(t *testing.T) {
+	original := wipic.SubscriberNumber()
+	t.Cleanup(func() {
+		if err := wipic.SetSubscriberNumber(original); err != nil {
+			t.Fatalf("restore the subscriber number: %v", err)
+		}
+	})
+	// One line per network prefix a handset of this era could carry, plus the
+	// unified prefix that replaced them, which is the shape a number most
+	// likely has today and the one a fixed "SKT" got most wrong.
+	for _, number := range []string{
+		"01000000000", "01112345678", "01612345678",
+		"01712345678", "01812345678", "01912345678",
+	} {
+		if err := wipic.SetSubscriberNumber(number); err != nil {
+			t.Fatalf("SetSubscriberNumber(%q) error = %v", number, err)
+		}
+		runtime := startFixture(t, nil)
+		if rebuilt := fixtureString(t, runtime, "handsetNumber"); rebuilt != number {
+			t.Errorf("a title reading m.CARRIER beside MIN=%q rebuilds %q", number, rebuilt)
+		}
+		runtime.Destroy(true)
 	}
 }
 

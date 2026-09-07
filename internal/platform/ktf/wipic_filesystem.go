@@ -582,9 +582,27 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 	return uint32(count), nil
 }
 
-// wipicFileStatByName implements the KTF custom slot 5, db_stat_by_name:
-// (name, out int32[3], mode). Titles treat a zero result with out[2] above a
-// size threshold as a valid save. Missing databases answer M_E_BADRECID.
+// wipicFileStatByName serves MC_fsGetFileStat(name, MH_FileInfo* out, mode),
+// the file attributes at slot 5: `{ attrib, creationTime, size }`, twelve
+// bytes with the length at offset 8. Titles treat a zero result with out[2]
+// above a size threshold as a valid save. A name nothing has answers
+// M_E_BADRECID, which is what a missing database has always answered here.
+//
+// **A directory this platform was asked to make is a name it has.** Nothing
+// here holds a directory — the store is one flat map from a name to its bytes
+// — so `MC_fsMkDir` writes the name down and that list is the whole of what a
+// directory is. `MC_fsIsExist` already reads it, and a stat that did not was
+// the same question answered two ways: one title makes its shared directory,
+// stats the name it just made, is told there is no such thing, and calls
+// `MC_knlExit` inside `startApp`. The list is what both calls consult now.
+//
+// The attribute word stays zero, and that is a decision rather than an
+// omission. The specification defines `MC_FILE_IS_DIR` through the HAL rather
+// than giving its value, and the one title that asks reads out[0] as a
+// bitfield — it tests bit 3, then bit 1, and files the entry under a different
+// kind for each — without branching on the kind it gets: the same run, frame
+// for frame, with the word set to 0, 2 or 8. A bit nothing here established is
+// worse than a zero, and there is nothing local left for it to settle.
 func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread) (uint32, error) {
 	nameAddress, err := thread.Register(0)
 	if err != nil {
@@ -605,17 +623,29 @@ func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread
 		size = uint32(len(saved))
 	} else if packaged, ok := runtime.guestFile(name); ok {
 		size = uint32(len(packaged))
+	} else if runtime.createdDirectories()[name] {
+		// A made directory holds no bytes, so the length it reports is zero;
+		// what matters to the caller is that the call succeeded at all.
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> directory", name))
+		return runtime.writeFileStat(outAddress, 0)
 	} else {
 		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> missing", name))
 		return wipicErrorBadParam, nil
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> %d", name, size))
-	if outAddress != 0 {
-		record := make([]byte, 12)
-		binary.LittleEndian.PutUint32(record[8:], size)
-		if err := runtime.client.core.Memory().Write(outAddress, record); err != nil {
-			return 0, fmt.Errorf("write KTF database stat: %w", err)
-		}
+	return runtime.writeFileStat(outAddress, size)
+}
+
+// writeFileStat fills the MH_FileInfo the stat was handed and answers success.
+// A caller that passed no record still gets the answer.
+func (runtime *initializationRuntime) writeFileStat(outAddress, size uint32) (uint32, error) {
+	if outAddress == 0 {
+		return 0, nil
+	}
+	record := make([]byte, 12)
+	binary.LittleEndian.PutUint32(record[8:], size)
+	if err := runtime.client.core.Memory().Write(outAddress, record); err != nil {
+		return 0, fmt.Errorf("write KTF database stat: %w", err)
 	}
 	return 0, nil
 }

@@ -24,7 +24,19 @@ const localInitializationAcceptanceMaxSteps = 10_000_000
 
 // The startApp probe allows more work: real games run tens of millions of
 // instructions of table decompression before first returning.
-const localStartAcceptanceMaxSteps = 50_000_000
+//
+// **It is the session's own ceiling, taken rather than copied.** A probe with
+// a number of its own drifts away from the runtime it is measuring, and this
+// one had: it stood at half `sessionDefaultMaxSteps` and reported two local
+// archives as refusing their `start` and `frame` rungs with "ARM instruction
+// limit exceeded", while the same two archives ran three thousand ticks under
+// the CLI without an error, because a real session had granted them twice
+// what the probe did. A rung that fails an archive the emulator would have run
+// is measuring itself. `session.go` says why the session's ceiling is where it
+// is — two local titles spend fifty to a hundred million instructions inside
+// one native call in `startApp`, decompressing what they load — so raising
+// that one raises this, and there is no second number left to re-lower.
+const localStartAcceptanceMaxSteps = sessionDefaultMaxSteps
 
 // localAcceptanceMaxSteps allows WFEATURE_KTF_MAX_STEPS to widen the probe
 // ceiling when investigating long-running initialization loops.
@@ -319,7 +331,8 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 			}
 			object, constructed, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
-				t.Fatalf("%v; runs=%+v callbacks=%+v\ncounts:\n%s", err, constructed.Runs, client.runtime.callbacks, formatDiagnosticCounts(client.runtime.diagnosticCounts(), 2000))
+				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000,
+					"%v; runs=%+v callbacks=%+v", err, constructed.Runs, client.runtime.callbacks))
 			}
 			address, ok := client.JVM().AOTAddress(object)
 			if !ok {
@@ -383,7 +396,7 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			}
 			object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
-				t.Fatalf("construct: %v\ncounts:\n%s", err, formatDiagnosticCounts(client.runtime.diagnosticCounts(), 2000))
+				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000, "construct: %v", err))
 			}
 			classAddress, err := client.runtime.ensureJavaClass("[Ljava/lang/String;")
 			if err != nil {
@@ -403,10 +416,9 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			}
 			started, err := client.InvokeVirtual(context.Background(), object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(argumentsObject))
 			if err != nil {
-				t.Fatalf("startApp: %v; runs=%d\nsite hints:\n%s\ncounts:\n%s",
-					err, len(started.Runs),
-					errorSiteHints(client.JVM(), err),
-					formatDiagnosticCounts(client.runtime.diagnosticCounts(), 2000))
+				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000,
+					"site hints:\n%s\nstartApp: %v; runs=%d",
+					errorSiteHints(client.JVM(), err), err, len(started.Runs)))
 			}
 			steps := uint64(0)
 			for _, run := range started.Runs {
@@ -539,8 +551,8 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 				}
 			}
 			if flushes == 0 || drawn == 0 {
-				t.Fatalf("no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)\ncounts:\n%s",
-					ran, flushes, drawn, tickErr, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60))
+				t.Fatal(withDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60,
+					"no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)", ran, flushes, drawn, tickErr))
 			}
 			rendered++
 			t.Logf("%dx%d frame after %d ticks, %d flushes, %d lit pixels", width, height, ran, flushes, drawn)
@@ -628,6 +640,23 @@ func nearestAOTMethod(vm *jvm.VM, address uint32) string {
 		return fmt.Sprintf("no method near %#x", address)
 	}
 	return best
+}
+
+// withDiagnosticCounts builds a probe failure that carries the runtime's
+// diagnostic counts and still **ends with the reason it failed**.
+//
+// The sweep that reads these probes keeps the last line a subtest printed and
+// nothing else (`internal/tools/acceptance`, `collect`), because that is where
+// a `t.Fatalf` leaves its message. A failure that ends in a block of counts is
+// therefore recorded as its own last count: one archive's refusal was written
+// down for a whole sweep as `1 getmethod getClipX()I` — the fortieth count
+// line, an ordinary successful lookup — while the error that actually ended
+// the run never reached the report at all, and the reading of it that followed
+// went looking for a member that was already declared.
+//
+// The counts are worth printing; they cannot be what a message ends with.
+func withDiagnosticCounts(counts map[string]uint32, limit int, format string, arguments ...any) string {
+	return fmt.Sprintf("counts:\n%s%s", formatDiagnosticCounts(counts, limit), fmt.Sprintf(format, arguments...))
 }
 
 func formatDiagnosticCounts(counts map[string]uint32, limit int) string {

@@ -1496,8 +1496,40 @@ func runtimeDisplayCallSerially(runtime *initializationRuntime, _ *jvm.VM, argum
 	return jvm.VoidValue(), nil
 }
 
+// The game actions this platform's Display answers with, each paired with the
+// key code it stands for. The five pad actions are the numbers every runtime
+// of this era uses; the soft keys, the volume pair, and clear sit in a block
+// of this platform's own above them.
+//
+// **One table, read in both directions.** `getGameAction` and `getKeyCode` are
+// inverses, and they used to be two switches — the forward one knowing six
+// pairs and the reverse one twelve. A title that asks what a key means and
+// then indexes its own table by the answer is handed the key code straight
+// back for every pair only the reverse knew, and a key code here is negative.
+// Deriving both directions from one list is what stops the two disagreeing
+// again; see docs/ktf.md on what a title did with the answer.
+var runtimeDisplayActions = []struct{ action, key int32 }{
+	{1, KeyUp},
+	{2, KeyLeft},
+	{5, KeyRight},
+	{6, KeyDown},
+	{8, KeyFire},
+	{90, KeyLeftSoft},
+	{91, KeyRightSoft},
+	{92, KeyThirdSoft},
+	{96, KeyVolumeUp},
+	{97, KeyVolumeDown},
+	// Which key this pair names is not something this project has identified.
+	// It is what the original reverse table answered for 98, and it is kept
+	// so that the two directions stay inverses of each other.
+	{98, -15},
+	{99, KeyClear},
+}
+
 // runtimeDisplayGameAction maps a WIPI key code to its game action with the
-// original Display::getGameAction table; unmapped keys report themselves.
+// original Display::getGameAction table. A key with no action reports itself,
+// which is what leaves the digits, star, and hash reaching a title's own
+// branches as the characters they are.
 func runtimeDisplayGameAction(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 1 {
 		return jvm.VoidValue(), fmt.Errorf("Display.getGameAction expected a key code, got %d arguments", len(arguments))
@@ -1506,19 +1538,10 @@ func runtimeDisplayGameAction(_ *initializationRuntime, _ *jvm.VM, arguments []j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	switch key {
-	case KeyUp:
-		return jvm.IntValue(1), nil
-	case KeyDown:
-		return jvm.IntValue(6), nil
-	case KeyLeft:
-		return jvm.IntValue(2), nil
-	case KeyRight:
-		return jvm.IntValue(5), nil
-	case KeyFire:
-		return jvm.IntValue(8), nil
-	case KeyClear:
-		return jvm.IntValue(99), nil
+	for _, pair := range runtimeDisplayActions {
+		if pair.key == key {
+			return jvm.IntValue(pair.action), nil
+		}
 	}
 	return jvm.IntValue(key), nil
 }
@@ -1533,31 +1556,10 @@ func runtimeDisplayKeyCode(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	switch action {
-	case 1:
-		return jvm.IntValue(KeyUp), nil
-	case 2:
-		return jvm.IntValue(KeyLeft), nil
-	case 5:
-		return jvm.IntValue(KeyRight), nil
-	case 6:
-		return jvm.IntValue(KeyDown), nil
-	case 8:
-		return jvm.IntValue(KeyFire), nil
-	case 90:
-		return jvm.IntValue(KeyLeftSoft), nil
-	case 91:
-		return jvm.IntValue(KeyRightSoft), nil
-	case 92:
-		return jvm.IntValue(-8), nil
-	case 96:
-		return jvm.IntValue(KeyVolumeUp), nil
-	case 97:
-		return jvm.IntValue(KeyVolumeDown), nil
-	case 98:
-		return jvm.IntValue(-15), nil
-	case 99:
-		return jvm.IntValue(KeyClear), nil
+	for _, pair := range runtimeDisplayActions {
+		if pair.action == action {
+			return jvm.IntValue(pair.key), nil
+		}
 	}
 	return jvm.IntValue(0), nil
 }

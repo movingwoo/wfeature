@@ -261,10 +261,7 @@ func eachLocalSKTArchive(t *testing.T, ask func(t *testing.T, session *skt.Runti
 			if err != nil {
 				t.Fatalf("open archive: %v", err)
 			}
-			framebuffer, err := backend.NewMemoryFramebuffer(240, 320)
-			if err != nil {
-				t.Fatalf("framebuffer: %v", err)
-			}
+			framebuffer := localProbeFramebuffer(t, archive)
 			// Saves go to the test's own directory: these rungs run long
 			// enough for a title to reach a write, and a probe must not read
 			// or write the progress a person made playing.
@@ -283,6 +280,30 @@ func eachLocalSKTArchive(t *testing.T, ask func(t *testing.T, session *skt.Runti
 	if ran == 0 {
 		t.Skip("no local SKT archives")
 	}
+}
+
+// localProbeFramebuffer builds the screen a Host would give this archive: the
+// 240x320 default unless the archive itself names the handset it was packaged
+// for, which is what `runskt` with no `-screen` and a server session with no
+// size in its `start` both do (`skt.PackagedScreen`).
+//
+// A probe that always asked for 240x320 was asking a question no Host asks. Two
+// local archives load their artwork by the screen they are given and carry only
+// the smaller set; on the default they find nothing, catch their own
+// `IOException` and paint an empty screen — which a rung reads as a title that
+// will not boot rather than as a handset it was never run on.
+func localProbeFramebuffer(t *testing.T, archive *skt.Archive) *backend.MemoryFramebuffer {
+	t.Helper()
+	width, height := 240, 320
+	if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(archive); packaged {
+		width, height = packagedWidth, packagedHeight
+		t.Logf("screen %dx%d, taken from the archive", width, height)
+	}
+	framebuffer, err := backend.NewMemoryFramebuffer(width, height)
+	if err != nil {
+		t.Fatalf("framebuffer: %v", err)
+	}
+	return framebuffer
 }
 
 // tickToFirstFrame runs until the title has presented a frame with something

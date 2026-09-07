@@ -530,6 +530,10 @@ func (runtime *initializationRuntime) guestMillis() int64 {
 	// asking the time is waiting rather than computing, and the Host charges
 	// the two differently. See continueHostService.
 	runtime.client.guestClockReads++
+	// A Host that moves its own clock cannot move it from inside the call the
+	// guest is asking from, so the guest's own execution moves it instead. See
+	// advanceBatchClockTo.
+	runtime.client.advanceBatchClockTo(runtime.client.core.Steps())
 	elapsed := runtime.client.now().Sub(runtime.clockBase)
 	if elapsed < 0 {
 		elapsed = 0
@@ -1887,21 +1891,43 @@ func (runtime *initializationRuntime) wipicSetTimer(thread *armcore.Thread) (uin
 	if err != nil {
 		return 0, err
 	}
-	if len(runtime.pendingTimers) >= maxPendingTimers {
-		return 0, fmt.Errorf("KTF pending timer count exceeds %d", maxPendingTimers)
-	}
 	delay := uint64(high)<<32 | uint64(low)
 	// A guest that asks for an absurd delay is asking for a timer that never
 	// fires in a session; clamping keeps the deadline arithmetic in range
 	// without changing any delay a game actually uses.
 	wait := time.Duration(min(delay, maxTimerDelayMillis)) * time.Millisecond
-	runtime.pendingTimers = append(runtime.pendingTimers, wipicTimer{
+	armed := wipicTimer{
 		pointer:  pointer,
 		callback: callback[0],
 		param:    param,
 		delay:    delay,
 		due:      runtime.client.framePeriodDeadline(wait),
-	})
+	}
+	// One timer record is one timer. MC_knlUnsetTimer cancels by record
+	// address and cannot mean anything else, so arming a record that is
+	// already queued re-arms that timer rather than adding a second one with
+	// the same identity. A title whose frame loop re-arms the same record
+	// every tick without ever unsetting it otherwise grew the queue by one
+	// entry a tick until the ceiling below refused the call and the run died
+	// with 256 queued entries that were all identical.
+	//
+	// Only a queued WIPI-C entry is replaced. A java/util/Timer entry carries
+	// a task instead of a callback and is cancelled through its own Timer, so
+	// it is never the record this call names. An entry that has already been
+	// handed to a service round is not in the queue at all -- ServiceTimers
+	// takes the whole slice and re-queues what it did not run -- so a callback
+	// that re-arms itself while it is running still queues one entry, which is
+	// the timer it just asked for.
+	for index, timer := range runtime.pendingTimers {
+		if timer.task == nil && timer.pointer == pointer {
+			runtime.pendingTimers[index] = armed
+			return 0, nil
+		}
+	}
+	if len(runtime.pendingTimers) >= maxPendingTimers {
+		return 0, fmt.Errorf("KTF pending timer count exceeds %d", maxPendingTimers)
+	}
+	runtime.pendingTimers = append(runtime.pendingTimers, armed)
 	return 0, nil
 }
 

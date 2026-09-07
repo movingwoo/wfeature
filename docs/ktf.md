@@ -5379,6 +5379,10 @@ bit through the HAL rather than giving its value. A guessed bit is worse than a
 refusal: a title that tests it would branch on a number nothing here established.
 No local title asks.
 
+*(A later title asks, and the refusal is what ends it. The attribute word stays
+unguessed; see "A directory the platform made, and the two questions that
+answered it differently".)*
+
 ### A picture a title recoloured, and the four bytes that refused it
 
 A title of the sibling platform keeps one encoded PNG in a byte array, writes new
@@ -6460,6 +6464,12 @@ since the window opened — which on a stepped run it never has. That run still
 fails on the step allowance, in the same three seconds, which is what
 [`cli.md`](cli.md) tells a reader to reach for `-play` about.
 
+*(The second half of that is now only true of a clock nothing moves at all. A
+Host that owns its clock runs it at a rate while a service call holds it, so a
+guest waiting there sees its wait end — see "A batch Host's clock had no rate".
+A call that never returns still fails on the step allowance, in the same
+seconds.)*
+
 **The whole-set A/B moves no verdict.** The 264 archives run through the same
 400 stepped ticks before and after differ in one line, and it is a title whose
 first lit frame arrives a tick earlier with the frames themselves identical —
@@ -7033,8 +7043,395 @@ The same profile taken on an LGT title found nothing of the kind — 50 MB over
 1.43 billion instructions, half of it the one-off read of the archive — so this
 was this platform's, not the engine's.
 
+## A game action is a subscript, and only one direction of the table knew it
+
+`Display.getGameAction(key)` answers what a key means — up, fire, clear — and
+`Display.getKeyCode(action)` is the reverse. They were written as two switches,
+and the two did not hold the same table: the forward one knew six pairs and the
+reverse one twelve. Every pair only the reverse knew came back out of the
+forward direction as the key code itself, which is what an unmapped key
+answers, and **every key code on this platform is negative**.
+
+Three archives died on the first soft key held against a settled screen — two
+titles of one family, one of them packaged for both module generations, all
+three in the same two frames:
+
+```text
+notify KTF card MainApp key: java/lang/ArrayIndexOutOfBoundsException:
+  thrown by guest code ... arrays=0x30009d90 [B runtime=200 guest=200
+  ... MainApp.KeyPress(I)V+0x1e ... MainApp.keyNotify(II)Z+0x42
+```
+
+**The guest's own code is what says whose fault it was.** Its
+`keyNotify(type, key)` tests the key for negative first and, when it is
+negative, replaces it with what `getGameAction` answers before branching on the
+event type; `KeyPress` then reads one byte out of a field of its own at that
+subscript. The fault report names the array and its length in the same line as
+the index: a **200-byte** table, which is room for every action and every
+keypad character and nothing else, read at **-6**. The title is not indexing
+its table wrong. It asked what the key meant, and was handed the key back.
+
+So the two directions are one list now, read forwards and backwards
+(`runtimeDisplayActions` in `runtime_java.go`): 1/2/5/6/8 for the pad, then this
+platform's own block above them — 90 and 91 for the two soft keys, 92 for the
+third, 96 and 97 for the volume pair, 98, and 99 for clear. Those numbers are
+not new here. They are what `getKeyCode` has answered since this platform was
+written, and the change is that the question can now be asked in either
+direction and get the same answer. They are also not only this platform's
+record of itself: a title on the sibling platform keeps its key map as a
+resource, one table per handset, and that table lists `1`, `2`, `5`, `6`, `8`,
+`90`, `92` and `99` — the pad, the soft keys it uses, and clear; see
+[`skvm.md`](skvm.md), "The key codes a Jlet reads are not the ones a MIDlet
+reads". A title's own resource is the strongest evidence there is for a number
+like this, and it agrees with the reverse table.
+
+**A key with no action still reports itself**, which is what leaves the digits,
+star, and hash reaching a title's own branches as the characters they are — and
+it is also why this read as a soft-key defect rather than as a table defect:
+every pad key already had an action, and every keypad character is already its
+own subscript, so the soft keys were the only keys left to fall over.
+
+**The packaging makes no difference, which is the other half of the finding.**
+One of the three archives is the same title in the earlier relocatable-module
+packaging, and it died at the same index on the same size of array: the table
+lives in the runtime Java bridge, above whatever shape the client image
+arrived in. All three take the soft key now and go on drawing.
+
+Measured on the interactive rung of the ladder, which is the rung a key is what
+moves: over a 257-archive local tree it went from 238 passed / 9 skipped / 10
+failed to **240 / 9 / 8**, and over a three-archive tree in the earlier
+packaging from 2 passed / 1 failed to **3 / 0 / 0**. Both counts moved by
+exactly the archives that were dying on the soft key and by nothing else, which
+is what the change can reach: the only answers it alters are the ones for keys
+that had no action before, and of those only the two soft keys are ever put to
+an archive by this rung.
+
+**Two things are deliberately left alone.** The send and end keys have no action
+in either direction, so they still report themselves and would take such a title
+below its array in exactly the same way; nothing names an action for them, no
+local archive asks, and inventing a number to close a hole nothing has fallen
+into is how a table stops being evidence. And the other two platforms carry the
+same six-pair forward table, which is where this one came from — whether a title
+of theirs asks the question has not been measured here.
+
+## A timer armed twice is one timer, not two
+
+`MC_knlSetTimer` takes the address of a timer record the guest owns, and
+`MC_knlUnsetTimer` takes the same address and cancels **every** queued entry
+that names it. The platform therefore already treats one record as one timer:
+there is no reading of `unset(record)` under which a record can stand for two
+of them. Arming was the half that disagreed — it appended a queue entry per
+call, so a title whose frame loop re-arms the same record every tick grew the
+queue by one entry a tick.
+
+The ceiling is 256 pending timers, which is a guard against a runaway rather
+than a budget, and one local title reached it by playing normally. The run
+ended with
+
+```
+service KTF timer at 0x…: handle supervisor call 0x3 at 0x…:
+KTF pending timer count exceeds 256
+```
+
+and the queue at that moment held 256 entries that were **identical in every
+field** — same record, same callback, same parameter, same delay. The
+diagnostic counts for the run say the rest: `wipic 0x1a` (SetTimer) 513 times,
+`wipic 0x1b` (UnsetTimer) **zero**. The title never cancels; it just arms the
+same record again on every pass, which is a perfectly ordinary way to write a
+frame loop against this API and cost nothing on the handset, because the
+handset replaced the timer.
+
+**So arming a record that is already queued now replaces that entry in place.**
+The predicate is the record address *and* a queued entry that is a WIPI-C timer
+rather than a `java/util/Timer` task, because those share the slice and are
+cancelled through their own `Timer` rather than by record address; a kernel
+call must not take one of their slots. Two things it deliberately does not
+look at:
+
+- **A callback that is running is not in the queue.** `ServiceTimers` takes the
+  whole slice, dispatches from its own copy, and re-queues only what it did not
+  run — so a callback that re-arms itself while it is running finds nothing to
+  replace and queues one entry, which is the next timer it just asked for.
+  That path is unchanged, and it is the path most of these titles use.
+- **A one-shot that has already fired is gone.** It left the queue when it was
+  dispatched, so arming the record again is a new timer by construction.
+
+The ceiling is still checked, but only on the path that actually adds an entry.
+A queue that is full can still re-arm a timer it already holds, which is the
+case that used to fail.
+
+**What it moved.** A unit test is the proof of the semantics — arming one
+record twice leaves one entry, and 512 re-arms of it leave one entry where the
+old code refused at 256 — and the local KTF ladder is the proof that timers,
+which every title on this platform touches, were not disturbed by it. Over the
+257-archive local set, before and after, in the same tree: parse, initialize,
+load and construct 257 passed; start 255 passed / 2 failed; frame 255 passed /
+2 failed; **sustained 252 → 253 passed, 4 → 3 failed** (1 skipped either way);
+interactive 238 passed / 9 skipped / 10 failed. Comparing the two runs stage by
+stage, **exactly one stage outcome in the whole corpus changed**, and it is the
+sustained rung of the title above, fail → pass. Nothing else moved in either
+direction.
+
+That one title's failure had been recorded by the sweep as
+`1 getmethod getClipX()I`, which is not a failure at all but the first line of
+the diagnostic counts the probe printed *after* its reason — see
+[`testing.md`](testing.md) for why a probe's last line has to be its reason.
+The defect spent a whole sweep filed under a count.
+
+**Only one kind of Host reaches it.** Under a wall clock — the page, or
+`runktf -play` — the same title runs three thousand ticks with no error,
+because real time passes between deadlines. A batch Host takes every deadline
+the moment it is due, so it is the one that fills the queue. It is the same
+queue either way, and a defect only one kind of Host reaches is still a
+defect.
+
+## Five titles the interactive rung failed, and not one of them was stopped
+
+The rung's failure line is `no key changed the screen`, and it says two things
+at once: that keys were put to a screen, and that the screen is the kind of
+screen a key ought to move. The second half was never measured. Five archives
+were reported this way — four with `over 1 screen its opening moved on to`, one
+with `and it did not move on its own in the 4096 ticks after` — and they were
+filed as the rung's own limit rather than as defects, which is a verdict about
+a title reached from a screen nobody had watched.
+
+**All five have now been watched, and none of them is stopped.** Driven on from
+the same settled screen with nothing held, every one of them leaves it:
+
+| the screen the rung failed on | leaves it after |
+| --- | --- |
+| the third screen of an opening | 323 ticks |
+| a studio logo, one screen in | 2123 ticks |
+| a publisher logo, one screen in | 4606 ticks |
+| a publisher logo, one screen in | 8898 ticks |
+| a developer logo, the screen it booted to | 23934 ticks |
+
+and four of the five go on to something a key plainly answers. Driven past the
+opening with `runktf -route`, one reaches a main menu whose highlighted item
+moves down two places under two `down` presses; one reaches a `PRESS ANY KEY`
+title screen that leaves under the first key put to it; one reaches a scrolling
+prologue with its own skip prompt. The fifth answers `fire` on the **fourth**
+screen of its opening, having sat still for 8192 ticks first.
+
+### The rung judged its last round by a rule it applied to no other
+
+The rung already knows the principle. Its own comment says that a screen which
+answered no key is watched with nothing held, and that what it moves to is
+settled and asked in turn, because *a title whose opening outlasts the press
+window answered nothing because its opening was still playing*. That was
+applied to every round but the last one, where the loop left before the watch:
+
+```go
+if round == ladder.SettleRounds {
+        break
+}
+left, opening, err := tickUntilScreenMoves(session, screen, localLadderOpeningTicks)
+```
+
+So the final screen — the only one whose verdict is ever reported — was the one
+screen the rung never watched. Four of the five die exactly there. **The watch
+now happens on every round**, and a screen that leaves on its own is reported
+the way this rung already reports a screen that never settles: as unanswerable,
+not as a failure. Not knowing and not working are different answers, and a skip
+that names how long the screen took to leave is a measurement whoever reads it
+can start from rather than repeat.
+
+The fifth dies on the other ceiling. `localLadderOpeningTicks` was 4096, sized
+when the openings measured moved again within a few hundred ticks of the press
+window closing; the largest opening measured here is **23934** ticks on one
+screen. It is 65536 now, a little under three times that. Widening it costs
+nothing measurable, because only a screen that has already answered no key ever
+waits there and the wait ends the tick the screen moves.
+
+### A key cannot be credited on a screen that drifts
+
+Reading these took a probe of its own —
+`TestLocalKTFStoppedScreenAnswersEveryKey`, which takes one archive by absolute
+path, walks the rung's own shape, and holds **every** key this platform names
+against each settled screen rather than five. The first thing it produced was
+wrong, and how it was wrong is the finding.
+
+Pointed at the first archive in the rung's own order — press the keys, then
+watch — it answered that `hangup` moved the screen, which is not a key a title
+of this era acts on. It had not. The screen was going to move at that tick
+anyway: `hangup` is the eleventh of twenty-three key names, the sweep spends 64
+ticks a key, and 11 × 64 is where that title's logo advances by itself. The
+same span run with nothing held moved the screen at tick 651 against the
+sweep's 652.
+
+Interleaving a control does not fix it. With an idle window of the same length
+beside every key, another archive's 2120-tick drift landed in a press window
+instead of the idle window next to it, and the same screen was credited to `5`.
+**Two different keys for one drift is the shape of the error**: a control that
+shares a timeline with the thing it is controlling for is not a control.
+
+The only sound order is to watch first and press second, which is what the
+probe does — a screen that sat still for 8192 ticks and then changed 4 ticks
+after `fire` changed because of `fire`. The rung keeps the opposite order,
+because watching first would spend the opening budget on all 257 archives
+instead of on the handful that answer no key. What that buys is a small hole: a
+screen that drifts inside the 320 ticks its five keys take can still be
+credited to one of them. Nothing in the corpus is known to, and the note is
+here so a suspicious pass is read with it in mind.
+
+### Two things worth knowing about these openings
+
+**A slow animation settles.** One of the five reaches a main menu that cycles
+four frames on a period of about 38 ticks, and each frame is held far longer
+than the eight identical ticks `ladder.StillRuns` asks for — so the settle
+judgment calls one frame of an animation a still screen, and then any key at
+all looks like an answer, because three of the four frames are content that
+"settled screen" never held. It happens to give the right verdict for the wrong
+reason here. The cycling path in `internal/ladder` was sized against blinks
+with periods up to 16 ticks, and this is slower than anything in that
+measurement.
+
+**Ticks are not seconds, and these openings are long in ticks.** These titles
+paint once per Host tick, so a screen a handset holds for a couple of seconds
+is thousands of ticks here whichever clock is driving. The one that took 23934
+ticks to leave its first logo needs about 100,000 to reach its title screen,
+and that is not the manual clock's doing: `runktf -play` on the wall clock sits
+on the same frame for its whole run too. A number in ticks is a number about
+this Host's loop, and it is the only number the ladder has.
+## A directory the platform made, and the two questions that answered it differently
+
+A title ends itself inside `startApp`, on both of its launches:
+
+```
+start KTF main class Clet: invoke KTF AOT Clet.startApp([Ljava/lang/String;)V:
+handle supervisor call 0x2 at 0x…: execute KTF AOT native call at 0x…:
+handle supervisor call 0x3 at 0x…: MC_knlExit from 0x101511: KTF guest requested exit
+```
+
+The exit is deliberate, and what it decided just before it is three lines of the
+ordered trace:
+
+```
+fs mkdir shared -> exists
+cdb stat shared -> missing
+kernel exit
+```
+
+The title makes its own directory, asks the platform about the name it has just
+made, is told there is no such thing, and quits. On its first launch the mkdir
+succeeds and the stat still says missing, so the two answers disagree whichever
+way the mkdir went.
+
+**Nothing here holds a directory, and the list of names that were made is the
+whole of what one is.** `MC_fsMkDir` writes the name down — that is the design,
+and the reason is in "Two titles stop on WIPI C table 7 function 8" above.
+`MC_fsIsExist` already reads that list, for the stated reason that the
+alternative is telling a title the directory it just made is not there.
+`MC_fsGetFileStat` did not, so slot 5 and slot 16 were one question with two
+answers. Slot 5 reads the list now.
+
+**The attribute word stays zero, and that is still not a guess.** The title's
+own classifier is what the caller of the stat does with `out[0]`:
+
+```
+bl      <slot 5>          ; (name, MH_FileInfo* out, mode=1)
+ldr     r4, [r4]          ; out[0], the attribute word
+movs    r3, #8
+ands    r3, r4            ; bit 3 → kind 2
+beq     …
+movs    r3, #2
+ands    r3, r4            ; bit 1 → kind 1, neither → kind 0
+strh    r3, [r5, #2]
+ldr     r3, [sp, #0x204]  ; out[1], the creation time
+ldr     r3, [sp, #0x208]  ; out[2], the size
+```
+
+So the word is a bitfield, bits 3 and 1 mean two different kinds of entry, and
+this is the third independent confirmation that `MH_FileInfo` is
+`{ attrib, creationTime, size }`. It is not evidence for **which** bit means a
+directory, and the title does not need one: with the word set to 0, 2 or 8 the
+same run reaches the same 800 ticks with the same flush and lit-pixel totals.
+What ended the title was the refusal, not the classification.
+
+**What it moved.** The title now runs its full three thousand ticks on both
+launches instead of quitting before its first — from `exited` at tick 0 to
+2,996 flushes and 71,275 lit pixels — and it reaches the record stores it
+could never get to before: `record`, `recordStore` and `shared` all made, and
+four `rms_*.sav` databases opened. A unit test covers the two questions
+agreeing.
+
+## A batch Host's clock had no rate, and a guest that waited paid for it
+
+The other title of the same pass refuses its ninth tick:
+
+```
+service KTF timer at 0x10d2a1:
+KTF Host service call exceeded its step allowance of 500000000 steps
+```
+
+Five hundred million guest instructions in eight ticks, inside one timer
+callback. The profile says what they were:
+
+```
+guest profile: 500005 samples over 500005503 instructions (1 sample / 1000)
+   99.95%    499773  0x10a522-0x10a544
+```
+
+and that range disassembles to the guest's own `delay(ms)`: read
+`MC_knlCurrentTime`, compare the 64-bit difference against the argument, spin a
+pad loop of `r3 += 25` to 999,999 — some 160,000 instructions — and read the
+clock again. Its caller passes `0xfa << 1`, so the wait is 500 milliseconds and
+it is holding the title's opening logo on the screen. The ordered trace agrees
+from the other side: its last two thousand events are `wipic 0x1c` and nothing
+else. **This is a wait, not work**, which is the distinction
+[`cli.md`](cli.md) sends a reader here for.
+
+**The refusal was ours, and "the clock has to have moved" was only half a
+rule.** The fifteenth round above stopped charging a step window to a call that
+spent it asking the time — but only when the clock had moved under it, because a
+Host stepping ticks holds the clock still for the length of a service call and
+renewing those windows for free would hang the run instead of failing it in
+seconds. Both halves of that are true. What neither of them says is that the
+clock standing still inside a call was ever a decision: such a Host jumps its own
+clock between ticks and simply has no way to move it from inside one, so the
+guest above waits for an instant that cannot arrive, and it does not matter how
+patient the ceiling is.
+
+**So a Host-owned clock now has a rate.** While a service call holds one, it
+advances with the guest's own execution, at `batchGuestStepsPerMillisecond` —
+a hundred thousand steps to the millisecond, which is a handset ARM of this era
+at about one instruction a cycle. The title agrees from its own side: the pad
+loop it spins between two clock reads is a pause of a millisecond or two at
+this rate and nonsense at a rate far from it. The figure is not load-bearing to
+a factor of ten either way; it only has to be slow enough that waiting still
+costs execution, so the wait allowance keeps bounding a guest nothing will
+satisfy, and fast enough that a real delay fits in the allowance a call is
+given — half a second is fifty million steps here, against five hundred
+million.
+
+Three things it deliberately is not:
+
+- **not the wall clock's business.** A session on the wall clock is left alone,
+  because real time is not the Host's to advance and never stands still under a
+  call in the first place. Nothing the page or `-play` does changes.
+- **not between calls.** Outside a service call a batch Host jumps its clock to
+  the next deadline itself, and a clock that also crept forward under the guest
+  would arrive at that jump from somewhere the Host did not put it.
+- **not a free renewal.** A guest that executes nothing between its clock reads
+  buys no time with them either, so a call that will never end still ends on
+  the step allowance, in the same seconds, exactly as before. That is the case
+  the unit test above it has always covered, and it passes unchanged.
+
+**What it moved.** The title reaches its first lit frame on a stepped run
+instead of failing a tick before it — 24 flushes where there were 9 — and its
+delay loop terminates in the trace, which now runs on into the rest of the
+callback. Under a wall clock, where it always worked, it still answers a key:
+`fire` takes it off the logo, through a menu and into a character screen.
+
 ## Deliberately incomplete
 
+- **the bit in a file's attribute word that says "directory".** `MC_fsGetFileStat`
+  answers for a name `MC_fsMkDir` made, with `{0, 0, 0}`, because that is what
+  ended a title that only needed the call to succeed — see "A directory the
+  platform made". Which bit a real handset sets is still a HAL number the
+  specification does not print, and the one local title that reads the word runs
+  identically whichever of the two candidates is set, so there is nothing here to
+  decide it with
 - **showing what the last flush put on the panel, rather than reading the
   framebuffer when a Host asks.** The other platform changed to that and three
   of its titles came back — see [`lgt.md`](lgt.md), "What a Host shows is what

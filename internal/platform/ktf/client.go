@@ -178,6 +178,9 @@ type Client struct {
 	serviceStartedAt   time.Time
 	serviceWindowAt    time.Time
 	serviceWindowReads uint64
+	// serviceStepMark is how much guest execution had been counted the last
+	// time a Host-owned clock was advanced by it. See advanceBatchClockTo.
+	serviceStepMark uint64
 	// guestClockReads counts the times the guest has asked what time it is,
 	// through any of the calls that answer from the session clock. It only
 	// ever grows; the difference across a step window is what says the guest

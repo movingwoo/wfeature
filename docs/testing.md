@@ -674,6 +674,9 @@ The current tests cover these boundaries:
   beside the caller, both cancels stopping them, and a refused negative delay
 - the SKVM text component interface typed into through the platform's input
   method handler, and the four-argument `XTextField` a name screen builds
+- the handset facts describing one handset: a fixture puts the subscriber
+  number back together from `m.CARRIER` and `MIN` the way the local titles do,
+  over one number per network prefix
 - FIFO ordering, pending-event bounds, and self-reposting throughput limits in
   the backend event queue
 - app properties and the start/pause/resume/destroy lifecycle in a newly authored
@@ -963,6 +966,26 @@ The ratio is still not the number that says what plays. Nothing here is: what
 plays is found by driving a title with keys and looking at the frames, one
 title at a time. A first frame is a first frame.
 
+### A probe's ceiling is the session's, not a second one beside it
+
+Every rung here gives the client an ARM instruction budget, and that budget used
+to be a number of the probe's own: fifty million, which was half of what
+`sessionDefaultMaxSteps` grants a real session. Two local archives spend more
+than that inside a single native call in `startApp`, decompressing what they
+load — one of them needs between 91 and 92 million instructions, the other
+between 62 and 63 — so the probe refused both at `start`, refused them again at
+`frame`, and named the ceiling in the reason. The same two archives ran three
+thousand ticks under `runktf` with no error, because a real session had granted
+them twice what the probe did.
+
+**A rung that fails an archive the emulator would have run is measuring
+itself**, and a report that says so twice makes it look like two defects. The
+constant is now taken rather than restated — `localStartAcceptanceMaxSteps =
+sessionDefaultMaxSteps` — so there is no second number to drift out of step and
+none to re-lower on its own; whatever raises the session's ceiling raises the
+probe's with it, and `session.go` is the one place the reasoning has to live.
+`WFEATURE_KTF_MAX_STEPS` still widens it beyond that for an investigation.
+
 ### Two rungs above a first frame
 
 A first frame is a first frame, and two of the questions it leaves open can be
@@ -1229,6 +1252,31 @@ The rows are joined to the files through the name `go test` prints rather than
 the name on disk, because a subtest name has its spaces rewritten to
 underscores. Joining on the wrong one reports every archive with a space in its
 name as a file no probe ever ran.
+
+#### A probe's failure has to end with its reason
+
+`why` is the **last line the subtest printed**, and nothing else, because that
+is where a `t.Fatalf` leaves its message and because a report needs one
+sentence per archive rather than a transcript. That makes the order of a
+failure's own parts load-bearing: whatever a probe's message ends with is the
+whole of what a person reading the sweep sees, and the whole of what
+`why_class` groups on.
+
+These probes print the runtime's diagnostic counts with a failure, dozens of
+lines of them, and a message that ended with that block spent that one line on
+whichever counter happened to sort last. It is not hypothetical: one archive's
+refusal was recorded as `1 getmethod getClipX()I` — the fortieth count line of
+a run whose lookups had every one of them succeeded, naming a member the
+runtime declares — while the error that ended the run never reached the report
+at all. A sweep read that way sends the next reader after a defect that is not
+there.
+
+So a probe puts its counts first and its reason last —
+`withDiagnosticCounts` in `local_acceptance_test.go`, which the rungs in
+`local_ladder_test.go` call as well — and
+`TestDiagnosticCountsDoNotDisplaceTheReason` holds it there. Diagnostics are
+still worth printing, because they are usually the next step; what changed is
+only which end of the message they sit at.
 
 ### What changed, and what they have in common
 

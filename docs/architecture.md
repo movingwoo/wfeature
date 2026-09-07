@@ -365,6 +365,86 @@ framing:
   [`running.md`](running.md#behind-a-reverse-proxy-on-a-unix-socket) has the
   configuration that does.
 
+## Where a stopped game keeps its state
+
+A quick save writes a running session to bytes and starts an identical one from
+them later. It was measured across all three platforms and **deliberately not
+built**; what follows is the evidence, because the interesting half is not the
+container but where a stopped game's state actually lives.
+
+State that lives in **data** can be written out. Guest memory is data: a page
+table of 4 KiB pages, and `Memory.CommittedRegions` already reports exactly the
+pages that have storage. An `armcore.Thread`'s `Context` — registers, CPSR,
+entry stack — is data. A JVM object graph is data. State that lives on the **Go
+call stack** cannot be written out, and that is where the answer diverges per
+platform: `frame` is a local of `vm.execute` and the invoke path recurses into
+Go, so a Java call chain's depth is Go stack depth and `execution` keeps a
+counter and a free list rather than a list of active frames.
+
+So the question for each platform is what is on the Go stack at the moment a
+guest thread comes to rest.
+
+- **LGT is the cheap case, because its Java is compiled ahead of time and its
+  Java state is therefore in guest memory.** A Java worker parks inside
+  `javaThreadSleep`, which ends in `return 0, worker.park()`; the twelve Go
+  frames above it are stateless dispatch, and the only work left in the whole
+  chain after the park is `thread.SetRegister(0, result)` at the tail of
+  `callJavaMethod`. Those frames can be thrown away: recreate the goroutine from
+  the saved context, write the result register, resume. Titles with no guest
+  thread are safe at every tick boundary; titles with one were safe at **none**
+  of 300 measured boundaries until the park itself is declared a safe point.
+- **SKT is possible but needs machinery.** Its guest threads are free-running
+  goroutines, and over 66,558 observations across five titles the chain between
+  a thread's entry and where it rested was **purely `vm.execute` frames every
+  time**, at most seven deep. A prototype captured such a stack and resumed it in
+  a VM that had executed nothing, matching an uninterrupted run — the parent
+  frame is already in a resumable shape, because the interpreter reads an
+  invoke's operands and pops its arguments before it calls, so resuming a caller
+  is "push the result and continue". Making frames walkable costs a pointer
+  write per call: allocation counts do not move and the time signal is +0.4% to
+  +2.0% against a noise floor of ±1.2%. Stopping a thread needs no new check —
+  the step-ceiling test at the top of the interpreter loop is already at an
+  instruction boundary with the operand stack settled.
+- **KTF is the expensive case.** Its stack alternates engines: JVM native
+  dispatch, an ARM run, more dispatch, another ARM run, 27 frames deep at a
+  `Thread.sleep`. Those Go layers are not stateless the way LGT's are — after
+  the inner call returns, one writes eight bytes to a guest address, another
+  converts registers to a typed value by descriptor and repairs an exception
+  handler head, another leaves a monitor. The layer alphabet is closed and small
+  (12,941 samples produced six distinct sequences over 26 frame kinds; the park
+  sites are five and nesting is bounded at 64), and bytecode frames cannot appear
+  at all because the platform builds its VM with no class source. So the stack
+  could be recorded as data and re-entered layer by layer. Two things stand in
+  the way. A derived `armcore.Thread` is registered nowhere and has no parent
+  link, so **a parked worker's guest registers are reachable only from the
+  sleeping goroutine's own Go frames** — measured at rest, `currentThread` is
+  nil and every worker's ARM thread still reads `pc=0`. That is additive to fix.
+  The second is not: roughly eight of the 26 frame kinds would need a resume
+  entry point, and every future parkable supervisor call would have to add one,
+  where forgetting is a silently wrong restore rather than a failure.
+
+**The size of a snapshot was never the problem.** Committed memory is 1-3% of
+what is mapped (0.79-2.83 MB against ~92 MB across six titles), `compress/flate`
+takes another 2.2-3.7x, and the committed page set is fixed after boot — ten
+times the ticks added no pages and changed the compressed size by five bytes.
+Two things follow. Dirty-page tracking is worth nothing: filtering out the
+committed pages that are still all zero wins 0.9% or loses, because the
+compressor already handles them, so it would add cost to every guest store to
+buy nothing. And the per-page decode caches are never carried — they rebuild
+from the page bytes and are sometimes larger than the whole snapshot.
+
+Where the bytes would live is settled too, and by a fact rather than a
+preference: the page does not emulate. The server runs the game, so a snapshot
+never crosses the socket — which is as well, since the inbound message limit is
+1 MiB and a compressed snapshot has already been measured above it.
+
+**Why it was not built.** Every platform can be made to work, but KTF's third of
+it leaves a permanent maintenance surface with a silent failure mode, and the
+project would not ship a quick save that works on some titles and not others.
+It is reopenable: if the execution model changes for another reason and
+recording the layer stack becomes incidental, or if the feature becomes worth
+that hazard, the measurements above are the starting point rather than the work.
+
 ## Where the rest of the documentation is
 
 | Document | Covers |

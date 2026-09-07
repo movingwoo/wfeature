@@ -209,17 +209,23 @@ own title screen for a whole run that way, and one LGT title's character select
 answers `right` but not `OK` until the press is held. Twenty ticks is a press a
 game cannot miss.
 
-**A title that busy-waits on the clock needs `-play`.** A stepped run holds the
-guest clock still for the length of a Host service call — the clock only moves
+**A title that busy-waits on the clock is one to read `-diag` about.** A
+stepped run cannot move the guest clock from inside a Host service call — only
 between ticks — so a title that waits inside `keyNotify` by polling
-`MC_knlCurrentTime` until enough time has passed never sees it pass. It spends
-its whole service allowance instead and the run dies with `exceeded its step
-allowance`, which reads exactly like a hang in the emulator. One local KTF
-title does this when its menu starts a new game: stepped, it fails there every
-time; with `-play`, the same route reaches the play screen. **The tell is in
-`-diag`** — the tail of the trace is one boundary repeated (here `wipic 0x1c`,
-the current-time call) rather than the mix of drawing and allocation a loading
-screen makes. Reach for `-play` before believing the title is stuck.
+`MC_knlCurrentTime` until enough time has passed used to never see it pass. It
+spent its whole service allowance instead and the run died with `exceeded its
+step allowance`, which reads exactly like a hang in the emulator. **The tell is
+in `-diag`** — the tail of the trace is one boundary repeated (here `wipic
+0x1c`, the current-time call) rather than the mix of drawing and allocation a
+loading screen makes.
+
+A stepped run now runs such a wait at a rate rather than not at all: while a
+service call holds a clock the Host owns, the clock advances with the guest's
+own execution, so a delay of half a second costs about fifty million steps and
+ends — [`ktf.md`](ktf.md), "A batch Host's clock had no rate". A call that will
+never return still fails on the allowance, in the same seconds. `-play` remains
+the way to see what a title does at the speed a person plays it at, and the
+paragraph below is why a batch must not measure only the fast one.
 
 **`-play` is not the same as `-play -speed 8`, and a batch that only measures
 the second one misses a whole failure.** A wait the guest spends polling the
@@ -667,17 +673,17 @@ native is the answer worth reading. [`skvm.md`](skvm.md) has what it found
 across the local titles.
 
 `-screen` is here because the screen is not the same handset for every title on
-this vendor. One local archive branches on the width and asks for a 240-wide
-artwork set it does not contain, because it was packaged for a smaller phone.
+this vendor. Two local archives branch on the screen and ask for a 240-wide
+artwork set they do not contain, because they were packaged for a smaller phone.
 
-**It no longer needs the flag.** An SKT descriptor declares no screen size —
+**Neither needs the flag now.** An SKT descriptor declares no screen size —
 every key of every local `.msd` and every manifest was inventoried and none of
-them carries one — but the archive says it another way, in the names of its own
-resources, and that is now read: with no `-screen` the run takes the handset
-the archive was packaged for. `docs/skvm.md` has the title's own branch, the
-rule, and why it is narrower than the equivalent on the other WIPI platform.
-The flag is what remains for the archive the rule does not recognise, and it
-still wins whenever it is given.
+them carries one — but an archive says it another way, in the names of its own
+resources and directories, and that is now read: with no `-screen` the run takes
+the handset the archive was packaged for. `docs/skvm.md` has both titles' own
+branches, the rule, and why it is narrower than the equivalent on the other WIPI
+platform. The flag is what remains for the archive the rule does not recognise,
+and it still wins whenever it is given.
 
 `-cheat` attaches the same console the two WIPI paths take, against the
 synthetic address space this platform lays over its object graph
