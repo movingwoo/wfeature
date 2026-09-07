@@ -173,3 +173,67 @@ test("the file input is cleared so the same file can be picked twice", async () 
   await page.fire("save-import-file", "change");
   assert.equal(input.value, "");
 });
+
+// A web view drops `<a download>` and a blob: URL without native help, and
+// says nothing — so the button worked in every desktop browser and did
+// nothing on the two platforms this feature is most for. These three say
+// which road each host takes.
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+const BYTES = new Uint8Array([0, 1, 2, 250, 255]);
+const BLOB = { arrayBuffer: async () => BYTES.buffer };
+
+test("an Android web view is handed the bytes rather than a download", async () => {
+  const page = pageOf();
+  const handed = [];
+  const messages = [];
+  initSaveBackup({
+    document: page.document,
+    window: { wfeatureExport: { save: (name, data) => handed.push([name, data]) } },
+    fetcher: async () => ok(BLOB),
+    chosenGame: () => GAME,
+    onStatus: message => messages.push(message),
+  });
+  await page.fire("save-export", "click");
+  await settle();
+  assert.deepEqual(handed, [[`게임${SAVE_BACKUP_EXTENSION}`, "AAEC+v8="]]);
+  assert.equal(page.created.length, 0, "no anchor: the web view would drop it");
+  assert.deepEqual(messages, ["저장할 위치를 고르세요."]);
+});
+
+test("an iOS web view is handed the same two things", async () => {
+  const page = pageOf();
+  const posted = [];
+  initSaveBackup({
+    document: page.document,
+    window: { webkit: { messageHandlers: { wfeatureExport: { postMessage: body => posted.push(body) } } } },
+    fetcher: async () => ok(BLOB),
+    chosenGame: () => GAME,
+    onStatus: () => {},
+  });
+  await page.fire("save-export", "click");
+  await settle();
+  assert.deepEqual(posted, [{ name: `게임${SAVE_BACKUP_EXTENSION}`, data: "AAEC+v8=" }]);
+  assert.equal(page.created.length, 0);
+});
+
+test("a browser still gets the download it knows what to do with", async () => {
+  const page = pageOf();
+  const url = globalThis.URL;
+  globalThis.URL = { createObjectURL: () => "blob:x", revokeObjectURL: () => {} };
+  try {
+    initSaveBackup({
+      document: page.document,
+      window: {},
+      fetcher: async () => ok(BLOB),
+      chosenGame: () => GAME,
+      onStatus: () => {},
+    });
+    await page.fire("save-export", "click");
+    await settle();
+  } finally {
+    globalThis.URL = url;
+  }
+  assert.equal(page.created.length, 1, "the anchor is how a browser is asked");
+  assert.equal(page.created[0].download, `게임${SAVE_BACKUP_EXTENSION}`);
+  assert.equal(page.created[0].clicked, 1);
+});

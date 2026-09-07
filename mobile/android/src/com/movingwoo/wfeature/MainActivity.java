@@ -4,9 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -17,6 +19,7 @@ import android.widget.TextView;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.ServerSocket;
 import java.net.URL;
@@ -49,7 +52,9 @@ public class MainActivity extends Activity {
     private WebView webView;
     private Process server;
     private ValueCallback<Uri[]> pendingFiles;
+    private byte[] pendingExport;
     private static final int PICK_FILE = 1;
+    private static final int NAME_EXPORT = 2;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -206,6 +211,14 @@ public class MainActivity extends Activity {
         WebView.setWebContentsDebuggingEnabled(true);
 
         webView.setWebViewClient(new WebViewClient());
+        // The other half of the file story. An input is answered by
+        // onShowFileChooser below; a *download* is not answered at all — a
+        // WebView drops `<a download>` and a blob: URL on the floor with no
+        // DownloadListener, silently, so 세이브 내보내기 did nothing here while
+        // working in every desktop browser. Rather than teach DownloadManager
+        // to fetch a blob it cannot fetch, the page hands the bytes over and
+        // this asks where they go. See web/save-backup.js.
+        webView.addJavascriptInterface(new ExportBridge(), "wfeatureExport");
         webView.setWebChromeClient(new WebChromeClient() {
             /**
              * The ＋ 게임 추가 button is a file input, and this is the ten
@@ -251,8 +264,50 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);
     }
 
+    /**
+     * What the page calls to put a save on the phone. The name and the bytes
+     * arrive together because the picker wants a name to suggest.
+     */
+    private class ExportBridge {
+        @JavascriptInterface
+        public void save(String name, String base64) {
+            final byte[] bytes;
+            try {
+                bytes = Base64.decode(base64, Base64.DEFAULT);
+            } catch (IllegalArgumentException notBase64) {
+                Log.e(TAG, "a save export arrived unreadable", notBase64);
+                return;
+            }
+            // A JavascriptInterface method runs on the WebView's own thread,
+            // and an Activity is started from the main one.
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    pendingExport = bytes;
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    // Nothing on a phone knows what a .wfs is, and a type it
+                    // guesses wrong is a picker that hides the folder the
+                    // player keeps their backups in.
+                    intent.setType("application/octet-stream");
+                    intent.putExtra(Intent.EXTRA_TITLE, name);
+                    try {
+                        startActivityForResult(intent, NAME_EXPORT);
+                    } catch (Exception noPicker) {
+                        pendingExport = null;
+                        Log.e(TAG, "no document picker for a save export", noPicker);
+                    }
+                }
+            });
+        }
+    }
+
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
+        if (request == NAME_EXPORT) {
+            writeExport(result, data);
+            return;
+        }
         if (request != PICK_FILE) {
             super.onActivityResult(request, result, data);
             return;
@@ -262,6 +317,41 @@ public class MainActivity extends Activity {
         }
         pendingFiles.onReceiveValue(chosenFiles(result, data));
         pendingFiles = null;
+    }
+
+    /**
+     * Writes the export to the place the picker named. The bytes are dropped
+     * either way afterwards: a cancelled export must not be written by the
+     * next one, and holding a save in memory past the moment it is wanted is
+     * holding it for the life of the app.
+     */
+    private void writeExport(int result, Intent data) {
+        byte[] bytes = pendingExport;
+        pendingExport = null;
+        if (bytes == null || result != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        OutputStream out = null;
+        try {
+            out = getContentResolver().openOutputStream(data.getData());
+            if (out == null) {
+                Log.e(TAG, "the document picker named a place that cannot be written");
+                return;
+            }
+            out.write(bytes);
+            out.flush();
+        } catch (Exception failed) {
+            Log.e(TAG, "a save export could not be written", failed);
+        } finally {
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (Exception ignored) {
+                    // A close that fails after a successful write is nothing
+                    // the player can act on, and the file is already there.
+                }
+            }
+        }
     }
 
     /** What the picker returned, as the array the file input expects. */
