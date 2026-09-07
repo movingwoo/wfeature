@@ -36,6 +36,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
 final class PlayViewController: UIViewController {
     private var webView: WKWebView!
+    // The file a document picker is exporting, kept only for as long as that
+    // picker is up; see the WKScriptMessageHandler extension below.
+    private var exportStaged: URL?
     private let message = UILabel()
 
     override func viewDidLoad() {
@@ -86,6 +89,13 @@ final class PlayViewController: UIViewController {
         // must not require a gesture of its own on top of that.
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsInlineMediaPlayback = true
+        // A file input is answered by WKWebView itself, which is why nothing
+        // here does that. A *download* is not: `<a download>` and a blob: URL
+        // are dropped without a download delegate, silently, so 세이브 내보내기
+        // did nothing on this platform while working in every desktop browser.
+        // The page hands the bytes over instead and this puts up the document
+        // picker. See web/save-backup.js.
+        configuration.userContentController.add(self, name: "wfeatureExport")
 
         let webView = WKWebView(frame: view.bounds, configuration: configuration)
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -105,8 +115,63 @@ final class PlayViewController: UIViewController {
         webView.load(URLRequest(url: url))
     }
 
+    fileprivate func clearStagedExport() {
+        guard let staged = exportStaged else { return }
+        exportStaged = nil
+        try? FileManager.default.removeItem(at: staged)
+    }
+
     // The page paints to the edges and keeps its own safe-area padding, which
     // is what the keypad's bottom row is measured against.
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+}
+
+// Where a save goes when the page hands one over.
+extension PlayViewController: WKScriptMessageHandler {
+    func userContentController(_ controller: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard message.name == "wfeatureExport",
+              let body = message.body as? [String: Any],
+              let name = body["name"] as? String,
+              let encoded = body["data"] as? String,
+              let bytes = Data(base64Encoded: encoded) else {
+            NSLog("a save export arrived unreadable")
+            return
+        }
+        // The picker exports a file that exists, so the bytes are written
+        // before it opens. It goes in the caches directory rather than the
+        // documents one: `UIFileSharingEnabled` puts documents in the Files
+        // app, and a half-exported save sitting there beside the games would
+        // be a second copy nobody asked for.
+        let staged = FileManager.default.temporaryDirectory
+            .appendingPathComponent(name.isEmpty ? "save.wfs" : name)
+        do {
+            try bytes.write(to: staged, options: .atomic)
+        } catch {
+            NSLog("a save export could not be staged: \(error)")
+            return
+        }
+        // asCopy, so the picker moves its own copy where the player says and
+        // the staged file stays ours to clean up.
+        let picker = UIDocumentPickerViewController(forExporting: [staged], asCopy: true)
+        picker.shouldShowFileExtensions = true
+        exportStaged = staged
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+}
+
+// The staged file outlives the picker either way — a place chosen or a cancel
+// — so both endings clear it. Leaving it costs the player nothing today and is
+// a save of theirs lying in a temporary directory.
+extension PlayViewController: UIDocumentPickerDelegate {
+    func documentPicker(_ controller: UIDocumentPickerViewController,
+                        didPickDocumentsAt urls: [URL]) {
+        clearStagedExport()
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        clearStagedExport()
+    }
 }

@@ -85,6 +85,48 @@ const saveAs = (blob, name, doc) => {
   URL.revokeObjectURL(link.href);
 };
 
+// **A web view is not a browser about this.** `<a download>` and a `blob:` URL
+// are a request that the host decides what to do with, and a desktop browser
+// decides to save the file. A web view embedded in an app decides nothing
+// unless the app tells it to: Android's ignores the click outright without a
+// DownloadListener, and WKWebView drops the navigation without a download
+// delegate. Neither reports anything, so the button read as broken on both
+// phones while working everywhere else — which is the platform this feature
+// exists for, since a phone is where a player cannot reach the save tree at
+// all.
+//
+// So on a phone the page stops asking for a download and hands the bytes over
+// instead, and the app puts up the system's own "where shall I put this"
+// — a create-document picker on Android, a document picker on iOS. That is
+// also the better answer: a download folder is a place a file lands, and this
+// is a file somebody means to keep.
+//
+// The two hosts are one contract, name and base64, because there is nothing
+// about this that differs between them and two shapes would be two things to
+// keep in step. Base64 rather than bytes because both bridges carry strings.
+const nativeSaver = win => {
+  const android = win?.wfeatureExport;
+  if (typeof android?.save === "function") {
+    return (name, data) => android.save(name, data);
+  }
+  const ios = win?.webkit?.messageHandlers?.wfeatureExport;
+  if (typeof ios?.postMessage === "function") {
+    return (name, data) => ios.postMessage({ name, data });
+  }
+  return null;
+};
+
+// base64 of a blob, in chunks: spreading a whole array into fromCharCode
+// overflows the argument stack at a size a save can reach.
+const toBase64 = async blob => {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
+};
+
 // initSaveBackup wires the two buttons.
 //
 // `chosenGame` is asked at the moment a button is pressed rather than read
@@ -97,6 +139,7 @@ const saveAs = (blob, name, doc) => {
 // wrong file, and it is the only step at which the answer is still theirs.
 export const initSaveBackup = ({
   document: doc,
+  window: win = globalThis,
   fetcher = fetch,
   chosenGame,
   onStatus,
@@ -133,7 +176,17 @@ export const initSaveBackup = ({
     }
     busy(exportButton, "내보내는 중...", async () => {
       const blob = await exportSave(game, fetcher);
-      saveAs(blob, backupFileName(game), doc);
+      const name = backupFileName(game);
+      const native = nativeSaver(win);
+      if (native) {
+        native(name, await toBase64(blob));
+        // The picker is the app's now, and what happens at it — a place
+        // chosen, or a cancel — is not something the page hears about. So it
+        // says what it did rather than claiming the file was written.
+        onStatus?.("저장할 위치를 고르세요.");
+        return;
+      }
+      saveAs(blob, name, doc);
       onStatus?.("세이브를 내려받았습니다.");
     });
   });
