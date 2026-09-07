@@ -11,14 +11,8 @@ KTF·LGT·SKT 게임을 지원합니다.
 서버를 기동 후 웹 브라우저로 접근하는 방식이며 PWA 설치를 지원합니다.  
 기본 접속 정보는 `http://127.0.0.1:11541`입니다.  
 파일을 폴더에 넣고 에뮬레이터를 실행합니다.  
-데스크톱은 설치 프로그램 없이 압축을 풀어 바로 실행합니다.  
-
-> 0.4.0 pre-release
-> **안드로이드·iOS 실험 빌드**가 있습니다
-> [`docs/mobile.md`](docs/mobile.md) 문서를 참조해주세요.
-
-**게임은 서버에서 돌고 브라우저는 화면만 받습니다.**  
-자세한 내용은 [`docs/session.md`](docs/session.md) 문서를 참조해주세요.
+  
+모바일에서는 웹으로 서버에 접근하거나 apk, ipa를 설치하여 이용합니다.  
 
 ---
 
@@ -40,7 +34,8 @@ KTF·LGT·SKT 게임을 지원합니다.
 
 압축 안의 `README.txt`를 읽어주세요.  
 아카이브를 직접 만들려면 `make dist` 명령어를 사용합니다.  
-폰 빌드는 `make mobile`이며 안드로이드 SDK와 Xcode가 필요합니다. 릴리스 CI가 대신 만들어 붙입니다.  
+폰 빌드는 `make mobile`이며 안드로이드 SDK와 Xcode가 필요합니다(러너마다 툴체인이 하나씩이라 `make mobile-android`·`make mobile-ios`로 나눠 부를 수도 있습니다).  
+릴리스 CI가 데스크톱 다섯 개와 함께 만들며, **일곱 개가 전부 만들어져야 발행됩니다.**  
 자세한 내용은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.  
 버전별 변경 내역은 [`CHANGELOG.md`](CHANGELOG.md) 문서에 있습니다.
 
@@ -99,8 +94,10 @@ make serve
 Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.
 
 주소나 폴더는 플래그로 바꿉니다.  
-`-addr`, `-games`, `-saves`, `-logs`, `-web`, `-version`
-환경 변수(`WFEATURE_ADDR`, `WFEATURE_PORT`, `WFEATURE_HOST`, `WFEATURE_GAME_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_WEB_ROOT`)
+`-addr`, `-port`, `-games`, `-saves`, `-logs`, `-web`, `-number`, `-open`, `-version`  
+환경 변수(`WFEATURE_ADDR`, `WFEATURE_PORT`, `WFEATURE_HOST`, `WFEATURE_GAME_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_WEB_ROOT`, `WFEATURE_PHONE_NUMBER`, `WFEATURE_OPEN`)  
+
+`-number`는 게임에게 알려줄 가입자 번호입니다. 요금제를 확인하는 게임이 있어 짧게 주면 그 화면을 넘어갑니다.
 
 ### 소켓 방식
 
@@ -122,6 +119,9 @@ Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/runn
 
 처음 시작은 시간이 걸릴 수 있습니다.  
 
+게임을 고른 다음 **세이브 내보내기 / 세이브 가져오기**로 그 게임의 세이브를 파일 하나로 주고받을 수 있습니다.  
+게임이 돌기 전 화면에만 있습니다 — 가져오기는 세이브를 덮어쓰기 때문입니다.
+
 ## 조작
 
 키보드와 화면 키패드를 같이 쓸 수 있습니다.
@@ -140,7 +140,7 @@ Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/runn
 
 위 표는 키보드 기본값입니다.  
 설정의 **⌨️ 키 설정**에서 임의의 키와 직접 매핑할 수 있습니다.
-키패드 배치는 설정의 **🎮 키패드**에서 바꿀 수 있으며 3가지 타입이 있습니다.
+키패드 배치는 설정의 **🎮 키패드**에서 바꿀 수 있으며 3가지 타입이 있고, **🎮 키패드 크기 조정**에서 크기를 직접 정할 수 있습니다.
 PC 웹 브라우저와 같은 넓은 화면 + 디버그 빌드에서는 화면 왼쪽에 실행 로그가 나옵니다.
 
 ## 설정
@@ -154,6 +154,11 @@ PC 웹 브라우저와 같은 넓은 화면 + 디버그 빌드에서는 화면 �
   축소되어 보이면 화면을 줄이면 됩니다.
 - **🎮 키패드** — 화면 키패드 배치를 `Type1` / `Type2` / `Type3` 중에서
   고릅니다. 고른 배치는 기억합니다.
+- **🎮 키패드 크기 조정** — 키 크기, 방향 패드와 숫자 패드의 폭 배분, 윗줄 높이,
+  아랫줄 높이를 정합니다. 게임 화면 위에서 조절하므로 키패드가 커진 만큼 게임
+  화면이 줄어드는 것이 바로 보입니다. **기본값으로**를 누르면 처음 상태로 돌아갑니다.
+- **📳 진동** — 게임이 요청한 진동을 실제로 울릴지 정합니다. 진동을 지원하지
+  않는 브라우저에서는 나오지 않습니다.
 - **⏩ 속도** — 0.25배에서 4배까지 속도를 조절합니다. **게임마다 따로
   기억하며** 돌아가는 중에도 바로 적용됩니다. 게임이 자기 속도를 하드웨어에
   맡겨 두어 원래 단말보다 빠르게 도는 경우 0.25~0.75배로 늦출 수 있습니다 —
@@ -177,6 +182,8 @@ var/savedata/<빌드 프로필>/<플랫폼>/<게임PID>/
 ```
 
 debug 빌드와 release 빌드는 세이브를 따로 씁니다.  
+
+게임 선택 화면의 **세이브 내보내기**는 이 폴더를 `.wfs` 파일 하나로 묶어 내려받고 **세이브 가져오기**는 그 파일을 되돌립니다.  
 
 ## 치트
 
@@ -220,7 +227,7 @@ make serve              # 디버그
 make serve-release      # 릴리즈
 ```
 
-배포본은 `make dist VERSION=0.3.1`처럼 버전을 주면 다섯 OS용 아카이브로 묶습니다.  
+배포본은 `make dist VERSION=0.4.0`처럼 버전을 주면 다섯 OS용 아카이브로 묶습니다.  
 `v`로 시작하는 태그를 밀면 GitHub Actions가 같은 아카이브를 만들어 릴리스로 올리고 푸시마다 우분투·윈도우·macOS에서 서버를 실제로 띄워 봅니다.  
 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
 
@@ -241,7 +248,12 @@ make run ARGS="runktf var/games/ktf/game.zip -play"
 
 ```sh
 make test          # go test + Node 테스트
+make acceptance    # 손에 있는 게임을 전부 돌려 보고서를 남김
 ```
+
+`make acceptance`는 `var/games/` 아래 아카이브를 플랫폼별로 끝까지 몰아 보고
+`var/acceptance/<날짜>.md`에 무엇이 어디서 멈췄는지 씁니다. 저장소에 게임이 없으므로
+손에 코퍼스가 있는 사람만 돌릴 수 있고, 그래서 `make test`에는 들어 있지 않습니다.
 
 무엇을 어디까지 검증하는지는 [`docs/testing.md`](docs/testing.md)에 있습니다.
 

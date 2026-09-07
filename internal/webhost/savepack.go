@@ -55,7 +55,7 @@ const savePackQuery = "game"
 // savePackExtension is what an exported file is called. It is not `.zip` or
 // `.bin` on purpose — the file has one meaning and a name that says so keeps
 // somebody from unpacking it, editing it, and finding the checksum refuses it.
-const savePackExtension = ".wfsave"
+const savePackExtension = ".wfs"
 
 // maxSavePackUpload bounds an imported container. Saves of this era are
 // kilobytes; this is the same kind of generous ceiling maxGameUpload is, and it
