@@ -142,7 +142,7 @@ func (s *Server) storeSave(writer http.ResponseWriter, request *http.Request, ow
 	// running game is gone at that game's next commit with nothing reported
 	// anywhere — which is the same defect the sessions arbitrate among
 	// themselves, arriving by the other road. See saveclaim.go.
-	held, holder := s.holdSaveDirectory(ownerRoot, "the save API")
+	held, holder := s.holdSaveDirectory(ownerRoot, "the save API", false)
 	if !held {
 		s.logger.Warn("refused a save write into a directory a game holds",
 			"owner", filepath.Base(ownerRoot), "key", key, "game", holder)

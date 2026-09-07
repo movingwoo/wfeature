@@ -42,10 +42,13 @@ import (
 // is a smaller loss than not being able to back up the game they are playing.
 //
 // An import writes, so it takes the claim the save API takes —
-// `holdSaveDirectory`, for the length of the write, refusing a parked holder
-// rather than taking it over. A restore landing under a running game would be
-// erased at that game's next commit with nothing reported anywhere, which is
-// the original defect arriving by a third road.
+// `holdSaveDirectory`, for the length of the write. A restore landing under a
+// running game would be erased at that game's next commit with nothing
+// reported anywhere, which is the original defect arriving by a third road, so
+// a live holder refuses it. A **parked** holder is closed and taken over, the
+// way starting the game already does: parking is what survives a reload, so
+// refusing it was a refusal no reload could clear, on the one screen where the
+// game's own parked session is the likeliest thing holding the directory.
 
 // savePackQuery names the game whose saves are being carried. It is the same
 // string `games.json` handed the page, percent-encoding and all, checked here
@@ -203,10 +206,10 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 	}
 
 	// An import writes the tree whole, so it takes the same claim one save API
-	// write takes, and for the same reason. A parked game is a holder here
-	// rather than something to take over: nobody would trade a player's parked
-	// game for a restore they can repeat in a moment.
-	held, holder := s.holdSaveDirectory(directory, "세이브 가져오기")
+	// write takes, and for the same reason. Unlike that write it takes a parked
+	// holder over — a person chose this file and this game, and the parked game
+	// it would otherwise be refused by is this game.
+	held, holder := s.holdSaveDirectory(directory, "세이브 가져오기", true)
 	if !held {
 		s.logger.Warn("refused a save import into a directory a game holds",
 			"game", label, "holder", holder)

@@ -30,7 +30,9 @@ import "time"
 // puts it under this rule rather than beside it: a `PUT` into a directory a
 // game holds is refused instead of landing under a session that will write the
 // whole file back over it, and a game starting while a write is in flight
-// waits the write out inside the grace below. The native CLI is the one road
+// waits the write out inside the grace below. It is refused by a parked holder
+// too, because nobody asked for it. A save import is a person asking, so it
+// takes a parked holder over the way a start does — see holdSaveDirectory. The native CLI is the one road
 // left unarbitrated — it is another process and this claim is in memory; see
 // "What is not solved" in `docs/session.md`.
 
@@ -85,17 +87,7 @@ func (s *Server) claimSaveDirectory(directory, label string) (bool, string) {
 			return false, held.label
 		}
 		// The holder is parked, so it is closed here and the directory taken.
-		// Dropping it releases the claim, which is why this does not delete
-		// the entry itself.
-		for token, parked := range s.parked {
-			if parked.saveDirectory == directory {
-				s.dropLocked(token, parked, "another page started the same game")
-				break
-			}
-		}
-		// A claim with no parked game behind it is a game that was closing as
-		// this start arrived; the directory is free either way.
-		delete(s.claims, directory)
+		s.takeParkedHolderLocked(directory, "another page started the same game")
 	}
 	if s.claims == nil {
 		s.claims = make(map[string]*saveClaim)
@@ -104,20 +96,51 @@ func (s *Server) claimSaveDirectory(directory, label string) (bool, string) {
 	return true, ""
 }
 
-// holdSaveDirectory takes the claim for something that is not a game — the
-// save API writing one entry — and reports whether it got it, naming the
-// holder when it did not. It differs from claimSaveDirectory in the one way
-// that matters: a parked game is a holder here rather than something to take
-// over. Nobody would trade a player's parked game for a tool's write, and the
-// caller has somewhere to put the refusal.
-func (s *Server) holdSaveDirectory(directory, label string) (bool, string) {
+// takeParkedHolderLocked closes the parked game holding a directory and leaves
+// the directory free. The caller holds parkedMu and has already established
+// that the holder is parked; `reason` is what the page that comes back for the
+// game is told. Dropping the parked session releases its claim, which is why
+// the delete below is for the other case: a claim with no parked game behind
+// it is a game that was closing as this request arrived, and the directory is
+// free either way.
+func (s *Server) takeParkedHolderLocked(directory, reason string) {
+	for token, parked := range s.parked {
+		if parked.saveDirectory == directory {
+			s.dropLocked(token, parked, reason)
+			return
+		}
+	}
+	delete(s.claims, directory)
+}
+
+// holdSaveDirectory takes the claim for something that is not a game, and
+// reports whether it got it, naming the holder when it did not.
+//
+// `takeParked` is the whole difference between its two callers, and the split
+// is about who is asking rather than about what is written. The save API is a
+// guest writing one entry with nobody watching, so a parked game outranks it:
+// nobody would trade a player's parked game for a write they did not ask for.
+// A save import is the opposite — a person on the pre-start screen who chose
+// the file and the game it replaces — and there the rule at the top of this
+// file applies unchanged: nobody is watching a parked game, the person asking
+// is here now, so the parked game is closed and the restore proceeds.
+//
+// Refusing a parked holder there was a lock with no key. Parking is what
+// survives a page reload, so the refusal outlived every reload the person
+// tried, and the message told them to stop a game in a window that was already
+// gone. The import buttons sit on the screen where the game is not running,
+// which is exactly where its own parked session is the likeliest holder.
+func (s *Server) holdSaveDirectory(directory, label string, takeParked bool) (bool, string) {
 	if directory == "" {
 		return true, ""
 	}
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
 	if held, ok := s.claims[directory]; ok {
-		return false, held.label
+		if !held.parked || !takeParked {
+			return false, held.label
+		}
+		s.takeParkedHolderLocked(directory, "a save was restored into this game")
 	}
 	if s.claims == nil {
 		s.claims = make(map[string]*saveClaim)
