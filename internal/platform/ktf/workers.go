@@ -82,6 +82,10 @@ type guestWorker struct {
 	// nil for a guest Thread. It is what releases that Timer's thread when the
 	// task returns.
 	timerOwner *jvm.Object
+	// publishedFrame records that this thread put a frame on the panel since
+	// its last declared wait. It is what tells a frame loop's own sleep apart
+	// from any other sleep a guest thread takes; see frameLoopPeriod.
+	publishedFrame bool
 	// wakeAt is the instant this worker becomes eligible for another slice.
 	// A worker that parked because its step budget ran out leaves it in the
 	// past and is granted again immediately; one that parked on a guest wait

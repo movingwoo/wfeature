@@ -155,7 +155,19 @@ func (face *Face) Render(character rune) Bitmap {
 	// not, because the 16-dot font happens to carry a blank glyph at zero and
 	// the handset font does not, which is not a difference a title should be
 	// able to see. It reads as nothing, and takes no width, on both.
-	if character == 0 {
+	// The rest of C0, and DEL, are padding or formatting for the same reason. A
+	// buffer that ends in NULs is the same buffer that carries a stray \r, \n or
+	// \t through drawString, and a title that draws one is not asking for ink at
+	// that position — it is asking for a line to end, which drawString does not
+	// do. A box is the loudest possible wrong answer: it lands at the ends of
+	// sentences and at the whitespace positions inside them, and it widens
+	// stringWidth enough to push a centred line off the screen. Reading as
+	// nothing keeps the line where the title put it. What a line break should do
+	// instead is a separate question, deliberately left open here. C1
+	// (0x80-0x9f) stays a box: no title pads with it, so a C1 rune reaching this
+	// far means a byte was decoded wrong, and the codepoint-marked box is the
+	// glyph that says which byte.
+	if character < 0x20 || character == 0x7f {
 		return Bitmap{}
 	}
 	if character == ' ' && face.authoredLatin {

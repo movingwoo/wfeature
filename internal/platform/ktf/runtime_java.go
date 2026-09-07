@@ -1801,12 +1801,21 @@ func runtimeThreadSleep(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if milliseconds > 0 {
+	if milliseconds < 0 {
+		return jvm.VoidValue(), nil
+	}
+	// A wait a thread declares straight after publishing a frame of its own is
+	// that thread's frame period, and is raised to the resolution the platform
+	// answers periods at. Every other wait is the length the guest asked for.
+	// A game that paces its loop with `Thread.sleep(0)` asks for a period of
+	// nothing, and nothing is what it used to get. See frameLoopPeriod.
+	wait := runtime.client.frameLoopPeriod(time.Duration(milliseconds) * time.Millisecond)
+	if wait > 0 {
 		// A sleeping guest thread ends its slice: the worker parks so the Host
 		// can run timers and paint, and becomes eligible again once the sleep
 		// has actually elapsed. Honouring the length is what holds a frame
 		// loop to the rate the game chose.
-		if err := runtime.sleepCurrentWorker(time.Duration(milliseconds) * time.Millisecond); err != nil {
+		if err := runtime.sleepCurrentWorker(wait); err != nil {
 			return jvm.VoidValue(), err
 		}
 	}

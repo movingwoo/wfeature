@@ -1389,6 +1389,15 @@ func (runtime *initializationRuntime) presentScreen() error {
 	if !runtime.repaintServicing {
 		runtime.guestFlushedOwnFrame = true
 	}
+	// A frame published from a guest thread makes that thread's next declared
+	// wait a frame period rather than any other kind of sleep. See
+	// frameLoopPeriod, which is the only reader and the only thing that clears
+	// it. The Host's own round paint runs on the client thread and sets
+	// nothing here, because a wait declared there is already a frame period by
+	// the time it is answered — see deferClientWait.
+	if worker := runtime.client.activeWorker; worker != nil {
+		worker.publishedFrame = true
+	}
 	runtime.countDiagnostic("flush lcd")
 	return nil
 }
