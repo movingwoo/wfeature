@@ -2173,6 +2173,139 @@ archive on the server, pumps the startup that KTF runs in slices, and sends the
 presented frames on. The phone keypad and keyboard route to KTF key events over
 the same socket. See [`session.md`](session.md).
 
+### A frame loop on a guest thread, asking for no frame period at all
+
+"The frame period a handset would have charged for" above knows two places a
+frame loop lives: a WIPI timer's interval, and a wait declared inside the
+card's own `paint`. There is a third and it reached neither rule. A title can
+put the whole loop on a guest thread — `repaint`, `serviceRepaints`,
+`Thread.sleep`, `Thread.yield`, round again — and a wait declared there goes to
+`sleepCurrentWorker`, which resolves it through `waitDeadline`: the length the
+guest asked for, with no floor and nothing attached to it.
+
+**The length one local title asks for is zero**, and zero was answered
+literally. `runtimeThreadSleep` parked nothing for a sleep of no milliseconds,
+`Thread.yield` is the JVM's builtin and does nothing either, and so the loop
+held nothing that could end a thread's slice: it ran the whole slice, two
+million guest steps, every round. `-diag` over sixty rounds counts 288,779
+`Card.repaint`, 288,779 `Card.serviceRepaints`, 288,780 `Thread.sleep` and
+577,558 `Thread.yield`, and not one read of the clock.
+
+A person reports that as unbearably slow, and both halves of it are true at
+once. Measured on the wall clock with `TestLocalKTFGuestClockRate`:
+
+| | before | after |
+|---|---|---|
+| flushes per round | **4,813.0** | 1.0 |
+| guest clock against the wall | 1.0000 | 1.0000 |
+| sixty rounds (wall, and therefore noise) | 2m 6.6s | 1.2s |
+
+Four thousand eight hundred published frames for each one a Host collects is a
+world stepping four thousand times between two pictures of it: the game
+sprinting and the screen crawling, and both of those are what the person saw.
+The cost is the guest's own drawing rather than the Host's presentation — a
+flush here only marks the framebuffer for collection — and the same sixty
+rounds carry 971,316 `Graphics.drawImage` and 866,499 `Graphics.fillRect`
+calls, which is where the two minutes went. Afterwards the title's splash
+animation runs at one frame a round and finishes writing its wordmark inside
+six hundred of them.
+
+**What the guest asked for is a frame as soon as one can be had**, which is the
+request the timer path already had a name and a floor for — `sleep(0)` and
+`sleep(10)` are the same idiom of the era, and the floor is the resolution this
+platform answers a frame period at rather than a claim about a handset. It now
+reaches this shape of loop too:
+
+- **a frame published from a guest thread marks that thread.** `presentScreen`
+  sets it on the worker rather than on the runtime, so one thread's frame
+  cannot pace another thread's sleep;
+- **the next wait that thread declares is that thread's frame period**, raised
+  to `minGuestFramePeriod` if it is shorter (`frameLoopPeriod`, `clock.go`).
+  Reading the mark clears it, so one frame makes one wait a period rather than
+  every wait after it;
+- **every other wait is the length the guest asked for.** A thread that has not
+  published a frame is not in a frame loop whatever else it is doing, and
+  flooring its sleeps would turn a loader that sleeps between chunks of work
+  into a loader that takes a frame per chunk.
+
+**The frame's own work is deliberately not charged here.**
+`chargedFramePeriod` measures from the last time anything read it, which for a
+thread arriving after a long start-up is the whole start-up — and unlike the
+timer path there is no deadline to clamp the answer against, because
+`sleepCurrentWorker` parks for exactly the length it is handed. The floor is
+what this report needed; the work bound would have added microseconds to it and
+a way to park a thread for an hour.
+
+**What this is not is throttling the Host's own presentation.** Nothing here
+changes how often a frame is collected or shown. It changes what the guest is
+granted when it asks for a wait, by the rule this platform already applies to
+every other shape of frame loop, and a Host on a manual clock skips the new
+period the way it skips every other one — so a batch run pays no wall time for
+it.
+
+**How far the shape reaches, and how far the change does.** Publish rate per
+round over the whole local set at 30 rounds of `-play`: before, exactly one
+archive is above three, at 4,807, and the next is 23; after, none is above
+three and the highest is that same unrelated archive, which does not move
+(689 flushes to 686). A final-frame A/B over the first sixty archives — 300
+rounds each, with the same binary run twice as a control — answers 47
+identical, 12 where the control itself differs and the comparison says
+nothing, and **one that differs, which is this title.** A wall-clock run of a
+title with a blinking prompt lands the blink where it lands; the control is
+what says so, and running the A/B without one reported seven differences of
+which three were the control's.
+
+### The opening that takes minutes, and whose minutes they are
+
+Reported in the same week and looking like the same defect from the other end:
+a title that never reaches its main screen. Its flush rate is ordinary — 0.9 a
+round — and its opening does leave by itself, after 8,897 rounds on a stepped
+Host with nothing held. At a browser's twenty rounds a second that is minutes
+spent on one picture, which is what a person reports as stuck.
+
+**A clock with the wrong rate would produce both reports**, which is why the
+two were looked at together: a guest that computes when its next frame is due
+spins if the clock runs ahead of it and waits for ever if it runs behind. The
+measurement says no. On the wall clock the guest's clock runs at **1.0000**
+against real time for this title, for the spinning one beside it and for a
+healthy one — which it must, since `guestMillis` is the session clock and a
+multiplier of one — and this title barely reads it: 31 `MC_knlCurrentTime` and
+48 `System.currentTimeMillis` against 324 `Thread.sleep` calls over a run
+covering the whole opening. **It is not measuring a deadline. It is counting
+sleeps.**
+
+The sleeps are its own and they are the whole of the wait. Two guest threads
+are asleep for essentially all of it; over 9,000 rounds of `-play`:
+
+| the thread | sleeps | asks for | comes to |
+|---|---|---|---|
+| its receive thread | 326 | 500ms | 163s |
+| its main `Runnable` | 15 | ~11,035ms | 166s |
+
+against 170 seconds of wall clock for the run, the two overlapping. The Host
+answers each to within three milliseconds — 503ms of wall for a 500ms request,
+timestamped at the boundary — and between them the guest retires 674,607
+instructions over 3,700 rounds: all of those rounds together come to a third of
+what a *single* thread slice is allowed to retire. **This is a wait and not a
+load**, which is the distinction [`cli.md`](cli.md) sends a reader here for,
+and the boundary counts over the window name no stub, no refusal and no
+missing entry.
+
+**The check that decides it is the multiplier.** At `-speed 8` every wait costs
+an eighth and the guest's clock runs eight times as fast. The opening then
+leaves at 2,850 rounds instead of 7,680, and the wall clock between launch and
+the transition falls from about 150 seconds to about 20 — the factor the waits
+were divided by, within the noise a busy machine puts on any wall-clock number.
+An opening made of the Host's own overhead would not have moved at all.
+
+So this is recorded rather than fixed. The title asks to wait, it is granted
+the wait it asked for, and a handset with an honest `Thread.sleep` would have
+held it on that picture just as long. What it is counting to is not
+established — its own logging across the window is one line of its resource
+engine on a loop — and it is not something a Host can shorten without lying to
+the guest about the clock. A person who does not want to sit through it has the
+multiplier, which is what the multiplier is for.
+
 ## Cheat engine
 
 `internal/cheat` ports the original scanner/freeze engine: a progressive

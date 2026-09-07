@@ -242,10 +242,36 @@ func TestNulIsPaddingRatherThanAGlyph(t *testing.T) {
 			}
 		}
 	}
-	// Every other control character keeps the codepoint-marked box, which is
-	// the answer that says "this runtime has no glyph for it" rather than
-	// dropping it from the frame.
-	if bitmap := Handset().Render(1); bitmap.Advance == 0 {
-		t.Error("a control character other than NUL disappeared")
+}
+
+// The rest of C0 and DEL are padding and formatting for the same reason NUL is,
+// and a title that puts \r or \t through drawString gets a box at the end of
+// every sentence and a stringWidth that centres the line off the screen. Both
+// faces have to agree, since the two disagreed about NUL for no reason a title
+// could see. C1 is not padding: it keeps the codepoint-marked box, which is how
+// a mis-decoded byte announces itself.
+func TestC0AndDeleteDrawNothingOnBothFaces(t *testing.T) {
+	faces := map[string]*Face{"large": Default(), "handset": Handset()}
+	for name, face := range faces {
+		for character := rune(0); character <= 0x1f; character++ {
+			bitmap := face.Render(character)
+			if bitmap.Width != 0 || bitmap.Advance != 0 || len(bitmap.Rows) != 0 {
+				t.Errorf("%s face renders U+%04X %d wide with advance %d, want nothing",
+					name, character, bitmap.Width, bitmap.Advance)
+			}
+			for _, coverage := range bitmap.Alpha {
+				if coverage != 0 {
+					t.Errorf("%s face inks U+%04X", name, character)
+					break
+				}
+			}
+		}
+		if bitmap := face.Render(0x7f); bitmap.Width != 0 || bitmap.Advance != 0 {
+			t.Errorf("%s face renders DEL %d wide with advance %d, want nothing",
+				name, bitmap.Width, bitmap.Advance)
+		}
+		if bitmap := face.Render(0x9f); bitmap.Advance == 0 {
+			t.Errorf("%s face dropped a C1 character that should stay a box", name)
+		}
 	}
 }
