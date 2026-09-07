@@ -54,6 +54,12 @@ coverage.out
 /var/routes/
 # Custom Patch Folder
 /var/custom/
+# Everything else under the runtime tree, because the list above names the
+# directories that exist today and a tool told to write somewhere new produces
+# a file whose rows are game names and which nothing here would have ignored.
+# `var/README.md` explains the layout and stays tracked.
+/var/*
+!/var/README.md
 
 # Secrets, at any depth rather than only the root file that exists today.
 .env

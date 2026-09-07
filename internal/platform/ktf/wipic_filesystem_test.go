@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -131,6 +132,58 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 	}
 	if got := int32(databaseCall(t, second, wipicFileMakeDirectory, "other", 1)); got != 0 {
 		t.Fatalf("mkdir of a name nothing made = %d, want 0", got)
+	}
+}
+
+// TestAMadeDirectoryIsThereToBothQuestions is one title's whole start-up. It
+// makes its own directory, asks the platform about the name it has just made,
+// and calls MC_knlExit if the answer is "no such file" — so `MC_fsIsExist` and
+// `MC_fsGetFileStat` disagreeing about one name was the difference between a
+// title that plays and one that quits inside `startApp`.
+func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
+	const noSuchName = int32(-22) // M_E_BADRECID, which wipicErrorBadParam spells unsigned.
+	const record = platformDataBase + 0xc000
+	saves := t.TempDir()
+	_, runtime := newTestRuntime(t)
+	runtime.client.saveStore = NewDirectorySaveStore(saves)
+
+	const name = "shared"
+	if got := int32(databaseCall(t, runtime, wipicFileStatByName, name, record)); got != noSuchName {
+		t.Fatalf("stat of a name nothing made = %d, want %d", got, noSuchName)
+	}
+	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != 0 {
+		t.Fatalf("mkdir = %d, want 0", got)
+	}
+	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
+		t.Fatalf("a made directory answers exists = %d, want 0", got)
+	}
+	if got := int32(databaseCall(t, runtime, wipicFileStatByName, name, record)); got != 0 {
+		t.Fatalf("stat of the directory just made = %d, want 0", got)
+	}
+	// MH_FileInfo is { attrib, creationTime, size }. A directory holds no
+	// bytes, and the attribute word is left as it is rather than guessed at:
+	// the bit that would say "directory" is a HAL number the specification
+	// does not print.
+	info := make([]byte, 12)
+	if err := runtime.client.core.Memory().Read(record, info); err != nil {
+		t.Fatal(err)
+	}
+	for index, field := range []string{"attributes", "creation time", "size"} {
+		if got := binary.LittleEndian.Uint32(info[index*4:]); got != 0 {
+			t.Fatalf("the %s of a made directory = %d, want 0", field, got)
+		}
+	}
+
+	// A second session over the same save tree is where the list of made
+	// names earns its keep: nothing is in memory and the store is the only
+	// record, and both questions still have to answer the same way.
+	_, second := newTestRuntime(t)
+	second.client.saveStore = NewDirectorySaveStore(saves)
+	if got := int32(databaseCall(t, second, wipicFileStatByName, name, record)); got != 0 {
+		t.Fatalf("stat in a second session = %d, want 0", got)
+	}
+	if got := int32(databaseCall(t, second, wipicFileStatByName, "other", record)); got != noSuchName {
+		t.Fatalf("stat of a name nothing made, in a second session = %d, want %d", got, noSuchName)
 	}
 }
 

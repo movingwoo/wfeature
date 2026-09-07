@@ -1287,42 +1287,83 @@ have one at all and none carries more than `Manifest-Version` and `Created-By`.
 There is no screen size anywhere in an SKT descriptor.
 
 **The resource names are the declaration, and they are read now.**
-`skt.PackagedScreen` scans the archive's non-class entries for a name whose
-stem ends in `_<width>`, and answers a handset when **every** such name agrees
-on one width, at least two of them do, and this project offers a handset for
-that width (128, 176, 240, 320). Anything else answers nothing.
+`skt.PackagedScreen` scans every component of every non-class entry path — a
+directory as readily as the name at the end of it — for one ending in
+`_<width>`, and answers a handset when **every** width-suffixed component in the
+archive agrees on one width, at least two say it, and this project offers a
+handset for that width (128, 176, 240, 320). Anything else answers nothing.
 
 That narrowness is the whole of the design, and it is why this is a rule here
 and a flag on the other WIPI platform. KTF's `__adf__` really does carry a
 `DisplaySize`, and thirteen local archives declare `176*220` while twelve of
 them draw across the whole 240x320 screen — so honouring the declaration there
 would shrink twelve working titles to fix one (`ktf.md`, "A band beside a title
-screen was the title's own"). Here the signal is in **one** archive of the
-fifteen, and it is the one that cannot start without it; the other fourteen
-carry no width-suffixed name at all and are untouched. A Host that asks for a
-size still wins — `runskt -screen` and the browser's screen setting both
-override this — so the rule only decides what "no answer" means.
+screen was the title's own"). Here it answers for **three** of the ninety-one
+local archives, and one of those three declares the default it would have run on
+anyway, so it decides the handset for two titles and leaves eighty-nine
+untouched — measured by reading back the size of the frame each archive is given.
+A Host that asks for a size still wins — `runskt -screen` and the browser's
+screen setting both override this — so the rule only decides what "no answer"
+means.
 
-**The larger corpus adds one archive the rule deliberately does not reach.** It
-declares its width the same way and in the same place, but as a *directory*
-(`img_176/`) rather than a name's stem, and it chooses the set from the height
-of an offscreen image it makes one pixel wider and sixteen rows taller than the
-Canvas:
+**The second of those two declares its width as a directory.** Its whole
+artwork tree is `img_176/`, and it picks the tree from the height of an
+offscreen image it makes one pixel wider and sixteen rows taller than its
+Canvas — which on this vendor is the display, so the ladder it indexes is a
+ladder of displays:
 
 ```
 buffer = createImage(Canvas.getWidth() + 1, Canvas.getHeight() + 16)
-buffer.getHeight() > 250  ->  /img_240/
-                    > 212  ->  /img_240/
-                    > 166  ->  /img_176/
-                     else  ->  /img_120/
+display > 250  ->  /img_240/
+        > 212  ->  /img_240/
+        > 166  ->  /img_176/
+         else  ->  /img_120/
 ```
 
-so the set it ships is the one it picks only when its Canvas reports between 151
-and 196 rows. Reading the directory would answer 176 and this project's handset
-for 176 is 220 rows tall, which lands on the wrong side of that ladder — so the
-rule would change nothing. Measured: `-screen 240x320` and `-screen 176x220`
-both draw an empty screen and `-screen 176x196` draws the title, which is why
-the flag is the answer here and the rule is not.
+so the tree it ships is the one it picks on a display of 167 to 212 rows.
+Anything taller asks for a `/img_240/` tree that is not there. It catches the
+`IOException` — the trace on the way past is `printStackTrace`, not an uncaught
+throw — keeps its nulls, and paints on: white for its first eighty-eight ticks
+and black from there on, for as long as it is asked to run. **That is the whole
+of "the presented frame is entirely black" for this archive**, and nothing in
+this runtime is wrong in it: a 240x320 handset would find no `/img_240/` tree
+either.
+
+**Reading the directory is only half of it; the other half is the height.** An
+archive declares a width and never a height, so the height is this project's
+answer, and `packagedScreenHandsets` is where it is given. It answered 220 rows
+for a declared 176, which is the wrong side of the ladder above — measured:
+`-screen 240x320` and `-screen 176x220` both draw an empty screen, and
+`-screen 176x196`, `176x208` and `176x212` all draw the title. It answers **208**
+now, which is a display this generation shipped and which both declaring
+archives run on: this one paints its title screen (34,373 lit of 36,608 at 300
+ticks, against 0 of 76,800 on the default), and the other draws the same title
+screen it drew at 220 — the same picture, 2,275 lit at twelve hundred ticks
+either way, twelve rows shorter — and is still laying its opening text over the
+same picture two thousand ticks in. The 220 that was there is not gone: `runskt -screen 176x220`
+and the browser's 176x220 are unchanged, and this map only decides what "no
+answer" means.
+
+**Reading the whole path also stops the rule being misled.** No local archive
+does this, but nothing stopped one: a package holding `img_176/logo.png`,
+`img_176/menu.png` and a pair of `_240` names was answered **240** by the
+stem-only rule, which never saw the directory that disagreed with them. It
+answers nothing now, which is what two widths in one archive has always meant
+here, and that case is in `screen_test.go` beside the two real shapes.
+
+**And the probes ask the rule, because every other Host does.** The local rungs
+built their framebuffer at 240x320 whatever the archive said, so they were
+asking a question neither `runskt` nor a server session asks: both of those let
+`PackagedScreen` answer first. Both archives that declare a width were being
+measured on a handset this project would not have started them on — one of them
+found no artwork there and painted an empty screen, which the boot rung read as a
+title that will not boot. `localProbeFramebuffer` in
+[`local_ladder_test.go`](../internal/platform/skt/local_ladder_test.go) is the
+one place that decision is made for all four rungs, and it logs the size it took
+whenever it is not the default, so a rung's report says which handset it asked
+about. Over the ninety-one local archives this moves two of them and nothing
+else: boot goes 78/1 to 79/0 and sustained, interactive and sound are unchanged,
+archive for archive.
 
 ### The sizes of the pictures do not say what the names say
 
@@ -1372,11 +1413,12 @@ at either size, two lay out correctly at either, and one draws the identical
 picture either way and differs only in whether it is letterboxed.
 
 **And it clears the known-bad case by one pixel.** The archive that declares its
-width as an `img_176/` directory, and that needs `-screen 176x196` because
-176x220 draws it an empty screen, escapes this rule only because its widest
-picture is 177 rather than 176. Had that one picture been a pixel narrower the
-rule would have handed it the size already measured as blank. A rule that avoids
-a known-bad outcome by one pixel is not a rule.
+width as an `img_176/` directory draws an empty screen on 176x220, and escapes
+this rule only because its widest picture is 177 rather than 176. Had that one
+picture been a pixel narrower the rule would have handed it a size measured as
+blank — and it would still hand it that size today, because the width was never
+the part of the answer that was wrong for it. A rule that avoids a known-bad
+outcome by one pixel is not a rule.
 
 So this is **measured and not built**. The flag stays the way a Host asks for a
 size, `PackagedScreen` stays the only thing that answers without being asked,
@@ -1446,12 +1488,15 @@ drawn, and the band is the one place a title has no reason to leave anything.
 Fifty-one archives naming the difference, one of them in a filename, outweighs
 an inference from two.
 
-**The 176 archive keeps its flag.** It is the one that reads its artwork set
-from the ladder above, and the rung it needs is `> 166` and not `> 212`. Under
-the old answer `-screen 176x220` gave the ladder 236 and `-screen 176x196` gave
-it 212; under this one they give 220 and 196, so 196 still works and the flag is
-unchanged. What the change does is line the ladder up with what it is a ladder
-of — a 240x320 display now indexes it with 320 rather than 336.
+**The 176 archive needed a flag until this reading made its ladder legible.**
+It is the one that reads its artwork set from the ladder above, and the rung it
+needs is `> 166` and not `> 212`. Under the old answer `-screen 176x220` gave
+the ladder 236 and `-screen 176x196` gave it 212; under this one they give 220
+and 196. That is what turned the ladder into a ladder of displays rather than of
+displays-plus-sixteen — a 240x320 display now indexes it with 320 rather than
+336 — and it is why the handset for a declared 176 could be settled at 208
+rather than guessed at: see "The handset a title was packaged for is in its
+resource names", above. The flag still wins wherever it is given.
 
 **What the whole corpus does with it.** All ninety-one archives, 300 ticks each,
 first frame captured, before and against: **sixty-one frames differ and no run

@@ -255,7 +255,10 @@ archive's own resource names, so the title above starts on the phone it was
 built for without anyone knowing to change a setting. A start that carries a
 size is honoured as it always was. The page omits the field when the stored
 size is the default, so choosing 240x320 by hand reads here as "no answer" and
-that title still starts at 176x220 — which is the size it can run at.
+that title still starts at 176x208 — which is a size it can run at. Two local
+titles answer this way, and the menu offers neither of them that size: one of
+the two cannot run on any size the menu does offer, which is why the archive
+gets to answer before the settings panel does.
 
 Two rules keep the setting honest:
 

@@ -17,7 +17,20 @@ func TestPackagedScreenReadsAWidthOnlyWhenTheNamesAgree(t *testing.T) {
 		{
 			name:    "a title packaged for the smaller handset",
 			entries: []string{"title/main_logo_176.png", "title/gamevil_176.png", "title/intro_176.dat", "bg/bg_00.png", "eff/eff_exorcist_1.dat", "n.class"},
-			width:   176, height: 220, ok: true,
+			width:   176, height: 208, ok: true,
+		},
+		{
+			name:    "a title that declares the width as a directory",
+			entries: []string{"img_176/hero.png", "img_176/room.png", "img_176/table0.png", "data/t1", "snd/s0.mmf", "Game.class"},
+			width:   176, height: 208, ok: true,
+		},
+		{
+			name:    "one file under a width-suffixed directory is still one",
+			entries: []string{"img_176/only.png", "data/t1", "Game.class"},
+		},
+		{
+			name:    "a directory disagreeing with a name is not a declaration",
+			entries: []string{"img_176/logo.png", "img_176/menu.png", "title/splash_240.png", "title/logo_240.png"},
 		},
 		{
 			name:    "an archive with no width in any name",

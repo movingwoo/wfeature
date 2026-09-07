@@ -56,10 +56,7 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open archive: %v", err)
 			}
-			framebuffer, err := backend.NewMemoryFramebuffer(240, 320)
-			if err != nil {
-				t.Fatalf("framebuffer: %v", err)
-			}
+			framebuffer := localProbeFramebuffer(t, archive)
 			// Saves go to the test's own directory: a probe must not read or
 			// write the progress a person made playing.
 			session, err := skt.Start(archive, skt.Options{

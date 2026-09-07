@@ -36,10 +36,25 @@ import (
 // A window the guest spent asking what time it is, on a clock that moved
 // under it, is therefore renewed without being charged, and what bounds it
 // instead is the session clock: a call may wait `serviceDefaultWait` before it
-// fails. The clock has to have moved because that is what separates the two
-// Hosts — a batch Host holds the clock still for the length of a service call,
-// so a title that busy-waits there never sees the wait end, and turning that
-// into a free renewal would hang the run rather than fail it in seconds.
+// fails.
+//
+// **What a batch Host's clock was missing is a rate.** Such a Host jumps its
+// clock to the next deadline between ticks and holds it still for the length of
+// a service call, so a guest that waits inside one by polling waits for an
+// instant that cannot arrive. A second local title does exactly that: its
+// opening logo is held by a delay loop of the guest's own — read
+// `MC_knlCurrentTime`, spin a counted pad loop, read it again, until half a
+// second has passed — and it spends the whole 500M allowance there, eight ticks
+// in, on a wall that stops nothing at all when the same title is shown to a
+// person. Failing it kept the run from hanging and called a title that was
+// waiting a title that broke.
+//
+// So while a service call holds such a clock, the clock advances with the
+// guest's own execution, at `batchGuestStepsPerMillisecond`. That is the one
+// thing a handset has that a stopped clock does not, it costs a waiting guest
+// exactly what a working one pays, and it leaves both bounds intact: half a
+// second of waiting is fifty million steps, and a guest waiting for an instant
+// nothing will satisfy still runs out of allowance in seconds.
 var ErrServiceStepLimit = errors.New("KTF Host service call exceeded its step allowance")
 
 // ErrServiceWaitLimit ends a call that has spent the whole wait allowance
@@ -81,6 +96,7 @@ func (client *Client) beginHostService(ctx context.Context) func() {
 	client.serviceStartedAt = client.now()
 	client.serviceWindowAt = client.serviceStartedAt
 	client.serviceWindowReads = client.guestClockReads
+	client.serviceStepMark = client.core.Steps()
 	client.thread.SetLimitHook(func(context.Context) error {
 		return client.continueHostService(ctx, allowance)
 	})
@@ -128,6 +144,54 @@ func (client *Client) continueHostService(ctx context.Context, allowance uint64)
 		client.runtime.countDiagnostic("service window renewed")
 	}
 	return nil
+}
+
+// batchGuestStepsPerMillisecond is how much guest execution a millisecond of a
+// batch Host's clock costs, which is the same as saying how fast the emulated
+// processor runs while such a Host holds its clock. A handset of this era is an
+// ARM at a couple of hundred megahertz retiring about one instruction a cycle,
+// and a hundred thousand steps to the millisecond is that, rounded to a number
+// worth reading. The local title that needed one agrees from the other side:
+// the pad loop it spins between two reads of the platform clock is forty
+// thousand iterations of four instructions, which is a pause of a millisecond
+// or two at this rate and nonsense at a rate far from it.
+//
+// **The figure is not load-bearing to a factor of ten either way.** It has to
+// be slow enough that a wait still costs execution — otherwise the wait
+// allowance stops bounding a guest that will never be satisfied — and fast
+// enough that a real delay fits inside the step allowance a call is given: half
+// a second of waiting is fifty million steps here, against an allowance of five
+// hundred million.
+const batchGuestStepsPerMillisecond = 100_000
+
+// advanceBatchClockTo moves a Host's own clock forward by what the guest has
+// executed since the last time it was asked, and records the new mark.
+//
+// Only a Host that supplies a clock it moves by hand has one to move; a session
+// on the wall clock leaves this alone, because real time is not the Host's to
+// advance and never stands still under a call in the first place. And only
+// inside a service call, because that is the whole of the problem: between
+// calls a batch Host jumps its own clock to the next deadline, and inside one
+// it cannot, so a guest that waits there by polling waits for an instant that
+// cannot arrive.
+func (client *Client) advanceBatchClockTo(steps uint64) {
+	if client == nil || client.serviceDepth == 0 || steps <= client.serviceStepMark {
+		return
+	}
+	manual, ok := client.clock.(*ManualClock)
+	if !ok {
+		return
+	}
+	// The mark moves by whole milliseconds rather than to the step count, so
+	// the remainder of a read that did not buy one is still there for the next
+	// read to finish. Dropping it instead loses most of a wait when the guest
+	// asks the time more often than a millisecond of its own execution.
+	millis := (steps - client.serviceStepMark) / batchGuestStepsPerMillisecond
+	if millis == 0 {
+		return
+	}
+	client.serviceStepMark += millis * batchGuestStepsPerMillisecond
+	manual.Advance(time.Duration(millis) * time.Millisecond)
 }
 
 // waitAllowance is how long a service call may wait on the clock.

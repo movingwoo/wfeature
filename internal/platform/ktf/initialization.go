@@ -530,6 +530,10 @@ func (runtime *initializationRuntime) guestMillis() int64 {
 	// asking the time is waiting rather than computing, and the Host charges
 	// the two differently. See continueHostService.
 	runtime.client.guestClockReads++
+	// A Host that moves its own clock cannot move it from inside the call the
+	// guest is asking from, so the guest's own execution moves it instead. See
+	// advanceBatchClockTo.
+	runtime.client.advanceBatchClockTo(runtime.client.core.Steps())
 	elapsed := runtime.client.now().Sub(runtime.clockBase)
 	if elapsed < 0 {
 		elapsed = 0
