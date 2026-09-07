@@ -22,7 +22,7 @@
 // The extension the server writes and the input accepts. It is not `.zip`
 // because the file is not one, and a name that says so keeps somebody from
 // unpacking it, editing it, and finding the checksum refuses it.
-export const SAVE_BACKUP_EXTENSION = ".wfsave";
+export const SAVE_BACKUP_EXTENSION = ".wfs";
 
 const endpoint = game => `api/savepack?game=${encodeURIComponent(game)}`;
 

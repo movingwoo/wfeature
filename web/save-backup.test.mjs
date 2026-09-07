@@ -169,7 +169,7 @@ test("the file input is cleared so the same file can be picked twice", async () 
     confirm: () => true,
   });
   input.files = [new Uint8Array([1])];
-  input.value = "C:\\fakepath\\a.wfsave";
+  input.value = "C:\\fakepath\\a.wfs";
   await page.fire("save-import-file", "change");
   assert.equal(input.value, "");
 });
