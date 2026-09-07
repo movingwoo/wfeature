@@ -2,6 +2,11 @@ import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from 
 import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
+import {
+  createKeypadSize,
+  label as keypadSizeLabel,
+  metrics as keypadSizeMetrics,
+} from "./keypad-size.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
@@ -831,6 +836,84 @@ const initKeypadLayout = () => {
   });
 };
 
+// How big the keypad is. The layout above says which keys are drawn and this
+// says how much room they get, which is the half that cannot be answered once
+// for everybody: a phone held in one hand wants the direction pad big and under
+// the thumb holding it, and one held in two wants the halves even.
+//
+// The panel is a screen of its own over the canvas rather than rows in the
+// settings panel, because that panel is a centred modal on a phone and covers
+// the keypad these sliders move. Here the pad stays under a thumb and answers
+// every drag, and the screen the panel is drawn on is the room the pad is
+// taking — so the trade is on screen rather than described.
+const initKeypadSize = () => {
+  const panel = document.getElementById("keypad-size");
+  const list = document.getElementById("keypad-size-list");
+  const open = document.getElementById("keypad-size-open");
+  const size = createKeypadSize();
+  // The stored size is applied whether or not the panel could be found: a page
+  // that lost the markup is still the keypad the person chose, and a keypad
+  // that silently went back to its default would look like the setting had not
+  // been saved.
+  size.apply();
+  if (!panel || !list || !open) return;
+
+  const rows = new Map();
+  for (const metric of keypadSizeMetrics) {
+    const row = document.createElement("label");
+    row.className = "keypad-size-row";
+
+    const name = document.createElement("span");
+    name.className = "keypad-size-name";
+    name.textContent = metric.label;
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(metric.min);
+    slider.max = String(metric.max);
+    slider.step = String(metric.step);
+
+    const value = document.createElement("span");
+    value.className = "keypad-size-value";
+
+    // The slider is told what the setting became rather than what was asked
+    // for: a value out of range, or between two steps, is clamped on the way
+    // in, and a control showing the request instead of the answer is a control
+    // that disagrees with the keypad beside it.
+    const show = applied => {
+      slider.value = String(applied);
+      value.textContent = keypadSizeLabel(metric.name, applied);
+    };
+    slider.addEventListener("input", () => {
+      show(size.set(metric.name, slider.value));
+      size.apply();
+    });
+
+    show(size.values()[metric.name]);
+    row.append(name, slider, value);
+    list.append(row);
+    rows.set(metric.name, show);
+  }
+
+  document.getElementById("keypad-size-reset")?.addEventListener("click", () => {
+    const values = size.reset();
+    for (const [name, show] of rows) show(values[name]);
+    size.apply();
+  });
+
+  const visible = on => panel.classList.toggle("visible", on);
+  open.addEventListener("click", () => {
+    // On a narrow window the settings panel is the modal over the keypad, so
+    // it goes; docked in the rail it is part of the page and closing it would
+    // be a surprise.
+    if (!dockedPanels.matches) {
+      document.getElementById("settings-panel")?.classList.remove("visible");
+    }
+    visible(true);
+  });
+  document.getElementById("keypad-size-close")?.addEventListener("click", () => visible(false));
+};
+
 // initDebugLog reveals the report button when there is a report to take, which
 // is when a debug server answered: the reports are a developer's tool and a
 // release has no use for one, so the button is taken out of the panel rather
@@ -1522,6 +1605,7 @@ const main = async () => {
   initStatus();
   initInput();
   initKeypadLayout();
+  initKeypadSize();
   initRestart();
   initModalBackdrop();
   initSettings();
