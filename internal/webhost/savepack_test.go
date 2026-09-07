@@ -249,6 +249,34 @@ func TestSavePackExportIsFreeWhileImportTakesTheClaim(t *testing.T) {
 	}
 }
 
+// The refusal above must not outlive the window it names. Parking is what
+// survives a page reload, so a parked holder refused every reload the person
+// tried while the message told them to stop a game in a window that was
+// already gone — and the import buttons sit on the screen where that game's
+// own parked session is the likeliest holder. A parked holder is taken over
+// here, the way starting the game already takes it over.
+func TestSavePackImportTakesOverAParkedHolder(t *testing.T) {
+	server, directory, _, game := savePackFixture(t)
+	writeSavePackSaves(t, directory)
+	container := savePackRequest(t, server, http.MethodGet, game, nil).Body.Bytes()
+
+	if claimed, holder := server.claimSaveDirectory(directory, "this game, in a tab that is gone"); !claimed {
+		t.Fatalf("could not take the claim: held by %q", holder)
+	}
+	server.markSaveDirectoryParked(directory, true)
+
+	imported := savePackRequest(t, server, http.MethodPost, game, container)
+	if imported.Code != http.StatusOK {
+		t.Fatalf("import under a parked holder gave %d %q, want %d",
+			imported.Code, imported.Body.String(), http.StatusOK)
+	}
+	// The import releases what it took, so nothing is left holding the
+	// directory — a second import in a row has to work as well.
+	if again := savePackRequest(t, server, http.MethodPost, game, container); again.Code != http.StatusOK {
+		t.Errorf("a second import gave %d %q", again.Code, again.Body.String())
+	}
+}
+
 // An empty backup is worse than no backup: it is a file the person keeps,
 // believing their progress is in it.
 func TestSavePackWillNotExportAGameThatHasNeverSaved(t *testing.T) {
