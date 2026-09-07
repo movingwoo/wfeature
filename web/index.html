@@ -73,6 +73,24 @@
               <button id="save-import" class="game-add save-backup">세이브 가져오기</button>
             </div>
           </div>
+
+          <!-- The keypad's own measurements, drawn over the game screen rather
+               than listed in the settings panel. On a phone that panel is a
+               centred modal and covers the very keypad these sliders move, so
+               a size chosen there would be chosen blind: here the pad stays
+               where it is and under a thumb, every drag shows on it, and the
+               screen this panel is standing on shrinks as the pad grows, which
+               is the other half of the trade being made. The rows are built in
+               script from the list in keypad-size.js, so the panel and the
+               numbers cannot come to disagree about what there is to set. -->
+          <div class="keypad-size" id="keypad-size">
+            <div class="panel-header">
+              <span>🎮 키패드 크기 조정</span>
+              <button id="keypad-size-close" class="panel-close">완료</button>
+            </div>
+            <div id="keypad-size-list" class="keypad-size-list"></div>
+            <button id="keypad-size-reset" class="panel-button">기본값으로</button>
+          </div>
         </div>
 
         <!-- A popup rather than a line in the column: it used to sit here and
@@ -223,6 +241,11 @@
               <option value="type3">Type3</option>
             </select>
           </label>
+          <!-- Not a row of sliders here: the panel is a modal on a phone and
+               sits on top of the keypad, so the pad being sized would be the
+               one thing not visible while it is sized. The button opens a
+               screen of its own over the canvas instead. -->
+          <button id="keypad-size-open" class="panel-button">🎮 키패드 크기 조정</button>
           <!-- Only where there is a keyboard to press: on a phone this is a
                list of keys nobody can reach, in a panel that has to stay short
                enough for a thumb. It starts hidden everywhere and app.js

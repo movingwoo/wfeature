@@ -57,6 +57,18 @@ the token, so the restart button still starts a game over.
   `M` for `Menu`, arrows and `Space` for the direction pad. Any of those can be
   moved from the settings panel; `keybindings.js` holds the table and the one
   rule it has, and a binding a user changed is remembered.
+  How much room the pad gets is a setting of its own, opened from `Opts` and
+  drawn over the game screen rather than in the settings panel: that panel is a
+  centred modal on a phone and covers the very keypad the sliders move. Four
+  numbers, which are the keypad's four bands — the size of a key, how the middle
+  band's width is split between the direction pad and the number pad, the height
+  of the top row, and the last row against the pad's own keys. `keypad-size.js`
+  holds them, clamps anything that arrives from storage, and writes the same
+  custom properties `style.css` declares, so one write moves the pad, the gaps
+  **and the game screen**: the two are one budget, and a bigger keypad is a
+  smaller screen above it rather than a pad pushed off the bottom. That is also
+  why the panel stands on the canvas — the room it loses as the pad grows is the
+  room being spent.
   Keys are sent as press/release over the session
   socket; the platform the code is translated for is the engine's business, not
   the page's. A held key lights its button, by pointer and by keyboard alike,
@@ -83,8 +95,11 @@ the token, so the restart button still starts a game over.
   and what is read back afterwards cannot disagree. Wide windows and debug
   builds only.
 - **Settings (`Opts`)** — MIDI and effect volume, the magnification filter, the
-  speed multiplier, the keypad layout, the key settings, the cheat panel toggle,
-  the debug report button, and a restart that reloads the page. The keypad
+  speed multiplier, the keypad layout, the keypad size, the key settings, the
+  cheat panel toggle, the debug report button, and a restart that reloads the
+  page. The keypad size is a button rather than rows of sliders: it opens a
+  screen of its own over the canvas, where the pad being sized stays visible and
+  pressable. The keypad
   layout is a list here rather than the cycling button it used to be in the
   keypad's own top row: that spot went to the menu key, and a choice made once
   reads better as three named options than as a press that moves to the next.
@@ -119,7 +134,8 @@ the token, so the restart button still starts a game over.
   a game. A value the browser refuses is kept in memory for the life of the
   page, so the control still works and only its memory is lost, and the run log
   says so once at load. `localStorage` holds the last game, the per-game screen
-  size and speed, the magnification, the keypad type and the key bindings;
+  size and speed, the magnification, the keypad type, the keypad size and the
+  key bindings;
   `sessionStorage` holds the resume token, which belongs to one tab.
 
 The run log and the report button are the developer's half of the page, and a
