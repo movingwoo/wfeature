@@ -284,6 +284,45 @@ public final class SKVMMIDlet extends MIDlet {
         return result.toString();
     }
 
+    /**
+     * handsetNumber puts the subscriber number back together the way the
+     * titles of this era do: MIN carries the line, and the network code in
+     * m.CARRIER names the prefix that goes in front of it. A runtime whose two
+     * answers describe one handset hands back the number MIN itself answered;
+     * one that answers a fixed carrier code hands back somebody else's number
+     * for every line the code does not fit.
+     */
+    public static String handsetNumber() {
+        String carrier = System.getProperty("m.CARRIER");
+        String line = System.getProperty("MIN");
+        if (carrier == null || line == null) {
+            return "";
+        }
+        if (line.length() > 0 && line.charAt(0) == '0') {
+            line = line.substring(3);
+        } else {
+            line = line.substring(2);
+        }
+        if (line.length() == 7) {
+            line = "0" + line;
+        }
+        String prefix = "";
+        if ("SKT".equals(carrier)) {
+            prefix = "011";
+        } else if ("STI".equals(carrier)) {
+            prefix = "017";
+        } else if ("KTF".equals(carrier)) {
+            prefix = "016";
+        } else if ("HSP".equals(carrier)) {
+            prefix = "018";
+        } else if ("LGT".equals(carrier)) {
+            prefix = "019";
+        } else if ("010".equals(carrier)) {
+            prefix = "010";
+        }
+        return prefix + line;
+    }
+
     /** Tick counts what the timer thread came back for. */
     static final class Tick extends TimerTask {
         int runs;

@@ -218,7 +218,9 @@ carries a workaround for, and a null there throws inside the constructor that
 would have started its game thread. The subscriber number is the one the WIPI
 platforms answer with, since the question is about the handset rather than about
 which runtime is asking, and the vendor string deliberately names no real
-manufacturer.
+manufacturer. `m.CARRIER` is not a constant among them: it is derived from the
+subscriber number, because a title reads the two together — see "The carrier
+code is part of the number, not a fact beside it".
 
 **The JVM step limit is a window, not a ceiling.** A title's own thread is the
 game — it decodes images and loads a world before it draws anything — so a fixed
@@ -283,8 +285,10 @@ What that list turned into, roughly in the order it was worked:
   carries workarounds for, so a null was a hard stop. And `MIN` used to be
   copied into a table at package load, which meant a Host that set the number
   afterwards — `-number`, `WFEATURE_PHONE_NUMBER` — was ignored here. It is
-  read when it is asked for now, which matters because one title authenticates
-  against it; see "One title checks its licence against the handset's number".
+  read when it is asked for now, which matters because five titles authenticate
+  against it; see "Five titles check their licence against the handset's
+  number", and "The carrier code is part of the number, not a fact beside it"
+  for the second half of the same answer.
 - **An EUC-KR file name in an archive stopped an archive from opening.**
   `zip.Reader.Open` takes an io/fs path and refuses a name that is not valid
   UTF-8, which is what a Korean handset's own data file has. Entries are read
@@ -825,14 +829,30 @@ platform's null goes to be forgotten. The exception the title swallowed named
 the problem exactly, and the failure it eventually reported was a `Vector` in
 an unrelated class.
 
-### One title checks its licence against the handset's number
+### Five titles check their licence against the handset's number
 
-One title draws "인증 되지 않은 컨텐츠 입니다" and stops. Nothing is broken: its
-`SecureUtil` hashes the subscriber number, a slice of the service ID out of
-`MIDlet-Jar-URL`, and a constant, and compares the hex digest against the
-`MIDlet-Key` in the archive's own descriptor. The key was made for the handset
-the title was bought on, so it authenticates against a number this runtime does
-not have.
+Five titles draw "인증 되지 않은 컨텐츠 입니다" and stop. Nothing is broken: each
+ships the same `SecureUtil`, which hashes the subscriber number, a slice of the
+service ID out of `MIDlet-Jar-URL`, and a per-title constant, and compares the
+hex digest against the `MIDlet-Key` in the archive's own descriptor. The key was
+made for the handset the title was bought on, so it authenticates against a
+number this runtime does not have.
+
+**It is one library under five names.** The class is `SecureUtil` in one
+archive, `com.xce.security.SecureUtil` in another and a single obfuscated letter
+in the other three, and all five carry the same method shape, the same carrier
+table and the same notice text. Four of them run it inside `startApp` and call
+`System.exit(-1)` in the same pass, so a run ends one tick after its first
+frame; the fifth runs it behind a publisher logo and ends around a hundred ticks
+in. A sweep that reads only the tick count sees five different symptoms and one
+cause.
+
+**Nothing on this side fails on the way there**, and that is worth stating
+because a `catch (Exception)` around the whole check would have hidden it: a
+`-trace` of the run walks `isValid` from its first instruction to the
+`String.equals` at its end, so `getAppProperty` answered both descriptor keys,
+the substring arithmetic ran, and the digest was computed and simply did not
+match. The exception table was never entered.
 
 That makes it a setting rather than a defect: the number the emulator answers
 with is `-number` on the server and `WFEATURE_PHONE_NUMBER` for the CLI, and
@@ -840,6 +860,37 @@ this platform reads it late enough to see one now. The KTF platform has a title
 in the same position for the same reason — `docs/network.md`, "The subscriber
 number is the one property worth changing". **Whether any number the user has
 is the right one is theirs to know**; nothing here recovers it from the key.
+
+### The carrier code is part of the number, not a fact beside it
+
+What the five did find is real, and it sat between the number a user sets and
+the number a title reads. `MIN` answers a line and `m.CARRIER` answers a network
+code, and this runtime answered the second from a constant table. A title never
+reads them apart: it drops the leading digits off `MIN` and puts back the prefix
+the carrier code names — `SKT` is 011, `STI` 017, `KTF` 016, `HSP` 018, `LGT`
+019, and the unified `010` is its own code, because after the numbering change a
+prefix no longer says whose network a line is on.
+
+So a constant `SKT` beside a number of any other shape does not describe the
+wrong network — it describes **a different line**. With the default number, one
+call told a title the handset was 010-0000-0000 and the other told it
+011-0000-0000. And because the reconstructed number is exactly what the licence
+check above hashes, the documented lever only ever worked for a number beginning
+011: every other one was rebuilt into a number the user does not have, which is
+the shape a number most likely has today.
+
+`m.CARRIER` is derived from the subscriber number now
+(`subscriberCarrier`), and an unrecognised prefix still answers `SKT`.
+**There is no second reader to weigh that against**: of the sixty-six classes in
+the local corpus that read `m.CARRIER`, sixty-four carry that whole prefix
+table, one carries part of it, and the last discards the answer on the next
+instruction. `TestTheCarrierCodeDescribesTheNumberItIsAnsweredBeside` does the
+reconstruction the corpus does, in a fixture, over one number per prefix.
+
+**This changed none of the five**, and it was not expected to: the default
+number is not the number any of those keys was issued to, and it is not this
+project's business to find out what was. What it changes is that a user who
+knows the number can now supply one that is not an 011.
 
 ### The four that were left, and what each one actually wanted
 

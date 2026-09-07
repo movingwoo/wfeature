@@ -7033,6 +7033,148 @@ The same profile taken on an LGT title found nothing of the kind — 50 MB over
 1.43 billion instructions, half of it the one-off read of the archive — so this
 was this platform's, not the engine's.
 
+## A game action is a subscript, and only one direction of the table knew it
+
+`Display.getGameAction(key)` answers what a key means — up, fire, clear — and
+`Display.getKeyCode(action)` is the reverse. They were written as two switches,
+and the two did not hold the same table: the forward one knew six pairs and the
+reverse one twelve. Every pair only the reverse knew came back out of the
+forward direction as the key code itself, which is what an unmapped key
+answers, and **every key code on this platform is negative**.
+
+Three archives died on the first soft key held against a settled screen — two
+titles of one family, one of them packaged for both module generations, all
+three in the same two frames:
+
+```text
+notify KTF card MainApp key: java/lang/ArrayIndexOutOfBoundsException:
+  thrown by guest code ... arrays=0x30009d90 [B runtime=200 guest=200
+  ... MainApp.KeyPress(I)V+0x1e ... MainApp.keyNotify(II)Z+0x42
+```
+
+**The guest's own code is what says whose fault it was.** Its
+`keyNotify(type, key)` tests the key for negative first and, when it is
+negative, replaces it with what `getGameAction` answers before branching on the
+event type; `KeyPress` then reads one byte out of a field of its own at that
+subscript. The fault report names the array and its length in the same line as
+the index: a **200-byte** table, which is room for every action and every
+keypad character and nothing else, read at **-6**. The title is not indexing
+its table wrong. It asked what the key meant, and was handed the key back.
+
+So the two directions are one list now, read forwards and backwards
+(`runtimeDisplayActions` in `runtime_java.go`): 1/2/5/6/8 for the pad, then this
+platform's own block above them — 90 and 91 for the two soft keys, 92 for the
+third, 96 and 97 for the volume pair, 98, and 99 for clear. Those numbers are
+not new here. They are what `getKeyCode` has answered since this platform was
+written, and the change is that the question can now be asked in either
+direction and get the same answer. They are also not only this platform's
+record of itself: a title on the sibling platform keeps its key map as a
+resource, one table per handset, and that table lists `1`, `2`, `5`, `6`, `8`,
+`90`, `92` and `99` — the pad, the soft keys it uses, and clear; see
+[`skvm.md`](skvm.md), "The key codes a Jlet reads are not the ones a MIDlet
+reads". A title's own resource is the strongest evidence there is for a number
+like this, and it agrees with the reverse table.
+
+**A key with no action still reports itself**, which is what leaves the digits,
+star, and hash reaching a title's own branches as the characters they are — and
+it is also why this read as a soft-key defect rather than as a table defect:
+every pad key already had an action, and every keypad character is already its
+own subscript, so the soft keys were the only keys left to fall over.
+
+**The packaging makes no difference, which is the other half of the finding.**
+One of the three archives is the same title in the earlier relocatable-module
+packaging, and it died at the same index on the same size of array: the table
+lives in the runtime Java bridge, above whatever shape the client image
+arrived in. All three take the soft key now and go on drawing.
+
+Measured on the interactive rung of the ladder, which is the rung a key is what
+moves: over a 257-archive local tree it went from 238 passed / 9 skipped / 10
+failed to **240 / 9 / 8**, and over a three-archive tree in the earlier
+packaging from 2 passed / 1 failed to **3 / 0 / 0**. Both counts moved by
+exactly the archives that were dying on the soft key and by nothing else, which
+is what the change can reach: the only answers it alters are the ones for keys
+that had no action before, and of those only the two soft keys are ever put to
+an archive by this rung.
+
+**Two things are deliberately left alone.** The send and end keys have no action
+in either direction, so they still report themselves and would take such a title
+below its array in exactly the same way; nothing names an action for them, no
+local archive asks, and inventing a number to close a hole nothing has fallen
+into is how a table stops being evidence. And the other two platforms carry the
+same six-pair forward table, which is where this one came from — whether a title
+of theirs asks the question has not been measured here.
+
+## A timer armed twice is one timer, not two
+
+`MC_knlSetTimer` takes the address of a timer record the guest owns, and
+`MC_knlUnsetTimer` takes the same address and cancels **every** queued entry
+that names it. The platform therefore already treats one record as one timer:
+there is no reading of `unset(record)` under which a record can stand for two
+of them. Arming was the half that disagreed — it appended a queue entry per
+call, so a title whose frame loop re-arms the same record every tick grew the
+queue by one entry a tick.
+
+The ceiling is 256 pending timers, which is a guard against a runaway rather
+than a budget, and one local title reached it by playing normally. The run
+ended with
+
+```
+service KTF timer at 0x…: handle supervisor call 0x3 at 0x…:
+KTF pending timer count exceeds 256
+```
+
+and the queue at that moment held 256 entries that were **identical in every
+field** — same record, same callback, same parameter, same delay. The
+diagnostic counts for the run say the rest: `wipic 0x1a` (SetTimer) 513 times,
+`wipic 0x1b` (UnsetTimer) **zero**. The title never cancels; it just arms the
+same record again on every pass, which is a perfectly ordinary way to write a
+frame loop against this API and cost nothing on the handset, because the
+handset replaced the timer.
+
+**So arming a record that is already queued now replaces that entry in place.**
+The predicate is the record address *and* a queued entry that is a WIPI-C timer
+rather than a `java/util/Timer` task, because those share the slice and are
+cancelled through their own `Timer` rather than by record address; a kernel
+call must not take one of their slots. Two things it deliberately does not
+look at:
+
+- **A callback that is running is not in the queue.** `ServiceTimers` takes the
+  whole slice, dispatches from its own copy, and re-queues only what it did not
+  run — so a callback that re-arms itself while it is running finds nothing to
+  replace and queues one entry, which is the next timer it just asked for.
+  That path is unchanged, and it is the path most of these titles use.
+- **A one-shot that has already fired is gone.** It left the queue when it was
+  dispatched, so arming the record again is a new timer by construction.
+
+The ceiling is still checked, but only on the path that actually adds an entry.
+A queue that is full can still re-arm a timer it already holds, which is the
+case that used to fail.
+
+**What it moved.** A unit test is the proof of the semantics — arming one
+record twice leaves one entry, and 512 re-arms of it leave one entry where the
+old code refused at 256 — and the local KTF ladder is the proof that timers,
+which every title on this platform touches, were not disturbed by it. Over the
+257-archive local set, before and after, in the same tree: parse, initialize,
+load and construct 257 passed; start 255 passed / 2 failed; frame 255 passed /
+2 failed; **sustained 252 → 253 passed, 4 → 3 failed** (1 skipped either way);
+interactive 238 passed / 9 skipped / 10 failed. Comparing the two runs stage by
+stage, **exactly one stage outcome in the whole corpus changed**, and it is the
+sustained rung of the title above, fail → pass. Nothing else moved in either
+direction.
+
+That one title's failure had been recorded by the sweep as
+`1 getmethod getClipX()I`, which is not a failure at all but the first line of
+the diagnostic counts the probe printed *after* its reason — see
+[`testing.md`](testing.md) for why a probe's last line has to be its reason.
+The defect spent a whole sweep filed under a count.
+
+**Only one kind of Host reaches it.** Under a wall clock — the page, or
+`runktf -play` — the same title runs three thousand ticks with no error,
+because real time passes between deadlines. A batch Host takes every deadline
+the moment it is due, so it is the one that fills the queue. It is the same
+queue either way, and a defect only one kind of Host reaches is still a
+defect.
+
 ## Deliberately incomplete
 
 - **showing what the last flush put on the panel, rather than reading the

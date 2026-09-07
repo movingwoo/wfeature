@@ -144,8 +144,11 @@ func TestLocalKTFArchivesSustainAFrame(t *testing.T) {
 				t.Fatalf("the title ended itself %d ticks after its first frame, on its second launch", ran)
 			}
 			if err != nil {
-				t.Fatalf("tick %d after the first frame: %v\ncounts:\n%s",
-					ran, err, formatDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40))
+				// The reason goes last: the sweep records the final line a
+				// subtest printed, so counts printed after it are what the
+				// report files this archive under. See `docs/testing.md`.
+				t.Fatal(withDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40,
+					"tick %d after the first frame: %v", ran, err))
 			}
 			if ran < sustain {
 				t.Fatalf("nothing left to do %d ticks after the first frame, of %d asked for%s",

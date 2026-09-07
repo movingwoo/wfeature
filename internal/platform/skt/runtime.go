@@ -990,10 +990,12 @@ var systemProperties = map[string]string{
 	// too, so this is the archive's own spelling rather than a second fact,
 	// and answering it costs nothing: the value is the one m.MODEL answers and
 	// it matches none of the models any title carries a workaround for.
-	"m.MONDEL":  "0",
-	"m.CARRIER": "SKT",
-	"m.COLOR":   "7",
-	"m.SK_VM":   "10",
+	"m.MONDEL": "0",
+	// m.CARRIER is not in this table: it is derived from the subscriber
+	// number, because the two are one fact about one line. See
+	// subscriberCarrier.
+	"m.COLOR": "7",
+	"m.SK_VM": "10",
 	// Two more handset facts, both read the way the vendor string above is:
 	// straight into String.equals or String.length with no null check between.
 	// A static sweep of the ninety local archives for that shape — a
@@ -1007,6 +1009,59 @@ var systemProperties = map[string]string{
 	"m.EXT_SW":             "0",
 	"m.TYPE":               "0",
 	"com.xce.wipi.version": "",
+}
+
+// subscriberCarrier is the network code for a subscriber number.
+//
+// **`m.CARRIER` and `MIN` are one fact, and answering them separately made
+// them disagree.** Titles of this era do not read the carrier to learn who the
+// network is; they read it to put back the digits `MIN` does not carry. The
+// routine is always the same one: take `MIN`, drop the leading network digits
+// from it, and prepend the prefix the carrier code names — `SKT` is 011, `STI`
+// 017, `KTF` 016, `HSP` 018, `LGT` 019, and the unified `010` is its own code
+// because after the numbering change a line's prefix no longer says who its
+// network is. Sixty-six classes across the local corpus read `m.CARRIER`;
+// sixty-four of them carry that whole table, one carries part of it, and the
+// last reads the property and discards the answer on the next instruction. So
+// there is no second reader to weigh this against.
+//
+// A constant `SKT` beside a subscriber number of any other shape therefore
+// answers a *different line* than `MIN` does: with the default number, a title
+// asking this runtime what handset it is on is told 011-0000-0000 by one call
+// and 010-0000-0000 by the other. That is not a preference, it is two answers
+// to one question, and it is why deriving the code from the number is the
+// correction rather than picking a better constant.
+//
+// It matters because of what the reconstructed number is *for*: several local
+// titles hash it, together with a slice of their own service id and a
+// per-title constant, and compare the digest against a key in their
+// descriptor. Nothing recovers the number that key was issued to — see
+// `docs/skvm.md`, "Five titles check their licence against the handset's
+// number" — but a user who knows it can set it (`-number`, WFEATURE_PHONE_NUMBER),
+// and with a constant carrier code that lever only ever worked for a number
+// beginning 011. Every other number was rebuilt into a number the user does
+// not have.
+//
+// An unrecognised prefix answers `SKT`, which is the platform this is and the
+// value that was answered before there was a rule.
+func subscriberCarrier(number string) string {
+	if len(number) >= 3 {
+		switch number[:3] {
+		case "010":
+			return "010"
+		case "011":
+			return "SKT"
+		case "016":
+			return "KTF"
+		case "017":
+			return "STI"
+		case "018":
+			return "HSP"
+		case "019":
+			return "LGT"
+		}
+	}
+	return "SKT"
 }
 
 // getSystemProperty answers the MIDP system properties. The specification says
@@ -1026,6 +1081,11 @@ func (runtime *Runtime) getSystemProperty(_ *jvm.VM, arguments []jvm.Value) (jvm
 	value, ok := systemProperties[key]
 	if key == "MIN" || key == "m.MIN" {
 		value, ok = wipic.SubscriberNumber(), true
+	}
+	// The carrier is read late for the same reason, and from the same fact:
+	// see subscriberCarrier.
+	if key == "m.CARRIER" {
+		value, ok = subscriberCarrier(wipic.SubscriberNumber()), true
 	}
 	if !ok {
 		return jvm.ReferenceValue(nil), nil
