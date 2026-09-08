@@ -167,6 +167,54 @@ func TestACarriedStoreNobodyWroteLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// TestWritingOneCarriedStoreDoesNotPublishTheOthers is the multi-store half of
+// the rule above, and the single-store test could not see it: the index is
+// written whole, so the first write to one carried store used to put every
+// carried store's name in it — names with no bytes under them, which is the
+// phantom the rule exists to prevent.
+func TestWritingOneCarriedStoreDoesNotPublishTheOthers(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "carried")
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Alpha", "Beta"} {
+		index, data := packagedStoreFiles(name, []byte("x"))
+		archive.Entries[name+packagedStoreIndex] = index
+		archive.Entries[name+packagedStoreData] = data
+	}
+	options := testRuntimeOptions(t)
+	options.SaveStore = backend.NewDirectorySaveStore(directory)
+	runtime, err := Start(archive, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha, err := runtime.openStore("Alpha", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha.records = [][]byte{[]byte("written")}
+	runtime.persistStore(alpha)
+
+	// A later session whose archive carries neither.
+	plain, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := testRuntimeOptions(t)
+	later.SaveStore = backend.NewDirectorySaveStore(directory)
+	next, err := Start(plain, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := next.openStore("Alpha", false); err != nil {
+		t.Fatalf("the store that was written did not survive: %v", err)
+	}
+	if store, err := next.openStore("Beta", false); err == nil {
+		t.Fatalf("a store nothing wrote was published with %d records", len(store.records))
+	}
+}
+
 // TestACarriedRecordStoreIsRefusedWhenItDoesNotAddUp keeps a crafted container
 // from being read as a store. Every field the parse trusts is checked against
 // the data file it describes.
@@ -185,5 +233,20 @@ func TestACarriedRecordStoreIsRefusedWhenItDoesNotAddUp(t *testing.T) {
 	}
 	if _, _, ok := parsePackagedRecordStore(nil, nil); ok {
 		t.Fatal("parsed an empty index")
+	}
+
+	// The next-id word sizes an allocation, so a crafted one must not be
+	// believed: four bytes naming four billion records is a hundred gigabytes
+	// asked for before a record has been read.
+	huge, _ := packagedStoreFiles("Carried")
+	binary.BigEndian.PutUint32(huge[0:4], 0xffffff00)
+	if _, _, ok := parsePackagedRecordStore(huge, nil); ok {
+		t.Fatal("parsed an index naming four billion records")
+	}
+	// And it has to come after every id the table holds.
+	behind, data := packagedStoreFiles("Carried", []byte("first"), []byte("second"))
+	binary.BigEndian.PutUint32(behind[0:4], 2)
+	if _, _, ok := parsePackagedRecordStore(behind, data); ok {
+		t.Fatal("parsed an index whose next id is behind its own records")
 	}
 }

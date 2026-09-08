@@ -2471,7 +2471,14 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	store := runtime.databases[name]
 	if store == nil {
 		store = &runtimeDataBaseStore{name: name}
+		// A database this title deleted is gone rather than empty, and both
+		// the save under it and the copy the archive carries stay hidden
+		// while it is on the list. See recordDatabaseRemovals.
+		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 		saved, present := runtime.loadSave("jdb/" + name)
+		if deleted {
+			present = false
+		}
 		if present {
 			records, decodeErr := decodeSaveRecords(saved)
 			if decodeErr != nil {
@@ -2486,7 +2493,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// records are what the game finds, and finding them is what tells a
 		// title carrying its own data that it has nothing to download.
 		packaged, hasPackaged := false, false
-		if !present {
+		if !present && !deleted {
 			var records [][]byte
 			if records, hasPackaged = runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
 				store.records = records
@@ -2502,6 +2509,11 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 			runtime.databases = make(map[string]*runtimeDataBaseStore)
 		}
 		runtime.databases[name] = store
+		// Creating it again is what takes it off the list: a database written
+		// and still read as deleted is worse than one never deleted.
+		if deleted {
+			runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, false)
+		}
 		// A database opened for creation exists from that moment, even with
 		// no record in it yet, so the next open finds it rather than throwing
 		// again. One the archive carries is already found without a save.

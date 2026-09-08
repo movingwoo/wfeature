@@ -336,6 +336,9 @@ type initializationRuntime struct {
 	// store on first use. See guestFileRemovedKey for why a delete needs a
 	// list of its own.
 	removedFiles map[string]bool
+	// removedDatabaseLists holds the deletion lists the two storage tables
+	// keep, by save key. See recordDatabaseRemovals in wipic_record_database.go.
+	removedDatabaseLists map[string]map[string]bool
 	// removedCDatabases is the same list for the WIPI C filesystem table. See
 	// databaseRemovedKey.
 	removedCDatabases map[string]bool

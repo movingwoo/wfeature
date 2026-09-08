@@ -159,8 +159,13 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 		}
 		if state.packaged == nil {
 			state.packaged = make(map[string][][]byte)
+			state.unwritten = make(map[string]bool)
 		}
 		state.packaged[name] = records
+		// Marked here rather than when the store is opened: the index is
+		// written whole, so a store nobody has opened at all still has to be
+		// kept out of it when the store beside it is written.
+		state.unwritten[name] = true
 	}
 }
 
@@ -175,12 +180,25 @@ func (state *rmsState) contains(name string) bool {
 
 // storeIndex writes the store name list back so a later session lists stores
 // it has not opened.
+//
+// **A store the archive carried and nothing has written is left out**, and it
+// is left out here rather than at the call sites, because the index is written
+// whole: publishing one store's first write would otherwise publish the name
+// of every carried store beside it, which is the situation `unwritten` exists
+// to prevent. What the Host names, the Host has bytes for.
 func (runtime *Runtime) storeIndex(state *rmsState) {
 	boundary := runtime.saveStoreBoundary()
 	if boundary == nil {
 		return
 	}
-	if err := boundary.StoreSave(rmsIndexKey, []byte(strings.Join(state.names, "\n"))); err != nil && runtime.logger != nil {
+	names := make([]string, 0, len(state.names))
+	for _, name := range state.names {
+		if state.unwritten[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	if err := boundary.StoreSave(rmsIndexKey, []byte(strings.Join(names, "\n"))); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS index store failed", "error", err)
 	}
 }
@@ -252,12 +270,8 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		// the archive's copy must not come back through the create.
 		records = append([][]byte(nil), packaged...)
 		delete(state.packaged, name)
-		// Nothing is written here, not even the name. The first write does
-		// that — see unwritten above and persistStore below.
-		if state.unwritten == nil {
-			state.unwritten = make(map[string]bool)
-		}
-		state.unwritten[name] = true
+		// Nothing is written here, not even the name: the store stays in
+		// `unwritten` until something writes it. See persistStore.
 	}
 	if found && boundary != nil {
 		if data, ok := boundary.LoadSave(key); ok {

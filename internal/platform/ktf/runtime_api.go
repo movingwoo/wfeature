@@ -274,11 +274,14 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		}
 		store = &runtimeDataBaseStore{name: name}
 	}
-	// The record list is emptied rather than removed, because the save store
-	// has no delete and an empty list is what tells the next open that the
-	// packaged copy is not to be used.
+	// The record list is emptied and the name written down. Emptying alone
+	// leaves the next open answering "it exists and holds nothing", which is
+	// not what a title that deleted its save asked; the list is what makes it
+	// gone. The empty save stays because a save tree written before the list
+	// existed has to keep hiding its packaged copy.
 	store.records = nil
 	store.persist(runtime)
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, true)
 	delete(runtime.databases, name)
 	return jvm.VoidValue(), nil
 }

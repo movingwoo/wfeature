@@ -936,7 +936,20 @@ that deletes before it opens — it was told its own save was not there — and
 becomes worse once a database can come from the archive, because the packaged
 copy would come back on the next run as though the delete had not happened. It
 now answers the same way the C table's name form does: a name the save store
-or the archive holds is emptied, and only a name neither holds throws.
+or the archive holds is deleted, and only a name neither holds throws.
+
+**And a deleted database is gone rather than empty.** Both tables used to
+delete by emptying the save, which hides the packaged copy and nothing more:
+the next open finds a save, answers "the database exists and holds nothing",
+and a title that cleared its slot to start a new game is told its save is
+still there. That is the shape that cost the sibling platform two titles'
+opening sequences — `guestFileRemovedKey` in `runtime_file.go` has that story,
+and the guest filesystem has kept a removal list ever since for the same
+reason. The two storage tables keep one each now (`rdb/.removed`,
+`jdb/.removed`): a name on the list hides both its emptied save and the
+archive's packaged copy, opening it for creation takes it off again, and the
+save is still emptied so a tree written before the list existed keeps hiding
+what the archive carries.
 
 **What it is worth, across the local set:** of the 264 KTF 1.2 archives, 20
 open a packaged database in their first 64 ticks that they were previously told

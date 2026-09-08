@@ -644,11 +644,18 @@ func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
 		t.Fatalf("deleteDataBase on a packaged database nobody opened = %v", err)
 	}
-	// The next open finds an emptied database rather than the archive's copy.
+	// A deleted database is gone, not emptied: the archive's copy stays
+	// hidden and the next open says so, which is what a title that cleared
+	// its save to start again is asking.
 	runtime.databases = nil
-	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("openDataBase(create=false) after a delete = %v, want DataBaseException", err)
+	}
+	// Creating it again is an empty database rather than the archive's, and
+	// takes the name back off the deletion list.
+	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
 	if err != nil {
-		t.Fatalf("openDataBase after a delete = %v", err)
+		t.Fatalf("openDataBase(create=true) after a delete = %v", err)
 	}
 	object, err := database.Reference()
 	if err != nil {
@@ -659,7 +666,11 @@ func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 		t.Fatal("the database has no record store")
 	}
 	if len(store.records) != 0 {
-		t.Fatalf("records = %q, want the delete to have stuck", store.records)
+		t.Fatalf("records = %q, want an empty database", store.records)
+	}
+	runtime.databases = nil
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); err != nil {
+		t.Fatalf("openDataBase(create=false) after creating it again = %v", err)
 	}
 	// A name nothing holds is still not a database.
 	missing := jvm.ReferenceValue(client.JVM().NewString("absent"))

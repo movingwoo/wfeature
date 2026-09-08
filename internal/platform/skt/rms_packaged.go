@@ -102,6 +102,20 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 	// The store is as long as the next id says, so getNextRecordID answers
 	// what the handset would have. A record the store no longer holds is a
 	// hole in it rather than a shift of every id after it.
+	//
+	// That word is the one field here that sizes an allocation, and it comes
+	// out of an archive, so it is bounded exactly as the record count is: a
+	// `.sb` is a file anybody can craft, and four bytes naming four billion
+	// records is a hundred gigabytes asked for before a single record has
+	// been read. It also has to be consistent with the count — the next id
+	// comes after every id the table holds — which is what the twelve
+	// packaged stores in the local set all say.
+	if next < rmsFirstRecordID || uint64(next)-rmsFirstRecordID > packagedStoreMaxRecords {
+		return "", nil, false
+	}
+	if uint64(count) > uint64(next)-rmsFirstRecordID {
+		return "", nil, false
+	}
 	length := int(next) - rmsFirstRecordID
 	records := make([][]byte, max(length, 0))
 	for index := range int(count) {

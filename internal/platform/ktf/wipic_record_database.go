@@ -3,6 +3,8 @@ package ktf
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -165,10 +167,20 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	}
 	store, exists := runtime.recordDatabases[name]
 	if !exists {
+		// A database this title deleted is gone rather than empty: the list
+		// hides both the emptied save and the archive's packaged copy until
+		// something creates the name again.
+		deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 		records, hasPackaged := runtime.packagedRecordDatabase(name, recordSize)
 		saved, hasSaved := runtime.loadSave("rdb/" + name)
+		if deleted {
+			hasPackaged, hasSaved = false, false
+		}
 		if !hasPackaged && !hasSaved && int32(create) == 0 {
 			return wipicErrorNotFound, nil
+		}
+		if deleted {
+			runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, name, false)
 		}
 		store = &runtimeRecordDatabase{name: name, recordSize: recordSize}
 		switch {
@@ -223,14 +235,20 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	_, exists := runtime.recordDatabases[name]
 	_, hasPackaged := runtime.packagedRecordDatabase(name, 0)
 	_, hasSaved := runtime.loadSave("rdb/" + name)
+	if runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name] {
+		hasPackaged, hasSaved = false, false
+	}
 	if !exists && !hasPackaged && !hasSaved {
 		return wipicErrorNotFound, nil
 	}
 	delete(runtime.recordDatabases, name)
 	// The save is emptied rather than removed: a packaged database would
 	// otherwise come back on the next open, which is not what a game that
-	// deleted it asked for.
+	// deleted it asked for. The name is written down as well, because an
+	// emptied save still answers "the database exists" — see
+	// recordDatabaseRemovals.
 	runtime.storeSave("rdb/"+name, encodeSaveRecords(nil))
+	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, name, true)
 	return 0, nil
 }
 
@@ -550,4 +568,64 @@ func parseRecordDatabaseFile(data []byte) ([][]byte, bool) {
 		records = append(records, append([]byte(nil), slot[1:]...))
 	}
 	return records, true
+}
+
+// A deleted database has to be written down, for the reason the guest
+// filesystem's removal list is written down (`guestFileRemovedKey`): nothing
+// under either storage table can actually be deleted from. The save boundary
+// has no delete, and the archive's packaged copy is the game's own package.
+//
+// Emptying the save is what a delete used to do, and it is not enough. The
+// next open finds a save, answers "the database exists and holds nothing", and
+// a title that deletes its slot to start a new game is told its save is still
+// there — which is exactly how the sibling platform lost two titles' opening
+// sequences (see `guestFileRemovedKey`). It stays emptied, because a save tree
+// written before this list existed has to keep hiding its packaged copy; what
+// the list adds is the difference between empty and gone.
+//
+// The two tables keep separate lists because they keep separate stores.
+const (
+	recordDatabaseRemovedKey = "rdb/.removed"
+	javaDatabaseRemovedKey   = "jdb/.removed"
+)
+
+// databaseRemovals reads one deletion list, once per session per list.
+func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[string]bool {
+	if runtime.removedDatabaseLists == nil {
+		runtime.removedDatabaseLists = make(map[string]map[string]bool, 2)
+	}
+	if names, loaded := runtime.removedDatabaseLists[key]; loaded {
+		return names
+	}
+	names := make(map[string]bool)
+	if data, exists := runtime.loadSave(key); exists {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				names[line] = true
+			}
+		}
+	}
+	runtime.removedDatabaseLists[key] = names
+	return names
+}
+
+// markDatabaseRemoved records or clears one name and writes the list back.
+// Creating a database again takes its name off, or a title that deleted a save
+// and started a new game would never see the new one.
+func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string, removed bool) {
+	names := runtime.recordDatabaseRemovals(key)
+	if names[name] == removed {
+		return
+	}
+	if removed {
+		names[name] = true
+	} else {
+		delete(names, name)
+	}
+	list := make([]string, 0, len(names))
+	for existing := range names {
+		list = append(list, existing)
+	}
+	sort.Strings(list)
+	runtime.storeSave(key, []byte(strings.Join(list, "\n")))
 }

@@ -82,8 +82,21 @@ store behind that the archive no longer has to back: the next session would
 find the name, find no bytes under it, and answer "it exists and is empty",
 which is what a title reads as a save rather than as a first run. The name goes
 into the index with the store's **first write** instead (`persistStore`), which
-is also the moment the Host's copy takes over from the archive's. Both halves
-are pinned by tests, because each is silent when it is wrong.
+is also the moment the Host's copy takes over from the archive's.
+
+**The index is written whole, so the leaving-out belongs in `storeIndex`**
+rather than at the call sites. Keeping the rule at the call sites looks like it
+works and does not: the index serializes every name the session knows, so the
+first write to *one* carried store publishes the names of all the others beside
+it. That is why `unwritten` is filled when the stores are seeded rather than
+when one is opened, and why `storeIndex` subtracts it. Both halves are pinned
+by tests — one carried store, and two with only one of them written — because
+each is silent when it is wrong.
+
+**A `.sb` is a file anybody can craft**, so every field that sizes an
+allocation is bounded: the record count, and the next-record id the store's
+length comes from. Four bytes naming four billion records is a hundred
+gigabytes asked for before a record has been read.
 
 A store that does not parse is left out rather than reported. An archive is
 untrusted input, and a title with no save is a title on its first run.
