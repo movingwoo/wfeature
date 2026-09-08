@@ -73,8 +73,17 @@ packaged store is only used where the save store holds nothing under that
 store's key. The title's own writes therefore win from the moment it writes,
 and a store the title *deleted* stays deleted: deleting writes an empty record
 list under the key, so the key answers and the archive's copy is not seeded
-over it. Opening a packaged store writes the store index, so a later session
-finds the store by name whether or not the archive is still around.
+over it.
+
+**Serving one writes nothing, not even its name.** The index is the list of
+stores that exist, and a store the archive carries exists because the archive
+carries it — so naming it there while nothing has written it would leave a
+store behind that the archive no longer has to back: the next session would
+find the name, find no bytes under it, and answer "it exists and is empty",
+which is what a title reads as a save rather than as a first run. The name goes
+into the index with the store's **first write** instead (`persistStore`), which
+is also the moment the Host's copy takes over from the archive's. Both halves
+are pinned by tests, because each is silent when it is wrong.
 
 A store that does not parse is left out rather than reported. An archive is
 untrusted input, and a title with no save is a title on its first run.

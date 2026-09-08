@@ -127,7 +127,7 @@ func TestAWrittenRecordStoreWinsOverTheCarriedCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.records = [][]byte{[]byte("written")}
-	runtime.persist(store)
+	runtime.persistStore(store)
 
 	next := carriedFixture(t, backend.NewDirectorySaveStore(directory), "Carried", []byte("first"))
 	reopened, err := next.openStore("Carried", false)
@@ -136,6 +136,34 @@ func TestAWrittenRecordStoreWinsOverTheCarriedCopy(t *testing.T) {
 	}
 	if len(reopened.records) != 1 || string(reopened.records[0]) != "written" {
 		t.Fatalf("records = %q, want what the title wrote", reopened.records)
+	}
+}
+
+// TestACarriedStoreNobodyWroteLeavesNothingBehind is the other side of that:
+// serving a store out of the archive must not put its name in the Host's
+// index, or a session whose archive no longer carries it would find a store
+// that exists and holds nothing — and a title reads that as a save rather than
+// as a first run.
+func TestACarriedStoreNobodyWroteLeavesNothingBehind(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "carried")
+	first := carriedFixture(t, backend.NewDirectorySaveStore(directory), "Carried", []byte("first"))
+	if _, err := first.openStore("Carried", false); err != nil {
+		t.Fatalf("openRecordStore on a carried store = %v", err)
+	}
+
+	// The same save directory, an archive that carries nothing.
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testRuntimeOptions(t)
+	options.SaveStore = backend.NewDirectorySaveStore(directory)
+	next, err := Start(archive, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store, err := next.openStore("Carried", false); err == nil {
+		t.Fatalf("a store nothing wrote survived its archive with %d records", len(store.records))
 	}
 }
 

@@ -59,6 +59,13 @@ type rmsState struct {
 	// holds anything under the store's key, which is what keeps a deleted
 	// store deleted.
 	packaged map[string][][]byte
+	// unwritten names the carried stores this session has served whose bytes
+	// the Host does not hold yet. The Host's index must not name such a store:
+	// the archive is what makes it exist, and an index naming a store with no
+	// bytes anywhere would answer "it exists and is empty" once the archive is
+	// gone — which is the opposite of what a title's first-run check needs.
+	// The name goes into the index with the first write instead.
+	unwritten map[string]bool
 }
 
 // AttachSaveStore supplies the persistence boundary RMS uses. Without one,
@@ -245,10 +252,12 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		// the archive's copy must not come back through the create.
 		records = append([][]byte(nil), packaged...)
 		delete(state.packaged, name)
-		// From here the store is one this session has served, so the Host's
-		// index names it: the title may write it, and a write puts the Host's
-		// copy in front of the archive's for every session after this one.
-		runtime.storeIndex(state)
+		// Nothing is written here, not even the name. The first write does
+		// that — see unwritten above and persistStore below.
+		if state.unwritten == nil {
+			state.unwritten = make(map[string]bool)
+		}
+		state.unwritten[name] = true
 	}
 	if found && boundary != nil {
 		if data, ok := boundary.LoadSave(key); ok {
@@ -271,6 +280,21 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		runtime.persist(store)
 	}
 	return store, nil
+}
+
+// persistStore writes a store the way every mutation does: the records, and —
+// the first time a store the archive carried is written — its name in the
+// index, so a later session finds the Host's copy rather than looking for an
+// archive that may no longer be there. Callers must not hold the state lock.
+func (runtime *Runtime) persistStore(store *recordStore) {
+	state := runtime.rms()
+	state.mu.Lock()
+	if state.unwritten[store.name] {
+		delete(state.unwritten, store.name)
+		runtime.storeIndex(state)
+	}
+	state.mu.Unlock()
+	runtime.persist(store)
 }
 
 // persist writes one store's records through the Host boundary.
@@ -426,7 +450,7 @@ func (runtime *Runtime) rmsCloseRecordStore(_ *jvm.VM, arguments []jvm.Value) (j
 	}
 	store.mu.Unlock()
 	if closed {
-		runtime.persist(store)
+		runtime.persistStore(store)
 	}
 	return jvm.VoidValue(), nil
 }
@@ -545,7 +569,7 @@ func (runtime *Runtime) rmsAddRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordAdded", id)
 	return jvm.IntValue(id), nil
 }
@@ -578,7 +602,7 @@ func (runtime *Runtime) rmsSetRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordChanged", id)
 	return jvm.VoidValue(), nil
 }
@@ -602,7 +626,7 @@ func (runtime *Runtime) rmsDeleteRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordDeleted", id)
 	return jvm.VoidValue(), nil
 }
