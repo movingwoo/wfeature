@@ -53,6 +53,12 @@ type rmsState struct {
 	stores map[string]*recordStore
 	names  []string
 	loaded bool
+	// packaged holds the record stores the archive carried, by name. They are
+	// the initial content of a store nothing has written yet — see
+	// rms_packaged.go — and they are dropped from here as soon as the Host
+	// holds anything under the store's key, which is what keeps a deleted
+	// store deleted.
+	packaged map[string][][]byte
 }
 
 // AttachSaveStore supplies the persistence boundary RMS uses. Without one,
@@ -105,25 +111,49 @@ func (runtime *Runtime) rms() *rmsState {
 	return runtime.rmsState
 }
 
-// loadIndex seeds the known store names from the Host once per session.
-func (state *rmsState) loadIndex(store backend.SaveStore) {
+// loadIndex seeds the known store names once per session: the ones the Host
+// wrote down, and then the ones the archive brought with it.
+func (runtime *Runtime) loadIndex(state *rmsState) {
 	if state.loaded {
 		return
 	}
 	state.loaded = true
-	if store == nil {
-		return
-	}
-	data, ok := store.LoadSave(rmsIndexKey)
-	if !ok {
-		return
-	}
-	for _, name := range strings.Split(string(data), "\n") {
-		name = strings.TrimSpace(name)
-		if name == "" || state.contains(name) {
-			continue
+	store := runtime.saveStoreBoundary()
+	if store != nil {
+		if data, ok := store.LoadSave(rmsIndexKey); ok {
+			for _, name := range strings.Split(string(data), "\n") {
+				name = strings.TrimSpace(name)
+				if name == "" || state.contains(name) {
+					continue
+				}
+				state.names = append(state.names, name)
+			}
 		}
-		state.names = append(state.names, name)
+	}
+	// A store the container carried exists before the title has written
+	// anything, exactly as a packaged database does on the other platform.
+	// The Host's copy wins wherever there is one, and that is also how a
+	// deleted store stays deleted: deleting writes an empty record list under
+	// the store's key, so the key answers and the packaged copy is dropped.
+	for name, records := range runtime.Archive.packagedRecordStores() {
+		if store != nil {
+			if key, err := recordStoreKey(name); err == nil {
+				if _, written := store.LoadSave(key); written {
+					// The Host has the last word about this store, whether
+					// that is records the title wrote or the empty list a
+					// delete leaves behind. Neither the name nor the archive's
+					// copy is seeded over it.
+					continue
+				}
+			}
+		}
+		if !state.contains(name) {
+			state.names = append(state.names, name)
+		}
+		if state.packaged == nil {
+			state.packaged = make(map[string][][]byte)
+		}
+		state.packaged[name] = records
 	}
 }
 
@@ -187,7 +217,7 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	boundary := runtime.saveStoreBoundary()
-	state.loadIndex(boundary)
+	runtime.loadIndex(state)
 
 	if store, ok := state.stores[name]; ok {
 		store.mu.Lock()
@@ -209,6 +239,17 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		return nil, newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	var records [][]byte
+	if packaged, carried := state.packaged[name]; carried && found {
+		// Only when the store is one that exists: a title that deleted a
+		// carried store and then created it again asked for an empty one, and
+		// the archive's copy must not come back through the create.
+		records = append([][]byte(nil), packaged...)
+		delete(state.packaged, name)
+		// From here the store is one this session has served, so the Host's
+		// index names it: the title may write it, and a write puts the Host's
+		// copy in front of the archive's for every session after this one.
+		runtime.storeIndex(state)
+	}
 	if found && boundary != nil {
 		if data, ok := boundary.LoadSave(key); ok {
 			decoded, decodeErr := backend.DecodeSaveRecords(data)
@@ -308,7 +349,7 @@ func (runtime *Runtime) rmsOpenRecordStore(_ *jvm.VM, arguments []jvm.Value) (jv
 func (runtime *Runtime) rmsListRecordStores(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	state := runtime.rms()
 	state.mu.Lock()
-	state.loadIndex(runtime.saveStoreBoundary())
+	runtime.loadIndex(state)
 	names := append([]string(nil), state.names...)
 	state.mu.Unlock()
 	if len(names) == 0 {
@@ -338,7 +379,7 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 	state := runtime.rms()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.loadIndex(runtime.saveStoreBoundary())
+	runtime.loadIndex(state)
 	store, known := state.stores[name]
 	if known {
 		store.mu.Lock()

@@ -35,6 +35,50 @@ Store names come from the game, so they go through `backend.NormalizeSaveKey`
 like every other save key — a name that escapes the owner directory is
 rejected rather than sanitized.
 
+## The stores a title brought with it
+
+An archive taken off a handset carries the title's record stores, in an `rs`
+directory beside the JAR: two files per store, `NAME.sb` and `NAME.db`. This
+runtime looked at neither, so a title whose save came with it was told it had
+none — a MIDlet asking to continue answered `저장된 자료가 없습니다`, over a
+saved game that was sitting in its own archive. It is the same defect the KTF
+platform had with the databases its archives ship, and it has the same shape:
+present data, a readable format, and an API that never asked.
+
+`.sb` is the store and `.db` is its bytes. Every field is big-endian:
+
+```
+u32       the id the next record will take
+u16 + n   the store's name
+u32       the version, what getVersion answers
+u32       how many records follow
+u32       how many bytes the data file holds
+u64       when it was last modified, in milliseconds
+per record: u32 id, u32 offset into the data file, u32 length
+```
+
+What says that reading is right rather than plausible is arithmetic that holds
+for all twelve packaged stores in the local set: the declared length is the
+data file's exact size, the entries tile it end to end, and the fixed part plus
+twelve bytes per record is the `.sb` file's own length.
+
+**The name comes out of the file, not out of the path.** A handset writes an
+upper-case letter in a file name as `#X`, so the store `TowerSaveGame` is the
+file `#Tower#Save#Game.sb`. The `.sb` carries the name in full, which is a
+better answer than un-escaping a path — and the path is gone by then anyway,
+because a container's files are mounted by their bare names.
+
+**The Host has the last word, and that is what makes seeding safe.** A
+packaged store is only used where the save store holds nothing under that
+store's key. The title's own writes therefore win from the moment it writes,
+and a store the title *deleted* stays deleted: deleting writes an empty record
+list under the key, so the key answers and the archive's copy is not seeded
+over it. Opening a packaged store writes the store index, so a later session
+finds the store by name whether or not the archive is still around.
+
+A store that does not parse is left out rather than reported. An archive is
+untrusted input, and a title with no save is a title on its first run.
+
 ## The two decisions worth knowing
 
 **The index, not the file, says a store exists.** `SaveStore` can write and

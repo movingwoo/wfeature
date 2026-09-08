@@ -7,12 +7,19 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
-// packedRecordDatabase builds the packaged format: the header, then one slot
+// packagedDatabaseHeader builds the header the two packaged shapes share.
+func packagedDatabaseHeader(magic []byte, recordSize, count int) []byte {
+	header := make([]byte, recordDatabaseFileHeader)
+	copy(header, magic)
+	binary.BigEndian.PutUint32(header[recordDatabaseSizeOffset:], uint32(recordSize))
+	binary.BigEndian.PutUint32(header[recordDatabaseCountOffset:], uint32(count))
+	return header
+}
+
+// packedRecordDatabase builds the one-file shape: the header, then one slot
 // per record with a live flag in front of each.
 func packedRecordDatabase(recordSize int, records ...[]byte) []byte {
-	file := make([]byte, recordDatabaseFileHeader)
-	copy(file, recordDatabaseFileMagic)
-	binary.LittleEndian.PutUint32(file[8:12], uint32(recordSize))
+	file := packagedDatabaseHeader(recordDatabaseFileMagic, recordSize, len(records))
 	for _, record := range records {
 		slot := make([]byte, recordSize+1)
 		if record != nil {
@@ -22,6 +29,18 @@ func packedRecordDatabase(recordSize int, records ...[]byte) []byte {
 		file = append(file, slot...)
 	}
 	return file
+}
+
+// splitRecordDatabase builds the two-file shape: an index carrying the header
+// alone, and the records end to end with nothing between them.
+func splitRecordDatabase(recordSize int, records ...[]byte) (index, data []byte) {
+	index = packagedDatabaseHeader(recordDatabaseIndexMagic, recordSize, len(records))
+	for _, record := range records {
+		slot := make([]byte, recordSize)
+		copy(slot, record)
+		data = append(data, slot...)
+	}
+	return index, data
 }
 
 func openRecordDatabase(t *testing.T, runtime *initializationRuntime, name string, recordSize, create uint32) uint32 {
@@ -204,9 +223,95 @@ func TestPackagedRecordDatabaseRejectsWhatIsNotOne(t *testing.T) {
 		t.Fatal("parsed a file whose slots do not divide evenly")
 	}
 	zeroed := packedRecordDatabase(8)
-	binary.LittleEndian.PutUint32(zeroed[8:12], 0)
+	binary.BigEndian.PutUint32(zeroed[recordDatabaseSizeOffset:], 0)
 	if _, ok := parseRecordDatabaseFile(zeroed); ok {
 		t.Fatal("parsed a file claiming a zero record size")
+	}
+}
+
+// TestASplitPackagedDatabaseIsOpenedFromItsIndex covers the shape most of the
+// local archives package: the header is a NAME.idx of its own and NAME.db is
+// the records end to end, with no live flag in front of them. Reading only the
+// one-file shape left every one of those databases missing, and a title that
+// ships its own save that way opens on an offer to download it again.
+func TestASplitPackagedDatabaseIsOpenedFromItsIndex(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	runtime.guestFiles = map[string][]byte{"SAVE.idx": index, "SAVE.db": data}
+
+	records, ok := runtime.packagedRecordDatabase("SAVE", 4)
+	if !ok {
+		t.Fatal("the split shape was not recognized as a database")
+	}
+	if len(records) != 2 || string(records[0]) != "aaaa" || string(records[1]) != "bbbb" {
+		t.Fatalf("packaged records = %q, want the two the data file holds", records)
+	}
+	// The whole point is that a game opening it without asking for it to be
+	// created finds it rather than being told it is not there.
+	if handle := openRecordDatabase(t, runtime, "SAVE", 4, 0); handle == 0 {
+		t.Fatal("opening the packaged database without create failed")
+	}
+}
+
+// TestAPackagedIndexDeclaringNoRecordIsStillADatabase pins the difference
+// between empty and missing. An index whose count is zero has no data file in
+// the archive at all, and answering "no such database" for it would send a
+// title down its first-run path every time.
+func TestAPackagedIndexDeclaringNoRecordIsStillADatabase(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(100)
+	runtime.guestFiles = map[string][]byte{"EMPTY.idx": index}
+
+	records, ok := runtime.packagedRecordDatabase("EMPTY", 100)
+	if !ok {
+		t.Fatal("an index with no records was read as no database")
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %q, want none", records)
+	}
+}
+
+// TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith covers one packaged
+// index in the local set whose record size has bytes clobbered. Its data file
+// still divides evenly by the record count, and that division is the honest
+// answer; refusing the database instead loses a title's saved game.
+func TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	// The real file has the last byte of the magic and the first byte of the
+	// record size overwritten together, which is why neither is trusted.
+	index[recordDatabaseMagicMatch] = 0xff
+	binary.BigEndian.PutUint32(index[recordDatabaseSizeOffset:], 0xff000004)
+	runtime.guestFiles = map[string][]byte{"BENT.idx": index, "BENT.db": data}
+
+	records, ok := runtime.packagedRecordDatabase("BENT", 4)
+	if !ok {
+		t.Fatal("a database whose index disagrees with its own data was refused")
+	}
+	if len(records) != 2 || string(records[1]) != "bbbb" {
+		t.Fatalf("records = %q, want the two the data file holds", records)
+	}
+
+	// A data file the count cannot divide is a disagreement nothing settles.
+	runtime.guestFiles["BENT.db"] = data[:len(data)-1]
+	if _, ok := runtime.packagedRecordDatabase("BENT", 4); ok {
+		t.Fatal("parsed a data file the record count does not divide")
+	}
+}
+
+// TestTheOneFileShapeReadsItsRecordSizeBigEndian pins the header's byte order.
+// It was read as a little-endian word one field further on, which answers the
+// same number for a record shorter than 256 bytes and a different one for
+// everything above that.
+func TestTheOneFileShapeReadsItsRecordSizeBigEndian(t *testing.T) {
+	record := make([]byte, 328)
+	copy(record, "wide")
+	records, ok := parseRecordDatabaseFile(packedRecordDatabase(len(record), record))
+	if !ok {
+		t.Fatal("a database whose records are wider than 255 bytes was refused")
+	}
+	if len(records) != 1 || len(records[0]) != len(record) {
+		t.Fatalf("records = %d of %d bytes, want one of %d", len(records), len(records[0]), len(record))
 	}
 }
 

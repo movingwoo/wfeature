@@ -2460,6 +2460,10 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase name is not a string")
 	}
+	recordSize, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	create, err := arguments[2].Int32()
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -2476,7 +2480,21 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 				store.records = records
 			}
 		}
-		if !present && create == 0 {
+		// A database this archive ships is the database, exactly as it is for
+		// the WIPI C table next door. A save wins over it, because a game that
+		// has written since owns what it wrote; with no save, the packaged
+		// records are what the game finds, and finding them is what tells a
+		// title carrying its own data that it has nothing to download.
+		packaged, hasPackaged := false, false
+		if !present {
+			var records [][]byte
+			if records, hasPackaged = runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
+				store.records = records
+				packaged = true
+				runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
+			}
+		}
+		if !present && !packaged && create == 0 {
 			runtime.countDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
 		}
@@ -2486,8 +2504,8 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		runtime.databases[name] = store
 		// A database opened for creation exists from that moment, even with
 		// no record in it yet, so the next open finds it rather than throwing
-		// again.
-		if !present {
+		// again. One the archive carries is already found without a save.
+		if !present && !packaged {
 			store.persist(runtime)
 		}
 	}

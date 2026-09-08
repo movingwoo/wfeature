@@ -547,3 +547,38 @@ func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T
 		t.Fatalf("openDataBase(create=false) on a stored database = %v", err)
 	}
 }
+
+// TestAJavaDataBaseFindsWhatTheArchiveShipped is the other half of that rule.
+// A database the archive carries exists before the game has written anything,
+// exactly as it does for the WIPI C table next door, and a title that ships
+// its own saved game reads it through this class rather than the C one. While
+// this looked only at the save store, several local titles opened their own
+// packaged save, were told it was not there, and offered to download the data
+// they were already carrying.
+func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+
+	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("openDataBase(create=false) on a packaged database = %v", err)
+	}
+	object, err := database.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(store.records) != 1 || string(store.records[0]) != "aaaa" {
+		t.Fatalf("records = %q, want the one the archive ships", store.records)
+	}
+	// It is the archive's copy, so nothing is written until the game writes.
+	if _, written := client.saveStore.LoadSave("jdb/save"); written {
+		t.Fatal("opening a packaged database wrote a save over it")
+	}
+}

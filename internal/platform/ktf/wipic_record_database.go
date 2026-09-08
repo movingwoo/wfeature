@@ -165,7 +165,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	}
 	store, exists := runtime.recordDatabases[name]
 	if !exists {
-		records, hasPackaged := runtime.packagedRecordDatabase(name)
+		records, hasPackaged := runtime.packagedRecordDatabase(name, recordSize)
 		saved, hasSaved := runtime.loadSave("rdb/" + name)
 		if !hasPackaged && !hasSaved && int32(create) == 0 {
 			return wipicErrorNotFound, nil
@@ -221,7 +221,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	}
 	runtime.countDiagnostic(fmt.Sprintf("rdb delete %s", name))
 	_, exists := runtime.recordDatabases[name]
-	_, hasPackaged := runtime.packagedRecordDatabase(name)
+	_, hasPackaged := runtime.packagedRecordDatabase(name, 0)
 	_, hasSaved := runtime.loadSave("rdb/" + name)
 	if !exists && !hasPackaged && !hasSaved {
 		return wipicErrorNotFound, nil
@@ -415,12 +415,29 @@ func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecord
 	runtime.storeSave("rdb/"+store.name, encodeSaveRecords(store.records))
 }
 
-// packagedRecordDatabase reads a record database an archive ships as a data
-// file. The file carries the database's name with a .db suffix the name itself
-// does not have, so both spellings are tried: a game opens "NAME" and the
-// archive holds "NAME.db".
-func (runtime *initializationRuntime) packagedRecordDatabase(name string) ([][]byte, bool) {
-	for _, candidate := range []string{name, name + ".db"} {
+// packagedRecordDatabase reads a record database an archive ships with it. The
+// database's own name carries no suffix, so the file names are composed from
+// it, and the local set packages one in two shapes:
+//
+//   - one file, NAME.db, a header followed by one slot per record, each a live
+//     flag then the record's bytes;
+//   - two files, NAME.idx holding the header alone and NAME.db holding the
+//     records end to end with nothing between them.
+//
+// The split shape is by far the commoner one here, and a database in it can
+// have no data file at all: an index declaring no record is a database that
+// exists and is empty, which is a different answer from one that is missing.
+//
+// recordSize is what the caller asked to open the database with. It is only
+// consulted when the index disagrees with the size of its own data file.
+func (runtime *initializationRuntime) packagedRecordDatabase(name string, recordSize uint32) ([][]byte, bool) {
+	if index, exists := runtime.guestFile(name + recordDatabaseIndexSuffix); exists {
+		data, _ := runtime.guestFile(name + recordDatabaseDataSuffix)
+		if records, ok := runtime.parseRecordDatabaseIndex(name, index, data, recordSize); ok {
+			return records, true
+		}
+	}
+	for _, candidate := range []string{name, name + recordDatabaseDataSuffix} {
 		data, exists := runtime.guestFile(candidate)
 		if !exists {
 			continue
@@ -432,22 +449,90 @@ func (runtime *initializationRuntime) packagedRecordDatabase(name string) ([][]b
 	return nil, false
 }
 
-// recordDatabaseFileHeader is the fixed header a packaged record database
-// carries before its slots.
-const recordDatabaseFileHeader = 45
+const (
+	// recordDatabaseFileHeader is the fixed header both packaged shapes carry.
+	recordDatabaseFileHeader = 45
+	// The record size and the record count are big-endian words inside it.
+	recordDatabaseSizeOffset  = 5
+	recordDatabaseCountOffset = 9
 
-// recordDatabaseFileMagic opens the packaged format.
-var recordDatabaseFileMagic = []byte("qtcdb")
+	recordDatabaseDataSuffix  = ".db"
+	recordDatabaseIndexSuffix = ".idx"
+)
 
-// parseRecordDatabaseFile decodes the packaged format: a header naming the
-// record size, then one slot per record, each a live flag followed by the
-// record's bytes. A slot whose flag is clear is an id that was never used.
-func parseRecordDatabaseFile(data []byte) ([][]byte, bool) {
-	if len(data) < recordDatabaseFileHeader || string(data[:len(recordDatabaseFileMagic)]) != string(recordDatabaseFileMagic) {
+var (
+	// recordDatabaseFileMagic opens the one-file shape.
+	recordDatabaseFileMagic = []byte("qtcdb")
+	// recordDatabaseIndexMagic opens the index of the split shape.
+	recordDatabaseIndexMagic = []byte("qtpdb")
+)
+
+// recordDatabaseMagicMatch is how much of a magic has to match. Both are five
+// bytes and only their third differs, so four is still the whole of what tells
+// the two shapes apart. The last byte is left out because one packaged index
+// in the local set has it and the byte after it overwritten with 0xff, and
+// everything else about that file — its length, its record count, and a data
+// file that divides evenly by it — says it is an index. What such a file
+// cannot be trusted about is its record size, and the parse below takes that
+// from the data file instead.
+const recordDatabaseMagicMatch = 4
+
+// parseRecordDatabaseHeader reads the header the two shapes share. It answers
+// the record size and the record count; what the words past them mean is not
+// known, and nothing here needs them.
+func parseRecordDatabaseHeader(data, magic []byte) (recordSize, count uint32, ok bool) {
+	if len(data) < recordDatabaseFileHeader || string(data[:recordDatabaseMagicMatch]) != string(magic[:recordDatabaseMagicMatch]) {
+		return 0, 0, false
+	}
+	recordSize = binary.BigEndian.Uint32(data[recordDatabaseSizeOffset : recordDatabaseSizeOffset+4])
+	count = binary.BigEndian.Uint32(data[recordDatabaseCountOffset : recordDatabaseCountOffset+4])
+	return recordSize, count, true
+}
+
+// parseRecordDatabaseIndex decodes the split shape. The index says how many
+// records there are and how long one is; the data file is those records and
+// nothing else, so the two have to agree about its length. When they do not,
+// the data file wins: one packaged index in the local set has the two bytes
+// before its record size clobbered, and its data file still divides evenly by
+// the count the index declares.
+func (runtime *initializationRuntime) parseRecordDatabaseIndex(name string, index, data []byte, requested uint32) ([][]byte, bool) {
+	recordSize, count, ok := parseRecordDatabaseHeader(index, recordDatabaseIndexMagic)
+	if !ok || count > maxDataBaseRecords {
 		return nil, false
 	}
-	recordSize := binary.LittleEndian.Uint32(data[8:12])
+	if count == 0 {
+		// A database with no record still exists. Its data file is usually not
+		// in the archive at all, and an empty one says the same thing.
+		return nil, len(data) == 0
+	}
+	if uint64(recordSize)*uint64(count) != uint64(len(data)) {
+		if len(data) == 0 || len(data)%int(count) != 0 {
+			return nil, false
+		}
+		recordSize = uint32(len(data) / int(count))
+		runtime.countDiagnostic(fmt.Sprintf("rdb index size disagrees %s: %d records over %d bytes", name, count, len(data)))
+	}
 	if recordSize == 0 || recordSize > maxRecordDatabaseBytes {
+		return nil, false
+	}
+	if requested != 0 && requested != recordSize {
+		runtime.countDiagnostic(fmt.Sprintf("rdb packaged size %d opened as %d %s", recordSize, requested, name))
+	}
+	records := make([][]byte, 0, count)
+	for offset := 0; offset+int(recordSize) <= len(data); offset += int(recordSize) {
+		records = append(records, append([]byte(nil), data[offset:offset+int(recordSize)]...))
+	}
+	return records, true
+}
+
+// parseRecordDatabaseFile decodes the one-file shape: the shared header, then
+// one slot per record, each a live flag followed by the record's bytes. A slot
+// whose flag is clear is an id that was never used. The header's record count
+// is not read here — the slots are counted from the file's own length, which
+// is the same answer and holds for a file that was appended to.
+func parseRecordDatabaseFile(data []byte) ([][]byte, bool) {
+	recordSize, _, ok := parseRecordDatabaseHeader(data, recordDatabaseFileMagic)
+	if !ok || recordSize == 0 || recordSize > maxRecordDatabaseBytes {
 		return nil, false
 	}
 	slotSize := int(recordSize) + 1

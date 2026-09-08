@@ -846,6 +846,85 @@ the queue so the paint callback is called later rather than calling it from
 inside the function. The region is discarded here because a card is repainted
 whole.
 
+### A packaged database is packaged in two shapes, and the commoner one was unreadable
+
+The paragraph above says a game opens `FUNTER_DL` and the archive ships
+`P/FUNTER_DL.db`. That is true of two archives in the local set. **Twenty-one
+others package the same thing differently**, and until this was written down
+every one of those databases was missing at run time.
+
+Both shapes begin with the same 45-byte header — a five-byte magic, then the
+record size and the record count as **big-endian** words at offsets 5 and 9.
+What differs is where the records are:
+
+| magic | files | the records |
+|---|---|---|
+| `qtcdb` | `NAME.db` alone | after the header, one slot each: a live flag then the record's bytes |
+| `qtpdb` | `NAME.idx` and `NAME.db` | the whole of `NAME.db`, end to end, with no flag between them |
+
+The split shape is the one a handset writes. Its index carries the header and
+nothing else, so the size of the data file is `record size × record count`
+exactly — which is what says the reading is right rather than plausible: it
+holds for all 43 packaged databases in the local set, at record sizes from 5
+to 11,255 bytes.
+
+Three details are worth keeping, because each one is silent when it is wrong.
+
+- **A count of zero is a database, not a missing one.** Two local indexes
+  declare no record, and one of those has no data file in the archive at all.
+  Answering "no such database" for it sends a title down its first-run path on
+  every launch.
+- **The header's byte order only shows above 255.** The record size used to be
+  read as a little-endian word one field further along, which is the same
+  number for a record shorter than 256 bytes and a different one for anything
+  wider — one local database declares 328.
+- **The data file settles a record size its index disagrees with.** One local
+  index has the last byte of its magic and the top byte of its record size
+  overwritten with `0xff` together. Everything else about it is intact and its
+  1,400-byte data file divides evenly by the two records it declares, so the
+  division is taken and the magic is matched on four bytes rather than five.
+
+### The Java `DataBase` never looked at the archive, and that is a download gate
+
+The WIPI C table has consulted packaged databases since it was written. The
+Java class beside it — `org.kwis.msp.db.DataBase`, which is what a title
+written in Java opens — did not: it looked in the save store and nowhere else,
+so `openDataBase(name, size, false)` threw `DataBaseException` for every
+database an archive ships.
+
+That throw is exactly what a title uses to find out it is running for the first
+time, and one local title answers it by offering to download the data it is
+already carrying:
+
+```
+KTF guest printk  text="11-----Save Error"
+jdb absent op_save
+```
+
+behind a full-screen `본 게임을 즐기기 위해서는 추가 파일의 다운로드…가 필요합니다`
+prompt, over a phone line that has not existed for fifteen years. The archive
+holds `P/op_save.idx` and `P/op_save.db`: a one-record database, 5 bytes long,
+written on the handset this copy was taken from. With the packaged database
+found, the title goes splash → title → main menu → slot select → prologue and
+into its world.
+
+**This is the fourth download gate in this file and the first one that opens.**
+The other three are further down — a subscriber number's length, a `prefs`
+record nothing here can decrypt, and twelve resource containers the archive
+genuinely does not have. What separates this one is that nothing was missing:
+the data was in the archive, in the format the platform already had a parser
+for, behind an API that never called it.
+
+**A save still wins over the packaged copy**, on both tables, for the same
+reason it did on the C side: a game that has written since owns what it wrote.
+And opening a packaged database writes nothing — the empty-record write that
+makes a *created* database exist for the next session would otherwise shadow
+the archive's own copy with an empty one.
+
+**What it is worth, across the local set:** of the 264 KTF 1.2 archives, 20
+open a packaged database in their first 64 ticks that they were previously told
+was not there, and no archive's first frame changed anywhere else.
+
 ## A published instance field has two storages, and the boundary is where they agree
 
 Most of what a runtime-owned class holds never reaches guest memory: the guest
@@ -3321,6 +3400,12 @@ holds an object. So the question is not "who cleared it" but "which branch of
 its own start would have set it", and that is a different search.
 
 ## A second download gate, and the answer that opened it
+
+> The gate that came before these three is above, under the storage tables: a
+> title offering to download the save it already carries, because the Java
+> `DataBase` class never looked in the archive. That one is fixed; these three
+> are what is left.
+
 
 Another title in the same series opens by offering to download 600KB "to play
 the game", and both answers lead back to it: yes reaches its own connection
