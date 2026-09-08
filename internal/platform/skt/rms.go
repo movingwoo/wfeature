@@ -128,11 +128,8 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 	store := runtime.saveStoreBoundary()
 	if store != nil {
 		if data, ok := store.LoadSave(rmsIndexKey); ok {
-			// Lines are taken as they are. Trimming them would map "save "
-			// onto "save", so a store whose name has a space around it would
-			// vanish from the index and one without it would appear.
-			for _, name := range strings.Split(string(data), "\n") {
-				if name == "" || state.contains(name) {
+			for _, name := range splitStoreIndex(data) {
+				if state.contains(name) {
 					continue
 				}
 				state.names = append(state.names, name)
@@ -211,9 +208,32 @@ func (runtime *Runtime) storeIndex(state *rmsState) {
 		}
 		names = append(names, name)
 	}
-	if err := boundary.StoreSave(rmsIndexKey, []byte(strings.Join(names, "\n"))); err != nil && runtime.logger != nil {
+	if err := boundary.StoreSave(rmsIndexKey, joinStoreIndex(names)); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS index store failed", "error", err)
 	}
+}
+
+// The index is one list written one way and read another, which is how the two
+// halves came to disagree about trimming: a name with a space around it went
+// out as itself and came back as something else, so the store vanished from
+// the index and one that did not exist appeared. They are one encoding now,
+// and `validRecordStoreName` refuses the only character that cannot survive
+// it.
+func joinStoreIndex(names []string) []byte {
+	return []byte(strings.Join(names, "\n"))
+}
+
+// splitStoreIndex reads names back exactly as they were written, dropping only
+// the empty line an empty list leaves.
+func splitStoreIndex(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	names := make([]string, 0, len(lines))
+	for _, name := range lines {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // recordStoreKey is the save key one store's records live under. RMS store
@@ -257,7 +277,15 @@ func validRecordStoreName(name string) bool {
 	if strings.ContainsAny(name, "\n\r") {
 		return false
 	}
-	return !strings.ContainsAny(name, "/\\\x00")
+	if strings.ContainsAny(name, "/\\\x00") {
+		return false
+	}
+	// And it has to be a key this runtime can write. Answering that a name is
+	// valid and then failing to key it splits one refusal across two places:
+	// "." and ".." pass every rule above and normalize away to the scope, so
+	// the answer comes from the same function the caller asked.
+	_, err := recordStoreKey(name)
+	return err == nil
 }
 
 // rmsReservedName is the one store name this runtime cannot carry, because

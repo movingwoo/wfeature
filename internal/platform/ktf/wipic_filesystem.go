@@ -363,12 +363,8 @@ func (runtime *initializationRuntime) removedDatabases() map[string]bool {
 	}
 	runtime.removedCDatabases = make(map[string]bool)
 	if data, exists := runtime.loadSave(databaseRemovedKey); exists {
-		// Lines as they are; see removedGuestFiles for why none of the four
-		// lists trims them.
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				runtime.removedCDatabases[line] = true
-			}
+		for _, line := range splitRemovalList(data) {
+			runtime.removedCDatabases[line] = true
 		}
 	}
 	return runtime.removedCDatabases
@@ -391,8 +387,7 @@ func (runtime *initializationRuntime) markDatabaseRemoved(name string, removed b
 	for entry := range set {
 		names = append(names, entry)
 	}
-	sort.Strings(names)
-	runtime.storeSave(databaseRemovedKey, []byte(strings.Join(names, "\n")))
+	runtime.storeSave(databaseRemovedKey, joinRemovalList(names))
 }
 
 // wipicMakeDirectory serves MC_fsMkDir(dirName, aMode).

@@ -133,13 +133,8 @@ func (runtime *initializationRuntime) removedGuestFiles() map[string]bool {
 	}
 	runtime.removedFiles = make(map[string]bool)
 	if data, exists := runtime.loadSave(guestFileRemovedKey); exists {
-		// Lines as they are, which is how they were written and how the
-		// other three lists read theirs: trimming maps "save " onto "save",
-		// so a path with a space around it hides one without.
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				runtime.removedFiles[line] = true
-			}
+		for _, line := range splitRemovalList(data) {
+			runtime.removedFiles[line] = true
 		}
 	}
 	return runtime.removedFiles
@@ -161,8 +156,7 @@ func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed 
 	for entry := range set {
 		names = append(names, entry)
 	}
-	sort.Strings(names)
-	runtime.storeSave(guestFileRemovedKey, []byte(strings.Join(names, "\n")))
+	runtime.storeSave(guestFileRemovedKey, joinRemovalList(names))
 }
 
 // storeGuestFile persists one guest file. Writing a path brings it back, so

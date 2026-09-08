@@ -75,6 +75,33 @@ moved the crash into its caller.
 | `internal/platform/lgt.FuzzParseModuleNeverPanics` | the ELF, whose section headers are offsets and sizes a crafted file points anywhere |
 | `internal/platform/lgt.FuzzParseDescriptorNeverPanics` | `app_info`, parsed before anything has said it is text |
 | `internal/jvm/classfile.FuzzParseNeverPanics` | a class file |
+| `internal/platform/ktf.FuzzPackagedRecordDatabaseNeverPanics` | the two shapes a KTF archive packages a record database in |
+| `internal/platform/ktf.FuzzDatabaseNameSurvivesTheRemovalList` | a name a storage table takes, against the key it makes and the list it lands in |
+| `internal/platform/skt.FuzzPackagedRecordStoreNeverPanics` | one `.sb` record table against the `.db` it points into |
+| `internal/platform/skt.FuzzPackagedRecordStoresNeverPanics` | the whole scan of a container's stores, and what they ask for between them |
+| `internal/platform/skt.FuzzRecordStoreNameSurvivesTheIndex` | a store name, against the key it makes and the index it lands in |
+
+**The last five are there because a review found the same shape of defect nine
+times.** Reading a save an archive carries added two parsers whose every field
+indexes or sizes something, and a rule that a name a game chooses is also a
+save key — and then the same question had to be answered again at each entry
+point that takes a name, on each table, on both platforms. That grid is what
+kept producing findings: not one wrong idea, but one idea applied in one place
+and not the next. Two of the five are therefore **property** targets rather
+than parser ones. They assert what the grid is for:
+
+- a name a table accepts must key to a name *under its own scope* — one that
+  normalises to the scope itself makes a regular file where the directory
+  belongs, and every write under it fails from then on;
+- it must not address one of the lists a table keeps beside its entries;
+- and it must come back from that list as itself, beside another name, because
+  a name that splits on the list's separator takes its neighbours with it.
+
+Making those properties testable is what turned four copies of the list
+encoding into one (`joinRemovalList`/`splitRemovalList`, and `joinStoreIndex`/
+`splitStoreIndex` on the other platform). The copies had disagreed about
+trimming, which is how deleting `"save "` came to hide `"save"` — a defect
+found once per copy, one review round at a time.
 
 ```sh
 go test ./internal/platform/lgt -run FuzzOpen                      # the seeds, in the usual run

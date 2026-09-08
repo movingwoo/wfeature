@@ -347,22 +347,20 @@ func clearImportedRemoval(store *DirectorySaveStore, key string) {
 	}
 	kept := make([]string, 0, 8)
 	dropped := false
-	// Lines are taken as they are, because the lists themselves are written
-	// and read that way: trimming here would un-hide a deleted "save " and
-	// hide an unrelated live "save" on the way past.
-	for _, line := range strings.Split(string(data), "\n") {
-		switch {
-		case line == "":
-		case line == name:
+	// Through the list's own encoding, so this cannot drift from it: the two
+	// halves disagreeing about trimming is what put a name back that a title
+	// had deleted.
+	for _, line := range splitRemovalList(data) {
+		if line == name {
 			dropped = true
-		default:
-			kept = append(kept, line)
+			continue
 		}
+		kept = append(kept, line)
 	}
 	if !dropped {
 		return
 	}
-	_ = store.StoreSave(listKey, []byte(strings.Join(kept, "\n")))
+	_ = store.StoreSave(listKey, joinRemovalList(kept))
 }
 
 // recordSplit is one reading of an external store key as a database name and

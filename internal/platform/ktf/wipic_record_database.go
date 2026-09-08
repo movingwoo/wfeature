@@ -657,6 +657,31 @@ func (runtime *initializationRuntime) databaseDeleted(name string) bool {
 		runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 }
 
+// A removal list is one encoding, written here and read here, because it was
+// four: the two database tables, the guest filesystem and the WIPI C file
+// table each had their own pair, and the pairs disagreed about trimming. A
+// name with a space around it went out as itself and came back trimmed, so
+// deleting "save " hid "save" — found once per list, one review round at a
+// time. Names are joined by newlines and read back exactly as written; what
+// cannot survive that is refused by storableName rather than mangled here.
+func joinRemovalList(names []string) []byte {
+	sort.Strings(names)
+	return []byte(strings.Join(names, "\n"))
+}
+
+// splitRemovalList reads one back, dropping only the empty line an empty list
+// leaves behind.
+func splitRemovalList(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	names := make([]string, 0, len(lines))
+	for _, name := range lines {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // databaseRemovals reads one deletion list, once per session per list.
 func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[string]bool {
 	if runtime.removedDatabaseLists == nil {
@@ -667,14 +692,8 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 	}
 	names := make(map[string]bool)
 	if data, exists := runtime.loadSave(key); exists {
-		// Lines are taken as they are. Trimming them would map "save " onto
-		// "save", so deleting a name with a space around it would hide the
-		// name without one — and refusing such a name instead would orphan
-		// the save a title with one already has.
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				names[line] = true
-			}
+		for _, line := range splitRemovalList(data) {
+			names[line] = true
 		}
 	}
 	runtime.removedDatabaseLists[key] = names
@@ -698,8 +717,7 @@ func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string
 	for existing := range names {
 		list = append(list, existing)
 	}
-	sort.Strings(list)
-	runtime.storeSave(key, []byte(strings.Join(list, "\n")))
+	runtime.storeSave(key, joinRemovalList(list))
 }
 
 // reservedStorageNames are the names the storage tables keep their own

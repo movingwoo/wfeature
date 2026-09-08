@@ -83,14 +83,11 @@ func (a *Archive) packagedRecordStores() map[string]packagedStore {
 		header := a.Entries[name]
 		data := a.Entries[strings.TrimSuffix(name, packagedStoreIndex)+packagedStoreData]
 		store, carried, ok := parsePackagedRecordStore(header, data)
+		// The name comes out of an archive, so it is checked the way a name
+		// from the guest is — which includes being a key this runtime can
+		// write, or seeding it would put a name in listRecordStores that
+		// nothing can open and nothing can delete.
 		if !ok || !validRecordStoreName(store) {
-			continue
-		}
-		// A name that is not a save key is not a store this runtime can hold,
-		// and seeding it would put a name in listRecordStores that nothing can
-		// open and nothing can delete. The name comes out of an archive, so it
-		// is checked the way a name from the guest is.
-		if _, err := recordStoreKey(store); err != nil {
 			continue
 		}
 		if _, taken := stores[store]; taken {
