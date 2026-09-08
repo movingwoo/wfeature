@@ -921,6 +921,15 @@ And opening a packaged database writes nothing — the empty-record write that
 makes a *created* database exist for the next session would otherwise shadow
 the archive's own copy with an empty one.
 
+**`listDataBases` still names only what this session has opened**, which is a
+gap this change widens rather than opens: it could never name a database that
+only exists as a save either, because `backend.SaveStore` has `LoadSave` and
+`StoreSave` and no way to enumerate. Naming the packaged ones alone would trade
+one inconsistency for a worse one, and giving the interface a listing reaches
+both Hosts. No local title has been seen to call it; a title that stops because
+its own database is not in that list is the evidence that would be worth the
+change.
+
 **Deleting one has to reach it too.** `DataBase.deleteDataBase` looked only at
 the databases this session had opened, which was already wrong for a title
 that deletes before it opens — it was told its own save was not there — and

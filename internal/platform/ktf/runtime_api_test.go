@@ -583,6 +583,52 @@ func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
 	}
 }
 
+// TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped is the rule the whole
+// packaged path rests on, from the outside: the archive's copy is where a
+// title starts, and what the title writes is what every session after it
+// reads. Nothing about the archive is consulted once there is a save.
+func TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	files := map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.guestFiles = files
+	open := func(runtime *initializationRuntime) *runtimeDataBaseStore {
+		t.Helper()
+		name := jvm.ReferenceValue(runtime.client.JVM().NewString("save"))
+		value, err := runtimeOpenDataBase(runtime, runtime.client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+		if err != nil {
+			t.Fatalf("openDataBase(create=false) = %v", err)
+		}
+		object, err := value.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened, ok := object.Native.(*runtimeDataBaseStore)
+		if !ok {
+			t.Fatal("the database has no record store")
+		}
+		return opened
+	}
+
+	first := open(runtime)
+	// Opening the same name again is the same database, not a second copy of
+	// the archive's records.
+	if open(runtime) != first {
+		t.Fatal("opening one database twice made two stores")
+	}
+	first.records = [][]byte{[]byte("zzzz")}
+	first.persist(runtime)
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	next.guestFiles = files
+	if reopened := open(next); len(reopened.records) != 1 || string(reopened.records[0]) != "zzzz" {
+		t.Fatalf("records = %q, want what the title wrote", reopened.records)
+	}
+}
+
 // TestDeletingADatabaseReachesTheOneNobodyOpened covers the other half of the
 // name-keyed delete. It used to look only at the databases this session had
 // opened, so a title deleting before it opened was told its own save was not
