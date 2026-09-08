@@ -423,7 +423,10 @@ func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 	}
 	// The list is names joined by newlines, trimmed on the way back, so a name
 	// carrying either would not come back as itself.
-	for _, name := range []string{"", "A\nB", "..", ".removed"} {
+	// ".", "/" and "./" are names NormalizeSaveKey collapses away rather than
+	// refusing: they used to pass, and the store then wrote the scope itself
+	// as a regular file, after which every write under it failed for good.
+	for _, name := range []string{"", "A\nB", "..", ".", "/", "./", "//", ".removed"} {
 		if storableName(javaDatabaseScope, name) {
 			t.Fatalf("%q cannot survive the removal list and was accepted", name)
 		}

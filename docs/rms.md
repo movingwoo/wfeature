@@ -121,8 +121,16 @@ runtime's tombstone for an id the store no longer has, so a legitimate empty
 record decoded as a deleted one and the first write back made the loss
 permanent.
 
-**The version and the modification time are read and not used.** They are in
-the format and the parser answers them, and the store does not take them:
+**The `fs/` scope is shared with the other platform, and so is what it keeps
+there.** An `XFile` writes under `fs/`, deliberately — one owner directory holds
+a title's files whichever platform wrote them — and the KTF guest filesystem
+keeps its list of deleted paths at `fs/.removed`. A title writing that path
+from this side puts its own bytes where that list belongs, so the name is
+reserved here too: a guard the other platform's rule makes necessary on this
+one.
+
+**The version and the modification time are skipped rather than kept.** They are in
+the format and the header comment names them, and nothing carries them:
 `backend.EncodeSaveRecords` carries records and nothing else, so the first
 write — which a plain `closeRecordStore` performs — would lose them, and
 `getVersion` would answer the container's number in the session that opened the

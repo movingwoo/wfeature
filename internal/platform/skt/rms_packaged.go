@@ -112,12 +112,12 @@ func (a *Archive) packagedRecordStores() map[string]packagedStore {
 }
 
 // packagedStore is one store as the container held it: its records indexed the
-// way this runtime holds them — by id, with a nil for an id the store no longer
-// has — and the two numbers a title can ask the store about itself.
+// way this runtime holds them, by id, with a nil for an id the store no longer
+// has. The version and the modification time the header also declares are not
+// carried — see openStore for why answering them once and zero afterwards is
+// worse than answering zero throughout.
 type packagedStore struct {
-	records  [][]byte
-	version  int32
-	modified int64
+	records [][]byte
 }
 
 // parsePackagedRecordStore decodes one `.sb` against its data file.
@@ -132,15 +132,11 @@ func parsePackagedRecordStore(header, data []byte) (string, packagedStore, bool)
 		return "", packagedStore{}, false
 	}
 	name := string(header[6:cursor])
-	// The version and the modification time are what getVersion and
-	// getLastModified answer for a store the container carried. Decoding them
-	// past and letting the store report zero and "now" would make a title that
-	// stamps a version into its own data and compares it read its own save as
-	// version zero.
-	version := binary.BigEndian.Uint32(header[cursor : cursor+4])
+	// The word at the cursor is the store's version and the eight bytes past
+	// the size are its modification time. Neither is read: this runtime cannot
+	// keep them across a write, and openStore says why.
 	count := binary.BigEndian.Uint32(header[cursor+4 : cursor+8])
 	declared := binary.BigEndian.Uint32(header[cursor+8 : cursor+12])
-	modified := binary.BigEndian.Uint64(header[cursor+12 : cursor+20])
 	// Past the name: the version, the count, the size, and the eight bytes of
 	// the modification time.
 	cursor += 4 + 4 + 4 + 8
@@ -205,5 +201,5 @@ func parsePackagedRecordStore(header, data []byte) (string, packagedStore, bool)
 		copy(record, data[offset:offset+size])
 		records[id-rmsFirstRecordID] = record
 	}
-	return name, packagedStore{records: records, version: int32(version), modified: int64(modified)}, true
+	return name, packagedStore{records: records}, true
 }

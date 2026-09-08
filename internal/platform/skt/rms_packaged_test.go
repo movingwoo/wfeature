@@ -291,14 +291,7 @@ func TestAPackagedRecordOfNoBytesIsARecord(t *testing.T) {
 	if len(carried.records) != 3 || carried.records[1] == nil || len(carried.records[1]) != 0 {
 		t.Fatalf("records = %q, want the middle one empty rather than absent", carried.records)
 	}
-	// The container's version and modification time are decoded — they are
-	// what the format holds — and deliberately not handed to the store: the
-	// save encoding carries records only, so the first write would lose them
-	// and getVersion would answer the container's number once and zero
-	// afterwards. See openStore.
-	if carried.version != 1 || carried.modified != 1157345872686 {
-		t.Fatalf("version %d modified %d, want what the container declared", carried.version, carried.modified)
-	}
+
 }
 
 // TestTheStoreListTheArchiveSeedsIsTheSameEveryRun keeps map order out of a

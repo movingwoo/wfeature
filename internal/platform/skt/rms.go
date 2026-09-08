@@ -361,7 +361,15 @@ func (runtime *Runtime) persist(store *recordStore) {
 	if err != nil {
 		return
 	}
-	if err := boundary.StoreSave(key, backend.EncodeSaveRecords(store.records)); err != nil && runtime.logger != nil {
+	// Under the store's own lock: the callers release it before persisting,
+	// and persistStore now takes the state lock in that gap, so encoding
+	// without it read a slice another guest thread could be replacing. The
+	// order is state lock then store lock everywhere, which is the order
+	// openStore already takes them in.
+	store.mu.Lock()
+	encoded := backend.EncodeSaveRecords(store.records)
+	store.mu.Unlock()
+	if err := boundary.StoreSave(key, encoded); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS store failed", "name", store.name, "error", err)
 	}
 }

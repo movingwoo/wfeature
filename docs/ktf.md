@@ -966,7 +966,14 @@ both ends for that reason: onto one of these names it replaces the list, away
 from one it carries the list off. The guest
 File surface refuses the name where a File is constructed rather than where it
 is written, so a title cannot be told a write worked while nothing is stored,
-and a rename onto one is refused before the source is touched. The list also cannot carry a name that would not come back as
+and its rename and unlink refuse one at either end.
+
+**A name also has to survive normalisation as a name.** `NormalizeSaveKey`
+refuses `..` and *collapses* `.`, `/` and `./` away, so those passed the check
+and the store then wrote the scope itself: a regular file named `jdb` where the
+directory belongs, after which every write under that scope failed with "not a
+directory" and stayed failing across sessions — the removal list among them.
+What survives normalisation has to still be the scope and a name under it. The list also cannot carry a name that would not come back as
 itself, so a name with a newline is refused for the same reason: deleting a name with a newline in it would otherwise hide the two
 unrelated databases its halves spell, and deleting `save ` would hide `save`.
 
@@ -988,6 +995,16 @@ still writes through it, and those records would otherwise land under a key the
 list hides for ever — readable before this change set, lost after it. The
 delete empties that object's records first, so what such a write stores is the
 empty database the title asked for.
+
+**A database created through the WIPI C table is written down, and that is not
+free.** The Java table has always made a created database exist for the next
+session; this one did not, so a title that created one and wrote no record was
+answered `M_E_NOENT` afterwards. The cost of matching it is that the empty save
+appears on the first boot, and a save wins over the archive: for a title whose
+packaged index this parser refuses — a stale data file beside an intact header,
+say — that first boot makes the refusal permanent, where before a later parser
+fix could still have surfaced the records. Clearing the game's save is the way
+back, which is the same lever the release notes already name.
 
 **A WIPI C delete takes the database's handles with it**, which is what the
 file table beside it has always done. A handle kept across the delete is still

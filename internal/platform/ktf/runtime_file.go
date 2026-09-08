@@ -223,6 +223,13 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 		return jvm.VoidValue(), err
 	}
 	if name, ok := jvm.StringText(nameObject); ok {
+		if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+			// The last guest-filesystem entry point that takes a name.
+			// Unlinking this one writes the list's own name into the list, and
+			// the claim that every way a name reaches a key is covered has to
+			// be true rather than nearly true.
+			return jvm.VoidValue(), newGuestIOException("cannot unlink a reserved name: " + name)
+		}
 		delete(runtime.guestFiles, name)
 		delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
 		runtime.markGuestFileRemoved(name, true)

@@ -164,3 +164,27 @@ func fixtureString(t *testing.T, runtime *Runtime, className, method string) str
 	_ = jvm.StringClass
 	return value
 }
+
+// TestTheSharedFileScopeReservesTheListTheOtherPlatformKeeps covers a name
+// this platform had no reason to reserve on its own. The scope is shared with
+// the KTF guest filesystem — one owner directory holds a title's files
+// whichever platform wrote them — and that filesystem keeps its list of
+// deleted paths there, so writing it from this side is the same corruption
+// reached through the other door.
+func TestTheSharedFileScopeReservesTheListTheOtherPlatformKeeps(t *testing.T) {
+	for _, name := range []string{".removed", "/.removed", "./.removed"} {
+		if _, err := xFileKey(name); err == nil {
+			t.Fatalf("xFileKey(%q) = nil error, want the shared list's name refused", name)
+		}
+	}
+	// And a path that normalizes to the scope itself, which would make a file
+	// where the directory belongs.
+	for _, name := range []string{".", "/", "./"} {
+		if _, err := xFileKey(name); err == nil {
+			t.Fatalf("xFileKey(%q) = nil error, want a path that is not a name refused", name)
+		}
+	}
+	if _, err := xFileKey("/save/slot.dat"); err != nil {
+		t.Fatalf("xFileKey on an ordinary path = %v", err)
+	}
+}

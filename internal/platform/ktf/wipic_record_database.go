@@ -770,10 +770,18 @@ func storableName(scope, name string) bool {
 	if strings.ContainsAny(name, "\n\r") {
 		return false
 	}
-	// And it has to be a key on its own: NormalizeSaveKey refuses "..", which
-	// would otherwise be accepted here and then dropped by the store, leaving
-	// a title told its database was created and nothing ever persisted.
-	if _, err := backend.NormalizeSaveKey(scope + "/" + name); err != nil {
+	// And it has to be a key of its own under the scope. NormalizeSaveKey
+	// refuses "..", and it *collapses* ".", "/" and "./" away — so those
+	// passed, and the store then wrote the scope itself: a regular file named
+	// "jdb" where the directory belongs, after which every jdb write for that
+	// title fails with "not a directory" and stays failing across sessions,
+	// the removal list among them. What survives normalization has to still
+	// be the scope and a name under it.
+	key, err := backend.NormalizeSaveKey(scope + "/" + name)
+	if err != nil {
+		return false
+	}
+	if rest, under := strings.CutPrefix(key, scope+"/"); !under || rest == "" {
 		return false
 	}
 	return !reservedStorageName(scope, name)
