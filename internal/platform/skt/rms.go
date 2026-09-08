@@ -165,7 +165,14 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 				}
 			}
 		}
-		if !state.contains(name) {
+		// Whether the Host's index already named it decides everything after
+		// this. A store only the archive knows about must stay out of the
+		// index until something writes it; one the index already names is
+		// there because an earlier build created it, and taking it back out
+		// would leave the next session with no store at all — less than it had
+		// before this fix.
+		indexed := state.contains(name)
+		if !indexed {
 			state.names = append(state.names, name)
 		}
 		if state.packaged == nil {
@@ -176,7 +183,9 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 		// Marked here rather than when the store is opened: the index is
 		// written whole, so a store nobody has opened at all still has to be
 		// kept out of it when the store beside it is written.
-		state.unwritten[name] = true
+		if !indexed {
+			state.unwritten[name] = true
+		}
 	}
 }
 

@@ -433,3 +433,40 @@ func TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne(t *testing.T) {
 		t.Fatalf("records = %q, want the archive's copy", opened.records)
 	}
 }
+
+// TestTheEarlierBuildsStoreKeepsItsPlaceInTheIndex is the other half of the
+// upgrade rule, and the shape that made it worse than doing nothing. A store
+// the Host's index already names is there because an earlier build created it;
+// marking it unwritten took it back out of the index the next write rewrote,
+// so the session after that found no store at all.
+func TestTheEarlierBuildsStoreKeepsItsPlaceInTheIndex(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "carried")
+	store := backend.NewDirectorySaveStore(directory)
+	key, err := recordStoreKey("Alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreSave(key, backend.EncodeSaveRecords(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreSave(rmsIndexKey, []byte("Alpha")); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := carriedPair(t, backend.NewDirectorySaveStore(directory))
+	if _, err := runtime.openStore("Alpha", false); err != nil {
+		t.Fatal(err)
+	}
+	// Any other store being written rewrites the index whole.
+	other, err := runtime.openStore("Unrelated", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.records = [][]byte{[]byte("y")}
+	runtime.persistStore(other)
+
+	next := plainFixture(t, backend.NewDirectorySaveStore(directory))
+	if _, err := next.openStore("Alpha", false); err != nil {
+		t.Fatalf("the store the earlier build created was evicted from the index: %v", err)
+	}
+}

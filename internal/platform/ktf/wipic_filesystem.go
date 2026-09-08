@@ -201,6 +201,13 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
+	if reservedStorageName(cFileScope, name) {
+		// Removing writes nil over the key, and these keys are this table's
+		// own lists: the deletion list answers as a seed as soon as anything
+		// has been deleted, so the removal would go through and wipe it, and
+		// every database the title had deleted would be back on the next open.
+		return wipicErrorInvalid, nil
+	}
 	_, live := runtime.cFiles[name]
 	_, seeded := runtime.databaseSeed(name)
 	runtime.countDiagnostic(fmt.Sprintf("cdb delete %s -> %t", name, live || seeded))
@@ -302,6 +309,14 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s exists", oldName, newName))
 		return wipicErrorExists, nil
 	}
+	if reservedStorageName(cFileScope, newName) {
+		// Renaming onto a list this table keeps would replace it with the
+		// file's bytes, and the next session would read those bytes as the
+		// list. Refused before anything moves: returning after the source had
+		// already left the live map left a handle pointing at a store nothing
+		// else could reach.
+		return wipicErrorInvalid, nil
+	}
 	store, live := runtime.cFiles[oldName]
 	if !live {
 		seed, exists := runtime.databaseSeed(oldName)
@@ -319,12 +334,6 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		}
 	}
 	delete(runtime.cFiles, oldName)
-	if reservedStorageName(cFileScope, newName) {
-		// Renaming onto a list this table keeps would replace it with the
-		// file's bytes, and the next session would read those bytes as the
-		// list. The open path refuses the name for the same reason.
-		return wipicErrorInvalid, nil
-	}
 	store.name = newName
 	if runtime.cFiles == nil {
 		runtime.cFiles = make(map[string]*runtimeCFile)

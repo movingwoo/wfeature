@@ -509,3 +509,33 @@ func TestDeletingThroughOneTableHidesTheArchiveFromTheOther(t *testing.T) {
 		t.Fatalf("the C table served the archive's copy of a database the Java table deleted: %#x", handle)
 	}
 }
+
+// TestRemovingAReservedNameCannotWipeTheListItNames covers the way into the
+// file table's own lists that the open and the rename do not. Removing writes
+// nil over the key, and the deletion list answers as a seed as soon as
+// anything has been deleted — so the removal went through and wiped it, and
+// every database the title had deleted came back on the next open.
+func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.markDatabaseRemoved("SAVE", true)
+	before, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(before) != "SAVE" {
+		t.Fatalf("removal list = %q, want the name that was deleted", before)
+	}
+	const nameAddress = platformDataBase + 0x8000
+	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte(".removed"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	if err := thread.SetRegister(0, nameAddress); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileDelete); err != nil || result != wipicErrorInvalid {
+		t.Fatalf("removing the list = %#x, err = %v, want it refused", result, err)
+	}
+	after, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(after) != string(before) {
+		t.Fatalf("removal list = %q, want it untouched", after)
+	}
+}

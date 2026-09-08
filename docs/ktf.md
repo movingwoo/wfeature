@@ -959,7 +959,13 @@ the name itself, and **per scope**: a guest file called `.dirs` collides with
 nothing, because the directory list belongs to the table next door. The refusal
 covers every way a name reaches a key — the file table's rename and delete
 write one as surely as its open does, and `.dirs` has no list-rewrite to
-rescue it the way `.removed` happens to have. The list also cannot carry a name that would not come back as
+rescue it the way `.removed` happens to have. Removing is the sharpest of the
+three: it writes nil over the key, and the deletion list answers as a *seed* as
+soon as anything has been deleted, so the removal would have gone through and
+emptied the list, bringing back every database the title had deleted. The guest
+File surface refuses the name where a File is constructed rather than where it
+is written, so a title cannot be told a write worked while nothing is stored,
+and a rename onto one is refused before the source is touched. The list also cannot carry a name that would not come back as
 itself, so a name with a newline or with surrounding space is refused for the
 same reason: deleting a name with a newline in it would otherwise hide the two
 unrelated databases its halves spell, and deleting `save ` would hide `save`.

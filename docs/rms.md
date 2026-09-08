@@ -132,6 +132,13 @@ neither: emptying keeps a tombstone per record, so its list is not empty. This
 is the same rule the KTF tables keep, and it exists for the same reason —
 without it the fix reaches nobody who had already launched the title once.
 
+**A store the index already names keeps its place in it.** The rule above is
+about content, not about existence: a store the earlier build created is in the
+index because it created it, and treating it as one only the archive knows
+about took its name back out of the index the next write rewrote — leaving the
+session after that with no store at all, which is less than it had before any
+of this. Only a store the Host's index did not already name is held back.
+
 **Deleting a carried store ends both of the things carrying it means.** The
 archive's copy is not to be served again, and the name is not to be filtered
 out of the index the next create puts it in: without the second, a title that
