@@ -2504,16 +2504,18 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// has written since owns what it wrote; with no save, the packaged
 		// records are what the game finds, and finding them is what tells a
 		// title carrying its own data that it has nothing to download.
-		// The archive's copy is looked for when there is no save, and also
-		// when the save holds no record at all. The release before packaged
-		// databases existed told these titles their database was absent, and a
-		// title that then created one left an empty record list behind — which
-		// would otherwise mask the copy the archive carries for ever. An empty
-		// save still counts as the database existing, so a database created
-		// and never written is found by the next open exactly as before; what
-		// the rule decides is only which content it opens with.
+		// A save wins, and an empty one is still a save. Reading an empty
+		// record list as "not really a save" would have carried the archive's
+		// copy to a player whose earlier build created one — worth something,
+		// four local titles' worth — but the same shape is what a title
+		// leaves when it deletes a slot and creates it again, and no amount
+		// of bookkeeping tells those two apart without a third list per
+		// table. Resurrecting a save somebody cleared is worse than making
+		// them clear it once more, so the rule is not here: clearing the
+		// game's save is what adopts the packaged copy, and the release
+		// notes say so.
 		packaged := false
-		if (!present || len(store.records) == 0) && !runtime.databaseDeleted(name) {
+		if !present && !runtime.databaseDeleted(name) {
 			if records, hasPackaged := runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
 				store.records = records
 				packaged = true

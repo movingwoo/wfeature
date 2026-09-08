@@ -679,12 +679,12 @@ func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 	}
 }
 
-// TestAnEmptySaveDoesNotMaskTheDatabaseTheArchiveShipped covers the upgrade.
-// The release before packaged databases existed told these titles their
-// database was absent; a title that then created one left an empty record list
-// behind, and that empty list would have masked the archive's copy for ever —
-// so a player who had already launched the game once would never see the fix.
-func TestAnEmptySaveDoesNotMaskTheDatabaseTheArchiveShipped(t *testing.T) {
+// TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing pins the rule the delete
+// depends on. Reading an empty record list as "not really a save" would have
+// carried the archive's copy to a player whose earlier build created one, and
+// it is the same shape a title leaves when it clears a slot and creates it
+// again — so it would also resurrect a save somebody had just deleted.
+func TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := NewDirectorySaveStore(t.TempDir())
 	client.saveStore = store
@@ -706,20 +706,8 @@ func TestAnEmptySaveDoesNotMaskTheDatabaseTheArchiveShipped(t *testing.T) {
 	if !ok {
 		t.Fatal("the database has no record store")
 	}
-	if len(opened.records) != 1 || string(opened.records[0]) != "aaaa" {
-		t.Fatalf("records = %q, want the archive's copy", opened.records)
-	}
-	// An empty database with nothing in the archive is still a database that
-	// exists — a title that created one and wrote nothing finds it again.
-	bare, bareRuntime := newTestRuntime(t)
-	bare.saveStore = NewDirectorySaveStore(t.TempDir())
-	other := jvm.ReferenceValue(bare.JVM().NewString("scores"))
-	if _, err := runtimeOpenDataBase(bareRuntime, bare.JVM(), []jvm.Value{other, jvm.IntValue(8), jvm.IntValue(1)}); err != nil {
-		t.Fatal(err)
-	}
-	bareRuntime.databases = nil
-	if _, err := runtimeOpenDataBase(bareRuntime, bare.JVM(), []jvm.Value{other, jvm.IntValue(8), jvm.IntValue(0)}); err != nil {
-		t.Fatalf("a created database with no records was lost: %v", err)
+	if len(opened.records) != 0 {
+		t.Fatalf("records = %q, want the empty save the title has", opened.records)
 	}
 }
 
@@ -775,5 +763,45 @@ func TestWritingThroughAHandleHeldAcrossADeleteBringsItBack(t *testing.T) {
 	}
 	if store := object.Native.(*runtimeDataBaseStore); len(store.records) != 1 || string(store.records[0]) != "late" {
 		t.Fatalf("records = %q, want what the handle wrote", store.records)
+	}
+}
+
+// TestADatabaseClearedAndCreatedAgainStaysCleared is the round trip the delete
+// has to survive across a session, on the table a title reaches from Java. The
+// create takes the name off the removal list and leaves an empty save, which
+// is the same shape an earlier build left — and reading that as "no save"
+// would hand the title back the records it had just deleted.
+func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	files := map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.guestFiles = files
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)}); err != nil {
+		t.Fatalf("creating it again = %v", err)
+	}
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	next.guestFiles = files
+	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("the database the title created is gone on the next session: %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened := object.Native.(*runtimeDataBaseStore); len(reopened.records) != 0 {
+		t.Fatalf("records = %q, want the database to have stayed cleared", reopened.records)
 	}
 }

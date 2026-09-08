@@ -415,10 +415,17 @@ func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 	}
 	// The list is names joined by newlines, trimmed on the way back, so a name
 	// carrying either would not come back as itself.
-	for _, name := range []string{"", "A\nB", "save ", " save", ".removed"} {
+	for _, name := range []string{"", "A\nB", "..", ".removed"} {
 		if storableName(javaDatabaseScope, name) {
 			t.Fatalf("%q cannot survive the removal list and was accepted", name)
 		}
+	}
+	// A name with a space around it is one a title may already have a save
+	// under, so the list carries it as it is rather than the name being
+	// refused: trimming on the way back would have made deleting "save " hide
+	// "save".
+	if !storableName(javaDatabaseScope, "save ") {
+		t.Fatal("a name with a trailing space was refused, orphaning any save under it")
 	}
 	// The length cap is the WIPI C record database's own and does not reach
 	// the Java class: eleven Korean characters are thirty-three bytes, and

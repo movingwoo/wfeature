@@ -173,19 +173,11 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		// something creates the name again.
 		deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 		saved, hasSaved := runtime.loadSave("rdb/" + name)
-		emptySave := false
-		if hasSaved {
-			if decoded, err := decodeSaveRecords(saved); err == nil && len(decoded) == 0 {
-				emptySave = true
-			}
-		}
 		var records [][]byte
 		hasPackaged := false
-		// The archive's copy answers when there is no save, and also when the
-		// save holds no record: the release before packaged databases existed
-		// left exactly such a save behind for these titles. See the same rule
-		// on the Java table.
-		if (!hasSaved || emptySave) && !runtime.databaseDeleted(name) {
+		// A save wins, empty or not — see the Java table for why an empty one
+		// is not treated as absent.
+		if !hasSaved && !runtime.databaseDeleted(name) {
 			records, hasPackaged = runtime.packagedRecordDatabase(name, recordSize)
 		}
 		if deleted {
@@ -199,7 +191,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		}
 		store = &runtimeRecordDatabase{name: name, recordSize: recordSize}
 		switch {
-		case hasSaved && !(emptySave && hasPackaged):
+		case hasSaved:
 			// A save wins over the packaged copy: the packaged records are the
 			// initial content, and a game that has written since owns them.
 			decoded, err := decodeSaveRecords(saved)
@@ -215,6 +207,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 			runtime.recordDatabases = make(map[string]*runtimeRecordDatabase)
 		}
 		runtime.recordDatabases[name] = store
+		// A database opened for creation exists from that moment, with no
+		// record in it yet, so the next session finds it rather than
+		// answering M_E_NOENT. The Java table next door has always done this;
+		// this one did not, and after a delete it left a name the removal
+		// list and the save disagreed about.
+		if !hasSaved && !hasPackaged {
+			runtime.persistRecordDatabase(store)
+		}
 	}
 	if runtime.recordDatabaseHandles == nil {
 		runtime.recordDatabaseHandles = make(map[uint32]*runtimeRecordDatabaseHandle)
@@ -653,8 +653,12 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 	}
 	names := make(map[string]bool)
 	if data, exists := runtime.loadSave(key); exists {
+		// Lines are taken as they are. Trimming them would map "save " onto
+		// "save", so deleting a name with a space around it would hide the
+		// name without one — and refusing such a name instead would orphan
+		// the save a title with one already has.
 		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
+			if line != "" {
 				names[line] = true
 			}
 		}
@@ -747,7 +751,15 @@ func storableName(scope, name string) bool {
 	if name == "" {
 		return false
 	}
-	if strings.TrimSpace(name) != name || strings.ContainsAny(name, "\n\r") {
+	// Only the line separators. A name with a space around it is a name a
+	// title may already have a save under, and the list carries it as it is.
+	if strings.ContainsAny(name, "\n\r") {
+		return false
+	}
+	// And it has to be a key on its own: NormalizeSaveKey refuses "..", which
+	// would otherwise be accepted here and then dropped by the store, leaving
+	// a title told its database was created and nothing ever persisted.
+	if _, err := backend.NormalizeSaveKey(scope + "/" + name); err != nil {
 		return false
 	}
 	return !reservedStorageName(scope, name)

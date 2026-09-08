@@ -56,7 +56,7 @@ const (
 // packagedRecordStores reads every record store the container carried. A store
 // that cannot be read is left out rather than reported: the archive is
 // untrusted input, and a title with no save is a title on its first run.
-func (a *Archive) packagedRecordStores() map[string][][]byte {
+func (a *Archive) packagedRecordStores() map[string]packagedStore {
 	if a == nil || len(a.Entries) == 0 {
 		return nil
 	}
@@ -74,7 +74,7 @@ func (a *Archive) packagedRecordStores() map[string][][]byte {
 		}
 	}
 	sort.Strings(indexes)
-	stores := make(map[string][][]byte)
+	stores := make(map[string]packagedStore)
 	// One archive may hold many of these and each asks for its slots before a
 	// record is read, so what the whole of them may ask for is bounded as well
 	// as what each one may.
@@ -82,7 +82,7 @@ func (a *Archive) packagedRecordStores() map[string][][]byte {
 	for _, name := range indexes {
 		header := a.Entries[name]
 		data := a.Entries[strings.TrimSuffix(name, packagedStoreIndex)+packagedStoreData]
-		store, records, ok := parsePackagedRecordStore(header, data)
+		store, carried, ok := parsePackagedRecordStore(header, data)
 		if !ok || !validRecordStoreName(store) {
 			continue
 		}
@@ -96,11 +96,11 @@ func (a *Archive) packagedRecordStores() map[string][][]byte {
 		if _, taken := stores[store]; taken {
 			continue
 		}
-		if len(records) > budget {
+		if len(carried.records) > budget {
 			break
 		}
-		budget -= len(records)
-		stores[store] = records
+		budget -= len(carried.records)
+		stores[store] = carried
 	}
 	if len(stores) == 0 {
 		return nil
@@ -108,30 +108,44 @@ func (a *Archive) packagedRecordStores() map[string][][]byte {
 	return stores
 }
 
-// parsePackagedRecordStore decodes one `.sb` against its data file. It answers
-// the store's name and its records indexed the way this runtime holds them:
-// by id, with a nil for an id the store no longer has.
-func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
+// packagedStore is one store as the container held it: its records indexed the
+// way this runtime holds them — by id, with a nil for an id the store no longer
+// has — and the two numbers a title can ask the store about itself.
+type packagedStore struct {
+	records  [][]byte
+	version  int32
+	modified int64
+}
+
+// parsePackagedRecordStore decodes one `.sb` against its data file.
+func parsePackagedRecordStore(header, data []byte) (string, packagedStore, bool) {
 	if len(header) < packagedStoreHeaderBytes {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	next := binary.BigEndian.Uint32(header[0:4])
 	nameLength := int(binary.BigEndian.Uint16(header[4:6]))
 	cursor := 6 + nameLength
 	if nameLength == 0 || len(header) < cursor+packagedStoreHeaderBytes-6 {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	name := string(header[6:cursor])
+	// The version and the modification time are what getVersion and
+	// getLastModified answer for a store the container carried. Decoding them
+	// past and letting the store report zero and "now" would make a title that
+	// stamps a version into its own data and compares it read its own save as
+	// version zero.
+	version := binary.BigEndian.Uint32(header[cursor : cursor+4])
 	count := binary.BigEndian.Uint32(header[cursor+4 : cursor+8])
 	declared := binary.BigEndian.Uint32(header[cursor+8 : cursor+12])
+	modified := binary.BigEndian.Uint64(header[cursor+12 : cursor+20])
 	// Past the name: the version, the count, the size, and the eight bytes of
 	// the modification time.
 	cursor += 4 + 4 + 4 + 8
 	if count > packagedStoreMaxRecords || uint64(declared) != uint64(len(data)) {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	if len(header) < cursor+int(count)*packagedStoreEntryBytes {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	// The store is as long as the next id says, so getNextRecordID answers
 	// what the handset would have. A record the store no longer holds is a
@@ -145,10 +159,10 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 	// comes after every id the table holds — which is what the twelve
 	// packaged stores in the local set all say.
 	if next < rmsFirstRecordID || uint64(next)-rmsFirstRecordID > packagedStoreMaxRecords {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	if uint64(count) > uint64(next)-rmsFirstRecordID {
-		return "", nil, false
+		return "", packagedStore{}, false
 	}
 	length := int(next) - rmsFirstRecordID
 	records := make([][]byte, max(length, 0))
@@ -162,10 +176,10 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 		// naming id 16384 grows the store to 16384 slots and makes
 		// getNextRecordID answer past every id the title ever reserved.
 		if id < rmsFirstRecordID || id >= next || size > rmsMaxRecordBytes {
-			return "", nil, false
+			return "", packagedStore{}, false
 		}
 		if uint64(offset)+uint64(size) > uint64(len(data)) {
-			return "", nil, false
+			return "", packagedStore{}, false
 		}
 		for int(id) > len(records) {
 			records = append(records, nil)
@@ -177,5 +191,5 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 		copy(record, data[offset:offset+size])
 		records[id-rmsFirstRecordID] = record
 	}
-	return name, records, true
+	return name, packagedStore{records: records, version: int32(version), modified: int64(modified)}, true
 }

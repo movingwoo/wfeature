@@ -308,6 +308,15 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 	if options.DryRun {
 		return nil
 	}
+	scope, name, split := strings.Cut(key, "/")
+	if split && reservedStorageName(scope, name) {
+		// A source tree is somebody else's directory, and a file in it can be
+		// named anything. Writing one over a table's own list would replace it
+		// with the file's bytes — and the mark-clearing below would then read
+		// those bytes back as a list of deleted names.
+		report.skip("%s: %s is a name this platform keeps its own record under", source, key)
+		return nil
+	}
 	store := NewDirectorySaveStore(filepath.Join(options.SaveRoot, owner))
 	if err := store.StoreSave(key, data); err != nil {
 		return fmt.Errorf("write %s/%s: %w", owner, key, err)

@@ -284,12 +284,17 @@ func TestACarriedStoreDeletedAndCreatedAgainSurvivesTheSession(t *testing.T) {
 // writes a zero-length record for addRecord(null, 0, 0).
 func TestAPackagedRecordOfNoBytesIsARecord(t *testing.T) {
 	index, data := packagedStoreFiles("Carried", []byte("aaaaa"), []byte{}, []byte("bbbbb"))
-	_, records, ok := parsePackagedRecordStore(index, data)
+	_, carried, ok := parsePackagedRecordStore(index, data)
 	if !ok {
 		t.Fatal("a store holding an empty record was refused")
 	}
-	if len(records) != 3 || records[1] == nil || len(records[1]) != 0 {
-		t.Fatalf("records = %q, want the middle one empty rather than absent", records)
+	if len(carried.records) != 3 || carried.records[1] == nil || len(carried.records[1]) != 0 {
+		t.Fatalf("records = %q, want the middle one empty rather than absent", carried.records)
+	}
+	// The two numbers a title can ask the store about itself come from the
+	// container as well, so a carried save does not answer version zero.
+	if carried.version != 1 || carried.modified != 1157345872686 {
+		t.Fatalf("version %d modified %d, want what the container declared", carried.version, carried.modified)
 	}
 }
 
@@ -362,8 +367,8 @@ func TestACraftedIndexCannotAskForMoreThanItDescribes(t *testing.T) {
 		archive.Entries[name+packagedStoreData] = wideData
 	}
 	slots := 0
-	for _, records := range archive.packagedRecordStores() {
-		slots += len(records)
+	for _, carried := range archive.packagedRecordStores() {
+		slots += len(carried.records)
 	}
 	if slots > packagedStoreMaxSlots {
 		t.Fatalf("one archive asked for %d slots, over the %d budget", slots, packagedStoreMaxSlots)
@@ -405,12 +410,12 @@ func plainFixture(t *testing.T, store backend.SaveStore) *Runtime {
 	return runtime
 }
 
-// TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne is the SKT half
-// of the upgrade. The release before carried stores existed threw for one, the
-// title's first-run path created it, and creating it wrote an empty record
-// list and indexed the name — which would otherwise mask the archive's copy
-// for ever, so nobody who had already launched the title once would see this.
-func TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne(t *testing.T) {
+// TestAStoreTheHostHoldsWinsEvenWhenItHoldsNothing pins the rule the delete
+// depends on. Reading an empty record list as "not really a store" would have
+// carried the archive's copy to a player whose earlier build created one, and
+// it is the same shape a title leaves when it clears a slot and creates it
+// again — so it would also resurrect a store somebody had just deleted.
+func TestAStoreTheHostHoldsWinsEvenWhenItHoldsNothing(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "carried")
 	store := backend.NewDirectorySaveStore(directory)
 	key, err := recordStoreKey("Alpha")
@@ -427,46 +432,36 @@ func TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne(t *testing.T) {
 	runtime := carriedPair(t, backend.NewDirectorySaveStore(directory))
 	opened, err := runtime.openStore("Alpha", false)
 	if err != nil {
-		t.Fatalf("openRecordStore over the earlier build's empty store = %v", err)
+		t.Fatalf("openRecordStore over an empty store = %v", err)
 	}
-	if len(opened.records) != 1 || string(opened.records[0]) != "x" {
-		t.Fatalf("records = %q, want the archive's copy", opened.records)
+	if len(opened.records) != 0 {
+		t.Fatalf("records = %q, want the empty store the Host holds", opened.records)
 	}
 }
 
-// TestTheEarlierBuildsStoreKeepsItsPlaceInTheIndex is the other half of the
-// upgrade rule, and the shape that made it worse than doing nothing. A store
-// the Host's index already names is there because an earlier build created it;
-// marking it unwritten took it back out of the index the next write rewrote,
-// so the session after that found no store at all.
-func TestTheEarlierBuildsStoreKeepsItsPlaceInTheIndex(t *testing.T) {
+// TestACarriedStoreClearedAndCreatedAgainStaysCleared is the round trip the
+// delete has to survive across a session. The delete leaves an empty record
+// list and takes the name out of the index; the create that follows puts it
+// back and writes the same empty list — and the next session has to read that
+// as the empty store the title asked for rather than as an invitation to serve
+// the archive's copy again.
+func TestACarriedStoreClearedAndCreatedAgainStaysCleared(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "carried")
-	store := backend.NewDirectorySaveStore(directory)
-	key, err := recordStoreKey("Alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.StoreSave(key, backend.EncodeSaveRecords(nil)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.StoreSave(rmsIndexKey, []byte("Alpha")); err != nil {
-		t.Fatal(err)
-	}
-
 	runtime := carriedPair(t, backend.NewDirectorySaveStore(directory))
-	if _, err := runtime.openStore("Alpha", false); err != nil {
+	name := jvm.ReferenceValue(runtime.VM.NewString("Alpha"))
+	if _, err := runtime.rmsDeleteRecordStore(runtime.VM, []jvm.Value{name}); err != nil {
 		t.Fatal(err)
 	}
-	// Any other store being written rewrites the index whole.
-	other, err := runtime.openStore("Unrelated", true)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := runtime.openStore("Alpha", true); err != nil {
+		t.Fatalf("creating it again = %v", err)
 	}
-	other.records = [][]byte{[]byte("y")}
-	runtime.persistStore(other)
 
-	next := plainFixture(t, backend.NewDirectorySaveStore(directory))
-	if _, err := next.openStore("Alpha", false); err != nil {
-		t.Fatalf("the store the earlier build created was evicted from the index: %v", err)
+	next := carriedPair(t, backend.NewDirectorySaveStore(directory))
+	reopened, err := next.openStore("Alpha", false)
+	if err != nil {
+		t.Fatalf("the store the title created is gone on the next session: %v", err)
+	}
+	if len(reopened.records) != 0 {
+		t.Fatalf("records = %q, want the store to have stayed cleared", reopened.records)
 	}
 }

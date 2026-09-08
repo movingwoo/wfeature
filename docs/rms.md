@@ -120,24 +120,10 @@ It has to be a MIDP name, it has to be a save key, and it cannot be `.index` —
 the name this runtime keeps its store list under, which a container supplies on
 its own with no guest cooperation.
 
-**A store holding no record does not win over the one the archive carried**,
-and the index is what tells the two empty shapes apart. The release before
-carried stores existed threw for one, the title's first-run path created it,
-and creating a store writes an empty record list *and* puts its name in the
-index — so a name the index still holds with nothing under it is a store
-nothing ever wrote, and the archive's copy answers instead. A delete writes the
-same empty list and takes the name *out* of the index, so it is not that, and
-the archive's copy stays hidden. A store a title filled and then emptied is
-neither: emptying keeps a tombstone per record, so its list is not empty. This
-is the same rule the KTF tables keep, and it exists for the same reason —
-without it the fix reaches nobody who had already launched the title once.
-
-**A store the index already names keeps its place in it.** The rule above is
-about content, not about existence: a store the earlier build created is in the
-index because it created it, and treating it as one only the archive knows
-about took its name back out of the index the next write rewrote — leaving the
-session after that with no store at all, which is less than it had before any
-of this. Only a store the Host's index did not already name is held back.
+**A store the Host holds wins even when it holds no record**, and the KTF half
+of this work explains why the opposite was tried and withdrawn: the shape an
+earlier build left is the shape a delete-and-create leaves, and serving the
+archive over it hands back a save somebody cleared.
 
 **Deleting a carried store ends both of the things carrying it means.** The
 archive's copy is not to be served again, and the name is not to be filtered

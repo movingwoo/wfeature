@@ -926,27 +926,23 @@ And opening a packaged database writes nothing — the empty-record write that
 makes a *created* database exist for the next session would otherwise shadow
 the archive's own copy with an empty one.
 
-**A save holding no record does not win**, and that rule is about the upgrade
-rather than about correctness. The release before this one told these titles
-their database was absent; a title that answered by creating one left an empty
-record list behind, and by the plain rule that empty list would mask the
-archive's copy for ever — so the fix would never reach a player who had already
-launched the game once. Nine of the twenty-one local titles are in exactly that
-state after one run of the previous build. The database still *exists* when its
-save is empty, so a database a title created and never wrote is found by the
-next open as before; what the rule decides is only which records it opens with.
+**A save holding no record still wins, and that is a rule that was tried the
+other way round.** The release before this one told these titles their database
+was absent; a title that answered by creating one left an empty record list
+behind, so reading an empty save as "not really a save" would carry the
+archive's copy to a player who had already launched the game once — four local
+titles' worth. It also carries it to a player who *deleted* their save and
+created it again, because that leaves the identical shape: an empty record list
+with the name off the removal list. Nothing tells those two apart without a
+third list per table recording which empty saves this build made, and
+resurrecting a save somebody cleared is worse than asking them to clear one
+more time. So the rule is not here. **Clearing the game's save is what adopts
+the packaged copy** — the same lever as everywhere else, and it is in the
+release notes rather than in a rule. None of the three titles the download
+prompt was blocking needs it: two left no save at all, and the third has real
+records under its name that no rule should overwrite.
 
-**The other twelve keep their save, and that is the answer rather than a gap.**
-A title told its database was absent did not stop: it created one and wrote its
-own defaults, and on a machine where somebody then played, those records are
-their progress. Replacing them with a stranger's saved game to repair an
-earlier mistake of ours would cost more than it returns. What it means for a
-player who met one of the download prompts on the previous build is that
-clearing that game's save is what adopts the packaged copy — the same lever as
-everywhere else here, and it belongs in the release notes rather than in a
-rule.
-
-**A name a game chooses is a save key, and three names are reserved.** A key is
+**A name a game chooses is a save key, and three names are reserved.****A name a game chooses is a save key, and three names are reserved.** A key is
 a table's scope joined to the name, so a database or a file called `.removed`
 addresses the list of what the table deleted, and `.dirs` and `.index` the same
 way for the lists beside it. Whichever was written last won, and both readings
