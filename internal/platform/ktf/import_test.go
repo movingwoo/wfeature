@@ -185,3 +185,28 @@ func TestAnImportedSaveIsNotHiddenByAnEarlierDelete(t *testing.T) {
 		t.Fatalf("removal list = %q, want the imported name off it and the other kept", list)
 	}
 }
+
+// TestAnEntryTheImporterRefusesIsNotReportedAsImported keeps the report and
+// the save tree telling one story. The refusal is decided before the entry is
+// counted, so a name this platform keeps its own record under is not both
+// imported and skipped on a real run, nor promised by a dry run that the real
+// run will not perform.
+func TestAnEntryTheImporterRefusesIsNotReportedAsImported(t *testing.T) {
+	root := t.TempDir()
+	for _, dry := range []bool{false, true} {
+		report := &ImportReport{}
+		options := ImportOptions{SourceRoot: filepath.Join(root, "source"), SaveRoot: root, DryRun: dry}
+		if err := writeImported(options, report, "fs/PD0001/.removed", "PD0001", "fs/.removed", []byte("bytes")); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Imported) != 0 {
+			t.Fatalf("dry=%t: reported %d imported, want the refusal counted as a skip only", dry, len(report.Imported))
+		}
+		if len(report.Skipped) != 1 {
+			t.Fatalf("dry=%t: reported %d skipped, want the refusal named", dry, len(report.Skipped))
+		}
+	}
+	if _, exists := NewDirectorySaveStore(filepath.Join(root, "PD0001")).LoadSave("fs/.removed"); exists {
+		t.Fatal("the refused entry was written anyway")
+	}
+}

@@ -545,4 +545,24 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 	if !ok || string(after) != string(before) {
 		t.Fatalf("removal list = %q, want it untouched", after)
 	}
+
+	// Renaming one away is the same hole from the other end: the source is
+	// emptied after the copy, so the list would leave under another name and
+	// nothing would be left behind.
+	const toAddress = platformDataBase + 0x8100
+	if err := runtime.client.core.Memory().Write(toAddress, append([]byte("loot"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	for register, value := range map[int]uint32{0: nameAddress, 1: toAddress} {
+		if err := thread.SetRegister(register, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileRename); err != nil || result != wipicErrorInvalid {
+		t.Fatalf("renaming the list away = %#x, err = %v, want it refused", result, err)
+	}
+	moved, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(moved) != string(before) {
+		t.Fatalf("removal list = %q, want it untouched", moved)
+	}
 }

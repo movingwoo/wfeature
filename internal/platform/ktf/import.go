@@ -304,10 +304,9 @@ func importDatabaseScope(options ImportOptions, report *ImportReport) error {
 // writeImported persists one converted entry through the same store the
 // runtime reads with, so key validation and directory creation cannot drift.
 func writeImported(options ImportOptions, report *ImportReport, source, owner, key string, data []byte) error {
-	report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
-	if options.DryRun {
-		return nil
-	}
+	// Before the entry is counted, and before the dry run answers: a refused
+	// entry that has already been added reads as an import that happened, and
+	// a dry run would promise one the real run will not perform.
 	scope, name, split := strings.Cut(key, "/")
 	if split && reservedStorageName(scope, name) {
 		// A source tree is somebody else's directory, and a file in it can be
@@ -315,6 +314,10 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 		// with the file's bytes — and the mark-clearing below would then read
 		// those bytes back as a list of deleted names.
 		report.skip("%s: %s is a name this platform keeps its own record under", source, key)
+		return nil
+	}
+	report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
+	if options.DryRun {
 		return nil
 	}
 	store := NewDirectorySaveStore(filepath.Join(options.SaveRoot, owner))

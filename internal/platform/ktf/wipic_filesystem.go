@@ -309,12 +309,16 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s exists", oldName, newName))
 		return wipicErrorExists, nil
 	}
-	if reservedStorageName(cFileScope, newName) {
-		// Renaming onto a list this table keeps would replace it with the
-		// file's bytes, and the next session would read those bytes as the
-		// list. Refused before anything moves: returning after the source had
-		// already left the live map left a handle pointing at a store nothing
-		// else could reach.
+	if reservedStorageName(cFileScope, oldName) || reservedStorageName(cFileScope, newName) {
+		// Either end. Renaming *onto* a list this table keeps would replace it
+		// with the file's bytes, and the next session would read those bytes
+		// as the list; renaming one *away* is worse, because the source is
+		// emptied afterwards — the list answers as a seed as soon as anything
+		// has been deleted, so the rename would carry it off under another
+		// name and leave nothing behind, bringing back every database the
+		// title had deleted. Refused before anything moves: returning after
+		// the source had already left the live map left a handle pointing at
+		// a store nothing else could reach.
 		return wipicErrorInvalid, nil
 	}
 	store, live := runtime.cFiles[oldName]
