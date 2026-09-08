@@ -404,3 +404,32 @@ func plainFixture(t *testing.T, store backend.SaveStore) *Runtime {
 	}
 	return runtime
 }
+
+// TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne is the SKT half
+// of the upgrade. The release before carried stores existed threw for one, the
+// title's first-run path created it, and creating it wrote an empty record
+// list and indexed the name — which would otherwise mask the archive's copy
+// for ever, so nobody who had already launched the title once would see this.
+func TestAnEmptyStoreFromTheEarlierBuildDoesNotMaskTheCarriedOne(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "carried")
+	store := backend.NewDirectorySaveStore(directory)
+	key, err := recordStoreKey("Alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreSave(key, backend.EncodeSaveRecords(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreSave(rmsIndexKey, []byte("Alpha")); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := carriedPair(t, backend.NewDirectorySaveStore(directory))
+	opened, err := runtime.openStore("Alpha", false)
+	if err != nil {
+		t.Fatalf("openRecordStore over the earlier build's empty store = %v", err)
+	}
+	if len(opened.records) != 1 || string(opened.records[0]) != "x" {
+		t.Fatalf("records = %q, want the archive's copy", opened.records)
+	}
+}

@@ -156,7 +156,7 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 		records := carried[name]
 		if store != nil {
 			if key, err := recordStoreKey(name); err == nil {
-				if _, written := store.LoadSave(key); written {
+				if data, written := store.LoadSave(key); written && !unwrittenBefore(data, state.contains(name)) {
 					// The Host has the last word about this store, whether
 					// that is records the title wrote or the empty list a
 					// delete leaves behind. Neither the name nor the archive's
@@ -187,6 +187,26 @@ func (state *rmsState) contains(name string) bool {
 		}
 	}
 	return false
+}
+
+// unwrittenBefore answers whether stored bytes are what the release before
+// packaged stores left behind rather than something the title meant to keep.
+//
+// Both shapes are an empty record list, and the index tells them apart. The old
+// build threw for a carried store, the title's first-run path created one, and
+// creating one writes an empty list *and* puts the name in the index — so a
+// name the index still holds with no records under it is a store nothing ever
+// wrote. A delete writes the same empty list and takes the name *out* of the
+// index, so it is not this, and the archive's copy stays hidden.
+//
+// A store the title filled and then emptied is neither: emptying keeps a
+// tombstone per record, so its list is not empty.
+func unwrittenBefore(data []byte, indexed bool) bool {
+	if !indexed {
+		return false
+	}
+	records, err := backend.DecodeSaveRecords(data)
+	return err == nil && len(records) == 0
 }
 
 // storeIndex writes the store name list back so a later session lists stores
@@ -286,16 +306,28 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		return nil, newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	var records [][]byte
+	// A save holding no record does not win over what the archive carried, for
+	// the reason the KTF tables answer the same way: the release before this
+	// one threw for a carried store, the title's first-run path created one,
+	// and the empty record list that left behind would mask the archive's copy
+	// for ever — so nobody who had already launched the title once would see
+	// the fix. A delete is the other way a store ends up empty, and that one
+	// is not seeded at all.
+	served := false
 	if packaged, carried := state.packaged[name]; carried && found {
 		// Only when the store is one that exists: a title that deleted a
 		// carried store and then created it again asked for an empty one, and
 		// the archive's copy must not come back through the create.
 		records = append([][]byte(nil), packaged...)
+		served = true
 		delete(state.packaged, name)
 		// Nothing is written here, not even the name: the store stays in
 		// `unwritten` until something writes it. See persistStore.
 	}
-	if found && boundary != nil {
+	// Not when the archive's copy was served: loadIndex only offers one where
+	// the Host holds nothing under the key or holds the empty list the earlier
+	// build left, so reading that back over it would undo the decision.
+	if found && !served && boundary != nil {
 		if data, ok := boundary.LoadSave(key); ok {
 			decoded, decodeErr := backend.DecodeSaveRecords(data)
 			if decodeErr != nil {

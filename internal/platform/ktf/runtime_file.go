@@ -167,7 +167,7 @@ func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed 
 // path on the removal list would be stored and then be unreadable.
 func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) {
 	trimmed := strings.TrimPrefix(name, "/")
-	if reservedStorageName(trimmed) {
+	if reservedStorageName(guestFileScope, trimmed) {
 		// The name this table keeps its own list under. Writing it would put
 		// the file's bytes where the list belongs, and reading the list back
 		// would mark whatever those bytes spell as deleted.

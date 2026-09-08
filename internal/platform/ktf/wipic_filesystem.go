@@ -319,6 +319,12 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		}
 	}
 	delete(runtime.cFiles, oldName)
+	if reservedStorageName(cFileScope, newName) {
+		// Renaming onto a list this table keeps would replace it with the
+		// file's bytes, and the next session would read those bytes as the
+		// list. The open path refuses the name for the same reason.
+		return wipicErrorInvalid, nil
+	}
 	store.name = newName
 	if runtime.cFiles == nil {
 		runtime.cFiles = make(map[string]*runtimeCFile)
@@ -482,7 +488,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
-	if reservedStorageName(name) {
+	if reservedStorageName(cFileScope, name) {
 		return wipicErrorInvalid, nil
 	}
 	store, exists := runtime.cFiles[name]

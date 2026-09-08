@@ -955,10 +955,26 @@ names on the next run and hides databases nobody deleted. Moving the
 bookkeeping out of reach would orphan every list already written (the same
 reason these keys still spell `db`), so the names are refused instead, on all
 four tables, tested against the key the name normalises to rather than against
-the name itself. The list also cannot carry a name that would not come back as
+the name itself, and **per scope**: a guest file called `.dirs` collides with
+nothing, because the directory list belongs to the table next door. The refusal
+covers every way a name reaches a key — the file table's rename and delete
+write one as surely as its open does, and `.dirs` has no list-rewrite to
+rescue it the way `.removed` happens to have. The list also cannot carry a name that would not come back as
 itself, so a name with a newline or with surrounding space is refused for the
 same reason: deleting a name with a newline in it would otherwise hide the two
 unrelated databases its halves spell, and deleting `save ` would hide `save`.
+
+**The length bound stays where it came from.** A name has to survive the
+removal list on both tables, but the 31-byte cap is the WIPI C record
+database's own, out of its specification, and the Java class never had one:
+eleven Korean characters are thirty-three bytes, so applying it there would
+refuse a name that class has always taken — and orphan any save already written
+under it.
+
+**A table's own list hides that table's own save; the archive is hidden by
+either.** Reading the shared answer for the save as well let the C table's
+delete hide an unrelated Java save of the same name, and nothing on the Java
+side ever took a name off the C list, so that save was gone for good.
 
 **Writing a database takes it back off the deletion list**, exactly as writing
 a guest file does. A title that keeps a handle across its own delete still

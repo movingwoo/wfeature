@@ -163,7 +163,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("rdb open %s size %d create %d", name, recordSize, int32(create)))
-	if !storableName(name) {
+	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
 		return wipicErrorInvalid, nil
 	}
 	store, exists := runtime.recordDatabases[name]
@@ -247,6 +247,12 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("rdb delete %s", name))
+	// The name is written into the removal list, so it has to survive that
+	// list for the same reason an open has to: a name carrying a newline would
+	// come back as two, and hide two databases nobody deleted.
+	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
+		return wipicErrorInvalid, nil
+	}
 	_, exists := runtime.recordDatabases[name]
 	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 	_, hasSaved := runtime.loadSave("rdb/" + name)
@@ -691,23 +697,36 @@ func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string
 // Moving the bookkeeping somewhere a name cannot reach would orphan every list
 // already written, which is the same reason these save keys still spell "db".
 // So the names are reserved instead. No local title asks for one.
-var reservedStorageNames = map[string]bool{
-	".removed": true,
-	".dirs":    true,
-	".index":   true,
+// The set is per scope, because a name is only reserved where a list of that
+// name actually lives: the guest filesystem keeps a removal list, the WIPI C
+// file table keeps a removal list and a directory list, and each database
+// table keeps a removal list. A guest file called ".dirs" collides with
+// nothing under "fs/" and is left alone there.
+var reservedStorageNames = map[string]map[string]bool{
+	guestFileScope:      {".removed": true},
+	cFileScope:          {".removed": true, ".dirs": true},
+	recordDatabaseScope: {".removed": true},
+	javaDatabaseScope:   {".removed": true},
 }
 
-// reservedStorageName answers whether a guest-chosen name addresses one of
-// them. The test is against the key the name normalizes to rather than against
-// the name: NormalizeSaveKey drops empty and "." components, so "./.removed"
-// and ".removed/" reach the same file as ".removed".
-func reservedStorageName(name string) bool {
-	key, err := backend.NormalizeSaveKey("scope/" + name)
+const (
+	guestFileScope      = "fs"
+	cFileScope          = "db"
+	recordDatabaseScope = "rdb"
+	javaDatabaseScope   = "jdb"
+)
+
+// reservedStorageName answers whether a guest-chosen name addresses one of the
+// lists its own table keeps. The test is against the key the name normalizes
+// to rather than against the name: NormalizeSaveKey drops empty and "."
+// components, so "./.removed" and ".removed/" reach the same file.
+func reservedStorageName(scope, name string) bool {
+	key, err := backend.NormalizeSaveKey(scope + "/" + name)
 	if err != nil {
 		return false
 	}
-	rest, found := strings.CutPrefix(key, "scope/")
-	return found && reservedStorageNames[rest]
+	rest, found := strings.CutPrefix(key, scope+"/")
+	return found && reservedStorageNames[scope][rest]
 }
 
 // storableName is what both tables accept from a guest. A name has to be a
@@ -719,12 +738,17 @@ func reservedStorageName(name string) bool {
 // itself: deleting "A\nB" would hide the unrelated databases A and B, and
 // deleting "save " would hide "save", which nobody deleted. Neither table
 // bounded those characters, and both accept whatever string the guest built.
-func storableName(name string) bool {
-	if name == "" || len(name) > maxRecordDatabaseName {
+// It does not bound the length. That bound is the WIPI C record database's
+// own, from its specification, and applying it to the Java class would refuse
+// names that class has always accepted — eleven Korean characters are
+// thirty-three bytes, so a title using one, and any save already written under
+// it, would stop working.
+func storableName(scope, name string) bool {
+	if name == "" {
 		return false
 	}
 	if strings.TrimSpace(name) != name || strings.ContainsAny(name, "\n\r") {
 		return false
 	}
-	return !reservedStorageName(name)
+	return !reservedStorageName(scope, name)
 }

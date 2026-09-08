@@ -397,24 +397,37 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 // deleted. Whichever was written last used to win — the game's records read
 // back as a list of deleted names, which then hides databases nobody deleted.
 func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
-	for _, name := range []string{".removed", ".dirs", ".index", "./.removed", ".removed/"} {
-		if !reservedStorageName(name) {
+	for _, name := range []string{".removed", "./.removed", ".removed/"} {
+		if !reservedStorageName(javaDatabaseScope, name) {
 			t.Fatalf("%q reaches a key a table keeps its own list under", name)
 		}
 	}
-	for _, name := range []string{"sub/.removed", "removed", ".removedx", "scores"} {
-		if reservedStorageName(name) {
-			t.Fatalf("%q collides with nothing and was refused", name)
+	if !reservedStorageName(cFileScope, ".dirs") {
+		t.Fatal("the file table's directory list is not reserved on its own scope")
+	}
+	// A name is reserved only on the scope that keeps a list of it: the guest
+	// filesystem has no directory list, so a guest file called ".dirs"
+	// collides with nothing.
+	for _, name := range []string{".dirs", ".index", "sub/.removed", "removed", ".removedx", "scores"} {
+		if reservedStorageName(guestFileScope, name) {
+			t.Fatalf("%q collides with nothing under fs/ and was refused", name)
 		}
 	}
 	// The list is names joined by newlines, trimmed on the way back, so a name
 	// carrying either would not come back as itself.
-	for _, name := range []string{"", "A\nB", "save ", " save", ".removed", strings.Repeat("x", maxRecordDatabaseName+1)} {
-		if storableName(name) {
+	for _, name := range []string{"", "A\nB", "save ", " save", ".removed"} {
+		if storableName(javaDatabaseScope, name) {
 			t.Fatalf("%q cannot survive the removal list and was accepted", name)
 		}
 	}
-	if !storableName("save") {
+	// The length cap is the WIPI C record database's own and does not reach
+	// the Java class: eleven Korean characters are thirty-three bytes, and
+	// that class has always accepted them.
+	long := strings.Repeat("가", 11)
+	if !storableName(javaDatabaseScope, long) {
+		t.Fatalf("a %d-byte name the Java class has always taken was refused", len(long))
+	}
+	if !storableName(recordDatabaseScope, "save") {
 		t.Fatal("an ordinary name was refused")
 	}
 

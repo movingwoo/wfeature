@@ -255,6 +255,9 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.deleteDataBase name is not a string")
 	}
+	if !storableName(javaDatabaseScope, name) {
+		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
+	}
 	store := runtime.databases[name]
 	if store == nil {
 		// A database this session has not opened is still a database: the

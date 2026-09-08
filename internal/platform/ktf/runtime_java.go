@@ -2472,7 +2472,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if !storableName(name) {
+	if !storableName(javaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
 	}
 	store := runtime.databases[name]
@@ -2481,7 +2481,12 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// A database this title deleted is gone rather than empty, and both
 		// the save under it and the copy the archive carries stay hidden
 		// while it is on the list. See recordDatabaseRemovals.
-		deleted := runtime.databaseDeleted(name)
+		// This table's own list hides this table's own save; the shared
+		// archive is hidden by either. Reading the shared answer here let the
+		// WIPI C table's delete hide an unrelated Java save under the same
+		// name, and nothing on this side ever took that name off the other
+		// table's list, so the save was gone for good.
+		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 		saved, present := runtime.loadSave("jdb/" + name)
 		if deleted {
 			present = false
@@ -2508,7 +2513,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// and never written is found by the next open exactly as before; what
 		// the rule decides is only which content it opens with.
 		packaged := false
-		if (!present || len(store.records) == 0) && !deleted {
+		if (!present || len(store.records) == 0) && !runtime.databaseDeleted(name) {
 			if records, hasPackaged := runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
 				store.records = records
 				packaged = true
