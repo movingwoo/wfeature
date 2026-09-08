@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -387,5 +388,111 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 		if err != nil || result != wipicErrorInvalid {
 			t.Fatalf("list(buffer=%#x, capacity=%d) = %#x, err = %v", arguments.buffer, arguments.capacity, result, err)
 		}
+	}
+}
+
+// TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved closes a collision
+// that runs both ways: a save key is a table's scope joined to the name a game
+// chose, so a game naming an entry ".removed" addresses the list of what it
+// deleted. Whichever was written last used to win — the game's records read
+// back as a list of deleted names, which then hides databases nobody deleted.
+func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
+	for _, name := range []string{".removed", ".dirs", ".index", "./.removed", ".removed/"} {
+		if !reservedStorageName(name) {
+			t.Fatalf("%q reaches a key a table keeps its own list under", name)
+		}
+	}
+	for _, name := range []string{"sub/.removed", "removed", ".removedx", "scores"} {
+		if reservedStorageName(name) {
+			t.Fatalf("%q collides with nothing and was refused", name)
+		}
+	}
+	// The list is names joined by newlines, trimmed on the way back, so a name
+	// carrying either would not come back as itself.
+	for _, name := range []string{"", "A\nB", "save ", " save", ".removed", strings.Repeat("x", maxRecordDatabaseName+1)} {
+		if storableName(name) {
+			t.Fatalf("%q cannot survive the removal list and was accepted", name)
+		}
+	}
+	if !storableName("save") {
+		t.Fatal("an ordinary name was refused")
+	}
+
+	_, runtime := newTestRuntime(t)
+	if handle := openRecordDatabase(t, runtime, ".removed", 8, 1); handle != wipicErrorInvalid {
+		t.Fatalf("the record table opened its own list as a database: %#x", handle)
+	}
+}
+
+// TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt narrows the recovery
+// the split parser makes. It exists for one packaged index whose magic is cut
+// short, and with a single record the divide-evenly test can never reject — so
+// an intact header that disagrees with the file beside it would have read that
+// whole file as the database's one record.
+func TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(5, []byte("aaaaa"))
+	unrelated := make([]byte, 1400)
+	runtime.guestFiles = map[string][]byte{"CFG.idx": index, "CFG.db": unrelated}
+	if records, ok := runtime.packagedRecordDatabase("CFG", 5); ok {
+		t.Fatalf("an intact index took an unrelated file as its data: %d records of %d bytes", len(records), len(records[0]))
+	}
+	// The bent one it was written for still recovers.
+	bent, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	bent[recordDatabaseMagicMatch] = 0xff
+	binary.BigEndian.PutUint32(bent[recordDatabaseSizeOffset:], 0xff000004)
+	runtime.guestFiles = map[string][]byte{"BENT.idx": bent, "BENT.db": data}
+	if _, ok := runtime.packagedRecordDatabase("BENT", 4); !ok {
+		t.Fatal("the bent index this recovery exists for was refused")
+	}
+}
+
+// TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt keeps the
+// empty-versus-missing rule from turning on a stale data file: answering "no
+// such database" sends a title down its first-run path on every launch.
+func TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(100)
+	runtime.guestFiles = map[string][]byte{"E.idx": index, "E.db": []byte("stale")}
+	records, ok := runtime.packagedRecordDatabase("E", 100)
+	if !ok {
+		t.Fatal("an index declaring no record was read as no database")
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %q, want none", records)
+	}
+}
+
+// TestWritingADatabaseTakesItBackOffTheDeletionList covers a handle a title
+// keeps across its own delete. The records go to the key the list hides, so
+// without the unmark they would be written and then unreadable for ever — the
+// guest file table pairs every write with the same unmark.
+func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, "SAVE", true)
+	store := &runtimeRecordDatabase{name: "SAVE", records: [][]byte{[]byte("written")}}
+	runtime.persistRecordDatabase(store)
+	if runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)["SAVE"] {
+		t.Fatal("a database that was written is still on the deletion list")
+	}
+	runtime.recordDatabases = nil
+	if handle := openRecordDatabase(t, runtime, "SAVE", 8, 0); handle == wipicErrorNotFound {
+		t.Fatal("the record written through a surviving handle is unreachable")
+	}
+}
+
+// TestDeletingThroughOneTableHidesTheArchiveFromTheOther pins what the two
+// tables share. They keep separate stores and separate lists, but one archive:
+// a packaged copy hidden by one table's delete has to be hidden by both, or
+// the record a title cleared comes straight back through the other door.
+func TestDeletingThroughOneTableHidesTheArchiveFromTheOther(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, "save", true)
+	if handle := openRecordDatabase(t, runtime, "save", 4, 0); handle != wipicErrorNotFound {
+		t.Fatalf("the C table served the archive's copy of a database the Java table deleted: %#x", handle)
 	}
 }

@@ -873,7 +873,8 @@ Three details are worth keeping, because each one is silent when it is wrong.
 - **A count of zero is a database, not a missing one.** Two local indexes
   declare no record, and one of those has no data file in the archive at all.
   Answering "no such database" for it sends a title down its first-run path on
-  every launch.
+  every launch — including when a stale data file the index does not describe
+  sits beside it, which is a file to ignore rather than a database to refuse.
 - **The header's byte order only shows above 255.** The record size used to be
   read as a little-endian word one field further along, which is the same
   number for a record shorter than 256 bytes and a different one for anything
@@ -883,6 +884,10 @@ Three details are worth keeping, because each one is silent when it is wrong.
   overwritten with `0xff` together. Everything else about it is intact and its
   1,400-byte data file divides evenly by the two records it declares, so the
   division is taken and the magic is matched on four bytes rather than five.
+  **An intact header that disagrees with the file beside it is refused**: that
+  is a stale file rather than a bent number, and with a single record the
+  divide-evenly test can never reject, so any file at all would otherwise have
+  been read as the database's one record.
 
 ### The Java `DataBase` never looked at the archive, and that is a download gate
 
@@ -920,6 +925,51 @@ reason it did on the C side: a game that has written since owns what it wrote.
 And opening a packaged database writes nothing — the empty-record write that
 makes a *created* database exist for the next session would otherwise shadow
 the archive's own copy with an empty one.
+
+**A save holding no record does not win**, and that rule is about the upgrade
+rather than about correctness. The release before this one told these titles
+their database was absent; a title that answered by creating one left an empty
+record list behind, and by the plain rule that empty list would mask the
+archive's copy for ever — so the fix would never reach a player who had already
+launched the game once. Nine of the twenty-one local titles are in exactly that
+state after one run of the previous build. The database still *exists* when its
+save is empty, so a database a title created and never wrote is found by the
+next open as before; what the rule decides is only which records it opens with.
+
+**The other twelve keep their save, and that is the answer rather than a gap.**
+A title told its database was absent did not stop: it created one and wrote its
+own defaults, and on a machine where somebody then played, those records are
+their progress. Replacing them with a stranger's saved game to repair an
+earlier mistake of ours would cost more than it returns. What it means for a
+player who met one of the download prompts on the previous build is that
+clearing that game's save is what adopts the packaged copy — the same lever as
+everywhere else here, and it belongs in the release notes rather than in a
+rule.
+
+**A name a game chooses is a save key, and three names are reserved.** A key is
+a table's scope joined to the name, so a database or a file called `.removed`
+addresses the list of what the table deleted, and `.dirs` and `.index` the same
+way for the lists beside it. Whichever was written last won, and both readings
+are wrong — worse, a list overwritten by records reads back as a set of deleted
+names on the next run and hides databases nobody deleted. Moving the
+bookkeeping out of reach would orphan every list already written (the same
+reason these keys still spell `db`), so the names are refused instead, on all
+four tables, tested against the key the name normalises to rather than against
+the name itself. The list also cannot carry a name that would not come back as
+itself, so a name with a newline or with surrounding space is refused for the
+same reason: deleting a name with a newline in it would otherwise hide the two
+unrelated databases its halves spell, and deleting `save ` would hide `save`.
+
+**Writing a database takes it back off the deletion list**, exactly as writing
+a guest file does. A title that keeps a handle across its own delete still
+writes through it, and those records would otherwise land under a key the list
+hides for ever — readable before this change set, lost after it.
+
+**A packaged copy is hidden by either table's list.** The two tables keep
+separate stores and separate lists, and what they share is the archive: a
+delete through the Java class has to hide the archive's copy from the C table
+as well, or the record a title just cleared comes straight back through the
+other door.
 
 **`listDataBases` still names only what this session has opened**, which is a
 gap this change widens rather than opens: it could never name a database that

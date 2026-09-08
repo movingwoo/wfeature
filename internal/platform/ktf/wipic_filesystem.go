@@ -482,6 +482,9 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
+	if reservedStorageName(name) {
+		return wipicErrorInvalid, nil
+	}
 	store, exists := runtime.cFiles[name]
 	seed, hasSeed := runtime.databaseSeed(name)
 	_, hasPackaged := runtime.packagedDatabase(name)

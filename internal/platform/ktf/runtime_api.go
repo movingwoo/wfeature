@@ -263,8 +263,18 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		// own save is not there — and the packaged copy would come back on
 		// the next run as though nothing had been deleted. The WIPI C table
 		// next door already answers the name form this way.
+		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 		_, saved := runtime.loadSave("jdb/" + name)
-		_, packaged := runtime.packagedRecordDatabase(name, 0)
+		packaged := false
+		if !runtime.databaseDeleted(name) {
+			_, packaged = runtime.packagedRecordDatabase(name, 0)
+		}
+		if deleted {
+			// Already gone. Answering "deleted" twice tells a title that uses
+			// the throw as its existence probe that a save it just cleared is
+			// still there — which is the whole point of the list.
+			saved = false
+		}
 		if !saved && !packaged {
 			message := "database not found: " + name
 			return jvm.VoidValue(), &jvm.GuestException{

@@ -2,6 +2,7 @@ package skt
 
 import (
 	"encoding/binary"
+	"sort"
 	"strings"
 )
 
@@ -44,9 +45,12 @@ const (
 	// table: the two counts either side of the name, the size, and the time.
 	packagedStoreHeaderBytes = 4 + 2 + 4 + 4 + 4 + 8
 	packagedStoreEntryBytes  = 12
-	// packagedStoreMaxRecords bounds what a crafted header may make this
-	// allocate. A handset's store held tens of records.
+	// packagedStoreMaxRecords bounds what a crafted header may make one store
+	// allocate, and packagedStoreMaxSlots what a whole archive may. A
+	// handset's store held tens of records; five hundred crafted indexes of
+	// twenty-seven bytes each asked for thirty-two million slots.
 	packagedStoreMaxRecords = 1 << 16
+	packagedStoreMaxSlots   = 1 << 17
 )
 
 // packagedRecordStores reads every record store the container carried. A store
@@ -56,16 +60,46 @@ func (a *Archive) packagedRecordStores() map[string][][]byte {
 	if a == nil || len(a.Entries) == 0 {
 		return nil
 	}
-	stores := make(map[string][][]byte)
-	for name, header := range a.Entries {
-		if !strings.HasSuffix(name, packagedStoreIndex) {
-			continue
+	// The entries are walked in name order rather than in map order. Two
+	// things depend on it: what this seeds is written out as a list, so map
+	// order made the store index different bytes from identical input on every
+	// launch — every save-tree comparison then reported a difference that was
+	// not one; and when two files decode to one store name, which of them wins
+	// has to be the same on every launch rather than whichever the map offered
+	// first.
+	indexes := make([]string, 0, len(a.Entries))
+	for name := range a.Entries {
+		if strings.HasSuffix(name, packagedStoreIndex) {
+			indexes = append(indexes, name)
 		}
+	}
+	sort.Strings(indexes)
+	stores := make(map[string][][]byte)
+	// One archive may hold many of these and each asks for its slots before a
+	// record is read, so what the whole of them may ask for is bounded as well
+	// as what each one may.
+	budget := packagedStoreMaxSlots
+	for _, name := range indexes {
+		header := a.Entries[name]
 		data := a.Entries[strings.TrimSuffix(name, packagedStoreIndex)+packagedStoreData]
 		store, records, ok := parsePackagedRecordStore(header, data)
 		if !ok || !validRecordStoreName(store) {
 			continue
 		}
+		// A name that is not a save key is not a store this runtime can hold,
+		// and seeding it would put a name in listRecordStores that nothing can
+		// open and nothing can delete. The name comes out of an archive, so it
+		// is checked the way a name from the guest is.
+		if _, err := recordStoreKey(store); err != nil {
+			continue
+		}
+		if _, taken := stores[store]; taken {
+			continue
+		}
+		if len(records) > budget {
+			break
+		}
+		budget -= len(records)
 		stores[store] = records
 	}
 	if len(stores) == 0 {
@@ -123,7 +157,11 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 		id := binary.BigEndian.Uint32(entry[0:4])
 		offset := binary.BigEndian.Uint32(entry[4:8])
 		size := binary.BigEndian.Uint32(entry[8:12])
-		if id < rmsFirstRecordID || id > packagedStoreMaxRecords || size > rmsMaxRecordBytes {
+		// An id the store holds is below the id it will hand out next. Without
+		// that the id is a second way to size the slice: a one-record table
+		// naming id 16384 grows the store to 16384 slots and makes
+		// getNextRecordID answer past every id the title ever reserved.
+		if id < rmsFirstRecordID || id >= next || size > rmsMaxRecordBytes {
 			return "", nil, false
 		}
 		if uint64(offset)+uint64(size) > uint64(len(data)) {
@@ -132,7 +170,12 @@ func parsePackagedRecordStore(header, data []byte) (string, [][]byte, bool) {
 		for int(id) > len(records) {
 			records = append(records, nil)
 		}
-		records[id-rmsFirstRecordID] = append([]byte(nil), data[offset:offset+size]...)
+		// A record of no bytes is a record: MIDP writes one for
+		// addRecord(null, 0, 0). append([]byte(nil)) answers nil, which is
+		// this runtime's tombstone for an id the store no longer has.
+		record := make([]byte, size)
+		copy(record, data[offset:offset+size])
+		records[id-rmsFirstRecordID] = record
 	}
 	return name, records, true
 }

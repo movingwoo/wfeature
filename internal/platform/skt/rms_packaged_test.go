@@ -2,7 +2,9 @@ package skt
 
 import (
 	"encoding/binary"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -249,4 +251,156 @@ func TestACarriedRecordStoreIsRefusedWhenItDoesNotAddUp(t *testing.T) {
 	if _, _, ok := parsePackagedRecordStore(behind, data); ok {
 		t.Fatal("parsed an index whose next id is behind its own records")
 	}
+}
+
+// TestACarriedStoreDeletedAndCreatedAgainSurvivesTheSession is the flow this
+// whole change set exists to protect — clearing a slot to start a new game.
+// The delete left the store marked unwritten, so the create that followed put
+// its name into an index that filtered it straight back out, and the next
+// session could find neither the Host's copy nor the archive's.
+func TestACarriedStoreDeletedAndCreatedAgainSurvivesTheSession(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "carried")
+	runtime := carriedPair(t, backend.NewDirectorySaveStore(directory))
+	name := jvm.ReferenceValue(runtime.VM.NewString("Alpha"))
+	if _, err := runtime.rmsDeleteRecordStore(runtime.VM, []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.openStore("Alpha", true)
+	if err != nil {
+		t.Fatalf("creating it again = %v", err)
+	}
+	if len(created.records) != 0 {
+		t.Fatalf("records = %q, want the empty store the title asked for", created.records)
+	}
+
+	next := plainFixture(t, backend.NewDirectorySaveStore(directory))
+	if _, err := next.openStore("Alpha", false); err != nil {
+		t.Fatalf("the store the title created is gone on the next session: %v", err)
+	}
+}
+
+// TestAPackagedRecordOfNoBytesIsARecord keeps empty and absent apart. A nil
+// slot is this runtime's tombstone for an id the store no longer has, and MIDP
+// writes a zero-length record for addRecord(null, 0, 0).
+func TestAPackagedRecordOfNoBytesIsARecord(t *testing.T) {
+	index, data := packagedStoreFiles("Carried", []byte("aaaaa"), []byte{}, []byte("bbbbb"))
+	_, records, ok := parsePackagedRecordStore(index, data)
+	if !ok {
+		t.Fatal("a store holding an empty record was refused")
+	}
+	if len(records) != 3 || records[1] == nil || len(records[1]) != 0 {
+		t.Fatalf("records = %q, want the middle one empty rather than absent", records)
+	}
+}
+
+// TestTheStoreListTheArchiveSeedsIsTheSameEveryRun keeps map order out of a
+// file. The index is a list, so iterating the archive's entries in map order
+// wrote different bytes from identical input on every launch — every save-tree
+// comparison then reported a difference that was not one, and a real index
+// regression would hide inside that noise.
+func TestTheStoreListTheArchiveSeedsIsTheSameEveryRun(t *testing.T) {
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Alpha", "Beta", "Gamma", "Delta", "Epsilon"} {
+		index, data := packagedStoreFiles(name, []byte("x"))
+		archive.Entries[name+packagedStoreIndex] = index
+		archive.Entries[name+packagedStoreData] = data
+	}
+	var first []string
+	for round := range 20 {
+		options := testRuntimeOptions(t)
+		options.SaveStore = backend.NewDirectorySaveStore(t.TempDir())
+		runtime, err := Start(archive, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := runtime.rms()
+		state.mu.Lock()
+		runtime.loadIndex(state)
+		names := append([]string(nil), state.names...)
+		state.mu.Unlock()
+		if round == 0 {
+			first = names
+			continue
+		}
+		if strings.Join(names, "\n") != strings.Join(first, "\n") {
+			t.Fatalf("round %d seeded %q, want the same order as %q", round, names, first)
+		}
+	}
+}
+
+// TestACraftedIndexCannotAskForMoreThanItDescribes bounds the two words that
+// size an allocation. Both come out of an archive: the next-record id, and an
+// entry's own id, which used to be a second door to the same room.
+func TestACraftedIndexCannotAskForMoreThanItDescribes(t *testing.T) {
+	huge, _ := packagedStoreFiles("Carried")
+	binary.BigEndian.PutUint32(huge[0:4], 0xffffff00)
+	if _, _, ok := parsePackagedRecordStore(huge, nil); ok {
+		t.Fatal("parsed an index naming four billion records")
+	}
+	reaching, data := packagedStoreFiles("Carried", []byte("first"))
+	binary.BigEndian.PutUint32(reaching[len(reaching)-12:], 16384)
+	if _, _, ok := parsePackagedRecordStore(reaching, data); ok {
+		t.Fatal("parsed a record whose id is past the id the store hands out next")
+	}
+
+	// And what a whole archive may ask for is bounded as well as each store.
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide, wideData := packagedStoreFiles("Wide")
+	binary.BigEndian.PutUint32(wide[0:4], packagedStoreMaxRecords)
+	for index := range 500 {
+		name := fmt.Sprintf("Wide%03d", index)
+		copied := append([]byte(nil), wide...)
+		binary.BigEndian.PutUint16(copied[4:6], uint16(len(name)))
+		copied = append(copied[:6], append([]byte(name), copied[6+len("Wide"):]...)...)
+		archive.Entries[name+packagedStoreIndex] = copied
+		archive.Entries[name+packagedStoreData] = wideData
+	}
+	slots := 0
+	for _, records := range archive.packagedRecordStores() {
+		slots += len(records)
+	}
+	if slots > packagedStoreMaxSlots {
+		t.Fatalf("one archive asked for %d slots, over the %d budget", slots, packagedStoreMaxSlots)
+	}
+}
+
+func carriedPair(t *testing.T, store backend.SaveStore) *Runtime {
+	t.Helper()
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Alpha", "Beta"} {
+		index, data := packagedStoreFiles(name, []byte("x"))
+		archive.Entries[name+packagedStoreIndex] = index
+		archive.Entries[name+packagedStoreData] = data
+	}
+	options := testRuntimeOptions(t)
+	options.SaveStore = store
+	runtime, err := Start(archive, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
+}
+
+func plainFixture(t *testing.T, store backend.SaveStore) *Runtime {
+	t.Helper()
+	archive, err := Open(recordStoreJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testRuntimeOptions(t)
+	options.SaveStore = store
+	runtime, err := Start(archive, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
 }

@@ -142,7 +142,18 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 	// The Host's copy wins wherever there is one, and that is also how a
 	// deleted store stays deleted: deleting writes an empty record list under
 	// the store's key, so the key answers and the packaged copy is dropped.
-	for name, records := range runtime.Archive.packagedRecordStores() {
+	// In name order: what this seeds is written out as a list, so ranging the
+	// map put different bytes in the store index from identical input on every
+	// launch, and every save-tree comparison reported a difference that was
+	// not one.
+	carried := runtime.Archive.packagedRecordStores()
+	carriedNames := make([]string, 0, len(carried))
+	for name := range carried {
+		carriedNames = append(carriedNames, name)
+	}
+	sort.Strings(carriedNames)
+	for _, name := range carriedNames {
+		records := carried[name]
 		if store != nil {
 			if key, err := recordStoreKey(name); err == nil {
 				if _, written := store.LoadSave(key); written {
@@ -230,8 +241,19 @@ func validRecordStoreName(name string) bool {
 			return false
 		}
 	}
+	if name == rmsReservedName {
+		// The name this runtime keeps its store list under. A store of that
+		// name and the list address one key, and whichever was written last
+		// would be read as the other — a store's records read back as the
+		// list leave every other store unreachable.
+		return false
+	}
 	return !strings.ContainsAny(name, "/\\\x00")
 }
+
+// rmsReservedName is the one store name this runtime cannot carry, because
+// rmsIndexKey is the scope joined to it.
+const rmsReservedName = ".index"
 
 // openStore finds or loads a store, creating it when asked.
 func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error) {
@@ -432,6 +454,12 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 		return jvm.VoidValue(), newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	delete(state.stores, name)
+	// The archive's copy of a deleted store is not to be served again, and the
+	// name is not to be filtered out of the index the next create puts it in:
+	// both of those are what `packaged` and `unwritten` mean, and a delete
+	// ends both.
+	delete(state.packaged, name)
+	delete(state.unwritten, name)
 	remaining := state.names[:0]
 	for _, existing := range state.names {
 		if existing != name {

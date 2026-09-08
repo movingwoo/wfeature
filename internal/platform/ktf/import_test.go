@@ -161,3 +161,27 @@ func TestImportExternalSavesDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("dry run wrote %v", entries)
 	}
 }
+
+// TestAnImportedSaveIsNotHiddenByAnEarlierDelete covers the one path into the
+// save store that does not go through the tables that own it. A name a title
+// deleted stays on its table's removal list however many bytes are written
+// under it, so an import would land a save nothing can open and the report
+// would say it succeeded.
+func TestAnImportedSaveIsNotHiddenByAnEarlierDelete(t *testing.T) {
+	root := t.TempDir()
+	store := NewDirectorySaveStore(filepath.Join(root, "PD0001"))
+	if err := store.StoreSave("jdb/.removed", []byte("KEEP\nNOM2")); err != nil {
+		t.Fatal(err)
+	}
+	options := ImportOptions{SourceRoot: filepath.Join(root, "source"), SaveRoot: root}
+	if err := writeImported(options, &ImportReport{}, "db/PD0001/NOM21", "PD0001", "jdb/NOM2", []byte("records")); err != nil {
+		t.Fatal(err)
+	}
+	list, ok := store.LoadSave("jdb/.removed")
+	if !ok {
+		t.Fatal("the removal list went missing")
+	}
+	if string(list) != "KEEP" {
+		t.Fatalf("removal list = %q, want the imported name off it and the other kept", list)
+	}
+}

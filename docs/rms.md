@@ -94,9 +94,38 @@ by tests — one carried store, and two with only one of them written — becaus
 each is silent when it is wrong.
 
 **A `.sb` is a file anybody can craft**, so every field that sizes an
-allocation is bounded: the record count, and the next-record id the store's
-length comes from. Four bytes naming four billion records is a hundred
-gigabytes asked for before a record has been read.
+allocation is bounded: the record count, the next-record id the store's length
+comes from, and each entry's own id, which is a second way to the same room — a
+one-record table naming id 16384 grows the store to 16384 slots and makes
+`getNextRecordID` answer past every id the title ever reserved. An id the store
+holds is below the id it hands out next. **What a whole archive may ask for is
+bounded as well as what each store may**: five hundred crafted indexes of
+twenty-seven bytes each asked for thirty-two million slots and most of a
+gigabyte, on the first RMS call.
+
+**The entries are read in name order.** What this seeds is written out as a
+list, so ranging a map put different bytes in `rms/.index` from identical input
+on every launch — every save-tree comparison then reported a difference that
+was not one, and a real index regression would have hidden inside that noise.
+The order also decides which file wins when two decode to one store name.
+
+**A record of no bytes is a record.** MIDP writes one for
+`addRecord(null, 0, 0)`, and `append([]byte(nil))` answers nil — which is this
+runtime's tombstone for an id the store no longer has, so a legitimate empty
+record decoded as a deleted one and the first write back made the loss
+permanent.
+
+**A store name out of an archive is checked the way a name from the guest is.**
+It has to be a MIDP name, it has to be a save key, and it cannot be `.index` —
+the name this runtime keeps its store list under, which a container supplies on
+its own with no guest cooperation.
+
+**Deleting a carried store ends both of the things carrying it means.** The
+archive's copy is not to be served again, and the name is not to be filtered
+out of the index the next create puts it in: without the second, a title that
+cleared its slot to start a new game created the store, wrote the index that
+left it out, and found nothing at all on the next launch — the flow this whole
+change exists to protect.
 
 A store that does not parse is left out rather than reported. An archive is
 untrusted input, and a title with no save is a title on its first run.

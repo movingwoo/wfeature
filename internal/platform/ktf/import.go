@@ -312,7 +312,43 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 	if err := store.StoreSave(key, data); err != nil {
 		return fmt.Errorf("write %s/%s: %w", owner, key, err)
 	}
+	clearImportedRemoval(store, key)
 	return nil
+}
+
+// clearImportedRemoval takes an imported name off the deletion list its table
+// keeps. A save arriving from another runtime says nothing about what this one
+// deleted before it arrived, and a name still on the list is hidden however
+// many bytes are written under it — so an import would land a save nothing can
+// open, with nothing in the report to say why. The tables' own writes clear
+// the mark the same way; this is the one path into the store that does not go
+// through them.
+func clearImportedRemoval(store *DirectorySaveStore, key string) {
+	scope, name, found := strings.Cut(key, "/")
+	if !found || name == "" {
+		return
+	}
+	listKey := scope + "/.removed"
+	data, exists := store.LoadSave(listKey)
+	if !exists {
+		return
+	}
+	kept := make([]string, 0, 8)
+	dropped := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+		case line == name:
+			dropped = true
+		default:
+			kept = append(kept, line)
+		}
+	}
+	if !dropped {
+		return
+	}
+	_ = store.StoreSave(listKey, []byte(strings.Join(kept, "\n")))
 }
 
 // recordSplit is one reading of an external store key as a database name and

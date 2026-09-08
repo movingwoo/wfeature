@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // The record database is the other half of the WIPI C storage interface. Where
@@ -162,7 +163,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("rdb open %s size %d create %d", name, recordSize, int32(create)))
-	if name == "" || len(name) > maxRecordDatabaseName {
+	if !storableName(name) {
 		return wipicErrorInvalid, nil
 	}
 	store, exists := runtime.recordDatabases[name]
@@ -171,10 +172,24 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		// hides both the emptied save and the archive's packaged copy until
 		// something creates the name again.
 		deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-		records, hasPackaged := runtime.packagedRecordDatabase(name, recordSize)
 		saved, hasSaved := runtime.loadSave("rdb/" + name)
+		emptySave := false
+		if hasSaved {
+			if decoded, err := decodeSaveRecords(saved); err == nil && len(decoded) == 0 {
+				emptySave = true
+			}
+		}
+		var records [][]byte
+		hasPackaged := false
+		// The archive's copy answers when there is no save, and also when the
+		// save holds no record: the release before packaged databases existed
+		// left exactly such a save behind for these titles. See the same rule
+		// on the Java table.
+		if (!hasSaved || emptySave) && !runtime.databaseDeleted(name) {
+			records, hasPackaged = runtime.packagedRecordDatabase(name, recordSize)
+		}
 		if deleted {
-			hasPackaged, hasSaved = false, false
+			hasSaved = false
 		}
 		if !hasPackaged && !hasSaved && int32(create) == 0 {
 			return wipicErrorNotFound, nil
@@ -184,7 +199,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		}
 		store = &runtimeRecordDatabase{name: name, recordSize: recordSize}
 		switch {
-		case hasSaved:
+		case hasSaved && !(emptySave && hasPackaged):
 			// A save wins over the packaged copy: the packaged records are the
 			// initial content, and a game that has written since owns them.
 			decoded, err := decodeSaveRecords(saved)
@@ -233,10 +248,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	}
 	runtime.countDiagnostic(fmt.Sprintf("rdb delete %s", name))
 	_, exists := runtime.recordDatabases[name]
-	_, hasPackaged := runtime.packagedRecordDatabase(name, 0)
+	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 	_, hasSaved := runtime.loadSave("rdb/" + name)
-	if runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name] {
-		hasPackaged, hasSaved = false, false
+	hasPackaged := false
+	if !deleted {
+		_, hasPackaged = runtime.packagedRecordDatabase(name, 0)
+	}
+	if deleted {
+		hasSaved = false
 	}
 	if !exists && !hasPackaged && !hasSaved {
 		return wipicErrorNotFound, nil
@@ -430,6 +449,10 @@ func (store *runtimeRecordDatabase) record(id uint32) ([]byte, bool) {
 }
 
 func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecordDatabase) {
+	// Writing brings it back, as it does on the guest file table: a handle
+	// held across the title's own delete would otherwise write to a key the
+	// deletion list hides for ever.
+	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, store.name, false)
 	runtime.storeSave("rdb/"+store.name, encodeSaveRecords(store.records))
 }
 
@@ -498,13 +521,16 @@ const recordDatabaseMagicMatch = 4
 // parseRecordDatabaseHeader reads the header the two shapes share. It answers
 // the record size and the record count; what the words past them mean is not
 // known, and nothing here needs them.
-func parseRecordDatabaseHeader(data, magic []byte) (recordSize, count uint32, ok bool) {
+// intact says whether the whole magic matched. Only a header whose last magic
+// byte is gone is one whose record size cannot be believed, and that is the
+// one file the data-file fallback is for.
+func parseRecordDatabaseHeader(data, magic []byte) (recordSize, count uint32, intact, ok bool) {
 	if len(data) < recordDatabaseFileHeader || string(data[:recordDatabaseMagicMatch]) != string(magic[:recordDatabaseMagicMatch]) {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	recordSize = binary.BigEndian.Uint32(data[recordDatabaseSizeOffset : recordDatabaseSizeOffset+4])
 	count = binary.BigEndian.Uint32(data[recordDatabaseCountOffset : recordDatabaseCountOffset+4])
-	return recordSize, count, true
+	return recordSize, count, string(data[:len(magic)]) == string(magic), true
 }
 
 // parseRecordDatabaseIndex decodes the split shape. The index says how many
@@ -514,17 +540,28 @@ func parseRecordDatabaseHeader(data, magic []byte) (recordSize, count uint32, ok
 // before its record size clobbered, and its data file still divides evenly by
 // the count the index declares.
 func (runtime *initializationRuntime) parseRecordDatabaseIndex(name string, index, data []byte, requested uint32) ([][]byte, bool) {
-	recordSize, count, ok := parseRecordDatabaseHeader(index, recordDatabaseIndexMagic)
+	recordSize, count, intact, ok := parseRecordDatabaseHeader(index, recordDatabaseIndexMagic)
 	if !ok || count > maxDataBaseRecords {
 		return nil, false
 	}
 	if count == 0 {
-		// A database with no record still exists. Its data file is usually not
-		// in the archive at all, and an empty one says the same thing.
-		return nil, len(data) == 0
+		// A database with no record still exists, whatever sits beside it. Its
+		// data file is usually not in the archive at all; one that is there
+		// and not empty is a stale file the index does not describe, and
+		// refusing the database over it would send the title down its
+		// first-run path on every launch — the answer this rule exists to
+		// avoid.
+		return nil, true
 	}
 	if uint64(recordSize)*uint64(count) != uint64(len(data)) {
-		if len(data) == 0 || len(data)%int(count) != 0 {
+		// The data file settles it only for the damage this was written for:
+		// the one packaged index in the local set whose magic is cut short and
+		// whose record size therefore cannot be believed. An intact header
+		// that disagrees with the file beside it is a stale file rather than a
+		// bent number — and with one record the divisibility test can never
+		// reject, so any file at all would otherwise be read as the database's
+		// single record.
+		if intact || len(data) == 0 || len(data)%int(count) != 0 {
 			return nil, false
 		}
 		recordSize = uint32(len(data) / int(count))
@@ -549,7 +586,7 @@ func (runtime *initializationRuntime) parseRecordDatabaseIndex(name string, inde
 // is not read here — the slots are counted from the file's own length, which
 // is the same answer and holds for a file that was appended to.
 func parseRecordDatabaseFile(data []byte) ([][]byte, bool) {
-	recordSize, _, ok := parseRecordDatabaseHeader(data, recordDatabaseFileMagic)
+	recordSize, _, _, ok := parseRecordDatabaseHeader(data, recordDatabaseFileMagic)
 	if !ok || recordSize == 0 || recordSize > maxRecordDatabaseBytes {
 		return nil, false
 	}
@@ -588,6 +625,17 @@ const (
 	recordDatabaseRemovedKey = "rdb/.removed"
 	javaDatabaseRemovedKey   = "jdb/.removed"
 )
+
+// databaseDeleted answers whether a name is on either table's deletion list.
+// The two tables keep separate stores, and each one's list hides its own save;
+// what they share is the archive, so a packaged copy has to be hidden by both.
+// Without that, deleting through one table leaves the archive's copy fully
+// readable through the other, and a title using both gets back the record it
+// just cleared.
+func (runtime *initializationRuntime) databaseDeleted(name string) bool {
+	return runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name] ||
+		runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
+}
 
 // databaseRemovals reads one deletion list, once per session per list.
 func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[string]bool {
@@ -628,4 +676,55 @@ func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string
 	}
 	sort.Strings(list)
 	runtime.storeSave(key, []byte(strings.Join(list, "\n")))
+}
+
+// reservedStorageNames are the names the storage tables keep their own
+// bookkeeping under, beside the entries a game names. A save key is a table's
+// scope and the game's name joined, so a game naming an entry after one of
+// these addresses the table's own record — the list of what was deleted, the
+// list of directories that exist. Whichever was written last would win, and
+// both readings are wrong: the game's save read back as a list of deleted
+// names, or a list read back as the game's save. Worse, a list overwritten by
+// records reads as a set of deleted names on the next run, which hides
+// databases nobody deleted.
+//
+// Moving the bookkeeping somewhere a name cannot reach would orphan every list
+// already written, which is the same reason these save keys still spell "db".
+// So the names are reserved instead. No local title asks for one.
+var reservedStorageNames = map[string]bool{
+	".removed": true,
+	".dirs":    true,
+	".index":   true,
+}
+
+// reservedStorageName answers whether a guest-chosen name addresses one of
+// them. The test is against the key the name normalizes to rather than against
+// the name: NormalizeSaveKey drops empty and "." components, so "./.removed"
+// and ".removed/" reach the same file as ".removed".
+func reservedStorageName(name string) bool {
+	key, err := backend.NormalizeSaveKey("scope/" + name)
+	if err != nil {
+		return false
+	}
+	rest, found := strings.CutPrefix(key, "scope/")
+	return found && reservedStorageNames[rest]
+}
+
+// storableName is what both tables accept from a guest. A name has to be a
+// save key on its own, has to survive the removal list's own encoding, and
+// must not address the list itself.
+//
+// The list is names joined by newlines and read back a line at a time with the
+// surrounding space trimmed, so a name carrying either would not come back as
+// itself: deleting "A\nB" would hide the unrelated databases A and B, and
+// deleting "save " would hide "save", which nobody deleted. Neither table
+// bounded those characters, and both accept whatever string the guest built.
+func storableName(name string) bool {
+	if name == "" || len(name) > maxRecordDatabaseName {
+		return false
+	}
+	if strings.TrimSpace(name) != name || strings.ContainsAny(name, "\n\r") {
+		return false
+	}
+	return !reservedStorageName(name)
 }

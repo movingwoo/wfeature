@@ -678,3 +678,102 @@ func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 		t.Fatalf("deleteDataBase on nothing = %v, want DataBaseException", err)
 	}
 }
+
+// TestAnEmptySaveDoesNotMaskTheDatabaseTheArchiveShipped covers the upgrade.
+// The release before packaged databases existed told these titles their
+// database was absent; a title that then created one left an empty record list
+// behind, and that empty list would have masked the archive's copy for ever —
+// so a player who had already launched the game once would never see the fix.
+func TestAnEmptySaveDoesNotMaskTheDatabaseTheArchiveShipped(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	if err := store.StoreSave("jdb/save", encodeSaveRecords(nil)); err != nil {
+		t.Fatal(err)
+	}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	value, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("openDataBase over an empty save = %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(opened.records) != 1 || string(opened.records[0]) != "aaaa" {
+		t.Fatalf("records = %q, want the archive's copy", opened.records)
+	}
+	// An empty database with nothing in the archive is still a database that
+	// exists — a title that created one and wrote nothing finds it again.
+	bare, bareRuntime := newTestRuntime(t)
+	bare.saveStore = NewDirectorySaveStore(t.TempDir())
+	other := jvm.ReferenceValue(bare.JVM().NewString("scores"))
+	if _, err := runtimeOpenDataBase(bareRuntime, bare.JVM(), []jvm.Value{other, jvm.IntValue(8), jvm.IntValue(1)}); err != nil {
+		t.Fatal(err)
+	}
+	bareRuntime.databases = nil
+	if _, err := runtimeOpenDataBase(bareRuntime, bare.JVM(), []jvm.Value{other, jvm.IntValue(8), jvm.IntValue(0)}); err != nil {
+		t.Fatalf("a created database with no records was lost: %v", err)
+	}
+}
+
+// TestDeletingADatabaseTwiceSaysItIsGone keeps the delete and the open giving
+// one answer. The delete deliberately leaves an emptied save behind, so
+// without consulting the list a second delete succeeded while the open beside
+// it threw — and a title using the throw as its existence probe was told a
+// save it had just cleared was still there.
+func TestDeletingADatabaseTwiceSaysItIsGone(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatalf("first delete = %v", err)
+	}
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("second delete = %v, want DataBaseException", err)
+	}
+}
+
+// TestWritingThroughAHandleHeldAcrossADeleteBringsItBack is the Java half of
+// the rule the WIPI C table keeps: the object a title already holds still
+// writes, and those records must not land under a key the deletion list hides.
+func TestWritingThroughAHandleHeldAcrossADeleteBringsItBack(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	value, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := object.Native.(*runtimeDataBaseStore)
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	held.records = [][]byte{[]byte("late")}
+	held.persist(runtime)
+
+	runtime.databases = nil
+	reopened, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("the record written through a surviving handle is unreachable: %v", err)
+	}
+	object, err = reopened.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store := object.Native.(*runtimeDataBaseStore); len(store.records) != 1 || string(store.records[0]) != "late" {
+		t.Fatalf("records = %q, want what the handle wrote", store.records)
+	}
+}

@@ -2443,6 +2443,10 @@ func runtimeDataBaseException(message string) error {
 
 // persist writes the serialized record list through the Host save store.
 func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) {
+	// Writing a database brings it back, exactly as writing a guest file does
+	// (storeGuestFile). A title holding a handle across its own delete would
+	// otherwise write records to a key the deletion list hides for ever.
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, store.name, false)
 	runtime.storeSave("jdb/"+store.name, encodeSaveRecords(store.records))
 }
 
@@ -2468,13 +2472,16 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	if !storableName(name) {
+		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
+	}
 	store := runtime.databases[name]
 	if store == nil {
 		store = &runtimeDataBaseStore{name: name}
 		// A database this title deleted is gone rather than empty, and both
 		// the save under it and the copy the archive carries stay hidden
 		// while it is on the list. See recordDatabaseRemovals.
-		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
+		deleted := runtime.databaseDeleted(name)
 		saved, present := runtime.loadSave("jdb/" + name)
 		if deleted {
 			present = false
@@ -2492,10 +2499,17 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// has written since owns what it wrote; with no save, the packaged
 		// records are what the game finds, and finding them is what tells a
 		// title carrying its own data that it has nothing to download.
-		packaged, hasPackaged := false, false
-		if !present && !deleted {
-			var records [][]byte
-			if records, hasPackaged = runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
+		// The archive's copy is looked for when there is no save, and also
+		// when the save holds no record at all. The release before packaged
+		// databases existed told these titles their database was absent, and a
+		// title that then created one left an empty record list behind — which
+		// would otherwise mask the copy the archive carries for ever. An empty
+		// save still counts as the database existing, so a database created
+		// and never written is found by the next open exactly as before; what
+		// the rule decides is only which content it opens with.
+		packaged := false
+		if (!present || len(store.records) == 0) && !deleted {
+			if records, hasPackaged := runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
 				store.records = records
 				packaged = true
 				runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))

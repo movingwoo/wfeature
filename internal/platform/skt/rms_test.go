@@ -91,6 +91,12 @@ func TestRecordStoreNameNormalizationRejectsTraversal(t *testing.T) {
 	if !validRecordStoreName("scores") {
 		t.Fatal("validRecordStoreName(\"scores\") = false, want true")
 	}
+	// The store list lives at rmsIndexKey, which is the scope joined to this
+	// name: a store of that name and the list would address one key, and one
+	// written over the other leaves every store unreachable.
+	if validRecordStoreName(rmsReservedName) {
+		t.Fatalf("validRecordStoreName(%q) = true, want the list's own name reserved", rmsReservedName)
+	}
 }
 
 func TestSaveOwnerFallsBackToMainClass(t *testing.T) {
