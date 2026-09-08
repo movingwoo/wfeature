@@ -582,3 +582,42 @@ func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
 		t.Fatal("opening a packaged database wrote a save over it")
 	}
 }
+
+// TestDeletingADatabaseReachesTheOneNobodyOpened covers the other half of the
+// name-keyed delete. It used to look only at the databases this session had
+// opened, so a title deleting before it opened was told its own save was not
+// there — and once a database could come from the archive, the packaged copy
+// would come back on the next run as though the delete had not happened.
+func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatalf("deleteDataBase on a packaged database nobody opened = %v", err)
+	}
+	// The next open finds an emptied database rather than the archive's copy.
+	runtime.databases = nil
+	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("openDataBase after a delete = %v", err)
+	}
+	object, err := database.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("records = %q, want the delete to have stuck", store.records)
+	}
+	// A name nothing holds is still not a database.
+	missing := jvm.ReferenceValue(client.JVM().NewString("absent"))
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{missing}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("deleteDataBase on nothing = %v, want DataBaseException", err)
+	}
+}

@@ -921,6 +921,14 @@ And opening a packaged database writes nothing — the empty-record write that
 makes a *created* database exist for the next session would otherwise shadow
 the archive's own copy with an empty one.
 
+**Deleting one has to reach it too.** `DataBase.deleteDataBase` looked only at
+the databases this session had opened, which was already wrong for a title
+that deletes before it opens — it was told its own save was not there — and
+becomes worse once a database can come from the archive, because the packaged
+copy would come back on the next run as though the delete had not happened. It
+now answers the same way the C table's name form does: a name the save store
+or the archive holds is emptied, and only a name neither holds throws.
+
 **What it is worth, across the local set:** of the 264 KTF 1.2 archives, 20
 open a packaged database in their first 64 ticks that they were previously told
 was not there, and no archive's first frame changed anywhere else.

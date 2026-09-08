@@ -257,12 +257,26 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	}
 	store := runtime.databases[name]
 	if store == nil {
-		message := "database not found: " + name
-		return jvm.VoidValue(), &jvm.GuestException{
-			Object:  &jvm.Object{ClassName: runtimeDataBaseExceptionClass, Native: message},
-			Message: message,
+		// A database this session has not opened is still a database: the
+		// save store may hold it, and the archive may carry it. Deleting has
+		// to reach both, or a title that deletes before it opens is told its
+		// own save is not there — and the packaged copy would come back on
+		// the next run as though nothing had been deleted. The WIPI C table
+		// next door already answers the name form this way.
+		_, saved := runtime.loadSave("jdb/" + name)
+		_, packaged := runtime.packagedRecordDatabase(name, 0)
+		if !saved && !packaged {
+			message := "database not found: " + name
+			return jvm.VoidValue(), &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: runtimeDataBaseExceptionClass, Native: message},
+				Message: message,
+			}
 		}
+		store = &runtimeDataBaseStore{name: name}
 	}
+	// The record list is emptied rather than removed, because the save store
+	// has no delete and an empty list is what tells the next open that the
+	// packaged copy is not to be used.
 	store.records = nil
 	store.persist(runtime)
 	delete(runtime.databases, name)
