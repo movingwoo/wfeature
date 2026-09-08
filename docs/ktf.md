@@ -942,10 +942,12 @@ release notes rather than in a rule. None of the three titles the download
 prompt was blocking needs it: two left no save at all, and the third has real
 records under its name that no rule should overwrite.
 
-**A name a game chooses is a save key, and three names are reserved.****A name a game chooses is a save key, and three names are reserved.** A key is
+**A name a game chooses is a save key, and each table's own names are
+reserved on its own scope.** A key is
 a table's scope joined to the name, so a database or a file called `.removed`
-addresses the list of what the table deleted, and `.dirs` and `.index` the same
-way for the lists beside it. Whichever was written last won, and both readings
+addresses the list of what that table deleted — every one of the four keeps
+one — and `.dirs` the same way for the directory list the WIPI C file table
+keeps beside it. Whichever was written last won, and both readings
 are wrong — worse, a list overwritten by records reads back as a set of deleted
 names on the next run and hides databases nobody deleted. Moving the
 bookkeeping out of reach would orphan every list already written (the same

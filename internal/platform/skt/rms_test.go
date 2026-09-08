@@ -94,6 +94,19 @@ func TestRecordStoreNameNormalizationRejectsTraversal(t *testing.T) {
 	// The store list lives at rmsIndexKey, which is the scope joined to this
 	// name: a store of that name and the list would address one key, and one
 	// written over the other leaves every store unreachable.
+	// The store list is names joined by newlines, so a name carrying one would
+	// come back as two phantoms with the real store gone. An archive supplies
+	// a name here as well as the guest.
+	for _, name := range []string{"a\nb", "a\rb"} {
+		if validRecordStoreName(name) {
+			t.Fatalf("validRecordStoreName(%q) = true, want a name the store list cannot carry refused", name)
+		}
+	}
+	// A name with a space around it is one a title may already have a store
+	// under, and the list carries it as it is.
+	if !validRecordStoreName("save ") {
+		t.Fatal("validRecordStoreName(\"save \") = false, orphaning any store under it")
+	}
 	if validRecordStoreName(rmsReservedName) {
 		t.Fatalf("validRecordStoreName(%q) = true, want the list's own name reserved", rmsReservedName)
 	}

@@ -96,8 +96,11 @@ func (a *Archive) packagedRecordStores() map[string]packagedStore {
 		if _, taken := stores[store]; taken {
 			continue
 		}
+		// Skipped rather than ending the walk: one oversized store early in
+		// name order would otherwise suppress every smaller one after it, and
+		// which stores load would depend on alphabetical position.
 		if len(carried.records) > budget {
-			break
+			continue
 		}
 		budget -= len(carried.records)
 		stores[store] = carried
@@ -166,6 +169,13 @@ func parsePackagedRecordStore(header, data []byte) (string, packagedStore, bool)
 	}
 	length := int(next) - rmsFirstRecordID
 	records := make([][]byte, max(length, 0))
+	// The entries may point anywhere inside the data file, including all at
+	// the same offset, so the count and the slot bound say nothing about how
+	// many bytes they ask for between them: two thousand entries each naming a
+	// megabyte of a one-megabyte file asked for two gigabytes. A real store
+	// tiles its data file end to end, so the file's own length is the honest
+	// ceiling for the whole of them.
+	carried := 0
 	for index := range int(count) {
 		entry := header[cursor+index*packagedStoreEntryBytes:]
 		id := binary.BigEndian.Uint32(entry[0:4])
@@ -179,6 +189,10 @@ func parsePackagedRecordStore(header, data []byte) (string, packagedStore, bool)
 			return "", packagedStore{}, false
 		}
 		if uint64(offset)+uint64(size) > uint64(len(data)) {
+			return "", packagedStore{}, false
+		}
+		carried += int(size)
+		if carried > len(data) {
 			return "", packagedStore{}, false
 		}
 		for int(id) > len(records) {

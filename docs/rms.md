@@ -98,10 +98,16 @@ allocation is bounded: the record count, the next-record id the store's length
 comes from, and each entry's own id, which is a second way to the same room — a
 one-record table naming id 16384 grows the store to 16384 slots and makes
 `getNextRecordID` answer past every id the title ever reserved. An id the store
-holds is below the id it hands out next. **What a whole archive may ask for is
-bounded as well as what each store may**: five hundred crafted indexes of
-twenty-seven bytes each asked for thirty-two million slots and most of a
-gigabyte, on the first RMS call.
+holds is below the id it hands out next. **The bytes the entries ask for
+between them are bounded by the data file they point into**, because they may
+all point at the same place: two thousand entries each naming a megabyte of a
+one-megabyte file asked for two gigabytes, which no count or slot limit sees. A
+real store tiles its data file end to end, so that file's own length is the
+ceiling. **And what a whole archive may ask for is bounded as well as what each
+store may**: five hundred crafted indexes of twenty-seven bytes each asked for
+thirty-two million slots and most of a gigabyte, on the first RMS call. A store
+over that budget is skipped rather than ending the walk, so one large store
+early in name order does not suppress every smaller one after it.
 
 **The entries are read in name order.** What this seeds is written out as a
 list, so ranging a map put different bytes in `rms/.index` from identical input

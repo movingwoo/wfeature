@@ -344,8 +344,10 @@ func clearImportedRemoval(store *DirectorySaveStore, key string) {
 	}
 	kept := make([]string, 0, 8)
 	dropped := false
+	// Lines are taken as they are, because the lists themselves are written
+	// and read that way: trimming here would un-hide a deleted "save " and
+	// hide an unrelated live "save" on the way past.
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
 		switch {
 		case line == "":
 		case line == name:

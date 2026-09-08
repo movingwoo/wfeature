@@ -257,7 +257,11 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 	_, hasSaved := runtime.loadSave("rdb/" + name)
 	hasPackaged := false
-	if !deleted {
+	if !runtime.databaseDeleted(name) {
+		// The archive is what the two tables share, so the same answer the
+		// open gives: a packaged copy hidden by either list is not there for
+		// this call either, or a delete would succeed on a name the open next
+		// to it reports as missing.
 		_, hasPackaged = runtime.packagedRecordDatabase(name, 0)
 	}
 	if deleted {

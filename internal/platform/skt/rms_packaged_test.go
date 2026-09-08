@@ -351,6 +351,16 @@ func TestACraftedIndexCannotAskForMoreThanItDescribes(t *testing.T) {
 		t.Fatal("parsed a record whose id is past the id the store hands out next")
 	}
 
+	// The entries may point anywhere in the data file, so the bytes they ask
+	// for between them are bounded too: without that, entries all naming the
+	// whole file asked for a gigabyte from a megabyte of input.
+	overlapping, small := packagedStoreFiles("Carried", []byte("aaaa"), []byte("bbbb"))
+	binary.BigEndian.PutUint32(overlapping[len(overlapping)-16:], 0)
+	binary.BigEndian.PutUint32(overlapping[len(overlapping)-12:], uint32(len(small)))
+	if _, _, ok := parsePackagedRecordStore(overlapping, small); ok {
+		t.Fatal("parsed entries asking for more bytes than the data file holds")
+	}
+
 	// And what a whole archive may ask for is bounded as well as each store.
 	archive, err := Open(recordStoreJAR)
 	if err != nil {

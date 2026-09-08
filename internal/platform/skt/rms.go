@@ -128,8 +128,10 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 	store := runtime.saveStoreBoundary()
 	if store != nil {
 		if data, ok := store.LoadSave(rmsIndexKey); ok {
+			// Lines are taken as they are. Trimming them would map "save "
+			// onto "save", so a store whose name has a space around it would
+			// vanish from the index and one without it would appear.
 			for _, name := range strings.Split(string(data), "\n") {
-				name = strings.TrimSpace(name)
 				if name == "" || state.contains(name) {
 					continue
 				}
@@ -246,6 +248,13 @@ func validRecordStoreName(name string) bool {
 		// name and the list address one key, and whichever was written last
 		// would be read as the other — a store's records read back as the
 		// list leave every other store unreachable.
+		return false
+	}
+	// The store list is names joined by newlines, so a name carrying one would
+	// come back as two: the store itself disappears from the index and two
+	// phantoms take its place. The KTF tables refuse the same character for
+	// the same reason, and a name out of an archive reaches this too.
+	if strings.ContainsAny(name, "\n\r") {
 		return false
 	}
 	return !strings.ContainsAny(name, "/\\\x00")
