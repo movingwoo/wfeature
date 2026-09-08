@@ -121,6 +121,16 @@ runtime's tombstone for an id the store no longer has, so a legitimate empty
 record decoded as a deleted one and the first write back made the loss
 permanent.
 
+**The version and the modification time are read and not used.** They are in
+the format and the parser answers them, and the store does not take them:
+`backend.EncodeSaveRecords` carries records and nothing else, so the first
+write — which a plain `closeRecordStore` performs — would lose them, and
+`getVersion` would answer the container's number in the session that opened the
+store and zero in every session after it. Answering zero throughout is at least
+the same answer every time. Carrying them properly is a save format that holds
+more than records, on both Hosts and in the backup container, and no local
+title has been seen to read either.
+
 **A store name out of an archive is checked the way a name from the guest is.**
 It has to be a MIDP name, it has to be a save key, and it cannot be `.index` —
 the name this runtime keeps its store list under, which a container supplies on

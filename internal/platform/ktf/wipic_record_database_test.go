@@ -202,8 +202,16 @@ func TestRecordDatabaseSlot6TellsTheTwoCallShapesApart(t *testing.T) {
 	if _, still := runtime.recordDatabases["KEYS"]; still {
 		t.Fatal("the database survived a delete addressed by name")
 	}
-	// The handle form still reaches records.
-	for register, value := range map[int]uint32{0: handle, 1: 1} {
+	// Deleting by name takes its handles with it, as the file table's remove
+	// does: one kept across the delete would still be holding the records,
+	// and writing through it would put them back.
+	if _, kept := runtime.recordDatabaseHandles[handle]; kept {
+		t.Fatal("a handle survived the delete of the database it addresses")
+	}
+	// The handle form still reaches records, on a database that is there.
+	runtime.guestFiles = map[string][]byte{"OTHER.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	other := openRecordDatabase(t, runtime, "OTHER", 8, 0)
+	for register, value := range map[int]uint32{0: other, 1: 1} {
 		if err := thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
@@ -499,6 +507,40 @@ func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
 	runtime.recordDatabases = nil
 	if handle := openRecordDatabase(t, runtime, "SAVE", 8, 0); handle == wipicErrorNotFound {
 		t.Fatal("the record written through a surviving handle is unreachable")
+	}
+}
+
+// TestDeletingARecordDatabaseTakesItsHandlesWithIt is the other side of that
+// unmark. A handle kept across the delete still holds the records, so writing
+// through it persists them again *and* takes the name back off the list — the
+// database the title just deleted, restored whole. The file table has purged
+// its handles on removal for the same reason.
+func TestDeletingARecordDatabaseTakesItsHandlesWithIt(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.guestFiles = map[string][]byte{"SAVE.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	handle := openRecordDatabase(t, runtime, "SAVE", 8, 0)
+
+	const nameAddress = platformDataBase + 0x8000
+	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte("SAVE"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	if err := thread.SetRegister(0, nameAddress); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseDelete); err != nil || result != 0 {
+		t.Fatalf("delete = %#x, err = %v", result, err)
+	}
+	if _, kept := runtime.recordDatabaseHandles[handle]; kept {
+		t.Fatal("a handle survived the delete of the database it addresses")
+	}
+	if !runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)["SAVE"] {
+		t.Fatal("the deleted database is not on the removal list")
+	}
+	runtime.recordDatabases = nil
+	if result := openRecordDatabase(t, runtime, "SAVE", 8, 0); result != wipicErrorNotFound {
+		t.Fatalf("open after delete = %#x, want M_E_NOENT", result)
 	}
 }
 

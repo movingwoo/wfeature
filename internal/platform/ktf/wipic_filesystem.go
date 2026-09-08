@@ -363,8 +363,10 @@ func (runtime *initializationRuntime) removedDatabases() map[string]bool {
 	}
 	runtime.removedCDatabases = make(map[string]bool)
 	if data, exists := runtime.loadSave(databaseRemovedKey); exists {
+		// Lines as they are; see removedGuestFiles for why none of the four
+		// lists trims them.
 		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
+			if line != "" {
 				runtime.removedCDatabases[line] = true
 			}
 		}

@@ -133,8 +133,11 @@ func (runtime *initializationRuntime) removedGuestFiles() map[string]bool {
 	}
 	runtime.removedFiles = make(map[string]bool)
 	if data, exists := runtime.loadSave(guestFileRemovedKey); exists {
+		// Lines as they are, which is how they were written and how the
+		// other three lists read theirs: trimming maps "save " onto "save",
+		// so a path with a space around it hides one without.
 		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
+			if line != "" {
 				runtime.removedFiles[line] = true
 			}
 		}
@@ -586,6 +589,13 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	to, err := runtimeFileSystemName(arguments[1])
 	if err != nil {
 		return jvm.VoidValue(), err
+	}
+	if reservedStorageName(guestFileScope, strings.TrimPrefix(from, "/")) {
+		// The source as well as the destination. Reading one of these names
+		// resolves the platform's own list, so renaming it away would copy
+		// the list's bytes into a file the title can then open — around the
+		// refusal a File of that name already gets.
+		return jvm.VoidValue(), newGuestIOException("cannot rename a reserved name: " + from)
 	}
 	if reservedStorageName(guestFileScope, strings.TrimPrefix(to, "/")) {
 		// The name this table keeps its removal list under. The write would be

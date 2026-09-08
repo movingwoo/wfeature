@@ -967,8 +967,7 @@ from one it carries the list off. The guest
 File surface refuses the name where a File is constructed rather than where it
 is written, so a title cannot be told a write worked while nothing is stored,
 and a rename onto one is refused before the source is touched. The list also cannot carry a name that would not come back as
-itself, so a name with a newline or with surrounding space is refused for the
-same reason: deleting a name with a newline in it would otherwise hide the two
+itself, so a name with a newline is refused for the same reason: deleting a name with a newline in it would otherwise hide the two
 unrelated databases its halves spell, and deleting `save ` would hide `save`.
 
 **The length bound stays where it came from.** A name has to survive the
@@ -984,9 +983,18 @@ delete hide an unrelated Java save of the same name, and nothing on the Java
 side ever took a name off the C list, so that save was gone for good.
 
 **Writing a database takes it back off the deletion list**, exactly as writing
-a guest file does. A title that keeps a handle across its own delete still
-writes through it, and those records would otherwise land under a key the list
-hides for ever — readable before this change set, lost after it.
+a guest file does. A Java `DataBase` object a title keeps across its own delete
+still writes through it, and those records would otherwise land under a key the
+list hides for ever — readable before this change set, lost after it. The
+delete empties that object's records first, so what such a write stores is the
+empty database the title asked for.
+
+**A WIPI C delete takes the database's handles with it**, which is what the
+file table beside it has always done. A handle kept across the delete is still
+holding the records, so a write through it persists them *and* takes the name
+back off the list: the database the title had just deleted, restored whole. The
+Java class cannot be closed the same way — the object is the guest's — which is
+why the two paths answer this differently.
 
 **A packaged copy is hidden by either table's list.** The two tables keep
 separate stores and separate lists, and what they share is the archive: a

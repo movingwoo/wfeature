@@ -271,6 +271,16 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 		return wipicErrorNotFound, nil
 	}
 	delete(runtime.recordDatabases, name)
+	// Handles onto the store go with it, exactly as the file table's remove
+	// does it. A caller that kept one would otherwise still be holding the
+	// records, and writing through it persists them again — and the write
+	// takes the name back off the removal list, so the database the title had
+	// just deleted comes back whole.
+	for handle, open := range runtime.recordDatabaseHandles {
+		if open.store != nil && open.store.name == name {
+			delete(runtime.recordDatabaseHandles, handle)
+		}
+	}
 	// The save is emptied rather than removed: a packaged database would
 	// otherwise come back on the next open, which is not what a game that
 	// deleted it asked for. The name is written down as well, because an

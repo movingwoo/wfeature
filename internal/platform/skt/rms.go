@@ -295,15 +295,20 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		return nil, newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	var records [][]byte
-	version, modified := int32(0), runtime.nowMillis()
 	if packaged, carried := state.packaged[name]; carried && found {
 		// Only when the store is one that exists: a title that deleted a
 		// carried store and then created it again asked for an empty one, and
 		// the archive's copy must not come back through the create.
 		records = append([][]byte(nil), packaged.records...)
-		// What the container said about the store, so getVersion and
-		// getLastModified answer what the handset would have.
-		version, modified = packaged.version, packaged.modified
+		// The version and the modification time the container declares are
+		// read and not used. Handing them to the store would be right for one
+		// session and wrong for every session after it: the save encoding
+		// carries records and nothing else, so the first write — which a plain
+		// close performs — loses them, and getVersion would answer the
+		// container's number once and zero from then on. Answering zero
+		// throughout is at least the same answer every time. Carrying them
+		// properly means a save format that holds more than records, on both
+		// Hosts and in the backup container.
 		delete(state.packaged, name)
 		// Nothing is written here, not even the name: the store stays in
 		// `unwritten` until something writes it. See persistStore.
@@ -321,7 +326,7 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 			records = decoded
 		}
 	}
-	store := &recordStore{name: name, records: records, open: 1, version: version, modified: modified}
+	store := &recordStore{name: name, records: records, open: 1, modified: runtime.nowMillis()}
 	state.stores[name] = store
 	if !found {
 		state.names = append(state.names, name)
