@@ -25,23 +25,23 @@ func upload(t *testing.T, server *Server, name string, content []byte) *httptest
 // game in, so the archive arrives over the socket and has to show up in the
 // picker afterwards.
 func TestAGameAddedFromThePageIsThereToPlay(t *testing.T) {
-	gameRoot := t.TempDir()
-	server := newTestServer(t, Options{GameRoot: gameRoot})
+	addedRoot := t.TempDir()
+	server := newTestServer(t, Options{AddedRoot: addedRoot})
 
-	if recorder := upload(t, server, "영웅서기2.zip", []byte("PK\x03\x04 not really")); recorder.Code != http.StatusOK {
+	if recorder := upload(t, server, "한글이름.zip", []byte("PK\x03\x04 not really")); recorder.Code != http.StatusOK {
 		t.Fatalf("upload = %d: %s", recorder.Code, recorder.Body)
 	}
 
-	written, err := os.ReadFile(filepath.Join(gameRoot, "영웅서기2.zip"))
+	written, err := os.ReadFile(filepath.Join(addedRoot, "한글이름.zip"))
 	if err != nil {
-		t.Fatalf("the archive is not in the game root: %v", err)
+		t.Fatalf("the archive is not in the added root: %v", err)
 	}
 	if string(written) != "PK\x03\x04 not really" {
 		t.Errorf("the bytes changed on the way in: %q", written)
 	}
 
-	games := ListGames(gameRoot)
-	if len(games) != 1 || games[0].Name != "영웅서기2" {
+	games := ListGames("", addedRoot)
+	if len(games) != 1 || games[0].Name != "한글이름" {
 		t.Fatalf("the picker lists %+v", games)
 	}
 	// An uploaded archive has no platform directory, and that is deliberate:
@@ -49,6 +49,11 @@ func TestAGameAddedFromThePageIsThereToPlay(t *testing.T) {
 	// and this route has not read them.
 	if games[0].Group != "" {
 		t.Errorf("group = %q, want the ungrouped root", games[0].Group)
+	}
+	// It carries the added root's prefix, which is what tells the page it may
+	// remove this one, and what sends every later request to the right root.
+	if !games[0].Added || !strings.HasPrefix(games[0].Path, "ext/") {
+		t.Errorf("the picker offers %+v, want an added game under ext/", games[0])
 	}
 }
 
@@ -65,13 +70,13 @@ func TestAnUploadCannotNameAPlaceOutsideTheGameRoot(t *testing.T) {
 		"noextension",
 	} {
 		t.Run(name, func(t *testing.T) {
-			gameRoot := t.TempDir()
-			server := newTestServer(t, Options{GameRoot: gameRoot})
+			addedRoot := t.TempDir()
+			server := newTestServer(t, Options{AddedRoot: addedRoot})
 			recorder := upload(t, server, name, []byte("something"))
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("upload %q = %d, want 400", name, recorder.Code)
 			}
-			entries, err := os.ReadDir(gameRoot)
+			entries, err := os.ReadDir(addedRoot)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -83,21 +88,21 @@ func TestAnUploadCannotNameAPlaceOutsideTheGameRoot(t *testing.T) {
 
 	// And nothing climbs out of the root even when the parent is writable.
 	parent := t.TempDir()
-	gameRoot := filepath.Join(parent, "games")
-	server := newTestServer(t, Options{GameRoot: gameRoot})
+	addedRoot := filepath.Join(parent, "ext")
+	server := newTestServer(t, Options{AddedRoot: addedRoot})
 	if recorder := upload(t, server, "../escape.zip", []byte("x")); recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", recorder.Code)
 	}
 	if _, err := os.Stat(filepath.Join(parent, "escape.zip")); !os.IsNotExist(err) {
-		t.Fatal("an upload wrote outside the game root")
+		t.Fatal("an upload wrote outside the added root")
 	}
 }
 
 // Re-uploading a corrected archive is a thing people do, and the file it
 // replaces has to be gone rather than half-overwritten.
 func TestUploadingTheSameNameReplacesTheArchiveWhole(t *testing.T) {
-	gameRoot := t.TempDir()
-	server := newTestServer(t, Options{GameRoot: gameRoot})
+	addedRoot := t.TempDir()
+	server := newTestServer(t, Options{AddedRoot: addedRoot})
 
 	if recorder := upload(t, server, "game.zip", []byte("the first one, which is longer")); recorder.Code != http.StatusOK {
 		t.Fatalf("first upload = %d", recorder.Code)
@@ -105,7 +110,7 @@ func TestUploadingTheSameNameReplacesTheArchiveWhole(t *testing.T) {
 	if recorder := upload(t, server, "game.zip", []byte("the second")); recorder.Code != http.StatusOK {
 		t.Fatalf("second upload = %d", recorder.Code)
 	}
-	written, err := os.ReadFile(filepath.Join(gameRoot, "game.zip"))
+	written, err := os.ReadFile(filepath.Join(addedRoot, "game.zip"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,18 +118,18 @@ func TestUploadingTheSameNameReplacesTheArchiveWhole(t *testing.T) {
 		t.Errorf("content = %q, want the second upload whole", written)
 	}
 	// The temporary file the atomic write used is not left in the picker's way.
-	entries, err := os.ReadDir(gameRoot)
+	entries, err := os.ReadDir(addedRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 {
-		t.Errorf("the game root holds %d files, want one", len(entries))
+		t.Errorf("the added root holds %d files, want one", len(entries))
 	}
 }
 
 func TestAnUploadThatIsTooLargeSaysSo(t *testing.T) {
-	gameRoot := t.TempDir()
-	server := newTestServer(t, Options{GameRoot: gameRoot})
+	addedRoot := t.TempDir()
+	server := newTestServer(t, Options{AddedRoot: addedRoot})
 	recorder := upload(t, server, "huge.zip", make([]byte, maxGameUpload+1))
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", recorder.Code)
@@ -137,16 +142,26 @@ func TestAnUploadThatIsTooLargeSaysSo(t *testing.T) {
 }
 
 func TestAnEmptyUploadIsRefused(t *testing.T) {
-	gameRoot := t.TempDir()
-	server := newTestServer(t, Options{GameRoot: gameRoot})
+	addedRoot := t.TempDir()
+	server := newTestServer(t, Options{AddedRoot: addedRoot})
 	if recorder := upload(t, server, "empty.zip", nil); recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
 }
 
 func TestOnlyPostAddsAGame(t *testing.T) {
-	server := newTestServer(t, Options{GameRoot: t.TempDir()})
+	server := newTestServer(t, Options{AddedRoot: t.TempDir()})
 	if recorder := get(t, server, "/api/games"); recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /api/games = %d, want 405", recorder.Code)
+	}
+}
+
+// A host with nowhere to put an added game does not pretend to take one: the
+// alternative is a file written beside the working directory and a picker that
+// never lists it.
+func TestAnUploadWithNoAddedRootIsRefused(t *testing.T) {
+	server := newTestServer(t, Options{GameRoot: t.TempDir()})
+	if recorder := upload(t, server, "game.zip", []byte("x")); recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
 	}
 }

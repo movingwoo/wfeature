@@ -24,10 +24,28 @@ import (
 //
 // **What arrives is not trusted.** The name is checked here rather than
 // sanitised, because a name that needs repairing is a name worth refusing, and
-// what a bad one buys is a write outside the game root. The bytes are not
+// what a bad one buys is a write outside the added root. The bytes are not
 // examined at all: which platform an archive belongs to is the engine's answer
 // from its content, and a file this route accepted still has to survive being
 // loaded before it is a game.
+//
+// The same route takes the archive back out again; that half is in remove.go,
+// and what it may reach is decided by which root the file landed in.
+
+// serveGames is the route a game arrives on and leaves by.
+//
+//	POST   /api/games?name=<file>   <- the bytes become an added game
+//	DELETE /api/games?game=<path>   -> one added game is gone
+func (s *Server) serveGames(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodPost:
+		s.serveGameUpload(writer, request)
+	case http.MethodDelete:
+		s.serveGameRemoval(writer, request)
+	default:
+		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
 
 // maxGameUpload bounds one archive. The largest of this era measures a few
 // megabytes — the biggest in the local library is under four — so this is
@@ -41,10 +59,12 @@ const maxGameUpload = 32 << 20
 // percent-encoded by every client that has ever made a URL.
 const uploadNameQuery = "name"
 
-// serveGameUpload writes one archive into the game root.
+// serveGameUpload writes one archive into the added root.
 func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
+	if s.addedRoot == "" {
+		// A host that configured no added root has nowhere to put this, and
+		// nowhere the page could delete from afterwards either.
+		writeError(writer, http.StatusNotFound, "Not Found")
 		return
 	}
 	name, err := uploadName(request.URL.Query().Get(uploadNameQuery))
@@ -69,16 +89,17 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	// The archive lands in the root rather than in a platform directory,
-	// because which platform it belongs to is read from its bytes when it is
-	// loaded and this route has not read them. The picker already has a place
-	// for an archive with no group.
-	if err := os.MkdirAll(s.gameRoot, 0o755); err != nil {
-		s.logger.Error("could not make the game root", "path", s.gameRoot, "error", err)
+	// The archive lands in the added root rather than in the library, and in
+	// that root rather than in a platform directory under it: which platform
+	// it belongs to is read from its bytes when it is loaded, and this route
+	// has not read them. The picker already has a place for an archive with no
+	// group.
+	if err := os.MkdirAll(s.addedRoot, 0o755); err != nil {
+		s.logger.Error("could not make the added root", "path", s.addedRoot, "error", err)
 		writeError(writer, http.StatusInternalServerError, "게임을 저장하지 못했습니다.")
 		return
 	}
-	if err := writeFileAtomically(filepath.Join(s.gameRoot, name), body); err != nil {
+	if err := writeFileAtomically(filepath.Join(s.addedRoot, name), body); err != nil {
 		s.logger.Error("could not write an uploaded game", "name", name, "error", err)
 		writeError(writer, http.StatusInternalServerError, "게임을 저장하지 못했습니다.")
 		return

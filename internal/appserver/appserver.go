@@ -82,15 +82,22 @@ func Start(options Options) (*Server, error) {
 	}
 
 	gameRoot := filepath.Join(options.Root, "games")
+	addedRoot := webhost.AddedRootIn(options.Root)
 	saveRoot := filepath.Join(options.Root, "savedata", "ktf")
 	logRoot := filepath.Join(options.Root, "logs")
 
+	// The same upgrade step the desktop server takes: an archive added from
+	// the page before there was an added root is one the page cannot remove.
+	// See internal/webhost/adopt.go — it runs once.
+	webhost.AdoptLooseGames(gameRoot, addedRoot, logger)
+
 	host, err := webhost.New(webhost.Options{
-		Client:   web.Client(),
-		GameRoot: gameRoot,
-		SaveRoot: saveRoot,
-		LogRoot:  logRoot,
-		Logger:   logger,
+		Client:    web.Client(),
+		GameRoot:  gameRoot,
+		AddedRoot: addedRoot,
+		SaveRoot:  saveRoot,
+		LogRoot:   logRoot,
+		Logger:    logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("appserver: %w", err)
@@ -119,6 +126,7 @@ func Start(options Options) (*Server, error) {
 		"url", fmt.Sprintf("http://127.0.0.1:%d", port),
 		"profile", host.Profile(),
 		"games", gameRoot,
+		"added", addedRoot,
 		"saves", saveRoot)
 
 	return &Server{port: port, httpServer: httpServer, host: host, logger: logger}, nil

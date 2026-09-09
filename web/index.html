@@ -58,6 +58,12 @@
             <div class="prestart-row">
               <input type="file" id="game-file" class="game-file" accept=".zip,.jar,application/zip,application/java-archive" multiple />
               <button id="game-add" class="game-add">＋ 게임 추가</button>
+              <!-- Only what this page added can go, so the button greys out on
+                   a game that was put beside the server by hand. It stays on
+                   screen rather than appearing and disappearing with the
+                   selection: a control that comes and goes reads as a glitch,
+                   and a disabled one says there is a rule. -->
+              <button id="game-remove" class="game-add game-remove" disabled>게임 삭제</button>
             </div>
             <!-- The save tree lives beside the server, so from here a player's
                  progress is somewhere they cannot point at — and on a phone it
@@ -97,6 +103,20 @@
              push the keypad down whenever there was anything to say. It stays
              in the markup where it is read from, and the stylesheet takes it
              out of the flow. -->
+        <!-- The page asks its own questions rather than calling window.confirm.
+             The phone app is a WebView with a WebChromeClient of its own — the
+             file picker needs one — and what a JavaScript confirm does there is
+             that client's decision; answering "no" with nothing on screen is a
+             button that does nothing. The verb goes on the button that carries
+             it out, so the last thing read is what is about to happen. -->
+        <div id="confirm-dialog" class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-text">
+          <span id="confirm-text" class="confirm-text"></span>
+          <div class="confirm-actions">
+            <button id="confirm-cancel" class="confirm-button">취소</button>
+            <button id="confirm-accept" class="confirm-button confirm-accept">확인</button>
+          </div>
+        </div>
+
         <div id="status-message" class="status-message">
           <!-- The live region is the text, not the popup: the dismiss button
                never changes and would be read out with every message. -->

@@ -62,11 +62,12 @@ W-Feature — 피처폰 게임 에뮬레이터 (Linux)
    stop.sh                      멈추기
    status.sh                    떠 있는지 확인
    games/                       게임을 넣는 곳
+   ext/                         화면의 "＋ 게임 추가"로 넣은 게임 (그 버튼으로 지울 수 있다)
    savedata/                    세이브 (처음 저장할 때 생긴다)
    logs/                        디버그 기록 (설정에서 저장을 눌렀을 때만)
 
    서버를 업데이트할 때는 wfeature-server 만 새 것으로 바꾸면 된다.
-   games/ 와 savedata/ 는 그대로 두면 그대로 이어서 쓴다.
+   games/ 와 ext/ 와 savedata/ 는 그대로 두면 그대로 이어서 쓴다.
 
    상시로 띄워 두려면 systemd 유닛에서 이 폴더를 WorkingDirectory 로 주고
    wfeature-server 를 ExecStart 로 잡으면 된다. 데몬용 옵션은 따로 없다.

@@ -59,7 +59,10 @@ func TestPlayingAndStoppingAGameLeavesNoGoroutinesBehind(t *testing.T) {
 			t.Fatalf("set a read deadline: %v", err)
 		}
 		expectMessage(t, connection, serverReady)
-		if err := connection.WriteText(`{"kind":"start","game":"skt/canvas.zip"}`); err != nil {
+		// The path is the one `games.json` hands out, prefix and all: a start
+		// resolves against the same roots the HTTP routes do, and a path that
+		// names neither of them is refused rather than guessed at.
+		if err := connection.WriteText(`{"kind":"start","game":"games/skt/canvas.zip"}`); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 		expectMessage(t, connection, serverStarted)

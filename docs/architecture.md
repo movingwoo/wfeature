@@ -279,8 +279,8 @@ is built per profile like every other binary here. There is no flag for it: one
 process serving the other profile's save tree is a way to disagree with the
 binary that is running, not a feature.
 
-Both profiles read the same `var/games` and speak the same save API, but each
-owns its saves: `var/savedata/<profile>/ktf/`. Playing a debug build must not
+Both profiles read the same `var/games` and `var/ext` and speak the same save
+API, but each owns its saves: `var/savedata/<profile>/ktf/`. Playing a debug build must not
 move a release build's progress, and a debug session is where a half-finished
 API is most likely to write a save the game cannot read back. Both binaries
 resolve that path from their own build tag, so the two Hosts of one profile

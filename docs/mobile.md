@@ -137,9 +137,10 @@ anything looks at the signature. The build stamps the SDK it actually used.
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
 
-## Adding a game
+## Adding a game, and removing it
 
-The page has a **＋ 게임 추가** button, which is `POST /api/games`; see
+The page has a **＋ 게임 추가** button, which is `POST /api/games`, and a
+**게임 삭제** button beside it, which is `DELETE /api/games`; see
 [`running.md`](running.md).
 
 On a desktop that is a convenience. On Android it is the only way in: **since
@@ -147,6 +148,23 @@ Android 11 a file manager cannot open the directory an app keeps its files in**,
 so "put the archive in games/" names a place nobody can reach. The button is
 what makes a phone build have any games at all, and it is the reason that
 feature came before the app did.
+
+The same wall makes removal the page's job too. A game added by mistake, or a
+finished one, sits in a directory nothing else on the phone can open, so
+without a button the only way to clear it out is to clear the app's data —
+which takes every save with it. What the page added is what the page may
+delete: it lands in `ext/` beside `games/`, and that is the only directory the
+delete button reaches. **The server moves what an older build left loose in
+`games/` into `ext/` on its first start**: adding a game used to write there,
+and a game added before this version would otherwise be one no phone can ever
+remove. It is the same step on every host — see "The one move an upgrade makes"
+in [`running.md`](running.md) — and it moves only what sits loose, because on a
+phone that is what the page put there; a folder of archives is a library
+somebody assembled over USB deliberately. On a phone every game arrives that way, so `ext/` is the
+folder with the games in it and `games/` is the empty one beside it, which is
+worth knowing when the data directory is read over USB. The saves are not
+touched by a removal — they are keyed by what is inside the archive, so adding
+the same file again comes back to the same progress.
 
 ## What is not answered yet
 

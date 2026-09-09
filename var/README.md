@@ -3,7 +3,16 @@
 This directory is the root for local runtime data that is neither source nor a
 build artifact.
 
-- `games/`: user-provided game archives
+- `games/`: user-provided game archives, put here by hand
+- `ext/`: game archives that arrived through the page's ＋ 게임 추가 button.
+  They are a root of their own because what the page added is what the page may
+  delete: an archive written here and one dropped into `games/` are otherwise
+  the same bytes in the same shape, and the picker is a directory read rather
+  than a registry, so where the file is has to be what answers. Removing one
+  leaves its saves alone — a save is keyed by what is inside the archive, so
+  adding the same file again lands on the same progress. The empty `.adopted`
+  file in here records that the one-time move of what an older build left loose
+  in `games/` has run; deleting it only makes that move happen again.
 - `routes/`: scripted ways back to a scene, for `runktf`/`runlgt -route`. A
   route is written against one archive — usually named after it — and reaching
   a late scene can take thousands of ticks to script, so the ones worth keeping

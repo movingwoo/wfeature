@@ -71,6 +71,14 @@ type Options struct {
 
 	// GameRoot holds the archives, grouped by platform directory.
 	GameRoot string
+	// AddedRoot holds the archives that arrived through the page's add button
+	// — `var/ext` in a checkout, `ext/` beside the games directory on a phone.
+	// It is a root of its own rather than a directory inside GameRoot because
+	// what is in it is what the page may delete, and because the library's
+	// group directories are named by whoever made them: reserving a name in
+	// there would be reserving one out of somebody's own categories. A host
+	// that leaves it empty serves no added games and no removals.
+	AddedRoot string
 	// SaveRoot is this profile's KTF save tree; a platform segment in a
 	// request reroots to a sibling directory.
 	SaveRoot string
@@ -92,11 +100,12 @@ type Options struct {
 // Server answers every route the client uses. Its zero value is not usable;
 // build one with New.
 type Server struct {
-	client   fs.FS
-	gameRoot string
-	saveRoot string
-	logRoot  string
-	logger   *slog.Logger
+	client    fs.FS
+	gameRoot  string
+	addedRoot string
+	saveRoot  string
+	logRoot   string
+	logger    *slog.Logger
 	// profile is this binary's build profile. There is no flag for it: the
 	// server is built per profile like every other binary here, so a flag
 	// would only be a way to disagree with the binary that is running.
@@ -144,6 +153,7 @@ func New(options Options) (*Server, error) {
 	return &Server{
 		client:          options.Client,
 		gameRoot:        options.GameRoot,
+		addedRoot:       options.AddedRoot,
 		saveRoot:        options.SaveRoot,
 		logRoot:         options.LogRoot,
 		logger:          logger,
@@ -181,10 +191,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveSaves(writer, request)
 	case requestPath == "/games.json":
 		s.serveGameList(writer, request)
-	case strings.HasPrefix(requestPath, "/games/"):
+	case strings.HasPrefix(requestPath, "/games/"), strings.HasPrefix(requestPath, "/ext/"):
 		s.serveGameArchive(writer, request)
 	case requestPath == "/api/games":
-		s.serveGameUpload(writer, request)
+		s.serveGames(writer, request)
 	case requestPath == "/api/savepack":
 		s.serveSavePack(writer, request)
 	case requestPath == "/api/status":
