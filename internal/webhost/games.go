@@ -2,6 +2,7 @@ package webhost
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,23 +23,58 @@ import (
 // listing.
 var gameExtensions = map[string]bool{".zip": true, ".jar": true}
 
+// The two roots a game can come from, and the prefix each one wears in the
+// paths `games.json` hands out. A game either sits in the library beside the
+// server under `games/<group>/`, or it arrived through the page's add button
+// and sits in the added root under `ext/`.
+//
+// **The split is what makes removal answerable.** An archive the page wrote
+// and one a person dropped into the library are the same bytes in the same
+// shape, so a page that deleted "whatever sits loose in the root" would be
+// deleting somebody's own library on the strength of a guess. There is no
+// registry to consult instead — this listing is a directory read, every time
+// it is asked for, which is what keeps it from ever disagreeing with the disk
+// — so the answer has to be somewhere a directory read can find it, and where
+// the file is is the one place that qualifies.
+const (
+	libraryPrefix = "games"
+	addedPrefix   = "ext"
+)
+
 // Game is one entry in the picker.
 type Game struct {
 	// Group is the platform directory the archive sits in, and is empty for an
-	// archive dropped straight into the game root.
+	// archive dropped straight into a root.
 	Group string `json:"group"`
 	// Name is the archive's file name without its extension.
 	Name string `json:"name"`
 	// Path is the URL the page loads the archive from.
 	Path string `json:"path"`
+	// Added reports that the archive came in through the page rather than
+	// being put beside the server by hand, which is also what makes it the
+	// page's to remove.
+	Added bool `json:"added,omitempty"`
 }
 
-// ListGames describes the game root as the picker consumes it: one entry per
-// archive, grouped by the platform directory holding it, and then the archives
-// sitting in the root itself. A missing root is an empty list rather than an
-// error — a fresh install has no games yet, and the page has to load anyway so
-// the user can see where to put them.
-func ListGames(gameRoot string) []Game {
+// ListGames describes both roots as the picker consumes them: one entry per
+// archive, grouped by the platform directory holding it, then the archives
+// sitting in the root itself, and the games the page added last. A missing
+// root is an empty list rather than an error — a fresh install has no games
+// yet, and the page has to load anyway so the user can see where to put them.
+func ListGames(gameRoot, addedRoot string) []Game {
+	games := listRoot(gameRoot, libraryPrefix, false)
+	// A host with no added root, and one pointed at the library itself, both
+	// list once: a second pass over the same directory would offer every game
+	// twice, and offer the library as the page's to delete.
+	if addedRoot != "" && addedRoot != gameRoot {
+		games = append(games, listRoot(addedRoot, addedPrefix, true)...)
+	}
+	return games
+}
+
+// listRoot is one root's worth of that listing, under the prefix its paths
+// carry.
+func listRoot(gameRoot, prefix string, added bool) []Game {
 	// The depth this reads to is the boundary every tool that reasons about
 	// the library shares; gameroot.Entries holds it, one group at a time and
 	// with the ungrouped archives last.
@@ -68,14 +104,15 @@ func ListGames(gameRoot string) []Game {
 			group = entry.Group
 			sortFrom = len(games)
 		}
-		prefix := "games/"
+		location := prefix + "/"
 		if entry.Group != "" {
-			prefix += url.PathEscape(entry.Group) + "/"
+			location += url.PathEscape(entry.Group) + "/"
 		}
 		games = append(games, Game{
 			Group: entry.Group,
 			Name:  strings.TrimSuffix(entry.Name, filepath.Ext(entry.Name)),
-			Path:  prefix + url.PathEscape(entry.Name),
+			Path:  location + url.PathEscape(entry.Name),
+			Added: added,
 		})
 	}
 	sortGroup()
@@ -87,7 +124,7 @@ func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
-	body, err := json.Marshal(ListGames(s.gameRoot))
+	body, err := json.Marshal(ListGames(s.gameRoot, s.addedRoot))
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")
 		return
@@ -95,24 +132,66 @@ func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request
 	writeJSON(writer, http.StatusOK, body)
 }
 
-// serveGameArchive serves /games/<group>/<archive> out of the game root. The
-// archives are tens of megabytes and never change in place, so they are the
-// one response worth revalidating instead of re-sending.
+// errNotAGame is what every road into the two roots answers with when the path
+// it was handed does not name a game inside one of them. It says no more than
+// that on purpose: which of the reasons it was is worth logging and is not
+// worth telling a caller that is trying paths.
+var errNotAGame = errors.New("the path does not name a game")
+
+// gameFile resolves a path the picker handed out — `games/<group>/<archive>`
+// or `ext/<archive>` — to the file it names, and reports whether it is one the
+// page added. Every route that reaches an archive goes through here, so the
+// check that a path stays inside a root is written once: the leading component
+// chooses the root and cannot be anything else, and pathComponents refuses the
+// components after it that would climb back out.
+func (s *Server) gameFile(gamePath string) (file string, added bool, err error) {
+	components, err := pathComponents(gamePath)
+	if err != nil || len(components) < 2 {
+		return "", false, errNotAGame
+	}
+	root := ""
+	switch components[0] {
+	case libraryPrefix:
+		root = s.gameRoot
+	case addedPrefix:
+		root, added = s.addedRoot, true
+	}
+	// An unknown prefix leaves the root empty, and so does a host that was
+	// given no added root: both would otherwise resolve against the working
+	// directory, which is a place no game of ours lives.
+	if root == "" {
+		return "", false, errNotAGame
+	}
+	return filepath.Join(append([]string{root}, components[1:]...)...), added, nil
+}
+
+// gameFileInQuery is gameFile for the routes that take the path in a query
+// rather than in the request path. `games.json` hands out percent-encoded
+// paths and the page sends back what it was given, so a Korean name arrives
+// escaped — where net/http has already unescaped a request path by the time a
+// handler sees it. One helper so that neither road forgets which it is.
+func (s *Server) gameFileInQuery(raw string) (file string, added bool, err error) {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", false, errNotAGame
+	}
+	return s.gameFile(decoded)
+}
+
+// serveGameArchive serves `/games/<group>/<archive>` and `/ext/<archive>` out
+// of the root each names. The archives are tens of megabytes and never change
+// in place, so they are the one response worth revalidating instead of
+// re-sending.
 func (s *Server) serveGameArchive(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
-	components, err := pathComponents(strings.TrimPrefix(request.URL.Path, "/games"))
+	file, _, err := s.gameFile(strings.TrimPrefix(request.URL.Path, "/"))
 	if err != nil {
 		writeError(writer, http.StatusForbidden, "Forbidden")
 		return
 	}
-	if len(components) == 0 {
-		writeError(writer, http.StatusNotFound, "Not Found")
-		return
-	}
-	file := filepath.Join(append([]string{s.gameRoot}, components...)...)
 	info, err := os.Stat(file)
 	if err != nil || !info.Mode().IsRegular() {
 		writeError(writer, http.StatusNotFound, "Not Found")

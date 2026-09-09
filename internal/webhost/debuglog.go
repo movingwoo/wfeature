@@ -233,12 +233,18 @@ func reportTime(name string) (time.Time, bool) {
 	return stamp, true
 }
 
-// GameRootIn, SaveRootIn and LogRootIn name the runtime directories under a
-// data root. In a checkout that root is the ignored var/ tree, which is the
-// same layout the native CLI uses so both Hosts of one profile boot from the
-// same data; a released binary passes the directory it was dropped into.
-func GameRootIn(root string) string { return filepath.Join(root, "games") }
-func LogRootIn(root string) string  { return filepath.Join(root, "logs") }
+// GameRootIn, AddedRootIn, SaveRootIn and LogRootIn name the runtime
+// directories under a data root. In a checkout that root is the ignored var/
+// tree, which is the same layout the native CLI uses so both Hosts of one
+// profile boot from the same data; a released binary passes the directory it
+// was dropped into.
+//
+// The added root is a sibling of the game root rather than a directory inside
+// it: what the page added is what the page may delete, and the library's own
+// group directories are named by whoever made them. See webhost.Options.
+func GameRootIn(root string) string  { return filepath.Join(root, "games") }
+func AddedRootIn(root string) string { return filepath.Join(root, "ext") }
+func LogRootIn(root string) string   { return filepath.Join(root, "logs") }
 func SaveRootIn(root string) string {
 	return filepath.Join(root, "savedata", backend.BuildProfile(), "ktf")
 }

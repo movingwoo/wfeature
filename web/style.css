@@ -291,6 +291,26 @@ body {
   opacity: 0.65;
 }
 
+/* Smaller than 게임 추가 and quieter than it, because deleting is the rarer
+   errand of the two and the one that cannot be undone from this screen. The
+   red is kept for the hover: at rest it is one more button in a row, and under
+   a finger it says what it is about to do. */
+.game-remove {
+  padding: 8px 16px;
+  font-size: 0.9em;
+}
+
+.game-remove:hover:not(:disabled) {
+  background: #6d2f2f;
+}
+
+/* Disabled means "not yours to delete" here rather than "busy", which is what
+   the shared rule above assumes: this one is the state of the game the picker
+   is showing, and it can sit there for the whole visit. */
+.game-remove:disabled {
+  cursor: not-allowed;
+}
+
 /* Two more buttons at the weight of 게임 추가 would make the first screen read
    as four equal choices. Backing a save up is the rarer errand of the four, so
    the pair is smaller rather than louder. */
@@ -762,9 +782,76 @@ body {
   background: #5c5c5c;
 }
 
+/* The page's own confirmation window, in the shape of the message popup above
+   because it is the same kind of thing: centred, over everything, and the only
+   thing being read while it is up. It sits above the message, since a question
+   asked after a message is the one waiting for an answer. */
+.confirm-dialog {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 340px);
+  max-height: 70dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 240;
+  box-sizing: border-box;
+  padding: 20px 16px 16px;
+  background: #2b2b2b;
+  color: #e8e6e3;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+
+.confirm-dialog.visible {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.confirm-text {
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.confirm-button {
+  font: inherit;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 9px 22px;
+  cursor: pointer;
+}
+
+.confirm-button:hover {
+  background: #5c5c5c;
+}
+
+/* The one that goes through is the red one, and it is second: the safe button
+   is where a thumb already is, and the colour is the last thing read. */
+.confirm-accept {
+  background: #6d2f2f;
+}
+
+.confirm-accept:hover {
+  background: #863939;
+}
+
 /* A message dims the page at every width, unlike the panels below: it is a
-   modal everywhere, because it is never something the page is read alongside. */
-body:has(.status-message.visible) .modal-backdrop {
+   modal everywhere, because it is never something the page is read alongside.
+   A question is the same, and more so. */
+body:has(.status-message.visible) .modal-backdrop,
+body:has(.confirm-dialog.visible) .modal-backdrop {
   display: block;
 }
 

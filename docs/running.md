@@ -65,13 +65,15 @@ server carries the page and runs the emulator itself.
 | `-addr` | `:11541` | the listening address; `unix:/path/to.sock` listens on a socket file instead, for a reverse proxy (below) |
 | `-web` | `web` | the client directory; when it is missing the binary serves its embedded copy |
 | `-games` | `var/games` | the archives, grouped by platform directory |
+| `-ext` | `var/ext` | the archives added from the page, which are the ones it may remove |
 | `-saves` | `var/savedata/<profile>/ktf` | this profile's KTF save tree |
 | `-logs` | `var/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number |
 
 Each flag also reads an environment variable when it is not given —
 `WFEATURE_ADDR`, `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`,
-`WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER` — and
+`WFEATURE_ADDED_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`,
+`WFEATURE_PHONE_NUMBER` — and
 `WFEATURE_HOST` with `WFEATURE_PORT` still compose an address.
 
 `-number` is the odd one, because it is the only setting that changes what a
@@ -88,9 +90,9 @@ server built with `-tags debug` collects the full diagnostics and writes to the
 debug save tree. One process cannot serve the other profile, which is what keeps
 a debug session from moving a release session's progress.
 
-### Adding a game from the page
+### Adding a game from the page, and taking it back off
 
-`POST /api/games?name=<file name>` writes one archive into the game root, and
+`POST /api/games?name=<file name>` writes one archive into the added root, and
 the picker has a **＋ 게임 추가** button that calls it. The name is
 percent-encoded in the query rather than carried in a header, because these
 names are Korean and a header value is Latin-1.
@@ -105,8 +107,65 @@ dot or an extension that is not `.zip` or `.jar` is answered with a sentence
 the page shows, because a name that needs repairing is a request to write
 somewhere else. The bytes are not examined — which platform an archive belongs
 to is read from its content when it is loaded — so the archive lands in the
-game root with no platform directory, which is exactly the ungrouped case the
+added root with no platform directory, which is exactly the ungrouped case the
 picker already had.
+
+**There are two roots, and which one a game is in is what says whether the page
+may delete it.** The library is `var/games`, grouped by whatever directories
+its owner made; what arrives through the page lands in `var/ext`, and
+`DELETE /api/games?game=<picker path>` removes one archive from there and
+refuses everything else with a sentence the page shows. `games.json` marks the
+second kind `"added": true` and gives it an `ext/` path, and the picker heads
+those under 추가한 게임 with the **게임 삭제** button live only on them.
+
+The split is the whole design. An archive the page wrote and one a person
+dropped into the library are the same bytes in the same shape, and there is no
+registry to tell them apart — `games.json` is a directory read, every time, and
+a list kept beside it could drift away from the disk and answer for a file that
+is no longer the one it names. Where the file is cannot drift. A directory
+inside `var/games` would have done as well, except that the library's group
+names belong to whoever made them, so reserving one would be taking a name out
+of somebody's own categories.
+
+A game that is playing when its archive is deleted **keeps playing**: the
+archive is read once at the start and a parked session holds the game itself,
+so the file going away costs a running game nothing.
+
+Removing a game **does not touch its saves.** A save is keyed by what is inside
+the archive rather than by where it sits, so adding the same file again lands
+on the same progress — which makes a deletion something a player can change
+their mind about, and makes deleting their progress for them a decision worth
+not taking. The save routes work on `ext/` paths exactly as they do on library
+ones.
+
+**The one move an upgrade makes.** Games added before there was an added root
+are in the game root, where a removal cannot reach them, so the first start
+after the upgrade moves what sits loose there across — `AdoptLooseGames` in
+`internal/webhost/adopt.go`, called by the desktop server and by the in-process
+one, so every host takes the same step. It moves only what is directly in the
+game root: a group directory is a library somebody assembled and filed, and
+moving that would answer a question nobody asked. It never overwrites a name
+the added root already holds — two files, one name, and nothing here can tell
+whether they are the same game.
+
+It runs **once**, recorded by an empty `.adopted` file in the added root. A
+person may still drop an archive straight into the game root by hand, which the
+README has always said they may, and a sweep that ran every start would keep
+filing those somewhere the owner did not choose. An unfinished move leaves the
+marker unwritten so the next start completes it.
+
+**The page asks its own question before deleting.** Not `window.confirm`: the
+phone app is a WebView with a `WebChromeClient` of its own — the file picker
+behind ＋ 게임 추가 needs one — and what a JavaScript confirm does there is that
+client's decision, where answering "no" with nothing on screen is a button that
+does nothing. `web/confirm.js` puts the dialog in the page, so the question, the
+words and the answer are the same everywhere; the restart button asks through it
+too.
+
+Deleting matters for the same reason adding does. On a desktop an added file is
+in a folder, and a folder can be opened; on Android it is in the directory a
+file manager has not been able to open since 11, so without this the only way
+to clear a game out is to clear the app's data and lose every save with it.
 
 The write is atomic (a temporary file beside the target, then a rename), so
 re-uploading a corrected archive over a running library never leaves a
@@ -114,7 +173,8 @@ truncated file the loader would fail on. Uploads are bounded at 32 MB, which
 is generous for an era whose largest archives are a few megabytes.
 
 **There is still no authentication.** Anything that can reach the port could
-already read and write the save trees; it can now add a game as well. That is
+already read and write the save trees; it can now add a game, and remove one it
+added, as well. That is
 the same trade the rest of this server makes on a home network, and the same
 reason `-addr 127.0.0.1:11541` exists.
 
@@ -269,6 +329,7 @@ styles, so it only needs a `games/` directory beside it.
 ```text
 wfeature-server            the binary, ~11 MB
 games/ktf/<game>.zip       what to play
+ext/<game>.zip             what the page added, and what it may delete
 savedata/<profile>/...     written on the first save
 logs/                      written when a report is taken
 ```

@@ -10,7 +10,6 @@ import (
 	"image"
 	"image/png"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1265,23 +1264,18 @@ func (r *sessionRunner) queue(message serverMessage, droppable bool) {
 
 // readGameArchive resolves the archive path the picker offered and reads it.
 // The page sends back the same string games.json gave it, percent-encoding and
-// all, and it is checked here exactly as the HTTP route checks it: a session
-// is not a way around the game root.
+// all, and it is resolved by the same gameFile the HTTP routes use: a session
+// is not a way around either root.
 func (s *Server) readGameArchive(gamePath string) ([]byte, string, error) {
-	decoded, err := url.PathUnescape(gamePath)
+	file, _, err := s.gameFileInQuery(gamePath)
 	if err != nil {
-		return nil, "", fmt.Errorf("game path is not a valid URL path: %w", err)
+		return nil, "", errors.New("game path is not inside a game directory")
 	}
-	components, err := pathComponents(strings.TrimPrefix(decoded, "games"))
-	if err != nil || len(components) == 0 {
-		return nil, "", errors.New("game path is not inside the game directory")
-	}
-	file := filepath.Join(append([]string{s.gameRoot}, components...)...)
 	archive, err := os.ReadFile(file)
 	if err != nil {
 		return nil, "", fmt.Errorf("read the game archive: %w", err)
 	}
-	name := components[len(components)-1]
+	name := filepath.Base(file)
 	return archive, strings.TrimSuffix(name, filepath.Ext(name)), nil
 }
 

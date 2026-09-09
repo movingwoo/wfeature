@@ -120,9 +120,19 @@ public class MainActivity extends Activity {
     private Process launch(int port, File root) throws Exception {
         String binary = getApplicationInfo().nativeLibraryDir + "/" + SERVER_LIBRARY;
         File games = new File(root, "games");
+        // Where a game added from the page lands, and therefore the only place
+        // the page may delete from. On a phone every game arrives that way, so
+        // this is the directory with the games in it and `games/` is the empty
+        // one beside it — worth knowing when the folder is read over USB.
+        //
+        // What an older build left in `games/` moves across on the first
+        // start, and the server does that for every host rather than this
+        // launcher doing it for one; see internal/webhost/adopt.go.
+        File added = new File(root, "ext");
         File saves = new File(root, "savedata/ktf");
         File logs = new File(root, "logs");
         games.mkdirs();
+        added.mkdirs();
         saves.mkdirs();
         logs.mkdirs();
 
@@ -132,6 +142,7 @@ public class MainActivity extends Activity {
                 // on the Wi-Fi would be one with no key in front of it.
                 "-addr", "127.0.0.1:" + port,
                 "-games", games.getAbsolutePath(),
+                "-ext", added.getAbsolutePath(),
                 "-saves", saves.getAbsolutePath(),
                 "-logs", logs.getAbsolutePath(),
                 // The client is inside the binary; there is no directory of

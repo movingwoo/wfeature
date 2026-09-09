@@ -10,7 +10,8 @@ import {
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
-import { initAddGame } from "./add-game.js";
+import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
+import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
 import {
@@ -720,6 +721,16 @@ const initGameSelect = async () => {
       onStatus: setStatus,
       onAdded: () => initGameSelect(),
     });
+    // Only the games this page added can be deleted from it, and which those
+    // are is the listing's answer — so the button follows the selection, and
+    // the reload after a removal is what turns it off again.
+    initRemoveGame({
+      document,
+      chosenGame,
+      onStatus: setStatus,
+      onRemoved: () => initGameSelect(),
+    });
+    select.addEventListener("change", () => syncRemoveButton(document));
     // The picker is what says which game the two save buttons act on, so
     // chosenGame is handed over rather than read once: a player changes the
     // selection between pressing them.
@@ -736,15 +747,14 @@ const initGameSelect = async () => {
     const games = await response.json();
     select.replaceChildren();
 
-    for (const group of [...new Set(games.map(game => game.group))]) {
+    for (const label of [...new Set(games.map(groupLabel))]) {
       const optionGroup = document.createElement("optgroup");
-      // An archive sitting in the game root has no platform directory to name
-      // it, and a blank optgroup label reads as a glitch.
-      optionGroup.label = group ? group.toUpperCase() : "기타";
-      for (const game of games.filter(candidate => candidate.group === group)) {
+      optionGroup.label = label;
+      for (const game of games.filter(candidate => groupLabel(candidate) === label)) {
         const option = document.createElement("option");
         option.value = game.path;
         option.textContent = game.name;
+        if (game.added) option.dataset.added = "yes";
         optionGroup.appendChild(option);
       }
       select.appendChild(optionGroup);
@@ -752,6 +762,7 @@ const initGameSelect = async () => {
 
     if (games.length === 0) {
       select.add(new Option("등록된 게임이 없습니다", ""));
+      syncRemoveButton(document);
       return;
     }
 
@@ -762,6 +773,7 @@ const initGameSelect = async () => {
 
     select.disabled = false;
     startButton.disabled = false;
+    syncRemoveButton(document);
     if (startButton.dataset.started) return;
     startButton.dataset.started = "yes";
     startButton.addEventListener("click", async () => {
@@ -788,12 +800,21 @@ const initGameSelect = async () => {
   } catch (error) {
     reportError(error);
     select.replaceChildren(new Option("게임 목록을 불러올 수 없습니다", ""));
+    syncRemoveButton(document);
   }
 };
 
 const initRestart = () => {
-  document.getElementById("restart")?.addEventListener("click", () => {
-    if (!confirm("게임을 처음부터 다시 시작할까요? 저장하지 않은 진행은 사라집니다.")) return;
+  document.getElementById("restart")?.addEventListener("click", async () => {
+    // The page's own question rather than the browser's, for the reason in
+    // confirm.js: in the app's WebView a JavaScript confirm can answer "no"
+    // with nothing on screen, which is a button that does nothing.
+    const restart = await askToConfirm({
+      document,
+      message: "게임을 처음부터 다시 시작할까요? 저장하지 않은 진행은 사라집니다.",
+      confirmLabel: "다시 시작",
+    });
+    if (!restart) return;
     // Restarting is the one reload that must not come back to the same game,
     // so the token goes before the page does.
     rememberResumeToken("");
@@ -997,6 +1018,10 @@ const initLogView = debugBuild => {
 // must not also shut the panel that was open behind it.
 const initModalBackdrop = () => {
   document.getElementById("modal-backdrop")?.addEventListener("click", () => {
+    // A question that is waiting for an answer owns this tap: the dialog's own
+    // listener reads it as "no", and closing a panel behind it as well would
+    // be a second thing happening to a tap that meant one.
+    if (document.getElementById("confirm-dialog")?.classList.contains("visible")) return;
     if (statusVisible()) {
       setStatus("");
       return;

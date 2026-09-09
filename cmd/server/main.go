@@ -114,6 +114,8 @@ func run(arguments []string, answer, output *os.File) error {
 		"directory holding the client files; when it is missing the embedded copy is served")
 	gameRoot := flags.String("games", environmentOr("WFEATURE_GAME_ROOT", webhost.GameRootIn(root)),
 		"directory holding the game archives, grouped by platform")
+	addedRoot := flags.String("ext", environmentOr("WFEATURE_ADDED_ROOT", webhost.AddedRootIn(root)),
+		"directory holding the archives added from the page, which are the ones it may remove")
 	saveRoot := flags.String("saves", environmentOr("WFEATURE_SAVE_ROOT", webhost.SaveRootIn(root)),
 		"this profile's KTF save tree; other platforms are its siblings")
 	logRoot := flags.String("logs", environmentOr("WFEATURE_LOG_ROOT", webhost.LogRootIn(root)),
@@ -135,13 +137,18 @@ func run(arguments []string, answer, output *os.File) error {
 	}
 
 	logger := backend.NewLogger(output)
+	// The one move an upgrade makes: games added from the page before there
+	// was an added root are in the game root, where the page cannot reach them
+	// to remove them. See internal/webhost/adopt.go — it runs once.
+	webhost.AdoptLooseGames(*gameRoot, *addedRoot, logger)
 	options := webhost.Options{
-		Client:   web.Client(),
-		GameRoot: *gameRoot,
-		SaveRoot: *saveRoot,
-		LogRoot:  *logRoot,
-		Version:  version,
-		Logger:   logger,
+		Client:    web.Client(),
+		GameRoot:  *gameRoot,
+		AddedRoot: *addedRoot,
+		SaveRoot:  *saveRoot,
+		LogRoot:   *logRoot,
+		Version:   version,
+		Logger:    logger,
 	}
 	// A checkout serves its working copy so an edit to the page shows up on a
 	// reload; a released binary has no such directory and serves what it
@@ -178,6 +185,7 @@ func run(arguments []string, answer, output *os.File) error {
 		"client", source,
 		"data", layout,
 		"games", *gameRoot,
+		"added", *addedRoot,
 		"saves", *saveRoot)
 
 	if *openPage {
