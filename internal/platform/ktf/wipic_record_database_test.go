@@ -2,17 +2,25 @@ package ktf
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
-// packedRecordDatabase builds the packaged format: the header, then one slot
+// packagedDatabaseHeader builds the header the two packaged shapes share.
+func packagedDatabaseHeader(magic []byte, recordSize, count int) []byte {
+	header := make([]byte, recordDatabaseFileHeader)
+	copy(header, magic)
+	binary.BigEndian.PutUint32(header[recordDatabaseSizeOffset:], uint32(recordSize))
+	binary.BigEndian.PutUint32(header[recordDatabaseCountOffset:], uint32(count))
+	return header
+}
+
+// packedRecordDatabase builds the one-file shape: the header, then one slot
 // per record with a live flag in front of each.
 func packedRecordDatabase(recordSize int, records ...[]byte) []byte {
-	file := make([]byte, recordDatabaseFileHeader)
-	copy(file, recordDatabaseFileMagic)
-	binary.LittleEndian.PutUint32(file[8:12], uint32(recordSize))
+	file := packagedDatabaseHeader(recordDatabaseFileMagic, recordSize, len(records))
 	for _, record := range records {
 		slot := make([]byte, recordSize+1)
 		if record != nil {
@@ -22,6 +30,18 @@ func packedRecordDatabase(recordSize int, records ...[]byte) []byte {
 		file = append(file, slot...)
 	}
 	return file
+}
+
+// splitRecordDatabase builds the two-file shape: an index carrying the header
+// alone, and the records end to end with nothing between them.
+func splitRecordDatabase(recordSize int, records ...[]byte) (index, data []byte) {
+	index = packagedDatabaseHeader(recordDatabaseIndexMagic, recordSize, len(records))
+	for _, record := range records {
+		slot := make([]byte, recordSize)
+		copy(slot, record)
+		data = append(data, slot...)
+	}
+	return index, data
 }
 
 func openRecordDatabase(t *testing.T, runtime *initializationRuntime, name string, recordSize, create uint32) uint32 {
@@ -182,8 +202,16 @@ func TestRecordDatabaseSlot6TellsTheTwoCallShapesApart(t *testing.T) {
 	if _, still := runtime.recordDatabases["KEYS"]; still {
 		t.Fatal("the database survived a delete addressed by name")
 	}
-	// The handle form still reaches records.
-	for register, value := range map[int]uint32{0: handle, 1: 1} {
+	// Deleting by name takes its handles with it, as the file table's remove
+	// does: one kept across the delete would still be holding the records,
+	// and writing through it would put them back.
+	if _, kept := runtime.recordDatabaseHandles[handle]; kept {
+		t.Fatal("a handle survived the delete of the database it addresses")
+	}
+	// The handle form still reaches records, on a database that is there.
+	runtime.guestFiles = map[string][]byte{"OTHER.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	other := openRecordDatabase(t, runtime, "OTHER", 8, 0)
+	for register, value := range map[int]uint32{0: other, 1: 1} {
 		if err := thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
@@ -204,9 +232,95 @@ func TestPackagedRecordDatabaseRejectsWhatIsNotOne(t *testing.T) {
 		t.Fatal("parsed a file whose slots do not divide evenly")
 	}
 	zeroed := packedRecordDatabase(8)
-	binary.LittleEndian.PutUint32(zeroed[8:12], 0)
+	binary.BigEndian.PutUint32(zeroed[recordDatabaseSizeOffset:], 0)
 	if _, ok := parseRecordDatabaseFile(zeroed); ok {
 		t.Fatal("parsed a file claiming a zero record size")
+	}
+}
+
+// TestASplitPackagedDatabaseIsOpenedFromItsIndex covers the shape most of the
+// local archives package: the header is a NAME.idx of its own and NAME.db is
+// the records end to end, with no live flag in front of them. Reading only the
+// one-file shape left every one of those databases missing, and a title that
+// ships its own save that way opens on an offer to download it again.
+func TestASplitPackagedDatabaseIsOpenedFromItsIndex(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	runtime.guestFiles = map[string][]byte{"SAVE.idx": index, "SAVE.db": data}
+
+	records, ok := runtime.packagedRecordDatabase("SAVE", 4)
+	if !ok {
+		t.Fatal("the split shape was not recognized as a database")
+	}
+	if len(records) != 2 || string(records[0]) != "aaaa" || string(records[1]) != "bbbb" {
+		t.Fatalf("packaged records = %q, want the two the data file holds", records)
+	}
+	// The whole point is that a game opening it without asking for it to be
+	// created finds it rather than being told it is not there.
+	if handle := openRecordDatabase(t, runtime, "SAVE", 4, 0); handle == 0 {
+		t.Fatal("opening the packaged database without create failed")
+	}
+}
+
+// TestAPackagedIndexDeclaringNoRecordIsStillADatabase pins the difference
+// between empty and missing. An index whose count is zero has no data file in
+// the archive at all, and answering "no such database" for it would send a
+// title down its first-run path every time.
+func TestAPackagedIndexDeclaringNoRecordIsStillADatabase(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(100)
+	runtime.guestFiles = map[string][]byte{"EMPTY.idx": index}
+
+	records, ok := runtime.packagedRecordDatabase("EMPTY", 100)
+	if !ok {
+		t.Fatal("an index with no records was read as no database")
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %q, want none", records)
+	}
+}
+
+// TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith covers one packaged
+// index in the local set whose record size has bytes clobbered. Its data file
+// still divides evenly by the record count, and that division is the honest
+// answer; refusing the database instead loses a title's saved game.
+func TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	// The real file has the last byte of the magic and the first byte of the
+	// record size overwritten together, which is why neither is trusted.
+	index[recordDatabaseMagicMatch] = 0xff
+	binary.BigEndian.PutUint32(index[recordDatabaseSizeOffset:], 0xff000004)
+	runtime.guestFiles = map[string][]byte{"BENT.idx": index, "BENT.db": data}
+
+	records, ok := runtime.packagedRecordDatabase("BENT", 4)
+	if !ok {
+		t.Fatal("a database whose index disagrees with its own data was refused")
+	}
+	if len(records) != 2 || string(records[1]) != "bbbb" {
+		t.Fatalf("records = %q, want the two the data file holds", records)
+	}
+
+	// A data file the count cannot divide is a disagreement nothing settles.
+	runtime.guestFiles["BENT.db"] = data[:len(data)-1]
+	if _, ok := runtime.packagedRecordDatabase("BENT", 4); ok {
+		t.Fatal("parsed a data file the record count does not divide")
+	}
+}
+
+// TestTheOneFileShapeReadsItsRecordSizeBigEndian pins the header's byte order.
+// It was read as a little-endian word one field further on, which answers the
+// same number for a record shorter than 256 bytes and a different one for
+// everything above that.
+func TestTheOneFileShapeReadsItsRecordSizeBigEndian(t *testing.T) {
+	record := make([]byte, 328)
+	copy(record, "wide")
+	records, ok := parseRecordDatabaseFile(packedRecordDatabase(len(record), record))
+	if !ok {
+		t.Fatal("a database whose records are wider than 255 bytes was refused")
+	}
+	if len(records) != 1 || len(records[0]) != len(record) {
+		t.Fatalf("records = %d of %d bytes, want one of %d", len(records), len(records[0]), len(record))
 	}
 }
 
@@ -282,5 +396,218 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 		if err != nil || result != wipicErrorInvalid {
 			t.Fatalf("list(buffer=%#x, capacity=%d) = %#x, err = %v", arguments.buffer, arguments.capacity, result, err)
 		}
+	}
+}
+
+// TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved closes a collision
+// that runs both ways: a save key is a table's scope joined to the name a game
+// chose, so a game naming an entry ".removed" addresses the list of what it
+// deleted. Whichever was written last used to win — the game's records read
+// back as a list of deleted names, which then hides databases nobody deleted.
+func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
+	for _, name := range []string{".removed", "./.removed", ".removed/"} {
+		if !reservedStorageName(javaDatabaseScope, name) {
+			t.Fatalf("%q reaches a key a table keeps its own list under", name)
+		}
+	}
+	if !reservedStorageName(cFileScope, ".dirs") {
+		t.Fatal("the file table's directory list is not reserved on its own scope")
+	}
+	// A name is reserved only on the scope that keeps a list of it: the guest
+	// filesystem has no directory list, so a guest file called ".dirs"
+	// collides with nothing.
+	for _, name := range []string{".dirs", ".index", "sub/.removed", "removed", ".removedx", "scores"} {
+		if reservedStorageName(guestFileScope, name) {
+			t.Fatalf("%q collides with nothing under fs/ and was refused", name)
+		}
+	}
+	// The list is names joined by newlines, trimmed on the way back, so a name
+	// carrying either would not come back as itself.
+	// ".", "/" and "./" are names NormalizeSaveKey collapses away rather than
+	// refusing: they used to pass, and the store then wrote the scope itself
+	// as a regular file, after which every write under it failed for good.
+	for _, name := range []string{"", "A\nB", "..", ".", "/", "./", "//", ".removed"} {
+		if storableName(javaDatabaseScope, name) {
+			t.Fatalf("%q cannot survive the removal list and was accepted", name)
+		}
+	}
+	// A name with a space around it is one a title may already have a save
+	// under, so the list carries it as it is rather than the name being
+	// refused: trimming on the way back would have made deleting "save " hide
+	// "save".
+	if !storableName(javaDatabaseScope, "save ") {
+		t.Fatal("a name with a trailing space was refused, orphaning any save under it")
+	}
+	// The length cap is the WIPI C record database's own and does not reach
+	// the Java class: eleven Korean characters are thirty-three bytes, and
+	// that class has always accepted them.
+	long := strings.Repeat("가", 11)
+	if !storableName(javaDatabaseScope, long) {
+		t.Fatalf("a %d-byte name the Java class has always taken was refused", len(long))
+	}
+	if !storableName(recordDatabaseScope, "save") {
+		t.Fatal("an ordinary name was refused")
+	}
+
+	_, runtime := newTestRuntime(t)
+	if handle := openRecordDatabase(t, runtime, ".removed", 8, 1); handle != wipicErrorInvalid {
+		t.Fatalf("the record table opened its own list as a database: %#x", handle)
+	}
+}
+
+// TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt narrows the recovery
+// the split parser makes. It exists for one packaged index whose magic is cut
+// short, and with a single record the divide-evenly test can never reject — so
+// an intact header that disagrees with the file beside it would have read that
+// whole file as the database's one record.
+func TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(5, []byte("aaaaa"))
+	unrelated := make([]byte, 1400)
+	runtime.guestFiles = map[string][]byte{"CFG.idx": index, "CFG.db": unrelated}
+	if records, ok := runtime.packagedRecordDatabase("CFG", 5); ok {
+		t.Fatalf("an intact index took an unrelated file as its data: %d records of %d bytes", len(records), len(records[0]))
+	}
+	// The bent one it was written for still recovers.
+	bent, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	bent[recordDatabaseMagicMatch] = 0xff
+	binary.BigEndian.PutUint32(bent[recordDatabaseSizeOffset:], 0xff000004)
+	runtime.guestFiles = map[string][]byte{"BENT.idx": bent, "BENT.db": data}
+	if _, ok := runtime.packagedRecordDatabase("BENT", 4); !ok {
+		t.Fatal("the bent index this recovery exists for was refused")
+	}
+}
+
+// TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt keeps the
+// empty-versus-missing rule from turning on a stale data file: answering "no
+// such database" sends a title down its first-run path on every launch.
+func TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	index, _ := splitRecordDatabase(100)
+	runtime.guestFiles = map[string][]byte{"E.idx": index, "E.db": []byte("stale")}
+	records, ok := runtime.packagedRecordDatabase("E", 100)
+	if !ok {
+		t.Fatal("an index declaring no record was read as no database")
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %q, want none", records)
+	}
+}
+
+// TestWritingADatabaseTakesItBackOffTheDeletionList covers a handle a title
+// keeps across its own delete. The records go to the key the list hides, so
+// without the unmark they would be written and then unreadable for ever — the
+// guest file table pairs every write with the same unmark.
+func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, "SAVE", true)
+	store := &runtimeRecordDatabase{name: "SAVE", records: [][]byte{[]byte("written")}}
+	runtime.persistRecordDatabase(store)
+	if runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)["SAVE"] {
+		t.Fatal("a database that was written is still on the deletion list")
+	}
+	runtime.recordDatabases = nil
+	if handle := openRecordDatabase(t, runtime, "SAVE", 8, 0); handle == wipicErrorNotFound {
+		t.Fatal("the record written through a surviving handle is unreachable")
+	}
+}
+
+// TestDeletingARecordDatabaseTakesItsHandlesWithIt is the other side of that
+// unmark. A handle kept across the delete still holds the records, so writing
+// through it persists them again *and* takes the name back off the list — the
+// database the title just deleted, restored whole. The file table has purged
+// its handles on removal for the same reason.
+func TestDeletingARecordDatabaseTakesItsHandlesWithIt(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.guestFiles = map[string][]byte{"SAVE.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	handle := openRecordDatabase(t, runtime, "SAVE", 8, 0)
+
+	const nameAddress = platformDataBase + 0x8000
+	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte("SAVE"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	if err := thread.SetRegister(0, nameAddress); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseDelete); err != nil || result != 0 {
+		t.Fatalf("delete = %#x, err = %v", result, err)
+	}
+	if _, kept := runtime.recordDatabaseHandles[handle]; kept {
+		t.Fatal("a handle survived the delete of the database it addresses")
+	}
+	if !runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)["SAVE"] {
+		t.Fatal("the deleted database is not on the removal list")
+	}
+	runtime.recordDatabases = nil
+	if result := openRecordDatabase(t, runtime, "SAVE", 8, 0); result != wipicErrorNotFound {
+		t.Fatalf("open after delete = %#x, want M_E_NOENT", result)
+	}
+}
+
+// TestDeletingThroughOneTableHidesTheArchiveFromTheOther pins what the two
+// tables share. They keep separate stores and separate lists, but one archive:
+// a packaged copy hidden by one table's delete has to be hidden by both, or
+// the record a title cleared comes straight back through the other door.
+func TestDeletingThroughOneTableHidesTheArchiveFromTheOther(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, "save", true)
+	if handle := openRecordDatabase(t, runtime, "save", 4, 0); handle != wipicErrorNotFound {
+		t.Fatalf("the C table served the archive's copy of a database the Java table deleted: %#x", handle)
+	}
+}
+
+// TestRemovingAReservedNameCannotWipeTheListItNames covers the way into the
+// file table's own lists that the open and the rename do not. Removing writes
+// nil over the key, and the deletion list answers as a seed as soon as
+// anything has been deleted — so the removal went through and wiped it, and
+// every database the title had deleted came back on the next open.
+func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.markDatabaseRemoved("SAVE", true)
+	before, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(before) != "SAVE" {
+		t.Fatalf("removal list = %q, want the name that was deleted", before)
+	}
+	const nameAddress = platformDataBase + 0x8000
+	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte(".removed"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	if err := thread.SetRegister(0, nameAddress); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileDelete); err != nil || result != wipicErrorInvalid {
+		t.Fatalf("removing the list = %#x, err = %v, want it refused", result, err)
+	}
+	after, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(after) != string(before) {
+		t.Fatalf("removal list = %q, want it untouched", after)
+	}
+
+	// Renaming one away is the same hole from the other end: the source is
+	// emptied after the copy, so the list would leave under another name and
+	// nothing would be left behind.
+	const toAddress = platformDataBase + 0x8100
+	if err := runtime.client.core.Memory().Write(toAddress, append([]byte("loot"), 0)); err != nil {
+		t.Fatal(err)
+	}
+	for register, value := range map[int]uint32{0: nameAddress, 1: toAddress} {
+		if err := thread.SetRegister(register, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileRename); err != nil || result != wipicErrorInvalid {
+		t.Fatalf("renaming the list away = %#x, err = %v, want it refused", result, err)
+	}
+	moved, ok := runtime.loadSave(databaseRemovedKey)
+	if !ok || string(moved) != string(before) {
+		t.Fatalf("removal list = %q, want it untouched", moved)
 	}
 }

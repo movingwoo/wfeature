@@ -846,6 +846,213 @@ the queue so the paint callback is called later rather than calling it from
 inside the function. The region is discarded here because a card is repainted
 whole.
 
+### A packaged database is packaged in two shapes, and the commoner one was unreadable
+
+The paragraph above says a game opens `FUNTER_DL` and the archive ships
+`P/FUNTER_DL.db`. That is true of two archives in the local set. **Twenty-one
+others package the same thing differently**, and until this was written down
+every one of those databases was missing at run time.
+
+Both shapes begin with the same 45-byte header — a five-byte magic, then the
+record size and the record count as **big-endian** words at offsets 5 and 9.
+What differs is where the records are:
+
+| magic | files | the records |
+|---|---|---|
+| `qtcdb` | `NAME.db` alone | after the header, one slot each: a live flag then the record's bytes |
+| `qtpdb` | `NAME.idx` and `NAME.db` | the whole of `NAME.db`, end to end, with no flag between them |
+
+The split shape is the one a handset writes. Its index carries the header and
+nothing else, so the size of the data file is `record size × record count`
+exactly — which is what says the reading is right rather than plausible: it
+holds for all 43 packaged databases in the local set, at record sizes from 5
+to 11,255 bytes.
+
+Three details are worth keeping, because each one is silent when it is wrong.
+
+- **A count of zero is a database, not a missing one.** Two local indexes
+  declare no record, and one of those has no data file in the archive at all.
+  Answering "no such database" for it sends a title down its first-run path on
+  every launch — including when a stale data file the index does not describe
+  sits beside it, which is a file to ignore rather than a database to refuse.
+- **The header's byte order only shows above 255.** The record size used to be
+  read as a little-endian word one field further along, which is the same
+  number for a record shorter than 256 bytes and a different one for anything
+  wider — one local database declares 328.
+- **The data file settles a record size its index disagrees with.** One local
+  index has the last byte of its magic and the top byte of its record size
+  overwritten with `0xff` together. Everything else about it is intact and its
+  1,400-byte data file divides evenly by the two records it declares, so the
+  division is taken and the magic is matched on four bytes rather than five.
+  **An intact header that disagrees with the file beside it is refused**: that
+  is a stale file rather than a bent number, and with a single record the
+  divide-evenly test can never reject, so any file at all would otherwise have
+  been read as the database's one record.
+
+### The Java `DataBase` never looked at the archive, and that is a download gate
+
+The WIPI C table has consulted packaged databases since it was written. The
+Java class beside it — `org.kwis.msp.db.DataBase`, which is what a title
+written in Java opens — did not: it looked in the save store and nowhere else,
+so `openDataBase(name, size, false)` threw `DataBaseException` for every
+database an archive ships.
+
+That throw is exactly what a title uses to find out it is running for the first
+time, and one local title answers it by offering to download the data it is
+already carrying:
+
+```
+KTF guest printk  text="11-----Save Error"
+jdb absent op_save
+```
+
+behind a full-screen `본 게임을 즐기기 위해서는 추가 파일의 다운로드…가 필요합니다`
+prompt, over a phone line that has not existed for fifteen years. The archive
+holds `P/op_save.idx` and `P/op_save.db`: a one-record database, 5 bytes long,
+written on the handset this copy was taken from. With the packaged database
+found, the title goes splash → title → main menu → slot select → prologue and
+into its world.
+
+**This is the fourth download gate in this file and the first one that opens.**
+The other three are further down — a subscriber number's length, a `prefs`
+record nothing here can decrypt, and twelve resource containers the archive
+genuinely does not have. What separates this one is that nothing was missing:
+the data was in the archive, in the format the platform already had a parser
+for, behind an API that never called it.
+
+**A save still wins over the packaged copy**, on both tables, for the same
+reason it did on the C side: a game that has written since owns what it wrote.
+And opening a packaged database writes nothing — the empty-record write that
+makes a *created* database exist for the next session would otherwise shadow
+the archive's own copy with an empty one.
+
+**A save holding no record still wins, and that is a rule that was tried the
+other way round.** The release before this one told these titles their database
+was absent; a title that answered by creating one left an empty record list
+behind, so reading an empty save as "not really a save" would carry the
+archive's copy to a player who had already launched the game once — four local
+titles' worth. It also carries it to a player who *deleted* their save and
+created it again, because that leaves the identical shape: an empty record list
+with the name off the removal list. Nothing tells those two apart without a
+third list per table recording which empty saves this build made, and
+resurrecting a save somebody cleared is worse than asking them to clear one
+more time. So the rule is not here. **Clearing the game's save is what adopts
+the packaged copy** — the same lever as everywhere else, and it is in the
+release notes rather than in a rule. None of the three titles the download
+prompt was blocking needs it: two left no save at all, and the third has real
+records under its name that no rule should overwrite.
+
+**A name a game chooses is a save key, and each table's own names are
+reserved on its own scope.** A key is
+a table's scope joined to the name, so a database or a file called `.removed`
+addresses the list of what that table deleted — every one of the four keeps
+one — and `.dirs` the same way for the directory list the WIPI C file table
+keeps beside it. Whichever was written last won, and both readings
+are wrong — worse, a list overwritten by records reads back as a set of deleted
+names on the next run and hides databases nobody deleted. Moving the
+bookkeeping out of reach would orphan every list already written (the same
+reason these keys still spell `db`), so the names are refused instead, on all
+four tables, tested against the key the name normalises to rather than against
+the name itself, and **per scope**: a guest file called `.dirs` collides with
+nothing, because the directory list belongs to the table next door. The refusal
+covers every way a name reaches a key — the file table's rename and delete
+write one as surely as its open does, and `.dirs` has no list-rewrite to
+rescue it the way `.removed` happens to have. Emptying the key is the sharpest of
+them: removing writes nil over it, and a rename empties the source once it has
+copied it — and the deletion list answers as a *seed* as soon as anything has
+been deleted, so either would have gone through and left nothing behind,
+bringing back every database the title had deleted. A rename is refused at
+both ends for that reason: onto one of these names it replaces the list, away
+from one it carries the list off. The guest
+File surface refuses the name where a File is constructed rather than where it
+is written, so a title cannot be told a write worked while nothing is stored,
+and its rename and unlink refuse one at either end.
+
+**A name also has to survive normalisation as a name.** `NormalizeSaveKey`
+refuses `..` and *collapses* `.`, `/` and `./` away, so those passed the check
+and the store then wrote the scope itself: a regular file named `jdb` where the
+directory belongs, after which every write under that scope failed with "not a
+directory" and stayed failing across sessions — the removal list among them.
+What survives normalisation has to still be the scope and a name under it. The list also cannot carry a name that would not come back as
+itself, so a name with a newline is refused for the same reason: deleting a name with a newline in it would otherwise hide the two
+unrelated databases its halves spell, and deleting `save ` would hide `save`.
+
+**The length bound stays where it came from.** A name has to survive the
+removal list on both tables, but the 31-byte cap is the WIPI C record
+database's own, out of its specification, and the Java class never had one:
+eleven Korean characters are thirty-three bytes, so applying it there would
+refuse a name that class has always taken — and orphan any save already written
+under it.
+
+**A table's own list hides that table's own save; the archive is hidden by
+either.** Reading the shared answer for the save as well let the C table's
+delete hide an unrelated Java save of the same name, and nothing on the Java
+side ever took a name off the C list, so that save was gone for good.
+
+**Writing a database takes it back off the deletion list**, exactly as writing
+a guest file does. A Java `DataBase` object a title keeps across its own delete
+still writes through it, and those records would otherwise land under a key the
+list hides for ever — readable before this change set, lost after it. The
+delete empties that object's records first, so what such a write stores is the
+empty database the title asked for.
+
+**A database created through the WIPI C table is written down, and that is not
+free.** The Java table has always made a created database exist for the next
+session; this one did not, so a title that created one and wrote no record was
+answered `M_E_NOENT` afterwards. The cost of matching it is that the empty save
+appears on the first boot, and a save wins over the archive: for a title whose
+packaged index this parser refuses — a stale data file beside an intact header,
+say — that first boot makes the refusal permanent, where before a later parser
+fix could still have surfaced the records. Clearing the game's save is the way
+back, which is the same lever the release notes already name.
+
+**A WIPI C delete takes the database's handles with it**, which is what the
+file table beside it has always done. A handle kept across the delete is still
+holding the records, so a write through it persists them *and* takes the name
+back off the list: the database the title had just deleted, restored whole. The
+Java class cannot be closed the same way — the object is the guest's — which is
+why the two paths answer this differently.
+
+**A packaged copy is hidden by either table's list.** The two tables keep
+separate stores and separate lists, and what they share is the archive: a
+delete through the Java class has to hide the archive's copy from the C table
+as well, or the record a title just cleared comes straight back through the
+other door.
+
+**`listDataBases` still names only what this session has opened**, which is a
+gap this change widens rather than opens: it could never name a database that
+only exists as a save either, because `backend.SaveStore` has `LoadSave` and
+`StoreSave` and no way to enumerate. Naming the packaged ones alone would trade
+one inconsistency for a worse one, and giving the interface a listing reaches
+both Hosts. No local title has been seen to call it; a title that stops because
+its own database is not in that list is the evidence that would be worth the
+change.
+
+**Deleting one has to reach it too.** `DataBase.deleteDataBase` looked only at
+the databases this session had opened, which was already wrong for a title
+that deletes before it opens — it was told its own save was not there — and
+becomes worse once a database can come from the archive, because the packaged
+copy would come back on the next run as though the delete had not happened. It
+now answers the same way the C table's name form does: a name the save store
+or the archive holds is deleted, and only a name neither holds throws.
+
+**And a deleted database is gone rather than empty.** Both tables used to
+delete by emptying the save, which hides the packaged copy and nothing more:
+the next open finds a save, answers "the database exists and holds nothing",
+and a title that cleared its slot to start a new game is told its save is
+still there. That is the shape that cost the sibling platform two titles'
+opening sequences — `guestFileRemovedKey` in `runtime_file.go` has that story,
+and the guest filesystem has kept a removal list ever since for the same
+reason. The two storage tables keep one each now (`rdb/.removed`,
+`jdb/.removed`): a name on the list hides both its emptied save and the
+archive's packaged copy, opening it for creation takes it off again, and the
+save is still emptied so a tree written before the list existed keeps hiding
+what the archive carries.
+
+**What it is worth, across the local set:** of the 264 KTF 1.2 archives, 20
+open a packaged database in their first 64 ticks that they were previously told
+was not there, and no archive's first frame changed anywhere else.
+
 ## A published instance field has two storages, and the boundary is where they agree
 
 Most of what a runtime-owned class holds never reaches guest memory: the guest
@@ -3321,6 +3528,12 @@ holds an object. So the question is not "who cleared it" but "which branch of
 its own start would have set it", and that is a different search.
 
 ## A second download gate, and the answer that opened it
+
+> The gate that came before these three is above, under the storage tables: a
+> title offering to download the save it already carries, because the Java
+> `DataBase` class never looked in the archive. That one is fixed; these three
+> are what is left.
+
 
 Another title in the same series opens by offering to download 600KB "to play
 the game", and both answers lead back to it: yes reaches its own connection

@@ -35,6 +35,130 @@ Store names come from the game, so they go through `backend.NormalizeSaveKey`
 like every other save key — a name that escapes the owner directory is
 rejected rather than sanitized.
 
+## The stores a title brought with it
+
+An archive taken off a handset carries the title's record stores, in an `rs`
+directory beside the JAR: two files per store, `NAME.sb` and `NAME.db`. This
+runtime looked at neither, so a title whose save came with it was told it had
+none — a MIDlet asking to continue answered `저장된 자료가 없습니다`, over a
+saved game that was sitting in its own archive. It is the same defect the KTF
+platform had with the databases its archives ship, and it has the same shape:
+present data, a readable format, and an API that never asked.
+
+`.sb` is the store and `.db` is its bytes. Every field is big-endian:
+
+```
+u32       the id the next record will take
+u16 + n   the store's name
+u32       the version, what getVersion answers
+u32       how many records follow
+u32       how many bytes the data file holds
+u64       when it was last modified, in milliseconds
+per record: u32 id, u32 offset into the data file, u32 length
+```
+
+What says that reading is right rather than plausible is arithmetic that holds
+for all twelve packaged stores in the local set: the declared length is the
+data file's exact size, the entries tile it end to end, and the fixed part plus
+twelve bytes per record is the `.sb` file's own length.
+
+**The name comes out of the file, not out of the path.** A handset writes an
+upper-case letter in a file name as `#X`, so the store `TowerSaveGame` is the
+file `#Tower#Save#Game.sb`. The `.sb` carries the name in full, which is a
+better answer than un-escaping a path — and the path is gone by then anyway,
+because a container's files are mounted by their bare names.
+
+**The Host has the last word, and that is what makes seeding safe.** A
+packaged store is only used where the save store holds nothing under that
+store's key. The title's own writes therefore win from the moment it writes,
+and a store the title *deleted* stays deleted: deleting writes an empty record
+list under the key, so the key answers and the archive's copy is not seeded
+over it.
+
+**Serving one writes nothing, not even its name.** The index is the list of
+stores that exist, and a store the archive carries exists because the archive
+carries it — so naming it there while nothing has written it would leave a
+store behind that the archive no longer has to back: the next session would
+find the name, find no bytes under it, and answer "it exists and is empty",
+which is what a title reads as a save rather than as a first run. The name goes
+into the index with the store's **first write** instead (`persistStore`), which
+is also the moment the Host's copy takes over from the archive's.
+
+**The index is written whole, so the leaving-out belongs in `storeIndex`**
+rather than at the call sites. Keeping the rule at the call sites looks like it
+works and does not: the index serializes every name the session knows, so the
+first write to *one* carried store publishes the names of all the others beside
+it. That is why `unwritten` is filled when the stores are seeded rather than
+when one is opened, and why `storeIndex` subtracts it. Both halves are pinned
+by tests — one carried store, and two with only one of them written — because
+each is silent when it is wrong.
+
+**A `.sb` is a file anybody can craft**, so every field that sizes an
+allocation is bounded: the record count, the next-record id the store's length
+comes from, and each entry's own id, which is a second way to the same room — a
+one-record table naming id 16384 grows the store to 16384 slots and makes
+`getNextRecordID` answer past every id the title ever reserved. An id the store
+holds is below the id it hands out next. **The bytes the entries ask for
+between them are bounded by the data file they point into**, because they may
+all point at the same place: two thousand entries each naming a megabyte of a
+one-megabyte file asked for two gigabytes, which no count or slot limit sees. A
+real store tiles its data file end to end, so that file's own length is the
+ceiling. **And what a whole archive may ask for is bounded as well as what each
+store may**: five hundred crafted indexes of twenty-seven bytes each asked for
+thirty-two million slots and most of a gigabyte, on the first RMS call. A store
+over that budget is skipped rather than ending the walk, so one large store
+early in name order does not suppress every smaller one after it.
+
+**The entries are read in name order.** What this seeds is written out as a
+list, so ranging a map put different bytes in `rms/.index` from identical input
+on every launch — every save-tree comparison then reported a difference that
+was not one, and a real index regression would have hidden inside that noise.
+The order also decides which file wins when two decode to one store name.
+
+**A record of no bytes is a record.** MIDP writes one for
+`addRecord(null, 0, 0)`, and `append([]byte(nil))` answers nil — which is this
+runtime's tombstone for an id the store no longer has, so a legitimate empty
+record decoded as a deleted one and the first write back made the loss
+permanent.
+
+**The `fs/` scope is shared with the other platform, and so is what it keeps
+there.** An `XFile` writes under `fs/`, deliberately — one owner directory holds
+a title's files whichever platform wrote them — and the KTF guest filesystem
+keeps its list of deleted paths at `fs/.removed`. A title writing that path
+from this side puts its own bytes where that list belongs, so the name is
+reserved here too: a guard the other platform's rule makes necessary on this
+one.
+
+**The version and the modification time are skipped rather than kept.** They are in
+the format and the header comment names them, and nothing carries them:
+`backend.EncodeSaveRecords` carries records and nothing else, so the first
+write — which a plain `closeRecordStore` performs — would lose them, and
+`getVersion` would answer the container's number in the session that opened the
+store and zero in every session after it. Answering zero throughout is at least
+the same answer every time. Carrying them properly is a save format that holds
+more than records, on both Hosts and in the backup container, and no local
+title has been seen to read either.
+
+**A store name out of an archive is checked the way a name from the guest is.**
+It has to be a MIDP name, it has to be a save key, and it cannot be `.index` —
+the name this runtime keeps its store list under, which a container supplies on
+its own with no guest cooperation.
+
+**A store the Host holds wins even when it holds no record**, and the KTF half
+of this work explains why the opposite was tried and withdrawn: the shape an
+earlier build left is the shape a delete-and-create leaves, and serving the
+archive over it hands back a save somebody cleared.
+
+**Deleting a carried store ends both of the things carrying it means.** The
+archive's copy is not to be served again, and the name is not to be filtered
+out of the index the next create puts it in: without the second, a title that
+cleared its slot to start a new game created the store, wrote the index that
+left it out, and found nothing at all on the next launch — the flow this whole
+change exists to protect.
+
+A store that does not parse is left out rather than reported. An archive is
+untrusted input, and a title with no save is a title on its first run.
+
 ## The two decisions worth knowing
 
 **The index, not the file, says a store exists.** `SaveStore` can write and

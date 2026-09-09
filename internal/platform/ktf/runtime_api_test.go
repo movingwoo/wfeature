@@ -547,3 +547,261 @@ func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T
 		t.Fatalf("openDataBase(create=false) on a stored database = %v", err)
 	}
 }
+
+// TestAJavaDataBaseFindsWhatTheArchiveShipped is the other half of that rule.
+// A database the archive carries exists before the game has written anything,
+// exactly as it does for the WIPI C table next door, and a title that ships
+// its own saved game reads it through this class rather than the C one. While
+// this looked only at the save store, several local titles opened their own
+// packaged save, were told it was not there, and offered to download the data
+// they were already carrying.
+func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+
+	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("openDataBase(create=false) on a packaged database = %v", err)
+	}
+	object, err := database.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(store.records) != 1 || string(store.records[0]) != "aaaa" {
+		t.Fatalf("records = %q, want the one the archive ships", store.records)
+	}
+	// It is the archive's copy, so nothing is written until the game writes.
+	if _, written := client.saveStore.LoadSave("jdb/save"); written {
+		t.Fatal("opening a packaged database wrote a save over it")
+	}
+}
+
+// TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped is the rule the whole
+// packaged path rests on, from the outside: the archive's copy is where a
+// title starts, and what the title writes is what every session after it
+// reads. Nothing about the archive is consulted once there is a save.
+func TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
+	files := map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.guestFiles = files
+	open := func(runtime *initializationRuntime) *runtimeDataBaseStore {
+		t.Helper()
+		name := jvm.ReferenceValue(runtime.client.JVM().NewString("save"))
+		value, err := runtimeOpenDataBase(runtime, runtime.client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+		if err != nil {
+			t.Fatalf("openDataBase(create=false) = %v", err)
+		}
+		object, err := value.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened, ok := object.Native.(*runtimeDataBaseStore)
+		if !ok {
+			t.Fatal("the database has no record store")
+		}
+		return opened
+	}
+
+	first := open(runtime)
+	// Opening the same name again is the same database, not a second copy of
+	// the archive's records.
+	if open(runtime) != first {
+		t.Fatal("opening one database twice made two stores")
+	}
+	first.records = [][]byte{[]byte("zzzz")}
+	first.persist(runtime)
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	next.guestFiles = files
+	if reopened := open(next); len(reopened.records) != 1 || string(reopened.records[0]) != "zzzz" {
+		t.Fatalf("records = %q, want what the title wrote", reopened.records)
+	}
+}
+
+// TestDeletingADatabaseReachesTheOneNobodyOpened covers the other half of the
+// name-keyed delete. It used to look only at the databases this session had
+// opened, so a title deleting before it opened was told its own save was not
+// there — and once a database could come from the archive, the packaged copy
+// would come back on the next run as though the delete had not happened.
+func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatalf("deleteDataBase on a packaged database nobody opened = %v", err)
+	}
+	// A deleted database is gone, not emptied: the archive's copy stays
+	// hidden and the next open says so, which is what a title that cleared
+	// its save to start again is asking.
+	runtime.databases = nil
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("openDataBase(create=false) after a delete = %v, want DataBaseException", err)
+	}
+	// Creating it again is an empty database rather than the archive's, and
+	// takes the name back off the deletion list.
+	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
+	if err != nil {
+		t.Fatalf("openDataBase(create=true) after a delete = %v", err)
+	}
+	object, err := database.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("records = %q, want an empty database", store.records)
+	}
+	runtime.databases = nil
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); err != nil {
+		t.Fatalf("openDataBase(create=false) after creating it again = %v", err)
+	}
+	// A name nothing holds is still not a database.
+	missing := jvm.ReferenceValue(client.JVM().NewString("absent"))
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{missing}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("deleteDataBase on nothing = %v, want DataBaseException", err)
+	}
+}
+
+// TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing pins the rule the delete
+// depends on. Reading an empty record list as "not really a save" would have
+// carried the archive's copy to a player whose earlier build created one, and
+// it is the same shape a title leaves when it clears a slot and creates it
+// again — so it would also resurrect a save somebody had just deleted.
+func TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	if err := store.StoreSave("jdb/save", encodeSaveRecords(nil)); err != nil {
+		t.Fatal(err)
+	}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	value, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("openDataBase over an empty save = %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, ok := object.Native.(*runtimeDataBaseStore)
+	if !ok {
+		t.Fatal("the database has no record store")
+	}
+	if len(opened.records) != 0 {
+		t.Fatalf("records = %q, want the empty save the title has", opened.records)
+	}
+}
+
+// TestDeletingADatabaseTwiceSaysItIsGone keeps the delete and the open giving
+// one answer. The delete deliberately leaves an emptied save behind, so
+// without consulting the list a second delete succeeded while the open beside
+// it threw — and a title using the throw as its existence probe was told a
+// save it had just cleared was still there.
+func TestDeletingADatabaseTwiceSaysItIsGone(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatalf("first delete = %v", err)
+	}
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); !client.JVM().IsGuestException(err, runtimeDataBaseExceptionClass) {
+		t.Fatalf("second delete = %v, want DataBaseException", err)
+	}
+}
+
+// TestWritingThroughAHandleHeldAcrossADeleteBringsItBack is the Java half of
+// the rule the WIPI C table keeps: the object a title already holds still
+// writes, and those records must not land under a key the deletion list hides.
+func TestWritingThroughAHandleHeldAcrossADeleteBringsItBack(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	value, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := object.Native.(*runtimeDataBaseStore)
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	held.records = [][]byte{[]byte("late")}
+	held.persist(runtime)
+
+	runtime.databases = nil
+	reopened, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("the record written through a surviving handle is unreachable: %v", err)
+	}
+	object, err = reopened.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store := object.Native.(*runtimeDataBaseStore); len(store.records) != 1 || string(store.records[0]) != "late" {
+		t.Fatalf("records = %q, want what the handle wrote", store.records)
+	}
+}
+
+// TestADatabaseClearedAndCreatedAgainStaysCleared is the round trip the delete
+// has to survive across a session, on the table a title reaches from Java. The
+// create takes the name off the removal list and leaves an empty save, which
+// is the same shape an earlier build left — and reading that as "no save"
+// would hand the title back the records it had just deleted.
+func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := NewDirectorySaveStore(t.TempDir())
+	client.saveStore = store
+	index, data := splitRecordDatabase(4, []byte("aaaa"))
+	files := map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.guestFiles = files
+	name := jvm.ReferenceValue(client.JVM().NewString("save"))
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)}); err != nil {
+		t.Fatalf("creating it again = %v", err)
+	}
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	next.guestFiles = files
+	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatalf("the database the title created is gone on the next session: %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened := object.Native.(*runtimeDataBaseStore); len(reopened.records) != 0 {
+		t.Fatalf("records = %q, want the database to have stayed cleared", reopened.records)
+	}
+}

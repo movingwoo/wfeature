@@ -255,16 +255,46 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.deleteDataBase name is not a string")
 	}
+	if !storableName(javaDatabaseScope, name) {
+		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
+	}
 	store := runtime.databases[name]
 	if store == nil {
-		message := "database not found: " + name
-		return jvm.VoidValue(), &jvm.GuestException{
-			Object:  &jvm.Object{ClassName: runtimeDataBaseExceptionClass, Native: message},
-			Message: message,
+		// A database this session has not opened is still a database: the
+		// save store may hold it, and the archive may carry it. Deleting has
+		// to reach both, or a title that deletes before it opens is told its
+		// own save is not there — and the packaged copy would come back on
+		// the next run as though nothing had been deleted. The WIPI C table
+		// next door already answers the name form this way.
+		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
+		_, saved := runtime.loadSave("jdb/" + name)
+		packaged := false
+		if !runtime.databaseDeleted(name) {
+			_, packaged = runtime.packagedRecordDatabase(name, 0)
 		}
+		if deleted {
+			// Already gone. Answering "deleted" twice tells a title that uses
+			// the throw as its existence probe that a save it just cleared is
+			// still there — which is the whole point of the list.
+			saved = false
+		}
+		if !saved && !packaged {
+			message := "database not found: " + name
+			return jvm.VoidValue(), &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: runtimeDataBaseExceptionClass, Native: message},
+				Message: message,
+			}
+		}
+		store = &runtimeDataBaseStore{name: name}
 	}
+	// The record list is emptied and the name written down. Emptying alone
+	// leaves the next open answering "it exists and holds nothing", which is
+	// not what a title that deleted its save asked; the list is what makes it
+	// gone. The empty save stays because a save tree written before the list
+	// existed has to keep hiding its packaged copy.
 	store.records = nil
 	store.persist(runtime)
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, true)
 	delete(runtime.databases, name)
 	return jvm.VoidValue(), nil
 }

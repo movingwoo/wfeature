@@ -133,10 +133,8 @@ func (runtime *initializationRuntime) removedGuestFiles() map[string]bool {
 	}
 	runtime.removedFiles = make(map[string]bool)
 	if data, exists := runtime.loadSave(guestFileRemovedKey); exists {
-		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				runtime.removedFiles[line] = true
-			}
+		for _, line := range splitRemovalList(data) {
+			runtime.removedFiles[line] = true
 		}
 	}
 	return runtime.removedFiles
@@ -158,8 +156,7 @@ func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed 
 	for entry := range set {
 		names = append(names, entry)
 	}
-	sort.Strings(names)
-	runtime.storeSave(guestFileRemovedKey, []byte(strings.Join(names, "\n")))
+	runtime.storeSave(guestFileRemovedKey, joinRemovalList(names))
 }
 
 // storeGuestFile persists one guest file. Writing a path brings it back, so
@@ -167,6 +164,15 @@ func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed 
 // path on the removal list would be stored and then be unreadable.
 func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) {
 	trimmed := strings.TrimPrefix(name, "/")
+	if reservedStorageName(guestFileScope, trimmed) {
+		// The name this table keeps its own list under. Writing it would put
+		// the file's bytes where the list belongs, and reading the list back
+		// would mark whatever those bytes spell as deleted. Every caller
+		// refuses the name before reaching here; this is the backstop, and it
+		// is counted so a caller that does not is visible.
+		runtime.countDiagnostic("fs reserved name " + trimmed)
+		return
+	}
 	runtime.markGuestFileRemoved(trimmed, false)
 	runtime.storeSave("fs/"+trimmed, data)
 }
@@ -211,6 +217,13 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 		return jvm.VoidValue(), err
 	}
 	if name, ok := jvm.StringText(nameObject); ok {
+		if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+			// The last guest-filesystem entry point that takes a name.
+			// Unlinking this one writes the list's own name into the list, and
+			// the claim that every way a name reaches a key is covered has to
+			// be true rather than nearly true.
+			return jvm.VoidValue(), newGuestIOException("cannot unlink a reserved name: " + name)
+		}
 		delete(runtime.guestFiles, name)
 		delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
 		runtime.markGuestFileRemoved(name, true)
@@ -266,6 +279,13 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 	}
 	runtime.countDiagnostic(fmt.Sprintf("file %s mode %d", name, mode))
 	if name == "" || mode < 1 || mode > 4 {
+		return jvm.VoidValue(), newGuestIOException("Invalid file open")
+	}
+	if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+		// The name this table keeps its removal list under. Refused where the
+		// file is named rather than where it is written, so a title cannot
+		// open it, write, and be told the write worked while nothing is
+		// stored — the WIPI C table next door refuses the same collision.
 		return jvm.VoidValue(), newGuestIOException("Invalid file open")
 	}
 	state := &runtimeGuestFile{name: name}
@@ -570,6 +590,20 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	to, err := runtimeFileSystemName(arguments[1])
 	if err != nil {
 		return jvm.VoidValue(), err
+	}
+	if reservedStorageName(guestFileScope, strings.TrimPrefix(from, "/")) {
+		// The source as well as the destination. Reading one of these names
+		// resolves the platform's own list, so renaming it away would copy
+		// the list's bytes into a file the title can then open — around the
+		// refusal a File of that name already gets.
+		return jvm.VoidValue(), newGuestIOException("cannot rename a reserved name: " + from)
+	}
+	if reservedStorageName(guestFileScope, strings.TrimPrefix(to, "/")) {
+		// The name this table keeps its removal list under. The write would be
+		// dropped and the source deleted, so the rename has to be refused
+		// before either — a rename that destroys its source and stores nothing
+		// is worse than one that fails.
+		return jvm.VoidValue(), newGuestIOException("cannot rename onto a reserved name: " + to)
 	}
 	data, exists := runtime.guestFile(from)
 	if !exists {

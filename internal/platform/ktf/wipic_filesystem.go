@@ -201,6 +201,13 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
+	if reservedStorageName(cFileScope, name) {
+		// Removing writes nil over the key, and these keys are this table's
+		// own lists: the deletion list answers as a seed as soon as anything
+		// has been deleted, so the removal would go through and wipe it, and
+		// every database the title had deleted would be back on the next open.
+		return wipicErrorInvalid, nil
+	}
 	_, live := runtime.cFiles[name]
 	_, seeded := runtime.databaseSeed(name)
 	runtime.countDiagnostic(fmt.Sprintf("cdb delete %s -> %t", name, live || seeded))
@@ -302,6 +309,18 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s exists", oldName, newName))
 		return wipicErrorExists, nil
 	}
+	if reservedStorageName(cFileScope, oldName) || reservedStorageName(cFileScope, newName) {
+		// Either end. Renaming *onto* a list this table keeps would replace it
+		// with the file's bytes, and the next session would read those bytes
+		// as the list; renaming one *away* is worse, because the source is
+		// emptied afterwards — the list answers as a seed as soon as anything
+		// has been deleted, so the rename would carry it off under another
+		// name and leave nothing behind, bringing back every database the
+		// title had deleted. Refused before anything moves: returning after
+		// the source had already left the live map left a handle pointing at
+		// a store nothing else could reach.
+		return wipicErrorInvalid, nil
+	}
 	store, live := runtime.cFiles[oldName]
 	if !live {
 		seed, exists := runtime.databaseSeed(oldName)
@@ -344,10 +363,8 @@ func (runtime *initializationRuntime) removedDatabases() map[string]bool {
 	}
 	runtime.removedCDatabases = make(map[string]bool)
 	if data, exists := runtime.loadSave(databaseRemovedKey); exists {
-		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				runtime.removedCDatabases[line] = true
-			}
+		for _, line := range splitRemovalList(data) {
+			runtime.removedCDatabases[line] = true
 		}
 	}
 	return runtime.removedCDatabases
@@ -370,8 +387,7 @@ func (runtime *initializationRuntime) markDatabaseRemoved(name string, removed b
 	for entry := range set {
 		names = append(names, entry)
 	}
-	sort.Strings(names)
-	runtime.storeSave(databaseRemovedKey, []byte(strings.Join(names, "\n")))
+	runtime.storeSave(databaseRemovedKey, joinRemovalList(names))
 }
 
 // wipicMakeDirectory serves MC_fsMkDir(dirName, aMode).
@@ -482,6 +498,9 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
+	if reservedStorageName(cFileScope, name) {
+		return wipicErrorInvalid, nil
+	}
 	store, exists := runtime.cFiles[name]
 	seed, hasSeed := runtime.databaseSeed(name)
 	_, hasPackaged := runtime.packagedDatabase(name)

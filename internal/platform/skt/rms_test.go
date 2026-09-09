@@ -91,6 +91,25 @@ func TestRecordStoreNameNormalizationRejectsTraversal(t *testing.T) {
 	if !validRecordStoreName("scores") {
 		t.Fatal("validRecordStoreName(\"scores\") = false, want true")
 	}
+	// The store list lives at rmsIndexKey, which is the scope joined to this
+	// name: a store of that name and the list would address one key, and one
+	// written over the other leaves every store unreachable.
+	// The store list is names joined by newlines, so a name carrying one would
+	// come back as two phantoms with the real store gone. An archive supplies
+	// a name here as well as the guest.
+	for _, name := range []string{"a\nb", "a\rb"} {
+		if validRecordStoreName(name) {
+			t.Fatalf("validRecordStoreName(%q) = true, want a name the store list cannot carry refused", name)
+		}
+	}
+	// A name with a space around it is one a title may already have a store
+	// under, and the list carries it as it is.
+	if !validRecordStoreName("save ") {
+		t.Fatal("validRecordStoreName(\"save \") = false, orphaning any store under it")
+	}
+	if validRecordStoreName(rmsReservedName) {
+		t.Fatalf("validRecordStoreName(%q) = true, want the list's own name reserved", rmsReservedName)
+	}
 }
 
 func TestSaveOwnerFallsBackToMainClass(t *testing.T) {
@@ -144,4 +163,28 @@ func fixtureString(t *testing.T, runtime *Runtime, className, method string) str
 	}
 	_ = jvm.StringClass
 	return value
+}
+
+// TestTheSharedFileScopeReservesTheListTheOtherPlatformKeeps covers a name
+// this platform had no reason to reserve on its own. The scope is shared with
+// the KTF guest filesystem — one owner directory holds a title's files
+// whichever platform wrote them — and that filesystem keeps its list of
+// deleted paths there, so writing it from this side is the same corruption
+// reached through the other door.
+func TestTheSharedFileScopeReservesTheListTheOtherPlatformKeeps(t *testing.T) {
+	for _, name := range []string{".removed", "/.removed", "./.removed"} {
+		if _, err := xFileKey(name); err == nil {
+			t.Fatalf("xFileKey(%q) = nil error, want the shared list's name refused", name)
+		}
+	}
+	// And a path that normalizes to the scope itself, which would make a file
+	// where the directory belongs.
+	for _, name := range []string{".", "/", "./"} {
+		if _, err := xFileKey(name); err == nil {
+			t.Fatalf("xFileKey(%q) = nil error, want a path that is not a name refused", name)
+		}
+	}
+	if _, err := xFileKey("/save/slot.dat"); err != nil {
+		t.Fatalf("xFileKey on an ordinary path = %v", err)
+	}
 }

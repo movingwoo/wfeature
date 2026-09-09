@@ -2443,6 +2443,10 @@ func runtimeDataBaseException(message string) error {
 
 // persist writes the serialized record list through the Host save store.
 func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) {
+	// Writing a database brings it back, exactly as writing a guest file does
+	// (storeGuestFile). A title holding a handle across its own delete would
+	// otherwise write records to a key the deletion list hides for ever.
+	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, store.name, false)
 	runtime.storeSave("jdb/"+store.name, encodeSaveRecords(store.records))
 }
 
@@ -2460,14 +2464,33 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase name is not a string")
 	}
+	recordSize, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	create, err := arguments[2].Int32()
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	if !storableName(javaDatabaseScope, name) {
+		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
+	}
 	store := runtime.databases[name]
 	if store == nil {
 		store = &runtimeDataBaseStore{name: name}
+		// A database this title deleted is gone rather than empty, and both
+		// the save under it and the copy the archive carries stay hidden
+		// while it is on the list. See recordDatabaseRemovals.
+		// This table's own list hides this table's own save; the shared
+		// archive is hidden by either. Reading the shared answer here let the
+		// WIPI C table's delete hide an unrelated Java save under the same
+		// name, and nothing on this side ever took that name off the other
+		// table's list, so the save was gone for good.
+		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 		saved, present := runtime.loadSave("jdb/" + name)
+		if deleted {
+			present = false
+		}
 		if present {
 			records, decodeErr := decodeSaveRecords(saved)
 			if decodeErr != nil {
@@ -2476,7 +2499,30 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 				store.records = records
 			}
 		}
-		if !present && create == 0 {
+		// A database this archive ships is the database, exactly as it is for
+		// the WIPI C table next door. A save wins over it, because a game that
+		// has written since owns what it wrote; with no save, the packaged
+		// records are what the game finds, and finding them is what tells a
+		// title carrying its own data that it has nothing to download.
+		// A save wins, and an empty one is still a save. Reading an empty
+		// record list as "not really a save" would have carried the archive's
+		// copy to a player whose earlier build created one — worth something,
+		// four local titles' worth — but the same shape is what a title
+		// leaves when it deletes a slot and creates it again, and no amount
+		// of bookkeeping tells those two apart without a third list per
+		// table. Resurrecting a save somebody cleared is worse than making
+		// them clear it once more, so the rule is not here: clearing the
+		// game's save is what adopts the packaged copy, and the release
+		// notes say so.
+		packaged := false
+		if !present && !runtime.databaseDeleted(name) {
+			if records, hasPackaged := runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
+				store.records = records
+				packaged = true
+				runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
+			}
+		}
+		if !present && !packaged && create == 0 {
 			runtime.countDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
 		}
@@ -2484,10 +2530,15 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 			runtime.databases = make(map[string]*runtimeDataBaseStore)
 		}
 		runtime.databases[name] = store
+		// Creating it again is what takes it off the list: a database written
+		// and still read as deleted is worse than one never deleted.
+		if deleted {
+			runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, false)
+		}
 		// A database opened for creation exists from that moment, even with
 		// no record in it yet, so the next open finds it rather than throwing
-		// again.
-		if !present {
+		// again. One the archive carries is already found without a save.
+		if !present && !packaged {
 			store.persist(runtime)
 		}
 	}

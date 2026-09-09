@@ -48,11 +48,23 @@ func (runtime *Runtime) xFileRegistrations() []nativeRegistration {
 	}
 }
 
+// xFileNames the platform keeps for itself. This scope is shared with the KTF
+// guest filesystem — one owner directory holds a title's files whichever
+// platform wrote them — and that filesystem keeps its list of deleted paths at
+// "fs/.removed". A title writing that path here would put its own bytes where
+// the list belongs, and the platform next door would read them back as a set
+// of deleted names. It is reserved on that side; the shared scope is what
+// makes it have to be reserved on this one.
+var xFileReservedNames = map[string]bool{".removed": true}
+
 // xFileKey normalizes a guest path into the save key it lives under.
 func xFileKey(name string) (string, error) {
 	key, err := backend.NormalizeSaveKey(xFileSaveScope + strings.TrimPrefix(name, "/"))
 	if err != nil {
 		return "", newGuestException("java/io/IOException", err.Error())
+	}
+	if rest, under := strings.CutPrefix(key, xFileSaveScope); !under || rest == "" || xFileReservedNames[rest] {
+		return "", newGuestException("java/io/IOException", "reserved path "+name)
 	}
 	return key, nil
 }

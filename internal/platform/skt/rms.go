@@ -53,6 +53,19 @@ type rmsState struct {
 	stores map[string]*recordStore
 	names  []string
 	loaded bool
+	// packaged holds the record stores the archive carried, by name. They are
+	// the initial content of a store nothing has written yet — see
+	// rms_packaged.go — and they are dropped from here as soon as the Host
+	// holds anything under the store's key, which is what keeps a deleted
+	// store deleted.
+	packaged map[string]packagedStore
+	// unwritten names the carried stores this session has served whose bytes
+	// the Host does not hold yet. The Host's index must not name such a store:
+	// the archive is what makes it exist, and an index naming a store with no
+	// bytes anywhere would answer "it exists and is empty" once the archive is
+	// gone — which is the opposite of what a title's first-run check needs.
+	// The name goes into the index with the first write instead.
+	unwritten map[string]bool
 }
 
 // AttachSaveStore supplies the persistence boundary RMS uses. Without one,
@@ -105,25 +118,64 @@ func (runtime *Runtime) rms() *rmsState {
 	return runtime.rmsState
 }
 
-// loadIndex seeds the known store names from the Host once per session.
-func (state *rmsState) loadIndex(store backend.SaveStore) {
+// loadIndex seeds the known store names once per session: the ones the Host
+// wrote down, and then the ones the archive brought with it.
+func (runtime *Runtime) loadIndex(state *rmsState) {
 	if state.loaded {
 		return
 	}
 	state.loaded = true
-	if store == nil {
-		return
-	}
-	data, ok := store.LoadSave(rmsIndexKey)
-	if !ok {
-		return
-	}
-	for _, name := range strings.Split(string(data), "\n") {
-		name = strings.TrimSpace(name)
-		if name == "" || state.contains(name) {
-			continue
+	store := runtime.saveStoreBoundary()
+	if store != nil {
+		if data, ok := store.LoadSave(rmsIndexKey); ok {
+			for _, name := range splitStoreIndex(data) {
+				if state.contains(name) {
+					continue
+				}
+				state.names = append(state.names, name)
+			}
 		}
-		state.names = append(state.names, name)
+	}
+	// A store the container carried exists before the title has written
+	// anything, exactly as a packaged database does on the other platform.
+	// The Host's copy wins wherever there is one, and that is also how a
+	// deleted store stays deleted: deleting writes an empty record list under
+	// the store's key, so the key answers and the packaged copy is dropped.
+	// In name order: what this seeds is written out as a list, so ranging the
+	// map put different bytes in the store index from identical input on every
+	// launch, and every save-tree comparison reported a difference that was
+	// not one.
+	carried := runtime.Archive.packagedRecordStores()
+	carriedNames := make([]string, 0, len(carried))
+	for name := range carried {
+		carriedNames = append(carriedNames, name)
+	}
+	sort.Strings(carriedNames)
+	for _, name := range carriedNames {
+		records := carried[name]
+		if store != nil {
+			if key, err := recordStoreKey(name); err == nil {
+				if _, written := store.LoadSave(key); written {
+					// The Host has the last word about this store, whether
+					// that is records the title wrote or the empty list a
+					// delete leaves behind. Neither the name nor the archive's
+					// copy is seeded over it.
+					continue
+				}
+			}
+		}
+		if !state.contains(name) {
+			state.names = append(state.names, name)
+		}
+		if state.packaged == nil {
+			state.packaged = make(map[string]packagedStore)
+			state.unwritten = make(map[string]bool)
+		}
+		state.packaged[name] = records
+		// Marked here rather than when the store is opened: the index is
+		// written whole, so a store nobody has opened at all still has to be
+		// kept out of it when the store beside it is written.
+		state.unwritten[name] = true
 	}
 }
 
@@ -138,14 +190,50 @@ func (state *rmsState) contains(name string) bool {
 
 // storeIndex writes the store name list back so a later session lists stores
 // it has not opened.
+//
+// **A store the archive carried and nothing has written is left out**, and it
+// is left out here rather than at the call sites, because the index is written
+// whole: publishing one store's first write would otherwise publish the name
+// of every carried store beside it, which is the situation `unwritten` exists
+// to prevent. What the Host names, the Host has bytes for.
 func (runtime *Runtime) storeIndex(state *rmsState) {
 	boundary := runtime.saveStoreBoundary()
 	if boundary == nil {
 		return
 	}
-	if err := boundary.StoreSave(rmsIndexKey, []byte(strings.Join(state.names, "\n"))); err != nil && runtime.logger != nil {
+	names := make([]string, 0, len(state.names))
+	for _, name := range state.names {
+		if state.unwritten[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	if err := boundary.StoreSave(rmsIndexKey, joinStoreIndex(names)); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS index store failed", "error", err)
 	}
+}
+
+// The index is one list written one way and read another, which is how the two
+// halves came to disagree about trimming: a name with a space around it went
+// out as itself and came back as something else, so the store vanished from
+// the index and one that did not exist appeared. They are one encoding now,
+// and `validRecordStoreName` refuses the only character that cannot survive
+// it.
+func joinStoreIndex(names []string) []byte {
+	return []byte(strings.Join(names, "\n"))
+}
+
+// splitStoreIndex reads names back exactly as they were written, dropping only
+// the empty line an empty list leaves.
+func splitStoreIndex(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	names := make([]string, 0, len(lines))
+	for _, name := range lines {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // recordStoreKey is the save key one store's records live under. RMS store
@@ -175,8 +263,34 @@ func validRecordStoreName(name string) bool {
 			return false
 		}
 	}
-	return !strings.ContainsAny(name, "/\\\x00")
+	if name == rmsReservedName {
+		// The name this runtime keeps its store list under. A store of that
+		// name and the list address one key, and whichever was written last
+		// would be read as the other — a store's records read back as the
+		// list leave every other store unreachable.
+		return false
+	}
+	// The store list is names joined by newlines, so a name carrying one would
+	// come back as two: the store itself disappears from the index and two
+	// phantoms take its place. The KTF tables refuse the same character for
+	// the same reason, and a name out of an archive reaches this too.
+	if strings.ContainsAny(name, "\n\r") {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\\x00") {
+		return false
+	}
+	// And it has to be a key this runtime can write. Answering that a name is
+	// valid and then failing to key it splits one refusal across two places:
+	// "." and ".." pass every rule above and normalize away to the scope, so
+	// the answer comes from the same function the caller asked.
+	_, err := recordStoreKey(name)
+	return err == nil
 }
+
+// rmsReservedName is the one store name this runtime cannot carry, because
+// rmsIndexKey is the scope joined to it.
+const rmsReservedName = ".index"
 
 // openStore finds or loads a store, creating it when asked.
 func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error) {
@@ -187,7 +301,7 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	boundary := runtime.saveStoreBoundary()
-	state.loadIndex(boundary)
+	runtime.loadIndex(state)
 
 	if store, ok := state.stores[name]; ok {
 		store.mu.Lock()
@@ -209,6 +323,24 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		return nil, newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	var records [][]byte
+	if packaged, carried := state.packaged[name]; carried && found {
+		// Only when the store is one that exists: a title that deleted a
+		// carried store and then created it again asked for an empty one, and
+		// the archive's copy must not come back through the create.
+		records = append([][]byte(nil), packaged.records...)
+		// The version and the modification time the container declares are
+		// read and not used. Handing them to the store would be right for one
+		// session and wrong for every session after it: the save encoding
+		// carries records and nothing else, so the first write — which a plain
+		// close performs — loses them, and getVersion would answer the
+		// container's number once and zero from then on. Answering zero
+		// throughout is at least the same answer every time. Carrying them
+		// properly means a save format that holds more than records, on both
+		// Hosts and in the backup container.
+		delete(state.packaged, name)
+		// Nothing is written here, not even the name: the store stays in
+		// `unwritten` until something writes it. See persistStore.
+	}
 	if found && boundary != nil {
 		if data, ok := boundary.LoadSave(key); ok {
 			decoded, decodeErr := backend.DecodeSaveRecords(data)
@@ -232,6 +364,21 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 	return store, nil
 }
 
+// persistStore writes a store the way every mutation does: the records, and —
+// the first time a store the archive carried is written — its name in the
+// index, so a later session finds the Host's copy rather than looking for an
+// archive that may no longer be there. Callers must not hold the state lock.
+func (runtime *Runtime) persistStore(store *recordStore) {
+	state := runtime.rms()
+	state.mu.Lock()
+	if state.unwritten[store.name] {
+		delete(state.unwritten, store.name)
+		runtime.storeIndex(state)
+	}
+	state.mu.Unlock()
+	runtime.persist(store)
+}
+
 // persist writes one store's records through the Host boundary.
 func (runtime *Runtime) persist(store *recordStore) {
 	boundary := runtime.saveStoreBoundary()
@@ -242,7 +389,15 @@ func (runtime *Runtime) persist(store *recordStore) {
 	if err != nil {
 		return
 	}
-	if err := boundary.StoreSave(key, backend.EncodeSaveRecords(store.records)); err != nil && runtime.logger != nil {
+	// Under the store's own lock: the callers release it before persisting,
+	// and persistStore now takes the state lock in that gap, so encoding
+	// without it read a slice another guest thread could be replacing. The
+	// order is state lock then store lock everywhere, which is the order
+	// openStore already takes them in.
+	store.mu.Lock()
+	encoded := backend.EncodeSaveRecords(store.records)
+	store.mu.Unlock()
+	if err := boundary.StoreSave(key, encoded); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS store failed", "name", store.name, "error", err)
 	}
 }
@@ -308,7 +463,7 @@ func (runtime *Runtime) rmsOpenRecordStore(_ *jvm.VM, arguments []jvm.Value) (jv
 func (runtime *Runtime) rmsListRecordStores(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	state := runtime.rms()
 	state.mu.Lock()
-	state.loadIndex(runtime.saveStoreBoundary())
+	runtime.loadIndex(state)
 	names := append([]string(nil), state.names...)
 	state.mu.Unlock()
 	if len(names) == 0 {
@@ -338,7 +493,7 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 	state := runtime.rms()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.loadIndex(runtime.saveStoreBoundary())
+	runtime.loadIndex(state)
 	store, known := state.stores[name]
 	if known {
 		store.mu.Lock()
@@ -353,6 +508,12 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 		return jvm.VoidValue(), newGuestException(midp.RecordStoreNotFoundExceptionClass, "no record store named "+name)
 	}
 	delete(state.stores, name)
+	// The archive's copy of a deleted store is not to be served again, and the
+	// name is not to be filtered out of the index the next create puts it in:
+	// both of those are what `packaged` and `unwritten` mean, and a delete
+	// ends both.
+	delete(state.packaged, name)
+	delete(state.unwritten, name)
 	remaining := state.names[:0]
 	for _, existing := range state.names {
 		if existing != name {
@@ -385,7 +546,7 @@ func (runtime *Runtime) rmsCloseRecordStore(_ *jvm.VM, arguments []jvm.Value) (j
 	}
 	store.mu.Unlock()
 	if closed {
-		runtime.persist(store)
+		runtime.persistStore(store)
 	}
 	return jvm.VoidValue(), nil
 }
@@ -504,7 +665,7 @@ func (runtime *Runtime) rmsAddRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordAdded", id)
 	return jvm.IntValue(id), nil
 }
@@ -537,7 +698,7 @@ func (runtime *Runtime) rmsSetRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordChanged", id)
 	return jvm.VoidValue(), nil
 }
@@ -561,7 +722,7 @@ func (runtime *Runtime) rmsDeleteRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	store.version++
 	store.modified = runtime.nowMillis()
 	store.mu.Unlock()
-	runtime.persist(store)
+	runtime.persistStore(store)
 	runtime.notifyRecordListeners(store, "recordDeleted", id)
 	return jvm.VoidValue(), nil
 }

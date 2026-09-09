@@ -304,6 +304,18 @@ func importDatabaseScope(options ImportOptions, report *ImportReport) error {
 // writeImported persists one converted entry through the same store the
 // runtime reads with, so key validation and directory creation cannot drift.
 func writeImported(options ImportOptions, report *ImportReport, source, owner, key string, data []byte) error {
+	// Before the entry is counted, and before the dry run answers: a refused
+	// entry that has already been added reads as an import that happened, and
+	// a dry run would promise one the real run will not perform.
+	scope, name, split := strings.Cut(key, "/")
+	if split && reservedStorageName(scope, name) {
+		// A source tree is somebody else's directory, and a file in it can be
+		// named anything. Writing one over a table's own list would replace it
+		// with the file's bytes — and the mark-clearing below would then read
+		// those bytes back as a list of deleted names.
+		report.skip("%s: %s is a name this platform keeps its own record under", source, key)
+		return nil
+	}
 	report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
 	if options.DryRun {
 		return nil
@@ -312,7 +324,43 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 	if err := store.StoreSave(key, data); err != nil {
 		return fmt.Errorf("write %s/%s: %w", owner, key, err)
 	}
+	clearImportedRemoval(store, key)
 	return nil
+}
+
+// clearImportedRemoval takes an imported name off the deletion list its table
+// keeps. A save arriving from another runtime says nothing about what this one
+// deleted before it arrived, and a name still on the list is hidden however
+// many bytes are written under it — so an import would land a save nothing can
+// open, with nothing in the report to say why. The tables' own writes clear
+// the mark the same way; this is the one path into the store that does not go
+// through them.
+func clearImportedRemoval(store *DirectorySaveStore, key string) {
+	scope, name, found := strings.Cut(key, "/")
+	if !found || name == "" {
+		return
+	}
+	listKey := scope + "/.removed"
+	data, exists := store.LoadSave(listKey)
+	if !exists {
+		return
+	}
+	kept := make([]string, 0, 8)
+	dropped := false
+	// Through the list's own encoding, so this cannot drift from it: the two
+	// halves disagreeing about trimming is what put a name back that a title
+	// had deleted.
+	for _, line := range splitRemovalList(data) {
+		if line == name {
+			dropped = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !dropped {
+		return
+	}
+	_ = store.StoreSave(listKey, joinRemovalList(kept))
 }
 
 // recordSplit is one reading of an external store key as a database name and
