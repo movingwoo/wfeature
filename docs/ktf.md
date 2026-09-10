@@ -6467,7 +6467,7 @@ ask for. Standing the round paint down for good on the first call froze three of
 those: their flush counts fell from about 600 in 600 rounds to 3, 4 and 36.
 Counting the calls does not separate the two shapes either.
 
-**The gap does.** Measured over 600 rounds, a title driving its own screen comes
+**The initial fallback used the gap.** Measured over 600 rounds, a title driving its own screen comes
 back within two or three rounds and at worst seven; a title that has handed the
 screen back leaves hundreds of rounds, or never comes back. So the round paint
 stands down for eight rounds after a frame the guest painted, and comes back
@@ -6496,6 +6496,35 @@ racing the frame loop. The boundary trace says otherwise in one pass: every
 calls immediately before the fault are `Card.repaint` and
 `Card.serviceRepaints`. A trace that shows the call that caused the paint is
 worth more than a stack that shows where it ended up.
+
+#### A slow scene still belongs to its live worker
+
+The eight-round timeout alone is insufficient. A September 2026 input replay
+reached a merchant table whose worker prepared the scene in stages. The Host
+painted during a gap between those stages; the guest's `paint` cleared its
+partial/full redraw flags before the next stage consumed them. The scene stayed
+at stage 3, before its key handler accepted input. Another 1,000 idle ticks and
+20 held-key trials left the table unchanged, although key delivery continued.
+
+A successful `Card.serviceRepaints` now records the receiving card on the
+active worker. While that worker remains live, the Host does not paint that
+card without a repaint request, however long the gap. Explicit requests still
+paint; another card, or a card whose worker has exited, remains eligible for
+automatic painting. The existing eight-round grace period remains for paints
+without a live worker owner, preserving the bootstrap fallback above. The
+[WIPI Card specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/Card)
+defines `serviceRepaints` as a direct call into `paint`; ownership prevents the
+Host's compatibility fallback from adding calls between the worker's requests.
+
+Replaying the same recorded inputs from a fresh save copy completes the trade
+and returns to gameplay. A separate 600-tick startup comparison covered all 36
+archives currently in the local KTF directory: 35 completed with identical
+final PNGs; one failed before and after. Seven successful cases changed only
+their flush counts. This is a startup check, not full gameplay coverage.
+`TestWorkerPaintKeepsFrameStateUntilTheNextRequest` protects staged state across
+1,000 idle rounds and checks explicit repaint, worker exit, and card replacement.
+The ignored replay and comparison artifacts are under
+`var/acceptance/input-fix/`; the original saves were not changed.
 
 ### The ninth round: a card that was never told it was on the screen
 

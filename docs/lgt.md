@@ -5414,6 +5414,20 @@ companion to `drawChars`; `Display.getGameAction` and its reverse `getKeyCode`,
 which a title that handles the pad through actions asks for in its own
 `keyNotify`; and the two `BaseClip` methods below.
 
+The action conversion includes WIPI soft keys (`-6`, `-7`, `-8` to `90`, `91`,
+`92`) and side keys (`-13`, `-14`, `-15` to `96`, `97`, `98`), in both
+directions. The action numbers follow the
+[WIPI EventQueue specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/EventQueue).
+A September 2026 replay exposed the missing soft-key conversion: Call reached
+the guest as `-10`, which the guest changed to `-8` before calling
+`Display.getGameAction`. Returning `-8` instead of `92` left its call prompt
+visible. With the conversion present, the same recorded inputs from a fresh
+save copy dismiss the upper-left prompt and gameplay continues. Unmapped keys,
+including Call itself, still pass through unchanged; unknown reverse actions
+still return zero. `TestJavaDisplayGameActionsIncludeSoftAndSideKeys` covers
+the forward/reverse pairs, and `TestJavaDisplayPreservesKeysWithoutGameActions`
+guards the fallback. Replay artifacts remain under `var/acceptance/input-fix/`.
+
 **A `Clip` is a `BaseClip`, and this module says so itself.** Its class list
 gives `BaseClip` the virtual methods `putData([BII)I` and `clearData()V` and
 gives `Clip` only `setVolume(I)Z` — and then dispatches `clearData` on a `Clip`.

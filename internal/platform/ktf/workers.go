@@ -86,6 +86,11 @@ type guestWorker struct {
 	// its last declared wait. It is what tells a frame loop's own sleep apart
 	// from any other sleep a guest thread takes; see frameLoopPeriod.
 	publishedFrame bool
+	// paintedCard is the card this live worker services itself. Idle Host
+	// rounds must not paint it: paint can consume state the worker is still
+	// preparing. The worker/event channels order this write with Host reads,
+	// just as they do for wakeAt. Removing the worker releases ownership.
+	paintedCard *jvm.Object
 	// wakeAt is the instant this worker becomes eligible for another slice.
 	// A worker that parked because its step budget ran out leaves it in the
 	// past and is granted again immediately; one that parked on a guest wait

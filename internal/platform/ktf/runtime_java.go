@@ -3013,6 +3013,9 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	// screen without the title's own state having moved, so the same column of
 	// terrain was laid down at three offsets. Its slopes came out as a sawtooth
 	// and its ground ran off the bottom of the screen.
+	if worker := runtime.client.activeWorker; worker != nil {
+		worker.paintedCard = receiver
+	}
 	runtime.guestHasPainted = true
 	runtime.roundsSinceGuestPaint = 0
 	return jvm.VoidValue(), runtime.presentScreen()
