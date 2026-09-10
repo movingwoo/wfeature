@@ -8,7 +8,6 @@ import {
   sizeRow as keypadSizeRow,
 } from "./keypad-size.js";
 import {
-  EDITED,
   createKeypadLayout,
   isShape as isKeypadShape,
   assignable as keypadAssignable,
@@ -939,7 +938,13 @@ const initKeypad = () => {
   // redrawn from it afterwards. On a wide window the rail is docked and both
   // are visible at once, which is where a stale one would show.
   const shapeLists = [...document.querySelectorAll(".keypad-shape-list")];
-  const customOptions = [...document.querySelectorAll(".keypad-shape-edited")];
+  // What each option is called before anything is said about it. An edited pad
+  // is said on the option itself — see `draw` — so the name it goes back to has
+  // to be remembered, and the markup is where it is authored.
+  const shapeNames = new Map();
+  for (const list of shapeLists) {
+    for (const option of list.options) shapeNames.set(option, option.textContent);
+  }
   const panel = document.getElementById("keypad-arrange");
   const open = document.getElementById("keypad-arrange-open");
   const hint = document.getElementById("keypad-arrange-hint");
@@ -956,9 +961,19 @@ const initKeypad = () => {
   const draw = () => {
     applyKeypadKeys(layout.keys());
     size.apply(layout.shape());
+    // **An edited pad says so on the name of the shape it started from**, and
+    // not as an entry of its own in the list. It was one — hidden until a cell
+    // moved and then revealed — and that was wrong twice over: `hidden` on an
+    // `<option>` is honoured by some browsers and ignored by others, so it
+    // showed on Safari and in the app's WebView; and an entry nobody can
+    // usefully choose is a question rather than an answer, which is what it got
+    // asked. Four shapes, four options, and the chosen one carries the truth.
     const edited = layout.edited();
-    for (const option of customOptions) option.hidden = !edited;
-    for (const list of shapeLists) list.value = edited ? EDITED : layout.shape();
+    for (const [option, name] of shapeNames) {
+      const mine = option.value === layout.shape();
+      option.textContent = mine && edited ? `${name} (수정됨)` : name;
+    }
+    for (const list of shapeLists) list.value = layout.shape();
     const values = size.values(layout.shape());
     for (const [name, show] of showSize) show(values[name]);
   };
@@ -1038,10 +1053,11 @@ const initKeypad = () => {
 
   for (const list of shapeLists) {
     list.addEventListener("change", () => {
-      // 직접 배치 is what a list says, not something it takes: picking it back
-      // would have to mean "undo the shape I just chose", and by then the shape
-      // is what the pad is. `draw` puts every list back to the stored value, so
-      // choosing it is the same as choosing nothing.
+      // A list only ever holds shapes now, so this guard is about a value the
+      // page did not put there rather than about an entry of its own. Choosing
+      // the shape already chosen fires no change at all — the value has not
+      // moved — which is why going back to a shape's shipped cells is the reset
+      // button's job and not a second meaning for the list.
       if (isKeypadShape(list.value)) layout.useShape(list.value);
       picked = "";
       keyList.hidden = true;

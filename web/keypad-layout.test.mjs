@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { keyLabel, keyOrder } from "./keybindings.js";
 import {
   BAND_COLUMNS,
-  EDITED,
   BAND_FIXED_COLUMN,
   EMPTY,
   LEFT_COLUMNS,
@@ -265,8 +264,8 @@ test("an edit is stored, and is what the pad draws next time", () => {
 });
 
 test("an edit that lands back on a shape is not an edit", () => {
-  // Otherwise the settings row would go on saying 직접 배치 over a keypad with
-  // a name, and picking that same shape from the list would look like nothing.
+  // Otherwise the list would go on calling a shape modified when the pad is
+  // exactly that shape again.
   const storage = fakeStorage();
   storage.setItem(LAYOUT_KEY, "type1");
   const layout = createKeypadLayout(storage, LAYOUT_KEY);
@@ -340,7 +339,7 @@ test("reset is one shape's, and forgets the entry rather than storing its cells"
   // A name that is not a shape changes nothing.
   layout.useShape("type9");
   assert.equal(layout.shape(), "type2");
-  assert.ok(isShape("type4") && !isShape(EDITED) && !isShape(null));
+  assert.ok(isShape("type4") && !isShape("edited") && !isShape(null));
 });
 
 test("emptying a named shape by hand is not renamed to the empty one", () => {

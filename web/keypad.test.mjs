@@ -133,9 +133,24 @@ test("the keypad layout is a setting rather than a key, and every list of it is 
     .map(match => [...match[1].matchAll(/value="([^"]+)"/g)].map(option => option[1]));
   assert.equal(options.length, 2);
   assert.deepEqual(options[0], options[1], "the two shape lists offer different shapes");
-  // And the option that is not a shape is in both, or one list could not say
-  // that the pad has been edited.
-  assert.equal(page.match(/class="keypad-shape-edited"/g)?.length, 2);
+
+  // And no list carries an entry that is not a shape. There was one — hidden
+  // until a cell moved, then revealed to say the pad was no longer any of them
+  // — and it was wrong twice: `hidden` on an `<option>` is honoured by some
+  // browsers and ignored by others, so it showed where it should not have; and
+  // an entry nobody can usefully choose is a question rather than an answer.
+  // The chosen option's own name says it now, which app.js writes.
+  // Scoped to the shape lists: the page has other selects — the picture filter,
+  // the handset screen, the speed — and their options are not shapes.
+  assert.deepEqual(
+    options.flat().filter(value => !/^type\d$/.test(value)),
+    [],
+    "a shape list offers something that is not a shape",
+  );
+  assert.match(app, /option\.textContent = mine && edited \? `\$\{name\} \(수정됨\)` : name;/,
+    "an edited pad is not said on the shape it started from");
+  assert.match(app, /shapeNames\.set\(option, option\.textContent\)/,
+    "the name an option goes back to is not remembered");
 });
 
 test("the key settings the page draws are the keys the panel offers", () => {

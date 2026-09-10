@@ -137,10 +137,6 @@ export const regionLabel = {
 // same thing on a pad.
 export const EMPTY = "";
 
-// What the shape lists show when the pad is no longer any shape. It is a value
-// in those lists rather than a shape, so `isShape` answers false for it and
-// choosing it does nothing — `draw` puts every list back to the stored shape.
-export const EDITED = "edited";
 
 // The band and the pad are cells either way, so one table serves both: a shape
 // names every cell it fills and leaves the rest at EMPTY.
@@ -300,8 +296,8 @@ export const clampCells = stored => {
 export const isShape = name => Object.hasOwn(shipped, name);
 
 // shapeMatching reports which shape a table *is*, if any, so a page that stored
-// an edit which happens to equal a shape selects that shape rather than
-// showing 직접 배치 over a shape with a name.
+// an edit which happens to equal a shape selects that shape plainly rather than
+// calling it a modified one.
 export const shapeMatching = table => {
   const asked = clampCells(table);
   return shapes.find(name => cellIds.every(id => shipped[name][id] === asked[id])) ?? "";
@@ -419,7 +415,7 @@ export const createKeypadLayout = (storage = local, layoutKey = "wfeature:keypad
       if (!knownCell.has(id)) return table();
       const next = name === EMPTY ? clear(table(), id) : assign(table(), id, name);
       // An edit that lands back on the shape is not an edit. Storing it as one
-      // would leave the panel saying 직접 배치 over a shape with a name — and
+      // would leave the list calling a shape modified when it is not — and
       // emptying every cell of type1 makes a table type4 also matches, which is
       // why the shape now chosen is asked about first.
       if (shapeFor(next, shape) === shape) edits.delete(shape);
