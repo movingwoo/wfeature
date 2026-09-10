@@ -989,7 +989,7 @@ const initKeypad = () => {
   const showHint = () => {
     hint.textContent = picked
       ? `${whereIs(picked)} — 넣을 키를 고르세요.`
-      : "키패드에서 칸을 눌러 고르고, 넣을 키를 선택하세요. 빈 칸도 누를 수 있습니다.";
+      : "키패드에서 칸을 눌러 원하는 키로 변경합니다.";
   };
 
   // The sliders, from the list in keypad-size.js so the panel and the numbers

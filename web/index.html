@@ -104,10 +104,10 @@
                panel cannot come to disagree with either about what there is. -->
           <div class="keypad-arrange" id="keypad-arrange">
             <div class="panel-header">
-              <span>🎮 키패드</span>
+              <span>🎮 키패드 세부 조정</span>
               <button id="keypad-arrange-close" class="panel-close">완료</button>
             </div>
-            <label class="keypad-arrange-shape">배치
+            <label class="keypad-arrange-shape">타입
               <!-- The shape list lives here rather than in the settings panel,
                    because this is where changing it can be seen: the pad below
                    redraws, and its own size comes back with it. -->
@@ -131,7 +131,7 @@
             <!-- One button, and it undoes both halves: the shape's own cells and
                  its own size. Two buttons for the two would leave a person
                  wondering which of them had moved. -->
-            <button id="keypad-arrange-reset" class="panel-button">이 배치를 기본값으로</button>
+            <button id="keypad-arrange-reset" class="panel-button">기본값으로 되돌리기</button>
           </div>
         </div>
 
@@ -306,7 +306,7 @@
               <option value="4">4배</option>
             </select>
           </label>
-          <label>🎮 키패드
+          <label>🎮 키패드 타입
             <!-- The shape, here as well as on the keypad screen. It is the one
                  control of the three that is worth reaching without opening
                  anything: switching between the shapes is a thing somebody does
@@ -334,7 +334,7 @@
                the shape, the measurements and the cells were three controls in
                two places, which meant changing one of them meant finding out
                which place it was in. -->
-          <button id="keypad-arrange-open" class="panel-button">🎮 키패드 배치·크기</button>
+          <button id="keypad-arrange-open" class="panel-button">🎮 키패드 세부 조정</button>
           <!-- Only where there is a keyboard to press: on a phone this is a
                list of keys nobody can reach, in a panel that has to stay short
                enough for a thumb. It starts hidden everywhere and app.js
@@ -342,7 +342,7 @@
                one. Folded shut because nineteen rows would otherwise be most
                of the panel. -->
           <details id="key-bindings" class="key-bindings hidden">
-            <summary>⌨️ 키 설정</summary>
+            <summary>⌨️ 키보드 매핑 변경</summary>
             <div id="key-bindings-list" class="key-bindings-list"></div>
             <p class="key-bindings-hint">
               키 이름을 누른 다음 새 키를 누르세요. Esc는 취소, ✕는 비우기입니다. 이미 쓰고 있는 키를

@@ -71,7 +71,7 @@ export const metrics = [
     // stylesheet has the arithmetic. At the shipped 0.5 all seven are the same
     // width, which is the keypad this page draws.
     name: "split",
-    label: "가운데 좌우",
+    label: "좌우 비율",
     property: "--keypad-split",
     unit: "",
     min: 0.3,
