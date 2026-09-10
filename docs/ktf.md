@@ -1563,13 +1563,20 @@ except on the one row the cursor had already darkened. Three local titles came
 back with the change; a fourth, whose menu rows draw white text and then invert
 the row, is where the invisible-except-at-the-cursor shape came from.
 
-Two boundaries are deliberate. **A partly covered glyph pixel XORs its
-source and then blends by coverage** — full coverage is `destination ^ colour`
-and no coverage is the destination, so the antialiasing the text path already
-did stays continuous. And **an image blit is not XORed**: the specification's
-prose for the Java call names `drawLine` and `drawPolygon`, the LGT runtime
-routes only its colour operations through `put`, and no local title draws an
-image with the mode on — so the case is left as it is rather than guessed at.
+One boundary is deliberate. **A partly covered glyph pixel XORs its source and
+then blends by coverage** — full coverage is `destination ^ colour` and no
+coverage is the destination, so the antialiasing the text path already did stays
+continuous.
+
+**A second one was wrong, and the section after next is the title that says
+so.** An image blit was left un-XORed on three grounds: that the
+specification's prose for the Java call names `drawLine` and `drawPolygon`,
+that the LGT runtime routes only its colour operations through `put`, and that
+no local title draws an image with the mode on. The first two were a misreading.
+The specification has that sentence twice and the later of the two ends it with
+"모든 그리기 연산에 적용된다" — it applies to every drawing operation — and
+`put` is not LGT's colour path but the single point *all* of its drawing goes
+through, image blits included. The third was not true.
 
 Only titles that call `setXORMode` can see the change at all: across the local
 KTF set, one title reaches it inside its first four hundred ticks and the rest
@@ -1643,6 +1650,70 @@ Two more things had to be right for the shift to land:
 Two local KTF titles name `copyArea` at all — the scrolling one and one that
 moves a dialogue box's text with it — which is why a call this wrong survived
 this long, and why the fix was checked by playing both.
+
+## Text a title composes by XOR, out of a font sheet that has no colour
+
+A player reported that one title's Korean came out as square blocks the moment
+the game proper started, while the Korean on its menu was perfect. Both halves
+of that are the clue. The menu is a picture — a 325x25 strip carrying all eight
+of its labels in a row, twice, plain above and highlighted below — and the game
+only draws Korean itself once it is in a scene.
+
+It has no platform font to draw it with. Its archive carries a `font/`
+directory of eight strips, one glyph wide and hundreds of pixels tall, and they
+are the pieces of a syllable rather than syllables: three banks of 초성, two of
+중성, one of 종성, plus Latin and punctuation. Every strip is a two-entry
+palette — index 0 white and marked transparent by a `tRNS` chunk, index 1
+black. **There is no colour anywhere in the font**, and no call on this platform
+that would tint a picture while drawing it.
+
+So the title makes the colour itself. Per jamo:
+
+```
+setClip(x, y, w, h)                       // the cell this piece lands in
+setXORMode(true);  drawImage(ink, x, y)   // a small image filled with the text colour
+setXORMode(false); drawImage(strip, x, y - glyphOffset)
+setXORMode(true);  drawImage(ink, x, y)
+setXORMode(false)
+setClip(0, 0, screenWidth, screenHeight)
+```
+
+Written out, with `D` the ground and `C` the ink colour: the first pass leaves
+`D^C`; the strip writes `0` where its ink lands and leaves `D^C` where its
+transparency does; the second pass turns those zeroes into `0^C = C` and the
+rest back into `D^C^C = D`. **The glyph arrives in the ink colour and the
+ground is exactly as it was** — from a font sheet that only holds black, and
+without a single per-pixel call. The ink image is 12x12, refilled through
+`Image.getGraphics` and `fillRect` for each string, which is where the colour is
+chosen: the speaker's name in orange and the line under it in cream come out of
+one font this way.
+
+A `drawImage` that ignores the mode does all three passes opaque, so the third
+paints over the second and every syllable is a solid block of the ink colour.
+That is what the report was: a dialogue box of orange and cream rectangles,
+grouped exactly as the words are, under a menu that was never drawn this way at
+all.
+
+What found it was the argument log rather than the frame. The boundary trace
+names the call and the site — nine thousand `drawImage` at three sites bracketed
+by four `setXORMode`, and a `getGraphics`/`setColor`/`fillRect` triple once per
+string — and the shape of that is already the whole algorithm. Printing the
+arguments of one burst, armed at `getGraphics` so it covers one composition
+rather than the whole run, turned it into the sequence above.
+
+**Only a title that calls `setXORMode` can be affected by the change, and that
+is a countable set.** The name survives in the AOT image's import table, so
+`setXORMode` as a byte string across the local archives says who: 20 of 264 in
+the largest KTF corpus, 2 more in the smaller one, 6 across the two LGT ones —
+where `put` has always been correct — and **none at all in either SKT corpus**,
+which is why the WIPI Graphics that platform composes over MIDP does not declare
+the method and does not need to. Everything else is byte-identical by
+construction, because the change is inside a branch those runs never take.
+
+`copyArea` reads the mode now for the same reason `drawImage` does — the
+specification puts every drawing operation under it — although nothing local
+copies with the mode on. It is a pinned behaviour rather than a fixed defect,
+and the test beside it says which.
 
 ## A null surface is a state, not a fault
 

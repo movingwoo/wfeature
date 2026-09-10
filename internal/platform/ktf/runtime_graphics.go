@@ -537,6 +537,15 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	// encoding left pixels undrawn; either way the skipped pixels keep whatever
 	// the target already holds.
 	opacity := runtime.framebufferOpacityOf(handle)
+	// **XOR is a mode of every drawing operation, this one included.** A
+	// picture is how one title draws Korean at all: it fills a small image with
+	// the ink colour, XORs that over the cell, draws the jamo strip normally,
+	// and XORs the same image again — which restores the ground and leaves the
+	// glyph in the ink colour, out of a font sheet that only holds black on
+	// white. Drawn without XOR the second pass paints over the first, so every
+	// syllable comes out a solid block of the ink colour. See docs/ktf.md,
+	// "Text a title composes by XOR".
+	xor := state.xorMode
 	memory := runtime.client.core.Memory()
 	row := make([]byte, int(clippedWidth)*2)
 	target := make([]byte, int(clippedWidth)*2)
@@ -547,7 +556,7 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 			return fmt.Errorf("read KTF blit source row %d: %w", line, err)
 		}
 		targetAddress := state.target.pixels + uint32(top+line)*state.target.bpl + uint32(left)*2
-		if transparent != nil || opacity != nil {
+		if transparent != nil || opacity != nil || xor {
 			if err := memory.Read(targetAddress, target); err != nil {
 				return fmt.Errorf("read KTF blit target row %d: %w", line, err)
 			}
@@ -556,6 +565,11 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 				if (transparent != nil && binary.LittleEndian.Uint16(row[column:]) == *transparent) ||
 					!opacity.opaqueAt(int(sourceX), int(sourceY)) {
 					copy(row[column:column+2], target[column:column+2])
+					continue
+				}
+				if xor {
+					binary.LittleEndian.PutUint16(row[column:],
+						binary.LittleEndian.Uint16(row[column:])^binary.LittleEndian.Uint16(target[column:]))
 				}
 			}
 		}
@@ -661,13 +675,15 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 		return jvm.VoidValue(), nil // sized mutable image without pixel data yet
 	}
 	transparent := imageTransparentPixel(imageObject)
-	if transparent != nil || imageOpacityOf(decoded) != nil {
+	if transparent != nil || imageOpacityOf(decoded) != nil || state.xorMode {
 		// A masked draw needs the image's pixels in target format, so the
 		// decoded image is rasterized once and drawn through the same blit
 		// framebuffer-backed images use. An image whose encoding declared
 		// transparent pixels is masked whether or not the game named a
 		// transparent colour, which is what keeps a sprite from painting its
-		// unused border over the scene.
+		// unused border over the scene. An XOR draw takes the same road for a
+		// different reason: the difference it writes is the blit's to compute,
+		// and one implementation of it is enough.
 		handle, err := runtime.imageFramebufferHandle(imageObject)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -927,9 +943,12 @@ func runtimeGraphicsCopyArea(runtime *initializationRuntime, _ *jvm.VM, argument
 	sourceX := values[2] + state.translateX + (left - destinationX)
 	sourceY := values[3] + state.translateY + (top - destinationY)
 	// The graphics target is a drawing surface, not a decoded image, so it
-	// carries no transparency of its own to preserve here.
-	return jvm.VoidValue(), runtime.wipicBlit(
-		state.target, left, top, clippedWidth, clippedHeight,
+	// carries no transparency of its own to preserve here. The clip is already
+	// applied to the rectangle above, so the blit takes an empty one and the
+	// context contributes only its drawing mode.
+	return jvm.VoidValue(), runtime.wipicBlitClipped(
+		state.target, wipicClip{}, wipicPixelOp{xor: state.xorMode},
+		left, top, clippedWidth, clippedHeight,
 		state.target, sourceX, sourceY,
 		blitOpacity{},
 	)

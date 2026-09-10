@@ -30,9 +30,21 @@ import "fmt"
 type wipicPixelOp struct {
 	function uint32
 	param    uint32
+	// xor writes the difference between the pixel a draw wanted and the one
+	// already there. It is not a guest function: it is the mode the Java
+	// context carries as `Graphics.setXORMode`, travelling with the operation
+	// because both are answers to the same question — what a draw must write
+	// given what the surface already holds. The C context has a field of its
+	// own for it, `MC_GRP_CONTEXT_XOR_MODE_IDX`, at an offset no local title
+	// has settled the way the four below were settled — so that half stays
+	// unread rather than guessed, and nothing sets this from the C side.
+	xor bool
 }
 
-func (op wipicPixelOp) active() bool { return op.function != 0 }
+// active reports whether a write has to read the destination first. Both a
+// guest operation and XOR need what is already there; a context with neither
+// writes the source pixel.
+func (op wipicPixelOp) active() bool { return op.function != 0 || op.xor }
 
 // The pixel operation and its parameter are the last two words of the record.
 // The specification's field order puts them earlier, before the font and the
@@ -88,6 +100,12 @@ type pixelOpCache struct {
 // applyPixelOp answers what a draw must write, given what it wanted to write
 // and what the framebuffer already holds.
 func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, destination uint16) (uint16, error) {
+	// The specification makes the drawing modes exclusive — setting one
+	// cancels the other — so XOR answers here rather than compounding with an
+	// operation the same context might also carry.
+	if op.xor {
+		return source ^ destination, nil
+	}
 	if !op.active() {
 		return source, nil
 	}
