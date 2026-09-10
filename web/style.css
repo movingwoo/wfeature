@@ -1006,6 +1006,17 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 /* A settings note says what a setting will and will not do to the game that is
    running. It sits under its own control rather than in a status line, because
    what it is about is that control. */
+/* Hidden when there is nothing to say, and this rule is why the page has one
+   per element: `.hidden` is a convention rather than a rule of its own, so a
+   class carrying it does nothing until somebody writes the pair. Without this
+   the note was an empty <p> that still laid out — a flex item with margins,
+   collecting the panel's gap at both ends, which is twenty-six pixels of gap
+   between the setting above it and the one below. `markup.test.mjs` compares
+   the two lists now. */
+.settings-note.hidden {
+  display: none;
+}
+
 .settings-note {
   margin: 2px 0 8px;
   color: #f0c674;

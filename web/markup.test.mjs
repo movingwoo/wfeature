@@ -121,3 +121,55 @@ test("no id is used twice", () => {
     seen.set(tag.id, tag.line);
   }
 });
+
+const style = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+
+test("everything the page hides with a class has a rule that hides it", () => {
+  // `.hidden` is a convention and not a rule: the stylesheet writes one pair
+  // per element — `.panel-button.hidden`, `.key-bindings.hidden` — so a class
+  // carrying `hidden` does *nothing* until somebody writes its pair. And doing
+  // nothing does not look like nothing: the element still lays out, and in a
+  // flex column it collects the container's gap at both ends. One note left
+  // that way put twenty-six pixels of blank between two settings, and the page
+  // had no way to complain.
+  const faults = [];
+  for (const match of page.matchAll(/<(\w+)([^>]*\bclass="([^"]*\bhidden\b[^"]*)"[^>]*)>/g)) {
+    const [, tag, attributes, classes] = match;
+    const others = classes.split(/\s+/).filter(name => name && name !== "hidden");
+    const covered = others.some(name => style.includes(`.${name}.hidden`))
+      || /(^|[\s,}])\.hidden\s*\{/m.test(style);
+    if (!covered) {
+      const id = /\bid="([^"]+)"/.exec(attributes)?.[1] ?? "";
+      faults.push(`<${tag}${id ? " #" + id : ""}> carries hidden with classes [${others}] and no rule hides it`);
+    }
+  }
+  assert.deepEqual(faults, []);
+});
+
+test("everything the page hides with the attribute is not overridden by a class", () => {
+  // The other half of the same trap, and the page has been caught by it too: an
+  // author rule setting `display` beats the browser's own
+  // `[hidden] { display: none }` whatever its specificity, so an element hidden
+  // with `el.hidden` and styled with `display: grid` is not hidden at all. What
+  // makes it safe is a rule naming the attribute.
+  const faults = [];
+  for (const match of page.matchAll(/<(\w+)([^>]*\bhidden\b[^>]*)>/g)) {
+    const [, tag, attributes] = match;
+    // The attribute, not the class of the same name.
+    if (!/(^|\s)hidden(\s|=|$)/.test(attributes.replace(/class="[^"]*"/g, ""))) continue;
+    const classes = (/\bclass="([^"]*)"/.exec(attributes)?.[1] ?? "").split(/\s+/).filter(Boolean);
+    const styled = classes.filter(name =>
+      new RegExp(`\\.${name}\\s*\\{[^}]*display:`).test(style));
+    if (styled.length === 0) continue;
+    const covered = styled.every(name => style.includes(`.${name}[hidden]`))
+      // A *global* `[hidden]` rule covers everything; one scoped to some other
+      // element does not, and treating any `[hidden]` as the global one is what
+      // made this check pass while the defect it is for was in the tree.
+      || /(^|[\s,}])\[hidden\]\s*\{/m.test(style);
+    if (!covered) {
+      const id = /\bid="([^"]+)"/.exec(attributes)?.[1] ?? "";
+      faults.push(`<${tag}${id ? " #" + id : ""}> is hidden by attribute while [${styled}] sets display`);
+    }
+  }
+  assert.deepEqual(faults, []);
+});
