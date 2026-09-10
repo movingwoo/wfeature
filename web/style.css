@@ -672,35 +672,63 @@ body {
    `fr` may not appear there at all, which is why the track is the width less its
    six column gaps, worked out before it is divided. Dividing a length by a
    number a variable holds is the same construct --keypad-key-height is built on. */
+/* What the band and the pad do share: they are grids of the same seven columns
+   with the same gap between them, so a cell of one sits over a cell of the
+   other. What they do not share is how those columns are *sized* — see each
+   rule below, and the paragraph about the split. */
 .keypad-band,
 .keypad-pad {
   --keypad-cell-gap: 4px;
   --keypad-track: calc(100% - 6 * var(--keypad-cell-gap));
-  --keypad-share-left: var(--keypad-split);
-  --keypad-share-right: calc(1 - var(--keypad-split));
-  --keypad-share-mid: max(var(--keypad-share-left), var(--keypad-share-right));
-  --keypad-share-total: calc(3 + var(--keypad-share-mid));
-  --keypad-column-unit: calc(var(--keypad-track) / var(--keypad-share-total));
   display: grid;
-  grid-template-columns:
-      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-left)))
-      calc(var(--keypad-column-unit) * var(--keypad-share-mid))
-      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-right)));
   column-gap: var(--keypad-cell-gap);
   align-items: center;
   justify-items: center;
 }
 
-/* The band is one row of them, at the height that is a setting. It is a grid of
-   its own rather than the pad's first row because the drag rule tells them
-   apart — a finger crossing the pad presses what it crosses, and up here it aims
-   at one key at a time. `initInput` reads that off which element a button sits
-   in. */
+/* The band: seven equal columns, at the height that is a setting.
+
+   **Equal, and deliberately not the split's.** The left/right share is about
+   which thumb gets the bigger keys, and the keys up here have no hand: 메뉴,
+   통화 and CLR are aimed at one at a time from wherever the thumb happens to
+   be. Tilting them would buy nothing and cost the row its even spacing. The
+   consequence is that the band's columns stop lining up with the pad's once the
+   setting leaves 0.5, and that is the accepted price rather than an oversight —
+   it was made to follow the split once and taken back out.
+
+   It is a grid of its own rather than the pad's first row for a different
+   reason: the drag rule tells them apart. A finger crossing the pad presses
+   what it crosses, and up here it aims at one key at a time, which `initInput`
+   reads off which element a button sits in. */
 .keypad-band {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   height: var(--keypad-band);
 }
 
+/* The pad: seven columns the size setting's left/right share divides.
+
+   The columns are not seven equal shares, because that share has to mean
+   something: the middle column takes the wider side's width and the two sides
+   divide the rest by the share, normalised by their own total — three of each
+   side plus the one the middle took, which is `3 + max(share)` — so they always
+   fill the track exactly. At the shipped 0.5 every column is a seventh, which
+   is the keypad this page draws and the one place the band lines up with it.
+
+   Percentages inside `calc()` resolve against this element's own content box
+   and `fr` may not appear there at all, which is why the track is the width
+   less its six column gaps, worked out before it is divided. Dividing a length
+   by a number a variable holds is the same construct --keypad-key-height is
+   built on. */
 .keypad-pad {
+  --keypad-share-left: var(--keypad-split);
+  --keypad-share-right: calc(1 - var(--keypad-split));
+  --keypad-share-mid: max(var(--keypad-share-left), var(--keypad-share-right));
+  --keypad-share-total: calc(3 + var(--keypad-share-mid));
+  --keypad-column-unit: calc(var(--keypad-track) / var(--keypad-share-total));
+  grid-template-columns:
+      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-left)))
+      calc(var(--keypad-column-unit) * var(--keypad-share-mid))
+      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-right)));
   /* The rows are fixed heights rather than auto for the reason the empty cell
      below states: a row whose cells are all empty has to keep its place instead
      of collapsing and sliding the rest of the pad up. */

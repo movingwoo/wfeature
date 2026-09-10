@@ -105,7 +105,7 @@ test("the split is spent on the pad's columns and not on the space between them"
   // instead would shrink both sides and hand the room to neither — which is
   // what the wide gap between the two former pads did, and it is a key column
   // now.
-  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
+  const pad = ruleBody(".keypad-pad");
   assert.match(pad, /--keypad-split/, "the columns do not follow the split");
   assert.ok(
     !/grid-template-columns:\s*repeat\(7/.test(pad),
@@ -118,22 +118,27 @@ test("the split is spent on the pad's columns and not on the space between them"
   assert.match(pad, /repeat\(3, calc\(var\(--keypad-column-unit\) \* var\(--keypad-share-right\)\)\)/);
 });
 
-test("the band and the pad are one column template, not two", () => {
-  // They are grid items of one single-column container, so they are the same
-  // width and their columns have to be the same columns. Written twice they
-  // were two places for a moved split to disagree, and they did: the band held
-  // seven equal columns while the pad's shifted, so every column but the middle
-  // went out of line the moment the setting left its default.
+test("the band's columns are equal, and deliberately not the split's", () => {
+  // This is a decision that looks like a defect, which is why it is pinned
+  // rather than left to read as one: an audit of this branch called it a bug
+  // and made the band follow the split, and it was taken back out.
+  //
+  // The left/right share is about which thumb gets the bigger keys. The keys in
+  // the band have no hand — 메뉴, 통화 and CLR are aimed at one at a time from
+  // wherever the thumb is — so tilting them buys nothing and costs the row its
+  // even spacing. The price is that the band stops lining up with the pad once
+  // the setting leaves 0.5, and that is accepted.
+  const band = ruleBody(".keypad-band");
+  assert.match(band, /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/);
+  assert.ok(!band.includes("--keypad-split"), "the band follows the split again");
+  assert.ok(!band.includes("--keypad-column-unit"), "the band sizes its columns by the share again");
+  // The pad is the one that does, and it is the only one.
+  assert.match(ruleBody(".keypad-pad"), /--keypad-split/);
+  // What they *do* share is the shape of the grid, so a cell of one sits over a
+  // cell of the other at the default: seven columns and the same gap.
   const shared = ruleBody(".keypad-band,\n.keypad-pad");
-  assert.ok(shared.includes("grid-template-columns:"), "the two do not share a template");
-  assert.match(shared, /--keypad-split/, "the shared columns do not follow the split");
-  // And neither has one of its own to drift with.
-  for (const selector of [".keypad-band", ".keypad-pad"]) {
-    assert.ok(
-      !ruleBody(selector).includes("grid-template-columns:"),
-      `${selector} has columns of its own again`,
-    );
-  }
+  assert.match(shared, /column-gap: var\(--keypad-cell-gap\);/);
+  assert.ok(!shared.includes("grid-template-columns"), "the columns are shared again");
 });
 
 test("the middle column goes with the wider side, and the shares fill the track", () => {
@@ -141,7 +146,7 @@ test("the middle column goes with the wider side, and the shares fill the track"
   // between the two sides belonging to neither. Taking the wider side's width
   // makes the pad read as four wide columns and three narrow ones, which is
   // what "make that side bigger" means on one grid.
-  const pad = ruleBody(".keypad-band,\n.keypad-pad");
+  const pad = ruleBody(".keypad-pad");
   assert.match(pad, /--keypad-share-mid: max\(var\(--keypad-share-left\), var\(--keypad-share-right\)\);/);
   // And the shares are normalised by their own total, or seven columns of a
   // moved split would not add up to the row: three of each side plus the one
