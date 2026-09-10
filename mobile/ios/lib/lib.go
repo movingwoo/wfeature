@@ -20,6 +20,9 @@ import (
 	"github.com/movingwoo/wfeature/internal/appserver"
 )
 
+// version is stamped by the iOS build, matching the app bundle version.
+var version = "dev"
+
 // running is the one server this library will start. An app that asked twice
 // would otherwise take a second port and leave the first one serving, and the
 // second web view would be looking at a different library from the first.
@@ -52,7 +55,7 @@ func WfeatureStart(root *C.char) C.int {
 		}
 	}
 
-	server, err := appserver.Start(appserver.Options{Root: directory})
+	server, err := appserver.Start(appserver.Options{Root: directory, Version: version})
 	if err != nil {
 		failure = err.Error()
 		return 0

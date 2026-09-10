@@ -45,9 +45,9 @@ Neither is part of `make dist`: each needs a toolchain the desktop build does
 not, and a machine with neither should still be able to cut a release.
 
 ```sh
-make mobile VERSION=0.4.0          # both, into build/dist/ beside the archives
-make mobile-android VERSION=0.4.0  # just the APK
-make mobile-ios VERSION=0.4.0      # just the IPA
+make mobile VERSION=0.4.2          # both, into build/dist/ beside the archives
+make mobile-android VERSION=0.4.2  # just the APK
+make mobile-ios VERSION=0.4.2      # just the IPA
 mobile/android/build.sh            # the script the target runs
 mobile/ios/build.sh
 ```
@@ -181,3 +181,14 @@ the same file again comes back to the same progress.
 - **Whether either app runs at all beyond a first launch.** Both builds are
   verified as far as their contents: signed, correct architecture, the server
   and the page inside. That is not the same as playing a game on a phone.
+
+
+### Release version and build number
+
+The release workflow passes the tag version to both mobile builds. On iOS,
+`CFBundleShortVersionString` and the embedded server's `/api/status` report that
+version; an unstamped library reports `dev`. `CFBundleVersion` defaults to the
+repository commit count, as Android's `versionCode` does. Both release checkouts
+fetch full history. Set `BUILD_NUMBER` to a positive integer when an iOS rebuild
+needs a distinct build number or the source has no Git history (whose fallback
+is 1). This changes metadata only; app identity and save locations stay the same.

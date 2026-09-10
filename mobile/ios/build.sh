@@ -20,6 +20,15 @@ root=$(cd "$here/../.." && pwd)
 out=$here/build
 app=$out/Payload/wfeature.app
 
+# Use the same repository history counter as Android; allow an explicit build
+# number for rebuilds or source archives without Git history.
+build_number=${BUILD_NUMBER:-$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)}
+case "$build_number" in
+    ''|*[!0-9]*) echo "BUILD_NUMBER must be a positive integer" >&2; exit 1 ;;
+esac
+[ "$build_number" -gt 0 ] || { echo "BUILD_NUMBER must be a positive integer" >&2; exit 1; }
+echo "version     ${VERSION:-dev} (build $build_number)"
+
 sdk=$(xcrun --sdk iphoneos --show-sdk-path)
 [ -d "$sdk" ] || { echo "no iPhoneOS SDK; Xcode is needed, not just the command line tools" >&2; exit 1; }
 # iOS 14 is the floor because that is where TrollStore's range starts: it
@@ -63,7 +72,8 @@ xcrun --sdk iphoneos swiftc \
 # 3. The bundle.
 echo "==> assembling"
 sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
-sed -e "s/__VERSION__/${VERSION:-dev}/" -e "s/__SDK__/$sdk_version/" \
+sed -e "s/__VERSION__/${VERSION:-dev}/" -e "s/__BUILD_NUMBER__/$build_number/" \
+    -e "s/__SDK__/$sdk_version/" \
     "$here/Info.plist" > "$app/Info.plist"
 
 # The icons, at the sizes the plist names them by. A loose PNG with nothing

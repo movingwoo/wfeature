@@ -1664,3 +1664,19 @@ would change guest dates as well as timer deadlines. Separating these contracts
 needs a reproducible in-game timer or soundtrack failure and a dedicated core
 change. Real-phone backgrounding, long gameplay pauses, audible recovery, and
 progress made by guest threads outside these sampled scenes remain unverified.
+
+
+### Release metadata for 0.4.2 (2026-09-10)
+
+The Makefile and package metadata agree on 0.4.2, and the release workflow's
+changelog extraction returns the 0.4.2 section. The ordinary, debug, internal
+race and vet gates pass. A local `make mobile-ios VERSION=0.4.2` built the IPA;
+its binary plist reports 0.4.2 and the current repository commit count.
+
+The same Go entry-point package used by iOS was also built as a macOS shared
+library with `-X main.version=0.4.2`. Calling `WfeatureStart` and requesting its
+real `/api/status` returned version 0.4.2 with the release profile, followed by
+`WfeatureStop`. This checks the stamp through the library and embedded Host,
+not execution on an iPhone. `TestEmbeddedServerReportsItsReleaseVersion` covers
+both a supplied version and the unstamped `dev` fallback. No device install or
+release publication was performed.
