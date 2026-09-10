@@ -24,7 +24,7 @@ running anyway, and the phone draws what it is sent.
 ```text
 browser                          server
   │  GET /            ───────▶   embedded client files
-  │  WebSocket /api/session ─▶   one session per connection, parked if it drops
+  │  WebSocket /api/session ─▶   one controlling connection per game, retained when away
   │                              internal/session drives the platform
   │  ◀── binary frame (PNG)      internal/webhost encodes and sends
   │  ◀── text JSON               started / audio / stats / results
@@ -40,7 +40,7 @@ browser                          server
   `createImageBitmap`, and replays audio events onto the page's synthesiser.
 
 One connection drives one session, and a session now outlives its connection
-for five minutes; see "A game outlives its socket" below.
+without a time limit; see "A game outlives its socket" below.
 
 ## What travels
 
@@ -56,7 +56,9 @@ envelope at all.
 | `cheat` | one panel operation, or a text console line |
 | `report` | write the session's diagnostics under `logs/` |
 | `stop` | end the game without closing the connection |
-| `resume` | take back the game the server parked when the last socket closed, named by its token |
+| `resume` | find the browser token's game; set `takeover: true` only to explicitly transfer control from another connected page |
+| `park` | release control and retain the game without closing this socket |
+| `ping` | check connection liveness independently of guest execution |
 | `pointer` | one touch — `press`, `drag` or `release` with `x` and `y` in the guest's own screen. The page undoes its own canvas geometry first; only it knows what it put between the finger and the game |
 
 | From the server | Means |
@@ -67,7 +69,8 @@ envelope at all.
 | `audio` | a batch of sink calls in the order the guest made them |
 | `stats` | frames sent, frames dropped, average tick cost, average frame size |
 | `exited`, `error`, `result` | the game ended, something failed, an answer to a request |
-| `resumed` | there was no game under that token — the answer when a resume finds nothing |
+| `resumed` | no retained game, or `occupied: true` when another page controls it |
+| `detached` | control moved to another page; stop presentation and require explicit action to take it back |
 
 `ready` carries the server's build profile because the page has a developer's
 half — the run log beside the screen and the button that saves a report — and a
@@ -512,18 +515,10 @@ rather than to the connection: it is taken when a game starts, released
 wherever the game is closed, and it travels with a game that is parked, because
 a parked game still owns the files it will write when its page comes back.
 
-Two rules keep that from locking a player out of their own game:
-
-- **A parked holder is taken over rather than defended.** A parked game does
-  not tick and nobody is watching it, while the person starting the game is
-  here now — so the parked one is closed and its token spent. That costs it the
-  rest of its resume window, which is the smaller loss.
-- **A live holder is waited on for two seconds first.** A page that reloads —
-  which the restart button does, and which a phone coming back from the app
-  switcher may — opens its new socket before the server has noticed the old one
-  is gone, so the game it is starting is still held by a session a moment away
-  from parking. Without the grace a page would be refused by itself. A session
-  that is genuinely playing is still playing when the grace runs out.
+A fresh start over a parked holder requires confirmation before its retained
+progress is discarded. An active holder is refused immediately. Reloading a
+page resumes by browser token, so a fresh-start grace period is unnecessary.
+WebSocket starts use the atomic admission check in `startapproval.go`.
 
 **The save API takes the same claim for the length of one write.** A `PUT
 /api/saves/<owner>/<key>` into a directory a game holds is refused with 409 and
@@ -907,55 +902,83 @@ per refused archive, against a process that used to end.
 
 ## A game outlives its socket
 
-Switching to another app on a phone suspends the page, and the browser drops
-the socket behind it. One connection being one session meant that was the end
-of the game: coming back a minute later found a page saying the connection had
-gone and a game that would have to be started over. The phone did nothing
-unusual — it backgrounded a tab.
+A game is retained when its controlling page leaves. **Elapsed time does not
+close it.** The old five-minute expiry and the page's finite retry loop are
+removed. The server admits at most four games in total, including active games
+and parked games. Counting both reserves retention room before a page disappears:
+parking never silently evicts another game. A fifth start offers to close the
+oldest parked game; when all four are active it is refused. A fresh start over
+the same shared save directory also requires confirmation. Explicit stop, an
+approved fresh start, save import, and server shutdown end retained state.
+There is no snapshot on disk: restarting the server loses unsaved progress.
 
-So a session whose page goes away is **parked** rather than closed
-(`internal/webhost/resume.go`). It keeps its guest memory, its save handle, its
-diagnostics and the picture it had, and it waits five minutes under a **token**
-the page was given in `started`. A page that comes back sends `resume` with the
-token and is answered with the same `started` message and the picture the game
-was holding; a page that comes back too late is answered `resumed: false` and
-shows its game list again. Nothing else identifies a session — a resume names
-no archive, which is what makes it a resume rather than a restart.
+The browser keeps a random 128-bit capability in local storage under
+`wfeature.browser-token`, shared by tabs of the same origin and browser profile.
+This identifies the browser's current game, **not a user or a save owner**.
+`web/session-link.js` adopts the old tab-local `wfeature.resume-token` when no
+shared capability exists. Storage denial uses `web/storage.js`'s in-memory
+fallback; another tab or a discarded page cannot recover that fallback.
+There is no automatic identity link across browsers or devices, and no account,
+transfer code, or separate personal save directory is introduced.
 
-Four decisions are worth keeping:
+A destructive start first answers `result` with `confirmation` and a Korean
+`message`. The page uses its existing confirmation dialog, focused on Cancel.
+Accepting repeats the start with the returned confirmation string. It is bound
+to that connection, browser token, archive path, retained instance, and parking
+time. The server rechecks ownership, capacity and the victim under one lock;
+a changed victim needs a new confirmation, and an active game cannot be evicted.
+A pending dialog claims neither saves nor game capacity. Older clients can still
+start freely when nothing would be discarded, but cannot bypass this check.
 
-- **A parked game does not tick.** Nobody is watching it, and a game driven
-  with no one there can be killed while its player is away. Freezing is also
-  what a handset does when a call suspends an application, so the guest sees
-  the time away as one long wait — the same jump a suspended handset produces,
-  and the reason the window is minutes rather than hours.
-- **The game's context is not the connection's.** This is the part that does
-  not work if it is missed: a KTF guest thread parks *inside* a Go call that
-  captured the context it was last granted a slice under, so a session ticked
-  under its socket's context dies on the first tick after a resume with
-  `context canceled` surfacing from inside guest code. A game's context now
-  ends when the game is closed and travels with it into the parked set.
-- **Stopping is not parking.** The page's `stop` and a game that exits both
-  clear the token: a game somebody closed is not one to come back to.
-- **The token is random, and spent when it is used.** It is the one thing that
-  hands a running game to a socket, so it is 128 bits from `crypto/rand`
-  rather than a counter, and two pages racing on one token cannot both get the
-  game.
+A start supplies that token; older clients may omit it and receive a server-made
+one. The server reserves the token before loading, preventing simultaneous tabs
+from starting two games under one browser capability. A resume answers:
 
-On the page, the token lives in `sessionStorage` rather than in a variable,
-because the phone is also where the page itself is discarded and reloaded in
-the background — the reload is the case the game most needs to survive.
-Reconnection is driven by `visibilitychange`, `online` and `pageshow` as well
-as by a retry loop, because a backgrounded tab has its timers throttled to the
-point where a loop may not run at all: the event that says the phone is back is
-worth more than any interval. The restart button clears the token before it
-reloads, so restarting still starts the game over.
+- `started` with the same game's description and picture when it is parked;
+- `resumed` with `occupied: true` when another connection controls it;
+- `resumed` without `occupied` when nothing remains, so the page shows its
+  existing picker and can start again without a reload.
 
-It reaches `sessionStorage` through `web/storage.js`, the page's fail-safe
-boundary, which matters here more than it does for a setting: a browser that
-refuses storage would otherwise take the reconnection with it, and the boundary
-keeps the token in memory instead — so resuming works for everything except the
-one case a denied browser cannot help, the page itself being discarded.
+A connection already closing is allowed to finish parking before resumption is
+answered, so a reload does not compete with its own old socket.
+
+The occupied page offers **Continue here** (Korean in the UI). Clicking sends
+`resume` with `takeover: true`. The previous runner releases held keys and touch,
+pauses the guest, and relinquishes the game between guest calls. The next runner
+adopts the game and its save claim atomically under the server mutex. The old
+page receives `detached`, silences audio and vibration, and does not automatically
+claim control again. Input and stop on that old connection cannot reach the new
+owner's game. A handoff waiting on a long guest call times out after ten seconds;
+it can be requested again, and a cancelled queued request does not later detach
+the owner.
+
+When hidden, the page sends `park` and stops presentation immediately. The
+socket may stay open, but it no longer owns a game. Returning resumes the retained
+game; if another page has taken it, the explicit takeover choice appears. If the
+socket disappears without a final message, the server performs the same parking.
+Both paths release held input before calling the guest's pause entry point.
+Stopping uses an acknowledged `stop` and restores the existing picker, preserving
+its event wiring. Legacy unacknowledged stops receive no additional reply.
+
+Connection failures retry while visible, with delays from one to fifteen seconds
+and no attempt limit. Hidden pages do not run retries. `visibilitychange`,
+`online`, and `pageshow` trigger recovery. A playing page checks liveness every
+fifteen seconds; a `ping` must answer within ten seconds. The server answers it
+outside the guest command loop, so a slow loading or rendering call is not a
+broken network. Socket opening also has a ten-second timeout. Browser freezing
+can delay these timers; they are not a guarantee about OS scheduling.
+
+The game's context still belongs to the game, not its connection. Parking keeps
+it alive; stopping ends it. Guest clocks retain their existing wall-clock
+semantics, including the elapsed time seen after a long absence. The Host stops
+ticking parked games and calls platform pause/resume; this does not promise that
+every guest-created thread independently obeys its pause callback.
+
+**Saves are unchanged.** Formats, directories, import/export, and shared-save
+claims remain game-scoped. Different browsers may play different games at once.
+Two live games cannot write the same save directory. A confirmed fresh start
+or an explicit save import may replace a parked holder. Neither resumes someone
+else's in-memory game.
 
 ### The game is told it was parked
 
@@ -1132,9 +1155,6 @@ Two things are recorded here rather than guessed at in code:
   rather than a search.
 - **There is no authentication.** The server binds every interface so a phone
   can reach it, and anything else on that network can reach it too.
-- **Live sessions are not capped.** Parked games are — four, because each one
-  costs a running game's guest memory — but a server takes as many live
-  sessions as sockets ask for, and a KTF arena alone is mapped at 64 MiB. The
-  cap is missing on purpose rather than by oversight: it would refuse a
-  connection that works today, and the machine this runs on is one household's.
-  If a limit is ever added it belongs beside `maxParkedSessions`.
+- **The four-game count is not a memory budget.** Active and parked games share
+  the limit, but their allocations vary. The count bounds admitted games, not
+  concurrent archive inspection, socket connections, or resident bytes.

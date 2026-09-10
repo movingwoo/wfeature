@@ -9,42 +9,12 @@ import (
 	"github.com/movingwoo/wfeature/internal/session"
 )
 
-// A game outlives its socket for a few minutes.
-//
-// One connection was one session, and closing it ended the game. That rule is
-// right for a desktop, where a page stays open, and wrong for the phone this
-// is built for: switching to another app suspends the page, the browser drops
-// the socket a moment later, and coming back used to mean starting the game
-// over. The phone did nothing unusual — it backgrounded a tab — and the game
-// it was playing is exactly the state worth keeping.
-//
-// So a session whose page goes away is **parked** rather than closed: it keeps
-// its guest memory, its save handle, its diagnostics and the picture it had,
-// and it waits under a token the page was told when the game started. A page
-// that comes back within the window sends the token and gets its game back. A
-// page that does not is why the window exists at all — nothing can be left
-// running for a player who is not coming back.
-//
-// **A parked game does not tick.** Nobody is watching it, and a game driven
-// with no one there is a game that can be killed while its player is away;
-// freezing it is also what a handset does when a call suspends an application.
-// The guest's clock is the wall clock, so a resumed game sees the time it was
-// away as one long wait — the same jump a suspended handset produces, and the
-// reason the window is minutes rather than hours.
-const (
-	// resumeWindow is how long a parked game waits for its page. It is the
-	// span a person spends looking at something else on their phone, not a
-	// pause button: a game left longer than this is one nobody came back to.
-	resumeWindow = 5 * time.Minute
-
-	// maxParkedSessions bounds what a server holds for pages that are gone.
-	// Each one costs a running game's guest memory — a KTF arena alone is
-	// mapped at 64 MiB — so this is a memory limit rather than a policy: past
-	// it the oldest is closed to make room, because the newest page to
-	// disappear is the likeliest to return. Four is generous for the machine
-	// this runs on, which is one household's server.
-	maxParkedSessions = 4
-)
+// A browser's game outlives its connection until it is stopped, replaced,
+// evicted by the retention count, or the server shuts down. Tokens are random
+// bearer capabilities shared by tabs in one browser profile, not user accounts.
+// The save layout stays game-scoped and is protected by the existing claims.
+// Admission reserves room for active games too: losing a socket never evicts another game.
+const maxRetainedSessions = 4
 
 // parkedSession is a game waiting for its page to come back. Everything here
 // is what the runner would have lost when its socket closed.
@@ -65,12 +35,10 @@ type parkedSession struct {
 	postMortem    string
 	presented     uint64
 	parkedAt      time.Time
-	timer         *time.Timer
 }
 
-// parkSession takes a running game off a runner that is losing its socket and
-// holds it under a fresh token. The token is the one the page was given when
-// the game started, so a page that reconnects already knows it.
+// parkSession retains a game under its existing browser token. Ownership and
+// the save claim move together under parkedMu.
 func (s *Server) parkSession(token string, parked *parkedSession) {
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
@@ -78,60 +46,58 @@ func (s *Server) parkSession(token string, parked *parkedSession) {
 		s.parked = make(map[string]*parkedSession)
 	}
 	// Replacing a token's own earlier session closes it: the token is one
-	// page's, and that page cannot be playing two games.
+	// browser's, and that browser cannot be playing two games.
 	if previous, ok := s.parked[token]; ok {
 		s.dropLocked(token, previous, "replaced")
 	}
-	for len(s.parked) >= maxParkedSessions {
-		oldest, oldestToken := (*parkedSession)(nil), ""
-		for candidate, held := range s.parked {
-			if oldest == nil || held.parkedAt.Before(oldest.parkedAt) {
-				oldest, oldestToken = held, candidate
-			}
+	if s.sessionsClosed {
+		if owner := s.attached[token]; owner != nil {
+			owner.admitted = false
 		}
-		if oldest == nil {
-			break
-		}
-		s.dropLocked(oldestToken, oldest, "too many parked sessions")
+		delete(s.attached, token)
+		s.dropLocked(token, parked, "server stopping")
+		return
 	}
 	parked.parkedAt = time.Now()
-	parked.timer = time.AfterFunc(resumeWindow, func() { s.expireSession(token) })
+	if owner := s.attached[token]; owner != nil {
+		owner.admitted = false
+	}
+	delete(s.attached, token)
+	if claim := s.claims[parked.saveDirectory]; claim != nil {
+		claim.parked = true
+	}
 	s.parked[token] = parked
-	s.logger.Info("session parked", "game", parked.label, "window", resumeWindow)
+	s.logger.Info("session parked", "game", parked.label, "retained", len(s.parked))
 }
 
 // resumeSession hands a parked game back, or reports that there is none under
-// that token. A token is spent by the page that uses it: two pages racing on
-// one token cannot both get the game.
-func (s *Server) resumeSession(token string) (*parkedSession, bool) {
+// that token. Removing the parked entry and assigning control are atomic:
+// two pages racing on one token cannot both get the game.
+func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSession, bool) {
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
 	parked, ok := s.parked[token]
 	if !ok {
 		return nil, false
 	}
-	parked.timer.Stop()
 	delete(s.parked, token)
+	if s.attached == nil {
+		s.attached = make(map[string]*sessionRunner)
+	}
+	s.attached[token] = owner
+	owner.admitted = true
+	if claim := s.claims[parked.saveDirectory]; claim != nil {
+		claim.parked = false
+	}
 	return parked, true
 }
 
-// expireSession closes a game nobody came back for.
-func (s *Server) expireSession(token string) {
-	s.parkedMu.Lock()
-	defer s.parkedMu.Unlock()
-	parked, ok := s.parked[token]
-	if !ok {
-		return
-	}
-	s.dropLocked(token, parked, "resume window elapsed")
-}
-
-// CloseParkedSessions releases every game still waiting for a page. A server
-// that is stopping has no window left to honour, and the guest goroutines are
-// what would otherwise outlive it.
+// CloseParkedSessions releases retained games and rejects any late parking
+// from connections that close after shutdown has begun.
 func (s *Server) CloseParkedSessions() {
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
+	s.sessionsClosed = true
 	for token, parked := range s.parked {
 		s.dropLocked(token, parked, "server stopping")
 	}
@@ -139,7 +105,6 @@ func (s *Server) CloseParkedSessions() {
 
 // dropLocked closes one parked game. The caller holds the mutex.
 func (s *Server) dropLocked(token string, parked *parkedSession, reason string) {
-	parked.timer.Stop()
 	parked.game.Close()
 	s.releaseSaveDirectoryLocked(parked.saveDirectory)
 	if parked.cancel != nil {
@@ -179,4 +144,41 @@ func newResumeToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+// reserveSession prevents simultaneous starts in tabs sharing a browser token.
+func (s *Server) reserveSession(token string, owner *sessionRunner) bool {
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	if s.attached[token] != nil || s.parked[token] != nil {
+		return false
+	}
+	if s.attached == nil {
+		s.attached = make(map[string]*sessionRunner)
+	}
+	s.attached[token] = owner
+	return true
+}
+
+func (s *Server) attachedSession(token string) *sessionRunner {
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	return s.attached[token]
+}
+
+func (s *Server) releaseSession(token string, owner *sessionRunner) {
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	if s.attached[token] == owner {
+		delete(s.attached, token)
+		owner.admitted = false
+	}
+}
+
+func validResumeToken(token string) bool {
+	if len(token) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(token)
+	return err == nil
 }

@@ -69,9 +69,7 @@ func TestStoppingAGameReleasesItsSaveDirectory(t *testing.T) {
 	expectMessage(t, second, serverStarted)
 }
 
-// A parked game is taken over rather than defended. Nobody is watching it, and
-// refusing would lock a player out of their own game for the whole resume
-// window because of a tab they have already closed.
+// A fresh start closes a retained game only after an explicit confirmation.
 func TestStartingAGameTakesOverItsParkedSession(t *testing.T) {
 	server, url := resumeFixture(t)
 
@@ -90,7 +88,14 @@ func TestStartingAGameTakesOverItsParkedSession(t *testing.T) {
 
 	second := dialSession(t, url)
 	expectMessage(t, second, serverReady)
-	send(t, second, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	request := clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"}
+	send(t, second, request)
+	question := expectMessage(t, second, serverResult)
+	if question.Confirmation == "" || server.parkedGame(token) == nil {
+		t.Fatal("fresh start did not preserve the game pending approval")
+	}
+	request.Confirmation = question.Confirmation
+	send(t, second, request)
 	expectMessage(t, second, serverStarted)
 	if server.parkedCount() != 0 {
 		t.Errorf("%d sessions still parked, want the taken-over one to be closed", server.parkedCount())
@@ -107,31 +112,22 @@ func TestStartingAGameTakesOverItsParkedSession(t *testing.T) {
 	}
 }
 
-// A page that reloads is the sequence a refusal must not catch: the restart
-// button drops the socket and the new document starts the same game before the
-// server has noticed the old socket is gone. Nothing here waits for the park —
-// that is the point.
+// Reloading uses the browser token and needs no destructive confirmation.
 func TestReloadingAPageCanRestartTheSameGame(t *testing.T) {
 	server, url := resumeFixture(t)
-
 	first := dialSession(t, url)
 	expectMessage(t, first, serverReady)
 	send(t, first, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 	started := expectMessage(t, first, serverStarted)
-	if started.Started == nil || started.Started.SaveOwner == "" {
-		t.Skip("the fixture game has no saves of its own, so there is nothing to claim")
-	}
 	expectFrame(t, first)
-
 	_ = first.Close()
+	waitForParked(t, server, 1)
 	second := dialSession(t, url)
 	expectMessage(t, second, serverReady)
-	send(t, second, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
-	if answer := expectMessage(t, second, serverStarted); answer.Started == nil {
-		t.Fatal("the reloaded page did not get its game back")
-	}
+	send(t, second, clientMessage{Kind: clientResume, Token: started.Started.Token})
+	expectMessage(t, second, serverStarted)
 	if server.parkedCount() != 0 {
-		t.Errorf("%d sessions parked, want the reloaded page to have taken the game over", server.parkedCount())
+		t.Fatal("reload did not adopt the retained game")
 	}
 }
 

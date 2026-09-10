@@ -38,6 +38,12 @@ export const createKeyHolds = ({ press, release }) => {
   };
 
   return {
+    clear: () => {
+      for (const name of holders.keys()) release(name);
+      byPointer.clear();
+      holders.clear();
+      latched.clear();
+    },
     // tracking answers whether this pointer is one the keypad is following. A
     // finger that went down where a slide may not begin is not, and the moves
     // it sends are nobody's business here.

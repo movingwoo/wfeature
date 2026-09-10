@@ -179,8 +179,9 @@ built per profile like every other binary here.
   post. What a debug server does keep is bounded by report size, by a rolling
   rate, and by the age and total size of the directory; see
   `../docs/architecture.md`, "Debug run logs".
-- `GET /api/session` (WebSocket) — one emulation session per connection. This
-  is the path a game runs on and the reason the rest exists.
+- `GET /api/session` (WebSocket) — one controlling connection per game. Browser
+  tokens, retention, explicit takeover and recovery are described in
+  `../docs/session.md`, "A game outlives its socket".
 
 The emulator and the save tree are on the same machine, so nothing is preloaded
 and no save crosses the network. The save API remains for the CLI's layout,

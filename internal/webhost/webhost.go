@@ -134,8 +134,10 @@ type Server struct {
 	// parkedMu guards both parked and claims: a start that takes over a
 	// parked game touches the two together, and one mutex is what keeps that
 	// from needing an order.
-	parkedMu sync.Mutex
-	parked   map[string]*parkedSession
+	parkedMu       sync.Mutex
+	parked         map[string]*parkedSession
+	sessionsClosed bool
+	attached       map[string]*sessionRunner // guarded by parkedMu, including starts in flight
 	// claims holds the save directory of every game a session has in hand,
 	// parked or playing; see saveclaim.go.
 	claims map[string]*saveClaim

@@ -189,3 +189,16 @@ test("a move the touch does not own falls through to the keypad", () => {
     "the handler returns for every pointer while a touch is held",
   );
 });
+
+
+test("leaving the page lifts a held touch at its last position", () => {
+  const releases = [];
+  const touch = createTouchStream({ press() {}, drag() {}, release: (x, y) => releases.push([x, y]) });
+  touch.down(1, { x: 12, y: 14 });
+  touch.move(1, { x: 20, y: 30 });
+  touch.cancel();
+  touch.cancel();
+  assert.deepEqual(releases, [[20, 30]]);
+  assert.equal(touch.holding(), false);
+  assert.equal(touch.down(2, { x: 1, y: 2 }), true);
+});

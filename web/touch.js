@@ -89,6 +89,12 @@ export const createTouchStream = ({ press, drag, release }) => {
   let last = null;
 
   return {
+    cancel: () => {
+      const at = last;
+      active = null;
+      last = null;
+      if (at) release(at.x, at.y);
+    },
     down: (pointerId, point) => {
       if (active !== null || !point) return false;
       active = pointerId;

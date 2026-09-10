@@ -76,9 +76,12 @@ type clientMessage struct {
 	// Label names a stored debug report, for kind "report".
 	Label string `json:"label,omitempty"`
 
-	// Token names a game the server parked when this page's last socket
-	// closed, for kind "resume". The page was given it with "started".
-	Token string `json:"token,omitempty"`
+	// Token is the browser capability, shared by its tabs. Start may supply it;
+	// legacy clients omit it and receive a random one in started. Resume uses
+	// it to find the current game, with Takeover only on explicit user action.
+	Token        string `json:"token,omitempty"`
+	Takeover     bool   `json:"takeover,omitempty"`
+	Confirmation string `json:"confirmation,omitempty"`
 
 	// ID lets a page match an answer to the request that asked for it. Zero
 	// means the page is not waiting for one.
@@ -89,6 +92,8 @@ type clientMessage struct {
 const (
 	clientStart   = "start"
 	clientResume  = "resume"
+	clientPark    = "park"
+	clientPing    = "ping"
 	clientKey     = "key"
 	clientPointer = "pointer"
 	clientSpeed   = "speed"
@@ -148,10 +153,12 @@ type serverMessage struct {
 	Vibrate *vibrateMessage `json:"vibrate,omitempty"`
 
 	// Resumed answers a "resume": false says there was no game under that
-	// token, which is the ordinary answer after a long absence rather than a
+	// token, which is the ordinary answer after a server restart rather than a
 	// failure. A true answer arrives as "started" instead, because a page that
 	// has its game back needs everything a page that just started one does.
-	Resumed bool `json:"resumed,omitempty"`
+	Resumed      bool   `json:"resumed,omitempty"`
+	Occupied     bool   `json:"occupied,omitempty"`
+	Confirmation string `json:"confirmation,omitempty"`
 }
 
 // cheatResult is the union of what the cheat operations answer. The panel that
@@ -191,15 +198,16 @@ func (result *cheatResult) normalize() *cheatResult {
 
 // Message kinds the server may send.
 const (
-	serverReady   = "ready"
-	serverStarted = "started"
-	serverExited  = "exited"
-	serverError   = "error"
-	serverAudio   = "audio"
-	serverStats   = "stats"
-	serverResult  = "result"
-	serverResumed = "resumed"
-	serverVibrate = "vibrate"
+	serverReady    = "ready"
+	serverStarted  = "started"
+	serverExited   = "exited"
+	serverError    = "error"
+	serverAudio    = "audio"
+	serverStats    = "stats"
+	serverResult   = "result"
+	serverResumed  = "resumed"
+	serverDetached = "detached"
+	serverVibrate  = "vibrate"
 )
 
 // vibrateMessage is one request of the handset's motor.
@@ -218,6 +226,7 @@ type vibrateMessage struct {
 }
 
 type startedMessage struct {
+	Game      string `json:"game,omitempty"`
 	Platform  string `json:"platform"`
 	AID       string `json:"aid,omitempty"`
 	PID       string `json:"pid,omitempty"`

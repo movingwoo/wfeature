@@ -157,3 +157,18 @@ test("lifting twice releases once", () => {
   holds.lift(1);
   assert.deepEqual(sent, ["press 5", "release 5"]);
 });
+
+
+test("leaving the page releases each key once and forgets every pointer", () => {
+  const { holds, sent } = record();
+  holds.moveTo(1, "5");
+  holds.moveTo(2, "5");
+  holds.latch(3, "2");
+  holds.clear();
+  holds.clear();
+  holds.lift(1);
+  assert.deepEqual(sent, ["press 5", "press 2", "release 5", "release 2"]);
+  assert.equal(holds.tracking(2), false);
+  holds.moveTo(2, "5");
+  assert.equal(sent.at(-1), "press 5");
+});
