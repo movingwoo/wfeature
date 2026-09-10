@@ -108,3 +108,33 @@ func TestCloseIsSafeTwice(t *testing.T) {
 		t.Fatalf("second close: %v", err)
 	}
 }
+
+func TestEmbeddedServerReportsItsReleaseVersion(t *testing.T) {
+	for _, version := range []string{"", "0.4.2"} {
+		t.Run(version, func(t *testing.T) {
+			server, err := Start(Options{Root: t.TempDir(), Version: version})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Close() })
+			response, err := http.Get(server.URL() + "/api/status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var status struct {
+				Version string `json:"version"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+				t.Fatal(err)
+			}
+			want := version
+			if want == "" {
+				want = "dev"
+			}
+			if response.StatusCode != http.StatusOK || status.Version != want {
+				t.Fatalf("status = %d, version = %q, want %q", response.StatusCode, status.Version, want)
+			}
+		})
+	}
+}

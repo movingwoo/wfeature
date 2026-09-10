@@ -36,6 +36,9 @@ type Options struct {
 	// this is the app's own container, which is the only place it may write.
 	Root string
 
+	// Version is the release identifier reported by /api/status. Empty reports dev.
+	Version string
+
 	// Port is the loopback port to take. Zero asks the operating system for
 	// one, which is what an app should do: a fixed port is a port another app
 	// can already be holding, and the app is the only thing that needs to know
@@ -93,6 +96,7 @@ func Start(options Options) (*Server, error) {
 
 	host, err := webhost.New(webhost.Options{
 		Client:    web.Client(),
+		Version:   options.Version,
 		GameRoot:  gameRoot,
 		AddedRoot: addedRoot,
 		SaveRoot:  saveRoot,

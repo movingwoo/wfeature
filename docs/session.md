@@ -121,6 +121,19 @@ do — are one press between them, released when the last of them leaves. That
 bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
 can drive it directly; what is under the finger stays `app.js`'s question.
 
+### Key spacing while changing the left/right share
+
+The keypad's left/right slider changes column and button widths together. The
+visible gap between adjacent keys stays at its 50% value for the current key
+size and viewport. At 50%, buttons still use the width cap derived from the key
+size; any space left inside those columns becomes a fixed inset on every key.
+Moving the split then adds or removes button width without widening that inset.
+Previously the columns grew while their buttons stopped at the cap, leaving
+large gaps on the wider side.
+
+The middle column still follows the wider side, and the top band keeps seven
+equal columns. Key heights and vertical spacing are unchanged.
+
 ### The keypad carries one soft key, and it is the menu key
 
 A handset drew two labels in the bottom corners of its screen and put a key

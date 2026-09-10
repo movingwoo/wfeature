@@ -58,10 +58,11 @@
      pad it always drew. */
   --keypad-key-min: max(24px, var(--keypad-key-pref) - 12px);
   --keypad-bottom: 12px;
+  --keypad-width: min(100vw, 480px);
+  --keypad-side-padding: 16px;
   /* A key is wider than it is tall by the same third the shipped pad used: 48
-     tall and 64 wide. It is a cap rather than a width — a key takes its column
-     and stops here — so it is what lets the wider half of a changed split
-     actually grow instead of collecting the room as whitespace. */
+     tall and 64 wide. This caps the key at a 50% split; moving the split keeps
+     that layout's space around each key and changes the key's width. */
   --keypad-key-width: calc(var(--keypad-key-pref) * 4 / 3);
   /* The three row gaps inside the four-row pad, which are not between bands.
      There were two when the row of * 0 # was a band of its own below the pads;
@@ -575,14 +576,14 @@ body {
 .button-container {
   position: relative;
   display: grid;
-  width: min(100vw, 480px);
+  width: var(--keypad-width);
   margin: 0 auto;
   /* The band is a row of this grid now rather than three buttons positioned
      over a padding that reserved room for them, so the padding no longer
      carries it and the flexible gap between the band and the pad is the grid's
      own. The arithmetic is the one it was — band + gap + the pad — which is why
      --keypad-floor and --keypad-slack did not have to change. */
-  padding: 0 16px var(--keypad-chrome);
+  padding: 0 var(--keypad-side-padding) var(--keypad-chrome);
   gap: var(--keypad-gap);
   box-sizing: border-box;
 }
@@ -646,40 +647,17 @@ body {
   font-size: min(1em, calc(var(--keypad-band) * 0.5));
 }
 
-/* The band: the pad's seven columns, above the pad. Opts is the first and the
-   six after it are cells. The gap is the pad's own so the columns line up, and
-   the row is the band's height, which is a setting.
-
-   It is a grid of its own rather than the pad's first row because the drag rule
-   tells them apart — a finger crossing the pad presses what it crosses, and up
-   here it aims at one key at a time. `initInput` reads that off which element a
-   button sits in. */
-/* The band and the pad are the same seven columns, and the columns are declared
-   once for both. They have to be: the two are grid items of one single-column
-   container, so they are the same width, and a template written twice is two
-   places for a moved split to disagree — which it did, the band holding seven
-   equal columns while the pad's shifted, so every column but the middle went out
-   of line the moment the setting moved off its default.
-
-   The columns are not seven equal shares, because the size setting's left/right
-   share has to mean something: the middle column takes the wider side's width
-   and the two sides divide the rest by that share, normalised by their own total
-   — three of each side plus the one the middle took, which is `3 + max(share)`
-   — so they always fill the track exactly. At the shipped 0.5 every column is a
-   seventh, which is the keypad this page draws.
-
-   Percentages inside `calc()` resolve against each element's own content box and
-   `fr` may not appear there at all, which is why the track is the width less its
-   six column gaps, worked out before it is divided. Dividing a length by a
-   number a variable holds is the same construct --keypad-key-height is built on. */
 /* What the band and the pad do share: they are grids of the same seven columns
    with the same gap between them, so a cell of one sits over a cell of the
-   other. What they do not share is how those columns are *sized* — see each
+   other at 50%. What they do not share is how those columns are *sized* — see each
    rule below, and the paragraph about the split. */
 .keypad-band,
 .keypad-pad {
   --keypad-cell-gap: 4px;
-  --keypad-track: calc(100% - 6 * var(--keypad-cell-gap));
+  /* Use the container's width so this length also resolves inside a button,
+     where a percentage would refer to one column instead of the whole pad. */
+  --keypad-track: calc(var(--keypad-width) - 2 * var(--keypad-side-padding)
+      - 6 * var(--keypad-cell-gap));
   display: grid;
   column-gap: var(--keypad-cell-gap);
   align-items: center;
@@ -714,12 +692,12 @@ body {
    fill the track exactly. At the shipped 0.5 every column is a seventh, which
    is the keypad this page draws and the one place the band lines up with it.
 
-   Percentages inside `calc()` resolve against this element's own content box
-   and `fr` may not appear there at all, which is why the track is the width
-   less its six column gaps, worked out before it is divided. Dividing a length
-   by a number a variable holds is the same construct --keypad-key-height is
-   built on. */
+   The track is the container's content width less its six column gaps. The
+   inset is the space beside a capped key at 50%, held across every split so
+   widening a column widens its button by the same amount. */
 .keypad-pad {
+  --keypad-key-inset: max(0px,
+      calc((var(--keypad-track) / 7 - var(--keypad-key-width)) / 2));
   --keypad-share-left: var(--keypad-split);
   --keypad-share-right: calc(1 - var(--keypad-split));
   --keypad-share-mid: max(var(--keypad-share-left), var(--keypad-share-right));
@@ -757,8 +735,8 @@ body {
   visibility: hidden;
 }
 
-/* A key takes its column and stops at the cap, which is what turns a share of
-   the row into a bigger key rather than into whitespace around the same one.
+/* A key takes its column less the inset measured at a 50% split, so the visible
+   gaps stay the same when either side grows, even past the default width cap.
    The height is the row's, which the grid has already made the right one.
 
    A key narrowed by the split no longer gets shorter with it, as it did when
@@ -769,7 +747,10 @@ body {
 .keypad-pad button {
   min-width: 0;
   margin: 0;
-  width: min(100%, var(--keypad-key-width));
+  /* Padding must fit inside the narrowest column, without imposing a 22px
+     minimum button width that would consume some of the fixed gap. */
+  padding-inline: min(10px, 10%);
+  width: calc(100% - 2 * var(--keypad-key-inset));
   height: 100%;
   font-size: 1em;
   -webkit-touch-callout: none;

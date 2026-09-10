@@ -15,7 +15,7 @@
     <key>CFBundleShortVersionString</key>
     <string>__VERSION__</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>__BUILD_NUMBER__</string>
     <key>MinimumOSVersion</key>
     <string>14.0</string>
     <!-- Everything below is what Xcode stamps and a plist written by hand does

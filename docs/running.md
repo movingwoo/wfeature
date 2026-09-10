@@ -363,7 +363,7 @@ release number is a decision; in CI it comes from the tag, which is the same
 decision written down somewhere durable:
 
 ```sh
-make dist VERSION=0.4.0
+make dist VERSION=0.4.2
 ```
 
 ```text
@@ -527,7 +527,7 @@ written for all three.
 Opening the archives themselves used to be a check somebody had to remember:
 
 ```sh
-make dist VERSION=0.4.0
+make dist VERSION=0.4.2
 make dist-check
 ```
 
