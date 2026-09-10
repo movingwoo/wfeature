@@ -19,6 +19,7 @@ const shell = [
   "./key-holds.js",
   "./game-speed.js",
   "./keypad-size.js",
+  "./keypad-layout.js",
   "./storage.js",
   "./touch.js",
   "./add-game.js",

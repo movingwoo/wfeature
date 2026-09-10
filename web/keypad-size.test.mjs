@@ -63,8 +63,9 @@ test("the canvas budget moves with every metric that changes the keypad's height
     assert.match(source, /--keypad-band/, "the top row is outside the height budget");
     assert.match(source, /--keypad-rows/, "the rows of keys are outside the height budget");
   }
-  // The footer is a multiplier, so it reaches the budget as a row count.
-  assert.match(declared("--keypad-rows"), /--keypad-footer-scale/);
+  // The pad is one grid and every row of it is a row of keys, so the budget
+  // counts them rather than adding a band's own scale to three.
+  assert.match(declared("--keypad-rows"), /^\d+$/, "the row count is not a count");
   // And the floor is what the budget is taken against, so the smallest key has
   // to follow the chosen size rather than sit at a constant: on a short window
   // the pad is at its minimum, and a constant one would have left the keypad
@@ -72,19 +73,50 @@ test("the canvas budget moves with every metric that changes the keypad's height
   assert.match(declared("--keypad-key-min"), /--keypad-key-pref/);
 });
 
-test("the split is spent on the two pads and not on the space between them", () => {
-  // The middle band is one row of two pads. What one is not given the other is,
-  // which is the whole of the setting: a split that moved the gap instead would
-  // shrink both halves and hand the room to neither.
-  const columns = css.slice(css.indexOf(".keypad-main {"), css.indexOf("}", css.indexOf(".keypad-main {")));
-  assert.match(columns, /--keypad-split/, "the columns do not follow the split");
+test("the split is spent on the pad's columns and not on the space between them", () => {
+  // The pad is one grid of seven columns, and the setting is what the two sides
+  // of it divide: what one is not given the other is. A split that moved a gap
+  // instead would shrink both sides and hand the room to neither — which is
+  // what the wide gap between the two former pads did, and it is a key column
+  // now.
+  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
+  assert.match(pad, /--keypad-split/, "the columns do not follow the split");
   assert.ok(
-    !/grid-template-columns:[^;]*repeat\(2/.test(columns),
-    "the middle band is back on two equal columns",
+    !/grid-template-columns:\s*repeat\(7/.test(pad),
+    "the pad is back on seven columns the split cannot reach",
   );
-  // Both pads read the same number, from the two ends.
-  assert.match(css, /\.direction-pad \{\s*--keypad-pad-share: var\(--keypad-split\);/);
-  assert.match(css, /\.number-pad \{\s*--keypad-pad-share: calc\(1 - var\(--keypad-split\)\);/);
+  // Both sides read the same number, from the two ends.
+  assert.match(pad, /--keypad-share-left: var\(--keypad-split\);/);
+  assert.match(pad, /--keypad-share-right: calc\(1 - var\(--keypad-split\)\);/);
+  assert.match(pad, /repeat\(3, calc\(var\(--keypad-column-unit\) \* var\(--keypad-share-left\)\)\)/);
+  assert.match(pad, /repeat\(3, calc\(var\(--keypad-column-unit\) \* var\(--keypad-share-right\)\)\)/);
+});
+
+test("the middle column goes with the wider side, and the shares fill the track", () => {
+  // A split that left the middle column at a seventh would put an odd column
+  // between the two sides belonging to neither. Taking the wider side's width
+  // makes the pad read as four wide columns and three narrow ones, which is
+  // what "make that side bigger" means on one grid.
+  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
+  assert.match(pad, /--keypad-share-mid: max\(var\(--keypad-share-left\), var\(--keypad-share-right\)\);/);
+  // And the shares are normalised by their own total, or seven columns of a
+  // moved split would not add up to the row: three of each side plus the one
+  // the middle took.
+  assert.match(pad, /--keypad-share-total: calc\(3 \+ var\(--keypad-share-mid\)\);/);
+  assert.match(pad, /--keypad-column-unit: calc\(var\(--keypad-track\) \/ var\(--keypad-share-total\)\);/);
+  // The last row has no size of its own left to set.
+  assert.ok(!css.includes("--keypad-footer-scale"), "the last row is scaled again");
+  assert.ok(!page.includes("keypad-last-row"), "the markup still marks the last row");
+  assert.ok(
+    !metrics.some(metric => metric.name === "footer"),
+    "the panel offers a setting the stylesheet no longer reads",
+  );
+});
+
+test("every row of the pad is a row of keys, all the same height", () => {
+  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
+  assert.match(pad, /grid-template-rows: repeat\(4, var\(--keypad-key-height\)\);/);
+  assert.equal(declared("--keypad-rows"), "4");
 });
 
 test("a value out of range is the end of the range rather than what was asked", () => {
@@ -103,7 +135,6 @@ test("a clamped value is a value the slider can show", () => {
   // as readily as on 0.3, and both the panel and the stylesheet print these.
   assert.equal(clampMetric("split", 0.333), 0.33);
   assert.equal(clampMetric("split", 0.3), 0.3);
-  assert.equal(clampMetric("footer", 1.02), 1);
   assert.equal(clampMetric("key", 47.6), 48);
   for (const metric of metrics) {
     const value = clampMetric(metric.name, (metric.min + metric.max) / 2);
@@ -127,29 +158,77 @@ test("a length keeps its unit and a multiplier does not", () => {
   assert.equal(cssText("split", 0.5), "0.5");
   assert.equal(label("key", 48), "48px");
   assert.equal(label("split", 0.45), "45%");
-  assert.equal(label("footer", 1.4), "140%");
+  // A share is the other kind, and the panel prints it as one: "45%" is a thing
+  // a person can picture and "0.45" is not.
+  assert.equal(cssText("split", 0.45), "0.45");
 });
 
-test("a size is remembered, and comes back clamped", () => {
+test("a size is one shape's, remembered and clamped", () => {
   const storage = fakeStorage();
   const size = createKeypadSize(storage);
-  assert.equal(size.set("key", 60), 60);
-  assert.deepEqual(createKeypadSize(storage).values(), { ...defaults(), key: 60 });
+  assert.equal(size.set("type1", "key", 60), 60);
+  assert.deepEqual(createKeypadSize(storage).values("type1"), { ...defaults(), key: 60 });
+  // The shape it was not set on keeps the keypad this page ships.
+  assert.deepEqual(size.values("type2"), defaults());
 
   // Not through this page: an entry somebody wrote by hand, or one left by a
   // page whose ranges were different. A --keypad-key-pref of 4000px is a page
   // with no screen on it and no way back to the panel that did it.
-  storage.entries.set("wfeature:keypadSize", JSON.stringify({ key: 4000, split: 9 }));
-  const stored = createKeypadSize(storage).values();
+  storage.entries.set("wfeature:keypadSize", JSON.stringify({ type1: { key: 4000, split: 9 } }));
+  const stored = createKeypadSize(storage).values("type1");
   assert.equal(stored.key, 68);
   assert.equal(stored.split, 0.7);
+});
+
+test("each shape keeps its own size, and one does not move another", () => {
+  // A size belongs to a shape because the shapes differ in what is on them:
+  // one has the arrows as digits on the left, one has a whole number pad, one
+  // is empty until somebody fills it, and how much room each half wants differs
+  // with them.
+  const storage = fakeStorage();
+  const size = createKeypadSize(storage);
+  size.set("type1", "split", 0.65);
+  size.set("type2", "split", 0.35);
+  assert.equal(size.values("type1").split, 0.65);
+  assert.equal(size.values("type2").split, 0.35);
+  assert.equal(size.values("type4").split, defaults().split);
+
+  // Resetting one is one shape's business.
+  assert.deepEqual(size.reset("type1"), defaults());
+  assert.equal(size.values("type1").split, defaults().split);
+  assert.equal(size.values("type2").split, 0.35);
+  assert.deepEqual(Object.keys(JSON.parse(storage.getItem("wfeature:keypadSize"))), ["type2"]);
+});
+
+test("the size a 0.4 page stored is every shape's, until one of them moves", () => {
+  // That entry is a single set of numbers with no shape attached, because there
+  // were no shapes to attach it to: switching keypads then did not change the
+  // keys' size. Giving it to one shape only would move the pad the first time
+  // somebody switched.
+  const storage = fakeStorage();
+  storage.entries.set("wfeature:keypadSize", JSON.stringify({ key: 60, split: 0.4, band: 40 }));
+  const size = createKeypadSize(storage);
+  for (const shape of ["type1", "type2", "type3", "type4"]) {
+    assert.deepEqual(size.values(shape), { key: 60, split: 0.4, band: 40 }, `${shape} lost it`);
+  }
+  // The first per-shape write spreads it before it changes one, so the others
+  // go on drawing the keypad they were drawing.
+  size.set("type2", "key", 36);
+  assert.equal(size.values("type2").key, 36);
+  assert.equal(size.values("type1").key, 60);
+  assert.equal(size.values("type3").key, 60);
+  // And a shape reset after the spread is the shipped default rather than the
+  // number that page had.
+  assert.deepEqual(size.reset("type3"), defaults());
+  assert.equal(size.values("type3").key, defaults().key);
+  assert.equal(size.values("type1").key, 60);
 });
 
 test("storage that is not JSON, or not there, is the keypad this page ships", () => {
   const storage = fakeStorage();
   storage.entries.set("wfeature:keypadSize", "48px");
-  assert.deepEqual(createKeypadSize(storage).values(), defaults());
-  assert.deepEqual(createKeypadSize(undefined).values(), defaults());
+  assert.deepEqual(createKeypadSize(storage).values("type1"), defaults());
+  assert.deepEqual(createKeypadSize(undefined).values("type1"), defaults());
 
   // A storage that throws on every call is a browser told to block site data.
   // The keypad is the default and the setting lasts as long as the page.
@@ -159,9 +238,9 @@ test("storage that is not JSON, or not there, is the keypad this page ships", ()
     removeItem: () => { throw new Error("blocked"); },
   };
   const size = createKeypadSize(throwing);
-  assert.deepEqual(size.values(), defaults());
-  assert.equal(size.set("key", 52), 52);
-  assert.deepEqual(size.reset(), defaults());
+  assert.deepEqual(size.values("type1"), defaults());
+  assert.equal(size.set("type1", "key", 52), 52);
+  assert.deepEqual(size.reset("type1"), defaults());
 });
 
 test("reset forgets the entry rather than storing today's defaults", () => {
@@ -169,9 +248,9 @@ test("reset forgets the entry rather than storing today's defaults", () => {
   // changed, which is the bug game-speed.js records at its own key.
   const storage = fakeStorage();
   const size = createKeypadSize(storage);
-  size.set("band", 20);
+  size.set("type1", "band", 20);
   assert.ok(storage.entries.has("wfeature:keypadSize"));
-  assert.deepEqual(size.reset(), defaults());
+  assert.deepEqual(size.reset("type1"), defaults());
   assert.equal(storage.entries.has("wfeature:keypadSize"), false);
 });
 
@@ -179,30 +258,43 @@ test("applying writes the properties the stylesheet reads, and nothing else", ()
   const written = new Map();
   const root = { style: { setProperty: (name, value) => written.set(name, value) } };
   const size = createKeypadSize(fakeStorage());
-  size.set("split", 0.35);
-  size.apply(root);
+  size.set("type1", "split", 0.35);
+  size.apply("type1", root);
   assert.deepEqual(
     [...written.keys()].sort(),
     metrics.map(metric => metric.property).sort(),
   );
   assert.equal(written.get("--keypad-split"), "0.35");
+  // The shape decides which numbers are written, which is what makes changing
+  // the shape bring its own size back with it.
+  written.clear();
+  size.apply("type2", root);
+  assert.equal(written.get("--keypad-split"), String(defaults().split));
   // A root without a style — a document that has not parsed, a test harness —
   // is not a page to throw on.
-  assert.doesNotThrow(() => size.apply(null));
+  assert.doesNotThrow(() => size.apply("type1", null));
 });
 
-test("the panel is a screen over the canvas, built from this module's list", () => {
-  // Ids the script reaches for: a missing one is a control that silently never
-  // appears, which looks exactly like the page having no setting.
+test("the sliders are rows of the one keypad screen, built from this module's list", () => {
+  // There were two panels, one for the size and one for the cells. They
+  // answered halves of the same question and each shape wants its own answer to
+  // both, so they are one screen — and the ids the script reaches for are that
+  // screen's. A missing one is a control that silently never appears, which
+  // looks exactly like the page having no setting.
   for (const id of [
-    "keypad-size",
+    "keypad-arrange",
     "keypad-size-list",
-    "keypad-size-open",
-    "keypad-size-close",
-    "keypad-size-reset",
+    "keypad-arrange-open",
+    "keypad-arrange-close",
+    "keypad-arrange-reset",
   ]) {
     assert.ok(page.includes(`id="${id}"`), `the page has no ${id}`);
     assert.ok(app.includes(`"${id}"`), `app.js never looks up ${id}`);
+  }
+  // The size panel is gone rather than hidden: two screens for one keypad is
+  // what this replaced.
+  for (const gone of ["keypad-size-open", "keypad-size-close", "keypad-size-reset", 'id="keypad-size"']) {
+    assert.ok(!page.includes(gone), `the size panel is still in the page as ${gone}`);
   }
   // Over the game screen rather than in the settings panel, which is a modal on
   // a phone and covers the keypad these sliders move.
@@ -210,12 +302,12 @@ test("the panel is a screen over the canvas, built from this module's list", () 
     page.indexOf('class="canvas-wrapper"'),
     page.indexOf('id="status-message"'),
   );
-  assert.ok(wrapper.includes('id="keypad-size"'), "the size panel is outside the screen's hole");
+  assert.ok(wrapper.includes('id="keypad-arrange"'), "the keypad screen is outside the screen's hole");
   // The rows are built in script, so the panel cannot come to disagree with the
   // list about what there is to set.
   assert.ok(
     !page.includes('type="range" id="keypad-size'),
-    "the size panel has sliders of its own in the markup",
+    "the keypad screen has sliders of its own in the markup",
   );
   assert.ok(app.includes("keypadSizeMetrics"), "app.js does not build the rows from the list");
 });
