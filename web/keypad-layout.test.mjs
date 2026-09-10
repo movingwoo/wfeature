@@ -17,7 +17,6 @@ import {
   createKeypadLayout,
   isShape,
   keyFace,
-  shapeLabel,
   shapes,
   shipped,
   regionLabel,
@@ -175,7 +174,6 @@ test("a shape names only keys the editor can also choose", () => {
     assert.deepEqual(Object.keys(shipped[name]).sort(), [...cellIds].sort());
   }
   assert.deepEqual(assignable, keyOrder, "the editor's list has drifted from the keyboard panel's");
-  for (const name of shapes) assert.ok(shapeLabel[name], `${name} has no label`);
 });
 
 test("a pad face is the key's name where one fits, and the name is what is spoken", () => {

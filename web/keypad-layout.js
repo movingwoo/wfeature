@@ -255,12 +255,11 @@ shipped.type4 = fill({});
 
 export const shapes = ["type1", "type2", "type3", "type4"];
 
-export const shapeLabel = {
-  type1: "Type 1 — 숫자 방향키",
-  type2: "Type 2 — 화살표 + 숫자판",
-  type3: "Type 3 — 1 2 3 윗줄",
-  type4: "Type 4 — 빈 배치",
-};
+// A shape has no name here. It had four, for the three "start from this one"
+// buttons the editor used to carry, and one reset button replaced them — after
+// which the only place a shape is named is the markup's own `<option>`, which
+// `draw` reads to know what to put back when a pad stops being edited. A second
+// list of the same four names would be a second place for them to be wrong.
 
 // The keys a cell may hold. It is the keyboard panel's list, because the two
 // answer the same question — which phone keys does this handset have — and a
