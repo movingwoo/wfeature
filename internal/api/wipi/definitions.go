@@ -393,6 +393,14 @@ func graphicsDefinition() jvm.ClassDefinition {
 			// platform keeps and reports, and reset puts back the state a
 			// fresh Graphics would have had — both are already the SKVM
 			// contracts of the same name.
+			//
+			// **`setXORMode` is the third and is deliberately absent.** The
+			// other two carriers' runtimes implement it, and one of their
+			// titles composes all of its Korean out of it; here the name does
+			// not occur in a single archive of either local corpus, and a
+			// declared member with nothing behind it is a contract this layer
+			// would owe the drawing surface underneath. A Jlet that calls it
+			// is the evidence that would add it.
 			{Name: "setAlpha", Descriptor: "(I)V", Access: publicNative},
 			{Name: "getAlpha", Descriptor: "()I", Access: publicNative},
 			{Name: "reset", Descriptor: "()V", Access: publicNative},
