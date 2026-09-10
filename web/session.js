@@ -44,7 +44,7 @@ export class GameSession {
 
   // open connects and resolves once the server says it is ready to take a
   // game. It rejects if the socket fails before that.
-  open() {
+  open(timeoutMillis = 10000) {
     return new Promise((resolve, reject) => {
       let socket;
       try {
@@ -58,7 +58,12 @@ export class GameSession {
       this.socket = socket;
 
       let ready = false;
+      const timer = setTimeout(() => {
+        reject(new Error("세션 서버가 응답하지 않습니다."));
+        this.close();
+      }, timeoutMillis);
       socket.addEventListener("message", event => {
+        if (this.closed) return;
         if (typeof event.data !== "string") {
           this.#receiveFrame(event.data);
           return;
@@ -71,6 +76,7 @@ export class GameSession {
         }
         if (message.kind === "ready" && !ready) {
           ready = true;
+          clearTimeout(timer);
           this.profile = message.profile ?? "";
           resolve(this);
           return;
@@ -78,10 +84,11 @@ export class GameSession {
         this.#receive(message);
       });
       socket.addEventListener("error", () => {
-        if (!ready) reject(new Error("세션 서버에 연결하지 못했습니다."));
+        if (!ready) { clearTimeout(timer); reject(new Error("세션 서버에 연결하지 못했습니다.")); this.close(); }
       });
       socket.addEventListener("close", () => {
         this.closed = true;
+        clearTimeout(timer);
         // Everything still waiting for an answer is never getting one.
         for (const { reject: rejectPending } of this.pending.values()) {
           rejectPending(new Error("세션 연결이 끊어졌습니다."));
@@ -98,7 +105,8 @@ export class GameSession {
       // createImageBitmap decodes off the main thread, which is what keeps a
       // phone's frame budget for drawing rather than decoding.
       const bitmap = await createImageBitmap(blob);
-      this.handlers.onFrame?.(bitmap);
+      if (this.closed || !this.handlers.onFrame) bitmap.close?.();
+      else this.handlers.onFrame(bitmap);
     } catch (error) {
       console.warn("wfeature frame could not be decoded", error);
     }
@@ -121,6 +129,9 @@ export class GameSession {
       return;
     }
     switch (message.kind) {
+      case "detached":
+        this.handlers.onDetached?.();
+        break;
       case "started":
         this.handlers.onStarted?.(message.started);
         break;
@@ -142,6 +153,7 @@ export class GameSession {
         this.handlers.onVibrate?.(message.vibrate ?? {});
         break;
       case "error":
+        if (message.exited) this.handlers.onExited?.(message.message ?? "");
         this.handlers.onError?.(message.message ?? "세션 오류");
         break;
       default:
@@ -150,7 +162,7 @@ export class GameSession {
   }
 
   #send(message) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
+    if (!this.socket || this.closed || this.socket.readyState !== 1) return false;
     this.socket.send(JSON.stringify(message));
     return true;
   }
@@ -184,8 +196,10 @@ export class GameSession {
   // start loads a game on the server. A KTF title's start takes tens of
   // seconds inside the guest, so the wait is long by nature rather than by
   // fault, and the answer only arrives when the game is up.
-  start(gamePath, scale = 1, screen = null) {
+  start(gamePath, scale = 1, screen = null, token = "", confirmation = "") {
     const message = { kind: "start", game: gamePath, value: scale };
+    if (token) message.token = token;
+    if (confirmation) message.confirmation = confirmation;
     // The screen travels only when it is not the server's own default, so a
     // page that never opened the setting sends what it always sent.
     if (screen && (screen.width !== 240 || screen.height !== 320)) {
@@ -195,14 +209,14 @@ export class GameSession {
     return this.ask(message, 300000);
   }
 
-  // resume asks for the game the server parked when this page's last socket
-  // closed. The answer is a "started" message when the game is still there and
-  // a "resumed" one saying it is not when the window has run out — a phone that
-  // was away too long has nothing to come back to, which is an answer rather
-  // than a failure.
-  resume(token) {
-    return this.ask({ kind: "resume", token });
+  // A connected owner is reported as occupied unless takeover was explicit.
+  resume(token, takeover = false) {
+    return this.ask({ kind: "resume", token, ...(takeover ? { takeover: true } : {}) });
   }
+
+  ping() { return this.ask({ kind: "ping" }, 10000); }
+  park() { return this.ask({ kind: "park" }); }
+  stop() { return this.ask({ kind: "stop" }); }
 
   sendKey(action, code) {
     this.#send({ kind: "key", action, code });
@@ -232,6 +246,10 @@ export class GameSession {
 
   close() {
     this.closed = true;
+    for (const { reject } of this.pending.values()) {
+      reject(new Error("세션 연결이 끊어졌습니다."));
+    }
+    this.pending.clear();
     this.socket?.close();
   }
 }

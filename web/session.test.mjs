@@ -262,3 +262,39 @@ test("a start that failed is refused without the ending mark", async () => {
     return true;
   });
 });
+
+
+test("takeover is explicit and detachment is a control event, not a game ending", async () => {
+  let detached = 0;
+  let ended = 0;
+  const { session, socket } = await openFakeSession({ onDetached: () => detached++, onExited: () => ended++ });
+  const asking = session.resume("browser-token", true);
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.takeover, true);
+  socket.deliver({ kind: "resumed", id: sent.id, occupied: true });
+  assert.equal((await asking).occupied, true);
+  socket.deliver({ kind: "detached" });
+  assert.equal(detached, 1);
+  assert.equal(ended, 0);
+});
+
+test("park, stop and liveness wait for their own acknowledgements", async () => {
+  const { session, socket } = await openFakeSession();
+  for (const kind of ["park", "stop", "ping"]) {
+    const asking = session[kind]();
+    const sent = socket.sent.at(-1);
+    assert.equal(sent.kind, kind);
+    socket.deliver({ kind: "result", id: sent.id });
+    await asking;
+    assert.equal(session.pending.size, 0);
+  }
+});
+
+
+test("closing the transport rejects pending requests without waiting for a socket close event", async () => {
+  const { session } = await openFakeSession();
+  const asking = session.park();
+  session.close();
+  await assert.rejects(asking, /세션 연결이 끊어졌습니다/);
+  assert.equal(session.pending.size, 0);
+});

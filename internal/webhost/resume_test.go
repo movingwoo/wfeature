@@ -152,10 +152,8 @@ func TestSessionStoppedGameIsNotParked(t *testing.T) {
 	waitForParked(t, server, 0)
 }
 
-// The window is the reason parking is safe to do at all: a game nobody came
-// back for is closed rather than held. The timer that fires it is minutes away,
-// so what is tested here is the expiry itself.
-func TestParkedSessionIsClosedWhenItsWindowRunsOut(t *testing.T) {
+// Shutdown releases retained games; elapsed time is no longer a stop request.
+func TestParkedSessionIsClosedWhenTheServerStops(t *testing.T) {
 	server, url := resumeFixture(t)
 
 	connection := dialSession(t, url)
@@ -168,7 +166,7 @@ func TestParkedSessionIsClosedWhenItsWindowRunsOut(t *testing.T) {
 	_ = connection.Close()
 	waitForParked(t, server, 1)
 
-	server.expireSession(token)
+	server.CloseParkedSessions()
 	if server.parkedCount() != 0 {
 		t.Fatalf("%d sessions parked after the window elapsed, want 0", server.parkedCount())
 	}
@@ -179,6 +177,72 @@ func TestParkedSessionIsClosedWhenItsWindowRunsOut(t *testing.T) {
 	send(t, late, clientMessage{Kind: clientResume, Token: token})
 	if answer := expectMessage(t, late, serverResumed); answer.Resumed {
 		t.Error("an expired game was resumed")
+	}
+}
+
+func TestBrowserSessionNeedsExplicitTakeover(t *testing.T) {
+	server, url := resumeFixture(t)
+	token := "0123456789abcdef0123456789abcdef"
+	first := dialSession(t, url)
+	expectMessage(t, first, serverReady)
+	send(t, first, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip", Token: token})
+	started := expectMessage(t, first, serverStarted)
+	if started.Started.Token != token {
+		t.Fatal("the browser cannot find its game under its saved token")
+	}
+	expectFrame(t, first)
+
+	second := dialSession(t, url)
+	expectMessage(t, second, serverReady)
+	send(t, second, clientMessage{Kind: clientResume, Token: token})
+	if !expectMessage(t, second, serverResumed).Occupied {
+		t.Fatal("an attached game was not reported as occupied")
+	}
+	send(t, second, clientMessage{Kind: clientResume, Token: token, Takeover: true})
+	expectMessage(t, first, serverDetached)
+	expectMessage(t, second, serverStarted)
+	expectFrame(t, second)
+	if server.parkedCount() != 0 || server.claimCount() != 1 {
+		t.Fatal("handoff lost the save claim or left a duplicate game")
+	}
+	// Neither stale input nor stop on the old connection reaches the game.
+	send(t, first, clientMessage{Kind: clientStop, ID: 42})
+	expectMessage(t, first, serverResult)
+	send(t, first, clientMessage{Kind: clientResume, Token: token})
+	if !expectMessage(t, first, serverResumed).Occupied {
+		t.Fatal("the old page automatically took back control")
+	}
+	send(t, second, clientMessage{Kind: clientPark, ID: 43})
+	expectMessage(t, second, serverResult)
+	waitForParked(t, server, 1)
+	game := server.parkedGame(token)
+	if game == nil || !game.Paused() {
+		t.Fatal("leaving the page did not pause the game")
+	}
+	// Age the retention record without sleeping; resuming must not inspect age.
+	server.parkedMu.Lock()
+	server.parked[token].parkedAt = time.Now().Add(-24 * time.Hour)
+	server.parkedMu.Unlock()
+	send(t, second, clientMessage{Kind: clientResume, Token: token})
+	expectMessage(t, second, serverStarted)
+	expectFrame(t, second)
+	if server.parkedGame(token) != nil {
+		t.Fatal("the retained game was not adopted")
+	}
+}
+
+func TestASecondStartCannotReplaceTheSameBrowsersGame(t *testing.T) {
+	_, url := resumeFixture(t)
+	token := "1123456789abcdef0123456789abcdef"
+	first := dialSession(t, url)
+	expectMessage(t, first, serverReady)
+	send(t, first, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip", Token: token})
+	expectMessage(t, first, serverStarted)
+	second := dialSession(t, url)
+	expectMessage(t, second, serverReady)
+	send(t, second, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip", Token: token})
+	if !expectMessage(t, second, serverResumed).Occupied {
+		t.Fatal("a second tab replaced its browser's game")
 	}
 }
 
@@ -222,4 +286,46 @@ func TestParkingTellsTheGameAndResumingTellsItAgain(t *testing.T) {
 	if server.parkedGame(token) != nil {
 		t.Fatal("the game is still parked after being resumed")
 	}
+}
+
+func TestAConnectionClosingAfterShutdownCannotRetainAGame(t *testing.T) {
+	server, url := resumeFixture(t)
+	connection := dialSession(t, url)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	expectFrame(t, connection)
+	server.CloseParkedSessions()
+	send(t, connection, clientMessage{Kind: clientPark, ID: 7})
+	expectMessage(t, connection, serverResult)
+	if server.parkedCount() != 0 || server.claimCount() != 0 || server.attachedSession(started.Started.Token) != nil {
+		t.Fatal("late parking retained a game after shutdown")
+	}
+}
+
+func TestLivenessDoesNotWaitForTheGuestCommandLoop(t *testing.T) {
+	_, url := resumeFixture(t)
+	connection := dialSession(t, url)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientPing, ID: 123})
+	if got := expectMessage(t, connection, serverResult); got.ID != 123 {
+		t.Fatalf("liveness answer ID = %d", got.ID)
+	}
+}
+
+func TestMalformedInputDoesNotTellThePageItsGameEnded(t *testing.T) {
+	_, url := resumeFixture(t)
+	connection := dialSession(t, url)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	expectFrame(t, connection)
+	if err := connection.WriteText("{"); err != nil {
+		t.Fatal(err)
+	}
+	if answer := expectMessage(t, connection, serverError); answer.Exited {
+		t.Fatal("malformed input was reported as a game ending")
+	}
+	send(t, connection, clientMessage{Kind: clientResume, Token: started.Started.Token})
+	expectMessage(t, connection, serverStarted)
 }

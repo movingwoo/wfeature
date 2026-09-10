@@ -1590,3 +1590,77 @@ API is most likely to write a save the game cannot read back. See
 The audit did not turn the documented semantic gaps in the JVM, widgets, or
 graphics recorder into immediate work without a caller that needs them. Those
 remain evidence-triggered watch items in the local plan.
+
+
+## Browser session retention and control
+
+`internal/webhost/resume_test.go` exercises token-based starts, occupied replies,
+explicit takeover, old-owner detachment, explicit parking, resuming an aged
+retention record, save-claim release, and late parking during
+shutdown. Save-claim and save import/export tests cover shared saves.
+`startapproval_test.go` covers the four-game admission limit, preserving progress
+until confirmation, rejecting forged or stale approvals, and refusing eviction
+of active games. Protocol tests still accept clients that omit a browser token
+or send an unacknowledged stop.
+
+`web/session-link.test.mjs` drives two controllers against one simulated server:
+only an explicit takeover moves control, the old page does not automatically
+reclaim it, retries survive the former attempt limit, and returning during a
+pending park waits for the park before resuming. It also covers starts finishing
+while hidden, connection liveness without a close event, and a restarted server
+returning the existing page to its picker. The key and touch suites verify that
+leaving releases held input once.
+
+A local Chromium and WebKit run on 2026-09-10 drove the real page and Go server
+with the repository-authored SKT canvas fixture. It checked two-tab takeover,
+frame continuity after input, scripted hidden/visible transitions, closing and
+reopening the controlling tab, explicit stop followed by another start, and
+server restart followed by automatic picker recovery. These were local browser
+checks, not a new browser dependency or CI job. OS-driven phone suspension,
+process eviction, and hours-long pauses in real titles still require handset
+checks; scripted visibility events do not establish those behaviors.
+
+
+### Destructive starts and pause observations (2026-09-10)
+
+The local Chromium and WebKit check also used separate browser contexts to start
+against a retained shared-save holder. Both displayed the confirmation with
+Cancel focused, preserved the original session on cancellation, and replaced it
+only after acceptance. This exercised the real page, dialog and Go handler.
+
+`internal/session/local_pause_test.go` is an opt-in observation, not a claim of
+full suspension. From the repository root:
+
+```sh
+WFEATURE_PAUSE_ARCHIVE="$PWD/var/games/<archive>.zip" WFEATURE_PAUSE_DURATION=10s go test ./internal/session -run '^TestLocalPauseResumeObservation$' -v -count=1 -timeout=55s
+```
+
+It attaches no persistent save store and retains no guest audio or sample data.
+It drives three pause/resume cycles, checks that a paused Host tick is refused,
+and checks that ticks proceed after resumption. It reports frame changes,
+platform elapsed time, audio sink calls during the pause, and audio sink calls
+on the first resumed tick. Lifecycle callback errors remain visible in the log;
+a passing observation does not mean those callbacks succeeded.
+
+Five local archives (three SKT, one KTF, one LGT) completed three one-second
+pauses each without a changed parked picture or additional parked frame. One
+other SKT archive exited before a pause could be measured and supplies no pause
+evidence. One archive per platform was then observed over three ten-second
+pauses. All three retained their pictures and resumed ticking. KTF and SKT time
+advanced by approximately ten seconds per pause; LGT guest time advanced by zero.
+No audio calls occurred during these pauses or on their first resumed ticks, so
+these scenes provide no evidence about resuming an actively playing soundtrack.
+
+The LGT sample reported an unmapped read at address `0x1` inside `resumeClet` on
+each return, then continued ticking. This remains a callback compatibility
+finding, not proof that its in-game resume behavior is correct. The observation
+keeps that error rather than suppressing it to obtain a clean lifecycle result.
+
+No global clock correction or thread scheduler change follows from these
+samples. SKT guest threads run independently of Host ticks, and its
+`System.currentTimeMillis` and elapsed/audio time share a scaled clock. KTF also
+uses its clock for elapsed time and guest date APIs. Freezing that clock globally
+would change guest dates as well as timer deadlines. Separating these contracts
+needs a reproducible in-game timer or soundtrack failure and a dedicated core
+change. Real-phone backgrounding, long gameplay pauses, audible recovery, and
+progress made by guest threads outside these sampled scenes remain unverified.

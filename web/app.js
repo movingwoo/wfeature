@@ -16,6 +16,7 @@ import {
   cells as keypadCells,
 } from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
+import { browserToken, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
@@ -161,9 +162,7 @@ const reportEndingOrError = error => {
   setStatus("게임이 스스로 종료되었습니다. 다시 실행하면 이어서 볼 수 있습니다.");
 };
 
-// Restarting is a page reload rather than a teardown: the server holds one
-// session per connection and a fresh document is the cheapest way back to a
-// clean one. Saves live on the server, so nothing but unsaved progress is lost.
+// The last selection survives returning to the picker.
 const LAST_GAME_KEY = "wfeature:lastGame";
 const FRAME_SCALE_KEY = "wfeature:frameScale";
 // The screen is remembered per game rather than once for the page: it is a
@@ -199,7 +198,7 @@ const rememberScreen = (path, value) => {
 
 // chosenGame is the game the screen setting is about: whatever the list is
 // showing, and the last game played once the list is gone.
-const chosenGame = () => document.getElementById("game-select")?.value || lastGame() || "";
+const chosenGame = () => gameRunning ? currentGamePath : document.getElementById("game-select")?.value || lastGame() || "";
 
 // The handset's motor. The guest asks, the server passes the request on, and
 // this is where it is decided whether anything happens — including on a
@@ -216,12 +215,13 @@ const lastGame = () => localStore.getItem(LAST_GAME_KEY);
 const hideGameSelect = () => {
   const prestart = document.getElementById("prestart");
   prestart?.classList.add("hidden");
-  setTimeout(() => prestart?.remove(), 300);
+  if (prestart) prestart.inert = true;
 };
 
 let gameRunning = false;
 // Names the saved report after the game it came from.
 let currentGameLabel = "";
+let currentGamePath = "";
 // The platform the running session belongs to, as the engine detected it.
 // Empty until a game has been started.
 let currentPlatform = "";
@@ -249,33 +249,8 @@ let guestScreen = { width: 0, height: 0 };
 let cheatWired = false;
 let resetCheatPanel = () => {};
 
-// A dropped connection no longer ends the game: the server parks it for a few
-// minutes under a token it hands over when the game starts, and a page that
-// comes back sends the token to get it back. That is what makes this playable
-// on a phone — switching to another app suspends this page, the browser drops
-// the socket behind it, and without this the game was over.
-//
-// The token lives in sessionStorage rather than in a variable because the phone
-// is also where the page itself gets discarded and reloaded while it is in the
-// background: the reload is the case the game most needs to survive. Restarting
-// deliberately clears it, so the restart button still starts a game over.
-const RESUME_TOKEN_KEY = "wfeature.resume-token";
-// RESUME_ATTEMPTS x RESUME_DELAY covers the server's window with room to spare;
-// past it the game the token names has been closed and there is nothing to
-// reconnect to.
-const RESUME_DELAY = 3000;
-const RESUME_ATTEMPTS = 120;
-let reconnecting = false;
-
-const rememberResumeToken = token => {
-  // A browser that denies storage keeps the token in the store's own shadow,
-  // so resuming works for as long as the page itself lives — every case except
-  // the page being discarded, which is the one it cannot help.
-  if (token) sessionStore.setItem(RESUME_TOKEN_KEY, token);
-  else sessionStore.removeItem(RESUME_TOKEN_KEY);
-};
-
-const storedResumeToken = () => sessionStore.getItem(RESUME_TOKEN_KEY) ?? "";
+let sessionLink = null;
+let releaseInput = () => {};
 
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
@@ -524,13 +499,16 @@ const initInput = () => {
   // A window that loses focus stops being told about keyup, so a key held
   // across the switch would stay down in the game and lit on the keypad for
   // the rest of the run. Letting go on the way out is what actually happened.
-  window.addEventListener("blur", () => {
+  releaseInput = () => {
+    holds.clear();
+    touch.cancel();
     for (const name of keysDown.values()) {
       showPressed(name, false);
       sendKey("release", name);
     }
     keysDown.clear();
-  });
+  };
+  window.addEventListener("blur", releaseInput);
 };
 
 // drawFrame paints one picture from the server. Frames can arrive faster than
@@ -564,135 +542,65 @@ const drawFrame = bitmap => {
   });
 };
 
-// openSession connects to the server's emulator. It answers null rather than
-// throwing so the caller can say what a page with no session can do, which is
-// nothing: the emulator runs on the other end of this socket.
-const openSession = async () => {
-  if (!sessionAvailable()) return null;
+// The transport decodes messages; session-link owns reconnection and control.
+const openSession = async handlers => {
+  if (!sessionAvailable()) throw new Error("session transport unavailable");
+  const playing = () => ["playing", "starting"].includes(sessionLink?.state());
   const opening = new GameSession({
-    onFrame: drawFrame,
-    onAudio: events => playAudioEvents(pageAudio, events),
-    onVibrate: request => vibration.request(request),
-    onExited: reason => {
-      gameRunning = false;
-      // A game that ended must not leave a phone buzzing: the guest that would
-      // have stopped an indefinite vibration is gone.
-      vibration.stop();
-      // A game that ended has nothing to come back to.
-      rememberResumeToken("");
-      // The reason is for the run log, not for the player: it names a guest
-      // address and the platform call the game left from, which is what makes
-      // an ending investigable afterwards. The status line stays the sentence
-      // whoever is holding the phone can act on.
-      recordEvent(reason
-        ? `${currentPlatform} session exited: ${reason}`
-        : `${currentPlatform} session exited`);
-      setStatus("게임이 종료되었습니다. 🔄 재시작으로 다시 시작할 수 있습니다.");
-    },
-    onError: message => {
-      recordEvent(`session error: ${message}`);
-      setStatus(message);
-    },
+    ...handlers,
+    onFrame: bitmap => { if (playing()) drawFrame(bitmap); else bitmap.close(); },
+    onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
+    onVibrate: request => { if (playing()) vibration.request(request); },
+    onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
     onStats: stats => recordSessionStats(stats),
-    onClosed: () => {
-      if (!gameRunning) return;
-      // The game outlives the connection now. Input goes nowhere until there
-      // is a socket again, so the page stops sending it and starts trying to
-      // get its game back.
-      gameRunning = false;
-      // The socket is what a stop would have arrived on, so nothing can stop a
-      // running vibration until there is one again.
-      vibration.stop();
-      recordEvent("session connection lost");
-      void reconnectSession();
-    },
   });
-  try {
-    await opening.open();
-  } catch (error) {
-    console.warn("wfeature session unavailable", error);
-    return null;
-  }
+  await opening.open();
   return opening;
 };
 
-const wait = millis => new Promise(resolve => setTimeout(resolve, millis));
-
-// reconnectSession opens a new socket and asks for the game the server parked.
-// It keeps trying for as long as the server would hold one, because the reason
-// the socket went is usually that the phone stopped running this page at all —
-// and the moment it comes back is the moment an attempt succeeds.
-const reconnectSession = async () => {
-  const token = storedResumeToken();
-  if (!token || reconnecting) return;
-  reconnecting = true;
-  setStatus("서버와 다시 연결하는 중…");
-  try {
-    for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
-      const next = await openSession();
-      if (next) {
-        session = next;
-        if (await resumeStoredGame()) return;
-        // The socket is back but the game is not: the window ran out, or the
-        // server was restarted. Nothing is left to reconnect to.
-        return;
-      }
-      await wait(RESUME_DELAY);
-    }
-    setStatus("서버 연결이 끊어졌습니다. 새로고침해서 다시 시작하세요.");
-  } finally {
-    reconnecting = false;
+const sessionStateChanged = state => {
+  recordEvent(`session state: ${state}`);
+  if (state !== "playing" && state !== "starting") {
+    releaseInput();
+    gameRunning = false;
+    vibration.stop();
+    pageAudio?.stopAll();
+    pendingBitmap?.close();
+    pendingBitmap = null;
+  }
+  const returning = document.getElementById("session-return");
+  returning?.classList.toggle("hidden", state !== "occupied");
+  if (returning) returning.inert = state !== "occupied";
+  document.getElementById("restart")?.classList.toggle("hidden", state !== "playing");
+  if (state === "ready") {
+    document.getElementById("prestart")?.classList.remove("hidden");
+    document.getElementById("prestart").inert = false;
+    document.getElementById("settings-panel")?.classList.remove("visible");
+    document.getElementById("cheat-panel")?.classList.remove("visible");
+    resetCheatPanel();
+    setStatus("");
+    void initGameSelect();
+  } else {
+    document.getElementById("game-start").disabled = true;
+    if (state === "occupied" || state === "playing") hideGameSelect();
+    if (state === "occupied") setStatus("");
+    if (state === "connecting") setStatus("서버와 연결하는 중…");
+    if (state === "offline") setStatus("서버 연결을 기다리고 있습니다. 연결되면 자동으로 돌아옵니다.");
   }
 };
 
-// resumeStoredGame asks the freshly opened session for the parked game and puts
-// the page back the way it was. It answers whether the game came back.
-const resumeStoredGame = async () => {
-  const token = storedResumeToken();
-  if (!token) return false;
-  let answer;
-  try {
-    answer = await session.resume(token);
-  } catch (error) {
-    recordEvent(`session resume failed: ${error.message}`);
-    setStatus("서버 연결이 끊어졌습니다. 새로고침해서 다시 시작하세요.");
-    return false;
-  }
-  if (!answer?.started) {
-    rememberResumeToken("");
-    recordEvent("session could not be resumed");
-    setStatus(answer?.message || "이어서 진행할 게임이 없습니다. 새로고침해서 다시 시작하세요.");
-    return false;
-  }
-  currentPlatform = answer.started.platform ?? currentPlatform;
-  rememberResumeToken(answer.started.token ?? token);
-  document.getElementById("restart")?.classList.remove("hidden");
-  // The audio graph belongs to this page rather than to the game, so a page
-  // that came back has to build one again. A browser still holds it silent
-  // until a gesture, which the first key press supplies.
-  pageAudio?.ensure();
-  hideGameSelect();
-  // The speed setting lives in this page rather than in the parked game, so it
-  // is applied again on the way back in.
-  applyStoredSpeed();
-  sessionStarted(answer.started);
-  recordEvent("session resumed");
-  return true;
-};
-
-// initResumeOnReturn reconnects the moment the page is looked at again. A
-// backgrounded tab has its timers throttled to the point where a retry loop may
-// not run at all, so the event that says the phone is back is worth more than
-// any interval: it fires exactly when a reconnection can succeed.
 const initResumeOnReturn = () => {
-  const tryAgain = () => {
-    if (document.hidden || gameRunning || reconnecting) return;
-    if (!storedResumeToken()) return;
-    void reconnectSession();
-  };
-  document.addEventListener("visibilitychange", tryAgain);
-  window.addEventListener("online", tryAgain);
-  window.addEventListener("pageshow", tryAgain);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) void sessionLink.suspend();
+    else void sessionLink.wake();
+  });
+  window.addEventListener("online", () => { void sessionLink.wake(); });
+  window.addEventListener("pageshow", () => { void sessionLink.wake(); });
+  window.addEventListener("pagehide", () => sessionLink.leave());
+  document.getElementById("session-takeover")?.addEventListener("click", () => {
+    pageAudio?.ensure();
+    void sessionLink.wake(true);
+  });
 };
 
 // The server's own numbers, which are the only ones there are: the page is not
@@ -716,27 +624,21 @@ const recordSessionStats = stats => {
 // it, which is also why there is nothing to upload and nothing to preload:
 // saves are read and written on the same side as the emulator.
 const startServerGame = async (path, scale) => {
-  document.getElementById("restart")?.classList.remove("hidden");
-  // Starting a game is the user gesture browsers require before an
-  // AudioContext may run, so this is where the audio graph comes up.
   pageAudio?.ensure();
-  const answer = await session.start(path, scale, storedScreen(path));
-  currentPlatform = answer.started?.platform ?? "";
-  // The speed belongs to this game rather than to whatever the panel was
-  // showing before it started, and the socket was opened before any game was
-  // chosen — so the session hears it here, where the game is known.
-  applySpeed(storedSpeed(path));
-  // The token names this game while the page is away from it; keeping it is
-  // the whole of what a reconnect needs.
-  rememberResumeToken(answer.started?.token ?? "");
-  hideGameSelect();
-  sessionStarted(answer.started ?? {});
+  await sessionLink.start(path, scale, storedScreen(path));
 };
 
 // A session is running from here on: reveal the panels that only mean
 // something against a live game and say which platform answered.
 const sessionStarted = info => {
   gameRunning = true;
+  currentPlatform = info.platform ?? "";
+  currentGameLabel = info.name ?? "";
+  currentGamePath = info.game || lastGame() || "";
+  if (info.game) rememberGame(info.game);
+  applySpeed(storedSpeed(info.game || lastGame()));
+  pageAudio?.ensure();
+  hideGameSelect();
   canWatchWrites = info.can_watch === true;
   canTouch = info.can_touch === true;
   guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
@@ -810,7 +712,8 @@ const initGameSelect = async () => {
     }
 
     select.disabled = false;
-    startButton.disabled = false;
+    startButton.disabled = sessionLink?.state() !== "ready";
+    startButton.textContent = "실행";
     syncRemoveButton(document);
     if (startButton.dataset.started) return;
     startButton.dataset.started = "yes";
@@ -831,7 +734,7 @@ const initGameSelect = async () => {
       } catch (error) {
         reportEndingOrError(error);
         select.disabled = false;
-        startButton.disabled = false;
+        startButton.disabled = sessionLink?.state() !== "ready";
         startButton.textContent = "실행";
       }
     });
@@ -853,10 +756,7 @@ const initRestart = () => {
       confirmLabel: "다시 시작",
     });
     if (!restart) return;
-    // Restarting is the one reload that must not come back to the same game,
-    // so the token goes before the page does.
-    rememberResumeToken("");
-    location.reload();
+    try { await sessionLink.stop(); } catch (error) { reportError(error); }
   });
 };
 
@@ -1487,7 +1387,7 @@ const parseAddressInput = text => {
 
 // A saved cheat table names the game it was made against; the last started
 // archive is the best answer the page has.
-const currentGameName = () => (lastGame() ?? "").split("/").pop()?.replace(/\.(zip|jar)$/i, "") ?? "";
+const currentGameName = () => (currentGamePath || lastGame() || "").split("/").pop()?.replace(/\.(zip|jar)$/i, "") ?? "";
 
 const parseNumber = text => {
   const trimmed = text.trim();
@@ -1816,38 +1716,32 @@ const main = async () => {
   initVibrationSetting({ document, vibration });
   initKeyBindings();
 
-  session = await openSession();
-  if (!session) {
-    setStatus("서버 세션에 연결하지 못했습니다. 서버가 실행 중인지 확인하고 새로고침하세요.");
-    // Nothing said which build this is, so the page keeps the release face:
-    // the developer's parts are only ever shown on a debug server's word, and
-    // the capture behind them stops with them.
-    stopLogCapture();
-    initLogView(false);
-    initDebugLog(false);
-    return;
-  }
-  // Nothing registers a sink here: sound arrives as events over the socket and
-  // is played by the synthesiser in this page.
   pageAudio = new PageAudio();
-  recordEvent("server session opened");
-  applyStoredSpeed();
-  // Which build is running is the server's answer, given with "ready". The log
-  // rail and the report button belong to a debug run; a release is the same
-  // page without them.
-  const debugBuild = session.profile === "debug";
-  // A release keeps none of it: no rail to show the lines in, no button to
-  // write them out, and no route on the server to write them to, so the
-  // capture that has been running since load is taken back off here.
-  if (!debugBuild) stopLogCapture();
-  initLogView(debugBuild);
-  initDebugLog(debugBuild);
+  let profileWired = false;
+  sessionLink = createSessionLink({
+    confirmStart: message => askToConfirm({ document, message, confirmLabel: "종료하고 시작" }),
+    token: browserToken(localStore, sessionStore),
+    connect: openSession,
+    visible: () => !document.hidden,
+    onState: sessionStateChanged,
+    onConnection: connection => {
+      session = connection;
+      if (!connection || profileWired) return;
+      profileWired = true;
+      const debugBuild = connection.profile === "debug";
+      if (!debugBuild) stopLogCapture();
+      initLogView(debugBuild);
+      initDebugLog(debugBuild);
+    },
+    onStarted: sessionStarted,
+    onExited: reason => {
+      recordEvent(`session exited: ${reason}`);
+      setStatus("게임이 종료되었습니다. 목록에서 다시 실행할 수 있습니다.");
+    },
+  });
   initResumeOnReturn();
-  // A page that was already playing does not ask which game to start: the
-  // phone discarding and reloading it in the background is exactly the case
-  // the parked game is there for.
-  if (storedResumeToken() && (await resumeStoredGame())) return;
   await initGameSelect();
+  await sessionLink.wake();
 };
 
 void main();

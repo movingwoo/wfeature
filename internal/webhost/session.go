@@ -31,9 +31,8 @@ import (
 // one core, and a finished frame is small enough that a home network carries
 // twenty a second.
 //
-// One connection is one session. The connection closing ends the game, which
-// is the same rule the page already had — a reload was always a fresh session
-// — and it means nothing can outlive the thing that was watching it.
+// One connection owns control of at most one game. A game survives disconnects
+// in the server's retained set; another tab takes control only when requested.
 
 const (
 	// tickBudget is how much guest execution one pass covers. A service round
@@ -112,6 +111,8 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		server:     s,
 		connection: connection,
 		commands:   make(chan clientMessage, commandBuffer),
+		handoffs:   make(chan sessionHandoff),
+		done:       make(chan struct{}),
 		frames:     make(chan pendingFrame, 1),
 		outText:    make(chan outboundMessage, outboundBuffer),
 		outFrames:  make(chan outboundMessage, 1),
@@ -129,11 +130,18 @@ type pendingFrame struct {
 }
 
 type sessionRunner struct {
-	server     *Server
-	connection *wsproto.Conn
+	startApproval *startApproval
+	admitted      bool // Protected by Server.parkedMu.
+	server        *Server
+	connection    *wsproto.Conn
 
-	commands chan clientMessage
-	frames   chan pendingFrame
+	handoffs      chan sessionHandoff
+	done          chan struct{}
+	connectionCtx context.Context
+	heldKeys      map[int32]struct{}
+	heldPointer   *clientMessage
+	commands      chan clientMessage
+	frames        chan pendingFrame
 
 	// outText and outFrames are what the writer goroutine drains. They are
 	// separate because their backlogs mean opposite things. Text is small and
@@ -167,8 +175,7 @@ type sessionRunner struct {
 	// started is what the page was told when the game came up, kept so a page
 	// that reconnects can be told the same thing without the game restarting.
 	started startedMessage
-	// token names this game while its page is away; see resume.go. It is
-	// issued when a game starts and spent when one is resumed.
+	// token is the browser capability naming its current game; see resume.go.
 	token string
 
 	// gameCtx is the running game's own lifetime, and it is deliberately not
@@ -222,7 +229,9 @@ type sessionRunner struct {
 }
 
 func (r *sessionRunner) run(parent context.Context) {
+	defer close(r.done)
 	ctx, cancel := context.WithCancel(parent)
+	r.connectionCtx = ctx
 	defer cancel()
 
 	var waiting sync.WaitGroup
@@ -270,6 +279,11 @@ func (r *sessionRunner) readCommands(cancel context.CancelFunc) {
 		var message clientMessage
 		if err := decodeClientMessage(text, &message); err != nil {
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+			continue
+		}
+		// Liveness answers do not wait behind a long guest call.
+		if message.Kind == clientPing {
+			r.send(serverMessage{Kind: serverResult, ID: message.ID})
 			continue
 		}
 		select {
@@ -352,6 +366,8 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case handoff := <-r.handoffs:
+				r.handoff(handoff)
 			case message, ok := <-r.commands:
 				if !ok {
 					return
@@ -376,7 +392,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 
 		if err != nil {
 			r.endGame("the game failed: "+err.Error(), true)
-			r.send(serverMessage{Kind: serverError, Message: err.Error()})
+			r.send(serverMessage{Kind: serverError, Message: err.Error(), Exited: true})
 			continue
 		}
 		if progress.Exited {
@@ -443,6 +459,8 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
+		case handoff := <-r.handoffs:
+			r.handoff(handoff)
 		case message, ok := <-r.commands:
 			if !ok {
 				return
@@ -461,6 +479,8 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 	select {
 	case <-ctx.Done():
 	case <-timer.C:
+	case handoff := <-r.handoffs:
+		r.handoff(handoff)
 	case message, ok := <-r.commands:
 		if ok {
 			r.handle(ctx, message)
@@ -473,17 +493,36 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 	case clientStart:
 		r.startGame(ctx, message)
 	case clientResume:
-		r.resumeGame(message)
+		r.resumeGame(ctx, message)
+	case clientPark:
+		if r.game != nil {
+			r.park()
+		}
+		r.send(serverMessage{Kind: serverResult, ID: message.ID})
 	case clientKey:
 		if r.game == nil {
 			return
 		}
+		if message.Action == session.KeyPress && len(r.heldKeys) >= 64 {
+			if _, held := r.heldKeys[message.Code]; !held {
+				return
+			}
+		}
 		switch err := r.game.SendKey(r.gameCtx, message.Action, message.Code); {
 		case err == nil:
+			if message.Action == session.KeyPress {
+				if r.heldKeys == nil {
+					r.heldKeys = make(map[int32]struct{})
+				}
+				r.heldKeys[message.Code] = struct{}{}
+			} else if message.Action == session.KeyRelease {
+				delete(r.heldKeys, message.Code)
+			}
 		case errors.Is(err, session.ErrExited):
 			// A game that ends on a key press has ended, not failed.
-			r.endGame(endedByExit(r.game.ExitReason()), true)
-			r.send(serverMessage{Kind: serverExited, Message: r.game.ExitReason()})
+			reason := r.game.ExitReason()
+			r.endGame(endedByExit(reason), true)
+			r.send(serverMessage{Kind: serverExited, Message: reason})
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}
@@ -493,14 +532,21 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		}
 		switch err := r.game.SendPointer(r.gameCtx, message.Action, message.X, message.Y); {
 		case err == nil:
+			if message.Action == "release" {
+				r.heldPointer = nil
+			} else {
+				saved := message
+				r.heldPointer = &saved
+			}
 		case errors.Is(err, session.ErrNoPointer):
 			// The page was told at the start whether this game takes a touch,
 			// so one arriving here is a page that ignored the answer. It is
 			// dropped rather than reported: the alternative is an error rail
 			// filling up because somebody rested a thumb on the canvas.
 		case errors.Is(err, session.ErrExited):
-			r.endGame(endedByExit(r.game.ExitReason()), true)
-			r.send(serverMessage{Kind: serverExited, Message: r.game.ExitReason()})
+			reason := r.game.ExitReason()
+			r.endGame(endedByExit(reason), true)
+			r.send(serverMessage{Kind: serverExited, Message: reason})
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}
@@ -524,6 +570,9 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		// The numbers are kept even on a deliberate stop, so a report can be
 		// asked for once the game is off the screen.
 		r.endGame("the page stopped the game", false)
+		if message.ID != 0 {
+			r.send(serverMessage{Kind: serverResult, ID: message.ID})
+		}
 	default:
 		r.send(serverMessage{Kind: serverError, ID: message.ID,
 			Message: fmt.Sprintf("unknown message kind %q", message.Kind)})
@@ -543,7 +592,30 @@ func validScreen(width, height int) bool {
 }
 
 func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
+	if message.Token != "" && !validResumeToken(message.Token) {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid browser token"})
+		return
+	}
 	r.stopGame()
+	token := message.Token
+	if token == "" {
+		var err error
+		token, err = newResumeToken()
+		if err != nil {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "session token unavailable"})
+			return
+		}
+	}
+	if !r.server.reserveSession(token, r) {
+		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Occupied: true})
+		return
+	}
+	r.token = token
+	defer func() {
+		if r.game == nil {
+			r.stopGame()
+		}
+	}()
 
 	archive, label, err := r.server.readGameArchive(message.Game)
 	if err != nil {
@@ -574,10 +646,12 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 
 	// Two sessions on one save directory overwrite each other silently, so
 	// the directory is claimed before anything is started; see saveclaim.go.
+	if (message.Width != 0 || message.Height != 0) && !validScreen(message.Width, message.Height) {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid screen size"})
+		return
+	}
 	directory := r.server.saveDirectory(summary.Platform, summary.SaveOwner)
-	if claimed, holder := r.server.waitToClaimSaveDirectory(directory, label); !claimed {
-		r.send(serverMessage{Kind: serverError, ID: message.ID,
-			Message: fmt.Sprintf("다른 창에서 이미 실행 중입니다(%s). 그 창에서 게임을 멈추거나 창을 닫은 뒤 다시 시작하세요.", holder)})
+	if !r.admitStart(message, directory, label) {
 		return
 	}
 	r.saveDirectory = directory
@@ -648,16 +722,6 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		// for the trace can afford a stack walk every thousand instructions.
 		started.KTF().EnableProfile(0)
 	}
-	// The token travels with the game's identity because that is the moment
-	// there is something to come back to. A page that never hears one — a
-	// server whose randomness failed — simply cannot resume, which is the
-	// behaviour this had before parking existed.
-	if token, tokenErr := newResumeToken(); tokenErr == nil {
-		r.token = token
-	} else {
-		r.token = ""
-		r.server.logger.Warn("session resume token unavailable", "error", tokenErr)
-	}
 	// The size reported is the one the platform took rather than the one the
 	// page asked for: a platform may answer with a size of its own, and a page
 	// that laid out for a screen the game is not drawing has the picture in
@@ -667,6 +731,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner,
 		"screen", fmt.Sprintf("%dx%d", startedWidth, startedHeight))
 	r.started = startedMessage{
+		Game:      message.Game,
 		Platform:  summary.Platform,
 		AID:       summary.AID,
 		PID:       summary.PID,
@@ -700,6 +765,7 @@ func (r *sessionRunner) endGameContext() {
 // park hands the running game to the server to hold under this runner's token,
 // and forgets it here. The runner is about to end; the game is not.
 func (r *sessionRunner) park() {
+	r.releaseHeldInput()
 	game := r.game
 	r.game = nil
 	// The game is told before it is handed over. A handset suspended an
@@ -728,7 +794,6 @@ func (r *sessionRunner) park() {
 	}
 	// The game keeps its save directory while it waits, and a start that finds
 	// the claim parked may take it; see saveclaim.go.
-	r.server.markSaveDirectoryParked(r.saveDirectory, true)
 	r.server.parkSession(r.token, &parkedSession{
 		game:          game,
 		context:       r.gameCtx,
@@ -744,27 +809,58 @@ func (r *sessionRunner) park() {
 	// The context went with the game; this runner is not the one that ends it.
 	r.gameCtx, r.gameCancel = nil, nil
 	r.saveDirectory = ""
+	r.token = ""
 }
 
 // resumeGame adopts a game the server has been holding. The page that asks
 // already knows what it was playing, so the answer is the same `started` it
 // got the first time, followed by the picture the game had when its page left.
-func (r *sessionRunner) resumeGame(message clientMessage) {
-	parked, ok := r.server.resumeSession(message.Token)
+func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
+	if r.game != nil {
+		if r.token == message.Token {
+			identity := r.started
+			r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
+			r.pushFrame()
+		} else {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "stop the current game before resuming another"})
+		}
+		return
+	}
+	if owner := r.server.attachedSession(message.Token); owner != nil {
+		if !message.Takeover && (owner.connectionCtx == nil || owner.connectionCtx.Err() == nil) {
+			r.send(serverMessage{Kind: serverResumed, ID: message.ID, Occupied: true})
+			return
+		}
+		transferCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		request := sessionHandoff{token: message.Token, ctx: transferCtx, reply: make(chan struct{})}
+		select {
+		case owner.handoffs <- request:
+			select {
+			case <-request.reply:
+			case <-owner.done:
+			case <-transferCtx.Done():
+				r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "session handoff timed out; try again"})
+				return
+			}
+		case <-owner.done:
+		case <-transferCtx.Done():
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "session handoff timed out; try again"})
+			return
+		}
+	}
+	parked, ok := r.server.resumeSession(message.Token, r)
 	if !ok {
-		// An expired or unknown token is not an error the page can act on
+		// An evicted or unknown token is not an error the page can act on
 		// beyond forgetting it, and it is the ordinary case after a long
 		// absence, so it answers rather than fails.
 		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Resumed: false,
-			Message: "이어서 진행할 게임이 없습니다."})
+			Occupied: r.server.attachedSession(message.Token) != nil, Message: "이어서 진행할 게임이 없습니다."})
 		return
 	}
-	// Whatever this connection had is not what the page asked for.
-	r.stopGame()
 
 	r.game = parked.game
 	r.saveDirectory = parked.saveDirectory
-	r.server.markSaveDirectoryParked(r.saveDirectory, false)
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
 	r.label = parked.label
@@ -806,10 +902,12 @@ func (r *sessionRunner) resumeGame(message clientMessage) {
 }
 
 func (r *sessionRunner) stopGame() {
-	if r.game == nil {
-		return
+	r.server.releaseSession(r.token, r)
+	clear(r.heldKeys)
+	r.heldPointer = nil
+	if r.game != nil {
+		r.game.Close()
 	}
-	r.game.Close()
 	r.game = nil
 	r.server.releaseSaveDirectory(r.saveDirectory)
 	r.saveDirectory = ""
@@ -1378,4 +1476,37 @@ func (a *audioCollector) MIDISysEx(data []byte) {
 		return
 	}
 	a.append(audioEvent{Kind: audioSysEx, Data: base64.StdEncoding.EncodeToString(data)})
+}
+
+// Handoffs run between guest calls, never concurrently with a tick or input.
+type sessionHandoff struct {
+	token string
+	ctx   context.Context
+	reply chan struct{}
+}
+
+func (r *sessionRunner) handoff(request sessionHandoff) {
+	defer close(request.reply)
+	if request.ctx.Err() != nil || r.game == nil || r.token != request.token {
+		return
+	}
+	r.park()
+	r.send(serverMessage{Kind: serverDetached})
+}
+
+// The socket may disappear before keyup. Release at the last guest coordinates
+// while this runner still owns the game, before its pause callback runs.
+func (r *sessionRunner) releaseHeldInput() {
+	for code := range r.heldKeys {
+		if err := r.game.SendKey(r.gameCtx, session.KeyRelease, code); err != nil {
+			r.server.logger.Debug("releasing parked input failed", "error", err)
+		}
+	}
+	clear(r.heldKeys)
+	if point := r.heldPointer; point != nil {
+		if err := r.game.SendPointer(r.gameCtx, "release", point.X, point.Y); err != nil {
+			r.server.logger.Debug("releasing parked touch failed", "error", err)
+		}
+		r.heldPointer = nil
+	}
 }

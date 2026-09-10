@@ -1,7 +1,5 @@
 package webhost
 
-import "time"
-
 // One game, one save directory, one session.
 //
 // A save lives in a directory named by the archive, not by the page that
@@ -19,33 +17,20 @@ import "time"
 // the game is closed, and it travels with a game that is parked, because a
 // parked game still owns the files it will write when its page comes back.
 //
-// A **parked** holder is taken over instead of refusing. Nobody is watching a
-// parked game — it does not tick — and the person asking for it is here now,
-// so the parked game is closed and the new one starts. That costs the parked
-// game its resume window, which is the smaller loss: the alternative is a
-// player locked out of their own game for five minutes by a tab they already
-// closed.
+// WebSocket starts require explicit approval before closing a parked holder;
+// startapproval.go checks that approval and takes the claim atomically. The
+// helpers below retain takeover behavior for save restoration and internal
+// callers. Browser-token resumption keeps the existing game and its claim.
 //
 // The save API takes the same claim for the length of one write, which is what
 // puts it under this rule rather than beside it: a `PUT` into a directory a
 // game holds is refused instead of landing under a session that will write the
 // whole file back over it, and a game starting while a write is in flight
-// waits the write out inside the grace below. It is refused by a parked holder
+// is refused until the write finishes. It is refused by a parked holder
 // too, because nobody asked for it. A save import is a person asking, so it
 // takes a parked holder over the way a start does — see holdSaveDirectory. The native CLI is the one road
 // left unarbitrated — it is another process and this claim is in memory; see
 // "What is not solved" in `docs/session.md`.
-
-// claimGrace is how long a start waits for a claim it found held by a live
-// session. It is there for one sequence: a page that reloads — which the
-// restart button does, and a phone coming back from the app switcher may —
-// opens its new socket before the server has noticed the old one is gone, so
-// the game it is starting is still held by a session that is a moment away
-// from parking. Waiting that gap out is what keeps a page from being refused
-// by itself. A session that is genuinely playing is still playing when the
-// grace runs out, so this costs a real refusal a two second delay and nothing
-// else.
-const claimGrace = 2 * time.Second
 
 // saveClaim is one held save directory.
 type saveClaim struct {
@@ -55,22 +40,6 @@ type saveClaim struct {
 	// parked reports that the holder is waiting for its page rather than
 	// playing, which is what makes it takeable.
 	parked bool
-}
-
-// waitToClaimSaveDirectory takes a claim, waiting out a holder that is on its
-// way to parking; see claimGrace. It reports what claimSaveDirectory reports.
-func (s *Server) waitToClaimSaveDirectory(directory, label string) (bool, string) {
-	if directory == "" {
-		return true, ""
-	}
-	deadline := time.Now().Add(claimGrace)
-	for {
-		claimed, holder := s.claimSaveDirectory(directory, label)
-		if claimed || !time.Now().Before(deadline) {
-			return claimed, holder
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
 }
 
 // claimSaveDirectory takes the claim on a save directory for a game that is

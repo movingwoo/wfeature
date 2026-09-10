@@ -93,8 +93,7 @@ export const createSafeStorage = open => {
   };
 };
 
-// The two stores the page uses. `local` outlives the tab and holds settings;
-// `session` belongs to one tab and holds the resume token, which is what makes
-// a phone discarding and reloading the page keep its game.
+// Local storage holds settings and the browser capability shared by tabs.
+// Session storage is also read once to adopt an older page's resume token.
 export const local = createSafeStorage(() => globalThis.localStorage);
 export const session = createSafeStorage(() => globalThis.sessionStorage);
