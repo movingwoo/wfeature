@@ -10,6 +10,7 @@ import {
   defaults,
   label,
   metrics,
+  sizeRow,
 } from "./keypad-size.js";
 
 const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
@@ -275,6 +276,71 @@ test("applying writes the properties the stylesheet reads, and nothing else", ()
   assert.doesNotThrow(() => size.apply("type1", null));
 });
 
+// Enough of a document for a row: the element, its attributes, its children.
+// A stub rather than a browser because there is no browser here, and the thing
+// worth checking does not need one — whether a row is born showing its number.
+const stubDocument = () => ({
+  createElement: tag => ({
+    tag,
+    children: [],
+    attributes: {},
+    className: "",
+    textContent: "",
+    append(...nodes) {
+      this.children.push(...nodes);
+    },
+    addEventListener() {},
+  }),
+});
+
+test("a row is born showing its value, and does not wait to be told", () => {
+  // This is the defect it was written for. The rows used to be built after the
+  // only draw, so nothing set a thumb or a readout: every slider sat at
+  // whatever a range with no value renders at — its own midpoint, not the
+  // stored number — and every readout was blank until the first drag, which is
+  // the one thing that did call `show`. A value the row cannot be created
+  // without is what makes that unwritable.
+  const doc = stubDocument();
+  const split = metrics.find(metric => metric.name === "split");
+  const { row, slider } = sizeRow(split, 0.65, doc);
+  assert.equal(slider.value, "0.65", "the thumb was not put where the value is");
+  const [name, thumb, readout] = row.children;
+  assert.equal(name.textContent, split.label);
+  assert.equal(thumb, slider);
+  assert.equal(readout.textContent, "65%", "the readout is blank until something moves");
+  // The range the slider offers is the metric's own, or a stored value could
+  // sit somewhere the control cannot show.
+  assert.equal(slider.min, String(split.min));
+  assert.equal(slider.max, String(split.max));
+  assert.equal(slider.step, String(split.step));
+  assert.equal(slider.type, "range");
+  // The classes the stylesheet lays the row out with.
+  assert.deepEqual(
+    [row.className, name.className, readout.className],
+    ["keypad-size-row", "keypad-size-name", "keypad-size-value"],
+  );
+});
+
+test("a row shows what the value became, not what was asked for", () => {
+  // A number out of range, or between two steps, is clamped on the way in — and
+  // a control showing the request instead of the answer disagrees with the
+  // keypad beside it.
+  const doc = stubDocument();
+  const key = metrics.find(metric => metric.name === "key");
+  assert.equal(sizeRow(key, 4000, doc).slider.value, String(key.max));
+  assert.equal(sizeRow(key, undefined, doc).slider.value, String(key.value));
+  assert.equal(sizeRow(metrics.find(m => m.name === "split"), 0.333, doc).slider.value, "0.33");
+});
+
+test("every metric can be a row", () => {
+  const doc = stubDocument();
+  for (const metric of metrics) {
+    const { row, slider } = sizeRow(metric, metric.value, doc);
+    assert.equal(slider.value, String(metric.value), `${metric.name} does not show its default`);
+    assert.equal(row.children.length, 3, `${metric.name} is not a name, a slider and a number`);
+  }
+});
+
 test("the sliders are rows of the one keypad screen, built from this module's list", () => {
   // There were two panels, one for the size and one for the cells. They
   // answered halves of the same question and each shape wants its own answer to
@@ -310,4 +376,7 @@ test("the sliders are rows of the one keypad screen, built from this module's li
     "the keypad screen has sliders of its own in the markup",
   );
   assert.ok(app.includes("keypadSizeMetrics"), "app.js does not build the rows from the list");
+  // And it builds them through the row this module owns, which is what carries
+  // the value into the control rather than leaving that to a later call.
+  assert.match(app, /keypadSizeRow\(metric, size\.values\(layout\.shape\(\)\)\[metric\.name\]\)/);
 });

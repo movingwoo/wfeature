@@ -148,6 +148,50 @@ export const label = (name, value) => {
   return metric.unit === "px" ? `${value}px` : `${Math.round(value * 100)}%`;
 };
 
+// One slider row, already showing the value it is given.
+//
+// **The value is a parameter and not a later call, because a row that has to be
+// told separately is a row somebody can forget to tell** — and that is what
+// shipped: the rows were built after the only draw, so nothing ever set a
+// thumb or a readout. The thumbs sat wherever the browser puts a range with no
+// value (its own midpoint, not the stored number) and the readouts were blank
+// until the first drag, which is the one thing that did call `show`.
+//
+// The document is a parameter for the same reason the storage is: so a test can
+// hand it a stub and check that a row is born showing its number. The default
+// is evaluated at the call, not here, which is what keeps this importable
+// somewhere there is no document at all.
+export const sizeRow = (metric, initial, doc = globalThis.document) => {
+  const row = doc.createElement("label");
+  row.className = "keypad-size-row";
+
+  const name = doc.createElement("span");
+  name.className = "keypad-size-name";
+  name.textContent = metric.label;
+
+  const slider = doc.createElement("input");
+  slider.type = "range";
+  slider.min = String(metric.min);
+  slider.max = String(metric.max);
+  slider.step = String(metric.step);
+
+  const readout = doc.createElement("span");
+  readout.className = "keypad-size-value";
+
+  // The row is told what the setting *became* rather than what was asked for: a
+  // value out of range, or between two steps, is clamped on the way in, and a
+  // control showing the request instead of the answer disagrees with the keypad
+  // beside it.
+  const show = applied => {
+    slider.value = String(applied);
+    readout.textContent = label(metric.name, applied);
+  };
+  show(clampMetric(metric.name, initial));
+
+  row.append(name, slider, readout);
+  return { row, slider, show };
+};
+
 // createKeypadSize answers the object app.js drives, over whatever storage it
 // is given. The storage is a parameter so a test can hand it a map; the default
 // is the page's own fail-safe store, which never throws and keeps a value it

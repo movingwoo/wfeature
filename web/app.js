@@ -4,8 +4,8 @@ import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import {
   createKeypadSize,
-  label as keypadSizeLabel,
   metrics as keypadSizeMetrics,
+  sizeRow as keypadSizeRow,
 } from "./keypad-size.js";
 import {
   EDITED,
@@ -993,37 +993,17 @@ const initKeypad = () => {
   };
 
   // The sliders, from the list in keypad-size.js so the panel and the numbers
-  // cannot come to disagree about what there is to set. Each one is told what
-  // the setting *became* rather than what was asked for: a value out of range,
-  // or between two steps, is clamped on the way in, and a control showing the
-  // request instead of the answer disagrees with the keypad beside it.
+  // cannot come to disagree about what there is to set. Each row is built
+  // holding the value it is for — `sizeRow` takes it rather than waiting to be
+  // told — which is what stops a row from existing blank, and is where this
+  // went wrong once: the rows were made after the only `draw`, so nothing set a
+  // thumb or a readout until the first drag moved one.
   for (const metric of keypadSizeMetrics) {
-    const row = document.createElement("label");
-    row.className = "keypad-size-row";
-
-    const name = document.createElement("span");
-    name.className = "keypad-size-name";
-    name.textContent = metric.label;
-
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = String(metric.min);
-    slider.max = String(metric.max);
-    slider.step = String(metric.step);
-
-    const value = document.createElement("span");
-    value.className = "keypad-size-value";
-
-    const show = applied => {
-      slider.value = String(applied);
-      value.textContent = keypadSizeLabel(metric.name, applied);
-    };
+    const { row, slider, show } = keypadSizeRow(metric, size.values(layout.shape())[metric.name]);
     slider.addEventListener("input", () => {
       show(size.set(layout.shape(), metric.name, slider.value));
       size.apply(layout.shape());
     });
-
-    row.append(name, slider, value);
     sizeList.append(row);
     showSize.set(metric.name, show);
   }
