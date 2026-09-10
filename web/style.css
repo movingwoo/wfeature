@@ -41,9 +41,6 @@
      number pad. One number for the two, because they share one row: what one
      does not take the other does. */
   --keypad-split: 0.5;
-  /* The last row against the pad's own keys. * 0 # are pressed rarely and are
-     the first thing somebody wanting a bigger pad gives up. */
-  --keypad-footer-scale: 1;
   /* The size a key wants to be, and the smallest it will accept. A key does
      not grow past the first: past it a key is a large thing to press on a page
      with nothing else to press, and the screen is what the room is worth. */
@@ -66,17 +63,18 @@
      and stops here — so it is what lets the wider half of a changed split
      actually grow instead of collecting the room as whitespace. */
   --keypad-key-width: calc(var(--keypad-key-pref) * 4 / 3);
-  /* The space between the two pads, which is the thumb's way from one to the
-     other. It is a length rather than a share so that moving the split moves
-     the keys and not the distance between the halves. */
-  --keypad-main-gap: clamp(20px, 8vw, 56px);
-  /* The two row gaps inside the three-row pads, which are not between bands. */
-  --keypad-pad-rows: 16px;
-  /* The rows of keys the column has to find room for: the pads' three, plus the
-     footer at whatever size it has been given. The budget below counts in rows,
-     so a footer scaled to 1.4 has to be 1.4 rows here or the canvas is sized
-     against a keypad shorter than the one being drawn. */
-  --keypad-rows: calc(3 + var(--keypad-footer-scale));
+  /* The three row gaps inside the four-row pad, which are not between bands.
+     There were two when the row of * 0 # was a band of its own below the pads;
+     merging it in turned the band gap between them into the third of these, and
+     both are eight pixels — so this grew by exactly what --keypad-floor and
+     --keypad-slack below stopped counting, and the budget did not move. */
+  --keypad-pad-rows: 24px;
+  /* The rows of keys the column has to find room for. Four, flatly: the pad is
+     one grid and every row of it is a row of keys. It used to be
+     `3 + footer-scale`, because the row of * 0 # was a band below the pads with
+     a size of its own; merging it in at the same size is what makes this a
+     count again. */
+  --keypad-rows: 4;
   /* The last row of the page is the one that has to clear a gesture bar. */
   --keypad-chrome: calc(var(--keypad-bottom) + env(safe-area-inset-bottom, 0px));
   /* The first row of the page is the one that has to clear a status bar. A
@@ -92,7 +90,7 @@
   /* The screen is budgeted against the smallest keypad there can be, so that
      the pad is never pushed off the bottom; the pad then spends whatever the
      screen did not. */
-  --keypad-floor: calc(var(--keypad-band) + var(--keypad-gap-min) * 2
+  --keypad-floor: calc(var(--keypad-band) + var(--keypad-gap-min)
       + var(--keypad-key-min) * var(--keypad-rows) + var(--keypad-pad-rows)
       + var(--keypad-chrome));
   --canvas-width: min(100vw, 480px,
@@ -103,7 +101,7 @@
      given the size it wants. Positive on a phone, where the screen is capped
      by the width of the glass; negative in a window too short for both. */
   --keypad-slack: calc(var(--usable-height) - var(--canvas-height)
-      - var(--keypad-band) - var(--keypad-gap-min) * 2
+      - var(--keypad-band) - var(--keypad-gap-min)
       - var(--keypad-key-pref) * var(--keypad-rows) - var(--keypad-pad-rows)
       - var(--keypad-chrome));
 
@@ -201,8 +199,9 @@ body {
    the trade being shown rather than a layout going wrong.
 
    The page cannot scroll, so the panel scrolls: at the largest keypad there is
-   not much screen left to stand on. */
-.keypad-size {
+   not much screen left to stand on, and this one carries the shape list and the
+   cell picker as well. */
+.keypad-arrange {
   display: none;
   position: absolute;
   inset: 0;
@@ -222,8 +221,21 @@ body {
   touch-action: auto;
 }
 
-.keypad-size.visible {
+.keypad-arrange.visible {
   display: flex;
+}
+
+/* The shape list, above the sliders because it is the thing they belong to: a
+   size is one shape's, and changing the shape brings its own size back. */
+.keypad-arrange-shape {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.keypad-arrange-shape select {
+  flex: 1;
+  min-width: 0;
 }
 
 .keypad-size-list {
@@ -256,6 +268,75 @@ body {
   width: 3.5em;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* The keypad screen's own rows: the shape list, the size sliders, a line of
+   instruction, and the key list that replaces the instruction once a cell is
+   chosen. The pad itself is the rest of the editor and is below this panel,
+   not in it. */
+.keypad-arrange-hint {
+  margin: 0;
+  line-height: 1.4;
+  color: #cfd3d7;
+}
+
+/* A class rule beats the browser's own `[hidden] { display: none }` whatever
+   its specificity — author styles win over the user agent's — so the display
+   this sets has to be given back. The attribute is what the panel toggles from
+   script, because `el.hidden` is the one way to hide something that needs no
+   second name for the state. */
+.keypad-arrange-keys[hidden] {
+  display: none;
+}
+
+.keypad-arrange-keys {
+  display: grid;
+  /* Twenty keys, and the shortest is one character: a fixed column count would
+     make a 3.5em button for 확인 and the same for 5. */
+  grid-template-columns: repeat(auto-fill, minmax(3.2em, 1fr));
+  gap: 6px;
+}
+
+.keypad-arrange-keys button {
+  font: inherit;
+  padding: 8px 4px;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.keypad-arrange-keys button:hover {
+  background: #5c5c5c;
+}
+
+/* Emptying a cell is not one of the twenty, and it is not a key: it is the
+   thing the other nineteen are not, so it does not sit in the grid with them. */
+.keypad-arrange-keys button.keypad-arrange-clear {
+  grid-column: 1 / -1;
+  background: #3a3f44;
+}
+
+/* While the editor is open the pad is the editor: a press picks the cell rather
+   than sending its key, which app.js enforces, and the cells a shape left empty
+   are shown because that is where a key would go. */
+.button-container.arranging .keypad-cell {
+  cursor: pointer;
+}
+
+.button-container.arranging .keypad-cell.empty {
+  visibility: visible;
+  border: 1px dashed #7a828a;
+  background: transparent;
+  color: #7a828a;
+}
+
+/* Which cell the key list is for. An outline rather than a background: the
+   background is what says a key is being pressed, and nothing is. */
+.button-container.arranging .keypad-cell.picked {
+  outline: 2px solid #6cb6ff;
+  outline-offset: 1px;
 }
 
 .game-select,
@@ -345,14 +426,10 @@ body {
   opacity: 0.65;
 }
 
-/* Opts keeps this spot for the whole run and wears the browser's own button,
-   like CLR opposite it: it is one of the keypad's buttons rather than an icon
-   floating over the page. */
-.settings-toggle {
-  position: absolute;
-  top: 4px;
-  left: 8px;
-}
+/* Opts keeps the band's first column for the whole run and wears the same face
+   the rest of the keypad does: it is one of the keypad's buttons rather than an
+   icon floating over the page. It is placed by the band's grid, like every cell
+   beside it, which is why nothing here positions it. */
 
 .canvas-wrapper {
   position: relative;
@@ -500,9 +577,12 @@ body {
   display: grid;
   width: min(100vw, 480px);
   margin: 0 auto;
-  /* The top band is positioned over this padding rather than laid out in it,
-     so the padding is the band plus the first of the two flexible gaps. */
-  padding: calc(var(--keypad-band) + var(--keypad-gap)) 16px var(--keypad-chrome);
+  /* The band is a row of this grid now rather than three buttons positioned
+     over a padding that reserved room for them, so the padding no longer
+     carries it and the flexible gap between the band and the pad is the grid's
+     own. The arithmetic is the one it was — band + gap + the pad — which is why
+     --keypad-floor and --keypad-slack did not have to change. */
+  padding: 0 16px var(--keypad-chrome);
   gap: var(--keypad-gap);
   box-sizing: border-box;
 }
@@ -545,165 +625,152 @@ body {
    the row that was always there, and a band somebody shrinks takes the labels
    down with it instead of clipping them.
 
-   The four are named through the container so that the padding below beats the
-   one every keypad button gets: that rule is a class and a type, and would
+   They are named through the container so that the padding below beats the one
+   every keypad button gets: that rule is a class and a type, and would
    otherwise be the more specific of the two. */
 .button-container .settings-toggle,
-.button-container .clear-button,
-.button-container .menu-button,
-.button-container .call-button {
+.button-container .keypad-band-cell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   height: calc(var(--keypad-band) - 4px);
-  padding: 0 10px;
+  /* Two pixels rather than ten: the width is the column's now, and the padding
+     is what is left over for the label rather than what sets it. At the
+     narrowest phone the band's columns are 37.7 pixels and "Opts" wants about
+     thirty of them, which is the whole of the margin there is. */
+  padding: 0 2px;
+  /* A label too long for its column is clipped rather than allowed to widen the
+     cell, which on a grid would push every column after it out of line. */
+  overflow: hidden;
   font-size: min(1em, calc(var(--keypad-band) * 0.5));
 }
 
-.clear-button {
-  position: absolute;
-  top: 4px;
-  right: 8px;
-}
+/* The band: the pad's seven columns, above the pad. Opts is the first and the
+   six after it are cells. The gap is the pad's own so the columns line up, and
+   the row is the band's height, which is a setting.
 
-/* The top row runs Opts, Menu, Call, CLR. Menu sits left of centre rather than
-   on it so the send key has the space between the two, which keeps both ends of
-   the row where a thumb already looks for them. */
-.menu-button {
-  position: absolute;
-  top: 4px;
-  left: 50%;
-  transform: translateX(calc(-50% - 34px));
-}
+   It is a grid of its own rather than the pad's first row because the drag rule
+   tells them apart — a finger crossing the pad presses what it crosses, and up
+   here it aims at one key at a time. `initInput` reads that off which element a
+   button sits in. */
+/* The band and the pad are the same seven columns, and the columns are declared
+   once for both. They have to be: the two are grid items of one single-column
+   container, so they are the same width, and a template written twice is two
+   places for a moved split to disagree — which it did, the band holding seven
+   equal columns while the pad's shifted, so every column but the middle went out
+   of line the moment the setting moved off its default.
 
-.call-button {
-  position: absolute;
-  top: 4px;
-  left: 50%;
-  transform: translateX(calc(-50% + 42px));
-}
+   The columns are not seven equal shares, because the size setting's left/right
+   share has to mean something: the middle column takes the wider side's width
+   and the two sides divide the rest by that share, normalised by their own total
+   — three of each side plus the one the middle took, which is `3 + max(share)`
+   — so they always fill the track exactly. At the shipped 0.5 every column is a
+   seventh, which is the keypad this page draws.
 
-.keypad-main {
+   Percentages inside `calc()` resolve against each element's own content box and
+   `fr` may not appear there at all, which is why the track is the width less its
+   six column gaps, worked out before it is divided. Dividing a length by a
+   number a variable holds is the same construct --keypad-key-height is built on. */
+/* What the band and the pad do share: they are grids of the same seven columns
+   with the same gap between them, so a cell of one sits over a cell of the
+   other. What they do not share is how those columns are *sized* — see each
+   rule below, and the paragraph about the split. */
+.keypad-band,
+.keypad-pad {
+  --keypad-cell-gap: 4px;
+  --keypad-track: calc(100% - 6 * var(--keypad-cell-gap));
   display: grid;
-  /* Not two `1fr` columns: the split is a setting, and `fr` may not appear
-     inside `calc()`. Percentages resolve against this element's content box,
-     which is the row less the gap between the pads, so the pair below is the
-     same two halves at the default 0.5 and the same total at every other
-     value. */
-  grid-template-columns:
-      calc((100% - var(--keypad-main-gap)) * var(--keypad-split))
-      calc((100% - var(--keypad-main-gap)) * (1 - var(--keypad-split)));
-  gap: var(--keypad-main-gap);
-}
-
-/* The rows are the key's own height rather than auto: a layout that leaves a
-   row of the number pad empty — Type3 takes both of its top keys away — would
-   otherwise collapse that row to nothing and slide the pad up out of line with
-   the direction pad beside it. */
-.direction-pad,
-.number-pad {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  /* The rows stay the full key height on both sides whatever the split is, so
-     the two pads keep reading as one row of three: it is the key inside the row
-     that shrinks, centred in it, rather than the row. Making the row shrink too
-     would slide one pad up out of line with the other for no gain — the room is
-     the screen's already, budgeted above. */
-  grid-template-rows: repeat(3, var(--keypad-key-height));
-  /* A key narrowed by the split gets shorter with it. Width alone would leave
-     the direction pad as three tall slivers, which is a worse target than the
-     smaller square this gives and not what "make that side smaller" means. The
-     factor is 1 at and above an even split, because a key does not grow past
-     the size a thumb wants — the same rule --keypad-key-pref states. */
-  --keypad-pad-key-height: calc(
-      var(--keypad-key-height) * min(1, var(--keypad-pad-share) / 0.5));
+  column-gap: var(--keypad-cell-gap);
   align-items: center;
   justify-items: center;
-  gap: 8px 4px;
 }
 
-.direction-pad {
-  --keypad-pad-share: var(--keypad-split);
+/* The band: seven equal columns, at the height that is a setting.
+
+   **Equal, and deliberately not the split's.** The left/right share is about
+   which thumb gets the bigger keys, and the keys up here have no hand: 메뉴,
+   통화 and CLR are aimed at one at a time from wherever the thumb happens to
+   be. Tilting them would buy nothing and cost the row its even spacing. The
+   consequence is that the band's columns stop lining up with the pad's once the
+   setting leaves 0.5, and that is the accepted price rather than an oversight —
+   it was made to follow the split once and taken back out.
+
+   It is a grid of its own rather than the pad's first row for a different
+   reason: the drag rule tells them apart. A finger crossing the pad presses
+   what it crosses, and up here it aims at one key at a time, which `initInput`
+   reads off which element a button sits in. */
+.keypad-band {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  height: var(--keypad-band);
 }
 
-.number-pad {
-  --keypad-pad-share: calc(1 - var(--keypad-split));
+/* The pad: seven columns the size setting's left/right share divides.
+
+   The columns are not seven equal shares, because that share has to mean
+   something: the middle column takes the wider side's width and the two sides
+   divide the rest by the share, normalised by their own total — three of each
+   side plus the one the middle took, which is `3 + max(share)` — so they always
+   fill the track exactly. At the shipped 0.5 every column is a seventh, which
+   is the keypad this page draws and the one place the band lines up with it.
+
+   Percentages inside `calc()` resolve against this element's own content box
+   and `fr` may not appear there at all, which is why the track is the width
+   less its six column gaps, worked out before it is divided. Dividing a length
+   by a number a variable holds is the same construct --keypad-key-height is
+   built on. */
+.keypad-pad {
+  --keypad-share-left: var(--keypad-split);
+  --keypad-share-right: calc(1 - var(--keypad-split));
+  --keypad-share-mid: max(var(--keypad-share-left), var(--keypad-share-right));
+  --keypad-share-total: calc(3 + var(--keypad-share-mid));
+  --keypad-column-unit: calc(var(--keypad-track) / var(--keypad-share-total));
+  grid-template-columns:
+      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-left)))
+      calc(var(--keypad-column-unit) * var(--keypad-share-mid))
+      repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-right)));
+  /* The rows are fixed heights rather than auto for the reason the empty cell
+     below states: a row whose cells are all empty has to keep its place instead
+     of collapsing and sliding the rest of the pad up. */
+  grid-template-rows: repeat(4, var(--keypad-key-height));
+  /* The row gap is the one the band between the pad and the old last row used
+     to be. They are the same eight pixels, which is why merging the two cost
+     the height budget nothing. */
+  row-gap: 8px;
 }
 
-.type2-direction-pad,
-.type2-only,
-.type3-only {
-  display: none;
+/* A cell with no key in it. This is what the shapes are made of — the shipped
+   one leaves sixteen of the twenty-eight empty — and it replaces the four rules
+   that used to show and hide whole blocks of markup per shape.
+
+   **`visibility` and not `display`, and the grid is why.** The cells are placed
+   by auto-flow in the order the markup emits them, so a cell taken out of the
+   layout is not a hole: every cell after it moves up one, and the pad is
+   scrambled from the first empty one onwards. Hidden this way the box keeps its
+   place and is still not drawn, not hit-tested, and not read out — which for a
+   grid of fixed cells is what an empty cell *is*.
+
+   The rows are fixed heights for the same family of reason, stated where they
+   are declared: a row of empty cells keeps its height rather than collapsing
+   and sliding the rest of the pad up. */
+.keypad-cell.empty {
+  visibility: hidden;
 }
 
-.button-container[data-layout="type2"] .type1-direction-pad {
-  display: none;
-}
+/* A key takes its column and stops at the cap, which is what turns a share of
+   the row into a bigger key rather than into whitespace around the same one.
+   The height is the row's, which the grid has already made the right one.
 
-.button-container[data-layout="type2"] .type2-direction-pad {
-  display: grid;
-}
-
-.button-container[data-layout="type2"] .type2-only {
-  display: block;
-}
-
-/* Type3 keeps the Type1 direction pad and fills the corners of its top row
-   with the 1 and 3 the number pad hands over. */
-.button-container[data-layout="type3"] .type3-only {
-  display: block;
-}
-
-.button-container[data-layout="type3"] .type3-hidden {
-  display: none;
-}
-
-.key-up,
-.key-top-left,
-.key-top-right {
-  grid-row: 1;
-}
-
-.key-left,
-.key-right,
-.key-center {
-  grid-row: 2;
-}
-
-.key-down,
-.key-bottom-left,
-.key-bottom-right {
-  grid-row: 3;
-}
-
-.key-up,
-.key-down,
-.key-center {
-  grid-column: 2;
-}
-
-.key-left,
-.key-top-left,
-.key-bottom-left {
-  grid-column: 1;
-}
-
-.key-right,
-.key-top-right,
-.key-bottom-right {
-  grid-column: 3;
-}
-
-.keypad-footer {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-}
-
-.keypad-main button,
-.keypad-footer button {
+   A key narrowed by the split no longer gets shorter with it, as it did when
+   the two pads each had a height of their own. On a grid the row is shared, and
+   a row that shrank for one side would slide the other out of line with it —
+   which is the thing the old rule was avoiding in the first place. A narrowed
+   key is a narrower key now. */
+.keypad-pad button {
   min-width: 0;
   margin: 0;
+  width: min(100%, var(--keypad-key-width));
+  height: 100%;
   font-size: 1em;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
@@ -712,17 +779,6 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* A key takes its column and stops at the cap, which is what turns a share of
-   the row into a bigger key rather than into whitespace around the same one. */
-.keypad-main button {
-  width: min(100%, var(--keypad-key-width));
-  height: var(--keypad-pad-key-height);
-}
-
-.keypad-footer button {
-  width: min(100%, calc(var(--keypad-key-width) * var(--keypad-footer-scale)));
-  height: calc(var(--keypad-key-height) * var(--keypad-footer-scale));
-}
 
 /* The status line used to sit in the column between the screen and the keypad,
    which meant a message arriving pushed the keypad down — under the fold on a
@@ -865,13 +921,6 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 }
 
 @media (max-width: 480px) {
-  .settings-toggle,
-  .clear-button,
-  .menu-button,
-  .call-button {
-    top: 0;
-  }
-
   .cheat-list {
     max-height: 120px;
   }
@@ -879,7 +928,7 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 
 /* These live inside a panel; the top bar has no free corner. */
 .settings-panel .panel-button,
-.keypad-size .panel-button {
+.keypad-arrange .panel-button {
   font: inherit;
   margin-top: 2px;
   padding: 8px 10px;
@@ -892,7 +941,7 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 }
 
 .settings-panel .panel-button:hover,
-.keypad-size .panel-button:hover {
+.keypad-arrange .panel-button:hover {
   background: #5c5c5c;
 }
 
@@ -976,6 +1025,17 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 /* A settings note says what a setting will and will not do to the game that is
    running. It sits under its own control rather than in a status line, because
    what it is about is that control. */
+/* Hidden when there is nothing to say, and this rule is why the page has one
+   per element: `.hidden` is a convention rather than a rule of its own, so a
+   class carrying it does nothing until somebody writes the pair. Without this
+   the note was an empty <p> that still laid out — a flex item with margins,
+   collecting the panel's gap at both ends, which is twenty-six pixels of gap
+   between the setting above it and the one below. `markup.test.mjs` compares
+   the two lists now. */
+.settings-note.hidden {
+  display: none;
+}
+
 .settings-note {
   margin: 2px 0 8px;
   color: #f0c674;

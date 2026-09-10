@@ -4,9 +4,17 @@ import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import {
   createKeypadSize,
-  label as keypadSizeLabel,
   metrics as keypadSizeMetrics,
+  sizeRow as keypadSizeRow,
 } from "./keypad-size.js";
+import {
+  createKeypadLayout,
+  isShape as isKeypadShape,
+  assignable as keypadAssignable,
+  keyFace as keypadKeyFace,
+  regionLabel as keypadRegionLabel,
+  cells as keypadCells,
+} from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
@@ -281,16 +289,25 @@ const sendKey = (eventType, name) => {
 };
 
 const initInput = () => {
-  // A key can be printed on more than one button — the type-2 layout keeps the
-  // digits the type-1 direction pad uses, and type 3 prints 1 and 3 on the
-  // direction pad as well — so lighting a key lights every button carrying it,
-  // of which at most one is on screen.
+  // A key can be printed on more than one button — the shipped type3 puts 1 and
+  // 3 on the direction pad while the number pad keeps them, and the editor lets
+  // anybody do the same to any key — so lighting a key lights every button
+  // carrying it.
+  //
+  // It is a list rather than a table because the layout moves: the cells carry
+  // no key until `applyKeypadKeys` has run, and every later edit makes the
+  // previous listing wrong. That function calls this one, which is the whole of
+  // the arrangement.
   const buttonsByKey = new Map();
-  for (const button of document.querySelectorAll("button[data-key]")) {
-    const named = buttonsByKey.get(button.dataset.key) ?? [];
-    named.push(button);
-    buttonsByKey.set(button.dataset.key, named);
-  }
+  relistKeypadButtons = () => {
+    buttonsByKey.clear();
+    for (const button of document.querySelectorAll("button[data-key]")) {
+      const named = buttonsByKey.get(button.dataset.key) ?? [];
+      named.push(button);
+      buttonsByKey.set(button.dataset.key, named);
+    }
+  };
+  relistKeypadButtons();
 
   // A phone has no hover and the keypad is drawn rather than native, so this
   // class is the whole of the answer a finger gets. It is held for exactly as
@@ -315,15 +332,20 @@ const initInput = () => {
   const isTextEntry = target =>
     target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "SELECT");
 
-  // The pad is what a finger slides across: the two key blocks and the row of
-  // *, 0 and # under them. The keypad's top row is not part of it. Opts, the
-  // layout toggle, Call and CLR are aimed at one at a time — a slide that woke
-  // one of them on its way past would be a surprise, and CLR in the middle of a
-  // game is an expensive one — so they are pressed the way every button here
-  // was before sliding: held until the finger lifts, wherever it wanders.
+  // The pad is what a finger slides across: one grid of cells, the row of
+  // * 0 # among them. The band above it is not part of it — Opts and whatever
+  // the band's three cells hold are aimed at one at a time, because a slide
+  // that woke one of them on its way past would be a surprise and CLR in the
+  // middle of a game is an expensive one, so they are pressed the way every
+  // button here was before sliding: held until the finger lifts, wherever it
+  // wanders.
+  //
+  // It used to name two elements, the pads and the row below them. Merging
+  // those into one grid is why it names one — and the rule did not change with
+  // it, because that row was already inside the region a slide runs through.
   const padKey = element => {
     const button = element?.closest?.("button[data-key]");
-    return button?.closest(".keypad-main, .keypad-footer") ? button.dataset.key : null;
+    return button?.closest(".keypad-pad") ? button.dataset.key : null;
   };
 
   // Where a slide may begin. A finger that goes down on the screen or in the
@@ -374,6 +396,18 @@ const initInput = () => {
   // arrives from the screen or the margin is the same finger.
   document.addEventListener("pointerdown", event => {
     const target = event.target instanceof Element ? event.target : null;
+    // While the pad is being edited it is the editor: a press on a cell picks
+    // it, and nothing on the page sends a key or starts a slide. The panel's
+    // own buttons are not cells and are left to their click handlers, which is
+    // why this returns without preventing the default for them.
+    if (keypadArranging) {
+      const cell = target?.closest("button[data-cell]");
+      if (cell) {
+        event.preventDefault();
+        pickKeypadCell(cell.dataset.cell);
+      }
+      return;
+    }
     if (touchesTheGame(target) && touch.down(event.pointerId, touchPoint(event))) {
       // The canvas keeps the moves and the release once the finger leaves it,
       // for the same reason a key button does — and without it a drag off the
@@ -449,6 +483,10 @@ const initInput = () => {
 
   document.addEventListener("keydown", event => {
     if (isTextEntry(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+    // The pad being edited is the pad not being played, whichever way a key
+    // arrives. What the keyboard sends is a different panel's setting and is
+    // not what this editor moves, so nothing here is a way to change it.
+    if (keypadArranging) return;
     // A key arriving at all is the proof that there is a keyboard, which is
     // what puts the key settings in the panel.
     noticeKeyboard();
@@ -828,101 +866,238 @@ const initRestart = () => {
 // three rather than making the next one be discovered, and the choice is
 // remembered — a cycle one press away could be redone at a glance, and a panel
 // that has to be opened cannot.
-const KEYPAD_LAYOUTS = ["type1", "type2", "type3"];
-const KEYPAD_LAYOUT_KEY = "wfeature:keypadLayout";
+// Which key is in which cell of the keypad, and the editor that moves them.
+//
+// The three shapes are shipped in one table now — keypad-layout.js has the
+// table and the reasoning — so this is what puts a table on the page: a cell
+// takes its key's name, its face and its accessible name, or it takes none and
+// is hidden. Nothing else on the page knows a shape: `initInput` reads
+// `data-key` off whatever is there, which is why it has to be told to look
+// again whenever this runs.
+//
+// The editor is the pad. While it is open the pad sends nothing and a press
+// picks that cell, which is the one thing the settings panel could not do —
+// it is a modal over the keypad on a phone, so a cell chosen there would be
+// chosen blind.
 
-const storedKeypadLayout = () => {
-  const stored = localStore.getItem(KEYPAD_LAYOUT_KEY);
-  return KEYPAD_LAYOUTS.includes(stored) ? stored : "";
+// Whether the pad is being edited rather than played. The pointer and keyboard
+// handlers read it: a keypad that both edited and played would send the key it
+// was being asked to replace.
+let keypadArranging = false;
+
+// Set by initInput, which owns the map from key name to the buttons carrying
+// it. A layout change makes that map wrong, and nothing at runtime would say
+// so — a stale entry lights a button that no longer holds the key.
+let relistKeypadButtons = () => {};
+
+const applyKeypadKeys = table => {
+  for (const button of document.querySelectorAll("button[data-cell]")) {
+    const name = table[button.dataset.cell] ?? "";
+    if (!name) {
+      // No key, so no data-key: `padKey` and the pointer handler both look for
+      // that attribute, and an empty cell has to be a button that sends
+      // nothing rather than one that sends "".
+      delete button.dataset.key;
+      // Visible only while the editor is open, where it is the invitation.
+      button.textContent = "＋";
+      button.removeAttribute("aria-label");
+      button.classList.add("empty");
+      continue;
+    }
+    button.dataset.key = name;
+    button.textContent = keypadKeyFace(name);
+    // The face is what fits on the button and the label is what the key is
+    // called; where they differ the second is the accessible name, and where
+    // they agree an aria-label would only repeat the text.
+    const spoken = keyLabel(name);
+    if (spoken === button.textContent) button.removeAttribute("aria-label");
+    else button.setAttribute("aria-label", spoken);
+    button.classList.remove("empty");
+  }
+  relistKeypadButtons();
 };
 
-const initKeypadLayout = () => {
+// initKeypad is the whole of it: the shape, its size, and its cells, on one
+// screen, because each shape keeps its own answer to all three and setting one
+// of them is setting that shape's keypad.
+//
+// The size half used to be a panel of its own. It answered "how much room does
+// the pad get" while the shape list answered "what is on it", and the two were
+// in different places — so changing a keypad meant remembering which of them
+// held the control. They are stored per shape now, together, and reset
+// together: one button, because two would leave a person wondering which half
+// had moved.
+const initKeypad = () => {
   const container = document.querySelector(".button-container");
-  const select = document.getElementById("keypad-layout");
-  if (!container || !select) return;
+  // Every shape list on the page, and there are two: one on the keypad screen
+  // beside the sliders and the cells, and one in the settings panel where it
+  // can be reached without opening anything. Neither is the one that counts —
+  // the stored value is — so a change at either is the same call and both are
+  // redrawn from it afterwards. On a wide window the rail is docked and both
+  // are visible at once, which is where a stale one would show.
+  const shapeLists = [...document.querySelectorAll(".keypad-shape-list")];
+  // What each option is called before anything is said about it. An edited pad
+  // is said on the option itself — see `draw` — so the name it goes back to has
+  // to be remembered, and the markup is where it is authored.
+  const shapeNames = new Map();
+  for (const list of shapeLists) {
+    for (const option of list.options) shapeNames.set(option, option.textContent);
+  }
+  const panel = document.getElementById("keypad-arrange");
+  const open = document.getElementById("keypad-arrange-open");
+  const hint = document.getElementById("keypad-arrange-hint");
+  const keyList = document.getElementById("keypad-arrange-keys");
+  const sizeList = document.getElementById("keypad-size-list");
+  const layout = createKeypadLayout(localStore);
+  const size = createKeypadSize();
 
-  const apply = layout => {
-    container.dataset.layout = layout;
-    select.value = layout;
+  // The stored keypad is drawn whether or not the panel could be found: a page
+  // that lost the markup is still the keypad the person chose, and one that
+  // silently went back to its default would look like the setting had not been
+  // saved.
+  const showSize = new Map();
+  const draw = () => {
+    applyKeypadKeys(layout.keys());
+    size.apply(layout.shape());
+    // **An edited pad says so on the name of the shape it started from**, and
+    // not as an entry of its own in the list. It was one — hidden until a cell
+    // moved and then revealed — and that was wrong twice over: `hidden` on an
+    // `<option>` is honoured by some browsers and ignored by others, so it
+    // showed on Safari and in the app's WebView; and an entry nobody can
+    // usefully choose is a question rather than an answer, which is what it got
+    // asked. Four shapes, four options, and the chosen one carries the truth.
+    const edited = layout.edited();
+    for (const [option, name] of shapeNames) {
+      const mine = option.value === layout.shape();
+      option.textContent = mine && edited ? `${name} (수정됨)` : name;
+    }
+    for (const list of shapeLists) list.value = layout.shape();
+    const values = size.values(layout.shape());
+    for (const [name, show] of showSize) show(values[name]);
+  };
+  draw();
+  if (!container || !panel || !open || !hint || !keyList || !sizeList) return;
+
+  const cellById = new Map(keypadCells.map(cell => [cell.id, cell]));
+  let picked = "";
+
+  // Where the chosen cell is, in the words a person looking at the pad has.
+  // "키패드" is no help when the pad is twenty-eight cells; the row and the
+  // column are, and the band has three positions rather than a grid.
+  const whereIs = id => {
+    const cell = cellById.get(id);
+    if (!cell) return "";
+    // Both regions are columns of the same seven now, so both are named the
+    // same way: the band is the row above and has no row number to give.
+    if (cell.region === "band") return `${keypadRegionLabel.band} ${cell.column}열`;
+    return `${cell.row}행 ${cell.column}열`;
   };
 
-  const declared = KEYPAD_LAYOUTS.includes(container.dataset.layout)
-    ? container.dataset.layout
-    : KEYPAD_LAYOUTS[0];
-  apply(storedKeypadLayout() || declared);
-  select.addEventListener("change", () => {
-    const layout = KEYPAD_LAYOUTS.includes(select.value) ? select.value : KEYPAD_LAYOUTS[0];
-    apply(layout);
-    localStore.setItem(KEYPAD_LAYOUT_KEY, layout);
-  });
-};
+  const showPicked = () => {
+    for (const button of container.querySelectorAll("button[data-cell]")) {
+      button.classList.toggle("picked", button.dataset.cell === picked);
+    }
+  };
 
-// How big the keypad is. The layout above says which keys are drawn and this
-// says how much room they get, which is the half that cannot be answered once
-// for everybody: a phone held in one hand wants the direction pad big and under
-// the thumb holding it, and one held in two wants the halves even.
-//
-// The panel is a screen of its own over the canvas rather than rows in the
-// settings panel, because that panel is a centred modal on a phone and covers
-// the keypad these sliders move. Here the pad stays under a thumb and answers
-// every drag, and the screen the panel is drawn on is the room the pad is
-// taking — so the trade is on screen rather than described.
-const initKeypadSize = () => {
-  const panel = document.getElementById("keypad-size");
-  const list = document.getElementById("keypad-size-list");
-  const open = document.getElementById("keypad-size-open");
-  const size = createKeypadSize();
-  // The stored size is applied whether or not the panel could be found: a page
-  // that lost the markup is still the keypad the person chose, and a keypad
-  // that silently went back to its default would look like the setting had not
-  // been saved.
-  size.apply();
-  if (!panel || !list || !open) return;
+  const showHint = () => {
+    hint.textContent = picked
+      ? `${whereIs(picked)} — 넣을 키를 고르세요.`
+      : "키패드에서 칸을 눌러 원하는 키로 변경합니다.";
+  };
 
-  const rows = new Map();
+  // The sliders, from the list in keypad-size.js so the panel and the numbers
+  // cannot come to disagree about what there is to set. Each row is built
+  // holding the value it is for — `sizeRow` takes it rather than waiting to be
+  // told — which is what stops a row from existing blank, and is where this
+  // went wrong once: the rows were made after the only `draw`, so nothing set a
+  // thumb or a readout until the first drag moved one.
   for (const metric of keypadSizeMetrics) {
-    const row = document.createElement("label");
-    row.className = "keypad-size-row";
-
-    const name = document.createElement("span");
-    name.className = "keypad-size-name";
-    name.textContent = metric.label;
-
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = String(metric.min);
-    slider.max = String(metric.max);
-    slider.step = String(metric.step);
-
-    const value = document.createElement("span");
-    value.className = "keypad-size-value";
-
-    // The slider is told what the setting became rather than what was asked
-    // for: a value out of range, or between two steps, is clamped on the way
-    // in, and a control showing the request instead of the answer is a control
-    // that disagrees with the keypad beside it.
-    const show = applied => {
-      slider.value = String(applied);
-      value.textContent = keypadSizeLabel(metric.name, applied);
-    };
+    const { row, slider, show } = keypadSizeRow(metric, size.values(layout.shape())[metric.name]);
     slider.addEventListener("input", () => {
-      show(size.set(metric.name, slider.value));
-      size.apply();
+      show(size.set(layout.shape(), metric.name, slider.value));
+      size.apply(layout.shape());
     });
-
-    show(size.values()[metric.name]);
-    row.append(name, slider, value);
-    list.append(row);
-    rows.set(metric.name, show);
+    sizeList.append(row);
+    showSize.set(metric.name, show);
   }
 
-  document.getElementById("keypad-size-reset")?.addEventListener("click", () => {
-    const values = size.reset();
-    for (const [name, show] of rows) show(values[name]);
-    size.apply();
+  // The key list is built once and shown per cell: twenty buttons and a clear,
+  // and which cell they act on is `picked` rather than anything about the list.
+  for (const name of keypadAssignable) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = keypadKeyFace(name);
+    const spoken = keyLabel(name);
+    if (spoken !== button.textContent) button.setAttribute("aria-label", spoken);
+    button.addEventListener("click", () => {
+      if (!picked) return;
+      layout.set(picked, name);
+      draw();
+      showPicked();
+    });
+    keyList.append(button);
+  }
+  const empty = document.createElement("button");
+  empty.type = "button";
+  empty.className = "keypad-arrange-clear";
+  empty.textContent = "이 칸 비우기";
+  empty.addEventListener("click", () => {
+    if (!picked) return;
+    layout.set(picked, "");
+    draw();
+    showPicked();
+  });
+  keyList.append(empty);
+
+  for (const list of shapeLists) {
+    list.addEventListener("change", () => {
+      // A list only ever holds shapes now, so this guard is about a value the
+      // page did not put there rather than about an entry of its own. Choosing
+      // the shape already chosen fires no change at all — the value has not
+      // moved — which is why going back to a shape's shipped cells is the reset
+      // button's job and not a second meaning for the list.
+      if (isKeypadShape(list.value)) layout.useShape(list.value);
+      picked = "";
+      keyList.hidden = true;
+      draw();
+      showPicked();
+      showHint();
+    });
+  }
+
+  // One button for both halves of one shape. It forgets the edit rather than
+  // storing the shipped cells, so a shape whose default changes in a later
+  // build changes for the person who never edited it.
+  document.getElementById("keypad-arrange-reset")?.addEventListener("click", () => {
+    layout.reset();
+    size.reset(layout.shape());
+    picked = "";
+    keyList.hidden = true;
+    draw();
+    showPicked();
+    showHint();
   });
 
-  const visible = on => panel.classList.toggle("visible", on);
+  // What the pointer handler calls when a cell is pressed while this is open.
+  pickKeypadCell = id => {
+    picked = cellById.has(id) ? id : "";
+    keyList.hidden = !picked;
+    showPicked();
+    showHint();
+  };
+
+  const visible = on => {
+    keypadArranging = on;
+    container.classList.toggle("arranging", on);
+    panel.classList.toggle("visible", on);
+    if (!on) {
+      picked = "";
+      keyList.hidden = true;
+      showPicked();
+    }
+    showHint();
+  };
+
   open.addEventListener("click", () => {
     // On a narrow window the settings panel is the modal over the keypad, so
     // it goes; docked in the rail it is part of the page and closing it would
@@ -932,8 +1107,13 @@ const initKeypadSize = () => {
     }
     visible(true);
   });
-  document.getElementById("keypad-size-close")?.addEventListener("click", () => visible(false));
+  document.getElementById("keypad-arrange-close")?.addEventListener("click", () => visible(false));
+  showHint();
 };
+
+// Assigned by initKeypad. Until then a press on a cell while arranging cannot
+// happen, because nothing can turn arranging on.
+let pickKeypadCell = () => {};
 
 // initDebugLog reveals the report button when there is a report to take, which
 // is when a debug server answered: the reports are a developer's tool and a
@@ -1629,8 +1809,7 @@ const main = async () => {
   }
   initStatus();
   initInput();
-  initKeypadLayout();
-  initKeypadSize();
+  initKeypad();
   initRestart();
   initModalBackdrop();
   initSettings();
