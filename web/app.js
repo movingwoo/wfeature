@@ -12,8 +12,6 @@ import {
   isShape as isKeypadShape,
   assignable as keypadAssignable,
   keyFace as keypadKeyFace,
-  shapeLabel as keypadShapeLabel,
-  shapes as keypadShapes,
   regionLabel as keypadRegionLabel,
   cells as keypadCells,
 } from "./keypad-layout.js";

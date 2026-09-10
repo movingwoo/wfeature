@@ -360,6 +360,31 @@ test("emptying a named shape by hand is not renamed to the empty one", () => {
   assert.equal(empty.edited(), false);
 });
 
+test("an entry that is not a table is no entry", () => {
+  // `clampCells` answers a full table for anything, EMPTY everywhere it cannot
+  // read a key — and an empty table is a *valid* edit, the one somebody makes
+  // by clearing every cell. So folding a hand-edited or truncated entry through
+  // it would hand back a keypad with no keys on it rather than the shape the
+  // entry names, which is the opposite of what this module does with nonsense
+  // everywhere else.
+  for (const junk of ["garbage", 7, true, null, [], ["pad-r1c1"]]) {
+    const storage = fakeStorage();
+    storage.setItem(LAYOUT_KEY, "type1");
+    storage.setItem(KEYS_KEY, JSON.stringify({ type1: junk }));
+    const layout = createKeypadLayout(storage, LAYOUT_KEY);
+    assert.equal(layout.edited(), false, `${JSON.stringify(junk)} was taken as an edit`);
+    assert.deepEqual(layout.keys(), shipped.type1, `${JSON.stringify(junk)} moved the keypad`);
+  }
+  // A table is a table even when it is empty: that is the keypad somebody gets
+  // by clearing every cell, and it has to survive a reload.
+  const storage = fakeStorage();
+  storage.setItem(LAYOUT_KEY, "type1");
+  storage.setItem(KEYS_KEY, JSON.stringify({ type1: {} }));
+  const layout = createKeypadLayout(storage, LAYOUT_KEY);
+  assert.equal(layout.edited(), true);
+  assert.deepEqual(layout.keys(), shipped.type4, "an emptied shape came back with keys on it");
+});
+
 test("nonsense in storage is a shape rather than a throw", () => {
   const storage = fakeStorage();
   // A shape this build does not have. It used to be "type4", which this build

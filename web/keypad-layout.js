@@ -368,8 +368,13 @@ export const createKeypadLayout = (storage = local, layoutKey = "wfeature:keypad
   const stored = readJSON();
   const edits = new Map();
   for (const name of shapes) {
-    if (!Object.hasOwn(stored, name)) continue;
-    const table = clampCells(stored[name]);
+    // An entry that is not a table at all is no entry. Folding one through
+    // `clampCells` would answer every cell EMPTY, and an empty table is a
+    // *valid* edit — so a hand-edited or truncated entry would come back as a
+    // keypad with no keys on it rather than as the shape it names.
+    const entry = stored[name];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const table = clampCells(entry);
     if (shapeFor(table, name) === name) continue;
     edits.set(name, table);
   }

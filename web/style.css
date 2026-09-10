@@ -654,45 +654,28 @@ body {
    tells them apart — a finger crossing the pad presses what it crosses, and up
    here it aims at one key at a time. `initInput` reads that off which element a
    button sits in. */
-.keypad-band {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  column-gap: 4px;
-  align-items: center;
-  height: var(--keypad-band);
-}
-
-/* The pad is one grid: seven columns by four rows, laid out in reading order,
-   so a cell's place is where its button is in the markup and nothing here says
-   which row or column any cell is in.
+/* The band and the pad are the same seven columns, and the columns are declared
+   once for both. They have to be: the two are grid items of one single-column
+   container, so they are the same width, and a template written twice is two
+   places for a moved split to disagree — which it did, the band holding seven
+   equal columns while the pad's shifted, so every column but the middle went out
+   of line the moment the setting moved off its default.
 
    The columns are not seven equal shares, because the size setting's left/right
-   share still has to mean something: the middle column takes a seventh and the
-   two sides divide the rest by that share. At the shipped 0.5 every column is
-   the same width, which is the keypad this page draws; moved, it widens the
-   side under a thumb and narrows the other — the trade that setting has always
-   offered, now over a grid instead of over two pads.
+   share has to mean something: the middle column takes the wider side's width
+   and the two sides divide the rest by that share, normalised by their own total
+   — three of each side plus the one the middle took, which is `3 + max(share)`
+   — so they always fill the track exactly. At the shipped 0.5 every column is a
+   seventh, which is the keypad this page draws.
 
-   Percentages inside `calc()` resolve against this element's content box and
-   `fr` may not appear there at all, which is why the track is the width less
-   its six column gaps, worked out before it is divided. */
+   Percentages inside `calc()` resolve against each element's own content box and
+   `fr` may not appear there at all, which is why the track is the width less its
+   six column gaps, worked out before it is divided. Dividing a length by a
+   number a variable holds is the same construct --keypad-key-height is built on. */
+.keypad-band,
 .keypad-pad {
   --keypad-cell-gap: 4px;
   --keypad-track: calc(100% - 6 * var(--keypad-cell-gap));
-  /* The two sides' shares, and the middle column's. **The middle goes with the
-     wider side**, so a moved split reads as four wide columns and three narrow
-     ones rather than as three, one and three with an odd column in the middle
-     belonging to neither.
-
-     The shares are then normalised by their own total — three of each side plus
-     the one the middle took, which is `3 + max(share)` — so they always fill
-     the track exactly. At the shipped 0.5 the total is 3.5 and every column is
-     a seventh, which is the keypad this page draws.
-
-     Dividing a length by a number a variable holds is the same construct
-     --keypad-key-height above is built on. `fr` is what this would otherwise
-     want and it may not appear inside `calc()`, which is the reason the columns
-     were arithmetic here before they were a grid of seven. */
   --keypad-share-left: var(--keypad-split);
   --keypad-share-right: calc(1 - var(--keypad-split));
   --keypad-share-mid: max(var(--keypad-share-left), var(--keypad-share-right));
@@ -703,6 +686,21 @@ body {
       repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-left)))
       calc(var(--keypad-column-unit) * var(--keypad-share-mid))
       repeat(3, calc(var(--keypad-column-unit) * var(--keypad-share-right)));
+  column-gap: var(--keypad-cell-gap);
+  align-items: center;
+  justify-items: center;
+}
+
+/* The band is one row of them, at the height that is a setting. It is a grid of
+   its own rather than the pad's first row because the drag rule tells them
+   apart — a finger crossing the pad presses what it crosses, and up here it aims
+   at one key at a time. `initInput` reads that off which element a button sits
+   in. */
+.keypad-band {
+  height: var(--keypad-band);
+}
+
+.keypad-pad {
   /* The rows are fixed heights rather than auto for the reason the empty cell
      below states: a row whose cells are all empty has to keep its place instead
      of collapsing and sliding the rest of the pad up. */
@@ -711,11 +709,7 @@ body {
      to be. They are the same eight pixels, which is why merging the two cost
      the height budget nothing. */
   row-gap: 8px;
-  column-gap: var(--keypad-cell-gap);
-  align-items: center;
-  justify-items: center;
 }
-
 
 /* A cell with no key in it. This is what the shapes are made of — the shipped
    one leaves sixteen of the twenty-eight empty — and it replaces the four rules
@@ -735,17 +729,6 @@ body {
   visibility: hidden;
 }
 
-.keypad-pad button {
-  min-width: 0;
-  margin: 0;
-  font-size: 1em;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-  touch-action: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
 /* A key takes its column and stops at the cap, which is what turns a share of
    the row into a bigger key rather than into whitespace around the same one.
    The height is the row's, which the grid has already made the right one.
@@ -756,8 +739,16 @@ body {
    which is the thing the old rule was avoiding in the first place. A narrowed
    key is a narrower key now. */
 .keypad-pad button {
+  min-width: 0;
+  margin: 0;
   width: min(100%, var(--keypad-key-width));
   height: 100%;
+  font-size: 1em;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 

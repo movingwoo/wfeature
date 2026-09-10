@@ -17,6 +17,31 @@ const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
 const page = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
 
+// The body of one rule, found by its selector on a line of its own.
+//
+// `indexOf` alone is not enough and neither is a naive regex. `.keypad-pad {`
+// is also the second line of `.keypad-band,\n.keypad-pad {`, and that rule
+// belongs to the group rather than to either selector on its own — so a match
+// whose previous line ends in a comma is skipped. Pass the whole grouped
+// selector to read the group.
+const ruleBody = selector => {
+  const needle = `\n${selector} {`;
+  let at = -1;
+  for (let from = 0; ; ) {
+    const found = css.indexOf(needle, from);
+    if (found === -1) break;
+    const previousLine = css.slice(css.lastIndexOf("\n", found - 1) + 1, found);
+    if (!previousLine.trimEnd().endsWith(",")) {
+      at = found;
+      break;
+    }
+    from = found + 1;
+  }
+  assert.notEqual(at, -1, `the stylesheet has no rule for ${selector} on its own`);
+  const opened = css.indexOf("{", at);
+  return css.slice(opened + 1, css.indexOf("}", opened));
+};
+
 // The declared value of a custom property, as written in the stylesheet.
 const declared = property => {
   const match = css.match(new RegExp(`\\n\\s*${property}:\\s*([^;]+);`));
@@ -93,12 +118,30 @@ test("the split is spent on the pad's columns and not on the space between them"
   assert.match(pad, /repeat\(3, calc\(var\(--keypad-column-unit\) \* var\(--keypad-share-right\)\)\)/);
 });
 
+test("the band and the pad are one column template, not two", () => {
+  // They are grid items of one single-column container, so they are the same
+  // width and their columns have to be the same columns. Written twice they
+  // were two places for a moved split to disagree, and they did: the band held
+  // seven equal columns while the pad's shifted, so every column but the middle
+  // went out of line the moment the setting left its default.
+  const shared = ruleBody(".keypad-band,\n.keypad-pad");
+  assert.ok(shared.includes("grid-template-columns:"), "the two do not share a template");
+  assert.match(shared, /--keypad-split/, "the shared columns do not follow the split");
+  // And neither has one of its own to drift with.
+  for (const selector of [".keypad-band", ".keypad-pad"]) {
+    assert.ok(
+      !ruleBody(selector).includes("grid-template-columns:"),
+      `${selector} has columns of its own again`,
+    );
+  }
+});
+
 test("the middle column goes with the wider side, and the shares fill the track", () => {
   // A split that left the middle column at a seventh would put an odd column
   // between the two sides belonging to neither. Taking the wider side's width
   // makes the pad read as four wide columns and three narrow ones, which is
   // what "make that side bigger" means on one grid.
-  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
+  const pad = ruleBody(".keypad-band,\n.keypad-pad");
   assert.match(pad, /--keypad-share-mid: max\(var\(--keypad-share-left\), var\(--keypad-share-right\)\);/);
   // And the shares are normalised by their own total, or seven columns of a
   // moved split would not add up to the row: three of each side plus the one
@@ -115,8 +158,7 @@ test("the middle column goes with the wider side, and the shares fill the track"
 });
 
 test("every row of the pad is a row of keys, all the same height", () => {
-  const pad = css.slice(css.indexOf(".keypad-pad {"), css.indexOf("}", css.indexOf(".keypad-pad {")));
-  assert.match(pad, /grid-template-rows: repeat\(4, var\(--keypad-key-height\)\);/);
+  assert.match(ruleBody(".keypad-pad"), /grid-template-rows: repeat\(4, var\(--keypad-key-height\)\);/);
   assert.equal(declared("--keypad-rows"), "4");
 });
 
