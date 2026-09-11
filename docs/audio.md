@@ -206,6 +206,47 @@ rest of the piece — and so does the end of the program, because a loop has no
 length of its own and a thread waiting on one would otherwise outlive the
 program it belongs to.
 
+### A stopped clip is not a completed clip
+
+A guest thread whose blocking `play` or `loop` is ended by `stop`, `close`,
+`pause`, or another start receives `com.skt.m.UserStopException`. A clip that
+reaches its duration still returns normally, and calls on the Host's event
+thread still return without waiting.
+
+This distinction was missing: both outcomes returned normally. A local SKT
+title clears its audio repeat flag in its exception handler. After an explicit
+stop, the normal-return path left that flag set while its playing flag was
+clear. Its worker then slept repeatedly inside a synchronized block, retaining
+the monitor needed by the next serial event callback. The Host waited in
+`monitor.enter`, so input and session teardown could no longer progress.
+
+The correction is at the audio boundary, not in Java monitor or sleep semantics.
+The playback registration identifies the interrupted call, so a returning old
+call does not finish a newer call's wait. This is a compatibility finding from
+the local caller and its recovery path; the WIPI specification does not define
+this vendor-specific API, and the reference implementation leaves playback
+unimplemented.
+
+`TestStoppedAudioDoesNotReportNaturalCompletion` runs the repository-authored
+`audio-stop.jar` through the SKT runtime. It checks the guest exception branch
+for both playback methods and all four interruption paths, and the normal branch
+for natural completion. Without the correction, all eight interruption cases
+take the wrong branch.
+
+A local Chromium run on 2026-09-11 followed the reported start/new-game menu
+route, advanced the introduction, and reached stage 1. The page continued
+receiving changing pictures and accepted left/right input. Its restart control
+returned to the picker, and a repository-authored canvas fixture then started
+on the same server. No page exception or server warning was recorded in that
+run. This proves recovery on the reported path, not completion of the game or
+audible playback on a physical phone.
+
+An interactive CLI probe that stopped issuing ticks while inspecting screenshots
+also produced a guest division by zero in its frame-rate calculation after
+resuming. Its Host still answered commands and quit normally; the continuously
+ticking browser run did not show that error. A long gap between `-serve`
+commands is not a gameplay pacing test for this title.
+
 ### A sound started decades from now
 
 Making the timeline unconditional made a second thing visible, and it is the

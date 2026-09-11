@@ -1137,12 +1137,20 @@ func (runtime *Runtime) audioClipStart(call *jvm.Invocation, arguments []jvm.Val
 	clip.mu.Lock()
 	stopped := runtime.startPlaying(clip)
 	clip.mu.Unlock()
-	call.WaitAsGuestThread(wait, stopped)
+	waited := call.WaitAsGuestThread(wait, stopped)
 	clip.mu.Lock()
+	interrupted := clip.playing != stopped
 	if clip.playing == stopped {
 		runtime.endPlaying(clip)
 	}
 	clip.mu.Unlock()
+	// A caller that stopped playback did not finish the piece. Guest audio
+	// workers use their exception path to clear repeat state; reporting a
+	// normal return can leave them sleeping while holding a monitor that
+	// the next event callback needs.
+	if waited && interrupted {
+		return jvm.VoidValue(), newGuestException(skvm.UserStopExceptionClass, "audio playback stopped")
+	}
 	return jvm.VoidValue(), nil
 }
 
