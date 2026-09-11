@@ -148,7 +148,7 @@ export const createSessionLink = ({
         change("starting");
         try {
           const current = socket;
-          let response = await current.start(path, scale, screen, token);
+          let response = await current.start(path, scale, screen, token, "");
           while (response.confirmation) {
             const accepted = await confirmStart(response.message);
             if (socket !== current || current.closed) throw new Error("세션 연결이 끊어졌습니다.");

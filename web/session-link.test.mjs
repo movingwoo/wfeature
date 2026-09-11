@@ -247,6 +247,7 @@ test("fresh starts require approval, cancellation preserves the picker", async (
     await link.wake();
     await link.start("fixture", 1, null);
     assert.equal(asked, 1);
+    for (const call of calls) assert.equal(call.length, 5, "browser must not send an authentication switch");
     assert.equal(calls.length, accepted ? 2 : 1);
     assert.equal(link.state(), accepted ? "playing" : "ready");
     if (accepted) assert.equal(calls[1][4], "one-use");
