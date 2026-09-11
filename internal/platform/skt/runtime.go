@@ -257,6 +257,9 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	if archive == nil {
 		return nil, fmt.Errorf("SKT archive is nil")
 	}
+	if archive.Script != nil {
+		return nil, fmt.Errorf("SGS archives require StartScript instead of the Java runtime")
+	}
 	frameWidth, frameHeight, err := backend.ValidateFramebuffer(options.Framebuffer)
 	if err != nil {
 		return nil, fmt.Errorf("validate framebuffer: %w", err)

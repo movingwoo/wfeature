@@ -1,14 +1,5 @@
-// Package skt runs SKT handset games. There is no native code and no custom
-// executable format here: an SKT title is a MIDlet JAR whose world contains
-// the SKVM class surface on top of standard MIDP, so this package is a Java
-// runtime — class loading through the shared JVM, the MIDP surface the title
-// draws and saves through, and the SKVM classes on top.
-//
-// That runtime used to be a vendor-neutral "j2me" package with SKT as a thin
-// layer over it. It is all here now, because SKT is the only vendor that ever
-// asked for it: a bare MIDlet with no carrier behind it is not something this
-// emulator supports, and a neutral package with one consumer only hid where
-// its contracts really came from.
+// Package skt composes the SKVM/MIDP Java and GNEX/GVM SGS runtimes for SKT
+// handset games, using shared Go execution and backend services.
 package skt
 
 import (
@@ -26,13 +17,16 @@ import (
 // is why the shared SKT descriptor parser reads it.
 const msdSuffix = ".msd"
 
-// Open reads an SKT title, in either of the two shapes one arrives in.
+// Open reads an SKT Java package or a GNEX/GVM SGS archive.
 //
 // A handset was sent an archive: a zip holding `<id>.jar` beside `<id>.msd`,
 // and the JAR's own manifest names no MIDlet at all — the identity is in the
 // .msd. A bare JAR that does name its MIDlet is the other shape, and it is
 // what the fixtures and any repacked title look like.
 func Open(data []byte) (*Archive, error) {
+	if script, err := openScript(data); err != nil || script != nil {
+		return script, err
+	}
 	descriptor, jar, installed, err := unpackArchive(data)
 	if err != nil {
 		return nil, err

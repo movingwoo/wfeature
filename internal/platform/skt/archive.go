@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
+	"github.com/movingwoo/wfeature/internal/sgsvm"
 )
 
 const manifestPath = "META-INF/MANIFEST.MF"
@@ -71,9 +72,11 @@ func openWithin(data []byte, what string, limits archiveLimits) (*zip.Reader, *b
 }
 
 type Archive struct {
-	Descriptor Descriptor
-	MainClass  *classfile.Class
-	Entries    map[string][]byte
+	Script          *sgsvm.Program
+	ScriptSaveOwner string
+	Descriptor      Descriptor
+	MainClass       *classfile.Class
+	Entries         map[string][]byte
 }
 
 type Summary struct {
@@ -180,6 +183,9 @@ func newArchive(descriptor Descriptor, entries map[string][]byte) (*Archive, err
 }
 
 func (a *Archive) Summary() Summary {
+	if a.Script != nil {
+		return Summary{Name: a.Descriptor.Name, SaveOwner: a.ScriptSaveOwner, Entries: len(a.Script.Resources)}
+	}
 	return Summary{
 		Name:              a.Descriptor.Name,
 		MainClass:         a.MainClass.Name,

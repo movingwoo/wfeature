@@ -1819,7 +1819,10 @@ The title reaches its title screen. What it will not do is draw its world, and
 the honest way to read that is the way `Graphics3D` is read — a rasterizer this
 project has not built, not a feature that half works.
 
-### Twelve archives in the SKT corpus are a different platform
+### Twelve archives in the SKT corpus use another execution format
+
+SGS execution has since been added; see [sgs.md](sgs.md) for the current scope.
+The investigation below records the earlier Java-only limitation.
 
 They hold a `.mod` or an `.inf` beside a `.SGS`, and the `.mod` says what they
 are in its own header: `application/x-gnex-sgs`. An `.inf` beside one carries
@@ -1914,9 +1917,9 @@ expensive part of the two WIPI platforms was never the typing, it was the
 stretches spent guessing a contract from one caller and telling the guesses
 apart by A/B. Here every question has something to ask.
 
-**Nothing is built, and this is not the next thing to build.** The decision is
-about scope rather than feasibility, and it is the user's; it was taken again
-after the estimate above was measured.
+The original decision was to defer this runtime. The user superseded it on
+2026-09-11; the first executable SGS path and its remaining limitations are
+documented in [sgs.md](sgs.md).
 
 ## Deliberately incomplete
 
