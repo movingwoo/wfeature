@@ -1119,9 +1119,9 @@ const initModalBackdrop = () => {
 
 const showAuthentication = () => {
   const note = document.getElementById("authentication-note");
-  if (note) note.textContent = gameRunning
-    ? authenticationMessage(activeAuthentication)
-    : "지원하는 인증 방식은 실행할 때 자동으로 적용합니다.";
+  if (!note) return;
+  note.textContent = gameRunning ? authenticationMessage(activeAuthentication) : "";
+  note.classList.toggle("hidden", !note.textContent);
 };
 
 const initSettings = () => {
