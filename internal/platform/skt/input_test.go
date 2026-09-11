@@ -6,6 +6,42 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
+func TestCanvasWithoutCommandsReceivesHandsetMenuKey(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 4, 3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []KeyEventType{KeyPressed, KeyRepeated, KeyReleased} {
+		if err := runtime.SendKey(event, KeyCodeSoft1); err != nil {
+			t.Fatal(err)
+		}
+		if code := invokeFixtureInt(t, runtime, "CanvasMIDlet", "lastKeyCode"); code != 129 {
+			t.Fatalf("%s delivered %d, want handset menu code 129", event, code)
+		}
+	}
+	if events := invokeFixtureInt(t, runtime, "CanvasMIDlet", "keyEvents"); events != 132 {
+		t.Fatalf("key events = %d, want press/repeat/release sequence 132", events)
+	}
+
+	// Commands retain ownership of the soft keys, even without a listener.
+	data := runtime.displayableState(runtime.currentDisplayable)
+	data.commands = []*jvm.Object{{ClassName: "javax/microedition/lcdui/Command"}}
+	for _, key := range []int32{KeyCodeSoft1, KeyCodeSoft2} {
+		for _, event := range []KeyEventType{KeyPressed, KeyRepeated, KeyReleased} {
+			if err := runtime.SendKey(event, key); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if events := invokeFixtureInt(t, runtime, "CanvasMIDlet", "keyEvents"); events != 132 {
+		t.Fatalf("commands leaked raw Canvas events: %d", events)
+	}
+}
+
 // The names are the ones both WIPI platforms answer to, so a scripted run reads
 // the same whichever vendor it drives. CLR is the one that was missing: a title
 // of this era draws "BACK:CLR" on every screen that can be left, and a run that

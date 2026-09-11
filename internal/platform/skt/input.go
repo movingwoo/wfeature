@@ -30,6 +30,8 @@ const (
 	KeyCodeRight int32 = 145
 	KeyCodeDown  int32 = 146
 	KeyCodeFire  int32 = 148
+	// A Canvas without MIDP commands reads the handset's menu key directly.
+	KeyCodeMenu int32 = 129
 	// The handset's send key, which a game reads like any other: it is the one
 	// a title reaches for when it wants a key the keypad does not otherwise
 	// have, typically a quick save.
@@ -144,21 +146,25 @@ func (runtime *Runtime) deliverCurrentCanvasKey(eventType KeyEventType, callback
 	if runtime.jlet {
 		return runtime.deliverCardKey(current, callback, wipiKeyOfDevice(keyCode))
 	}
-	// Soft keys are not Canvas keys: MIDP puts commands on every Displayable,
-	// and a Canvas that added one has no other way to reach it.
+	// MIDP commands own the soft keys. Without commands, the first soft key
+	// reaches the handset menu handler, including repeat and release events.
 	if keyCode == KeyCodeSoft1 || keyCode == KeyCodeSoft2 {
-		if eventType != KeyPressed {
+		commands := runtime.commandsOfDisplayable(current)
+		if keyCode == KeyCodeSoft1 && len(commands) == 0 {
+			keyCode = KeyCodeMenu
+		} else {
+			if eventType != KeyPressed {
+				return nil
+			}
+			index := 0
+			if keyCode == KeyCodeSoft2 {
+				index = 1
+			}
+			if index < len(commands) {
+				return runtime.fireCommand(current, commands[index])
+			}
 			return nil
 		}
-		commands := runtime.commandsOfDisplayable(current)
-		index := 0
-		if keyCode == KeyCodeSoft2 {
-			index = 1
-		}
-		if index < len(commands) {
-			return runtime.fireCommand(current, commands[index])
-		}
-		return nil
 	}
 	if runtime.logger != nil {
 		runtime.logger.Debug("MIDP Canvas key event", "type", eventType, "code", keyCode, "class", current.ClassName)
@@ -310,7 +316,8 @@ func (runtime *Runtime) getCanvasKeyName(vm *jvm.VM, arguments []jvm.Value) (jvm
 	names := map[int32]string{
 		KeyCodeUp: "UP", KeyCodeLeft: "LEFT", KeyCodeRight: "RIGHT",
 		KeyCodeDown: "DOWN", KeyCodeFire: "FIRE", '*': "*", '#': "#",
-		'0': "0", '1': "1", '2': "2", '3': "3", '4': "4",
+		KeyCodeMenu: "MENU",
+		'0':         "0", '1': "1", '2': "2", '3': "3", '4': "4",
 		'5': "5", '6': "6", '7': "7", '8': "8", '9': "9",
 	}
 	name, ok := names[keyCode]
