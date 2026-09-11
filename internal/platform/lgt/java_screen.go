@@ -344,23 +344,35 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 // table the other two platforms here already carry, and the numbers are the
 // ones a title compares against rather than anything this platform chose.
 const (
-	javaGameActionUp    = 1
-	javaGameActionLeft  = 2
-	javaGameActionRight = 5
-	javaGameActionDown  = 6
-	javaGameActionFire  = 8
-	javaGameActionClear = 99
+	javaGameActionUp         = 1
+	javaGameActionLeft       = 2
+	javaGameActionRight      = 5
+	javaGameActionDown       = 6
+	javaGameActionFire       = 8
+	javaGameActionSoft1      = 90
+	javaGameActionSoft2      = 91
+	javaGameActionSoft3      = 92
+	javaGameActionSideUp     = 96
+	javaGameActionSideDown   = 97
+	javaGameActionSideSelect = 98
+	javaGameActionClear      = 99
 )
 
 // The key codes those actions stand for. A handset reports these to
 // `keyNotify`, and `getKeyCode` turns an action back into one.
 const (
-	javaKeyUp    int32 = -1
-	javaKeyDown  int32 = -2
-	javaKeyLeft  int32 = -3
-	javaKeyRight int32 = -4
-	javaKeyFire  int32 = -5
-	javaKeyClear int32 = -16
+	javaKeyUp         int32 = -1
+	javaKeyDown       int32 = -2
+	javaKeyLeft       int32 = -3
+	javaKeyRight      int32 = -4
+	javaKeyFire       int32 = -5
+	javaKeySoft1      int32 = -6
+	javaKeySoft2      int32 = -7
+	javaKeySoft3      int32 = -8
+	javaKeySideUp     int32 = -13
+	javaKeySideDown   int32 = -14
+	javaKeySideSelect int32 = -15
+	javaKeyClear      int32 = -16
 )
 
 // javaGameAction is `Display.getGameAction(keyCode)`. A key with no action
@@ -378,6 +390,18 @@ func javaGameAction(_ *Client, _ context.Context, _ *armcore.Thread, arguments [
 		return javaGameActionRight, nil
 	case javaKeyFire:
 		return javaGameActionFire, nil
+	case javaKeySoft1:
+		return javaGameActionSoft1, nil
+	case javaKeySoft2:
+		return javaGameActionSoft2, nil
+	case javaKeySoft3:
+		return javaGameActionSoft3, nil
+	case javaKeySideUp:
+		return javaGameActionSideUp, nil
+	case javaKeySideDown:
+		return javaGameActionSideDown, nil
+	case javaKeySideSelect:
+		return javaGameActionSideSelect, nil
 	case javaKeyClear:
 		return javaGameActionClear, nil
 	}
@@ -399,6 +423,18 @@ func javaKeyCode(_ *Client, _ context.Context, _ *armcore.Thread, arguments []ui
 		key = javaKeyRight
 	case javaGameActionFire:
 		key = javaKeyFire
+	case javaGameActionSoft1:
+		key = javaKeySoft1
+	case javaGameActionSoft2:
+		key = javaKeySoft2
+	case javaGameActionSoft3:
+		key = javaKeySoft3
+	case javaGameActionSideUp:
+		key = javaKeySideUp
+	case javaGameActionSideDown:
+		key = javaKeySideDown
+	case javaGameActionSideSelect:
+		key = javaKeySideSelect
 	case javaGameActionClear:
 		key = javaKeyClear
 	}

@@ -477,9 +477,8 @@ func (runtime *initializationRuntime) repaintQueued() bool {
 	return runtime != nil && runtime.repaintPending && len(runtime.displayCards) > 0
 }
 
-// guestPaintOwnershipRounds is how many Host rounds a frame the guest painted
-// itself keeps the Host's own round paint away. See paintTopCard for what the
-// number was measured against.
+// guestPaintOwnershipRounds delays automatic painting after a guest paint
+// when no live worker owns the card. Worker ownership has no round timeout.
 const guestPaintOwnershipRounds = 8
 
 // paintTopCard paints the top pushed card into the screen framebuffer and
@@ -516,19 +515,25 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// paint: a title whose frame loop steps the world inside `paint` takes a
 	// step it never asked for. See runtimeCardServiceRepaints.
 	//
-	// **The round paint is still the only thing driving some titles**, so this
-	// stands down while the guest is painting and comes back when it stops.
-	// Both shapes are in the local set and neither is rare: of the titles that
-	// call `serviceRepaints` at all, some call it every frame and some call it
-	// two or three times in a whole run — a load screen — and then never
-	// again, drawing the rest from a round paint they never ask for. **Whether
-	// a title calls it does not separate the two, and neither does how often**:
-	// what separates them is the gap. Measured over the local set at 600
-	// rounds, a title driving its own screen comes back within two or three
-	// rounds and at worst seven; a title that has handed the screen back leaves
-	// hundreds, or never comes back at all. Eight rounds is past every cadence
-	// and short of every handover, and it is a count of rounds rather than of
-	// milliseconds because what it bounds is the Host's own loop.
+	// A live worker that services this card owns its frame cadence. Counting
+	// idle Host rounds cannot establish that it stopped: a slow scene can
+	// leave a long gap between requested paints. An extra paint in that gap
+	// can clear the dirty flag before the worker advances the next scene stage.
+	// Explicit repaint requests remain eligible, as do other cards and cards
+	// whose worker has returned.
+	if !runtime.repaintPending {
+		card := runtime.topCard()
+		for _, worker := range runtime.client.workers {
+			if worker.paintedCard == card {
+				return false, nil
+			}
+		}
+	}
+	// **The round paint is still the only thing driving some titles.** When
+	// no live worker owns the card, a bootstrap paint only delays this fallback.
+	// Some titles service a load screen two or three times, then depend on
+	// automatic painting. Keep their existing eight-round grace period here;
+	// a long gap alone must not revoke a live worker's ownership above.
 	runtime.roundsSinceGuestPaint++
 	if !runtime.repaintPending && runtime.guestHasPainted &&
 		runtime.roundsSinceGuestPaint <= guestPaintOwnershipRounds {
