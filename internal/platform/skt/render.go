@@ -254,7 +254,7 @@ func (runtime *Runtime) queueCanvasPaint(canvas *jvm.Object, rect paintRect) err
 		runtime.displayMu.Unlock()
 		return nil
 	}
-	if err := runtime.events.Post("Canvas.repaint", runtime.paintPendingCanvas); err != nil {
+	if err := runtime.postCanvasPaintLocked(); err != nil {
 		runtime.pendingPaint = paintRect{}
 		runtime.paintCanvas = nil
 		runtime.paintQueued = false
@@ -270,16 +270,33 @@ func (runtime *Runtime) queueCanvasPaint(canvas *jvm.Object, rect paintRect) err
 // asked for during its own paint is the next one.
 func (runtime *Runtime) postDeferredPaint() error {
 	runtime.displayMu.Lock()
+	defer runtime.displayMu.Unlock()
 	if !runtime.paintDeferred || !runtime.paintQueued {
 		runtime.paintDeferred = false
-		runtime.displayMu.Unlock()
 		return nil
 	}
-	runtime.paintDeferred = false
-	runtime.displayMu.Unlock()
-	if err := runtime.events.Post("Canvas.repaint", runtime.paintPendingCanvas); err != nil {
+	if err := runtime.postCanvasPaintLocked(); err != nil {
 		return fmt.Errorf("queue Canvas repaint: %w", err)
 	}
+	runtime.paintDeferred = false
+	return nil
+}
+
+// A synchronous paint consumes dirty pixels, not the callback already queued
+// for them. Reuse that callback until the Host actually takes it.
+func (runtime *Runtime) postCanvasPaintLocked() error {
+	if runtime.paintPosted {
+		return nil
+	}
+	if err := runtime.events.Post("Canvas.repaint", func() error {
+		runtime.displayMu.Lock()
+		runtime.paintPosted = false
+		runtime.displayMu.Unlock()
+		return runtime.paintPendingCanvas()
+	}); err != nil {
+		return err
+	}
+	runtime.paintPosted = true
 	return nil
 }
 

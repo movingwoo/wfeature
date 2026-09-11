@@ -84,6 +84,9 @@ type Runtime struct {
 	pendingPaint paintRect
 	paintCanvas  *jvm.Object
 	paintQueued  bool
+	// paintPosted tracks the queued callback separately from dirty pixels:
+	// serviceRepaints can paint those pixels before the Host drains that callback.
+	paintPosted bool
 	// jlet says this session's application class is a WIPI Jlet rather than a
 	// MIDlet, which decides which class name the display objects carry. The
 	// card stack and the event queue are the Jlet half's own state. See
