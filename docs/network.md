@@ -4,12 +4,22 @@ Nothing here reaches a network. That is one decision applied across four
 platforms, and this document is where the decision and its whole surface live;
 each platform document links back to it rather than restating it.
 
+On 2026-09-11 the user requested a common offline authentication-bypass feature.
+Recognized certificate, identity and license adapters are implemented. One recognized
+LGT contract also has a local notification/empty-save responder; external networking
+remains disabled.
+[authentication.md](authentication.md) separates the recognized schemes and
+records their implementation boundaries.
+[authentication-cases.md](authentication-cases.md) records the subsequent corpus
+inventory, current controlled experiments, and unresolved case distinctions.
+
 ## The decision
 
-Every connection a game asks for is **refused**, immediately and with the
-failure its own error path was written to expect.
+By default, every connection a game asks for is **refused**, through a return
+value, guest exception, or deferred callback. With automatic authentication compatibility, one recognized LGT contract uses the bounded in-process responder
+described below. All other connections still reach the guest failure path.
 
-The alternative is worse than it looks. A game told a connection opened waits
+An unconditional success response is worse than it looks. A game told a connection opened waits
 for bytes, and it waits inside the screen it only leaves when a read
 completes. That is a state its author never saw: a handset with no coverage,
 or a subscriber who declined the data charge, refused the connection outright,
@@ -28,11 +38,12 @@ something the game handles.
 | KTF | `org.kwis.msf.io.Network.connect` | `-1` |
 | KTF | `org.kwis.msf.io.Network.disconnect` | accepted no-op |
 | KTF | WIPI C net table, `close` | success — closing what never opened is not a failure |
+| KTF | WIPI C net table, `connect` | accepts a bounded callback request, then reports failure; without a callback or with a full queue, refuses immediately |
 | KTF | WIPI C net table, everything else | `0xffffffff` |
-| KTF | `MC_knlGetAccessLevel` | the network bit is clear |
-| LGT | `MC_netConnect` | accepted, then fails through its callback |
+| KTF | `MC_knlGetAccessLevel` | all API groups are permitted; individual network operations still fail |
+| LGT | `MC_netConnect` | accepted within a 64-request bound, then fails through its callback; recognized local notification dials report local readiness |
 | LGT | `MC_netClose` | success, because the call returns void |
-| LGT | the rest of the net block — socket connect/write/read/close, both callback setters | error |
+| LGT | the rest of the net block — socket connect/write/read/close, both callback setters | error, except the recognized local notification/empty-save socket |
 | LGT | `org.kwis.msf.io.Network.connect` | `-1`, and one title disagrees — below |
 | LGT | `org.kwis.msf.io.URL.find` | `SchemeNotFoundException`, the failure the specification names |
 | SKT | `SMS.send`, `Call.call` | `false` |
@@ -42,7 +53,7 @@ something the game handles.
 | MIDP | a network media locator | `MediaException` |
 | MIDP | a network player locator in the high-level UI | refused |
 
-Three details in that table are not obvious.
+The following refusal details describe the default path.
 
 **The whole block refuses, not only the connect call.** A title refused a
 connection still tears down what it had already started. Stopping it at the
@@ -82,9 +93,25 @@ reported yet, because it withdraws the question.
 `Session.Tick`, between guest calls and never inside one, the same place the
 timers fire.
 
-**`MC_knlGetAccessLevel` is the best refusal of all.** A game that checks the
-bit before it dials skips the attempt entirely instead of making one and
-handling the answer. Asking is the whole point of the call.
+**`MC_knlGetAccessLevel` reports API permission, not connectivity.** All API
+groups are permitted (`0xff`). A game may therefore attempt a dial; the network
+operation itself supplies the refusal rather than hiding the API group.
+
+## Local notification and remote-save compatibility
+
+The automatically selected `lgt-offline-notification` status selects a contract recognized from
+connected Thumb code and referenced protocol fields. It handles only the guest's
+explicit Yes/No notification, an empty remote-save lookup and that query's finish.
+It never contacts the stored endpoint, sends SMS or transfers a save. Ordinary
+guest file writes remain unchanged. [authentication.md](authentication.md#lgt-local-notification-and-empty-remote-save-service)
+records recognition, response bytes, limits and the user-visible restart flow.
+
+The [WIPI C network specification](https://mirusu400.github.io/wipi-wiki/c-api/network.md)
+defines socket callbacks as `(fd, error, param)`, including the fifth stack
+argument of `MC_netSocketConnect`. Read/write callbacks are one-shot; closing
+cancels them. The local implementation follows those contracts and invokes guest
+callbacks between guest calls. It bounds fragmented requests and queued work;
+unknown requests fail instead of waiting for invented remote data.
 
 ## The Generic Connection Framework
 
@@ -134,6 +161,11 @@ empty string. Nothing goes online either way, so the properties describe a
 handset and the refusal happens where the connection is actually attempted.
 
 ### The subscriber number is the one property worth changing
+
+The current automatic adapter isolates this choice per KTF session and uses the
+recognized accessor's full embedded fallback. The historical short-number sweep
+below did not test that full fallback; it has now passed directly. See
+[current mechanisms](authentication.md). Network refusal itself is unchanged.
 
 `PHONENUMBER` and `MIN` answer `01000000000` by default, and that default is a
 compromise rather than a fact, because **two local titles want opposite things
@@ -294,6 +326,13 @@ and an unimplemented slot is fatal where a refusal is not. Serving that path —
 The title with the offline path behind its question is also not reached by a
 plain run: it needs a route past its menus, so it was not in this sweep and
 would have to be driven by hand to be counted at all.
+
+**Source update, 2026-09-11:** the slot prerequisite above has since been
+implemented. `slotNetSocket` is `0x7d0` in `internal/platform/lgt/wipic.go`, and
+`TestSocketIsRefusedLikeTheRestOfTheNetworkBlock` verifies normal refusal rather
+than an unimplemented import. The sweep above remains historical evidence of
+the risk; it does not establish the outcome of accepting the dial on today's
+code. The reopened authentication project must repeat that comparison.
 
 ## Not implemented
 

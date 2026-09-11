@@ -24,9 +24,10 @@ import (
 //
 // This writes one for the number this platform answers with. It mints an
 // authorisation a server used to issue; nothing here pretends otherwise, and
-// **nothing in the emulator calls it** — a person runs `wfeature provision`
-// deliberately, for an archive they hold. It is kept because the format took
-// work to read and may be needed again, not because anything depends on it.
+// recognized sessions use automatic compatibility, or a person runs
+// `wfeature provision` explicitly.
+// Compatibility requires additional executable evidence and keeps the result
+// in memory. The explicit provisioning command writes it to the save store.
 
 // certificateName is the database entry, and certificateSaveKey is where the
 // record database looks for a saved copy before it falls back to the one the
@@ -156,6 +157,9 @@ func ProvisionCertificate(archive *Archive, number string) (*CertificateProvisio
 	}
 	if number == "" {
 		number = HandsetNumber()
+	}
+	if err := wipic.ValidateSubscriberNumber(number); err != nil {
+		return nil, err
 	}
 	if len(number) >= certificateNumberLength {
 		// The title reads the number into a twelve byte buffer and compares it

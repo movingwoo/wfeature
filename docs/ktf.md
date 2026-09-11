@@ -2897,7 +2897,9 @@ satisfy it.
 The format is understood — `internal/platform/ktf/provision.go` carries it,
 and `wfeature provision` writes one sealed for the number this platform
 answers with. It is a command a person runs deliberately for an archive they
-hold; nothing in the emulator calls it.
+hold. Automatic authentication compatibility now reuses it with
+stricter executable recognition and an in-memory certificate save wrapper; see
+[authentication.md](authentication.md#ktf-certificates-and-identity).
 
 ## What the corpus names, and what it never asks for
 
@@ -3599,6 +3601,11 @@ holds an object. So the question is not "who cleared it" but "which branch of
 its own start would have set it", and that is a different search.
 
 ## A second download gate, and the answer that opened it
+
+The subsequent authentication implementation resolves the accessor's embedded
+11-digit fallback and applies it to one session. The short inputs in the sweep
+below select that full number internally; the fallback also passes when supplied
+directly. See [current mechanism](authentication.md#ktf-certificates-and-identity).
 
 > The gate that came before these three is above, under the storage tables: a
 > title offering to download the save it already carries, because the Java
@@ -5236,13 +5243,13 @@ second gate's did.
   시작하세요` notice and stops on it. There is no server to dial and no way
   back from that screen.
 
-**The archive already carries what it offers to download.** Its JAR holds 173
+**The initial completeness hypothesis was later disproved below.** Its JAR holds 173
 entries besides the client image — resource trees named by number, plus two
 tables — and they come to 857KB, comfortably over the 700 plus 160 the prompt
-names. So this is the second gate's shape again: the data is present and the
-title is deciding not to look at it.
+names. That size initially suggested the second gate's shape, but aggregate
+size does not establish that the required resource containers are present.
 
-**Nothing here is missing, and the diagnostics say so.** Over 1,200 ticks the
+**The initial diagnostics showed no platform failure, not complete content.** Over 1,200 ticks the
 boundary counts name no stub, no unimplemented table entry, no throw and no
 raise. What they do show is the title repainting one card every tick and its
 own resource engine printing `js_commonResInvokeNativeClinit(<address>)` on a

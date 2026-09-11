@@ -17,9 +17,10 @@ import (
 // take frames, send keys. It is the same shape KTF's session has, so a Host
 // that already drives one drives the other.
 type Session struct {
-	client  *Client
-	archive *Archive
-	tick    time.Duration
+	authentication backend.AuthenticationStatus
+	client         *Client
+	archive        *Archive
+	tick           time.Duration
 	// speed is how fast the game runs against the wall. The guest clock here
 	// is virtual and moves a tick at a time, so what a multiplier changes is
 	// what a tick of guest time is allowed to cost — see SetSpeed.
@@ -39,8 +40,10 @@ type Session struct {
 
 // SessionOptions configures a session.
 type SessionOptions struct {
-	Logger    *slog.Logger
-	SaveStore backend.SaveStore
+	// DisableAuthentication opts out of automatic compatibility for diagnostics.
+	DisableAuthentication bool
+	Logger                *slog.Logger
+	SaveStore             backend.SaveStore
 	// AudioSink is where the media block's sounds go. Nil is silent.
 	AudioSink backend.AudioSink
 	SaveRoot  string
@@ -135,6 +138,29 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if err != nil {
 		return nil, err
 	}
+	authentication := backend.AuthenticationOff
+	if !options.DisableAuthentication {
+		authentication = backend.AuthenticationUnsupported
+		if authenticationOptions(client.module) {
+			client.saveStore = newAuthenticationOptionStore(client.saveStore, archive)
+			authentication = backend.AuthenticationLGTOptions
+		} else if authenticationCertificate58(client.module) {
+			if store, ok := newAuthenticationCertificate58Store(client.saveStore, archive, client.subscriberNumber); ok {
+				client.saveStore = store
+				authentication = backend.AuthenticationLGTCertificate58
+			}
+		}
+		if authentication == backend.AuthenticationUnsupported {
+			if contract := authenticationNotification(client.module); contract != nil {
+				client.notificationNetwork = &notificationNetwork{contract: *contract, identity: client.subscriberNumber}
+				authentication = backend.AuthenticationLGTNotification
+			}
+		}
+
+		if options.Logger != nil {
+			options.Logger.Debug("authentication compatibility", "status", authentication)
+		}
+	}
 	// A title that fails during startup takes its client with it, and the
 	// client is what holds the trace — which is exactly the run worth reading.
 	// So the trace travels on the error.
@@ -148,7 +174,16 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if tick <= 0 {
 		tick = defaultTick
 	}
-	return &Session{client: client, archive: archive, tick: tick, speed: backend.ClampSpeed(options.Speed)}, nil
+	return &Session{client: client, archive: archive, tick: tick, speed: backend.ClampSpeed(options.Speed), authentication: authentication}, nil
+}
+
+// Authentication reports the policy selected for this run, independently of
+// whether a handled network refusal lets the guest continue offline.
+func (session *Session) Authentication() backend.AuthenticationStatus {
+	if session.authentication == "" {
+		return backend.AuthenticationOff
+	}
+	return session.authentication
 }
 
 // StartFailure is a startup that failed with a platform call trace attached.

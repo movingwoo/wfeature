@@ -1171,3 +1171,19 @@ Two things are recorded here rather than guessed at in code:
 - **The four-game count is not a memory budget.** Active and parked games share
   the limit, but their allocations vary. The count bounds admitted games, not
   concurrent archive inspection, socket connections, or resident bytes.
+
+
+## Automatic offline authentication
+
+New sessions automatically select recognized authentication compatibility.
+The Opts panel has no authentication control or notice. The page stores no policy
+preference and sends no authentication switch. The obsolete incoming
+`authentication` field is ignored, including false from older clients. The shared `Options.DisableAuthentication` opt-out is for
+local diagnostics and is not exposed by the browser protocol.
+
+The `started` description reports `authentication` as `off`, `unsupported`,
+`ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `skt-license`,
+`lgt-cached-authentication`, `lgt-certificate-58`, or `lgt-offline-notification`.
+Resume returns the existing runtime and its result. Unsupported retains ordinary
+guest behavior. Applied identifies a selected adapter, not successful gameplay.
+See [implementation and limits](authentication.md).

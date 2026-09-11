@@ -1034,3 +1034,20 @@ the format, which is the only evidence available that this scheme is the one it
 uses.
 
 **Nothing in the emulator runs this.** It is a deliberate, one-off command.
+
+
+## Offline authentication compatibility
+
+`wfeature runktf <archive.zip>`, `wfeature runskt <archive.zip>`,
+and `wfeature runlgt <archive.zip>` automatically apply the same recognized
+adapters as the PWA. Use `-no-auth` only for an explicit diagnostic comparison.
+The old `-auth` flag remains accepted for existing scripts. After startup, stderr reports the selected mechanism, such as
+`authentication: ktf-certificate-52` or `authentication: skt-license`.
+`authentication: unsupported` leaves ordinary behavior in place, including for
+earlier native KTF packages. A recognized LGT cached-result layout reports
+`authentication: lgt-cached-authentication`, `authentication: lgt-certificate-58`,
+or `authentication: lgt-offline-notification`. The last handles explicit notification
+choices and empty remote-save queries locally; it sends nothing outside the emulator.
+Certificate data and adapted class files stay in memory; ordinary progress uses
+`-save`. This differs from `provision`, which writes a persistent replacement.
+See [mechanisms, recognition and limitations](authentication.md).

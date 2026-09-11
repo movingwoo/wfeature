@@ -11,7 +11,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
-	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 const (
@@ -2087,7 +2086,7 @@ func (runtime *initializationRuntime) wipicGetSystemProperty(thread *armcore.Thr
 		return 0, fmt.Errorf("read KTF system property id: %w", err)
 	}
 	runtime.countDiagnostic("sysprop " + name)
-	value, ok := wipic.SystemProperties[name]
+	value, ok := runtime.client.systemProperty(name)
 	if !ok {
 		return wipicErrorInvalid, nil
 	}

@@ -135,6 +135,77 @@ func TestSessionReadySaysWhichBuildAnswered(t *testing.T) {
 	}
 }
 
+func TestSessionAuthenticationReportsUnsupportedAndRetainsItOnResume(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil || started.Started.Authentication != backend.AuthenticationUnsupported {
+		t.Fatalf("authentication result = %+v", started.Started)
+	}
+	expectFrame(t, connection)
+	send(t, connection, clientMessage{Kind: clientPark})
+	expectMessage(t, connection, serverResult)
+	send(t, connection, clientMessage{Kind: clientResume, Token: started.Started.Token})
+	resumed := expectMessage(t, connection, serverStarted)
+	if resumed.Started == nil || resumed.Started.Authentication != backend.AuthenticationUnsupported {
+		t.Fatalf("resumed authentication = %+v", resumed)
+	}
+}
+
+func TestSessionAuthenticationAppliesLicenseAndRetainsItOnResume(t *testing.T) {
+	connection, logs := sessionFixture(t)
+	archive, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "license.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "LICENSE.MF"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var container bytes.Buffer
+	writer := zip.NewWriter(&container)
+	for name, data := range map[string][]byte{"fixture.msd": descriptor, "fixture.jar": archive} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(logs), "games", "skt", "license.zip"), container.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/license.zip"})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil || started.Started.Authentication != backend.AuthenticationSKTLicense {
+		t.Fatalf("authentication result = %+v", started.Started)
+	}
+	send(t, connection, clientMessage{Kind: clientPark})
+	expectMessage(t, connection, serverResult)
+	send(t, connection, clientMessage{Kind: clientResume, Token: started.Started.Token})
+	resumed := expectMessage(t, connection, serverStarted)
+	if resumed.Started == nil || resumed.Started.Authentication != backend.AuthenticationSKTLicense {
+		t.Fatalf("resumed authentication = %+v", resumed)
+	}
+	// An older page may still send its saved false preference. Compatibility
+	// belongs to the server default now, so that obsolete field has no effect.
+	send(t, connection, clientMessage{Kind: clientStop})
+	if err := connection.WriteText(`{"kind":"start","game":"games/skt/license.zip","authentication":false}`); err != nil {
+		t.Fatal(err)
+	}
+	again := expectMessage(t, connection, serverStarted)
+	if again.Started == nil || again.Started.Authentication != backend.AuthenticationSKTLicense {
+		t.Fatalf("obsolete preference changed automatic policy: %+v", again.Started)
+	}
+
+}
+
 func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 	connection, _ := sessionFixture(t)
 	expectMessage(t, connection, serverReady)
@@ -146,6 +217,9 @@ func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 	}
 	if started.Started.Platform != "skt" {
 		t.Errorf("platform = %q, want skt", started.Started.Platform)
+	}
+	if started.Started.Authentication != backend.AuthenticationUnsupported {
+		t.Fatalf("default authentication = %q", started.Started.Authentication)
 	}
 	// The page lays out from these before the first picture arrives.
 	if started.Started.Width != 240 || started.Started.Height != 320 {

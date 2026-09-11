@@ -1,5 +1,10 @@
 # The LGT platform
 
+The network socket-creation API now accepts both observed slots, `0x7d0` and
+the standard-order `0x25a`. Both refuse sockets normally. The latter was verified
+inside a successful-dial callback; it is not inferred solely from slot order.
+See [callback evidence and offline-policy limits](authentication.md#lgt-socket-prerequisite).
+
 LGT (LG Telecom) shipped its own WIPI implementation. Two things make it a
 different platform from KTF, and everything else follows from them:
 
@@ -4951,7 +4956,9 @@ are carried by `collect_test.go` rather than by the corpus.
   the same way. The band is what made this cheap (above); what would make it
   free is a draw that reaches the guest's own bytes rather than a copy of them,
   and nothing local is waiting on it now.
-- **No network.** The block reports failure: a game's own state machine handles
+- **No external network.** Authentication compatibility can select the bounded
+  [local notification and empty-save responder](authentication.md#lgt-local-notification-and-empty-remote-save-service).
+  Otherwise the block reports failure: a game's own state machine handles
   that, while claiming a connection would make it wait for data that never
   arrives. It is the *whole* block rather than only the connect call, because a
   title that is refused a connection still tears down what it had started, and

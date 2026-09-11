@@ -42,6 +42,8 @@ func (session *Session) Vibration() backend.Vibration {
 
 // SessionOptions bound guest execution for one session.
 type SessionOptions struct {
+	// DisableAuthentication opts out of automatic compatibility for diagnostics.
+	DisableAuthentication bool
 	// MaxSteps caps the ARM instructions of each bounded guest run. Zero
 	// selects the startApp acceptance ceiling real games require.
 	MaxSteps uint64
@@ -304,6 +306,13 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	} else if options.SaveRoot != "" {
 		client.AttachSaveStore(NewDirectorySaveStore(filepath.Join(options.SaveRoot, SaveOwner(archive.Descriptor))))
 	}
+	if !options.DisableAuthentication {
+		client.authentication = backend.AuthenticationUnsupported
+		if certificate, ok := authenticationCertificate(archive, client.subscriberNumber); ok {
+			client.AttachSaveStore(newCertificateSaveStore(client.saveStore, certificate))
+			client.authentication = backend.AuthenticationKTFCertificate23
+		}
+	}
 	// Everything from here on has run guest code, so a failure carries the
 	// trace of what the game was doing when it stopped.
 	failed := func(err error) (*Session, error) {
@@ -333,6 +342,24 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 			return failed(err)
 		}
 		client.log("KTF initialized")
+	}
+	// The 52-byte reader obtains its cipher through the relocated pointer
+	// table. Inspect it before constructing the application, after the loader
+	// has established those pointers. No guest instruction or table is patched.
+	if !options.DisableAuthentication {
+		files := archive.GuestFiles()
+		if client.authentication == backend.AuthenticationUnsupported && (len(files[certificateName]) == 52 || len(files["prefs"]) == 64) {
+			if image, err := client.ImageBytes(); err == nil {
+				if certificate, ok := authenticationCertificate52(archive, image, client.subscriberNumber); ok {
+					client.AttachSaveStore(newCertificateSaveStore(client.saveStore, certificate))
+					client.authentication = backend.AuthenticationKTFCertificate52
+				} else if number, ok := authenticationSubscriber(archive, image); ok {
+					client.subscriberNumber = number
+					client.authentication = backend.AuthenticationKTFSubscriber
+				}
+			}
+		}
+		client.log("authentication compatibility", "status", client.authentication)
 	}
 	object, _, err := client.NewObject(ctx, archive.Descriptor.MainClass, "()V")
 	if err != nil {

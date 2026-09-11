@@ -13,7 +13,6 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/glyph"
 	"github.com/movingwoo/wfeature/internal/jvm"
-	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 const runtimeJletClass = "org/kwis/msp/lcdui/Jlet"
@@ -2732,7 +2731,7 @@ func runtimeGetSystemProperty(runtime *initializationRuntime, _ *jvm.VM, argumen
 	if name != nil {
 		if text, ok := jvm.StringText(name); ok {
 			runtime.countDiagnostic("sysprop " + text)
-			value = wipic.SystemProperties[text]
+			value, _ = runtime.client.systemProperty(text)
 		}
 	}
 	return jvm.ReferenceValue(runtime.client.vm.NewString(value)), nil
@@ -2762,7 +2761,7 @@ func runtimeSystemGetProperty(runtime *initializationRuntime, vm *jvm.VM, argume
 	if value, known := runtimeSystemPropertyTable[text]; known {
 		return jvm.ReferenceValue(vm.NewString(value)), nil
 	}
-	if value, known := wipic.SystemProperties[text]; known {
+	if value, known := runtime.client.systemProperty(text); known {
 		return jvm.ReferenceValue(vm.NewString(value)), nil
 	}
 	return jvm.ReferenceValue(nil), nil

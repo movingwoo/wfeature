@@ -140,9 +140,11 @@ func Inspect(archive []byte) (Summary, error) {
 // Options configures a session. The zero value runs a silent session at the
 // original speed on a handset-sized screen.
 type Options struct {
-	SaveStore backend.SaveStore
-	AudioSink backend.AudioSink
-	Logger    *slog.Logger
+	// DisableAuthentication opts out of automatic compatibility for diagnostics.
+	DisableAuthentication bool
+	SaveStore             backend.SaveStore
+	AudioSink             backend.AudioSink
+	Logger                *slog.Logger
 
 	// Speed scales the pace of the platforms that own a clock. Zero and 1 both
 	// mean the speed the game was written for.
@@ -307,13 +309,14 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			return session, nil
 		}
 		started, err := ktf.StartSession(ctx, archive, ktf.SessionOptions{
-			AudioSink:  options.AudioSink,
-			SaveStore:  options.SaveStore,
-			Speed:      options.Speed,
-			TraceLimit: options.TraceLimit,
-			Logger:     options.Logger,
-			Width:      options.width(),
-			Height:     options.height(),
+			DisableAuthentication: options.DisableAuthentication,
+			AudioSink:             options.AudioSink,
+			SaveStore:             options.SaveStore,
+			Speed:                 options.Speed,
+			TraceLimit:            options.TraceLimit,
+			Logger:                options.Logger,
+			Width:                 options.width(),
+			Height:                options.height(),
 		})
 		if err != nil {
 			return nil, startEndedOrFailed(err)
@@ -322,12 +325,13 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		session.ktf = started
 	case detect.LGT:
 		started, err := lgt.StartSession(ctx, archive, lgt.SessionOptions{
-			Logger:    options.Logger,
-			AudioSink: options.AudioSink,
-			SaveStore: options.SaveStore,
-			Width:     options.width(),
-			Height:    options.height(),
-			Speed:     options.Speed,
+			DisableAuthentication: options.DisableAuthentication,
+			Logger:                options.Logger,
+			AudioSink:             options.AudioSink,
+			SaveStore:             options.SaveStore,
+			Width:                 options.width(),
+			Height:                options.height(),
+			Speed:                 options.Speed,
 		})
 		if err != nil {
 			return nil, startEndedOrFailed(err)
@@ -354,10 +358,11 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		}
 		session.surface = surface
 		runtime, err := skt.Start(opened, skt.Options{
-			JVM:         jvm.Options{Logger: options.Logger},
-			Framebuffer: surface,
-			SaveStore:   options.SaveStore,
-			Speed:       options.Speed,
+			DisableAuthentication: options.DisableAuthentication,
+			JVM:                   jvm.Options{Logger: options.Logger},
+			Framebuffer:           surface,
+			SaveStore:             options.SaveStore,
+			Speed:                 options.Speed,
 		})
 		// A failed start still hands back the runtime it got to, and closing
 		// it is the Host's job either way.
@@ -1353,4 +1358,21 @@ func (f *captureFramebuffer) Frame() ([]byte, int, int) {
 		return nil, 0, 0
 	}
 	return append([]byte(nil), f.rgba...), f.width, f.height
+}
+
+// Authentication reports the actual policy retained with this session.
+func (session *Session) Authentication() backend.AuthenticationStatus {
+	if session.options.DisableAuthentication {
+		return backend.AuthenticationOff
+	}
+	if session.ktf != nil {
+		return session.ktf.Authentication()
+	}
+	if session.runtime != nil {
+		return session.runtime.Authentication()
+	}
+	if session.lgt != nil {
+		return session.lgt.Authentication()
+	}
+	return backend.AuthenticationUnsupported
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // The guest address map. The module keeps whatever addresses its ELF names —
@@ -117,12 +118,14 @@ type CletFunctions struct {
 
 // Client is one loaded LGT game.
 type Client struct {
-	core      *armcore.Core
-	thread    *armcore.Thread
-	archive   *Archive
-	module    *Module
-	logger    *slog.Logger
-	saveStore backend.SaveStore
+	core                *armcore.Core
+	thread              *armcore.Thread
+	archive             *Archive
+	module              *Module
+	logger              *slog.Logger
+	saveStore           backend.SaveStore
+	subscriberNumber    string
+	notificationNetwork *notificationNetwork
 
 	mu sync.Mutex
 	// arena is the platform's own data, surfaces the pixels a title draws
@@ -169,9 +172,10 @@ type Client struct {
 	installedPixelOps   map[uint32]bool
 	uninstalledPixelOps map[uint32]uint64
 
-	// netConnects are the accepted dials whose refusal has not been reported
+	// netConnects are the accepted dials whose result has not been reported
 	// yet; see wipic_net.go for why a dial is accepted at all.
-	netConnects []pendingNetConnect
+	netConnects   []pendingNetConnect
+	netGeneration uint64
 
 	clock  *guestClock
 	events []pendingEvent
@@ -406,23 +410,24 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = stackBase + uint32(stackSize)
 	client := &Client{
-		core:         core,
-		thread:       armcore.NewThread(initial),
-		archive:      archive,
-		module:       module,
-		logger:       options.Logger,
-		saveStore:    options.SaveStore,
-		arena:        newArena(platformDataBase, platformDataSize),
-		surfaces:     newArena(surfaceBase, surfaceSize),
-		heap:         newArena(heapBase, heapSize),
-		codeCurse:    platformCodeBase,
-		stubs:        make(map[uint64]uint32),
-		framebuffers: make(map[uint32]*framebuffer),
-		timers:       make(map[uint32]*timer),
-		nextHandle:   1,
-		clock:        newGuestClock(core.Steps),
-		files:        make(map[uint32]*openFile),
-		clips:        make(map[uint32]*mediaClip),
+		core:             core,
+		thread:           armcore.NewThread(initial),
+		archive:          archive,
+		module:           module,
+		logger:           options.Logger,
+		saveStore:        options.SaveStore,
+		subscriberNumber: wipic.SubscriberNumber(),
+		arena:            newArena(platformDataBase, platformDataSize),
+		surfaces:         newArena(surfaceBase, surfaceSize),
+		heap:             newArena(heapBase, heapSize),
+		codeCurse:        platformCodeBase,
+		stubs:            make(map[uint64]uint32),
+		framebuffers:     make(map[uint32]*framebuffer),
+		timers:           make(map[uint32]*timer),
+		nextHandle:       1,
+		clock:            newGuestClock(core.Steps),
+		files:            make(map[uint32]*openFile),
+		clips:            make(map[uint32]*mediaClip),
 		// A nil sink is allowed and makes every sound silent, which is what a
 		// Host without an audio device wants; the game still runs its whole
 		// sound path.

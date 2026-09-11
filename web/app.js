@@ -643,6 +643,7 @@ const sessionStarted = info => {
   canTouch = info.can_touch === true;
   guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
+  recordEvent(`authentication: ${info.authentication ?? "off"}`);
   setStatus("");
   initCheat();
 };

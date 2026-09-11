@@ -34,9 +34,11 @@ var (
 )
 
 type Runtime struct {
-	Archive *Archive
-	VM      *jvm.VM
-	MIDlet  *jvm.Object
+	Archive          *Archive
+	VM               *jvm.VM
+	MIDlet           *jvm.Object
+	authentication   backend.AuthenticationStatus
+	subscriberNumber string
 
 	events *backend.EventLoop
 	logger *slog.Logger
@@ -217,8 +219,10 @@ func (runtime *Runtime) clockMillis() int64 {
 }
 
 type Options struct {
-	JVM         jvm.Options
-	Framebuffer backend.Framebuffer
+	// DisableAuthentication opts out of automatic compatibility for diagnostics.
+	DisableAuthentication bool
+	JVM                   jvm.Options
+	Framebuffer           backend.Framebuffer
 	// SaveStore persists RMS record stores and com.xce.io files. Without one
 	// they live only as long as the session.
 	SaveStore backend.SaveStore
@@ -267,6 +271,18 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	// unconditional: every title this package runs is an SKT title, and one
 	// that never touches com.skt.m simply never initializes those classes.
 	source := jvm.ClassSources{archive}
+	authentication := backend.AuthenticationOff
+	if !options.DisableAuthentication {
+		authentication = backend.AuthenticationUnsupported
+		adapted := prepareAuthentication(archive)
+		if len(adapted) != 0 {
+			source = jvm.ClassSources{adapted, archive}
+			authentication = backend.AuthenticationSKTLicense
+		}
+		if options.JVM.Logger != nil {
+			options.JVM.Logger.Debug("authentication compatibility", "status", authentication, "classes", len(adapted))
+		}
+	}
 	runtime := &Runtime{}
 	// A title's own thread is the game: it decodes its images, loads its world
 	// and runs its frames, and it does that for as long as the title is up. So
@@ -324,20 +340,22 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		return nil, err
 	}
 	*runtime = Runtime{
-		pace:        pace,
-		paceStart:   pace.Now(),
-		Archive:     archive,
-		VM:          machine,
-		events:      backend.NewEventLoop(backend.EventLoopOptions{}),
-		logger:      options.JVM.Logger,
-		state:       StateCreated,
-		framebuffer: options.Framebuffer,
-		frameWidth:  frameWidth,
-		frameHeight: frameHeight,
-		frameRGBA:   make([]byte, frameLength),
-		fullScreen:  make(map[*jvm.Object]bool),
-		fonts:       make(map[fontKey]*jvm.Object),
-		saveStore:   options.SaveStore,
+		authentication:   authentication,
+		subscriberNumber: wipic.SubscriberNumber(),
+		pace:             pace,
+		paceStart:        pace.Now(),
+		Archive:          archive,
+		VM:               machine,
+		events:           backend.NewEventLoop(backend.EventLoopOptions{}),
+		logger:           options.JVM.Logger,
+		state:            StateCreated,
+		framebuffer:      options.Framebuffer,
+		frameWidth:       frameWidth,
+		frameHeight:      frameHeight,
+		frameRGBA:        make([]byte, frameLength),
+		fullScreen:       make(map[*jvm.Object]bool),
+		fonts:            make(map[fontKey]*jvm.Object),
+		saveStore:        options.SaveStore,
 	}
 	for index := 3; index < len(runtime.frameRGBA); index += 4 {
 		runtime.frameRGBA[index] = 0xff
@@ -1073,19 +1091,15 @@ func (runtime *Runtime) getSystemProperty(_ *jvm.VM, arguments []jvm.Value) (jvm
 	if err != nil {
 		return jvm.VoidValue(), fmt.Errorf("system property key: %w", err)
 	}
-	// The subscriber number is read when it is asked for rather than copied
-	// into the table above, because a Host sets it after this package is
-	// loaded — `-number`, or WFEATURE_PHONE_NUMBER — and a title that
-	// authenticates against it would otherwise be handed the default no matter
-	// what the user chose. See docs/network.md.
+	// Snapshot after Host setup and retain one identity throughout this run,
+	// including its carrier prefix and authentication checks.
 	value, ok := systemProperties[key]
 	if key == "MIN" || key == "m.MIN" {
-		value, ok = wipic.SubscriberNumber(), true
+		value, ok = runtime.subscriberNumber, true
 	}
-	// The carrier is read late for the same reason, and from the same fact:
-	// see subscriberCarrier.
+	// The carrier describes the same snapshot; see subscriberCarrier.
 	if key == "m.CARRIER" {
-		value, ok = subscriberCarrier(wipic.SubscriberNumber()), true
+		value, ok = subscriberCarrier(runtime.subscriberNumber), true
 	}
 	if !ok {
 		return jvm.ReferenceValue(nil), nil

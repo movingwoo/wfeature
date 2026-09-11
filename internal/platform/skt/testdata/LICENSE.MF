@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+MIDlet-1: License fixture,,LicenseMIDlet
+MIDlet-Name: License fixture
+MIDlet-Version: 1.0
+MIDlet-Vendor: wfeature
+MIDlet-Key: deliberately-wrong
+MIDlet-Jar-URL: local:SERVICE_ID=0000001234567890

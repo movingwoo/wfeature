@@ -71,6 +71,16 @@ const maxSubscriberNumber = 11
 // It is called once, from a host's startup, before any session exists —
 // nothing here is safe to change while a game is running.
 func SetSubscriberNumber(number string) error {
+	if err := ValidateSubscriberNumber(number); err != nil {
+		return err
+	}
+	SystemProperties["PHONENUMBER"] = number
+	SystemProperties["MIN"] = number
+	return nil
+}
+
+// ValidateSubscriberNumber checks an identity without changing Host defaults.
+func ValidateSubscriberNumber(number string) error {
 	if number == "" {
 		// A title that takes the last four digits off the number would ask to
 		// copy minus four bytes, which is how this was learned.
@@ -85,8 +95,6 @@ func SetSubscriberNumber(number string) error {
 			return fmt.Errorf("the subscriber number %q is not digits", number)
 		}
 	}
-	SystemProperties["PHONENUMBER"] = number
-	SystemProperties["MIN"] = number
 	return nil
 }
 

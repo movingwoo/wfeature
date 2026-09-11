@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 )
 
@@ -25,6 +26,9 @@ type clientMessage struct {
 
 	// Game is the archive path from games.json, for kind "start".
 	Game string `json:"game,omitempty"`
+	// LegacyAuthentication is accepted from older pages and ignored. New starts
+	// always select recognized compatibility; the browser has no policy switch.
+	LegacyAuthentication bool `json:"authentication,omitempty"`
 
 	// Action and Code carry one key event: "press" or "release", and the
 	// MIDP-style code the keypad has always sent. A page may still send
@@ -226,13 +230,14 @@ type vibrateMessage struct {
 }
 
 type startedMessage struct {
-	Game      string `json:"game,omitempty"`
-	Platform  string `json:"platform"`
-	AID       string `json:"aid,omitempty"`
-	PID       string `json:"pid,omitempty"`
-	Name      string `json:"name,omitempty"`
-	SaveOwner string `json:"save_owner,omitempty"`
-	MainClass string `json:"main_class,omitempty"`
+	Authentication backend.AuthenticationStatus `json:"authentication"`
+	Game           string                       `json:"game,omitempty"`
+	Platform       string                       `json:"platform"`
+	AID            string                       `json:"aid,omitempty"`
+	PID            string                       `json:"pid,omitempty"`
+	Name           string                       `json:"name,omitempty"`
+	SaveOwner      string                       `json:"save_owner,omitempty"`
+	MainClass      string                       `json:"main_class,omitempty"`
 	// Width and Height are the picture's size before magnification, so the
 	// page can lay out before the first frame arrives.
 	Width  int `json:"width"`

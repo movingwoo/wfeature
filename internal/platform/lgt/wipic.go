@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // LGT's WIPI C slots are a flat index whose module bases follow the spec's
@@ -158,26 +157,19 @@ const (
 	// specification's order, which the set a title imports confirms: connect,
 	// close, socket connect/write/read/close and the two callback setters are
 	// exactly a socket client's needs.
-	slotNetConnect       uint32 = 0x258
-	slotNetClose         uint32 = 0x259
-	slotNetSocketConnect uint32 = 0x25b
-	slotNetSocketWrite   uint32 = 0x25c
-	slotNetSocketRead    uint32 = 0x25d
-	slotNetSocketClose   uint32 = 0x25e
-	slotNetSetReadCB     uint32 = 0x265
-	// slotNetSocket is MC_netSocket(domain, type), and it is the one entry of
-	// the block that is **not** where the block's order puts it: counting from
-	// MC_netConnect lands it on 0x25a, and the module that calls it resolves
-	// 0x7d0. Nothing else moved with it — the same module goes on to resolve
-	// MC_netSocketConnect at 0x25b and MC_netSocketClose at 0x25e — so 0x25a
-	// is left unclaimed rather than filled in by the count that this entry
-	// disproves.
-	//
-	// What it is, is not in doubt: the caller passes the specification's own
-	// MC_AF_INET (2) and MC_SOCKET_STREAM (1), tests the answer for a
-	// non-negative descriptor, and on success calls MC_netSocketConnect with
-	// the address and port that the MC_utilInetAddrInt and MC_utilHtons calls
-	// just above it prepared.
+	slotNetConnect        uint32 = 0x258
+	slotNetClose          uint32 = 0x259
+	slotNetSocketStandard uint32 = 0x25a
+	slotNetSocketConnect  uint32 = 0x25b
+	slotNetSocketWrite    uint32 = 0x25c
+	slotNetSocketRead     uint32 = 0x25d
+	slotNetSocketClose    uint32 = 0x25e
+	slotNetSetReadCB      uint32 = 0x265
+	// Both socket-creation slots are observed. One interface puts it outside
+	// the network block at 0x7d0; another uses the standard-order 0x25a.
+	// Both callers pass MC_AF_INET (2), MC_SOCKET_STREAM (1), test a negative
+	// descriptor and otherwise reach socket connect with a converted address
+	// and port. See docs/authentication.md for the callback-path evidence.
 	slotNetSocket     uint32 = 0x7d0
 	slotNetSetWriteCB uint32 = 0x266
 	// Block nine is the utility block, in the specification's own order, the
@@ -270,7 +262,7 @@ func knownWIPICSlot(slot uint32) bool {
 		slotFsClose, slotFsSeek, slotFsFileAttribute, slotFsRemove,
 		slotFsRename, slotFsMkDir, slotFsRmDir, slotFsList, slotFsTotalSpace,
 		slotFsAvailable, slotFsTell, slotFsIsExist,
-		slotNetConnect, slotNetClose, slotNetSocket, slotNetSocketConnect,
+		slotNetConnect, slotNetClose, slotNetSocket, slotNetSocketStandard, slotNetSocketConnect,
 		slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
 		slotDbListDataBases,
@@ -501,7 +493,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		if err != nil {
 			return answerInt(wipiError)
 		}
-		value, known := wipic.SystemProperties[name]
+		value, known := client.systemProperty(name)
 		if !known {
 			if client.logger != nil {
 				client.logger.Debug("LGT unknown system property", "name", name)
@@ -775,15 +767,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// than through its return value. See wipic_net.go.
 		return answerInt(client.connectNetwork(thread))
 
-	case slotNetSocket, slotNetSocketConnect, slotNetSocketWrite,
+	case slotNetSocket, slotNetSocketStandard, slotNetSocketConnect, slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB:
-		// There is no network. Reporting an error is what the game's own
-		// state machine handles; claiming a connection would make it wait
-		// for data that never arrives. The rest of the block answers the same
-		// way, because a title that is refused a connection still tears down
-		// what it had started, and stopping it there would turn a handled
-		// refusal into a crash.
-		return answerInt(wipiError)
+		return answerInt(client.notificationSocketCall(thread, slot))
 
 	case slotNetClose:
 		// MC_netClose returns void, so there is no failure to report. It does
