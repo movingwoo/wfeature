@@ -831,6 +831,11 @@ an unrelated class.
 
 ### Five titles check their licence against the handset's number
 
+Automatic authentication compatibility recognizes these license-check
+layouts and adapts only their final comparison in a session-owned class copy.
+The original observations below describe the diagnostic disabled path. See
+[current mechanism and validation](authentication.md#skt-license-checks).
+
 Five titles draw "인증 되지 않은 컨텐츠 입니다" and stop. Nothing is broken: each
 ships the same `SecureUtil`, which hashes the subscriber number, a slice of the
 service ID out of `MIDlet-Jar-URL`, and a per-title constant, and compares the

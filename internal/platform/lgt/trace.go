@@ -404,6 +404,7 @@ var wipicSlotNames = map[uint32]string{
 	slotNetConnect:                  "netConnect",
 	slotNetClose:                    "netClose",
 	slotNetSocket:                   "netSocket",
+	slotNetSocketStandard:           "netSocket",
 	slotNetSocketConnect:            "netSocketConnect",
 	slotNetSocketWrite:              "netSocketWrite",
 	slotNetSocketRead:               "netSocketRead",

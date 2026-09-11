@@ -147,6 +147,7 @@ const sktTickInterval = 16 * time.Millisecond
 
 func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	logger := backend.NewLogger(stderr)
+	authentication := true
 	ticks := 64
 	framePath := ""
 	frameDir := ""
@@ -169,6 +170,10 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	screenChosen := false
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
+		case "-auth": // Retained for older diagnostic scripts; compatibility is automatic.
+			authentication = true
+		case "-no-auth":
+			authentication = false
 		case "-ticks":
 			if index+1 >= len(args) {
 				fmt.Fprintln(stderr, "-ticks expects a count")
@@ -352,15 +357,19 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		saveRoot = filepath.Join(platformSaveRoot("skt"), skt.SaveOwner(archive.Descriptor))
 	}
 	runtime, err := skt.Start(archive, skt.Options{
-		JVM:         jvm.Options{Logger: logger, TraceInstructions: traceInstructions},
-		Framebuffer: framebuffer,
-		SaveStore:   backend.NewDirectorySaveStore(saveRoot),
+		DisableAuthentication: !authentication,
+		JVM:                   jvm.Options{Logger: logger, TraceInstructions: traceInstructions},
+		Framebuffer:           framebuffer,
+		SaveStore:             backend.NewDirectorySaveStore(saveRoot),
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	logger.Debug("SKT startup dispatch completed", "main_class", archive.Descriptor.MainClass, "state", runtime.State())
+	if authentication {
+		fmt.Fprintf(stderr, "authentication: %s\n", runtime.Authentication())
+	}
 	// The recorder is the CLI's speaker, the same one the other two paths
 	// take. It is attached after Start because that is when the runtime
 	// exists; nothing is lost, because the timeline emits from the first
@@ -740,6 +749,7 @@ const defaultProbeTicks = 64
 // ticking past the first frame, injecting -key events, so in-game progress is
 // observable from the command line; with -route it replays a script instead.
 func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
+	authentication := true
 	ticks := defaultProbeTicks
 	ticksChosen := false
 	framePath := ""
@@ -766,6 +776,10 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	screenWidth, screenHeight := 0, 0
 	for index := 0; index < len(extra); index++ {
 		switch extra[index] {
+		case "-auth": // Retained for older diagnostic scripts; compatibility is automatic.
+			authentication = true
+		case "-no-auth":
+			authentication = false
 		case "-save":
 			if index+1 >= len(extra) {
 				fmt.Fprintln(stderr, "-save expects a directory")
@@ -1027,6 +1041,9 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// has no descriptor to inspect and no AOT methods to profile or symbolize.
 	// The cheat engine and the route runner it does have.
 	if ktf.IsNativeArchive(data) {
+		if authentication {
+			fmt.Fprintln(stderr, "authentication: unsupported")
+		}
 		for name, unsupported := range map[string]bool{
 			"-diag":           diagPath != "",
 			"-gdb":            gdbAddress != "",
@@ -1071,12 +1088,13 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// computes, not how long it takes, so it runs a manual clock it jumps to
 	// each next deadline: the same sequence of guest work, at no real cost.
 	options := ktf.SessionOptions{
-		SaveRoot:   saveRoot,
-		TraceLimit: traceLimit,
-		Logger:     logger,
-		Speed:      speed,
-		Width:      screenWidth,
-		Height:     screenHeight,
+		DisableAuthentication: !authentication,
+		SaveRoot:              saveRoot,
+		TraceLimit:            traceLimit,
+		Logger:                logger,
+		Speed:                 speed,
+		Width:                 screenWidth,
+		Height:                screenHeight,
 	}
 	// The recording sink timestamps with guest time, which the session only
 	// answers once it exists, so the clock is attached just after the start.
@@ -1116,6 +1134,9 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer session.Close()
+	if authentication {
+		fmt.Fprintf(stderr, "authentication: %s\n", session.Authentication())
+	}
 
 	// A debugger attaches to the loaded core. Attaching slows execution to
 	// one instruction per quantum, which is why it is opt-in rather than
@@ -2177,12 +2198,12 @@ func importSaves(source string, extra []string, stdout, stderr io.Writer) int {
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
-	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
+	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-no-auth] [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
 	fmt.Fprintln(output, "                            [-screen WxH] [-cheat] [-patch table.json] [-serve]")
-	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
+	fmt.Fprintln(output, "  wfeature runlgt <game.zip> [-no-auth] [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-steps N] [-save dir] [-cheat] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-trace N] [-trace-live filter] [-route script] [-patch table.json] [-serve]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick]")
-	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
+	fmt.Fprintln(output, "  wfeature runktf <game.zip> [-no-auth] [-ticks N] [-frame out.png] [-save dir] [-play] [-speed N] [-key tick:name] [-framedir dir] [-cheat] [-diag report.json] [-audio out] [-scale N] [-screen WxH]")
 	fmt.Fprintln(output, "                            [-gdb host:port] [-patch table.json]")
 	fmt.Fprintln(output, "                            [-profile report.txt] [-profile-folded stacks.txt] [-profile-from tick] [-route script] [-serve]")
 	fmt.Fprintln(output, "  wfeature invoke <game.jar> <method> <descriptor> [arguments...]")
@@ -2204,6 +2225,7 @@ const lgtCheatTickInterval = 50 * time.Millisecond
 // writes the frame it produced.
 func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	logger := backend.NewLogger(stderr)
+	authentication := true
 	ticks := 64
 	framePath := ""
 	frameDir := ""
@@ -2226,6 +2248,10 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	screenWidth, screenHeight := 0, 0
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
+		case "-auth": // Retained for older diagnostic scripts; compatibility is automatic.
+			authentication = true
+		case "-no-auth":
+			authentication = false
 		case "-cheat":
 			cheatConsole = true
 		case "-patch":
@@ -2441,13 +2467,14 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	sessionOptions := lgt.SessionOptions{
-		Logger:    logger,
-		SaveRoot:  saveRoot,
-		TraceSVC:  traceSVC,
-		TraceLive: traceLive,
-		MaxSteps:  maxSteps,
-		Width:     screenWidth,
-		Height:    screenHeight,
+		DisableAuthentication: !authentication,
+		Logger:                logger,
+		SaveRoot:              saveRoot,
+		TraceSVC:              traceSVC,
+		TraceLive:             traceLive,
+		MaxSteps:              maxSteps,
+		Width:                 screenWidth,
+		Height:                screenHeight,
 	}
 	// The recording sink timestamps with guest time, which the session only
 	// answers once it exists, so the clock is attached just after the start.
@@ -2470,6 +2497,9 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 				len(failure.Trace), lgt.FormatSVCTrace(failure.Trace))
 		}
 		return 1
+	}
+	if authentication {
+		fmt.Fprintf(stderr, "authentication: %s\n", session.Authentication())
 	}
 	if audioSink != nil {
 		audioSink.Clock = session.GuestElapsed

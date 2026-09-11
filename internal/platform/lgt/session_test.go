@@ -1,9 +1,42 @@
 package lgt
 
 import (
+	"bytes"
+	"context"
 	"testing"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
+
+func TestAuthenticationUnknownCletRetainsItsOrdinaryBehavior(t *testing.T) {
+	var ordinary []byte
+	for _, enabled := range []bool{false, true} {
+		session, err := StartSession(context.Background(), fixtureArchive(t), SessionOptions{
+			DisableAuthentication: !enabled, Width: 16, Height: 8, MaxSteps: 1 << 20,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close(context.Background()) })
+		want := backend.AuthenticationOff
+		if enabled {
+			want = backend.AuthenticationUnsupported
+		}
+		if session.Authentication() != want {
+			t.Fatalf("authentication = %s, want %s", session.Authentication(), want)
+		}
+		frame, _, _, _ := session.Frame()
+		if ordinary == nil {
+			ordinary = bytes.Clone(frame)
+		} else if !bytes.Equal(frame, ordinary) {
+			t.Fatal("unsupported authentication changed the Clet frame")
+		}
+		if result := int32(callSlot(t, session.client, slotNetSocketStandard, 2, 1)); result != wipiError {
+			t.Fatalf("socket result = %d", result)
+		}
+	}
+}
 
 // TestSpeedBuysGuestTimeMoreCheaply covers the setting a Host offers a person.
 //

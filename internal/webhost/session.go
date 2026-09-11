@@ -731,18 +731,19 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner,
 		"screen", fmt.Sprintf("%dx%d", startedWidth, startedHeight))
 	r.started = startedMessage{
-		Game:      message.Game,
-		Platform:  summary.Platform,
-		AID:       summary.AID,
-		PID:       summary.PID,
-		Name:      summary.Name,
-		SaveOwner: summary.SaveOwner,
-		MainClass: summary.MainClass,
-		Width:     startedWidth,
-		Height:    startedHeight,
-		Token:     r.token,
-		CanWatch:  started.Cheat() != nil && started.Cheat().CanWatch(),
-		CanTouch:  started.HasPointer(),
+		Authentication: started.Authentication(),
+		Game:           message.Game,
+		Platform:       summary.Platform,
+		AID:            summary.AID,
+		PID:            summary.PID,
+		Name:           summary.Name,
+		SaveOwner:      summary.SaveOwner,
+		MainClass:      summary.MainClass,
+		Width:          startedWidth,
+		Height:         startedHeight,
+		Token:          r.token,
+		CanWatch:       started.Cheat() != nil && started.Cheat().CanWatch(),
+		CanTouch:       started.HasPointer(),
 	}
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})

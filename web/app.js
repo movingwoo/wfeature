@@ -2,6 +2,7 @@ import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from 
 import { PageAudio } from "./audio.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
+import { authenticationMessage } from "./game-authentication.js";
 import {
   createKeypadSize,
   metrics as keypadSizeMetrics,
@@ -167,6 +168,7 @@ const LAST_GAME_KEY = "wfeature:lastGame";
 const FRAME_SCALE_KEY = "wfeature:frameScale";
 // The screen is remembered per game rather than once for the page: it is a
 // property of the title — which artwork its archive carries — and not a taste.
+let activeAuthentication = "off";
 const SCREEN_KEY_PREFIX = "wfeature:screen:";
 const DEFAULT_SCREEN = "240x320";
 // The range the server accepts, mirrored so a stored value outside it is
@@ -643,6 +645,9 @@ const sessionStarted = info => {
   canTouch = info.can_touch === true;
   guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
+  activeAuthentication = info.authentication ?? "off";
+  showAuthentication();
+  recordEvent(`authentication: ${activeAuthentication}`);
   setStatus("");
   initCheat();
 };
@@ -712,6 +717,7 @@ const initGameSelect = async () => {
     }
 
     select.disabled = false;
+    showAuthentication();
     startButton.disabled = sessionLink?.state() !== "ready";
     startButton.textContent = "실행";
     syncRemoveButton(document);
@@ -1111,6 +1117,13 @@ const initModalBackdrop = () => {
   });
 };
 
+const showAuthentication = () => {
+  const note = document.getElementById("authentication-note");
+  if (note) note.textContent = gameRunning
+    ? authenticationMessage(activeAuthentication)
+    : "지원하는 인증 방식은 실행할 때 자동으로 적용합니다.";
+};
+
 const initSettings = () => {
   const toggle = document.getElementById("settings-toggle");
   const panel = document.getElementById("settings-panel");
@@ -1190,6 +1203,9 @@ const initSettings = () => {
       rememberSpeed(chosenGame(), speed.value);
     });
   }
+
+  showAuthentication();
+  document.getElementById("game-select")?.addEventListener("change", showAuthentication);
 
   // The screen belongs to the game rather than to the page, so the menu shows
   // what the game about to start is set to and changing it is a decision about

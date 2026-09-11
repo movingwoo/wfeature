@@ -122,19 +122,17 @@ func TestListRefusesABufferItCannotFill(t *testing.T) {
 	}
 }
 
-// MC_netSocket is reached at 0x7d0 rather than at the 0x25a the block's order
-// predicts, and it answers the way the rest of the block does: there is no
-// network, and a title that is refused a socket takes its own offline path.
+// Both observed interface variants report a refused socket normally, so a
+// guest can handle that refusal instead of losing its callback to an import error.
 func TestSocketIsRefusedLikeTheRestOfTheNetworkBlock(t *testing.T) {
 	client := fixtureClient(t)
-
-	// MC_AF_INET and MC_SOCKET_STREAM, which is what the caller passes.
-	if code := int32(callSlot(t, client, slotNetSocket, 2, 1)); code >= 0 {
-		t.Fatalf("MC_netSocket answered %d, want a negative descriptor", code)
-	}
-	// And the slot resolves, because a module resolves what it might call
-	// before it calls anything.
-	if _, err := client.importFunction(importTableWIPIC, slotNetSocket); err != nil {
-		t.Fatalf("MC_netSocket did not resolve: %v", err)
+	for _, slot := range []uint32{slotNetSocket, slotNetSocketStandard} {
+		// MC_AF_INET and MC_SOCKET_STREAM, which is what the callers pass.
+		if code := int32(callSlot(t, client, slot, 2, 1)); code >= 0 {
+			t.Fatalf("MC_netSocket at %#x answered %d, want a negative descriptor", slot, code)
+		}
+		if _, err := client.importFunction(importTableWIPIC, slot); err != nil {
+			t.Fatalf("MC_netSocket at %#x did not resolve: %v", slot, err)
+		}
 	}
 }

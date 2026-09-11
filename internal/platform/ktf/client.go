@@ -50,9 +50,11 @@ func svcStub(category, id uint32) []byte {
 }
 
 type Client struct {
-	core   *armcore.Core
-	thread *armcore.Thread
-	image  ClientImage
+	subscriberNumber string
+	authentication   backend.AuthenticationStatus
+	core             *armcore.Core
+	thread           *armcore.Thread
+	image            ClientImage
 	// mapped is what the image occupies in guest memory, entry is the address
 	// ExecuteEntry calls, and argument is the single word it is called with.
 	// The current generation of client images enters at its first byte with
@@ -1083,13 +1085,14 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
 	client := &Client{
-		core:     core,
-		thread:   armcore.NewThread(initial),
-		image:    image,
-		mapped:   mappedSize,
-		entry:    entry,
-		argument: argument,
-		module:   relocatable,
+		subscriberNumber: HandsetNumber(),
+		core:             core,
+		thread:           armcore.NewThread(initial),
+		image:            image,
+		mapped:           mappedSize,
+		entry:            entry,
+		argument:         argument,
+		module:           relocatable,
 
 		moduleSegment: segmentBase,
 	}

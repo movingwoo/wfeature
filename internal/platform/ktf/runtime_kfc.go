@@ -348,6 +348,6 @@ func runtimeDMInfoInstance(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Va
 // runtimeDMInfoHandsetNumber answers the subscriber number, which is what a MIN
 // is. It is the same number every other question about this handset's identity
 // is answered with.
-func runtimeDMInfoHandsetNumber(_ *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.ReferenceValue(vm.NewString(HandsetNumber())), nil
+func runtimeDMInfoHandsetNumber(runtime *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.ReferenceValue(vm.NewString(runtime.client.subscriberNumber)), nil
 }

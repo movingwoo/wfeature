@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // `org/kwis/msp/handset/HandsetProperty`, the handset's own values as a Java
@@ -31,7 +30,7 @@ func javaSystemProperty(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x holds no property name", arguments[0])
 	}
-	value, known := wipic.SystemProperties[name]
+	value, known := client.systemProperty(name)
 	if !known {
 		if client.logger != nil {
 			client.logger.Debug("LGT java handset property is not one this handset has", "name", name)

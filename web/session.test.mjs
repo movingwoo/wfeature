@@ -298,3 +298,15 @@ test("closing the transport rejects pending requests without waiting for a socke
   await assert.rejects(asking, /세션 연결이 끊어졌습니다/);
   assert.equal(session.pending.size, 0);
 });
+
+
+test("authentication is automatic and its result survives the protocol", async () => {
+  const { session, socket } = await openFakeSession();
+  for (const status of ["unsupported", "ktf-certificate-23"]) {
+    const asking = session.start("ktf/game.zip", 1, null, "browser", "");
+    const sent = socket.sent.at(-1);
+    assert.equal(sent.authentication, undefined);
+    socket.deliver({ kind: "started", id: sent.id, started: { authentication: status } });
+    assert.equal((await asking).started.authentication, status);
+  }
+});

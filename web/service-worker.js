@@ -3,7 +3,7 @@
 // retires the entries an older shell left behind. The fetch handler is network
 // first, so a stale entry is not what this prevents — an entry for a file the
 // shell no longer has is.
-const cacheName = "wfeature-shell-v15";
+const cacheName = "wfeature-shell-v21";
 
 // The shell is what the page needs to come up, which is now only the page: a
 // game runs on the server and this page draws what it sends.
@@ -19,6 +19,7 @@ const shell = [
   "./audio.js",
   "./key-holds.js",
   "./game-speed.js",
+  "./game-authentication.js",
   "./keypad-size.js",
   "./keypad-layout.js",
   "./storage.js",
