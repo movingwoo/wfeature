@@ -1176,9 +1176,9 @@ Two things are recorded here rather than guessed at in code:
 ## Automatic offline authentication
 
 New sessions automatically select recognized authentication compatibility.
-The page has no checkbox, stores no policy preference and sends no authentication
-switch. The obsolete incoming `authentication` field is ignored, including false
-from older clients. The shared `Options.DisableAuthentication` opt-out is for
+The Opts panel has no authentication control or notice. The page stores no policy
+preference and sends no authentication switch. The obsolete incoming
+`authentication` field is ignored, including false from older clients. The shared `Options.DisableAuthentication` opt-out is for
 local diagnostics and is not exposed by the browser protocol.
 
 The `started` description reports `authentication` as `off`, `unsupported`,

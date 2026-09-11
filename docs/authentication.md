@@ -1,8 +1,8 @@
 # Offline authentication compatibility
 
 Authentication compatibility applies automatically to recognized local game
-archives in both the PWA and CLI. There is no browser checkbox or per-archive
-preference; old stored preferences and the obsolete incoming `authentication`
+archives in both the PWA and CLI. The Opts panel has no authentication control
+or notice. Old stored preferences and the obsolete incoming `authentication`
 field do not affect new sessions. `runktf`, `runskt` and `runlgt` use the same
 platform defaults. `-no-auth` and `Options.DisableAuthentication` retain an
 explicit diagnostic comparison path. The old `-auth` flag remains accepted by
@@ -300,7 +300,8 @@ consent, transmit the subscriber number, or register a choice with a third party
 On restart, `IS_SAVEDATA_EXIST` receives an eight-byte empty-result frame:
 opcode 2, zero status, zero subscriber-field length, false existence and zero
 network-order data length. `FINISH_SAVEDATA` receives opcode 7, zero status and
-zero variable-field length. The page states that these exchanges are local.
+zero variable-field length. These exchanges remain local; their status is
+available in diagnostics.
 The guest may show its own restart and no-remote-save notices; those notices are
 not evidence of an external service or cloud backup.
 
@@ -357,9 +358,9 @@ menu afterward in both debug and release, without any authentication flag.
 
 Automatic defaults replace the initial opt-in product design at the user's
 request. The shared session and all three platform option types use a diagnostic
-`DisableAuthentication` opt-out; the browser sends no policy switch and displays
-only the applied/unsupported result. An older browser's `authentication: false`
-request is ignored, and a fresh browser needs no preference. Historical off/on
+`DisableAuthentication` opt-out; the browser sends no policy switch and records
+the applied/unsupported result in diagnostics, without settings-panel text.
+An older browser's `authentication: false` request is ignored, and a fresh browser needs no preference. Historical off/on
 comparisons elsewhere in this document describe the policy controls available
 when those measurements were taken.
 
