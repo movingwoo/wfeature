@@ -646,26 +646,23 @@ exactly the state it reached before — the reading it takes from `"EN/L"`
 produces the same mode table its constructor started with — which is why
 adopting the real contract changed no title's frames.
 
-**There is no automaton, and the null one is a defined answer.** The
-specification says what happens to a key the automaton cannot use: whatever is
-composing goes into the completion buffer and the call returns 0. An automaton
-that composes nothing is never composing anything, so both output buffers come
-back empty and every key answers 0. That is what `MC_imHandleInput` does here —
-not a stub standing in for the contract, but the contract's own
-did-not-handle-it branch, taken always.
+**Numeric input is implemented; letter composition remains incomplete.** In
+`N123` mode, `MC_imHandleInput` returns one completed ASCII digit for a pressed
+or repeated numeric key, provided the completion buffer fits the digit and its
+terminator. It clears the composing buffer and preserves both input capacities.
+Release, navigation and flush keys remain unhandled. The widget continues to
+own its text, deletion and mode selection.
 
-**Every local title that reaches this call reaches it once, to reset.** Three
-archives make the call, each exactly one time, from a text widget's
-constructor, and the key is always `0x9d`. That is `MH_IMA_FLUSH` — the
-specification defines it as `-99` and the parameter is an `M_Char` — so the one
-thing any title asks for is "finish whatever is composing", asked before
-anything has been typed. None of them routes a character key through the
-platform afterwards. So what is missing is composition itself, and no local
-title is waiting on it.
-
-It stays missing on purpose. The mode that widget selects is Hangul, and
-composing Hangul from a twelve-key pad is a handset vendor's own layout rather
-than anything the specification fixes.
+Earlier probes observed only constructor flushes. A later authentication
+acceptance route reaches a mandatory name widget that selects mode 3 and sends
+`2` and `3` with event type 502. Returning empty strings there prevented name
+entry. The corrected path visibly enters digits and accepts a four-digit name;
+the guest's own minimum-length check rejects a two-byte name. This supersedes
+the earlier claim that no local title sends character keys through the platform.
+The [WIPI input-method contract](https://mirusu400.github.io/wipi-wiki/hal/input-method.md)
+defines numeric mode and the completed/composing output buffers. Numeric entry
+does not require the whole-field editor in `internal/textinput`; multi-tap and
+Hangul composition still need an adapter to that separate output contract.
 
 **The composing buffer is written now, and the reason it was not is worth
 keeping.** `(key, type, buf1, size1)` arrive in registers and `(buf2, size2)`
@@ -677,17 +674,9 @@ and the platform stub balances its push before the supervisor call, so the
 stack pointer the handler sees is the caller's. Both sizes are the caller's
 capacities and the specification marks them in-only, so neither is rewritten.
 
-One argument still does not match the specification. The `type` is genuinely
-computed — the caller writes `0xfb` and shifts it left, so `0x1f6` is meant —
-and `MH_Event` numbers its events from 1 to 11. It is a vendor's own numbering,
-and nothing here needs it: a flush is a flush whatever the event was.
-
-Where a later attempt would start: `internal/textinput` already implements the
-multi-tap keypad the other platforms' text fields use, which covers three of
-the four modes above. It has no Hangul — and Hangul is the mode that widget
-selects — and it keeps a whole field's text, while this call hands back a
-completed string and a composing one and leaves the field to the widget. So
-what it needs is an adapter, not a caller.
+The `type` uses the same vendor event numbers as the Clet boundary: pressed
+502, released 503 and repeated 504. The observed name widget forwards 502.
+A flush still empties both buffers regardless of its event type.
 
 Because a Clet writes the framebuffer directly, the runtime's copy of a
 surface is **re-read from guest memory before every draw call and written back
@@ -4919,10 +4908,9 @@ are carried by `collect_test.go` rather than by the corpus.
   for a reference (`null` is a value a title can test) and wrong for a number,
   and no local title asks for one.
 
-- **No input automaton.** The four input-method calls that describe and select
-  a mode are answered as the specification defines them; `MC_imHandleInput`
-  composes nothing, so a widget that types through the platform stays empty.
-  See "Character input" for why a guessed keypad layout is worse than the gap.
+- **Letter composition is incomplete.** `MC_imHandleInput` completes digits in
+  `N123` mode. English multi-tap and Hangul composition through this C boundary
+  remain unimplemented; see "Character input".
 - **A scene load takes seconds, and the screen holds its loading art for all
   of it.** Taken again after the page-permission change in `docs/armcore.md`,
   on an M-series desktop, release profile: the worst single tick across the

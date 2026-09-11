@@ -93,21 +93,9 @@ const imaFlushKey = 0x9d
 // handleInputKey services MC_imHandleInput: a key in, a completed string and a
 // composing string out, and 1 or 0 for whether the automaton took the key.
 //
-// **This is the null automaton, and that is a defined answer rather than a
-// stub.** The specification says what happens to a key the automaton cannot
-// use: whatever is composing goes into the completion buffer, and the call
-// returns 0. An automaton that composes nothing is never composing anything,
-// so both buffers come back empty and every key answers 0 — which is exactly
-// what this does, for every key including MH_IMA_FLUSH.
-//
-// What is missing is composition itself, and no local title asks for it. Three
-// archives reach this call and each reaches it once, from a text widget's
-// constructor, with MH_IMA_FLUSH and two freshly zeroed eight-byte buffers:
-// the widget resets the automaton before it starts and then never routes a
-// character key through the platform. So the gap stands where it did, and it
-// stands deliberately — the mode that widget selects is Hangul, and composing
-// Hangul from a twelve-key pad is a handset vendor's own layout rather than
-// anything the specification fixes.
+// Numeric mode returns one completed ASCII digit for a pressed or repeated
+// key. Other modes still have no composition implementation. The widget owns
+// editing, deletion and mode changes; navigation and flush keys remain unhandled.
 //
 // `(key, type, buf1, size1)` arrive in registers and `(buf2, size2)` on the
 // stack. The stacked pair used to be left alone because no caller had been
@@ -135,8 +123,27 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 			return err
 		}
 	}
-	// 0 is "the automaton did not handle it", which is the whole of what this
-	// automaton ever answers.
+	key, err := thread.Register(0)
+	if err != nil {
+		return err
+	}
+	kind, err := thread.Register(1)
+	if err != nil {
+		return err
+	}
+	if client.inputMode == 3 && (kind == EventKeyPressed || kind == EventKeyRepeated) &&
+		key >= '0' && key <= '9' && completed != 0 && completedSize != 0 {
+		capacity, err := client.readWord(completedSize)
+		if err != nil {
+			return err
+		}
+		if int32(capacity) >= 2 {
+			if err := client.core.Memory().Write(completed, []byte{byte(key), 0}); err != nil {
+				return err
+			}
+			return thread.SetRegister(0, 1)
+		}
+	}
 	return thread.SetRegister(0, 0)
 }
 
