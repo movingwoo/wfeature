@@ -7733,15 +7733,12 @@ here so a suspicious pass is read with it in mind.
 
 ### Two things worth knowing about these openings
 
-**A slow animation settles.** One of the five reaches a main menu that cycles
-four frames on a period of about 38 ticks, and each frame is held far longer
-than the eight identical ticks `ladder.StillRuns` asks for — so the settle
-judgment calls one frame of an animation a still screen, and then any key at
-all looks like an answer, because three of the four frames are content that
-"settled screen" never held. It happens to give the right verdict for the wrong
-reason here. The cycling path in `internal/ladder` was sized against blinks
-with periods up to 16 ticks, and this is slower than anything in that
-measurement.
+**The old still shortcut misclassified a slow animation.** A menu cycles four
+frames over about 38 ticks, holding each longer than the former eight-tick
+shortcut. That shortcut froze on one phase and credited later unpressed phases
+to a key. Both settling paths now observe the full 64-sample cycle horizon;
+[the regression and three-corpus comparison](settling-validation.md) record the
+change and the remaining limits of finite observation.
 
 **Ticks are not seconds, and these openings are long in ticks.** These titles
 paint once per Host tick, so a screen a handset holds for a couple of seconds
@@ -7926,6 +7923,5 @@ callback. Under a wall clock, where it always worked, it still answers a key:
   theoretical, and none of them is what boxed that map's objects (see "An image
   is drawn through its own handle") or what dropped a sprite's backdrop (see
   "The transparency a title brings with it")
-- cheat write watches, hit tracing, and cheat-table save/load (Phase 4)
 - in-game progression is verified by the user playing, not by automated
   probes; probes only surface missing API surfaces to implement

@@ -68,14 +68,13 @@ and match archive bytes before rerunning the BREW observation or deciding which
 previously requested archives to include. Do not move game files during a plan
 review. Use the generated records under `var/acceptance/` for dated membership.
 
-`internal/ladder` still uses `StillRuns = 8` and `SettleRounds = 2`. A four-frame
-animation with a period around 38 ticks can satisfy the still test, allowing an
-animation change to be credited to a key. The KTF rung watches after the last
-round; the LGT and SKT rungs leave that round earlier. Increasing the common
-round count therefore needs controls on all three platforms. See [ktf.md](ktf.md),
-"A key cannot be credited on a screen that drifts" and "Two things worth knowing
-about these openings". Truly non-settling animation is an unanswerable grade,
-not an emulator defect.
+`internal/ladder` now uses the full 64-sample observation horizon for both
+still and cycling screens. A regression reproduces the former 38-tick animation
+false positive. A three-corpus comparison retained `SettleRounds = 2` because
+four rounds changed no outcome. The remaining final-round watch difference and
+finite-observation limits are recorded in
+[settling-validation.md](settling-validation.md). A non-settling animation is an
+unanswerable grade, not an emulator defect.
 
 [testing.md](testing.md), "Browser session retention and control" and
 "Destructive starts and pause observations", records local Chromium and WebKit
@@ -138,19 +137,15 @@ The following are candidates, not speed claims or approved large rewrites:
 
 ## Documentation and provenance
 
-The root README still describes three keypad types and the former size panel,
-while the page ships four types and cell editing. `web/README.md` and early
-sections of `docs/session.md` also describe the former layout. These are
-documentation gaps, not missing keypad implementation.
+The root README, `web/README.md` and the keypad section of `docs/session.md`
+now describe four types, per-type cell editing and the shared sizing editor.
+These documentation corrections do not add another keypad implementation.
 
-Historical sections in [testing.md](testing.md) still name the removed
-`var/games/test_skt/NOT-WORKING.md` report and state that there is no session
-cap or request deadline. Later sections and current source supersede these
-claims. Some deliberately-incomplete lists also retain completed features,
-including KTF cheat watches and table persistence. The next documentation pass
-should distinguish historical observations from current limitations and remove
-individual title names already present in older tracked prose. This review
-introduces no new title names.
+The removed SKT corpus report is now marked historical in [testing.md](testing.md).
+The same document records current HTTP deadlines and the four-game retention cap.
+KTF's incomplete list no longer lists implemented cheat watches and table
+persistence. Historical archive counts still require dated corpus evidence;
+these documentation corrections are not new whole-corpus acceptance runs.
 
 The Host allocation bound remains a separate watch: `internal/webhost/session.go`
 reads an archive with `os.ReadFile` before handing it to a bounded loader.

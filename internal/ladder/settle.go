@@ -52,12 +52,12 @@
 //
 //	still:   the same frame for StillRuns ticks in a row.
 //	cycling: over the last 2*CycleWindow ticks, at most CycleFrames distinct
-//	         frames, and the most recent CycleWindow ticks introduce none the
-//	         CycleWindow before them had not already shown.
+//	         frames, with the same frame set in both halves.
 //
-// **The still path is checked first and is unchanged**, so every archive the
-// old judgment settled settles here at the same tick, on the same frame. The
-// cycling path can only add.
+// Both paths observe a full pair of cycle windows before settling. The old
+// eight-tick shortcut could freeze on one phase of a 38-tick animation and
+// mistake its next phase for a key response. A still screen now pays the same
+// observation cost as a blinking screen.
 //
 // # Why these numbers
 //
@@ -98,11 +98,9 @@ import (
 )
 
 const (
-	// StillRuns is how many ticks a screen must present one unchanged frame
-	// for to count as still. This is the judgment as it stood before the
-	// cycling path was added, kept to the tick so that no archive changes its
-	// answer because of a rule meant to reach the ones that had none.
-	StillRuns = 8
+	// StillRuns covers the same observation horizon as the cycling path.
+	// The initial frame plus this many ticks provide two full cycle windows.
+	StillRuns = 2*CycleWindow - 1
 	// CycleWindow is half the span a repeating screen is judged over, in
 	// ticks. See the package comment: the slowest blink measured repeats every
 	// 16 ticks, and a half this size holds two of those.
@@ -210,10 +208,15 @@ func (w *Watcher) cycling() ([]uint64, bool) {
 			return nil, false
 		}
 	}
+	recentFrames := map[uint64]bool{}
 	for _, frame := range recent {
+		recentFrames[frame] = true
 		if !cycle[frame] {
 			return nil, false
 		}
+	}
+	if len(recentFrames) != len(cycle) {
+		return nil, false
 	}
 	frames := make([]uint64, 0, len(cycle))
 	for frame := range cycle {

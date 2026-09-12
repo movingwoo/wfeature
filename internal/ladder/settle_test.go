@@ -27,10 +27,10 @@ func repeat(pattern []uint64, times int) []uint64 {
 	return out
 }
 
-func TestStillScreenSettlesOnTheEighthUnchangedTick(t *testing.T) {
+func TestStillScreenSettlesAfterTheFullObservationWindow(t *testing.T) {
 	watcher, at := watch(t, repeat([]uint64{7}, 64))
 	// The first identity is the frame that was up before the first tick, so
-	// the eighth unchanged tick is index eight.
+	// the full observation window ends at index StillRuns.
 	if at != StillRuns {
 		t.Fatalf("a still screen settled at %d, want %d", at, StillRuns)
 	}
@@ -143,5 +143,27 @@ func TestNothingChangedBeforeItSettled(t *testing.T) {
 	watcher.Observe(1)
 	if watcher.Changed(2) {
 		t.Fatal("a screen with nothing to compare against reported a change")
+	}
+}
+
+// A 38-tick four-frame loop holds each frame for nine or ten ticks. The old
+// eight-tick still shortcut froze its baseline on the first frame, then
+// credited the next animation phase to a key that had never been pressed.
+func TestSlowAnimationDoesNotLookLikeAKeyResponse(t *testing.T) {
+	var pattern []uint64
+	for index, hold := range []int{10, 9, 10, 9} {
+		pattern = append(pattern, repeat([]uint64{uint64(index + 1)}, hold)...)
+	}
+	watcher, at := watch(t, repeat(pattern, 5))
+	if at < 0 {
+		t.Fatal("repeating four-frame baseline never settled")
+	}
+	for _, frame := range pattern {
+		if watcher.Changed(frame) {
+			t.Fatalf("unpressed animation frame %d was credited to input after settling at %d", frame, at)
+		}
+	}
+	if !watcher.Changed(5) {
+		t.Fatal("new input content was not distinguished from animation")
 	}
 }

@@ -1154,10 +1154,10 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 Every archive under `var/games/skt` is started, ticked for 300 ticks and
 required to end somewhere other than the error state with something lit in its
 frame. That directory is the set the probe holds to,
-not the whole local corpus: the ninety-archive set is `var/games/test_skt`, it
-is swept with the CLI rather than with `go test`, and what the sweep found is
-`var/games/test_skt/NOT-WORKING.md` and "Ninety archives" in
-[`skvm.md`](skvm.md). A tick here is real time — a MIDlet's threads
+not the whole local corpus. The earlier ninety-archive sweep is historical;
+its former `var/games/test_skt` directory and local failure report are no longer
+authoritative corpus pointers. Use dated `var/acceptance/` records and current
+archive hashes before comparing membership. A tick here is real time — a MIDlet's threads
 sleep against the wall clock — so the subtests run in parallel and the whole
 probe takes about half a minute. Two of the fifteen finish early and still
 pass: they check a licence against the handset's subscriber number, draw the
@@ -1562,11 +1562,12 @@ cover:
   deliberately still installed `@latest`: what it reports moves with its
   vulnerability database, and pinning the tool would pin the question rather
   than the answer.
-- The LAN server bounds individual save and debug-log bodies, but it has no
-  whole-request read deadline and no cap on simultaneously live sessions. It
-  also intentionally has no authentication. The first two are operational
-  limits that can be added without choosing an identity model; authentication
-  remains a product decision for use beyond a trusted local network.
+- The LAN server bounds individual save and debug-log bodies, sets a ten-second
+  HTTP header deadline and ten-minute HTTP read deadline, and limits retained
+  running/parked games to four. The upgraded session socket clears the HTTP
+  read deadline and has its own lifecycle. These controls do not add a user
+  identity system; use beyond a trusted local network remains a separate
+  product decision.
 - The release-facing Korean text still needs a publication pass. The README's
   third-party component table omitted `golang.org/x/sys`, although it is linked
   on amd64 targets and was correctly included in the embedded notices — **since
