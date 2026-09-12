@@ -126,7 +126,7 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 | 04 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
 | 05 | Directed play entry and input verified | Payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 06 | Interactive management route verified | Seeded and empty controls are visually identical; progress pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
-| 07 | Existing-save route reaches management/HUD | Existing seed changes visible state; new progress pending | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 07 | Directed purchase and restored management/HUD verified | New payload restores changed currency and supply quantity versus immutable seed | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 08 | Directed battle field verified | No save write on route; applicability pending | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 09 | Directed restore-to-playfield route verified | New 64-byte save survives reopen and changes visible state versus immutable-seed control | Audible check pending | Directed close/reopen verified |
 | 10 | Directed field/HUD and dialogue verified | No save write on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |

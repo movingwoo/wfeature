@@ -1,9 +1,9 @@
 # SGS corpus acceptance on 2026-09-12
 
-This record covers directed play routes and controlled save/reopen checks in
-the twelve-ID local SGS corpus. It identifies the archive only by the stable ID and SHA-256 recorded in
-the ignored manifest. Archives, saves, screenshots, and the manifest remain
-outside Git.
+This record covers directed routes and save/lifecycle controls across the
+twelve-ID local SGS corpus. It identifies each archive only by the stable ID
+and SHA-256 recorded in the ignored manifest. Archives, saves, screenshots,
+and the manifest remain outside Git.
 
 ## ID 09 result
 
@@ -214,7 +214,7 @@ boundary that remains:
 | ID | Route and visible endpoint | Current boundary |
 | --- | --- | --- |
 | 06 | 100 events, including 50 presses, from 677 through 20756 ms. `sgs-directed-06-randomcompat-mode2-20260912/first-key025.png` and `first-key050.png` show interactive management screens over the playfield after resource-changing input. | This establishes the recorded management path. A distinct action-field route has not been identified. |
-| 07 | The first six recorded Fire presses reach the main menu; a seventh Fire press at 9000 ms selects the start flow. `sgs-directed-07-start-randomcompat-mode2-20260912/first-final.png` at 14120 ms shows the existing-save path in its interactive management/HUD screen. | The original 75-press recording navigates settings, help, and ranking screens without selecting Start, so it is not the directed route. |
+| 07 | The first six recorded Fire presses reach the main menu; a seventh Fire press at 9000 ms selects the start flow. `sgs-directed-07-new-progress-randomcompat-mode2-20260912/reopen-final.png` shows the restored changed values in the interactive management/HUD screen. | A directed management purchase now proves new visible progress across close/reopen. The original 75-press recording remains excluded because it does not select Start. |
 | 08 | 44 events, including 22 presses, from 938 through 17614 ms. `sgs-directed-08-randomcompat-mode2-20260912/first-final.png` at 22614 ms shows an active battle field after directed input. | No save write occurs on this route. |
 | 10 | 40 events, including 20 presses, from 619 through 6487 ms. `sgs-directed-10-randomcompat-mode2-20260912/first-key005.png` shows the field and HUD; later captures show field dialogue after continued input. | No save write occurs on this route. |
 | 11 | The title has six vertical selections. `Down, Fire`, then five more Fire presses advance the local story into an active room; later Down, Left, and Up presses move the visible player. `sgs-directed-11-local-mainplay-reopen-randomcompat-mode2-20260912/first-key011.png` through `first-key013.png` record that movement. | No save call occurs on this local main-play route. The external handoff on title selection zero remains unsupported but does not block local main play. |
@@ -241,7 +241,8 @@ from zero through five and clamps there. Fire on selection zero first enters
 state `[1, 0]`; a second Fire reaches external-URL service `0xc4` at `0x13cd`.
 The service argument is an absolute HTTP URL in script resource 65; the full
 value stays in ignored local evidence and no network request was made. State
-`[1, 5]` takes the local branch at the same gate and returns toward the title.
+`[1, 5]` takes the local branch at the same gate, decrements the first state
+element, and returns.
 Selection one instead enters the local story and main-play route described
 above. After `0xc4`, the script unconditionally jumps to the invocation
 terminator, so the alternate handoff does not expect a script callback.
@@ -258,10 +259,12 @@ empty-store control produces the same write sequence. All 54 first-session and
 The route therefore exercises the save boundary but does not establish visible
 saved progress.
 
-ID 07 starts from the existing 64-byte seed
+ID 07 starts from an immutable copy of the existing 64-byte seed
 `1b1c5cc8c32c9b5122befbde3cee7639ff24a759a20910e2144223d30ef4bc6e`.
-The seven-press start route loads and retains that payload. Its empty-store
-control writes a different payload with digest
+The preserved copy is
+`sgs-directed-07-new-progress-source-randomcompat-mode2-20260912/immutable-seed.bin`.
+The seven-press start route loads and retains those bytes. Its empty-store
+control writes a different default payload with digest
 `2d67960ff306191afdd74818324b1afa172eb53b2c917c01818f86b5a89a3f5f`.
 Under the same inputs, the arms first differ at press five at 7089 ms. At 14120
 ms the seeded arm shows the interactive management/HUD screen with framebuffer
@@ -270,8 +273,40 @@ digest
 the empty arm shows the new-game story with digest
 `df74839356bbb53c66390830469fafeeee06e9ab7e5866cf7f142e55bf89f16a`.
 The same distinction repeats after close/reopen. This proves that an existing
-save causally changes visible state. It does not prove creation and restoration
-of new progress during this run.
+save causally changes visible state.
+
+A later directed route proves creation and restoration of new progress. After
+the seven opening Fire presses, it uses the following additional presses; each
+is released 100 ms later:
+
+| At (ms) | Press |
+| ---: | --- |
+| 14000 | Down |
+| 16400 | Fire |
+| 19000 | Down |
+| 21400 | Fire |
+| 23800, 26200 | Right |
+| 28600 | Fire |
+| 31000, 33400, 35800 | Down |
+| 38200, 40600 | Fire |
+| 43000 | Clear |
+
+This selects a supply row, changes its displayed purchase quantity, and reaches
+the purchase action through the management UI. At 38200 ms the guest writes a
+new 64-byte payload with digest
+`90940f5e3fee80b5884733b2c42382494d6856d3676f96c9d58691612c225a9c`;
+it repeats those bytes at 39180 and 43016 ms. Relative to the immutable seed,
+word 5 changes from 395 to 355 and word 9 changes from 50 to 150.
+
+After Host close/reopen, startup loads the new payload at 0 ms before any write.
+The identical seven-Fire start route then writes the same bytes at 9248 ms and
+shows the management HUD with the changed visible values. Its final framebuffer
+digest is
+`558c1b770da889888681de162e18880013be75b4fc0dc8e8f4828aae4b4834be`.
+The control reopens the immutable seed under the same inputs, retains its bytes,
+and shows the original visible values with framebuffer digest
+`4c0540acd03f8a7186aa0c84ed2d53dbbf7c1c6ddabc6d6c78ff2b9d970623e6`.
+Both sessions and both controls finish without an execution or close error.
 
 IDs 08, 10, and 12 each make one missing-save read in the first session and one
 in the reopened session, with no write. ID 11 makes no save-boundary call. These
@@ -302,7 +337,7 @@ human acceptance item for every ID.
 | 04 | Active fight | Startup default only; no progress change | Host close/reopen passes | Check end-of-round behavior for a changed payload. |
 | 05 | Active playfield | Payload reloads, but empty control is visually identical | Host close/reopen passes | Exercise score, settings, or round completion and compare a changed visible field. |
 | 06 | Interactive management path | Seeded and empty controls are visually identical | Host close/reopen passes | Identify a distinct progress action or an action-field transition; repeating this management route adds no evidence. |
-| 07 | Existing-save path reaches interactive management/HUD | Existing seed causally changes visible state; new progress is not proven | Host close/reopen passes | Produce a new changed payload through a directed progress action and compare it with the immutable seed. |
+| 07 | Restored local progress reaches interactive management/HUD | A new purchase payload restores two changed visible values against the immutable-seed control | Host close/reopen passes | Audible output remains a human check. |
 | 08 | Active battle field | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
 | 09 | Active playfield and HUD | New payload causally restores visible progress | Host close/reopen passes | Audible output remains a human check. |
 | 10 | Field and HUD with continued dialogue | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
@@ -311,7 +346,6 @@ human acceptance item for every ID.
 
 Audio remains pending for all twelve IDs because no physical playback was
 heard during these diagnostics.
-
 ## Combined implementation verification
 
 The integrated revision `9c716ee` combines native text input, the original
