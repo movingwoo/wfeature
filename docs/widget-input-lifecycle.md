@@ -58,8 +58,10 @@ normal field constraints and notification behavior. Any new shown-shell or
 focus handle must also be a Java collection root; Go-side storage of a numeric
 guest handle alone does not preserve the guest object. Parent/child edges must
 remain traversable, and hiding, removing, or refocusing a component must
-invalidate its pending Host edit. These are requirements for the executable
-slice, not claims that the current runtime already satisfies them.
+invalidate its pending Host edit. The LGT adapter now records this ownership, rejects stale edits, and traces the
+shown/focused graphs. Its authored lifecycle regressions cover callback reentry,
+exact inherited signatures, and parent-cycle rejection. The sampled archive
+routes above still do not establish a real Java text-entry route.
 
 ## Whole-field replacement and IME callbacks
 
@@ -77,8 +79,8 @@ Whole-field input needs the component's string-setting contract. It must not
 synthesize per-key automaton events with the complete string. An explicitly
 installed application listener needs a separately established contract; refusing
 that unsupported target is a limitation, not evidence that custom listeners work.
-The current follow-up reviews the KTF adapter against this distinction and uses
-it as a requirement for the LGT adapter.
+The KTF and LGT adapters follow this distinction: they refuse installed delta
+listeners and use the component string-setting contract for supported fields.
 
 ## Separate native input-method callers
 
@@ -91,3 +93,23 @@ adapter. Conversely, the historical Java `TextComponent.imHandler` initializatio
 failure remains evidence of Java widget demand even when newer bounded routes
 do not reach the input screen. These are distinct input contracts; see the
 [input-method and widget history](lgt.md).
+
+## A response-dependent LGT editor route
+
+Static analysis of local archive SHA-256
+`735a579d82ac53bb205b04250ce44586c6d9375e64c2d6f3324796b3ae24d031`
+identifies a Java editor branch selected by response value 1101. The value is
+read from a connection's input stream. The connection factory call uses static
+import 46 (`0xb8 / 4`) from the module's static-method table; the recorded class
+metadata resolves that import to `org/kwis/msf/io/URL.find(String)`. Its address
+constant uses the `BillSocket` scheme. The endpoint is not needed for this
+finding and is omitted.
+
+The current runtime implements that factory with `javaURLFind`, which throws
+`SchemeNotFoundException` instead of opening a connection. This particular
+response-dependent branch therefore cannot establish real editor acceptance
+under the current offline runtime. Focused socket-refusal and exception-inheritance
+tests pass. This is static reachability evidence, not a recorded editor execution,
+and it does not rule out other entry paths in the same archive. A synthetic
+response would test a different acceptance path and must not be counted as real
+service behavior. See [network limitations](network.md).

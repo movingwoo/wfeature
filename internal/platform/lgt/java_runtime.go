@@ -133,6 +133,12 @@ type javaRuntime struct {
 	// the title built: the text it holds, its limit, the mode it is in and the
 	// children it was given. See java_widget.go.
 	widgets map[uint32]*javaWidget
+	// focusedWidget is the component the LWC container sends input to. The
+	// generation changes on every focus, parent or visibility transition so a
+	// Host edit cannot become current again after the guest changes the screen
+	// and later restores the same handles.
+	focusedWidget    uint32
+	widgetGeneration uint64
 	// dates is the instant each java/util/Date stands for.
 	dates          map[uint32]int64
 	databases      map[uint32]*javaDatabase

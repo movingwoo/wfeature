@@ -196,6 +196,42 @@ func TestJavaCollectorFollowsAWidgetToItsChildrenAndListener(t *testing.T) {
 	}
 }
 
+func TestJavaCollectorKeepsTheFocusedShownTextWidgetGraph(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	shell := newCollectableObject(t, client, "org/kwis/msp/lwc/ShellComponent")
+	field := newCollectableObject(t, client, "org/kwis/msp/lwc/TextFieldComponent")
+	handler := newCollectableObject(t, client, javaInputMethodHandlerClass)
+	listener := newCollectableObject(t, client, "java/lang/Object")
+	*client.javaWidgetState(shell) = javaWidget{
+		kind: javaWidgetShell, shown: true, children: []uint32{field},
+	}
+	*client.javaWidgetState(field) = javaWidget{
+		kind: javaWidgetTextField, parent: shell, inputHandler: handler, focused: true,
+	}
+	*client.javaWidgetState(handler) = javaWidget{listener: listener}
+	runtime.focusedWidget = field
+
+	for cycle := 0; cycle < 3; cycle++ {
+		collect(t, client)
+	}
+	for name, object := range map[string]uint32{
+		"shell": shell, "field": field, "handler": handler, "listener": listener,
+	} {
+		if !tracked(client, object) {
+			t.Fatalf("%s was freed while the focused shown field retained it", name)
+		}
+	}
+
+	runtime.widgets[shell].shown = false
+	runtime.focusedWidget = 0
+	collect(t, client)
+	collect(t, client)
+	if tracked(client, shell) || tracked(client, field) || tracked(client, handler) || tracked(client, listener) {
+		t.Fatal("an unshown and unfocused widget graph was retained")
+	}
+}
+
 // The third: a wrapper stands for another object's sink, and a stream for the
 // File it was opened on. Neither relationship is a word in guest memory.
 func TestJavaCollectorFollowsWrapperAndFileBindings(t *testing.T) {

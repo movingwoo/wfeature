@@ -5,6 +5,17 @@ This investigation extends the [LGT audit](lgt-audit-2026-09-12.md) at revision
 and unverified gameplay paths are separate findings. SGS development remains
 paused; this audit does not resume it.
 
+## Subsequent work
+
+The tables below retain the initial audit findings at `2b56bad`. The managed
+follow-up repairs KTF shutdown and SKT CLDC stream interfaces, adds supported
+[native keyboard input](native-text-input.md), and records actual save and
+stream-call evidence. Current results and limits are in the
+[KTF follow-up](ktf-compatibility-followup.md) and
+[SKT follow-up](skt-compatibility-followup.md). The historical widget description
+does not request handset keypad composition; the user selected Host keyboard/IME
+input instead.
+
 ## KTF
 
 | Area | Current gap and evidence |

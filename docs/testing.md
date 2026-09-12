@@ -1067,13 +1067,13 @@ with periods between 2 and 16 ticks, while 15 keep producing frames never seen
 before or cycle through six to thirty-two of them. Nothing fell between four
 and six.
 
-So a screen is settled when it is **still** — the same frame for eight ticks,
-unchanged — **or cycling**: over the last 64 ticks it showed at most four
-distinct frames, and the most recent 32 introduced none the 32 before them had
-not already shown. The still test is checked first and is untouched, so no
-archive changes its answer because of a rule written for the ones that had
-none. What the settled screen leaves behind is the *set* of frames it cycles
-through, and step 4 asks whether the key drew something that set never held: a
+Both decisions now observe **64 frame samples**: the initial frame and 63
+subsequent ticks. A screen settles if all samples are identical, or if it cycles
+through at most four distinct frames with the same frame set in each 32-sample
+half. The old eight-tick shortcut could mistake a held animation phase for a
+still screen; the [settling follow-up](settling-validation.md) records that
+regression and the corpus comparison. What the settled screen leaves behind is
+the *set* of frames it cycles through, and step 4 asks whether the key drew something that set never held: a
 blinking screen has no single frame to compare against, since half its ticks
 differ from the other half whether or not a key did anything. A screen still
 producing new content stays *unanswerable* — the point is to shrink "I do not

@@ -28,9 +28,9 @@ fields use a password input and are cleared when the dialog closes.
 
 Custom game-owned input interfaces are not automatically discoverable. A platform
 without a proven active field reports that no supported field is active. In
-particular, the current LGT widget implementation does not retain the focus and
-notification state needed for a safe adapter; WIPI-C UIC also lacks component
-creation. Supporting those paths requires their guest UI lifecycle first.
+particular, WIPI-C UIC lacks component creation, and game-owned native widgets
+do not expose a field identity. Supporting those paths requires their guest UI
+lifecycle first.
 
 ## Supported editors
 
@@ -41,6 +41,14 @@ InputMethodListener remain unsupported: its per-key composition deltas cannot
 safely describe an arbitrary whole-field replacement.
 KFC modal editors do not expose a live target and remain unsupported. SKT supports
 TextBox, the selected Form TextField, and a focused XTextField on the visible canvas.
+LGT supports a focused LWC TextField or TextBox whose parent chain reaches a
+shown Shell. Shell visibility and focus changes invalidate pending edits; field
+and listener revisions also reject guest changes that restore an earlier value.
+Application lifecycle callbacks are dispatched by their exact method signature,
+and shown/focused widget graphs remain reachable by the Java collector. As with
+KTF, an installed InputMethodListener is unsupported. This adds text editing,
+not a complete LWC renderer.
+
 Limits count Java UTF-16 units; supplementary characters consume two units. Native
 entry does not infer fields drawn by game code.
 
@@ -59,6 +67,17 @@ draft preservation, guest length limits, and absence of leaked game-key events o
 page errors. Artifacts are in the ignored
 `var/diagnostics/native-text-e2e-20260912` directory. Composition events are driven
 by automation; physical-phone keyboard and IME interaction still needs a person.
+
+An authored LGT AOT archive also boots through the shared session and actual
+WebSocket. Its initializer resolves the Java tables, allocates a shell and text
+field, and invokes construction, attachment, visibility, length, and focus calls.
+The tests reject an over-limit string, retry the same edit with Korean and a
+supplementary character, and reopen the field to read the stored value. Chromium
+and WebKit both pass composition isolation, game-key isolation, reload/resume,
+length rejection/retry, and guest readback with this archive. Review artifacts
+are in `var/diagnostics/lgt-text-e2e-20260912`. The fixture does not draw a complete
+widget screen or provide a guest key route that changes focus; those lifecycle
+transitions remain covered by separate runtime regressions.
 
 The integrated normal and debug suites, internal race checks, and `go vet ./...`
 pass. Both CLI and embedded-server binaries build in debug and release profiles.

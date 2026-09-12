@@ -80,7 +80,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// the annunciator above: the geometry is the platform's to keep, and this
 	// platform has none of the toolkit to keep it for, so a title that builds
 	// one goes on to whatever it does with the object.
-	"org/kwis/msp/lwc/ShellComponent.<init>(IIII)V": {Words: 5, Implementat: javaNoResult},
+	"org/kwis/msp/lwc/ShellComponent.<init>(IIII)V": {Words: 5, Implementat: javaShellComponentConstructor},
 	// The specification gives Image a public no-argument constructor beside its
 	// four factories, and a title uses it: it allocates the object itself and
 	// hands the empty picture to whatever fills it. There is nothing for this
