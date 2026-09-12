@@ -60,7 +60,29 @@ with `SRC_COPY`/`AND`/`OR`/`XOR`. The pixel *mask* is the surface's alpha
 channel rather than a separate plane, because these surfaces carry real
 alpha.
 
+## Synchronous repaint queue
+
+A worker may call `repaint` followed by `serviceRepaints` while the Host waits
+for its next input. The synchronous call paints the dirty region immediately,
+but the queued callback still exists. Previously each iteration cleared the
+only queued flag and posted another callback; the 1,025th request filled the
+1,024-event queue and killed the worker. A local authentication acceptance route
+exposed this while the CLI was waiting between commands.
+
+The runtime now tracks dirty pixels and a posted callback separately. Repaints
+reuse the outstanding callback until the Host consumes it. Repaints requested
+inside paint remain deferred to the following Host pass. An authored Canvas JAR
+regression performs 2,048 synchronous paints without a Host drain, then delivers
+input and a later partial repaint. The earlier test failed at request 1,025;
+that regression and the existing paint/serial-dispatch tests now pass.
+
 ## Input
+
+A Canvas with no MIDP commands receives the first soft key as handset menu
+code 129, including press, repeat and release. A local SKT title switches on
+that value to open its in-game menu; swallowing the key prevented access to
+that route. Displayables with commands retain command dispatch, and Jlet Cards
+retain their WIPI mapping. This is a vendor mapping, not a MIDP-standard key.
 
 Keys reach a Canvas as `keyPressed`, `keyReleased` and `keyRepeated`, and a
 `GameCanvas` may read `getKeyStates` instead. Which of those the corpus
