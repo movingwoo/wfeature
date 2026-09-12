@@ -896,8 +896,9 @@ func aotDeclaresPointerNotify(classes []jvm.AOTClassMetadata) bool {
 // the menu — and gave it back afterwards. A Host that parks a game whose page
 // has gone away is in exactly that position.
 const (
-	jletPauseApp  = "pauseApp"
-	jletResumeApp = "resumeApp"
+	jletPauseApp   = "pauseApp"
+	jletResumeApp  = "resumeApp"
+	jletDestroyApp = "destroyApp"
 )
 
 // PauseApp and ResumeApp run the Jlet's own lifecycle callbacks.
@@ -922,14 +923,21 @@ const (
 // which says the same thing more expensively — so a missing method is nothing
 // to call rather than something to report.
 func (client *Client) PauseApp(ctx context.Context) error {
-	return client.invokeJletLifecycle(ctx, jletPauseApp)
+	return client.invokeJletLifecycle(ctx, jletPauseApp, "()V")
 }
 
 func (client *Client) ResumeApp(ctx context.Context) error {
-	return client.invokeJletLifecycle(ctx, jletResumeApp)
+	return client.invokeJletLifecycle(ctx, jletResumeApp, "()V")
 }
 
-func (client *Client) invokeJletLifecycle(ctx context.Context, name string) error {
+// DestroyApp tells the active Jlet that an unconditional Host teardown has
+// begun. It must run before StopThreads: after that point guest code cannot be
+// entered safely.
+func (client *Client) DestroyApp(ctx context.Context) error {
+	return client.invokeJletLifecycle(ctx, jletDestroyApp, "(Z)V", jvm.IntValue(1))
+}
+
+func (client *Client) invokeJletLifecycle(ctx context.Context, name, descriptor string, arguments ...jvm.Value) error {
 	if client == nil || client.core == nil || client.thread == nil {
 		return fmt.Errorf("KTF client is not initialized")
 	}
@@ -949,16 +957,26 @@ func (client *Client) invokeJletLifecycle(ctx context.Context, name string) erro
 		// Nothing constructed a Jlet, so there is nothing with a lifecycle.
 		return nil
 	}
+	if name == jletDestroyApp {
+		if runtime.destroyCallbackStarted {
+			return nil
+		}
+		// The transition is unconditional and one-way. Mark it before guest
+		// entry: an exit, exception or exhausted instruction allowance must
+		// not make a later Close repeat partially completed cleanup.
+		runtime.destroyCallbackStarted = true
+	}
 	defer client.beginHostService(ctx)()
 	previousThread, previousContext := runtime.currentThread, runtime.currentContext
 	runtime.currentThread, runtime.currentContext = client.thread, ctx
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
-	if !runtime.hasAOTMethod(jlet.ClassName, name, "()V") {
+	if !runtime.hasAOTMethod(jlet.ClassName, name, descriptor) {
 		return nil
 	}
-	_, err := runtime.invokeAOTFromJVM(jlet.ClassName, name, "()V", []jvm.Value{jvm.ReferenceValue(jlet)})
+	arguments = append([]jvm.Value{jvm.ReferenceValue(jlet)}, arguments...)
+	_, err := runtime.invokeAOTFromJVM(jlet.ClassName, name, descriptor, arguments)
 	return err
 }
 

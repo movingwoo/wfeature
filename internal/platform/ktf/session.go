@@ -785,18 +785,29 @@ func (session *Session) SkipToNextDeadline() bool {
 	return session.Client.SkipToNextDeadline()
 }
 
-// Close aborts every parked guest thread worker so their goroutines exit.
-// The session cannot tick afterwards.
+// Close gives the active Jlet its unconditional destroy callback, then aborts
+// every parked guest thread worker so their goroutines exit. The callback runs
+// first because stopped workers make every later guest entry unsafe. The
+// session cannot tick afterwards.
 func (session *Session) Close() {
-	// Whatever was still sounding stops with the session; a Host recording to
-	// a file otherwise ends with notes that never get their note off.
-	if session != nil && session.Client != nil {
-		session.Client.audio.StopAll()
-	}
 	if session == nil || session.Client == nil {
 		return
 	}
-	session.Client.StopThreads()
+	// Teardown remains guaranteed if guest cleanup panics. Whatever was still
+	// sounding stops with the session, and the outer defer still stops workers
+	// if stopping an audio sink also panics.
+	defer session.Client.StopThreads()
+	defer session.Client.audio.StopAll()
+	// WIPI transitions a Jlet to destroyed through destroyApp. A callback
+	// failure cannot refuse an unconditional close, but keeping it in the
+	// lifecycle diagnostics explains cleanup a title could not finish.
+	timeout := session.Client.waitAllowance()
+	if timeout > serviceDefaultWait {
+		timeout = serviceDefaultWait
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_ = session.lifecycleResult(session.Client.DestroyApp(ctx), jletDestroyApp)
 }
 
 // Frame exposes the last flushed RGBA frame with its size and flush count.

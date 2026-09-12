@@ -330,7 +330,11 @@ type initializationRuntime struct {
 	jletListeners  []*jvm.Object
 	grabbedKeys    map[int32]*jvm.Object
 	activeJlet     *jvm.Object
-	guestFiles     map[string][]byte
+	// destroyCallbackStarted makes the destroyed transition one-way. It is
+	// set before entering guest cleanup so a callback that exits or fails is
+	// never repeated by a second Host close.
+	destroyCallbackStarted bool
+	guestFiles             map[string][]byte
 	// removedFiles is the set of paths unlink has deleted, loaded from the
 	// store on first use. See guestFileRemovedKey for why a delete needs a
 	// list of its own.
