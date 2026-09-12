@@ -9,16 +9,14 @@ import (
 //
 // There is no list of them in the archive: an ELF here carries no dynamic
 // symbols, and the only place a platform function is named is the pair of
-// numbers the module passes to `get import function` while it is starting. It
-// passes every one of them, for everything it might ever call, before it runs
-// any of its own code — so the resolutions a startup produces are the whole
-// surface the title links against, which is the question a compatibility pass
-// asks first and which a run answers one call at a time.
+// numbers the module passes to `get import function`. Startup resolves part of
+// this surface, while lazy Java stubs may resolve more on their first call.
+// Metadata-built virtual dispatch does not necessarily appear in this map.
 //
 // Recording them costs a map entry per distinct pair, which a module makes a
 // few hundred of, once. `internal/tools/apiscan` is what reads them back.
 
-// ImportRecord is one platform function a module resolved at startup.
+// ImportRecord is one platform function a module has resolved.
 type ImportRecord struct {
 	// Category is the SVC category the resolved stub traps into, which is what
 	// names the slot: the import table a module asks is not always the table
@@ -50,9 +48,8 @@ func (client *Client) recordImport(category, slot uint32) {
 }
 
 // ResolvedImports reports every platform function the module has resolved,
-// ordered by category and slot. It is meaningful once Start has returned: a
-// module resolves everything at startup, so a client that has not started has
-// nothing to report and one that is playing has nothing to add.
+// ordered by category and slot. It is a snapshot of resolutions so far, not a
+// complete declaration of every function later gameplay may use.
 func (client *Client) ResolvedImports() []ImportRecord {
 	client.mu.Lock()
 	pairs := make([][2]uint32, 0, len(client.imports))

@@ -94,10 +94,33 @@ that the current area forbids saving. Walking to a permitted area remains a
 gameplay-route problem. The observed calls do not justify adding another file
 or menu ABI slot.
 
+A fresh replay on 2026-09-12 used an isolated empty save directory. It reached
+the field and the five-entry in-game menu, then selected quit and confirmed the
+choice. The live trace recorded `Jlet.notifyDestroyed()` reaching `MC_knlExit`,
+and the next captured frame was black. The isolated save directory remained
+empty. This proves the menu and exit calls are live while adding no evidence of
+a progress-save call.
+
 Future save checks should start from the title's packaged help or key map, then
 drive to a state where that key is active, and finally verify both the save-tree
 bytes and a fresh-session load. Settings files and pre-created empty slot files
 must be distinguished from saved progress.
+
+## Screen orientation evidence
+
+An additional local LGT archive outside the main scan was examined because its
+title had been suggested as a possible landscape application. Its descriptor
+contains no screen size or orientation. More decisively, a startup trace with
+the host forced to 320 by 240 still makes the module's two OEM configuration
+calls with `(0, 0x64, 240, 0)` and `(0, 0x65, 320, 0)`. The values come from the
+module and are opposite the forced host dimensions.
+
+At the default size the archive paints its usage notice across a 240 by 320
+frame. A forced wide run changes the surface the host provides and the notice
+can center itself within it, but it does not change the module's declared
+dimensions. This archive is evidence for the existing portrait size, not for
+automatic landscape selection. A different edition would need its own module
+trace or descriptor evidence before adding a selection rule.
 
 ## Native text input boundary
 
