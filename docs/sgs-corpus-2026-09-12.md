@@ -298,3 +298,21 @@ human acceptance item for every ID.
 
 Audio remains pending for all twelve IDs because no physical playback was
 heard during these diagnostics.
+
+## Combined implementation verification
+
+The integrated revision `9c716ee` combines native text input, the original
+random sequence, SIS metadata comparisons, literal frame extraction, and exact
+object references. General and debug tests, internal race tests, vet, and both
+CLI and server builds in debug and release passed. A Chromium run at 390 by
+844 pixels exercised the authored native-input archive: Korean submission,
+callback-opened dialogs, explicit cancellation, and park/resume without guest
+cancellation all passed with no page or server errors. This is a desktop
+Chromium viewport check, not physical-phone keyboard acceptance.
+
+A fresh manifest-verified startup check opened all twelve archives without a
+persistent save store and advanced each for 1,200 ticks of 16 milliseconds.
+All remained running and closed without error. Frame counts by ID were 93,
+74, 73, 73, 171, 93, 120, 75, 92, 600, 92, and 21. This confirms the bounded
+startup path on the combined implementation; it does not repeat or strengthen
+the directed play and save evidence above. The corpus matrix remains open.
