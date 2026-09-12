@@ -139,7 +139,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xcf` | `0x0041cd40` | I | Extended transparent text (x,y,resource,flags): bold, italic and underline; see verified raster contracts in sgs-text-effects.md. |
 | `0xd0` | `0x0041cdd0` | I | Extended text with background, same four operands and effect mask as cf; atomic glyph/work preflight. |
 | `0xd1` | `0x0041ce60` | M | Host dialog/action involving three resource IDs, stopping timers and yielding; exact UI behavior unresolved. |
-| `0xd2` | `0x0041cf70` | M | Push runtime mode byte (original global 0x52791c). |
+| `0xd2` | `0x0041cf70` | I | Push runtime mode byte. Standalone startup exposes mode 2 through this service and system variable 0 during initialization. |
 | `0xd3` | `0x0041c3b0` | M | Alias of bc, identical original handler address. |
 | `0xd4` | `0x0041cfa0` | M | Stop timers and emit host action 8 or 9 based on runtime/device mode; yields. |
 | `0xd5` | `0x0041cff0` | M | Host operation (resource,byteValue), actions 11/12 depending mode; yields. |

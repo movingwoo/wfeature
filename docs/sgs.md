@@ -67,6 +67,11 @@ The eight header callbacks are initialization, termination, timer, key, two
 message callbacks and two system callbacks. The implemented host path drives
 initialization, termination, timers and key activation. Variables 0–15 include
 the event parameter, screen dimensions, timer counters and runtime version.
+The initialization callback is the exception to the ordinary event-parameter
+rule: system variable 0 receives runtime mode 2 for standalone startup, and
+service `0xd2` returns the same mode. This mode is independent of the 1:1
+caller/receiver role; external transport and its later mode transitions remain
+unsupported.
 Three timers share a virtual clock. Pausing freezes this clock; resuming resets
 the wall-clock origin. The CLI advances the same clock in 16 ms diagnostic
 steps. Timers do not replay an unlimited backlog after a delayed host tick.

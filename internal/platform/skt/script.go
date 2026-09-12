@@ -26,6 +26,8 @@ type scriptTimer struct {
 	repeat, active bool
 }
 
+const scriptStandaloneRuntimeMode byte = 2
+
 // ScriptSession drives SGS events on the host's session goroutine. Guest
 // timers use a virtual clock and cannot create unbounded goroutines.
 type ScriptSession struct {
@@ -41,6 +43,7 @@ type ScriptSession struct {
 	last          time.Time
 	paused        bool
 	closed        bool
+	runtimeMode   byte
 	random        *rand.Rand
 }
 
@@ -52,7 +55,11 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	if err != nil {
 		return nil, err
 	}
-	s := &ScriptSession{graphics: graphics, options: options, last: time.Now(), random: rand.New(rand.NewPCG(1, 2))}
+	s := &ScriptSession{
+		graphics: graphics, options: options, last: time.Now(),
+		runtimeMode: scriptStandaloneRuntimeMode,
+		random:      rand.New(rand.NewPCG(1, 2)),
+	}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
 	s.vm = sgsvm.New(archive.Script, s)
@@ -65,12 +72,12 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 		}
 	}
 	width, height := options.Framebuffer.Dimensions()
-	for variable, value := range map[int]int16{0: 0, 1: int16(width), 2: int16(height), 3: 0, 4: 0, 5: 0, 6: 0, 9: 0, 10: 0, 15: 0x3009} {
+	for variable, value := range map[int]int16{0: int16(s.runtimeMode), 1: int16(width), 2: int16(height), 3: 0, 4: 0, 5: 0, 6: 0, 9: 0, 10: 0, 15: 0x3009} {
 		if variable < len(s.vm.Variables) && len(s.vm.Variables[variable].Values) > 0 {
 			s.vm.Set(variable, 0, value)
 		}
 	}
-	if err := s.event(ctx, 0, 0); err != nil {
+	if err := s.event(ctx, 0, int16(s.runtimeMode)); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -401,6 +408,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		vm.Push(value)
 	case 0xba:
 		s.overlayPolicy = byte(vm.Pop())
+	case 0xd2:
+		vm.Push(int16(s.runtimeMode))
 	case 0xb8, 0xb9:
 		return scriptCalendarCall(op, vm, time.Now())
 	case 0xa0:
@@ -441,7 +450,7 @@ var scriptArguments = map[byte]int{
 	0xc8: 4, 0xca: 2,
 	0xa5: 1, 0xa6: 1, 0xa7: 1, 0xa8: 1, 0xa9: 1, 0xaa: 1,
 	0x73: 0, 0x74: 5, 0x75: 1,
-	0xdb: 2, 0xdc: 1, 0xdd: 1, 0xe0: 6, 0xe1: 1, 0xe8: 7,
+	0xd2: 0, 0xdb: 2, 0xdc: 1, 0xdd: 1, 0xe0: 6, 0xe1: 1, 0xe8: 7,
 	0xb8: 1, 0xa4: 1, 0xab: 2, 0xac: 3, 0xb0: 3, 0xb1: 2, 0xb3: 3,
 	0x51: 1, 0x52: 1, 0x54: 1, 0x55: 0, 0x56: 0, 0x57: 1, 0x58: 3, 0x59: 1,
 	0x5a: 0, 0x5b: 0, 0x5c: 0, 0x5d: 0, 0x5e: 1, 0x5f: 4, 0x60: 3, 0x61: 3, 0x62: 4, 0x63: 4, 0x64: 4, 0x65: 4,
