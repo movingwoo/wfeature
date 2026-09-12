@@ -93,3 +93,23 @@ adapter. Conversely, the historical Java `TextComponent.imHandler` initializatio
 failure remains evidence of Java widget demand even when newer bounded routes
 do not reach the input screen. These are distinct input contracts; see the
 [input-method and widget history](lgt.md).
+
+## A response-dependent LGT editor route
+
+Static analysis of local archive SHA-256
+`735a579d82ac53bb205b04250ce44586c6d9375e64c2d6f3324796b3ae24d031`
+identifies a Java editor branch selected by response value 1101. The value is
+read from a connection's input stream. The connection factory call uses static
+import 46 (`0xb8 / 4`) from the module's static-method table; the recorded class
+metadata resolves that import to `org/kwis/msf/io/URL.find(String)`. Its address
+constant uses the `BillSocket` scheme. The endpoint is not needed for this
+finding and is omitted.
+
+The current runtime implements that factory with `javaURLFind`, which throws
+`SchemeNotFoundException` instead of opening a connection. This particular
+response-dependent branch therefore cannot establish real editor acceptance
+under the current offline runtime. Focused socket-refusal and exception-inheritance
+tests pass. This is static reachability evidence, not a recorded editor execution,
+and it does not rule out other entry paths in the same archive. A synthetic
+response would test a different acceptance path and must not be counted as real
+service behavior. See [network limitations](network.md).
