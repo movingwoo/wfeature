@@ -49,9 +49,10 @@ func (r *scriptSISBitReader) peek(count int) (uint, bool) {
 }
 
 // decodeScriptSISLiteralFrame implements the independently verified type-1
-// subset: independent objects containing literal or coded 8-by-8 tiles, exact
-// object references, and additive frame records without transforms. Other
-// composition modes fail closed until their contracts have executable evidence.
+// subset: independent objects containing literal or coded 8-by-8 tiles,
+// reference objects with optional tile replacement streams, and additive frame
+// records without composition transforms. Other composition modes fail closed
+// until their contracts have executable evidence.
 func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
 	var result scriptSISLiteralFrame
 	if len(data) < 3 || !bytes.Equal(data[:3], []byte("SIS")) {
@@ -82,11 +83,11 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	if !ok || objectCount > 20 {
 		return result, false
 	}
-	unresolved, ok := r.read(3)
-	if !ok || unresolved != 0 {
+	referenceWidth, ok := r.read(3)
+	if !ok {
 		return result, false
 	}
-	unresolved, ok = r.read(1)
+	unresolved, ok := r.read(1)
 	if !ok || unresolved != 0 {
 		return result, false
 	}
@@ -103,7 +104,6 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	}
 
 	objects := make([]scriptSISLiteralObject, objectCount)
-	lastIndependent := -1
 	for objectIndex := range objects {
 		lookahead, ok := r.peek(8)
 		if !ok {
@@ -111,15 +111,20 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 		}
 		if lookahead == 0 {
 			prefix, ok := r.read(9)
-			if !ok || prefix != 0 || lastIndependent < 0 {
+			if !ok || prefix != 0 || objectIndex == 0 {
 				return result, false
 			}
 			mode, ok := r.read(1)
-			if !ok || mode != 0 {
-				// Mode one introduces a separate transform stream.
+			if !ok {
 				return result, false
 			}
-			objects[objectIndex] = objects[lastIndependent]
+			objects[objectIndex] = objects[objectIndex-1]
+			if mode != 0 {
+				objects[objectIndex].pixels = bytes.Clone(objects[objectIndex].pixels)
+				if !decodeScriptSISReferenceTransform(&r, int(referenceWidth), &objects[objectIndex]) {
+					return result, false
+				}
+			}
 			continue
 		}
 		columns, ok := r.read(5)
@@ -140,25 +145,13 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 			coding[tile] = coded != 0
 		}
 		object := &objects[objectIndex]
-		lastIndependent = objectIndex
 		object.width = int(columns) * 8
 		object.height = int(rows) * 8
 		object.pixels = make([]byte, int(columns)*object.height)
 		for tile, coded := range coding {
-			var encodedPixels [64]byte
-			if coded {
-				encodedPixels, ok = decodeScriptSISCodedTile(&r)
-				if !ok {
-					return result, false
-				}
-			} else {
-				for encodedPosition := range encodedPixels {
-					pixel, ok := r.read(1)
-					if !ok {
-						return result, false
-					}
-					encodedPixels[encodedPosition] = byte(pixel)
-				}
+			encodedPixels, ok := decodeScriptSISTile(&r, coded)
+			if !ok {
+				return result, false
 			}
 			for encodedPosition, pixel := range encodedPixels {
 				if pixel == 0 {
@@ -246,22 +239,47 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	return result, true
 }
 
-// Coded tiles can expand a short run stream to a maximum-size object, and exact
-// references can render that object once for every declared object. Source
-// length alone is therefore not a sufficient bound. The fixed header supplies
-// a bounded object count before parsing begins. Four maximum-object terms cover
-// run iteration, coded expansion, tile placement and frame rendering; source
-// terms cover bit parsing and snapshotting. Charging the total before decoding
-// also accounts for malformed streams and other late format failures.
+func decodeScriptSISTile(r *scriptSISBitReader, coded bool) ([64]byte, bool) {
+	if coded {
+		return decodeScriptSISCodedTile(r)
+	}
+	var pixels [64]byte
+	for position := range pixels {
+		pixel, ok := r.read(1)
+		if !ok {
+			return [64]byte{}, false
+		}
+		pixels[position] = byte(pixel)
+	}
+	return pixels, true
+}
+
+// Coded tiles can expand a short run stream to a maximum-size object, and
+// references can render that object once for every declared object. Transform
+// references can also replace the same tile repeatedly. Source length alone is
+// therefore not a sufficient pixel-work bound. The fixed header supplies a
+// bounded object count and reference-index width before parsing begins. Five
+// maximum-object terms cover run iteration, coded expansion, tile placement,
+// reference snapshots and frame rendering. Each possible replacement adds
+// three tile terms for run iteration, decoded expansion and placement. Source
+// terms cover bit parsing and the input snapshot. Charging the total before
+// decoding also accounts for malformed streams and other late format failures.
 func scriptSISLiteralDecodeWork(data []byte) int {
 	objectCount := 20
+	replacementCount := 0
 	if len(data) >= 7 && bytes.Equal(data[:3], []byte("SIS")) {
 		objectCount = int(data[5]&0x0f)<<1 | int(data[6]>>7)
 		objectCount++
 		objectCount = min(objectCount, 20)
+		referenceWidth := int(data[6]>>4) & 7
+		if referenceWidth != 0 {
+			// A complete replacement needs an index, a coding selector, an
+			// initial color and at least the five-bit all-white run code.
+			replacementCount = len(data) * 8 / (referenceWidth + 7)
+		}
 	}
 	const maximumObjectPixelWork = (31 * 8 * 12 * 8) / 64
-	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*4*maximumObjectPixelWork
+	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*5*maximumObjectPixelWork + replacementCount*3
 }
 
 func scriptSISSignedMagnitude(value uint, magnitudeBits uint) int {

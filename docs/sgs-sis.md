@@ -3,8 +3,8 @@
 SIS has two distinct encodings selected by the gate described in
 [extended images](sgs-images.md). This document records exact inspected header
 fields and the verified payload structure. It does **not** yet specify a complete
-SIS decoder: several composition fields, reference-object transforms and type 2
-payload branches remain unresolved. Addresses refer to the original runtime;
+SIS decoder: several composition fields and type 2 payload branches remain
+unresolved. Addresses refer to the original runtime;
 no original implementation, lookup storage, permutation table or asset is
 reproduced.
 
@@ -22,7 +22,7 @@ also selects type 1 at the outer image gate, which restricts it to 1 through 20.
 | 15 | 4 | Height in eight-pixel units, nonzero; `0x5391f6` |
 | 19 | 1 | Unresolved flag; `0x5391f7` |
 | 20 | 5 | Object count minus one; decoded count must be at most 20; `0x5391f3` |
-| 25 | 3 | Unresolved field; `0x5391f8` |
+| 25 | 3 | Reference-transform tile-index width; `0x5391f8` |
 | 28 | 1 | Unresolved flag; `0x5391f9` |
 | 29 | 4 | Common delay field returned by metadata parser; `0x539202` |
 | 33 | 3 | Frame-record variant selector; `0x5391fa` |
@@ -71,12 +71,24 @@ reader at `0x43ada0`; a nonzero lookahead selects `0x43aa90`. The lookahead is
 rewound before dispatch. No byte alignment is inserted between objects.
 
 The reference reader consumes nine zero bits, followed by a one-bit mode. Mode
-zero is an exact reference: it consumes no further payload and shares the most
-recent independent object's dimensions, tile coding selections and residual
-payload position. A chain of exact references continues to share that same
-independent source. Mode one introduces another bitstream whose field width
-depends on header bits 25 through 27; that transform stream remains unsupported.
-The first object cannot be a reference.
+zero is an exact reference to the previous resolved object and consumes no
+further payload. Mode one snapshots the previous resolved object and then reads
+a tile-replacement stream. The first object cannot be a reference.
+
+Header bits 25 through 27 give the replacement tile-index width `n`. For `n=0`,
+the stream is immediately complete and consumes no further bits. Otherwise it
+repeats these records until the all-ones `n`-bit index:
+
+1. An `n`-bit tile index in row-major tile order.
+2. A one-bit coding selector.
+3. One complete 64-pixel tile using the same literal or coded representation as
+   an independent object.
+
+Each record replaces the indexed tile; it does not OR into the earlier pixels.
+Record order is significant, and the last of several records for one index
+wins. Consecutive mode-one references accumulate because each starts from the
+previous resolved object. A later mode-zero reference resolves to that latest
+state. Earlier independent and transformed objects retain their own snapshots.
 
 Three authored original-runtime calls verify the exact-reference boundary. One
 composed only the reference at (8,8), one ORed an independent object and its
@@ -84,6 +96,19 @@ reference at x offsets 0 and 1, and one selected the last member of a two-link
 reference chain at (7,7). All returned 1 and reached the sentinel; their final
 bit positions were 146, 165 and 157. The Go comparison repeats the exact packed
 outputs through the real `0xe7` dispatch.
+
+Twelve further original-runtime results verify the replacement contract: an
+empty width-zero stream; literal replacement of one and two-tile objects;
+reverse-order and duplicate-index records; a coded replacement; two chained
+transforms; an exact reference after that chain; and all three separately
+rendered snapshots of one independent object followed by two transforms. The
+duplicate-index result retained only the last replacement. All native calls
+reached their sentinel, returned the declared frame count, and are compared to
+Go by exact packed output and final bit position. The native helper also
+accepted an index beyond a one-tile object's logical range and left its visible
+output unchanged. Go rejects that stream before changing the destination,
+because allowing the native unchecked write would violate the untrusted-input
+boundary.
 
 An independent object at `0x43aa90` contains:
 
@@ -111,7 +136,7 @@ packing rows. A fresh original-runtime probe selected literal input positions
 (0,1), (2,0), (1,2), (0,3) and (7,7). This is the conventional alternating
 diagonal traversal and can be generated without retaining a lookup table. The
 original helper is not reproduced as a private lookup table. The following
-comparison identifies its public-standard basis and measured divergence.
+comparison checks the measured codes against a published standard.
 
 An exhaustive original-runtime probe over every 12-bit lookahead found 64 valid
 run prefixes for each initial color. Comparison with
@@ -135,8 +160,9 @@ padded to 12 bits returns zero. `000000100000` returns native run 17 rather than
 T.4 run 18. `000001111000` returns native run 64 with length 9, while the T.4
 run-64 prefix padded to 12 bits returns zero. Four end-to-end coded-tile calls
 also verified all-zero and all-one 64-pixel runs plus alternating 32-pixel runs
-in both directions. The measured codebook resembles T.4 but differs at these seven black runs;
-this comparison does not establish the historical derivation.
+in both directions. The measured overlap does not establish how the native
+codebook was derived, and the codebook is not the standard table plus one
+exception.
 
 The Go decoder uses the 128 independently observed color/run pairs and matches
 prefixes incrementally for at most 12 bits. A local differential test checks
@@ -209,13 +235,14 @@ The exposed wrapper's inclusive upper-bound defect remains documented in
 [extended images](sgs-images.md).
 
 The implemented subset accepts type 1 streams with independent literal or coded
-tiles, mode-zero exact references, header variant 1, frame flag zero and zero
-transform fields. It reconstructs a requested frame into temporary packed
-storage before a guest resource changes. The pre-parse work reserve covers
-maximum coded expansion and exact-reference fan-out. Mode-one reference
-transforms, header inversion, other header variants, frame masks and composition
-transforms return failure. Type 2 and SAF extraction remain unsupported. The
-safe frame range is zero through frame count minus one; the original wrapper's
-inclusive upper-bound defect is not reproduced. Source resources above 65,535
-bytes are rejected, matching the script resource size limit and keeping
-snapshot and decode work bounded.
+tiles, mode-zero exact references, mode-one literal or coded tile replacements,
+header variant 1, frame flag zero and zero composition-transform fields. It
+reconstructs a requested frame into temporary packed storage before a guest
+resource changes. The pre-parse work reserve covers maximum coded expansion,
+reference fan-out, object snapshots, and the maximum number of replacement
+records permitted by the source length and index width. Header inversion, other
+header variants, frame masks and composition transforms return failure. Type 2
+and SAF extraction remain unsupported. The safe frame range is zero through
+frame count minus one; the original wrapper's inclusive upper-bound defect is
+not reproduced. Source resources above 65,535 bytes are rejected, matching the
+script resource size limit and keeping snapshot and decode work bounded.

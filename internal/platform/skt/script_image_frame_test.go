@@ -68,7 +68,7 @@ func authoredSISLiteral(options authoredSISLiteralOptions) []byte {
 		bits.append(uint(pixel), 1)
 	}
 	if objects > 1 {
-		bits.append(0, 8) // A reference-object prefix, deliberately unsupported.
+		bits.append(0, 8) // Deliberately truncate a reference-object prefix.
 	}
 	bits.append(options.frameFlag, 1)
 	for object := uint(0); object < objects; object++ {
@@ -251,7 +251,7 @@ func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
 	}
 	for name, data := range map[string][]byte{
 		"malformed coded tile": authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, coded: true}),
-		"reference object":     authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, objects: 2}),
+		"truncated reference":  authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, objects: 2}),
 		"frame mask":           authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, frameFlag: 1}),
 		"transform":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, transforms: 8}),
 		"inversion":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, invert: 1}),
@@ -268,12 +268,10 @@ func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
 	}
 }
 
-func TestScriptSISReferencesRejectInvalidPrefixesAndTransformMode(t *testing.T) {
+func TestScriptSISReferencesRejectInvalidPrefixes(t *testing.T) {
 	valid := []byte{83, 73, 83, 8, 4, 64, 128, 16, 8, 191, 255, 255, 255, 255, 255, 255, 255, 192, 2, 16, 32, 0}
 	ninthBit := slices.Clone(valid)
 	scriptSISTestSetBit(ninthBit, 40+74+8)
-	transformMode := slices.Clone(valid)
-	scriptSISTestSetBit(transformMode, 40+74+9)
 	var firstReference scriptSISBits
 	firstReference.append(1, 5)
 	firstReference.append(0, 5)
@@ -288,10 +286,9 @@ func TestScriptSISReferencesRejectInvalidPrefixesAndTransformMode(t *testing.T) 
 	firstReference.append(0, 4)
 	firstReference.append(0, 10)
 	for name, data := range map[string][]byte{
-		"first object":       firstReference.bytes(),
-		"truncated prefix":   valid[:18],
-		"nonzero ninth bit":  ninthBit,
-		"transform mode one": transformMode,
+		"first object":      firstReference.bytes(),
+		"truncated prefix":  valid[:18],
+		"nonzero ninth bit": ninthBit,
 	} {
 		if _, ok := decodeScriptSISLiteralFrame(data, 0); ok {
 			t.Fatalf("accepted invalid %s reference", name)
