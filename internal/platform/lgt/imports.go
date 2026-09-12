@@ -100,10 +100,9 @@ func (record ImportRecord) Describe() string {
 }
 
 // importImplemented reports whether a call on this slot would be serviced.
-// Each table answers it the way its own handler decides: the WIPI C and OEM
-// tables keep the predicate their stubs already log against, the C library and
-// the Java table are decided by whether the slot has a name at all, and a Java
-// member slot is named only once the module's class metadata has arrived.
+// Each table answers it the way its own handler decides. Java uses the same
+// dispatch resolution as an actual call; metadata that can name a member does
+// not by itself make that member executable.
 func (client *Client) importImplemented(category, slot uint32) bool {
 	switch category {
 	case svcCategoryInit:
@@ -115,10 +114,33 @@ func (client *Client) importImplemented(category, slot uint32) bool {
 	case svcCategoryStdlib:
 		return stdlibSlotNames[slot] != ""
 	case svcCategoryJava:
-		if _, known := javaSVCArguments[slot]; known {
+		return client.javaSlotImplemented(slot)
+	}
+	return false
+}
+
+// javaSlotImplemented reports whether handleJavaSVC has an executable branch
+// for a slot a module could obtain through importFunction. Auxiliary entries
+// are intentionally accepted contracts even though their purpose remains
+// unnamed; static and virtual members must resolve to the same implementation
+// the dispatcher would call.
+func (client *Client) javaSlotImplemented(slot uint32) bool {
+	if _, known := javaSVCArguments[slot]; known {
+		return true
+	}
+	if index, static := javaStaticMethodParts(slot); static {
+		if _, _, classEntry := client.javaLink.unnamedStaticEntry(index); classEntry {
 			return true
 		}
-		return client.javaSlotName(slot) != ""
+		_, implemented := client.javaPlatformStaticDispatch(index)
+		return implemented
+	}
+	if slot&javaSlotVirtual != 0 {
+		_, implemented := client.javaPlatformVirtualDispatch(slot)
+		return implemented
+	}
+	if table, index, auxiliary := javaAuxiliaryParts(slot); auxiliary {
+		return table == importTableOEM && index == oemJavaFunction || javaAuxiliaryTables[table]
 	}
 	return false
 }

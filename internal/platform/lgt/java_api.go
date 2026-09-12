@@ -37,6 +37,17 @@ type javaPlatformMethod struct {
 	Implementat func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error)
 }
 
+// javaMethodDispatch is the answer shared by coverage, diagnostics and the
+// executable dispatch. Class is the receiver class used for the call; Owner is
+// the class that declared the resolved slot.
+type javaMethodDispatch struct {
+	Class        string
+	Owner        string
+	Called       string
+	Method       javaPlatformMethod
+	ByDescriptor bool
+}
+
 func javaPlatformKey(class string, member javaMemberRef) string {
 	return class + "." + member.Name + member.Descriptor
 }
@@ -1106,26 +1117,47 @@ func javaPlatformSingleton(name string) func(
 func (client *Client) callJavaPlatformStatic(
 	ctx context.Context, thread *armcore.Thread, index uint32,
 ) (bool, error) {
+	dispatch, ok := client.javaPlatformStaticDispatch(index)
+	if !ok {
+		return false, nil
+	}
+	if dispatch.ByDescriptor && client.logger != nil {
+		client.logger.Debug("LGT java unnamed static entry resolved by its descriptor",
+			"class", dispatch.Owner, "entry", index, "method", dispatch.Called)
+	}
+	return true, client.callJavaMethod(
+		ctx, thread, dispatch.Class, dispatch.Called, dispatch.Method)
+}
+
+// javaPlatformStaticDispatch resolves one static-method entry without running
+// it. A coverage report and a call must therefore agree on whether metadata is
+// only enough to name the entry or also selects an implementation.
+func (client *Client) javaPlatformStaticDispatch(index uint32) (javaMethodDispatch, bool) {
 	link := client.javaLink
 	if link == nil || link.surface == nil || int(index) >= len(link.surface.StaticMethods) {
-		return false, nil
+		return javaMethodDispatch{}, false
 	}
 	member := link.surface.StaticMethods[index]
 	owner, known := link.surface.ownerOf(
 		func(class javaAPIClass) javaRun { return class.StaticMethods }, index)
 	if !known {
-		return false, nil
+		return javaMethodDispatch{}, false
 	}
 	method, ok := javaPlatformMethods[javaPlatformKey(owner, member)]
+	byDescriptor := false
 	if !ok {
 		called, resolved, byShape := client.javaStaticByDescriptor(owner, index, member)
 		if !byShape {
-			return false, nil
+			return javaMethodDispatch{}, false
 		}
 		method, ok = resolved, true
 		member = javaMemberRef{Name: called, Descriptor: member.Descriptor}
+		byDescriptor = true
 	}
-	return true, client.callJavaMethod(ctx, thread, owner, member.String(), method)
+	return javaMethodDispatch{
+		Class: owner, Owner: owner, Called: member.String(), Method: method,
+		ByDescriptor: byDescriptor,
+	}, true
 }
 
 // javaStaticByDescriptor resolves an entry the module left **unnamed but
@@ -1176,10 +1208,6 @@ func (client *Client) javaStaticByDescriptor(
 	if name == "" {
 		return "", javaPlatformMethod{}, false
 	}
-	if client.logger != nil {
-		client.logger.Debug("LGT java unnamed static entry resolved by its descriptor",
-			"class", owner, "entry", index, "method", name+member.Descriptor)
-	}
 	return name, method, true
 }
 
@@ -1196,6 +1224,19 @@ func (client *Client) javaStaticByDescriptor(
 func (client *Client) callJavaPlatformVirtual(
 	ctx context.Context, thread *armcore.Thread, slot uint32,
 ) (bool, error) {
+	dispatch, ok := client.javaPlatformVirtualDispatch(slot)
+	if !ok {
+		return false, nil
+	}
+	return true, client.callJavaMethod(
+		ctx, thread, dispatch.Class, dispatch.Called, dispatch.Method)
+}
+
+// javaPlatformVirtualDispatch resolves one vtable stub without running it.
+// The inherited baked-slot walk and metadata lookup are the same ones the
+// executable path uses, so neither a readable label nor a class-local slot is
+// mistaken for an implementation.
+func (client *Client) javaPlatformVirtualDispatch(slot uint32) (javaMethodDispatch, bool) {
 	if name, index, ok := client.javaRuntimeState().javaVirtualSlotParts(slot); ok {
 		// **A slot a class inherits is reported against the class whose vtable
 		// first built the stub**, which is wherever the chain stopped having
@@ -1205,7 +1246,9 @@ func (client *Client) callJavaPlatformVirtual(
 		// answer for all of them.
 		for owner := name; owner != ""; owner = javaPlatformSuper(owner) {
 			if baked, served := javaBakedVirtualSlots[owner][index]; served {
-				return true, client.callJavaMethod(ctx, thread, name, baked.Called, baked.Method)
+				return javaMethodDispatch{
+					Class: name, Owner: owner, Called: baked.Called, Method: baked.Method,
+				}, true
 			}
 			if owner == "java/lang/Object" {
 				break
@@ -1214,13 +1257,15 @@ func (client *Client) callJavaPlatformVirtual(
 	}
 	class, member, known := client.javaVirtualMember(slot)
 	if !known {
-		return false, nil
+		return javaMethodDispatch{}, false
 	}
 	method, ok := javaPlatformMethods[javaPlatformKey(class, member)]
 	if !ok {
-		return false, nil
+		return javaMethodDispatch{}, false
 	}
-	return true, client.callJavaMethod(ctx, thread, class, member.String(), method)
+	return javaMethodDispatch{
+		Class: class, Owner: class, Called: member.String(), Method: method,
+	}, true
 }
 
 // callJavaMethod runs one implemented platform method: read its arguments the

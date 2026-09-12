@@ -264,26 +264,32 @@ func (client *Client) javaSlotName(slot uint32) string {
 			int(index) >= len(client.javaLink.surface.StaticMethods) {
 			return ""
 		}
-		member := client.javaLink.surface.StaticMethods[index].String()
+		member := client.javaLink.surface.StaticMethods[index]
 		owner, known := client.javaLink.surface.ownerOf(
 			func(class javaAPIClass) javaRun { return class.StaticMethods }, index)
 		switch {
-		case member == "":
+		case member.String() == "" && known:
 			// The two entries every class's run opens with carry no name; both
 			// answer with the class. See java.go.
 			return owner + ".<class>"
 		case known:
-			return owner + "." + member
+			if dispatch, implemented := client.javaPlatformStaticDispatch(index); implemented {
+				return dispatch.Owner + "." + dispatch.Called
+			}
+			return owner + "." + member.String()
 		}
-		return member
+		return member.String()
 	}
 	if slot&javaSlotVirtual != 0 {
 		name, index, known := client.javaRuntimeState().javaVirtualSlotParts(slot)
 		if !known {
 			return ""
 		}
-		if _, member, ok := client.javaVirtualMember(slot); ok {
-			return name + "." + member.String()
+		if dispatch, implemented := client.javaPlatformVirtualDispatch(slot); implemented {
+			return dispatch.Owner + "." + dispatch.Called
+		}
+		if owner, member, ok := client.javaVirtualMember(slot); ok {
+			return owner + "." + member.String()
 		}
 		return fmt.Sprintf("%s.slot%d", name, index)
 	}
