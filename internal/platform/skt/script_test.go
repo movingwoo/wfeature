@@ -67,6 +67,33 @@ func TestScriptAbsoluteValueWrapsAtWordBoundary(t *testing.T) {
 	}
 }
 
+func TestScriptStandaloneRuntimeMode(t *testing.T) {
+	// The initialization callback copies system variable 0 into a scratch
+	// variable before returning. Standalone startup exposes runtime mode 2
+	// through that variable.
+	s := newScriptTest(t, []byte{4, 0, 10, 16, 0xff}, nil)
+	if got := s.vm.Value(16, 0); got != 2 {
+		t.Fatalf("initial runtime mode = %d, want 2", got)
+	}
+
+	if err := s.SendKey(context.Background(), "press", KeyCodeFire); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Value(0, 0); got != 20 {
+		t.Fatalf("key event parameter = %d, want 20", got)
+	}
+	s.vm.Push(1234)
+	if err := s.Call(0xd2, s.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Pop(); got != 2 {
+		t.Fatalf("queried runtime mode = %d, want 2", got)
+	}
+	if got := s.vm.Pop(); got != 1234 {
+		t.Fatalf("runtime mode query changed caller stack: got %d", got)
+	}
+}
+
 func TestScriptExitStopsFutureTimersAndKeys(t *testing.T) {
 	s := newScriptTest(t, []byte{0x46}, nil)
 	if !s.Exited() {

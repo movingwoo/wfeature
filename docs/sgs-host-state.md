@@ -89,6 +89,11 @@ runtime mode, including system variable 0, is two, even without a remote peer.
 This concrete local startup path is evidence for those defaults; it does not
 prove that a local session has accepted a network connection.
 
+The emulator exposes this standalone mode during initialization and through
+`0xd2`. A later event replaces system variable 0 with its event parameter, but
+does not change the runtime mode returned by `0xd2`. The outgoing/incoming role
+remains separate and no communication transition is implied.
+
 The UserID comes from metadata in that path. An archive without this metadata
 does not establish a replacement identity. An empty host-provided value must
 remain an explicit compatibility choice, not be presented as a value read from
