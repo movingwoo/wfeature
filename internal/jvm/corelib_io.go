@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"unicode/utf16"
 )
@@ -669,11 +670,63 @@ func byteArrayOutputStreamReset(call *Invocation, arguments []Value) (Value, err
 	return VoidValue(), setIntField(call.vm, stream, ByteArrayOutputStreamClass, "count", 0)
 }
 
+func dataInputDefinition() ClassDefinition {
+	abstract := AccessPublic | AccessAbstract
+	throws := []string{IOExceptionClass}
+	return ClassDefinition{
+		Name:      DataInputClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessInterface | AccessAbstract,
+		Methods: []MethodDefinition{
+			{Name: "readFully", Descriptor: "([B)V", Access: abstract, Throws: throws},
+			{Name: "readFully", Descriptor: "([BII)V", Access: abstract, Throws: throws},
+			{Name: "skipBytes", Descriptor: "(I)I", Access: abstract, Throws: throws},
+			{Name: "readBoolean", Descriptor: "()Z", Access: abstract, Throws: throws},
+			{Name: "readByte", Descriptor: "()B", Access: abstract, Throws: throws},
+			{Name: "readUnsignedByte", Descriptor: "()I", Access: abstract, Throws: throws},
+			{Name: "readShort", Descriptor: "()S", Access: abstract, Throws: throws},
+			{Name: "readUnsignedShort", Descriptor: "()I", Access: abstract, Throws: throws},
+			{Name: "readChar", Descriptor: "()C", Access: abstract, Throws: throws},
+			{Name: "readInt", Descriptor: "()I", Access: abstract, Throws: throws},
+			{Name: "readLong", Descriptor: "()J", Access: abstract, Throws: throws},
+			{Name: "readFloat", Descriptor: "()F", Access: abstract, Throws: throws},
+			{Name: "readDouble", Descriptor: "()D", Access: abstract, Throws: throws},
+			{Name: "readUTF", Descriptor: "()Ljava/lang/String;", Access: abstract, Throws: throws},
+		},
+	}
+}
+
+func dataOutputDefinition() ClassDefinition {
+	abstract := AccessPublic | AccessAbstract
+	throws := []string{IOExceptionClass}
+	return ClassDefinition{
+		Name:      DataOutputClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessInterface | AccessAbstract,
+		Methods: []MethodDefinition{
+			{Name: "write", Descriptor: "(I)V", Access: abstract, Throws: throws},
+			{Name: "write", Descriptor: "([B)V", Access: abstract, Throws: throws},
+			{Name: "write", Descriptor: "([BII)V", Access: abstract, Throws: throws},
+			{Name: "writeBoolean", Descriptor: "(Z)V", Access: abstract, Throws: throws},
+			{Name: "writeByte", Descriptor: "(I)V", Access: abstract, Throws: throws},
+			{Name: "writeShort", Descriptor: "(I)V", Access: abstract, Throws: throws},
+			{Name: "writeChar", Descriptor: "(I)V", Access: abstract, Throws: throws},
+			{Name: "writeInt", Descriptor: "(I)V", Access: abstract, Throws: throws},
+			{Name: "writeLong", Descriptor: "(J)V", Access: abstract, Throws: throws},
+			{Name: "writeFloat", Descriptor: "(F)V", Access: abstract, Throws: throws},
+			{Name: "writeDouble", Descriptor: "(D)V", Access: abstract, Throws: throws},
+			{Name: "writeChars", Descriptor: "(Ljava/lang/String;)V", Access: abstract, Throws: throws},
+			{Name: "writeUTF", Descriptor: "(Ljava/lang/String;)V", Access: abstract, Throws: throws},
+		},
+	}
+}
+
 func dataInputStreamDefinition() ClassDefinition {
 	return ClassDefinition{
-		Name:      DataInputStreamClass,
-		SuperName: InputStreamClass,
-		Access:    AccessPublic,
+		Name:       DataInputStreamClass,
+		SuperName:  InputStreamClass,
+		Interfaces: []string{DataInputClass},
+		Access:     AccessPublic,
 		Fields: []FieldDefinition{
 			{Name: "input", Descriptor: "Ljava/io/InputStream;", Access: AccessPrivate},
 		},
@@ -702,6 +755,8 @@ func dataInputStreamDefinition() ClassDefinition {
 			{Name: "readChar", Descriptor: "()C", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadChar},
 			{Name: "readInt", Descriptor: "()I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadInt},
 			{Name: "readLong", Descriptor: "()J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadLong},
+			{Name: "readFloat", Descriptor: "()F", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadFloat},
+			{Name: "readDouble", Descriptor: "()D", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadDouble},
 			{Name: "readUTF", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative, Throws: []string{"java/io/IOException"}},
 			{Name: "readFully", Descriptor: "([B)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyArray},
 			{Name: "readFully", Descriptor: "([BII)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyRange},
@@ -984,11 +1039,44 @@ func dataInputReadLong(call *Invocation, arguments []Value) (Value, error) {
 	return LongValue(int64(highValue)<<32 | int64(uint32(lowValue))), nil
 }
 
+func dataInputReadFloat(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	bits, err := call.InvokeVirtual(stream, "readInt", "()I")
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := bits.Int32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	return FloatValue(math.Float32frombits(uint32(value))), nil
+}
+
+func dataInputReadDouble(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	bits, err := call.InvokeVirtual(stream, "readLong", "()J")
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := bits.Int64()
+	if err != nil {
+		return VoidValue(), err
+	}
+	return DoubleValue(math.Float64frombits(uint64(value))), nil
+}
+
 func dataOutputStreamDefinition() ClassDefinition {
 	return ClassDefinition{
-		Name:      DataOutputStreamClass,
-		SuperName: OutputStreamClass,
-		Access:    AccessPublic,
+		Name:       DataOutputStreamClass,
+		SuperName:  OutputStreamClass,
+		Interfaces: []string{DataOutputClass},
+		Access:     AccessPublic,
 		Fields: []FieldDefinition{
 			{Name: "out", Descriptor: "Ljava/io/OutputStream;", Access: AccessProtected},
 		},
@@ -1004,6 +1092,8 @@ func dataOutputStreamDefinition() ClassDefinition {
 			{Name: "writeChar", Descriptor: "(I)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteChar},
 			{Name: "writeInt", Descriptor: "(I)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteInt},
 			{Name: "writeLong", Descriptor: "(J)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteLong},
+			{Name: "writeFloat", Descriptor: "(F)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteFloat},
+			{Name: "writeDouble", Descriptor: "(D)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteDouble},
 			{Name: "writeUTF", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteUTF},
 			{Name: "writeChars", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataOutputWriteChars},
 		},
@@ -1148,6 +1238,44 @@ func dataOutputWriteLong(call *Invocation, arguments []Value) (Value, error) {
 		return VoidValue(), err
 	}
 	_, err = call.InvokeVirtual(stream, "writeInt", "(I)V", IntValue(int32(value)))
+	return VoidValue(), err
+}
+
+func dataOutputWriteFloat(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := arguments[1].Float32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	bits := math.Float32bits(value)
+	// DataOutput uses Float.floatToIntBits rather than the raw-bits form, so
+	// every NaN payload has the one canonical serialized representation.
+	if math.IsNaN(float64(value)) {
+		bits = 0x7fc00000
+	}
+	_, err = call.InvokeVirtual(stream, "writeInt", "(I)V", IntValue(int32(bits)))
+	return VoidValue(), err
+}
+
+func dataOutputWriteDouble(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := arguments[1].Float64()
+	if err != nil {
+		return VoidValue(), err
+	}
+	bits := math.Float64bits(value)
+	// DataOutput uses Double.doubleToLongBits, which likewise collapses all
+	// NaN encodings before writing the eight bytes.
+	if math.IsNaN(value) {
+		bits = 0x7ff8000000000000
+	}
+	_, err = call.InvokeVirtual(stream, "writeLong", "(J)V", LongValue(int64(bits)))
 	return VoidValue(), err
 }
 

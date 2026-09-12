@@ -1,5 +1,11 @@
 # SKT fixtures
 
+`src/StreamMIDlet.java` and `streams.jar` are a packaged lifecycle fixture for
+the CLDC `DataInput` and `DataOutput` interfaces. It checks stream
+assignability and primitive round trips after the SKT archive loader starts
+the MIDlet. Build it against an authored minimal `MIDlet` signature and package
+it with `STREAMS.MF`; the runtime supplies the actual MIDP class.
+
 `src/AudioStopMIDlet.java` and `audio-stop.jar` are newly authored fixtures for
 blocking audio calls. A guest thread distinguishes natural completion from
 `UserStopException`; the Go test supplies an authored SMAF note and stops the

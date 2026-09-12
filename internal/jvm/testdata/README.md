@@ -15,8 +15,8 @@ check that all three are reported and attributed to the method that ran them.
 
 `Streams.java` is a fixture for interface dispatch across the java.io stream
 classes: it writes a record through a `DataOutput` parameter and reads it back
-through a `DataInput` one, so a test can check that the call lands on the
-stream that was passed rather than on an interface this runtime never declares.
+through a `DataInput` one, and checks that both streams are instances of those
+interfaces. The test therefore covers both dispatch and assignability.
 
 ```sh
 javac -source 1.8 -target 1.8 -g:none internal/jvm/testdata/Streams.java

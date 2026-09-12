@@ -17,9 +17,15 @@ public final class Streams {
     public static int roundTrip() throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(bytes);
+        if (!(out instanceof DataOutput)) {
+            return -1;
+        }
         write(out);
         out.close();
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()));
+        if (!(in instanceof DataInput)) {
+            return -2;
+        }
         int total = read(in);
         in.close();
         return total;
@@ -30,6 +36,8 @@ public final class Streams {
         out.writeByte(5);
         out.writeBoolean(true);
         out.writeInt(1000);
+        out.writeFloat(1.5f);
+        out.writeDouble(-2.25d);
     }
 
     private static int read(DataInput in) throws IOException {
@@ -38,6 +46,27 @@ public final class Streams {
         if (in.readBoolean()) {
             total++;
         }
-        return total + in.readInt();
+        total += in.readInt();
+        if (in.readFloat() == 1.5f) {
+            total++;
+        }
+        if (in.readDouble() == -2.25d) {
+            total += 2;
+        }
+        return total;
+    }
+
+    public static byte[] encodeFloat(float value) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutput out = new DataOutputStream(bytes);
+        out.writeFloat(value);
+        return bytes.toByteArray();
+    }
+
+    public static byte[] encodeDouble(double value) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutput out = new DataOutputStream(bytes);
+        out.writeDouble(value);
+        return bytes.toByteArray();
     }
 }
