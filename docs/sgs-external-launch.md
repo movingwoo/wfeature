@@ -55,3 +55,14 @@ CLI diagnostics supply no external-launch capability. A valid `0xc4` request
 there returns `SGS external URL launch is unsupported by this host` through the
 existing start, key, or tick error path; it does not pretend that a browser was
 opened.
+
+## Actual caller verification
+
+On combined revision `274d2be`, the manifest-verified ID 11 alternate menu
+route reached `0xc4` once in the first session and once after Host close/reopen.
+An observation-only Host callback accepted both 42-byte HTTP destinations;
+no network action was supplied. Both sessions completed without execution or
+close errors and made no save writes. This proves delivery from the actual
+caller, not availability of the destination or downloaded content. Browser
+activation and ownership behavior are separately covered by the authored
+Chromium fixture.
