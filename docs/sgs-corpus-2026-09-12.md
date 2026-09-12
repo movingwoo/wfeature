@@ -202,3 +202,99 @@ audio sink:
 
 These counts identify applicable audio paths and do not establish that a person
 heard output. Audible acceptance remains pending for all five IDs.
+
+## ID 06-08 and 10-12 directed acceptance
+
+The current random-compatible runtime replays the exact timed recordings for
+these IDs from the ignored `sgs-user-routes.json` file. Each archive is resolved
+through the stable manifest and verified before opening. The following table
+records the concrete visible endpoint and the boundary that remains:
+
+| ID | Route and visible endpoint | Current boundary |
+| --- | --- | --- |
+| 06 | 100 events, including 50 presses, from 677 through 20756 ms. `sgs-directed-06-randomcompat-mode2-20260912/first-key025.png` and `first-key050.png` show interactive management screens over the playfield after resource-changing input. | This establishes the recorded management path. A distinct action-field route has not been identified. |
+| 07 | The first six recorded Fire presses reach the main menu; a seventh Fire press at 9000 ms selects the start flow. `sgs-directed-07-start-randomcompat-mode2-20260912/first-final.png` at 14120 ms shows the existing-save path in its interactive management/HUD screen. | The original 75-press recording navigates settings, help, and ranking screens without selecting Start, so it is not the directed route. |
+| 08 | 44 events, including 22 presses, from 938 through 17614 ms. `sgs-directed-08-randomcompat-mode2-20260912/first-final.png` at 22614 ms shows an active battle field after directed input. | No save write occurs on this route. |
+| 10 | 40 events, including 20 presses, from 619 through 6487 ms. `sgs-directed-10-randomcompat-mode2-20260912/first-key005.png` shows the field and HUD; later captures show field dialogue after continued input. | No save write occurs on this route. |
+| 11 | The preserved one-press recording reaches the local title screen and closes/reopens cleanly. A focused route at 19200 ms shows the download prompt; the next non-Clear press deterministically reaches unsupported external-URL service `0xc4` at `0x13cd` in both the first and reopened sessions. Clear returns to the title screen. | **Blocked:** the tested route reaches a download gate; other local main-play paths remain unresolved. `sgs-directed-11-gate-randomcompat-mode2-20260912/summary.json` records the first failure. |
+| 12 | 18 events, including nine presses, from 497 through 5974 ms. `sgs-directed-12-randomcompat-mode2-20260912/first-key009.png` and `first-final.png` show the active field after dialogue and movement input. | No save write occurs on this route. |
+
+All directed sessions except the deliberately exercised ID 11 gate start,
+advance, accept input, and close without an error. Their reopened sessions do
+the same. None reports a guest-initiated exit; this establishes Host
+close/reopen lifecycle behavior.
+
+The ID 11 service argument is an absolute HTTP URL in script resource 65; the
+full value stays in ignored local evidence and no network request was made.
+After `0xc4`, the script unconditionally jumps to the invocation terminator.
+This indicates a Host handoff followed by local return, with no script callback
+expected. Main play remains blocked until the Host supports that handoff or a
+different local gate condition is identified. The tested handoff alone does
+not advance the local screen; whether the gate depends on external content or
+on an earlier local predicate remains unresolved.
+
+## ID 06-08 and 10-12 save controls
+
+ID 06 starts from the 64-byte seed
+`caf4e3c15d6f27cdf179cd215eec5a9d83420b3d7949c6e03fbef021a96597bd`.
+It writes
+`d1e86415605a626fa05e9eb878b0a8d0a7e22ab73ea7071069ba2267e044d3d9`
+at startup, then writes the seed bytes again at 11168 and 14060 ms. An
+empty-store control produces the same write sequence. All 54 first-session and
+15 reopened-session captures are identical between the seeded and empty arms.
+The route therefore exercises the save boundary but does not establish visible
+saved progress.
+
+ID 07 starts from the existing 64-byte seed
+`1b1c5cc8c32c9b5122befbde3cee7639ff24a759a20910e2144223d30ef4bc6e`.
+The seven-press start route loads and retains that payload. Its empty-store
+control writes a different payload with digest
+`2d67960ff306191afdd74818324b1afa172eb53b2c917c01818f86b5a89a3f5f`.
+Under the same inputs, the arms first differ at press five at 7089 ms. At 14120
+ms the seeded arm shows the interactive management/HUD screen with framebuffer
+digest
+`4c0540acd03f8a7186aa0c84ed2d53dbbf7c1c6ddabc6d6c78ff2b9d970623e6`;
+the empty arm shows the new-game story with digest
+`df74839356bbb53c66390830469fafeeee06e9ab7e5866cf7f142e55bf89f16a`.
+The same distinction repeats after close/reopen. This proves that an existing
+save causally changes visible state. It does not prove creation and restoration
+of new progress during this run.
+
+IDs 08, 10, and 12 each make one missing-save read in the first session and one
+in the reopened session, with no write. ID 11 makes no save-boundary call. These
+are bounded results for the recorded paths; end-of-round or unvisited menu
+flows remain unknown.
+
+The directed first sessions emit the following audio activity:
+
+| ID | MIDI messages | Wave samples |
+| --- | ---: | ---: |
+| 06 | 1708 | 0 |
+| 07 | 363 | 4262 |
+| 08 | 496 | 980 |
+| 10 | 208 | 0 |
+| 11 | 414 | 0 |
+| 12 | 800 | 0 |
+
+These counters demonstrate service activity only. Audible output remains a
+human acceptance item for every ID.
+
+## Current corpus matrix
+
+| ID | Reusable directed route | Visible save result | Lifecycle result | First remaining test or blocker |
+| --- | --- | --- | --- | --- |
+| 01 | Active playfield | Distinct payload reloads, but default control is visually identical | Host close/reopen passes | Reach an end-of-round or menu flow that exposes a saved field. |
+| 02 | Active playfield | No save call on the route | Host close/reopen passes | Check end-of-round and the remaining menu entries for save applicability. |
+| 03 | Active fight | Startup default only; no progress change | Host close/reopen passes | Check end-of-round behavior for a changed payload. |
+| 04 | Active fight | Startup default only; no progress change | Host close/reopen passes | Check end-of-round behavior for a changed payload. |
+| 05 | Active playfield | Payload reloads, but empty control is visually identical | Host close/reopen passes | Exercise score, settings, or round completion and compare a changed visible field. |
+| 06 | Interactive management path | Seeded and empty controls are visually identical | Host close/reopen passes | Identify a distinct progress action or an action-field transition; repeating this management route adds no evidence. |
+| 07 | Existing-save path reaches interactive management/HUD | Existing seed causally changes visible state; new progress is not proven | Host close/reopen passes | Produce a new changed payload through a directed progress action and compare it with the immutable seed. |
+| 08 | Active battle field | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
+| 09 | Active playfield and HUD | New payload causally restores visible progress | Host close/reopen passes | Audible output remains a human check. |
+| 10 | Field and HUD with continued dialogue | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
+| 11 | No local main-play route found | No save call before the gate | One-press Host close/reopen passes; gate route errors deterministically | **Blocked:** diagnose the local gate predicate and Host handoff; the tested route does not reach main play. |
+| 12 | Active field after dialogue and movement | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
+
+Audio remains pending for all twelve IDs because no physical playback was
+heard during these diagnostics.
