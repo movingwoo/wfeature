@@ -39,8 +39,12 @@ The adapter preserves field constraints and stores the complete value using the
 component string-setting contract. Fields with an explicitly installed
 InputMethodListener remain unsupported: its per-key composition deltas cannot
 safely describe an arbitrary whole-field replacement.
-KFC modal editors do not expose a live target and remain unsupported. SKT supports
-TextBox, the selected Form TextField, and a focused XTextField on the visible canvas.
+KTF also supports a bounded non-modal KFC route: an explicitly shown GForm with
+exactly one directly attached GTextField that has an EventListener. The Host
+changes only that field's value. The guest listener receives keypad events and
+owns acceptance and dismissal. Ambiguous or changed form contents are rejected,
+and the synchronous KFC `doModal` path remains unsupported. SKT supports TextBox,
+the selected Form TextField, and a focused XTextField on the visible canvas.
 LGT supports a focused LWC TextField or TextBox whose parent chain reaches a
 shown Shell. Shell visibility and focus changes invalidate pending edits; field
 and listener revisions also reject guest changes that restore an earlier value.
@@ -67,6 +71,15 @@ draft preservation, guest length limits, and absence of leaked game-key events o
 page errors. Artifacts are in the ignored
 `var/diagnostics/native-text-e2e-20260912` directory. Composition events are driven
 by automation; physical-phone keyboard and IME interaction still needs a person.
+
+A real KTF archive also passes the shared session and browser paths for its
+non-modal GForm editor. A complete Korean composition updates the same
+GTextField without hiding the form. The guest's FIRE listener then reads the
+value, stores it, and hides the form; reopening the editor returns the accepted
+string. Leaving settings with CLR also persists the name across a new runtime
+session using the same save directory. Chromium and WebKit retain the game keypad and report no page errors.
+Review artifacts are in the ignored
+`var/diagnostics/ktf-native-browser-20260912` directory.
 
 An authored LGT AOT archive also boots through the shared session and actual
 WebSocket. Its initializer resolves the Java tables, allocates a shell and text

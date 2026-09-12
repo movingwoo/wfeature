@@ -9,9 +9,9 @@ import (
 // com/ktf/kfc is the vendor widget toolkit. Runtime classes preserve its
 // callable methods and component data, but do not draw a complete widget UI.
 // A settings name editor uses GForm.show rather than a synchronous modal call.
-// show and hide maintain visibility; doModal still returns immediately without
-// presenting a dialog. See docs/widget-input-lifecycle.md for verified routes
-// and the remaining focus, editing and dismissal requirements.
+// The bounded non-modal path exposes its sole listened GTextField to Host text
+// input and leaves acceptance and dismissal to the guest. doModal still returns
+// immediately without presenting a dialog. See docs/widget-input-lifecycle.md.
 const (
 	runtimeGFormClass          = "com/ktf/kfc/GForm"
 	runtimeGMenubarFormClass   = "com/ktf/kfc/GMenubarForm"
@@ -44,7 +44,7 @@ func runtimeGFormClassDefinition(class, super string) runtimeJavaClass {
 			// once and answers zero — which is what a dialog closed without a
 			// choice answers.
 			{class: class, name: "doModal", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeGFormDoModal},
-			{class: class, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentShown(true)},
+			{class: class, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeGFormShow},
 			{class: class, name: "hide", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeGFormHide},
 			{class: class, name: "isShown", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeCardIntField(componentShownField, 0)},
 			{class: class, name: "showNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
@@ -164,8 +164,13 @@ func runtimeChoiceTextClassDefinition() runtimeJavaClass {
 // choiceTextChoicesField is the array a choice list was constructed from, and
 // choiceTextSelectedField is the entry a title is looking at.
 const (
-	choiceTextChoicesField  = "choices:[Ljava/lang/String;"
-	choiceTextSelectedField = "selected:I"
+	choiceTextChoicesField                    = "choices:[Ljava/lang/String;"
+	choiceTextSelectedField                   = "selected:I"
+	componentKFCVisibilityRevisionField       = "kfcVisibilityRevision:J"
+	componentKFCTextRevisionField             = "kfcTextRevision:J"
+	runtimeKFCShownFormObject                 = "kfc:shown-form"
+	runtimeKFCActiveFieldObject               = "kfc:active-field"
+	componentKeyNotifyEvent             int32 = 3
 )
 
 func runtimeChoiceTextConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -181,8 +186,9 @@ func runtimeChoiceTextConstructor(_ *initializationRuntime, _ *jvm.VM, arguments
 // componentIMEModesField is the mode list a listener was given.
 const componentIMEModesField = "imeModes:[I"
 
-// componentTextListenerField is the listener a field was given, handed back by
-// getGTextListener. Nothing fires it: the text never changes on its own.
+// componentTextListenerField is the text-change listener a field was given,
+// handed back by getGTextListener. Host whole-string editing does not synthesize
+// its delta callback.
 const componentTextListenerField = "listener:Lcom/ktf/kfc/GTextListener;"
 
 // runtimeKFCReceiver takes the receiver of a constructor whose argument count
@@ -214,13 +220,107 @@ func runtimeGFormConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 	return jvm.VoidValue(), nil
 }
 
-func runtimeGFormHide(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+// runtimeGFormShow exposes only the vendor lifecycle observed in a non-modal
+// settings editor: one shown form directly contains one listened GTextField.
+// A form with no such field, or more than one, has no Host-editable target.
+func runtimeGFormShow(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("GForm.show", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentShownField] = jvm.IntValue(1)
+	runtimeComponentIncrementRevision(receiver, componentKFCVisibilityRevisionField)
+	runtime.runtimeObjects[runtimeKFCShownFormObject] = receiver
+	runtime.runtimeObjects[runtimeKFCActiveFieldObject] = runtime.uniqueVendorTextField(receiver)
+	return jvm.VoidValue(), nil
+}
+
+func runtimeGFormHide(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	receiver, err := runtimeComponentReceiver("GForm.hide", arguments, 1)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	receiver.Fields[componentShownField] = jvm.IntValue(0)
+	runtimeComponentIncrementRevision(receiver, componentKFCVisibilityRevisionField)
+	runtime.clearActiveVendorForm(receiver)
 	return jvm.VoidValue(), nil
+}
+
+func (runtime *initializationRuntime) clearActiveVendorForm(form *jvm.Object) {
+	if runtime.runtimeObjects[runtimeKFCShownFormObject] != form {
+		return
+	}
+	delete(runtime.runtimeObjects, runtimeKFCShownFormObject)
+	delete(runtime.runtimeObjects, runtimeKFCActiveFieldObject)
+}
+
+func (runtime *initializationRuntime) uniqueVendorTextField(form *jvm.Object) *jvm.Object {
+	var field *jvm.Object
+	for _, child := range runtimeComponentChildren(form) {
+		if child == nil {
+			continue
+		}
+		vendor, err := runtime.client.vm.IsSubclassOf(child.ClassName, runtimeGTextFieldClass)
+		if err != nil || !vendor {
+			continue
+		}
+		state, ok := runtimeComponentEventListenerState(child)
+		if !ok || state.listener == nil {
+			continue
+		}
+		if field != nil {
+			return nil
+		}
+		field = child
+	}
+	return field
+}
+
+// dispatchKeyToVendorForm gives a shown non-modal vendor form ownership of the
+// keypad while its one listened field is active. The listener sees the WIPI
+// Component event tuple. Its boolean only decides whether normal component
+// handling follows; this bounded path deliberately has no legacy keypad IME,
+// so the event never falls through into the covered game card.
+//
+// A press remains owned through its release even when the guest's press
+// callback hides the form. Delivering that release to the card underneath can
+// reopen the editor or activate the settings row that the form covered.
+func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int32) (bool, error) {
+	owner := runtime.kfcOwnedKeys[key]
+	if eventType != KeyPressed && owner.form == nil {
+		return false, nil
+	}
+	state, active := runtime.activeVendorTextInput()
+	sameOwner := active && state.form == owner.form && state.visibilityRevision == owner.visibilityRevision
+	if !active || eventType != KeyPressed && !sameOwner {
+		if owner.form == nil {
+			return false, nil
+		}
+		if eventType == KeyReleased {
+			delete(runtime.kfcOwnedKeys, key)
+		}
+		return true, nil
+	}
+	if eventType == KeyPressed {
+		if runtime.kfcOwnedKeys == nil {
+			runtime.kfcOwnedKeys = make(map[int32]kfcKeyOwner)
+		}
+		runtime.kfcOwnedKeys[key] = kfcKeyOwner{form: state.form, visibilityRevision: state.visibilityRevision}
+	}
+	_, err := runtime.client.vm.InvokeVirtual(state.event.listener, "eventNotify", "(IIIILjava/lang/Object;)Z",
+		jvm.IntValue(componentKeyNotifyEvent), jvm.IntValue(eventType), jvm.IntValue(key), jvm.IntValue(0), jvm.ReferenceValue(state.event.data))
+	if err != nil {
+		return true, fmt.Errorf("notify KTF vendor text field listener %s: %w", state.event.listener.ClassName, err)
+	}
+	if eventType == KeyReleased {
+		delete(runtime.kfcOwnedKeys, key)
+	}
+	return true, nil
+}
+
+type kfcKeyOwner struct {
+	form               *jvm.Object
+	visibilityRevision jvm.Value
 }
 
 func runtimeGFormDoModal(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -263,6 +363,7 @@ func runtimeGTextFieldSetString(_ *initializationRuntime, vm *jvm.VM, arguments 
 		text, _ = jvm.StringText(object)
 	}
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(text))
+	runtimeComponentIncrementRevision(receiver, componentKFCTextRevisionField)
 	return jvm.VoidValue(), nil
 }
 

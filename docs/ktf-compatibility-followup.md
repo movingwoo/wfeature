@@ -111,8 +111,14 @@ composition. Installing a listener after the Host takes its snapshot invalidates
 the pending commit. A handler-owned mutation revision also invalidates a pending edit when the
 guest installs a listener and restores the original null value before commit.
 
-The vendor modal path has an additional lifecycle gap: its text field is not
-associated with the form's active focus, and `doModal` returns synchronously.
-There is therefore no live vendor editor for a Host to commit to after the call.
-That modal lifetime needs its own design before the common snapshot-and-commit
-adapter can support it honestly.
+One observed vendor editor is non-modal. It shows a GForm containing one listened
+GTextField without making an explicit focus call. The adapter supports only that
+bounded shape, records form, child, listener, and text revisions, and applies a
+Host composition to the same field without hiding it. The field EventListener
+receives FIRE, copies `getString` into guest state, and hides the form. Key
+ownership prevents the release that opened the form from dismissing it and keeps
+the acceptance release away from the card underneath.
+
+The vendor `doModal` path still has a separate lifecycle gap: it returns
+synchronously, leaving no live editor for a later Host commit. That modal
+lifetime remains unsupported.

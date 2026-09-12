@@ -132,17 +132,40 @@ separate acceptance requirements. General, debug, race and vet checks pass.
 ### KTF non-modal form visibility
 
 The same settings route invokes `GForm.show()` after setting the field text.
-The vendor override previously did nothing even though `ShellComponent.show()`
-already maintained visibility. The override now uses that existing implementation;
-`show`, `hide`, and `isShown` agree for GForm and its runtime subclasses. The
-fixed-value stub inventory no longer lists these three `show` methods.
-
-A fresh-save replay reaches the show call and 60 subsequent ticks without a
-runtime error. The framebuffer still contains the settings menu. The captured
-route attaches a child through `ContainerComponent.addComponent` but makes no
-focus call. The host adapter requires `lwc:focus`, so visibility alone does not
-provide a native editor target. Focus traversal, host editing and dismissal must
-be verified together before claiming this real editor works. The WIPI
+The captured route attaches one GTextField through
+`ContainerComponent.addComponent`, installs its EventListener, and invokes
+`GForm.show()` after setting the field text. It makes no focus call. The WIPI
 [FormComponent contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/FormComponent.md)
-describes child focus traversal with the up/down keys; the vendor form's actual
-child selection still needs executable coverage.
+describes explicit child focus traversal, so the runtime does not infer a
+general rule that every shown field is active. It selects a Host target only
+for this observed vendor shape: an explicitly shown form with exactly one
+directly attached, listened GTextField. A missing listener, multiple eligible
+fields, removal, or a later lifecycle change prevents or invalidates editing.
+
+The field's real EventListener receives `eventNotify` with the WIPI KEY_NOTIFY
+tuple. On FIRE it reads `GTextField.getString`, copies that value into guest
+state, and calls `GForm.hide`; it returns false. Host composition therefore
+changes only the field value and leaves the form shown. The form owns each
+key press through its matching release even if the callback hides or replaces
+the form. A release whose press belonged to the underlying card is kept there,
+so the release that follows the opening FIRE cannot immediately dismiss the
+new form.
+
+Authored tests cover ambiguous and null children, listener and child changes,
+value restoration, hide and re-show generations, key ownership, and replacement
+forms. A fresh-save session replay accepts a complete Korean string through the
+guest FIRE callback and reads it back after reopening. Chromium and WebKit pass
+the same whole-string composition and keypad-isolation route without page
+errors. This support does not add a complete KFC renderer or change the
+synchronous `doModal` stub.
+
+### KTF name persistence acceptance
+
+Closing the runtime while still inside settings does not persist the newly
+accepted name. The real archive writes its settings when the user leaves that
+menu with CLR. The acceptance probe commits Korean text, confirms with FIRE,
+leaves settings with CLR, closes the session, and starts a new session against
+the same isolated save directory. Reopening the name field then returns the
+previously accepted text. This verifies guest-owned persistence, rather than
+only reopening an editor in the same runtime. The final normal, debug, internal
+race and vet checks pass.

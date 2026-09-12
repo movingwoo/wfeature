@@ -431,6 +431,9 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 		}
 		return nil
 	}
+	if handled, err := runtime.dispatchKeyToVendorForm(eventType, key); err != nil || handled {
+		return err
+	}
 	for index := len(runtime.displayCards) - 1; index >= 0; index-- {
 		card := runtime.displayCards[index]
 		result, err := runtime.client.vm.InvokeVirtual(card, "keyNotify", "(II)Z", jvm.IntValue(eventType), jvm.IntValue(key))
