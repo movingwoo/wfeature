@@ -368,3 +368,52 @@ func TestOwnedReleaseDoesNotReachAReplacementVendorLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestVendorKeyReleaseDoesNotReachReplacementListener(t *testing.T) {
+	session, _, field, listener := shownVendorTextField(t, "old")
+	runtime := session.Client.runtime
+	replacement := newWidget("test/ReplacementFieldListener")
+	deliveries := 0
+	if err := session.Client.JVM().RegisterNative(replacement.ClassName, "eventNotify", "(IIIILjava/lang/Object;)Z", func(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) { deliveries++; return jvm.IntValue(0), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Client.JVM().RegisterNative(listener.ClassName, "eventNotify", "(IIIILjava/lang/Object;)Z", func(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+		_, err := runtimeComponentSetEventListener(runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(field), jvm.ReferenceValue(replacement), jvm.ReferenceValue(nil)})
+		return jvm.IntValue(0), err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []int32{KeyPressed, KeyReleased} {
+		if err := runtime.dispatchKeyToCards(kind, KeyFire); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if deliveries != 0 {
+		t.Fatalf("replacement listener received %d events without its own press", deliveries)
+	}
+}
+
+func TestVendorReleaseErrorClearsKeyOwner(t *testing.T) {
+	session, form, _, listener := shownVendorTextField(t, "old")
+	runtime := session.Client.runtime
+	failure := errors.New("release callback failed")
+	if err := session.Client.JVM().RegisterNative(listener.ClassName, "eventNotify", "(IIIILjava/lang/Object;)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
+		kind, _ := args[2].Int32()
+		if kind == KeyReleased {
+			callVendorFormMethod(t, runtime, session.Client.JVM(), form, "hide")
+			return jvm.VoidValue(), failure
+		}
+		return jvm.IntValue(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.dispatchKeyToVendorForm(KeyPressed, KeyFire); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.dispatchKeyToVendorForm(KeyReleased, KeyFire); !errors.Is(err, failure) {
+		t.Fatalf("release error = %v", err)
+	}
+	if handled, err := runtime.dispatchKeyToVendorForm(KeyPressed, KeyFire); handled || err != nil {
+		t.Fatalf("next card press handled=%v error=%v", handled, err)
+	}
+}

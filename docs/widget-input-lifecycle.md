@@ -169,3 +169,14 @@ the same isolated save directory. Reopening the name field then returns the
 previously accepted text. This verifies guest-owned persistence, rather than
 only reopening an editor in the same runtime. The final normal, debug, internal
 race and vet checks pass.
+
+A key press also captures the selected field, child-list revision and event
+listener state. Replacing the listener during its press callback consumes the
+old press's trailing release without delivering it to the replacement listener.
+The same form and visibility generation alone are not sufficient ownership.
+A regression reproduces this callback replacement before the correction.
+
+Release ownership is cleared before invoking the guest release callback. If
+that callback hides the form and throws, the next card press is still delivered
+normally; an error must not leave the previous press captured. A regression
+covers this callback failure.

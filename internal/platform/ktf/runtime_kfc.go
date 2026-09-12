@@ -287,11 +287,16 @@ func (runtime *initializationRuntime) uniqueVendorTextField(form *jvm.Object) *j
 // reopen the editor or activate the settings row that the form covered.
 func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int32) (bool, error) {
 	owner := runtime.kfcOwnedKeys[key]
+	if eventType == KeyReleased {
+		delete(runtime.kfcOwnedKeys, key)
+	}
 	if eventType != KeyPressed && owner.form == nil {
 		return false, nil
 	}
 	state, active := runtime.activeVendorTextInput()
-	sameOwner := active && state.form == owner.form && state.visibilityRevision == owner.visibilityRevision
+	sameOwner := active && state.form == owner.form && state.visibilityRevision == owner.visibilityRevision &&
+		state.field == owner.field && state.childrenRevision == owner.childrenRevision &&
+		sameRuntimeComponentEventState(state.event, owner.event)
 	if !active || eventType != KeyPressed && !sameOwner {
 		if owner.form == nil {
 			return false, nil
@@ -305,7 +310,10 @@ func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int
 		if runtime.kfcOwnedKeys == nil {
 			runtime.kfcOwnedKeys = make(map[int32]kfcKeyOwner)
 		}
-		runtime.kfcOwnedKeys[key] = kfcKeyOwner{form: state.form, visibilityRevision: state.visibilityRevision}
+		runtime.kfcOwnedKeys[key] = kfcKeyOwner{
+			form: state.form, visibilityRevision: state.visibilityRevision,
+			field: state.field, childrenRevision: state.childrenRevision, event: state.event,
+		}
 	}
 	_, err := runtime.client.vm.InvokeVirtual(state.event.listener, "eventNotify", "(IIIILjava/lang/Object;)Z",
 		jvm.IntValue(componentKeyNotifyEvent), jvm.IntValue(eventType), jvm.IntValue(key), jvm.IntValue(0), jvm.ReferenceValue(state.event.data))
@@ -321,6 +329,9 @@ func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int
 type kfcKeyOwner struct {
 	form               *jvm.Object
 	visibilityRevision jvm.Value
+	field              *jvm.Object
+	childrenRevision   jvm.Value
+	event              runtimeComponentEventState
 }
 
 func runtimeGFormDoModal(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
