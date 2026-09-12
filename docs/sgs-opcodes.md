@@ -89,9 +89,9 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0x9d` | `0x0041b120` | I | Stop timer 0. |
 | `0x9e` | `0x0041b140` | I | Stop timer 1. |
 | `0x9f` | `0x0041b160` | I | Stop timer 2. |
-| `0xa0` | `0x0041b180` | P | Seed pseudo-random generator; host sequence differs from original C library. |
-| `0xa1` | `0x0041b1a0` | P | Random integer between two sorted bounds, lower inclusive/upper exclusive; equal bounds return that value. |
-| `0xa2` | `0x0041b1f0` | P | Percentage test: rand()%100 < input, boolean result. |
+| `0xa0` | `0x0041b180` | I | Sign-extend the seed into the session-local original 32-bit recurrence. See [random services](sgs-random.md). |
+| `0xa1` | `0x0041b1a0` | I | Original 15-bit draw modulo the sorted bound difference; equal bounds return without drawing. Wide intervals retain the original distribution. |
+| `0xa2` | `0x0041b1f0` | I | Always consume an original 15-bit draw; compare its remainder modulo 100 with the signed percentage. |
 | `0xa3` | `0x0041b220` | I | Absolute value with signed-word overflow behavior. |
 | `0xa4` | `0x0041b240` | I | Sign: -1,0,1. |
 | `0xa5` | `0x0041b270` | I | Sine of integer degrees, result scaled 100 and rounded; reduce angle modulo 360. |

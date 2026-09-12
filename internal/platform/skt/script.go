@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"math/rand/v2"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -44,7 +43,7 @@ type ScriptSession struct {
 	paused        bool
 	closed        bool
 	runtimeMode   byte
-	random        *rand.Rand
+	random        scriptRandom
 }
 
 func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (*ScriptSession, error) {
@@ -58,7 +57,7 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	s := &ScriptSession{
 		graphics: graphics, options: options, last: time.Now(),
 		runtimeMode: scriptStandaloneRuntimeMode,
-		random:      rand.New(rand.NewPCG(1, 2)),
+		random:      scriptRandom(1),
 	}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
@@ -413,8 +412,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 	case 0xb8, 0xb9:
 		return scriptCalendarCall(op, vm, time.Now())
 	case 0xa0:
-		seed := uint64(uint16(vm.Pop()))
-		s.random = rand.New(rand.NewPCG(seed, seed+1))
+		seed := uint32(int32(vm.Pop()))
+		s.random = scriptRandom(seed)
 	case 0xa1:
 		a := vm.Args(2)
 		lo, hi := int(a[0]), int(a[1])
@@ -423,12 +422,12 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		}
 		result := lo
 		if lo != hi {
-			result += s.random.IntN(hi - lo)
+			result += s.random.next() % (hi - lo)
 		}
 		vm.Push(int16(result))
 	case 0xa2:
 		p := int(vm.Pop())
-		if s.random.IntN(100) < p {
+		if s.random.next()%100 < p {
 			vm.Push(1)
 		} else {
 			vm.Push(0)
