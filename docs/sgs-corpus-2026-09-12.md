@@ -308,6 +308,12 @@ and shows the original visible values with framebuffer digest
 `4c0540acd03f8a7186aa0c84ed2d53dbbf7c1c6ddabc6d6c78ff2b9d970623e6`.
 Both sessions and both controls finish without an execution or close error.
 
+The manager repeated the creation route and immutable-seed control on combined
+revision `5a47048`, including native input, external handoff, coded SIS tiles and
+reference replacements. Both final save digests and both final framebuffer
+digests above matched exactly. In each reopened session the expected payload
+was loaded at 0 ms before any write; neither route reported an error.
+
 IDs 08, 10, and 12 each make one missing-save read in the first session and one
 in the reopened session, with no write. ID 11 makes no save-boundary call. These
 are bounded results for the recorded paths; end-of-round or unvisited menu
