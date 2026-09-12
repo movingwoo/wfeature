@@ -207,9 +207,10 @@ blocked by nondeterministic `-play`; recording a network response alone does not
 justify recording clocks, input, responses, and scheduler choices together.
 
 The proposed common runtime extraction is also superseded: audio, framebuffer,
-saves, and glyphs are shared already. Remaining work is to make caller contracts
-explicit, especially the common origin and rate of audio `Play` and `Advance`
-timestamps and ownership across calls, rather than to create another layer.
+saves, and glyphs are shared already. The caller contracts for the common origin and rate of audio `Play` and
+`Advance` timestamps, borrowed buffers and callback reentrancy are now recorded
+in [runtime-service-contracts.md](runtime-service-contracts.md). No additional
+layer is required for that documentation task.
 
 Unqualified local reports about phone speed, PC keypad presentation, and sound
 remain requests for reproduction details. The old device-error report likewise

@@ -16,12 +16,13 @@ import (
 // for such an object: they are behind its `read`, which is a virtual call away
 // on the class the title compiled.
 //
-// So the wrapper reads it the way the guest would. Bytes are pulled a block at
-// a time into the same buffer a resource stream fills, and the cursor is the
-// same field, which is what lets every reader above — `readInt`, `readUTF`,
-// `readFully`, the reader's character decode — work unchanged: each one asks
-// for the bytes it needs before it looks at them, and asking is a no-op for a
-// stream this platform holds whole.
+// So the wrapper reads it the way the guest would. Bytes are pulled into the
+// same buffer a resource stream fills, and the cursor is the same field, which
+// is what lets every reader above — `readInt`, `readUTF`, `readFully`, the
+// reader's character decode — work unchanged: each one asks for the bytes it
+// needs before it looks at them, and asking is a no-op for a stream this
+// platform holds whole. A pull asks for exactly the missing bytes so a mark
+// forwarded to the guest observes the same cursor the wrapper does.
 //
 // **The methods are found in the object's vtable, not in its class record.** A
 // class the compiler laid out itself declares no member records at all — its
@@ -34,9 +35,12 @@ import (
 // They are the numbers this platform assigned the class, so a subclass's
 // override of one is at the same slot.
 const (
-	javaStreamSlotRead      = 10 // read()I
-	javaStreamSlotReadBlock = 12 // read([BII)I
-	javaStreamSlotAvailable = 14 // available()I
+	javaStreamSlotRead          = 10 // read()I
+	javaStreamSlotReadBlock     = 12 // read([BII)I
+	javaStreamSlotAvailable     = 14 // available()I
+	javaStreamSlotMark          = 16 // mark(I)V
+	javaStreamSlotReset         = 17 // reset()V
+	javaStreamSlotMarkSupported = 18 // markSupported()Z
 )
 
 // javaStreamSource is the title's own stream a wrapper stands for.
@@ -53,6 +57,11 @@ type javaStreamSource struct {
 	// Available is the title's own `available`, when it overrode one. A stream
 	// that did not is asked nothing: what has been pulled is the answer.
 	Available uint32
+	// Mark, Reset and MarkSupported are the title's own cursor contract. A
+	// DataInputStream delegates these calls to the InputStream it wraps.
+	Mark          uint32
+	Reset         uint32
+	MarkSupported uint32
 	// Buffer is the byte array `read([BII)` is handed, allocated once and
 	// reused, because a pull per block would otherwise allocate a block per
 	// pull.
@@ -67,10 +76,9 @@ type javaStreamSource struct {
 }
 
 const (
-	// javaStreamPull is how many bytes one call of the title's `read([BII)` is
-	// asked for. It is a block rather than the whole stream because a title's
-	// own stream has no length to ask for — `available` is a lower bound, not
-	// a size — and a block is what its own callers would have used.
+	// javaStreamPull is the most one call of the title's `read([BII)` is asked
+	// for. A title's own stream has no length to ask for — `available` is a
+	// lower bound, not a size — so larger reads are split into bounded pulls.
 	javaStreamPull = 4096
 	// javaStreamWindow caps how far ahead of the cursor bytes are held. A
 	// reader that asks for more than this at once is asking for a single
@@ -97,6 +105,15 @@ func (client *Client) openJavaGuestStream(object uint32) (*javaStream, error) {
 	if source.Available, err = client.javaOverriddenSlot(class, javaStreamSlotAvailable); err != nil {
 		return nil, err
 	}
+	if source.Mark, err = client.javaOverriddenSlot(class, javaStreamSlotMark); err != nil {
+		return nil, err
+	}
+	if source.Reset, err = client.javaOverriddenSlot(class, javaStreamSlotReset); err != nil {
+		return nil, err
+	}
+	if source.MarkSupported, err = client.javaOverriddenSlot(class, javaStreamSlotMarkSupported); err != nil {
+		return nil, err
+	}
 	if source.ReadBlock == 0 && source.ReadByte == 0 {
 		return nil, fmt.Errorf(
 			"%s overrides neither read() nor read([BII), so it is not a stream this platform can read",
@@ -107,6 +124,9 @@ func (client *Client) openJavaGuestStream(object uint32) (*javaStream, error) {
 			"read([BII)I", fmt.Sprintf("%#x", source.ReadBlock),
 			"read()I", fmt.Sprintf("%#x", source.ReadByte),
 			"available()I", fmt.Sprintf("%#x", source.Available),
+			"mark(I)V", fmt.Sprintf("%#x", source.Mark),
+			"reset()V", fmt.Sprintf("%#x", source.Reset),
+			"markSupported()Z", fmt.Sprintf("%#x", source.MarkSupported),
 			"object", object)
 	}
 	return &javaStream{Name: class.Name, Source: source}, nil
@@ -180,11 +200,15 @@ func (client *Client) pullJavaStream(
 	ctx context.Context, thread *armcore.Thread, stream *javaStream, want int,
 ) error {
 	source := stream.Source
+	missing := want - (len(stream.Data) - stream.Read)
+	if missing <= 0 {
+		return nil
+	}
 	if stream.Read > 0 {
 		stream.Data = stream.Data[:copy(stream.Data, stream.Data[stream.Read:])]
 		stream.Read = 0
 	}
-	data, err := client.readJavaGuestStream(ctx, thread, stream, want)
+	data, err := client.readJavaGuestStream(ctx, thread, stream, missing)
 	if err != nil {
 		return err
 	}
@@ -206,6 +230,10 @@ func (client *Client) readJavaGuestStream(
 ) ([]byte, error) {
 	source := stream.Source
 	if source.ReadBlock != 0 {
+		request := want
+		if request > javaStreamPull {
+			request = javaStreamPull
+		}
 		if source.Buffer == 0 {
 			buffer, err := client.newJavaByteArray(make([]byte, javaStreamPull))
 			if err != nil {
@@ -214,7 +242,7 @@ func (client *Client) readJavaGuestStream(
 			source.Buffer = buffer
 		}
 		answer, err := client.callOn(ctx, thread, source.ReadBlock,
-			[]uint32{source.Object, source.Buffer, 0, javaStreamPull})
+			[]uint32{source.Object, source.Buffer, 0, uint32(request)})
 		if err != nil {
 			return nil, fmt.Errorf("run %s read([BII)I at %#x: %w", stream.Name, source.ReadBlock, err)
 		}
@@ -226,9 +254,9 @@ func (client *Client) readJavaGuestStream(
 			// it as anything but the end is a loop that never finishes.
 			return nil, nil
 		}
-		if count > javaStreamPull {
-			return nil, fmt.Errorf("%s read([BII) filled %d bytes of a %d-byte array",
-				stream.Name, count, javaStreamPull)
+		if count > request {
+			return nil, fmt.Errorf("%s read([BII) filled %d bytes when asked for %d",
+				stream.Name, count, request)
 		}
 		block, _, err := client.javaArrayBlock(source.Buffer)
 		if err != nil {

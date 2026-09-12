@@ -14,8 +14,10 @@ import (
 // no Host renders both the same way. The browser drives a soundfont
 // synthesiser and Web Audio; the CLI records instead of playing.
 //
-// Every method is called from the Host's own goroutine while it advances the
-// audio clock, never concurrently.
+// Audio serializes sink calls under its mutex. Calls also occur during Play,
+// Stop, Close and volume changes, not only Advance. A sink must not call back
+// into the same Audio. Slice arguments are borrowed, read-only for the duration
+// of the call; a sink that queues them for later use must copy them.
 type AudioSink interface {
 	PlayWave(channels uint8, samplingRate uint32, samples []int16)
 	MIDINoteOn(channel, note, velocity uint8)
@@ -33,6 +35,11 @@ type AudioHandle uint32
 // playback. It does not own a clock: Advance is called with the same clock the
 // guest runs on, so a Host batching ticks through a manual clock hears the
 // same sequence a Host running in real time does, only faster.
+//
+// Play and Advance must use one monotonic guest-time domain per Audio instance:
+// the same origin, units and rate. A playback-speed change affects how quickly
+// the Host advances guest time, not a second scaling inside Audio. Restarting
+// the guest clock requires a new timeline; backward timestamps are not a seek.
 type Audio struct {
 	mutex  sync.Mutex
 	sink   AudioSink
@@ -162,7 +169,9 @@ func (audio *Audio) Load(data []byte) (AudioHandle, error) {
 // LoadEvents answers a handle for a sequence the caller built itself. MIDP's
 // Manager.playTone is one note rather than a file, and giving it a handle here
 // keeps every sound on the one timeline Advance drives instead of adding a
-// second path to the sink.
+// second path to the sink. The outer event slice is copied. Nested PCM and SysEx
+// slices remain shared and must stay immutable until the handle is closed.
+// Events must be ordered by their nonnegative millisecond offsets.
 func (audio *Audio) LoadEvents(events []smaf.Event) (AudioHandle, error) {
 	if audio == nil {
 		return 0, fmt.Errorf("audio is not configured")

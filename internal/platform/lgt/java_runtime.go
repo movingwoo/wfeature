@@ -734,6 +734,13 @@ func (client *Client) describeJavaVirtualSlot(slot uint32) string {
 	if !known {
 		return fmt.Sprintf("vtable slot %d", index)
 	}
+	if dispatch, implemented := client.javaPlatformVirtualDispatch(slot); implemented {
+		if dispatch.Owner != dispatch.Class {
+			return fmt.Sprintf("%s.%s (vtable slot %d, dispatched on %s)",
+				dispatch.Owner, dispatch.Called, index, dispatch.Class)
+		}
+		return fmt.Sprintf("%s.%s (vtable slot %d)", dispatch.Owner, dispatch.Called, index)
+	}
 	if owner, member, ok := client.javaVirtualMember(slot); ok {
 		// **The name to report is the one a lookup uses**, which is the class
 		// the slot was numbered under rather than the class dispatching on it.

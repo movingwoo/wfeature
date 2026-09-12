@@ -45,6 +45,8 @@ func coreLibraryDefinitions() []ClassDefinition {
 		outputStreamDefinition(),
 		byteArrayInputStreamDefinition(),
 		byteArrayOutputStreamDefinition(),
+		dataInputDefinition(),
+		dataOutputDefinition(),
 		dataInputStreamDefinition(),
 		dataOutputStreamDefinition(),
 		printStreamDefinition(),

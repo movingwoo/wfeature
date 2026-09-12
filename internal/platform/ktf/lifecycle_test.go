@@ -191,6 +191,7 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 		// either ran the body in the class's method table or it did not.
 		{fullName: "()V+pauseApp", body: ImageBase + 0x1c1, flags: 0x0001},
 		{fullName: "()V+resumeApp", body: ImageBase + 0x1c9, flags: 0x0001},
+		{fullName: "(Z)V+destroyApp", body: ImageBase + 0x1d1, flags: 0x0001},
 	}
 	methodPointers := make([]uint32, 0, len(methodSpecs)+1)
 	for _, spec := range methodSpecs {
@@ -286,6 +287,7 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 	// allocateAOTObject — so the class's one field is at +12.
 	writeThumb(0x1c0, 0x2002, 0x60c8, 0x4770) // movs r0,#2; str r0,[r1,#12]; bx lr
 	writeThumb(0x1c8, 0x2003, 0x60c8, 0x4770) // movs r0,#3; str r0,[r1,#12]; bx lr
+	writeThumb(0x1d0, 0x60ca, 0x4770)         // str r2,[r1,#12]; bx lr
 	client.executable.Interface.Functions.GetClass = ImageBase + 0x151
 	return client
 }

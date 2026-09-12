@@ -24,8 +24,8 @@
 //     Nothing runs here either, and the method half of the question is gone —
 //     see ktfPlatformNames.
 //   - An LGT title is a native module whose imports exist nowhere but the calls
-//     it makes while it starts, so this scan starts it and reads back what it
-//     resolved. It is one boot per archive rather than a read.
+//     it makes to resolve them. This scan starts it and reads back resolutions
+//     through Start; lazy calls and later virtual dispatch remain outside it.
 //
 // The `-natives` report is any `runskt -diag` output: the SKT platform
 // registers part of its surface on a live runtime rather than in a
@@ -581,7 +581,7 @@ func nameShaped(entry string) bool {
 // does not implement.
 //
 // Unlike the other two this one runs the title — as far as its initializer,
-// which is where a module resolves every platform function it might ever call.
+// which resolves only the imports reached during that boot path.
 // Nothing else in the archive lists them: the ELF carries no dynamic symbols,
 // and a slot is a pair of numbers passed to a callback. A startup that fails
 // still resolved everything it got to, so what it did resolve is reported

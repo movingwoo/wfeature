@@ -1,5 +1,9 @@
 # SKVM and the SKT platform
 
+See the [2026-09-12 coverage audit](ktf-skt-audit-2026-09-12.md) for current
+API gaps and validation. It also identifies older limitations below that are
+already implemented, including Canvas touch, curves, and Host vibration.
+
 An SKT handset game is a MIDlet JAR. There is no native code, no custom
 executable format, and no ARM: what makes it an SKT game is that its world
 contains `com.skt.m`, `com.skt.m3d` and `com.xce` on top of standard MIDP.

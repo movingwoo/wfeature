@@ -9,16 +9,14 @@ import (
 //
 // There is no list of them in the archive: an ELF here carries no dynamic
 // symbols, and the only place a platform function is named is the pair of
-// numbers the module passes to `get import function` while it is starting. It
-// passes every one of them, for everything it might ever call, before it runs
-// any of its own code — so the resolutions a startup produces are the whole
-// surface the title links against, which is the question a compatibility pass
-// asks first and which a run answers one call at a time.
+// numbers the module passes to `get import function`. Startup resolves part of
+// this surface, while lazy Java stubs may resolve more on their first call.
+// Metadata-built virtual dispatch does not necessarily appear in this map.
 //
 // Recording them costs a map entry per distinct pair, which a module makes a
 // few hundred of, once. `internal/tools/apiscan` is what reads them back.
 
-// ImportRecord is one platform function a module resolved at startup.
+// ImportRecord is one platform function a module has resolved.
 type ImportRecord struct {
 	// Category is the SVC category the resolved stub traps into, which is what
 	// names the slot: the import table a module asks is not always the table
@@ -50,9 +48,8 @@ func (client *Client) recordImport(category, slot uint32) {
 }
 
 // ResolvedImports reports every platform function the module has resolved,
-// ordered by category and slot. It is meaningful once Start has returned: a
-// module resolves everything at startup, so a client that has not started has
-// nothing to report and one that is playing has nothing to add.
+// ordered by category and slot. It is a snapshot of resolutions so far, not a
+// complete declaration of every function later gameplay may use.
 func (client *Client) ResolvedImports() []ImportRecord {
 	client.mu.Lock()
 	pairs := make([][2]uint32, 0, len(client.imports))
@@ -100,10 +97,9 @@ func (record ImportRecord) Describe() string {
 }
 
 // importImplemented reports whether a call on this slot would be serviced.
-// Each table answers it the way its own handler decides: the WIPI C and OEM
-// tables keep the predicate their stubs already log against, the C library and
-// the Java table are decided by whether the slot has a name at all, and a Java
-// member slot is named only once the module's class metadata has arrived.
+// Each table answers it the way its own handler decides. Java uses the same
+// dispatch resolution as an actual call; metadata that can name a member does
+// not by itself make that member executable.
 func (client *Client) importImplemented(category, slot uint32) bool {
 	switch category {
 	case svcCategoryInit:
@@ -115,10 +111,33 @@ func (client *Client) importImplemented(category, slot uint32) bool {
 	case svcCategoryStdlib:
 		return stdlibSlotNames[slot] != ""
 	case svcCategoryJava:
-		if _, known := javaSVCArguments[slot]; known {
+		return client.javaSlotImplemented(slot)
+	}
+	return false
+}
+
+// javaSlotImplemented reports whether handleJavaSVC has an executable branch
+// for a slot a module could obtain through importFunction. Auxiliary entries
+// are intentionally accepted contracts even though their purpose remains
+// unnamed; static and virtual members must resolve to the same implementation
+// the dispatcher would call.
+func (client *Client) javaSlotImplemented(slot uint32) bool {
+	if _, known := javaSVCArguments[slot]; known {
+		return true
+	}
+	if index, static := javaStaticMethodParts(slot); static {
+		if _, _, classEntry := client.javaLink.unnamedStaticEntry(index); classEntry {
 			return true
 		}
-		return client.javaSlotName(slot) != ""
+		_, implemented := client.javaPlatformStaticDispatch(index)
+		return implemented
+	}
+	if slot&javaSlotVirtual != 0 {
+		_, implemented := client.javaPlatformVirtualDispatch(slot)
+		return implemented
+	}
+	if table, index, auxiliary := javaAuxiliaryParts(slot); auxiliary {
+		return table == importTableOEM && index == oemJavaFunction || javaAuxiliaryTables[table]
 	}
 	return false
 }

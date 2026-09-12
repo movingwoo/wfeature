@@ -428,10 +428,24 @@ func javaStreamAvailable(
 	return uint32(len(stream.Data) - stream.Read), nil
 }
 
-func javaStreamMarkSupported(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+func javaStreamMarkSupported(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
 		return 0, err
+	}
+	if stream.Source != nil {
+		if stream.Source.MarkSupported == 0 {
+			return 0, nil
+		}
+		answer, err := client.callOn(ctx, thread, stream.Source.MarkSupported,
+			[]uint32{stream.Source.Object})
+		if err != nil {
+			return 0, fmt.Errorf("run %s markSupported()Z at %#x: %w",
+				stream.Name, stream.Source.MarkSupported, err)
+		}
+		return answer, nil
 	}
 	if stream.Markable {
 		return 1, nil
@@ -439,10 +453,23 @@ func javaStreamMarkSupported(client *Client, _ context.Context, _ *armcore.Threa
 	return 0, nil
 }
 
-func javaStreamMark(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+func javaStreamMark(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
 		return 0, err
+	}
+	if stream.Source != nil {
+		if stream.Source.Mark == 0 {
+			return 0, nil
+		}
+		_, err := client.callOn(ctx, thread, stream.Source.Mark,
+			[]uint32{stream.Source.Object, arguments[1]})
+		if err != nil {
+			return 0, fmt.Errorf("run %s mark(I)V at %#x: %w", stream.Name, stream.Source.Mark, err)
+		}
+		return 0, nil
 	}
 	if stream.Markable {
 		stream.Mark = stream.Read
@@ -450,10 +477,27 @@ func javaStreamMark(client *Client, _ context.Context, _ *armcore.Thread, argume
 	return 0, nil
 }
 
-func javaStreamReset(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+func javaStreamReset(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
 	stream, err := client.javaStreamOf(arguments[0])
 	if err != nil {
 		return 0, err
+	}
+	if stream.Source != nil {
+		if stream.Source.Reset == 0 {
+			return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, "stream does not support reset")
+		}
+		if _, err := client.callOn(ctx, thread, stream.Source.Reset,
+			[]uint32{stream.Source.Object}); err != nil {
+			return 0, fmt.Errorf("run %s reset()V at %#x: %w", stream.Name, stream.Source.Reset, err)
+		}
+		// The guest moved its cursor; discard bytes pulled from its old
+		// position and let the next read refill from the reset position.
+		stream.Data = stream.Data[:0]
+		stream.Read = 0
+		stream.Source.Ended = false
+		return 0, nil
 	}
 	if !stream.Markable {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, "stream does not support reset")

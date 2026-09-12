@@ -1,5 +1,9 @@
 # KTF platform implementation status
 
+See the [2026-09-12 coverage audit](ktf-skt-audit-2026-09-12.md) for current
+API gaps, scanner limits, and corpus results. Historical counts below describe
+their own runs.
+
 This platform validates a KTF archive, locates its native image, maps it into
 the pure-Go ARM core and runs it: the client relocates itself, initializes, is
 asked for its main class, and from there the title plays — its own Java through
