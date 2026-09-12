@@ -1,6 +1,7 @@
 package skt
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -19,6 +20,10 @@ type ScriptOptions struct {
 	AudioSink   backend.AudioSink
 	Logger      *slog.Logger
 	Speed       float64
+	// UserID is the opaque byte string stored in the SGS script metadata
+	// record. Release Hosts currently leave it empty, matching the original
+	// PC Host's unconfigured default.
+	UserID []byte
 
 	ExternalLaunch func(string)
 }
@@ -29,6 +34,8 @@ type scriptTimer struct {
 }
 
 const scriptStandaloneRuntimeMode byte = 2
+const scriptStandaloneRole byte = 1
+const scriptUserIDMaxBytes = 9
 
 // ScriptSession drives SGS events on the host's session goroutine. Guest
 // timers use a virtual clock and cannot create unbounded goroutines.
@@ -48,6 +55,8 @@ type ScriptSession struct {
 	runtimeMode     byte
 	requestID       int16
 	requestStatus   int16
+	role            byte
+	userID          []byte
 	random          *rand.Rand
 	textInput       *scriptTextInput
 	textInputSerial uint64
@@ -57,6 +66,13 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	if archive == nil || archive.Script == nil {
 		return nil, fmt.Errorf("SKT archive contains no SGS program")
 	}
+	if len(options.UserID) > scriptUserIDMaxBytes {
+		return nil, fmt.Errorf("SGS UserID exceeds its %d-byte metadata field", scriptUserIDMaxBytes)
+	}
+	if bytes.IndexByte(options.UserID, 0) >= 0 {
+		return nil, fmt.Errorf("SGS UserID contains NUL")
+	}
+	options.UserID = bytes.Clone(options.UserID)
 	graphics, err := newScriptGraphics(options.Framebuffer)
 	if err != nil {
 		return nil, err
@@ -66,6 +82,8 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 		runtimeMode:   scriptStandaloneRuntimeMode,
 		requestID:     -1,
 		requestStatus: 1,
+		role:          scriptStandaloneRole,
+		userID:        options.UserID,
 		random:        rand.New(rand.NewPCG(1, 2)),
 	}
 	s.audio = backend.NewAudio(options.AudioSink)
@@ -261,6 +279,20 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 			return err
 		}
 		resource.Data[0] = 0
+	case 0x53:
+		resource := vm.Resource(int(vm.Pop()))
+		if err := vm.Error(); err != nil {
+			return err
+		}
+		ok, err := resizeScriptResource(vm, resource, len(s.userID)+1)
+		if err != nil {
+			return err
+		}
+		if ok {
+			copy(resource.Data, s.userID)
+			resource.Data[len(s.userID)] = 0
+		}
+		vm.Push(int16(s.role))
 	case 0x54:
 		address := vm.Pop()
 		return scriptDeviceResult(vm, address, []int16{0, 0, 0, 0, 0})
@@ -469,7 +501,7 @@ var scriptArguments = map[byte]int{
 	0x73: 0, 0x74: 5, 0x75: 1,
 	0xd2: 0, 0xdb: 2, 0xdc: 1, 0xdd: 1, 0xe0: 6, 0xe1: 1, 0xe8: 7,
 	0xb8: 1, 0xa4: 1, 0xab: 2, 0xac: 3, 0xb0: 3, 0xb1: 2, 0xb3: 3,
-	0x51: 1, 0x52: 1, 0x54: 1, 0x55: 0, 0x56: 0, 0x57: 1, 0x58: 3, 0x59: 1,
+	0x51: 1, 0x52: 1, 0x53: 1, 0x54: 1, 0x55: 0, 0x56: 0, 0x57: 1, 0x58: 3, 0x59: 1,
 	0x5a: 0, 0x5b: 0, 0x5c: 0, 0x5d: 0, 0x5e: 1, 0x5f: 4, 0x60: 3, 0x61: 3, 0x62: 4, 0x63: 4, 0x64: 4, 0x65: 4,
 	0x66: 4, 0x67: 1, 0x68: 2, 0x69: 1, 0x6a: 3, 0x6b: 3, 0x6c: 3, 0x6d: 3, 0x6e: 2, 0x6f: 3, 0x70: 4, 0x71: 4, 0x72: 5,
 	0x76: 0, 0x77: 0, 0x78: 0, 0x79: 1, 0x7a: 2, 0x7b: 2, 0x7c: 1, 0x7d: 2, 0x7e: 4, 0x7f: 2, 0x80: 2, 0x81: 2, 0x82: 3, 0x83: 1, 0x84: 2, 0x85: 2, 0x86: 3, 0x8a: 3, 0x8b: 4, 0x8c: 5, 0x8d: 6,

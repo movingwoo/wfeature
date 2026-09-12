@@ -12,7 +12,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 |---|---|---|---|
 | `0x51` | `0x00418980` | P | Device information: pop word address, write LCD class, color class, color count and audio class (four words). |
 | `0x52` | `0x00418a50` | P | Copy device MIN into a resource and pop its ID. Original reads configured `NV_ROM`/`MIN`; current host supplies an empty string. See [host state](sgs-host-state.md). |
-| `0x53` | `0x00418ad0` | M | Copy current script metadata `UserID` into a resource; replace its ID with role byte (0 outgoing, 1 incoming; standalone initializes 1). See [host state](sgs-host-state.md). |
+| `0x53` | `0x00418ad0` | I | Copy session `UserID` bytes and trailing NUL into a resource; replace its ID with role byte (0 outgoing, 1 incoming; standalone initializes 1). The PC Host's unconfigured default is empty; release Hosts do not expose a setting. See [host state](sgs-host-state.md). |
 | `0x54` | `0x00418b70` | I | Pop word address; clear five words through original helper. |
 | `0x55` | `0x0040eb80` | I | Fill drawing buffer with raw byte 255. |
 | `0x56` | `0x0040eba0` | I | Fill drawing buffer with raw byte 0. |

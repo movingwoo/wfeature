@@ -40,6 +40,22 @@ at offset `0x30`. Thus the inspected record reserves ten bytes for the UserID
 string, including its terminator. This is a record-layout bound, not an inferred
 universal limit for an unspecified identity protocol.
 
+The binary package descriptors are a different metadata layer. An exact scan of
+the twelve-entry SGS acceptance manifest verified ten MOD and two INF entries,
+comprising six distinct descriptor payloads. MOD carries little-endian
+length-prefixed timestamp, content-type, runtime, version and download fields;
+INF uses a separate fixed header and bounded trailing runtime/server fields.
+None carries a `UserID` key. Five MOD entries carry an eight-byte `ID` member
+inside an optional connection-information field, while the other five MOD and
+both INF entries omit it. No inspected loader maps that conditional member to
+the installed `UserID` key, so the emulator does not use it as script identity.
+
+The PC executable likewise contains no MOD/INF content marker and its direct
+import path reads `System`/`UserID` instead of a package descriptor. With no
+configured value, that lookup's default is the empty string. This establishes
+an empty UserID as the PC Host's standalone default while leaving the handset
+installer's descriptor-to-configuration mapping unknown.
+
 The network/download setup function at `0x412400` copies its first string
 argument into pending metadata at `0x526c28`. Download startup at `0x411310`
 validates script identifiers and size, and copies that pending UserID to the
@@ -114,12 +130,13 @@ The emulator exposes this standalone mode during initialization and through
 does not change the runtime mode returned by `0xd2`. The outgoing/incoming role
 remains separate and no communication transition is implied.
 
-The UserID comes from metadata in that path. An archive without this metadata
-does not establish a replacement identity. An empty host-provided value must
-remain an explicit compatibility choice, not be presented as a value read from
-the archive. The device MIN likewise needs a host configuration source if it is
-to be nonempty. No phone number, account, or identity should be synthesized from
-an archive title or directory name.
+The emulator's internal script Host option can supply up to nine opaque,
+non-NUL UserID bytes, which are snapshotted for the session. The release Hosts
+do not expose a setting and leave that option empty, matching the PC default.
+An archive without installed metadata does not establish a replacement value.
+The device MIN likewise needs its own Host source if it is to be nonempty. No
+phone number, account, or identity is synthesized from an archive title,
+directory name, or conditional descriptor field.
 
 The inspected transitions do not establish a complete remote transport,
 authentication, or disconnection protocol. Implementing local resource services

@@ -1,6 +1,7 @@
 package skt
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"testing"
@@ -12,11 +13,7 @@ import (
 
 func newScriptTest(t *testing.T, code []byte, store backend.SaveStore) *ScriptSession {
 	t.Helper()
-	p := &sgsvm.Program{Data: append([]byte{0}, code...), Entries: [8]uint16{1}, Variables: make([]sgsvm.Variable, 17)}
-	for i := range p.Variables {
-		p.Variables[i] = sgsvm.Variable{Mutable: true, Offset: i, Values: []int16{0}}
-	}
-	p.Variables[16].Values = make([]int16, 33)
+	p := scriptTestProgram(code)
 	fb, _ := backend.NewMemoryFramebuffer(16, 16)
 	s, err := StartScript(context.Background(), &Archive{Script: p}, ScriptOptions{Framebuffer: fb, SaveStore: store})
 	if err != nil {
@@ -24,6 +21,114 @@ func newScriptTest(t *testing.T, code []byte, store backend.SaveStore) *ScriptSe
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func scriptTestProgram(code []byte) *sgsvm.Program {
+	p := &sgsvm.Program{Data: append([]byte{0}, code...), Entries: [8]uint16{1}, Variables: make([]sgsvm.Variable, 17)}
+	for i := range p.Variables {
+		p.Variables[i] = sgsvm.Variable{Mutable: true, Offset: i, Values: []int16{0}}
+	}
+	p.Variables[16].Values = make([]int16, 33)
+	return p
+}
+
+func newScriptUserIDTest(t *testing.T, userID, initial []byte) *ScriptSession {
+	t.Helper()
+	p := scriptTestProgram([]byte{5, 0, 0x53, 10, 16, 0xff})
+	p.Resources = []sgsvm.Resource{{Mutable: true, Data: bytes.Clone(initial)}}
+	fb, _ := backend.NewMemoryFramebuffer(16, 16)
+	s, err := StartScript(context.Background(), &Archive{Script: p}, ScriptOptions{Framebuffer: fb, UserID: userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func TestScriptUserIDIsSessionOwnedOpaqueMetadata(t *testing.T) {
+	configured := []byte{0xb0, 0xa1, '4', '2'}
+	initial := []byte{9, 8, 7, 6, 5, 4, 3, 2, 1}
+	s := newScriptUserIDTest(t, configured, initial)
+	if got := s.vm.Value(16, 0); got != int16(scriptStandaloneRole) {
+		t.Fatalf("standalone role = %d, want %d", got, scriptStandaloneRole)
+	}
+	want := []byte{0xb0, 0xa1, '4', '2', 0, 4, 3, 2, 1}
+	if got := s.vm.Resources[0].Data; !bytes.Equal(got, want) {
+		t.Fatalf("configured UserID = %x, want %x", got, want)
+	}
+
+	// The Host owns its option buffer. A running session keeps the snapshot it
+	// received at startup, independently of later caller mutation.
+	configured[0] = 'X'
+	copy(s.vm.Resources[0].Data, initial)
+	s.vm.Push(1234)
+	s.vm.Push(0)
+	if err := s.Call(0x53, s.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Pop(); got != int16(scriptStandaloneRole) {
+		t.Fatalf("queried role = %d, want %d", got, scriptStandaloneRole)
+	}
+	if got := s.vm.Pop(); got != 1234 {
+		t.Fatalf("UserID query changed caller stack: got %d", got)
+	}
+	if got := s.vm.Resources[0].Data; !bytes.Equal(got, want) {
+		t.Fatalf("UserID after caller mutation = %x, want %x", got, want)
+	}
+
+	other := newScriptUserIDTest(t, []byte("OTHER"), []byte{1})
+	if got := other.vm.Resources[0].Data[:6]; !bytes.Equal(got, []byte("OTHER\x00")) {
+		t.Fatalf("second session UserID = %x", got)
+	}
+	if got := s.vm.Resources[0].Data; !bytes.Equal(got, want) {
+		t.Fatalf("second session changed first UserID: %x", got)
+	}
+}
+
+func TestScriptUserIDDefaultAndAllocatorRefusal(t *testing.T) {
+	s := newScriptUserIDTest(t, nil, []byte{9, 8, 7, 6})
+	if got := s.vm.Resources[0].Data; !bytes.Equal(got, []byte{0, 8, 7, 6}) {
+		t.Fatalf("default UserID = %x, want empty string with retained tail", got)
+	}
+
+	configured := newScriptUserIDTest(t, []byte("123456789"), []byte{7})
+	configured.vm.Resources[0].Data = []byte{7}
+	configured.vm.Resources = append(configured.vm.Resources, sgsvm.Resource{Data: make([]byte, 16<<20)})
+	before := bytes.Clone(configured.vm.Resources[0].Data)
+	configured.role = 255
+	configured.vm.Push(0)
+	if err := configured.Call(0x53, configured.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := configured.vm.Pop(); got != 255 {
+		t.Fatalf("unsigned role = %d, want 255", got)
+	}
+	if got := configured.vm.Resources[0].Data; !bytes.Equal(got, before) {
+		t.Fatalf("allocator refusal changed resource: got %x, want %x", got, before)
+	}
+
+	if err := configured.Call(0x53, configured.vm); err == nil || err.Error() != "operand stack underflow" {
+		t.Fatalf("zero-operand UserID query: %v", err)
+	}
+}
+
+func TestScriptUserIDOptionsValidateBeforeHostStartup(t *testing.T) {
+	program := scriptTestProgram([]byte{0xff})
+	for _, test := range []struct {
+		name   string
+		userID []byte
+		want   string
+	}{
+		{"too long", []byte("1234567890"), "SGS UserID exceeds its 9-byte metadata field"},
+		{"embedded NUL", []byte{'A', 0, 'B'}, "SGS UserID contains NUL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := StartScript(context.Background(), &Archive{Script: program}, ScriptOptions{UserID: test.userID})
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("StartScript() error = %v, want %q", err, test.want)
+			}
+		})
+	}
 }
 
 func TestScriptSavePreservesHandsetSizedData(t *testing.T) {

@@ -110,6 +110,13 @@ active: scheduled timers and later key or system callbacks can enter it again.
 The corresponding handset action remains unknown and is not treated as a game
 exit or a return to the browser library.
 
+Service `0x53` copies the session's opaque script `UserID` bytes and trailing
+NUL into a resource, then returns the standalone role value 1. The internal Host
+option accepts at most nine bytes and snapshots them before execution. Browser
+and CLI Hosts currently leave it empty, matching the original PC Host's
+unconfigured standalone default. Package MOD/INF metadata does not provide a
+proven replacement, and the handset installer mapping remains unknown.
+
 ## Graphics, sound and storage
 
 The framebuffer is indexed RGB332 and is presented only when the script
