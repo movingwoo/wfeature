@@ -180,3 +180,23 @@ Release ownership is cleared before invoking the guest release callback. If
 that callback hides the form and throws, the next card press is still delivered
 normally; an error must not leave the previous press captured. A regression
 covers this callback failure.
+
+## Remaining synchronous modal references
+
+The first archive's static helper at `0x1136cc` constructs a GMsgBox from two
+strings and fixed bounds, calls `doModal` at `0x113716`, discards its return
+value, and returns. It does not construct or read a GTextField. In the saved
+image its body pointer occurs in its method record, and that record is listed
+in its class method table; the bounded scan found no ordinary direct caller
+or separate symbolic reference. This does not exclude external/native calls.
+
+The other decoded modal path constructs a label-based DialogComponent. The
+second archive carrying GTextField has no literal `doModal` reference. These
+observations do not establish a reachable synchronous text-entry route. The
+proven settings editor uses non-modal show and a guest EventListener instead.
+
+A future modal investigation needs a concrete caller or external callback to
+exercise, with a PC-hit trace at the helper entry. Directly invoking the helper
+would verify modal mechanics but would not prove user-visible reachability.
+Synchronous modal support remains unimplemented; current evidence does not
+make it a prerequisite for the verified name-entry path.
