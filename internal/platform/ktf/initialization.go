@@ -329,6 +329,7 @@ type initializationRuntime struct {
 	guestEventLoop bool
 	jletListeners  []*jvm.Object
 	grabbedKeys    map[int32]*jvm.Object
+	kfcOwnedKeys   map[int32]kfcKeyOwner
 	activeJlet     *jvm.Object
 	// destroyCallbackStarted makes the destroyed transition one-way. It is
 	// set before entering guest cleanup so a callback that exits or fails is

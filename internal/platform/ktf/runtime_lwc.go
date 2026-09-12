@@ -6,11 +6,10 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
-// The lwc text components are the WIPI text-input surface. There is no
-// on-device input method here — text reaches the emulator through the Host
-// keypad — so a component holds the text it was constructed with and reports
-// it back. Everything that would require an editing overlay (caret movement,
-// per-key composition) is deliberately absent rather than faked.
+// The lwc text components are the WIPI text-input surface. Text reaches them
+// through the Host keypad or as a completed native-keyboard composition. The
+// runtime stores that text without inventing caret movement or per-key IME
+// composition inside an undrawn widget.
 
 const (
 	runtimeComponentClass          = "org/kwis/msp/lwc/Component"
@@ -355,6 +354,7 @@ func runtimeComponentAddComponent(_ *initializationRuntime, _ *jvm.VM, arguments
 		return jvm.VoidValue(), fmt.Errorf("KTF container child count exceeds %d", maxContainerChildren)
 	}
 	receiver.Native = append(children, child)
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.IntValue(int32(len(children))), nil
 }
 
@@ -376,6 +376,7 @@ func runtimeComponentRemoveComponent(_ *initializationRuntime, _ *jvm.VM, argume
 		for index, current := range children {
 			if current == child {
 				receiver.Native = append(children[:index:index], children[index+1:]...)
+				runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 				return jvm.VoidValue(), nil
 			}
 		}
@@ -389,6 +390,7 @@ func runtimeComponentRemoveComponent(_ *initializationRuntime, _ *jvm.VM, argume
 		return jvm.VoidValue(), nil
 	}
 	receiver.Native = append(children[:index:index], children[index+1:]...)
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
 
@@ -493,6 +495,7 @@ func runtimeComponentAddComponentAt(_ *initializationRuntime, _ *jvm.VM, argumen
 	copy(children[at+1:], children[at:])
 	children[at] = child
 	receiver.Native = children
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
 
@@ -518,6 +521,7 @@ func runtimeComponentSetComponentAt(_ *initializationRuntime, _ *jvm.VM, argumen
 	}
 	children[index] = child
 	receiver.Native = children
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
 
@@ -579,6 +583,7 @@ func runtimeComponentRemoveAllComponents(_ *initializationRuntime, _ *jvm.VM, ar
 		return jvm.VoidValue(), err
 	}
 	receiver.Native = nil
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
 
@@ -637,8 +642,10 @@ func runtimeComponentIndexOf(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 // Component.setEventListener is given: who to notify and what to hand back
 // with the notification.
 const (
-	componentEventListenerField = "eventListener:Lorg/kwis/msp/lwc/EventListener;"
-	componentEventDataField     = "eventData:Ljava/lang/Object;"
+	componentEventListenerField    = "eventListener:Lorg/kwis/msp/lwc/EventListener;"
+	componentEventDataField        = "eventData:Ljava/lang/Object;"
+	componentEventRevisionField    = "eventRevision:J"
+	componentChildrenRevisionField = "childrenRevision:J"
 	// componentActionListenerField and componentActionDataField are the same
 	// pair under the other name the toolkit uses: a button calls its action
 	// listener when the select key is released, where a component calls its
@@ -648,9 +655,9 @@ const (
 	componentActionDataField     = "actionData:Ljava/lang/Object;"
 )
 
-// runtimeComponentSetEventListener keeps both halves. Nothing fires them —
-// no component here is drawn, so none is operated — and keeping them is what
-// lets a title read back whether it has already wired its own dialog.
+// runtimeComponentSetEventListener keeps both halves. The bounded KTF vendor
+// form path dispatches key events to its selected field listener; other undrawn
+// components retain the pair for guest readback.
 func runtimeComponentSetEventListener(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	receiver, err := runtimeComponentReceiver("Component.setEventListener", arguments, 3)
 	if err != nil {
@@ -658,7 +665,54 @@ func runtimeComponentSetEventListener(_ *initializationRuntime, _ *jvm.VM, argum
 	}
 	receiver.Fields[componentEventListenerField] = arguments[1]
 	receiver.Fields[componentEventDataField] = arguments[2]
+	runtimeComponentIncrementRevision(receiver, componentEventRevisionField)
 	return jvm.VoidValue(), nil
+}
+
+func runtimeComponentIncrementRevision(component *jvm.Object, field string) {
+	revision, _ := component.Fields[field].Int64()
+	component.Fields[field] = jvm.LongValue(revision + 1)
+}
+
+type runtimeComponentEventState struct {
+	revision      jvm.Value
+	listenerValue jvm.Value
+	hasListener   bool
+	listener      *jvm.Object
+	dataValue     jvm.Value
+	hasData       bool
+	data          *jvm.Object
+}
+
+func runtimeComponentEventListenerState(component *jvm.Object) (runtimeComponentEventState, bool) {
+	state := runtimeComponentEventState{revision: component.Fields[componentEventRevisionField]}
+	state.listenerValue, state.hasListener = component.Fields[componentEventListenerField]
+	if !state.hasListener {
+		return state, true
+	}
+	listener, err := state.listenerValue.Reference()
+	if err != nil {
+		return runtimeComponentEventState{}, false
+	}
+	state.listener = listener
+	state.dataValue, state.hasData = component.Fields[componentEventDataField]
+	if !state.hasData {
+		return state, true
+	}
+	data, err := state.dataValue.Reference()
+	if err != nil {
+		return runtimeComponentEventState{}, false
+	}
+	state.data = data
+	return state, true
+}
+
+func sameRuntimeComponentEventState(left, right runtimeComponentEventState) bool {
+	return left.revision == right.revision &&
+		left.listener == right.listener && left.hasListener == right.hasListener &&
+		(!left.hasListener || left.listenerValue == right.listenerValue) &&
+		left.data == right.data && left.hasData == right.hasData &&
+		(!left.hasData || left.dataValue == right.dataValue)
 }
 
 // runtimeComponentSetActionListener keeps the pair a button is given. Nothing

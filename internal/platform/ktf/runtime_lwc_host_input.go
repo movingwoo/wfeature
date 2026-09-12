@@ -21,9 +21,9 @@ const (
 )
 
 // TextInput snapshots the active LWC editor for a Host that composes text with
-// its native keyboard or IME. Guest focus is authoritative: Component.setFocus
-// and FormComponent.setFocus both write lwc:focus while guest execution holds
-// the same run lock taken here.
+// its native keyboard or IME. Normal LWC fields use explicit guest focus. The
+// verified vendor path instead uses the sole listened GTextField in the shown
+// non-modal GForm. Guest execution and this snapshot share the client run lock.
 func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, error) {
 	if session == nil || session.Client == nil {
 		return nil, backend.ErrNoTextInput
@@ -37,8 +37,16 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	if client.runtime == nil || client.workersStopped {
 		return nil, backend.ErrNoTextInput
 	}
-	component := client.runtime.runtimeObjects["lwc:focus"]
-	multiline, ok := client.lwcTextInputKind(component)
+	focus := client.runtime.runtimeObjects["lwc:focus"]
+	component := focus
+	vendorState, vendorActive := client.runtime.activeVendorTextInput()
+	if vendorActive {
+		component = vendorState.field
+	}
+	multiline, vendor, ok := client.lwcTextInputKind(component)
+	if vendor && !vendorActive {
+		return nil, backend.ErrNoTextInput
+	}
 	if !ok {
 		return nil, backend.ErrNoTextInput
 	}
@@ -72,9 +80,14 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
+			if client.runtime == nil || client.workersStopped {
+				return backend.ErrTextInputChanged
+			}
 			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
-			if client.runtime == nil || client.workersStopped ||
-				client.runtime.runtimeObjects["lwc:focus"] != component ||
+			currentVendorState, currentVendorActive := client.runtime.activeVendorTextInput()
+			if client.runtime.runtimeObjects["lwc:focus"] != focus ||
+				vendorActive != currentVendorActive ||
+				(vendorActive && !sameVendorTextInputState(currentVendorState, vendorState)) ||
 				!listenerStateOK || !sameLWCTextInputListenerState(currentListenerState, listenerState) ||
 				!sameTextInputField(component, componentTextField, textValue, hasText) ||
 				!sameTextInputField(component, componentConstraintField, constraintValue, hasConstraint) ||
@@ -102,12 +115,11 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 }
 
 // lwcTextInputKind follows a guest subclass to the runtime LWC field or box it
-// extends. The vendor field also extends TextComponent, but its synchronous
-// modal call leaves no active editor for a Host to commit to, so it is refused
-// explicitly until that lifecycle exists.
-func (client *Client) lwcTextInputKind(component *jvm.Object) (multiline bool, ok bool) {
+// extends. A vendor field is marked separately because it is editable only
+// through the bounded shown-form lifecycle validated by activeVendorTextInput.
+func (client *Client) lwcTextInputKind(component *jvm.Object) (multiline, vendor, ok bool) {
 	if client == nil || client.vm == nil || component == nil {
-		return false, false
+		return false, false, false
 	}
 	name := component.ClassName
 	seen := make(map[string]bool)
@@ -115,19 +127,65 @@ func (client *Client) lwcTextInputKind(component *jvm.Object) (multiline bool, o
 		seen[name] = true
 		switch name {
 		case runtimeTextFieldComponentClass:
-			return false, true
+			return false, false, true
 		case runtimeTextBoxComponentClass:
-			return true, true
-		case runtimeGTextFieldClass, runtimeTextComponentClass:
-			return false, false
+			return true, false, true
+		case runtimeGTextFieldClass:
+			return false, true, true
+		case runtimeTextComponentClass:
+			return false, false, false
 		}
 		class, found := client.vm.AOTClass(name)
 		if !found {
-			return false, false
+			return false, false, false
 		}
 		name = class.SuperName
 	}
-	return false, false
+	return false, false, false
+}
+
+type vendorTextInputState struct {
+	form               *jvm.Object
+	field              *jvm.Object
+	visibilityRevision jvm.Value
+	childrenRevision   jvm.Value
+	textRevision       jvm.Value
+	event              runtimeComponentEventState
+}
+
+func (runtime *initializationRuntime) activeVendorTextInput() (vendorTextInputState, bool) {
+	if runtime == nil {
+		return vendorTextInputState{}, false
+	}
+	form := runtime.runtimeObjects[runtimeKFCShownFormObject]
+	field := runtime.runtimeObjects[runtimeKFCActiveFieldObject]
+	if form == nil || field == nil || runtime.uniqueVendorTextField(form) != field {
+		return vendorTextInputState{}, false
+	}
+	shown, err := form.Fields[componentShownField].Int32()
+	if err != nil || shown == 0 {
+		return vendorTextInputState{}, false
+	}
+	event, ok := runtimeComponentEventListenerState(field)
+	if !ok || event.listener == nil {
+		return vendorTextInputState{}, false
+	}
+	return vendorTextInputState{
+		form:               form,
+		field:              field,
+		visibilityRevision: form.Fields[componentKFCVisibilityRevisionField],
+		childrenRevision:   form.Fields[componentChildrenRevisionField],
+		textRevision:       field.Fields[componentKFCTextRevisionField],
+		event:              event,
+	}, true
+}
+
+func sameVendorTextInputState(left, right vendorTextInputState) bool {
+	return left.form == right.form && left.field == right.field &&
+		left.visibilityRevision == right.visibilityRevision &&
+		left.childrenRevision == right.childrenRevision &&
+		left.textRevision == right.textRevision &&
+		sameRuntimeComponentEventState(left.event, right.event)
 }
 
 func lwcTextConstraint(value jvm.Value, present bool) (int32, bool) {
