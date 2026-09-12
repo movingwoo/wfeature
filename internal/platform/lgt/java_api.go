@@ -308,6 +308,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"java/lang/String.<init>([B)V":     {Words: 2, Implementat: javaStringConstructor},
 	"java/lang/String.<init>([BII)V":   {Words: 4, Implementat: javaStringConstructor},
 	"java/lang/String.<init>([CII)V":   {Words: 4, Implementat: javaStringFromChars},
+	"java/lang/String.<init>([C)V":     {Words: 2, Implementat: javaStringFromChars},
 	"java/lang/StringBuffer.<init>()V": {Words: 1, Implementat: javaBufferConstructor},
 	// The capacity form is a hint about a buffer this platform grows on
 	// demand, so it builds the same empty buffer the no-argument form does —
@@ -415,6 +416,9 @@ func init() {
 			13: {Called: "skip(J)J", Method: javaPlatformMethod{Words: 3, Implementat: javaStreamSkip}},
 			14: {Called: "available()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamAvailable}},
 			15: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
+			16: {Called: "mark(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaStreamMark}},
+			17: {Called: "reset()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReset}},
+			18: {Called: "markSupported()Z", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamMarkSupported}},
 		},
 		// `java/io/DataInputStream` slot 25 takes the receiver alone and its answer
 		// is stored into an array the compiled code strides two bytes through, so
@@ -435,6 +439,8 @@ func init() {
 				Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadFully}},
 			20: {Called: "readFully([BII)V",
 				Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
+			21: {Called: "skipBytes(I)I",
+				Method: javaPlatformMethod{Words: 2, Implementat: javaStreamSkipBytes}},
 			// Slot 22 takes the receiver alone — the register beside it still
 			// holds the stream this one was built on, which the site loaded to
 			// reach the receiver and never reloaded — and it sits one before the
@@ -466,6 +472,8 @@ func init() {
 			// a count with it before it reads the rows.
 			28: {Called: "readInt()I",
 				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
+			29: {Called: "readLong()J",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadLong}},
 			// Slot 32 takes the receiver alone and is where this class's run ends:
 			// after `readInt` come `readLong`, `readFloat`, `readDouble` and then
 			// `readUTF()`, the last method of it that is not static. A title reads
@@ -732,32 +740,15 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		10: {Called: "setSeed(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaRandomSetSeed}},
 		12: {Called: "nextInt()I", Method: javaPlatformMethod{Words: 1, Implementat: javaRandomNext}},
 	},
-	// `java/util/Calendar`. Slot 14 is the fifth method the specification
-	// declares that is not a static and does not override one of Object's, so
-	// it is `get(int)` — the only method on this class a title calls at all,
-	// once per component of the date it shows.
+	// Calendar field reads use slot 14 in the smaller class-library layout
+	// and slot 19 in the fuller layout. The latter caller passes field IDs
+	// and consumes integers; the previous getTimeZone inference was wrong.
 	javaCalendarClass: {
 		14: {Called: "get(I)I", Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarGet}},
-		// Slot 19 takes the receiver alone and is the tenth of this class's
-		// own run, which the specification's declaration order makes
-		// `getTimeZone`.
-		19: {Called: "getTimeZone()Ljava/util/TimeZone;",
-			Method: javaPlatformMethod{Words: 1, Implementat: javaCalendarZone}},
-		// Slot 29 is where the site wins over the rule, which is the case the
-		// rule was written with. The site is three calls long and leaves
-		// nothing to read into it: `Calendar.getInstance()`, then a
-		// `new Date()` on the line after, then this slot on the calendar with
-		// that Date as its only argument and its answer dropped. **The one
-		// method this class declares that takes a Date is `setTime`**, so
-		// there is no second reading of the call — but the numbering puts
-		// `setTime` at 11, second in this class's own run, and 29 is eight
-		// past where that run ends. Either this module was compiled against a
-		// fuller Calendar than the one the other slots here were read off, or
-		// the run does not start where it appears to; nothing read so far
-		// says which, and the disagreement is the point rather than a detail.
-		// Nothing else in the local set dispatches this slot.
-		29: {Called: "setTime(Ljava/util/Date;)V",
-			Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarSetTime}},
+		19: {Called: "get(I)I", Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarGet}},
+		22: {Called: "getTime()Ljava/util/Date;", Method: javaPlatformMethod{Words: 1, Implementat: javaCalendarGetTime}},
+		28: {Called: "set(II)V", Method: javaPlatformMethod{Words: 3, Implementat: javaCalendarSet}},
+		29: {Called: "setTime(Ljava/util/Date;)V", Method: javaPlatformMethod{Words: 2, Implementat: javaCalendarSetTime}},
 	},
 	// `java/util/Date` and `java/util/TimeZone`, both of whose own runs are
 	// short enough to state whole: a Date declares getTime then setTime, and a
@@ -882,6 +873,8 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// title that has just pushed comes back for.
 		33: {Called: "pop()Ljava/lang/Object;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStackPop}},
+		35: {Called: "empty()Z",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaVectorEmpty}},
 	},
 	javaStringBufferClass: {
 		4: {Called: "toString()Ljava/lang/String;",
@@ -894,6 +887,8 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendObject}},
 		18: {Called: "append(Ljava/lang/String;)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendText}},
+		21: {Called: "append(Z)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendBoolean}},
 		// Slot 23 takes one word and answers the buffer, the same shape as
 		// slot 18. **What the word is, is what tells them apart**: its call
 		// site loads a local that the loop around it increments by one and
@@ -924,6 +919,10 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// buffer.
 		27: {Called: "delete(II)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 3, Implementat: javaBufferDelete}},
+		30: {Called: "insert(ILjava/lang/String;)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaBufferInsertText}},
+		34: {Called: "insert(II)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaBufferInsertInt}},
 		23: {Called: "append(I)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendInt}},
 	},

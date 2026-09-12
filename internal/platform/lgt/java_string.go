@@ -152,15 +152,19 @@ func javaStringConstructor(
 	return 0, nil
 }
 
-// javaStringFromChars is `String([CII)`, whose array is code units rather than
+// javaStringFromChars is `String([C)` or `String([CII)`, whose array is code units rather than
 // bytes and needs no decoding.
 func javaStringFromChars(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	object, array, offset, count := arguments[0], arguments[1], arguments[2], arguments[3]
+	object, array := arguments[0], arguments[1]
 	units, err := client.readJavaArrayChars(array)
 	if err != nil {
 		return 0, err
+	}
+	offset, count := uint32(0), uint32(len(units))
+	if len(arguments) == 4 {
+		offset, count = arguments[2], arguments[3]
 	}
 	if uint64(offset)+uint64(count) > uint64(len(units)) {
 		return 0, fmt.Errorf("%d characters from %d is past the end of %d", count, offset, len(units))
@@ -355,6 +359,46 @@ func javaBufferAppendInt(
 	}
 	client.setJavaText(buffer, held+strconv.FormatInt(int64(int32(arguments[1])), 10))
 	return buffer, nil
+}
+
+func javaBufferAppendBoolean(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	buffer := arguments[0]
+	held, ok := client.javaText(buffer)
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", buffer)
+	}
+	client.setJavaText(buffer, held+strconv.FormatBool(arguments[1] != 0))
+	return buffer, nil
+}
+
+func javaBufferInsertText(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	return client.javaBufferInsert(thread, arguments[0], int32(arguments[1]), javaTextValue(client, arguments[2]))
+}
+
+func javaBufferInsertInt(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	return client.javaBufferInsert(thread, arguments[0], int32(arguments[1]), strconv.FormatInt(int64(int32(arguments[2])), 10))
+}
+
+func (client *Client) javaBufferInsert(thread *armcore.Thread, object uint32, offset int32, text string) (uint32, error) {
+	held, ok := client.javaText(object)
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", object)
+	}
+	units, added := utf16Units(held), utf16Units(text)
+	if offset < 0 || int64(offset) > int64(len(units)) {
+		return 0, client.throwJavaPlatform(thread, "java/lang/StringIndexOutOfBoundsException", "invalid insertion offset")
+	}
+	if uint64(len(units))+uint64(len(added)) > uint64(maxJavaArrayLength) {
+		return 0, fmt.Errorf("insert exceeds the string length limit")
+	}
+	result := make([]uint16, 0, len(units)+len(added))
+	result = append(result, units[:offset]...)
+	result = append(result, added...)
+	result = append(result, units[offset:]...)
+	client.setJavaText(object, javaTextOfUnits(result))
+	return object, nil
 }
 
 // javaBufferSetLength is `StringBuffer.setLength(int)`: cut the buffer to that
