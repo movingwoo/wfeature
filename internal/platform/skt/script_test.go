@@ -94,6 +94,60 @@ func TestScriptStandaloneRuntimeMode(t *testing.T) {
 	}
 }
 
+func TestScriptModeGatedQueryOutsideModeThree(t *testing.T) {
+	// The script stores the query result, then writes a second value. Reaching
+	// the second store proves that the service does not yield the invocation.
+	s := newScriptTest(t, []byte{5, 7, 5, 9, 0xbe, 10, 16, 5, 1, 10, 15, 0xff}, nil)
+	if got := s.vm.Value(16, 0); got != 0 {
+		t.Fatalf("initial mode query = %d, want 0", got)
+	}
+	if got := s.vm.Value(15, 0); got != 1 {
+		t.Fatalf("instruction after mode query did not run: got %d", got)
+	}
+
+	for _, mode := range []byte{0, 1, 2, 4, 255} {
+		s.runtimeMode = mode
+		s.vm.Push(1234)
+		s.vm.Push(-123)
+		s.vm.Push(321)
+		if err := s.Call(0xbe, s.vm); err != nil {
+			t.Fatalf("mode %d: %v", mode, err)
+		}
+		if got := s.vm.Pop(); got != 0 {
+			t.Fatalf("mode %d result = %d, want 0", mode, got)
+		}
+		if got := s.vm.Pop(); got != 1234 {
+			t.Fatalf("mode %d changed caller stack: got %d", mode, got)
+		}
+	}
+}
+
+func TestScriptModeThreeQueryIsUnsupportedAtomically(t *testing.T) {
+	s := newScriptTest(t, []byte{0xff}, nil)
+	s.runtimeMode = 3
+	s.vm.Push(1234)
+	s.vm.Push(-123)
+	s.vm.Push(321)
+	if err := s.Call(0xbe, s.vm); err == nil || err.Error() != "unsupported SGS service 0xbe in runtime mode 3" {
+		t.Fatalf("mode-three query: %v", err)
+	}
+	for i, want := range []int16{321, -123, 1234} {
+		if got := s.vm.Pop(); got != want {
+			t.Fatalf("stack word %d after rejected query = %d, want %d", i, got, want)
+		}
+	}
+
+	// Operand registration rejects underflow before the service mutates state.
+	s.runtimeMode = scriptStandaloneRuntimeMode
+	s.vm.Push(1234)
+	if err := s.Call(0xbe, s.vm); err == nil || err.Error() != "operand stack underflow" {
+		t.Fatalf("one-operand query: %v", err)
+	}
+	if got := s.vm.Pop(); got != 1234 {
+		t.Fatalf("underflow changed caller stack: got %d", got)
+	}
+}
+
 func TestScriptExitStopsFutureTimersAndKeys(t *testing.T) {
 	s := newScriptTest(t, []byte{0x46}, nil)
 	if !s.Exited() {

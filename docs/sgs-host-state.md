@@ -124,3 +124,18 @@ an archive title or directory name.
 The inspected transitions do not establish a complete remote transport,
 authentication, or disconnection protocol. Implementing local resource services
 and startup defaults alone does not implement the 1:1 host mode transitions.
+
+## Mode-gated query
+
+Service `0xbe` at `0x41c4f0` reads two operands. When the runtime mode is any
+value other than 3, it replaces them with zero without calling the helper at
+`0x410f10` and without yielding. Direct execution of the original PC handler
+confirmed this result for modes 0, 1, 2, 4 and 255 and for signed-word operands.
+The emulator implements that path, including its exact stack effect. This makes
+the query executable in the standalone mode without implying a communication
+session.
+
+In mode 3, the PC handler calls `0x410f10` with both word operands and replaces
+them with the helper's low-word result. The helper's host meaning and handset
+behavior remain unresolved. The emulator rejects that path before consuming the
+operands rather than fabricating a result.
