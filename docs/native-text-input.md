@@ -21,8 +21,9 @@ pending edit to its game instance and clears it when parking or stopping the gam
 Committed strings are limited to 64 KiB of valid UTF-8, independently of guest field
 limits. Constraint validation preserves the pending edit for correction. A stale
 edit is invalidated permanently; the browser retains its draft until the user
-closes it. A guest exit during its change callback ends the session and settles
-the outstanding request. Password
+closes it. A guest exit during a change callback or the held-input release
+performed before opening an edit ends the session and settles the outstanding
+request. Password
 fields use a password input and are cleared when the dialog closes.
 
 Custom game-owned input interfaces are not automatically discoverable. A platform

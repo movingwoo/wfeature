@@ -24,7 +24,10 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 	switch message.Action {
 	case "open":
 		r.clearTextInput()
-		r.releaseHeldInput()
+		if err := r.releaseHeldInput(); errors.Is(err, session.ErrExited) {
+			r.endTextInputOnExit(message)
+			return
+		}
 		edit, err := r.game.TextInput(r.gameCtx)
 		if err != nil {
 			fail(err)
@@ -48,12 +51,7 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 		if err := r.textInput.Commit(r.gameCtx, message.Text); err != nil {
 			switch {
 			case errors.Is(err, session.ErrExited):
-				reason := r.game.ExitReason()
-				r.endGame(endedByExit(reason), true)
-				// The event moves the page out of its playing state before the
-				// request rejection reaches the dialog and tries to restore it.
-				r.send(serverMessage{Kind: serverExited, Message: reason})
-				r.send(serverMessage{Kind: serverError, ID: message.ID, Message: endedByExit(reason), Exited: true})
+				r.endTextInputOnExit(message)
 			case errors.Is(err, backend.ErrTextInputChanged):
 				// Once an edit has been proven stale it must never become usable
 				// again if the guest later restores the same focus and contents.
@@ -74,4 +72,13 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 	default:
 		fail(backend.ErrInvalidTextInput)
 	}
+}
+
+func (r *sessionRunner) endTextInputOnExit(message clientMessage) {
+	reason := r.game.ExitReason()
+	r.endGame(endedByExit(reason), true)
+	// The event moves the page out of its playing state before the request
+	// rejection reaches the dialog and tries to restore it.
+	r.send(serverMessage{Kind: serverExited, Message: reason})
+	r.send(serverMessage{Kind: serverError, ID: message.ID, Message: endedByExit(reason), Exited: true})
 }

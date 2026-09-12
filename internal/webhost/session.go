@@ -1504,17 +1504,24 @@ func (r *sessionRunner) handoff(request sessionHandoff) {
 
 // The socket may disappear before keyup. Release at the last guest coordinates
 // while this runner still owns the game, before its pause callback runs.
-func (r *sessionRunner) releaseHeldInput() {
+func (r *sessionRunner) releaseHeldInput() (exited error) {
 	for code := range r.heldKeys {
 		if err := r.game.SendKey(r.gameCtx, session.KeyRelease, code); err != nil {
+			if exited == nil && errors.Is(err, session.ErrExited) {
+				exited = err
+			}
 			r.server.logger.Debug("releasing parked input failed", "error", err)
 		}
 	}
 	clear(r.heldKeys)
 	if point := r.heldPointer; point != nil {
 		if err := r.game.SendPointer(r.gameCtx, "release", point.X, point.Y); err != nil {
+			if exited == nil && errors.Is(err, session.ErrExited) {
+				exited = err
+			}
 			r.server.logger.Debug("releasing parked touch failed", "error", err)
 		}
 		r.heldPointer = nil
 	}
+	return exited
 }
