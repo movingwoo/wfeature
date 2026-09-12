@@ -165,9 +165,10 @@ older diagnostics, now resolved by stable manifest ID instead of filesystem
 walk order.
 
 These artifacts remain ignored under `var/acceptance`; no archive or screenshot
-is added to Git. This evidence establishes directed main play for IDs 01-05.
-It does not yet establish user-visible save/load behavior, exit/restart from a
-saved checkpoint, or audible output for those IDs.
+is added to Git. This evidence establishes directed main play for IDs 01-05. A
+separate ID 01 route below establishes visible settings persistence across a
+Host restart. Save applicability remains open for IDs 02-05, and audible output
+remains open for all five IDs.
 
 ## ID 01-05 save and lifecycle boundary
 
@@ -176,18 +177,74 @@ from progress:
 
 | ID | Observed save behavior | Controlled visible result |
 | --- | --- | --- |
-| 01 | The empty store is read at startup, a 64-byte default with digest `bbffe0aa61cc73c4b716e2f1f8be1b4e2d1bdbc7a9d591609b3cee2433d15edb` is written at 0 ms, and a distinct payload with digest `a6719ee8a2ca241a39b24fd67bf62ab4dc2638df0dc4b3819ad44c1ddf8c17d5` is written at 29616 ms after press four. | Reopen loads the distinct payload before any new input. Repeating the complete route against that payload and the startup default produces the same thirteen captures, so the tested route does not expose a causal visible progress distinction. |
+| 01 | A directed settings route changes one displayed setting, then writes a new 64-byte payload with digest `454c636e964401f421eabd9160aa05f707d9bfdf0a8f6b7e1b9fda143f02505d`. | Reopen loads the new payload at 0 ms and shows the changed setting. The immutable-seed control uses the same reopen inputs and shows the original setting. |
 | 02 | The complete directed route performs no save load or write. | Close and reopen succeed from an empty store. No save or continue action is visible in the traversed main menu. |
 | 03 | Startup writes a 64-byte default with digest `8edccb6154be81c585c0de1615f7b9741e87e362281583322c3491169dfc4bb3`; the directed route reads it repeatedly but never changes it. | A seeded-default arm and an empty-store arm produce the same eighteen captures. The empty arm creates the same default at startup, so this is initialization rather than demonstrated progress. |
 | 04 | Startup writes a 64-byte default with digest `c65a363f975f4cfa7facb1ae53b5bf02a4d05312798320530b04ce4cb43b43ff`; the directed route reads it repeatedly but never changes it. | A seeded-default arm and an empty-store arm produce the same twenty-one captures. The empty arm creates the same default at startup, so this is initialization rather than demonstrated progress. |
 | 05 | The empty store is read at startup and a 64-byte payload with digest `5c0bfe68eb0efb627b6288421f7671c6768f80cf399c71b124351d936e9e1084` is written at 24064 ms after press two. | Reopen loads the payload. Repeating the complete route against that payload and an empty-store control produces the same twenty-five captures, so the tested route does not expose a causal visible progress distinction. |
 
+### ID 01 visible settings persistence
+
+Static tracing identifies the 64-byte save buffer at variable 85. Word 1 is
+copied from variable 73 at `0x3c09`, and service `0x99` writes the buffer at
+`0x3c29`. The directed route uses these timed inputs, with every press released
+100 ms later:
+
+| At (ms) | Press |
+| ---: | --- |
+| 19200, 21600 | Down |
+| 24000 | Fire |
+| 26400 | `*` |
+| 28800 | Fire |
+
+The two Down presses select the settings screen, Fire enters it, `*` changes
+the displayed audio setting, and the final Fire returns to the title and
+writes the save. The immutable 64-byte seed has digest
+`a6719ee8a2ca241a39b24fd67bf62ab4dc2638df0dc4b3819ad44c1ddf8c17d5`.
+The new payload differs only at word 1, which changes from 1 to 2, and has
+digest
+`454c636e964401f421eabd9160aa05f707d9bfdf0a8f6b7e1b9fda143f02505d`.
+
+The pre-change settings capture has framebuffer digest
+`c6b7e42923540212f891f3f5e24d417a1d507167ebcd9e2ffc250aa7cf0fede4`.
+At the save call, the changed settings frame has digest
+`a5d7c4be2b519438e2a61caf36f4afe38508d084d1aa2287977d48ecdfaae9e9`.
+After Host close/reopen, startup loads the changed payload twice at 0 ms before
+any write. Repeating `Down, Down, Fire` shows the changed setting with the same
+`a5d7c4be...` framebuffer digest. Reopening the immutable seed under identical
+inputs performs no write and shows the original setting with the
+`c6b7e429...` digest. Both arms finish without an execution or close error and
+remain guest-active.
+
+The ignored evidence directories under `var/acceptance` are
+`sgs-directed-01-settings-save-randomcompat-mode2-20260912` and
+`sgs-directed-01-settings-seed-control-randomcompat-mode2-20260912`. The
+preserved source is
+`sgs-directed-01-new-progress-source-randomcompat-mode2-20260912/immutable-seed.bin`.
+Earlier directories whose names start with `sgs-directed-01-new-progress`
+exercise an autonomously changed play counter. They are excluded because the
+tested Continue flow reinitializes that visible counter and therefore does not
+establish restored user-visible state.
+
+The changed first session emits 839 MIDI messages and 4512 wave samples. The
+reopened settings session emits no audio activity before its final capture;
+the control's reopened session emits 839 MIDI messages and 4512 wave samples.
+These counters establish service activity only. No physical playback was heard.
+
+The manager repeated both arms on combined revision `e49e18e`. All summary
+fields matched exactly, including the changed and control framebuffer digests,
+load-before-write ordering, audio counters and error-free Host restart. Every
+press was released; the final reopened captures were taken at 24,600 ms.
+The combined evidence directories are
+`sgs-01-settings-combined-released-20260912` and
+`sgs-01-settings-control-combined-20260912` under ignored `var/acceptance`.
+
 Every first session and reopened session in this comparison starts, advances,
 accepts input, and closes without an error. None reports a guest-initiated exit;
 the lifecycle evidence here is an orderly Host close followed by a new session
-over the same isolated store. The bounded absence findings apply to the menus
-and directed routes above, not to unvisited end-of-round, settings, or score
-flows.
+over the same isolated store. For IDs 02-05, the bounded absence findings apply
+to the menus and directed routes above, not to unvisited end-of-round,
+settings, or score flows.
 
 The same directed routes emitted the following activity through a recording
 audio sink:
@@ -337,7 +394,7 @@ human acceptance item for every ID.
 
 | ID | Reusable directed route | Visible save result | Lifecycle result | First remaining test or blocker |
 | --- | --- | --- | --- | --- |
-| 01 | Active playfield | Distinct payload reloads, but default control is visually identical | Host close/reopen passes | Reach an end-of-round or menu flow that exposes a saved field. |
+| 01 | Active playfield; directed settings screen | A newly changed visible setting reloads and remains distinct from the immutable-seed control | Host close/reopen passes | Audible output remains a human check; gameplay-score persistence is outside this settings proof. |
 | 02 | Active playfield | No save call on the route | Host close/reopen passes | Check end-of-round and the remaining menu entries for save applicability. |
 | 03 | Active fight | Startup default only; no progress change | Host close/reopen passes | Check end-of-round behavior for a changed payload. |
 | 04 | Active fight | Startup default only; no progress change | Host close/reopen passes | Check end-of-round behavior for a changed payload. |
