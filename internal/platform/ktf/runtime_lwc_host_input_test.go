@@ -3,6 +3,7 @@ package ktf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"unicode/utf16"
 
@@ -27,42 +28,6 @@ func TestTextInputCommitsAWholeHostCompositionToTheFocusedLWCField(t *testing.T)
 	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
 	field.Fields[componentMaxLengthField] = jvm.IntValue(4)
 
-	var notifiedText string
-	var notifiedLength, notifiedMode int32
-	listener := newWidget("test/InputListener")
-	if err := session.Client.JVM().RegisterNative("test/InputListener", "notifyTextChanged", "([CII)V", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-		array, err := arguments[1].Reference()
-		if err != nil {
-			return jvm.VoidValue(), err
-		}
-		_, values, err := jvm.ArraySnapshot(array)
-		if err != nil {
-			return jvm.VoidValue(), err
-		}
-		units := make([]uint16, len(values))
-		for index, value := range values {
-			unit, intErr := value.Int32()
-			if intErr != nil {
-				return jvm.VoidValue(), intErr
-			}
-			units[index] = uint16(unit)
-		}
-		notifiedText = string(utf16.Decode(units))
-		notifiedLength, _ = arguments[2].Int32()
-		notifiedMode, _ = arguments[3].Int32()
-		if got := runtimeComponentText(field); got != "한글🙂" {
-			t.Errorf("listener observed component text %q, want committed text", got)
-		}
-		return jvm.VoidValue(), nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	handler, err := field.Fields[componentInputHandlerField].Reference()
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler.Fields[inputMethodListenerField] = jvm.ReferenceValue(listener)
-
 	input, err := session.TextInput(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +41,140 @@ func TestTextInputCommitsAWholeHostCompositionToTheFocusedLWCField(t *testing.T)
 	if got := runtimeComponentText(field); got != "한글🙂" {
 		t.Fatalf("component text = %q, want committed composition", got)
 	}
-	if notifiedText != "한글🙂" || notifiedLength != 4 || notifiedMode != 0 {
-		t.Fatalf("notification = %q, length %d, mode %d", notifiedText, notifiedLength, notifiedMode)
+}
+
+func TestTextInputRefusesAnInstalledCompositionDeltaListener(t *testing.T) {
+	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	handler, err := field.Fields[componentInputHandlerField].Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := newWidget("test/InputListener")
+	listenerText := "old"
+	callbackCount := 0
+	if err := session.Client.JVM().RegisterNative("test/InputListener", "notifyTextChanged", "([CII)V", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		callbackCount++
+		// A replacement delta applies to the current composition fragment,
+		// represented here by the last character. Treating a completed field
+		// value as that delta would turn "old" plus "new" into "olnew".
+		characters, err := arguments[1].Reference()
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		_, values, err := jvm.ArraySnapshot(characters)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		length, err := arguments[2].Int32()
+		if err != nil || length < 0 || int(length) > len(values) {
+			return jvm.VoidValue(), fmt.Errorf("invalid input delta length %d", length)
+		}
+		mode, err := arguments[3].Int32()
+		if err != nil || mode != 0 {
+			return jvm.VoidValue(), fmt.Errorf("input delta mode = %d, want replacement", mode)
+		}
+		units := make([]uint16, length)
+		for index := range units {
+			unit, intErr := values[index].Int32()
+			if intErr != nil {
+				return jvm.VoidValue(), intErr
+			}
+			units[index] = uint16(unit)
+		}
+		listenerText = listenerText[:len(listenerText)-1] + string(utf16.Decode(units))
+		return jvm.VoidValue(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler.Fields[inputMethodListenerField] = jvm.ReferenceValue(listener)
+
+	if input, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		if err == nil {
+			err = input.Commit(context.Background(), "new")
+		}
+		t.Fatalf("TextInput with composition listener error = %v, listener text = %q", err, listenerText)
+	}
+	if callbackCount != 0 || listenerText != "old" || runtimeComponentText(field) != "old" {
+		t.Fatalf("refused input changed listener %q or component %q (%d callbacks)", listenerText, runtimeComponentText(field), callbackCount)
+	}
+}
+
+func TestTextInputCommitRejectsAListenerInstalledAfterSnapshot(t *testing.T) {
+	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := field.Fields[componentInputHandlerField].Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.Fields[inputMethodListenerField] = jvm.ReferenceValue(newWidget("test/InputListener"))
+
+	if err := input.Commit(context.Background(), "new"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit after listener installation error = %v", err)
+	}
+	if got := runtimeComponentText(field); got != "old" {
+		t.Fatalf("stale commit changed field to %q", got)
+	}
+}
+
+func TestTextInputCommitRejectsAListenerInstalledThenRemovedAfterSnapshot(t *testing.T) {
+	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := field.Fields[componentInputHandlerField].Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setListener := runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)
+	if _, err := setListener(session.Client.runtime, session.Client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(handler), jvm.ReferenceValue(newWidget("test/InputListener")),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setListener(session.Client.runtime, session.Client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(handler), jvm.ReferenceValue(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := input.Commit(context.Background(), "new"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit after listener install and removal error = %v", err)
+	}
+	if got := runtimeComponentText(field); got != "old" {
+		t.Fatalf("stale commit changed field to %q", got)
+	}
+}
+
+func TestTextInputRefusesMalformedInputMethodState(t *testing.T) {
+	for _, probe := range []struct {
+		name   string
+		mutate func(*jvm.Object)
+	}{
+		{
+			name: "handler",
+			mutate: func(field *jvm.Object) {
+				field.Fields[componentInputHandlerField] = jvm.IntValue(1)
+			},
+		},
+		{
+			name: "listener",
+			mutate: func(field *jvm.Object) {
+				handler, _ := field.Fields[componentInputHandlerField].Reference()
+				handler.Fields[inputMethodListenerField] = jvm.IntValue(1)
+			},
+		},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+			probe.mutate(field)
+			if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+				t.Fatalf("TextInput with malformed %s error = %v", probe.name, err)
+			}
+		})
 	}
 }
 

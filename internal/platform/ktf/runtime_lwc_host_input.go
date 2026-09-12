@@ -2,7 +2,6 @@ package ktf
 
 import (
 	"context"
-	"fmt"
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -48,6 +47,13 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	if !ok {
 		return nil, backend.ErrNoTextInput
 	}
+	listenerState, ok := lwcTextInputListenerState(component)
+	if !ok || listenerState.listener != nil {
+		// InputMethodListener consumes per-key composition deltas. The Host
+		// supplies a completed field value, which cannot be represented by
+		// that interface without a cursor or replacement range.
+		return nil, backend.ErrNoTextInput
+	}
 	textValue, hasText := component.Fields[componentTextField]
 	maxValue, hasMax := component.Fields[componentMaxLengthField]
 	text := componentText(component)
@@ -66,8 +72,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
+			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
 			if client.runtime == nil || client.workersStopped ||
 				client.runtime.runtimeObjects["lwc:focus"] != component ||
+				!listenerStateOK || !sameLWCTextInputListenerState(currentListenerState, listenerState) ||
 				!sameTextInputField(component, componentTextField, textValue, hasText) ||
 				!sameTextInputField(component, componentConstraintField, constraintValue, hasConstraint) ||
 				!sameTextInputField(component, componentMaxLengthField, maxValue, hasMax) {
@@ -88,7 +96,7 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 				client.textEditor = textinput.New(replacement, maxLength)
 			}
 			client.textMu.Unlock()
-			return client.notifyLWCTextChangedLocked(commitCtx, component, replacement)
+			return nil
 		},
 	}, nil
 }
@@ -203,49 +211,46 @@ func sameTextInputField(component *jvm.Object, name string, value jvm.Value, pre
 	return ok == present && (!ok || current == value)
 }
 
-// notifyLWCTextChangedLocked delivers the replacement the way the platform
-// input method does: a Java char array, its UTF-16 length, and replacement mode
-// zero. The caller holds client.run and has already updated the component, so a
-// listener that calls getString observes the committed value.
-func (client *Client) notifyLWCTextChangedLocked(ctx context.Context, component *jvm.Object, text string) error {
-	handlerValue, ok := component.Fields[componentInputHandlerField]
-	if !ok {
-		return nil
+type lwcInputListenerState struct {
+	handlerValue  jvm.Value
+	hasHandler    bool
+	handler       *jvm.Object
+	listenerValue jvm.Value
+	hasListener   bool
+	listener      *jvm.Object
+}
+
+// lwcTextInputListenerState returns the exact handler and delta-listener field
+// state so installing or removing one also invalidates an outstanding commit.
+func lwcTextInputListenerState(component *jvm.Object) (lwcInputListenerState, bool) {
+	state := lwcInputListenerState{}
+	state.handlerValue, state.hasHandler = component.Fields[componentInputHandlerField]
+	if !state.hasHandler {
+		return state, true
 	}
-	handler, err := handlerValue.Reference()
-	if err != nil || handler == nil {
-		return nil
-	}
-	listenerValue, ok := handler.Fields[inputMethodListenerField]
-	if !ok {
-		return nil
-	}
-	listener, err := listenerValue.Reference()
-	if err != nil || listener == nil {
-		return nil
-	}
-	units := utf16.Encode([]rune(text))
-	characters, err := client.vm.NewArray(jvm.Type{Kind: jvm.TypeChar}, int32(len(units)))
+	handler, err := state.handlerValue.Reference()
 	if err != nil {
-		return fmt.Errorf("allocate KTF text input characters: %w", err)
+		return lwcInputListenerState{}, false
 	}
-	values := make([]jvm.Value, len(units))
-	for index, unit := range units {
-		values[index] = jvm.IntValue(int32(unit))
+	if handler == nil {
+		return state, true
 	}
-	if err := jvm.SetArrayRange(characters, 0, values); err != nil {
-		return fmt.Errorf("fill KTF text input characters: %w", err)
+	state.handler = handler
+	state.listenerValue, state.hasListener = handler.Fields[inputMethodListenerField]
+	if !state.hasListener {
+		return state, true
 	}
-	runtime := client.runtime
-	defer client.beginHostService(ctx)()
-	previousThread, previousContext := runtime.currentThread, runtime.currentContext
-	runtime.currentThread, runtime.currentContext = client.thread, ctx
-	defer func() {
-		runtime.currentThread, runtime.currentContext = previousThread, previousContext
-	}()
-	if _, err := client.vm.InvokeVirtual(listener, "notifyTextChanged", "([CII)V",
-		jvm.ReferenceValue(characters), jvm.IntValue(int32(len(units))), jvm.IntValue(0)); err != nil {
-		return fmt.Errorf("notify KTF text input listener %s: %w", listener.ClassName, err)
+	listener, err := state.listenerValue.Reference()
+	if err != nil {
+		return lwcInputListenerState{}, false
 	}
-	return nil
+	state.listener = listener
+	return state, true
+}
+
+func sameLWCTextInputListenerState(left, right lwcInputListenerState) bool {
+	return left.handler == right.handler && left.hasHandler == right.hasHandler &&
+		(!left.hasHandler || left.handlerValue == right.handlerValue) &&
+		left.listener == right.listener && left.hasListener == right.hasListener &&
+		(!left.hasListener || left.listenerValue == right.listenerValue)
 }
