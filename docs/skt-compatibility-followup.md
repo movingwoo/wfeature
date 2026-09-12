@@ -58,13 +58,35 @@ defaults, settings, or authentication state, so these writes do not prove that
 play progress was saved. The probe sent no menu or gameplay input and did not
 perform a second launch over the files it created.
 
+A separate restart probe then used archive SHA-256
+`0ed66634d3dce7eeb05ec9ca95488f507574a1c8b62f3446018cecbd5c4d2415`.
+The first 300-tick process started with an empty save root and added one RMS
+record. The encoded store was 481 bytes: an eight-byte record header followed
+by a 473-byte payload whose SHA-256 was
+`8f7b7c4436343c7a942dddbfd1d2be15668d20112d918e5d5426ef6515224d0a`.
+A second process started a fresh runtime over that same root. Its diagnostics
+recorded one `getNumRecords` and one `getRecord(1)`, with no `addRecord` or
+`setRecord`; the save checksums remained unchanged.
+
+The caller and trace establish that the bytes were consumed rather than merely
+found. Static disassembly of the caller's `d.ad()` shows that a zero record
+count builds a default string and calls `addRecord` at bytecode PC 167. The
+fresh trace took the conditional at PC 34 to PC 37 and reached PC 167. The
+restart trace took PC 34 to PC 174, called `getRecord` at PC 180, constructed a
+String from the returned byte array at PC 183, and then parsed delimiters and
+assigned the resulting values to guest fields from PC 218 onward. This proves
+write, fresh-runtime reload, and guest consumption through RMS. Both runs
+produced the same opening frame digest, so the record is initial/default state;
+it does not prove restoration of user-visible gameplay progress.
+
 All 15 archives requested a vendor audio clip. Thirteen proceeded through
 `open` and `play` or `loop`, and all thirteen produced MIDI messages at the
 Host audio sink. Four also produced a WAV recording with sampled audio. The
 remaining two requested a clip but did not open or play one within 300 ticks.
 These results are playback-path evidence through the runtime timeline and
 sink. The separate decoder sweep only proves that packaged sound resources can
-be decoded; neither result establishes audibility on a physical phone.
+be decoded; neither result establishes that a person heard sound from a
+browser or physical phone.
 
 A previously documented browser run advanced one local title through its
 introduction to the first gameplay stage, continued presenting changing
@@ -72,7 +94,7 @@ frames, and accepted directional input. That observation did not verify a
 save/reload cycle or physical-device audio. The new boot probe does not extend
 the progression claim.
 
-The next bounded acceptance route should start with one of the five archives
+The remaining progression route should start with one of the five archives
 that both wrote an isolated save and reached the audio sink. The route should:
 
 1. Enter gameplay from a fresh save and record a stable visual checkpoint.
@@ -122,9 +144,12 @@ contract makes the field limit and constraints authoritative. The SKT Host
 adapter exposes three targets whose contents and focus are observable: the
 current `TextBox`, the selected `TextField` in the current `Form`, and a
 focused `XTextField` owned by the visible canvas. A commit checks the same
-object, display, selection or focus, and original value before replacing text.
-It enforces input constraints, counts the maximum in Java UTF-16 `char` units,
-repaints the target, and reports a Form item-state callback.
+object, display, selection or focus, original value, maximum size, and
+constraints before replacing text. An open command menu hides the editor from
+the Host and invalidates an earlier snapshot. The adapter enforces input
+constraints, counts the maximum in Java UTF-16 `char` units, repaints the
+target, and reports a Form item-state callback. A dedicated text-state lock
+serializes these operations with background guest setters and screen paint.
 
 A title-owned `com.xce.lcdui.TextComponent` exposes editing operations and a
 size, but no operation that reads its characters. The Host cannot form an
@@ -132,3 +157,29 @@ honest initial-value snapshot or compare a pending composition with the
 current value. That target remains unavailable through native IME input until
 caller evidence supplies a safe readable value or the interface contract is
 extended by an observed vendor method.
+
+The packaged TextBox acceptance fixture now passes the complete WebSocket path
+in automated Chromium and WebKit runs: open, Korean commit, reopen, stale
+target rejection, UTF-16 length rejection, and value retention across a
+pause/resume cycle. A person still needs to enter Korean with an actual phone
+keyboard and a desktop IME to verify operating-system composition behavior,
+focus, and the absence of unwanted browser zoom or layout movement.
+
+## Remaining acceptance
+
+The runtime-backed checks leave four requirements. The gameplay route remains
+automatable work; listening and unavailable archive checks need external input:
+
+1. Drive a title through real gameplay, make visible progress, use its own save
+   action, and verify that a fresh session visibly restores that progress. The
+   restart probe above proves the storage mechanism and guest parser only for
+   initial/default state.
+2. Listen through the browser and a phone. Decoder output, MIDI messages, and
+   sampled-audio buffers prove the software path but cannot establish what a
+   person hears from the operating system and speakers.
+3. Add a real Jlet archive to the local library and repeat the save, restart,
+   restore, audio, and input route. The current corpus contains no Jlet
+   application path.
+4. Supply a package reported to support landscape and compare it at `240x320`
+   and `320x240`. The current corpus has no stable landscape declaration from
+   which automatic selection can be derived.

@@ -101,6 +101,25 @@ and the next captured frame was black. The isolated save directory remained
 empty. This proves the menu and exit calls are live while adding no evidence of
 a progress-save call.
 
+A second fresh replay drove 5,920 ticks through the opening to a playable cave
+and pressed the title's documented save key. The title displayed its own
+"saving is not available in this area" message. The file trace contains no
+call caused by that key; the isolated tree contains only the five-byte settings
+file and three eleven-byte empty slot files created during startup. The route
+therefore reaches a real save decision, but the application rejects it before
+progress serialization or platform I/O. Another area is still required for a
+progress round trip.
+
+A bounded continuation cleared the nearby enemies and followed the visible
+cave corridors through two distinct room transitions. The save key produced
+the same application message after each transition and still made no file
+call. Further straight movement stopped at collision walls. The packaged map
+data describes the dungeon's submap topology but marks no save-enabled room,
+and the packaged help only says that saving in a boss area relocates the saved
+position to the designated return point. Reaching a known permitted state now
+requires completing more of the opening dungeon or its quest; there is no
+evidence-led short route from the current room to one.
+
 Future save checks should start from the title's packaged help or key map, then
 drive to a state where that key is active, and finally verify both the save-tree
 bytes and a fresh-session load. Settings files and pre-created empty slot files
