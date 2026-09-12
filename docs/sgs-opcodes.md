@@ -126,7 +126,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xc2` | `0x0041c600` | M | SMS helper (type,dialResource,textResource), replaces three args with result from 0x40c680. |
 | `0xc3` | `0x0041c690` | M | Communication request using multiple resource descriptors and 0x412400; exact wire semantics unresolved. |
 | `0xc4` | `0x0041c750` | I | Consume one NUL-terminated URL resource and yield the invocation without stopping timers or creating a guest callback. The browser exposes one bounded HTTP(S) link request for intentional navigation; CLI diagnostics reject the unsupported Host capability. See [external launch](sgs-external-launch.md). |
-| `0xc5` | `0x0041c7c0` | M | Set host action 2 and redirect PC to invocation terminator; exit/return-to-shell effect requires host-action verification. |
+| `0xc5` | `0x0041c7c0` | I | No arguments or result. Select host action 2 and yield only the current invocation. The inspected PC wrapper does not dispatch action 2, so the session and timers remain active; handset meaning is unverified. See [host action evidence](sgs-host-state.md#host-action-2-and-invocation-lifetime). |
 | `0xc6` | `0x0041c7e0` | M | Device/system query with multiple resource destinations through 0x40c9c0; exact argument layout unresolved. |
 | `0xc7` | `0x0041cb40` | M | Resource-based host operation through 0x40ca50; updates system variable 0 with result. |
 | `0xc8` | `0x0041cb90` | I | Set clipping rectangle (x1,y1,x2,y2), sorted/clamped inclusive endpoints. |

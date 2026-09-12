@@ -81,6 +81,26 @@ VM at `0x4154f2`, or before notifying a continuing VM with system event 12 at
 variable 0 before running the module's initial entry. Role and runtime mode are
 distinct values and must not share storage or interpretation.
 
+## Host action 2 and invocation lifetime
+
+Service `0xc5` at `0x41c7c0` takes no arguments and produces no result. It
+writes host action 2 at `0x5278b0`, then redirects the instruction pointer at
+`0x527704` to `0x4810c0`. That destination contains the ordinary `0xff`
+invocation terminator. The handler does not stop the three timers, mark the
+script as exited, or install a completion callback.
+
+The inspected PC wrapper subtracts one from each action and indexes the selector
+bytes at `0x420268`. Action 2 selects case 15, the common return at `0x4201ba`;
+there is no Host call or callback on that branch. Direct execution of the
+original handler and wrapper dispatch confirms both state transitions. Action 2
+is assigned nowhere else in the inspected executable.
+
+The emulator therefore follows the observable PC Host policy: `0xc5` yields
+the current invocation while leaving the script, timers and later Host events
+active. It is not reported as a shared-session exit. The meaning of action 2 on
+an original handset remains unverified, so neither an exit nor a
+return-to-shell transition should be inferred from the service name alone.
+
 ## Standalone behavior and remaining limits
 
 Standalone startup explicitly writes role **1** at `0x413a20`–`0x413a28` and

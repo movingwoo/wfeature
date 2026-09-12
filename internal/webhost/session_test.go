@@ -253,6 +253,103 @@ func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 	expectFrame(t, connection)
 }
 
+func TestScriptHostActionTwoKeepsWebSessionForFutureEvents(t *testing.T) {
+	root := t.TempDir()
+	gameRoot := filepath.Join(root, "games")
+	if err := os.MkdirAll(gameRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gameRoot, "yield.zip"), scriptHostYieldArchive(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, Options{
+		GameRoot: gameRoot,
+		SaveRoot: filepath.Join(root, "savedata"),
+		LogRoot:  filepath.Join(root, "logs"),
+	})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/yield.zip", ID: 1})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil || started.Started.Platform != "skt" {
+		t.Fatalf("started = %+v", started)
+	}
+	// Initialization produced no frame because 0xc5 ended that invocation.
+	// A later key still enters guest code and paints, which proves the runner
+	// retained the same live session rather than reporting an exit.
+	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: '5'})
+	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		opcode, payload, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatalf("waiting for the later key frame: %v", err)
+		}
+		if opcode == wsproto.OpBinary {
+			if _, err := png.Decode(bytes.NewReader(payload)); err != nil {
+				t.Fatalf("later key frame is not a PNG: %v", err)
+			}
+			break
+		}
+		var message serverMessage
+		if json.Unmarshal(payload, &message) == nil && (message.Kind == serverExited || message.Kind == serverError) {
+			t.Fatalf("session ended before the later key frame: %+v", message)
+		}
+	}
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func scriptHostYieldArchive(t *testing.T) []byte {
+	t.Helper()
+	data := make([]byte, 52)
+	data[0] = 1
+	copy(data[10:26], "Yield fixture")
+	entry := func(index int, code ...byte) {
+		binary.LittleEndian.PutUint16(data[28+index*2:], uint16(len(data)))
+		data = append(data, code...)
+	}
+	entry(0, 0xc5, 0x55, 0x78, 0xff)
+	entry(3, 0x55, 0x78, 0xff)
+	vd := len(data)
+	for range 17 {
+		data = append(data, 1, 1, 0, 0)
+	}
+	vi := len(data)
+	for index, value := range []int{vd, vi, vi, vi} {
+		binary.LittleEndian.PutUint16(data[44+index*2:], uint16(value))
+	}
+	var descriptor []byte
+	for _, value := range []string{"application/x-gnex-sgs", "SGS"} {
+		descriptor = binary.LittleEndian.AppendUint32(descriptor, uint32(len(value)))
+		descriptor = append(descriptor, value...)
+	}
+	var packed bytes.Buffer
+	writer := zip.NewWriter(&packed)
+	for name, value := range map[string][]byte{"fixture.mod": descriptor, "fixture.sgs": data} {
+		file, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return packed.Bytes()
+}
+
 // The carrier's earlier download package has to reach a browser through the
 // same protocol as everything else, and the only way to know it does is to
 // drive it: a real handshake, the real archive, real frames, and no browser

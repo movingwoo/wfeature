@@ -286,6 +286,11 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		return formatScriptResource(vm, int(op-0x89))
 	case 0x8f:
 		return s.beginTextInput(vm)
+	case 0xc5:
+		// The script runtime ends this invocation and hands action 2 to the
+		// native Host. The inspected PC Host does not dispatch that action,
+		// so it is not evidence that the game or shared session has exited.
+		vm.Yield()
 	case 0x90:
 		resource := vm.Resource(int(vm.Pop()))
 		data := resource.Data

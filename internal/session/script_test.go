@@ -19,20 +19,31 @@ import (
 // white again, and termination increments and persists the counter once more.
 func scriptArchiveFixture(t *testing.T, lcdMask ...byte) []byte {
 	t.Helper()
+	mask := byte(0)
+	if len(lcdMask) != 0 {
+		mask = lcdMask[0]
+	}
+	var callbacks [8][]byte
+	callbacks[0] = []byte{5, 16, 5, 1, 0x98, 0x55, 0x78, 5, 10, 5, 1, 0x9a, 0xff}
+	callbacks[1] = []byte{0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0xff}
+	callbacks[2] = []byte{0x55, 0x78, 0xff}
+	callbacks[3] = []byte{0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0x56, 0x78, 0xff}
+	return scriptArchiveWithCallbacks(t, "Script fixture", mask, callbacks)
+}
+
+func scriptArchiveWithCallbacks(t *testing.T, name string, lcdMask byte, callbacks [8][]byte) []byte {
+	t.Helper()
 	data := make([]byte, 52)
 	data[0] = 1
-	if len(lcdMask) != 0 {
-		data[1] = lcdMask[0]
-	}
-	copy(data[10:26], "Script fixture")
-	entry := func(index int, code ...byte) {
+	data[1] = lcdMask
+	copy(data[10:26], name)
+	for index, code := range callbacks {
+		if len(code) == 0 {
+			continue
+		}
 		binary.LittleEndian.PutUint16(data[28+index*2:], uint16(len(data)))
 		data = append(data, code...)
 	}
-	entry(0, 5, 16, 5, 1, 0x98, 0x55, 0x78, 5, 10, 5, 1, 0x9a, 0xff)
-	entry(1, 0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0xff)
-	entry(2, 0x55, 0x78, 0xff)
-	entry(3, 0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0x56, 0x78, 0xff)
 	vd := len(data)
 	for i := 0; i < 17; i++ {
 		data = append(data, 1, 1, 0, 0)
@@ -61,6 +72,16 @@ func scriptArchiveFixture(t *testing.T, lcdMask ...byte) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+func scriptHostYieldArchiveFixture(t *testing.T) []byte {
+	t.Helper()
+	var callbacks [8][]byte
+	// Painting after 0xc5 would expose a Host that continued the same
+	// invocation. The key callback paints only after a later Host event.
+	callbacks[0] = []byte{0xc5, 0x55, 0x78, 0xff}
+	callbacks[3] = []byte{0x55, 0x78, 0xff}
+	return scriptArchiveWithCallbacks(t, "Yield fixture", 0, callbacks)
 }
 
 func TestScriptSessionLifecycle(t *testing.T) {
@@ -166,6 +187,33 @@ func TestScriptSessionDefaultScreen(t *testing.T) {
 	defer s.Close()
 	if w, h := s.Screen(); w != 128 || h != 160 {
 		t.Fatalf("screen=%dx%d", w, h)
+	}
+}
+
+func TestScriptHostActionTwoLeavesSharedSessionRunning(t *testing.T) {
+	running, err := Start(context.Background(), scriptHostYieldArchiveFixture(t), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.Close()
+	if !running.Running() {
+		t.Fatal("host action 2 ended the shared session")
+	}
+	if running.Flushes() != 0 {
+		t.Fatal("initialization continued after host action 2")
+	}
+	progress, err := running.Tick(context.Background(), time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Exited {
+		t.Fatal("host action 2 was reported as a guest exit")
+	}
+	if err := running.SendKey(context.Background(), KeyPress, '5'); err != nil {
+		t.Fatal(err)
+	}
+	if running.Flushes() != 1 {
+		t.Fatalf("later key callback flushes = %d, want 1", running.Flushes())
 	}
 }
 

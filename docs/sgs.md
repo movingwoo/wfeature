@@ -103,6 +103,13 @@ coalesces later requests until the person opens or dismisses it. Parking keeps
 that request and a resumed page sees it again. The notice is nonmodal, so a
 later native text dialog retains sole ownership of keyboard input.
 
+Service `0xc5` takes no operands and yields only its current invocation. The
+inspected PC Host does not dispatch the action it receives, and the handler
+does not stop timers or install a callback. The script session therefore stays
+active: scheduled timers and later key or system callbacks can enter it again.
+The corresponding handset action remains unknown and is not treated as a game
+exit or a return to the browser library.
+
 ## Graphics, sound and storage
 
 The framebuffer is indexed RGB332 and is presented only when the script

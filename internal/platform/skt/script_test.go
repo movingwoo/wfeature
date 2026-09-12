@@ -111,6 +111,59 @@ func TestScriptExitStopsFutureTimersAndKeys(t *testing.T) {
 	}
 }
 
+func TestScriptHostActionTwoYieldsOnlyCurrentInvocation(t *testing.T) {
+	// The assignment after 0xc5 belongs to the same invocation and must not
+	// run. Unlike the bytecode exit instruction above, the service does not
+	// prevent a later Host event from entering a fresh callback.
+	s := newScriptTest(t, []byte{0xc5, 5, 9, 0x0a, 16, 0xff}, nil)
+	if s.Exited() {
+		t.Fatal("host action 2 became a script exit")
+	}
+	if got := s.vm.Value(16, 0); got != 0 {
+		t.Fatalf("yielded initialization continued: scratch = %d", got)
+	}
+
+	s.vm.Push(1234)
+	if err := s.Call(0xc5, s.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Pop(); got != 1234 {
+		t.Fatalf("host action 2 changed caller stack: got %d", got)
+	}
+
+	entry := len(s.vm.Program.Data)
+	s.vm.Program.Data = append(s.vm.Program.Data, 0x3a, 16, 1, 0xff)
+	s.vm.Program.Entries[3] = uint16(entry)
+	if err := s.SendKey(context.Background(), "press", KeyCodeFire); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Value(16, 0); got != 1 {
+		t.Fatalf("later key callback did not run: scratch = %d", got)
+	}
+	if s.Exited() {
+		t.Fatal("script exited after its later callback")
+	}
+}
+
+func TestScriptHostActionTwoLeavesScheduledTimerRunning(t *testing.T) {
+	// Schedule a one-shot timer before yielding. Its later callback increments
+	// scratch, proving 0xc5 did not merely leave an active bit behind while
+	// preventing the timer from entering guest code.
+	s := newScriptTest(t, []byte{5, 10, 5, 0, 0x9a, 0xc5, 5, 9, 0x0a, 16, 0xff}, nil)
+	entry := len(s.vm.Program.Data)
+	s.vm.Program.Data = append(s.vm.Program.Data, 0x3a, 16, 1, 0xff)
+	s.vm.Program.Entries[2] = uint16(entry)
+	if _, err := s.Advance(context.Background(), 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Value(16, 0); got != 1 {
+		t.Fatalf("scheduled timer callback did not run: scratch = %d", got)
+	}
+	if s.Exited() {
+		t.Fatal("script exited after its scheduled timer callback")
+	}
+}
+
 func TestScriptTextAndEllipse(t *testing.T) {
 	s := newScriptTest(t, []byte{0xff}, nil)
 	vm := s.vm
