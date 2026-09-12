@@ -1,5 +1,22 @@
 # SKT fixtures
 
+`src/AudioStopMIDlet.java` and `audio-stop.jar` are newly authored fixtures for
+blocking audio calls. A guest thread distinguishes natural completion from
+`UserStopException`; the Go test supplies an authored SMAF note and stops the
+clip after its wait is registered. No sound asset is bundled in the JAR.
+
+After compiling the generated library signatures described in
+[`docs/testing.md`](../../../../docs/testing.md#compiling-a-java-fixture), compile
+this source against those classes and package its class files with this manifest:
+
+```text
+Manifest-Version: 1.0
+MIDlet-1: Audio Stop Fixture, , AudioStopMIDlet
+MIDlet-Name: Audio Stop Fixture
+MIDlet-Version: 1.0
+MIDlet-Vendor: wfeature
+```
+
 `Watched.java` and its Java 8 class-format output are test fixtures newly
 authored for `wfeature`. It has two fields written from two methods, which is
 what a write-watch test needs: a hit has to land on the address of the field
