@@ -1,16 +1,73 @@
 # SGS completion acceptance
 
+## Resumed managed work
+
+The user resumed SGS work on 2026-09-12 using the managed workflow established
+for the carrier platforms. PR #136 is merged; the restart baseline is main at
+`2b56bad`. The pause below is historical and no longer prohibits SGS work.
+
+The five existing open areas remain in scope: systematic SIS metadata comparison,
+the twelve-title gameplay/save/audio/lifecycle matrix, Host UI/communication and
+identity services, extended SIS/SAF decoding and composition, and the remaining
+compatibility differences. A working subset does not complete this scope.
+
+Three `gpt-5.6-sol` workers at `xhigh` use isolated worktrees. Initial ownership
+is image contracts and metadata comparison, Host service contracts, and corpus
+acceptance. The manager owns shared integration, final review, testing and
+separate commits/PRs. Workers do not publish or merge. Runtime game archives and
+original saves remain read-only; each probe uses isolated save data.
+
+Implementation follows executable slices with evidence and regression tests.
+Unclear contracts remain explicit until compared with the original runtime or
+a demonstrated caller. The existing normal/debug/race/vet and profile-build
+gates still apply, and Host changes require session/browser verification.
+Physical audio and OS IME observations are reported separately from automated
+checks. No whole-platform completion follows from green unit tests alone.
+
+The systematic SIS metadata comparison is now complete in PR #154. The manager
+reran all 102 authored native results against the Go service in normal, debug
+and race builds; all return values and 510 output words matched. This closes
+only the metadata comparison item; the other four areas remain open.
+
+The standalone runtime-mode correction in PR #155 initializes the guest with mode 2 and
+implements `0xd2` without confusing that state with subsequent event parameters.
+The manager integration passed the normal/debug suites, internal race tests,
+vet, and both CLI/server build profiles. Matched, SHA-verified runs of all twelve
+archives produced identical frames and flush counts before and after the change.
+A real-server headless Chromium check rendered IDs 06 and 07, exercised key
+input, and returned to the launcher to start another session without page or
+protocol errors. This is startup/lifecycle evidence, not completion of their
+gameplay, save restoration or audible playback acceptance paths.
+
+PR #156, stacked on #155, corrects the random services to the observed 32-bit
+recurrence and 15-bit draw semantics. All 196 authored native service results
+and final states match the Go regression. The manager reran the full test,
+debug, race, vet and CLI/server profile-build gates and a twelve-archive startup
+probe. The directed ID 09 restore/control distinction also survives the change;
+later randomized play frames are not expected to match the former substitute
+generator. See [random evidence](sgs-random.md).
+
+The restart corpus manifest was checked against all twelve current archive
+SHA-256 values; every entry matched. A separate read-only descriptor inventory
+found one paired descriptor per archive: ten MOD files and two INF files.
+Their binary contents do not expose a line-based `UserID=` field. This does
+not establish that identity metadata is absent: the descriptor formats still
+need decoding before they can supply the identity service. No identity is
+inferred from a filename or the executable save-owner digest.
+
 ## Paused at user request
 
 Development of further compatibility features stopped on 2026-09-11 at the
 user's request. The user subsequently authorized a PR containing all SGS work
 completed so far. That PR is a partial-support delivery; it does not depend on
-finishing the full-compatibility requirements below. Further implementation
-remains paused. Unrelated workspace changes are excluded from the PR.
+finishing the full-compatibility requirements below. At that checkpoint, further implementation
+remained paused; the explicit resumption above supersedes that instruction.
+Unrelated workspace changes are excluded from the PR.
 
 The local SIS metadata query for `0xe8` is included, with focused header,
 instruction, address-bank, malformed-input and work-limit tests. Systematic
-comparison of the native SIS metadata probe with Go remains follow-up work.
+comparison of the native SIS metadata probe with Go was follow-up work at that
+checkpoint and is completed by the resumed comparison above.
 SAF metadata and the host image branch remain explicitly unsupported.
 
 The SAF zlib object-body component is tested but remains disconnected from
@@ -71,10 +128,14 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 | 06 | User input replay; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
 | 07 | User input replay; main route acceptance pending | Pending | Pending | Generic lifecycle only |
 | 08 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 09 | Browser menu evidence; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
+| 09 | Directed restore-to-playfield route verified | New 64-byte save survives reopen and changes visible state versus immutable-seed control | Audible check pending | Directed close/reopen verified |
 | 10 | Browser field/HUD evidence; consolidate route | Pending | Pending | Browser session reuse |
 | 11 | User confirms running; record main route | Pending | Pending | Directed route pending |
 | 12 | Generic input evidence; directed route pending | Pending | Pending | Generic lifecycle only |
+
+The ID 09 route and its post-random-service validation are recorded in the
+[dated corpus evidence](sgs-corpus-2026-09-12.md). Its shared map alone did not
+prove progress restoration; the same-input seed control was necessary.
 
 ## Final gates
 
