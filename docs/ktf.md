@@ -7923,6 +7923,5 @@ callback. Under a wall clock, where it always worked, it still answers a key:
   theoretical, and none of them is what boxed that map's objects (see "An image
   is drawn through its own handle") or what dropped a sprite's backdrop (see
   "The transparency a title brings with it")
-- cheat write watches, hit tracing, and cheat-table save/load (Phase 4)
 - in-game progression is verified by the user playing, not by automated
   probes; probes only surface missing API surfaces to implement

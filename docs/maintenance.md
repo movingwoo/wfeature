@@ -141,14 +141,11 @@ The root README, `web/README.md` and the keypad section of `docs/session.md`
 now describe four types, per-type cell editing and the shared sizing editor.
 These documentation corrections do not add another keypad implementation.
 
-Historical sections in [testing.md](testing.md) still name the removed
-`var/games/test_skt/NOT-WORKING.md` report and state that there is no session
-cap or request deadline. Later sections and current source supersede these
-claims. Some deliberately-incomplete lists also retain completed features,
-including KTF cheat watches and table persistence. The next documentation pass
-should distinguish historical observations from current limitations and remove
-individual title names already present in older tracked prose. This review
-introduces no new title names.
+The removed SKT corpus report is now marked historical in [testing.md](testing.md).
+The same document records current HTTP deadlines and the four-game retention cap.
+KTF's incomplete list no longer lists implemented cheat watches and table
+persistence. Historical archive counts still require dated corpus evidence;
+these documentation corrections are not new whole-corpus acceptance runs.
 
 The Host allocation bound remains a separate watch: `internal/webhost/session.go`
 reads an archive with `os.ReadFile` before handing it to a bounded loader.
