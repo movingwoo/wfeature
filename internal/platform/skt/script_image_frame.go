@@ -49,9 +49,9 @@ func (r *scriptSISBitReader) peek(count int) (uint, bool) {
 }
 
 // decodeScriptSISLiteralFrame implements the independently verified type-1
-// subset: independent objects containing literal 8-by-8 tiles, and additive
-// frame records without transforms. Other coding and composition modes fail
-// closed until their contracts have executable evidence.
+// subset: independent objects containing literal 8-by-8 tiles, exact object
+// references, and additive frame records without transforms. Other coding and
+// composition modes fail closed until their contracts have executable evidence.
 func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
 	var result scriptSISLiteralFrame
 	if len(data) < 3 || !bytes.Equal(data[:3], []byte("SIS")) {
@@ -103,12 +103,24 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	}
 
 	objects := make([]scriptSISLiteralObject, objectCount)
+	lastIndependent := -1
 	for objectIndex := range objects {
 		lookahead, ok := r.peek(8)
-		if !ok || lookahead == 0 {
-			// Eight zero bits select a reference object. The first object may
-			// not be a reference in the original parser either.
+		if !ok {
 			return result, false
+		}
+		if lookahead == 0 {
+			prefix, ok := r.read(9)
+			if !ok || prefix != 0 || lastIndependent < 0 {
+				return result, false
+			}
+			mode, ok := r.read(1)
+			if !ok || mode != 0 {
+				// Mode one introduces a separate transform stream.
+				return result, false
+			}
+			objects[objectIndex] = objects[lastIndependent]
+			continue
 		}
 		columns, ok := r.read(5)
 		if !ok || columns < 1 {
@@ -128,6 +140,7 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 			coding[tile] = coded != 0
 		}
 		object := &objects[objectIndex]
+		lastIndependent = objectIndex
 		object.width = int(columns) * 8
 		object.height = int(rows) * 8
 		object.pixels = make([]byte, int(columns)*object.height)
@@ -225,12 +238,21 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	return result, true
 }
 
-// A literal pixel consumes one stream bit. At most that many pixels can be
-// decoded and then visited once more while composing one selected frame. The
-// additional term accounts for snapshotting the source bytes. Charging this
-// conservative bound before decoding also accounts for late format failures.
+// A literal pixel consumes one stream bit. Exact references can make the same
+// maximum-size independent object render once for every declared object, so
+// source length alone is not a sufficient bound. The fixed header supplies a
+// bounded object count before parsing begins. The other terms cover source-bit
+// work and snapshotting. Charging this conservative total before decoding also
+// accounts for malformed references and other late format failures.
 func scriptSISLiteralDecodeWork(data []byte) int {
-	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64
+	objectCount := 20
+	if len(data) >= 7 && bytes.Equal(data[:3], []byte("SIS")) {
+		objectCount = int(data[5]&0x0f)<<1 | int(data[6]>>7)
+		objectCount++
+		objectCount = min(objectCount, 20)
+	}
+	const maximumObjectPixelWork = (31 * 8 * 12 * 8) / 64
+	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*maximumObjectPixelWork
 }
 
 func scriptSISSignedMagnitude(value uint, magnitudeBits uint) int {

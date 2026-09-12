@@ -178,6 +178,45 @@ func TestScriptSISLiteralMultipleTilesObjectsAndFrames(t *testing.T) {
 	}
 }
 
+func TestScriptSISExactReferences(t *testing.T) {
+	referenceOnly := make([]byte, 32)
+	for y := 8; y < 16; y++ {
+		referenceOnly[y*2+1] = 0xff
+	}
+	overlap := make([]byte, 32)
+	overlap[0] = 0xe0
+	chain := make([]byte, 32)
+	chain[29] = 0x02
+	for _, tc := range []struct {
+		name   string
+		data   []byte
+		pixels []byte
+	}{
+		{
+			"reference only",
+			[]byte{83, 73, 83, 8, 4, 64, 128, 16, 8, 191, 255, 255, 255, 255, 255, 255, 255, 192, 2, 16, 32, 0},
+			referenceOnly,
+		},
+		{
+			"overlapping independent and reference",
+			[]byte{83, 73, 83, 8, 4, 64, 128, 16, 8, 176, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 64, 0},
+			overlap,
+		},
+		{
+			"reference chain",
+			[]byte{83, 73, 83, 8, 4, 65, 0, 16, 8, 128, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 65, 195, 128},
+			chain,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, ok := decodeScriptSISLiteralFrame(tc.data, 0)
+			if !ok || frame.width != 16 || frame.height != 16 || !bytes.Equal(frame.pixels, tc.pixels) {
+				t.Fatalf("decoded %dx%d %x valid=%v, want 16x16 %x", frame.width, frame.height, frame.pixels, ok, tc.pixels)
+			}
+		})
+	}
+}
+
 func scriptSISTestPixel(pixels []byte, width, x, y int) bool {
 	return pixels[y*(width/8)+x/8]&(0x80>>(x&7)) != 0
 }
@@ -227,6 +266,41 @@ func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
 	if _, ok := decodeScriptSISLiteralFrame(valid, 1); ok {
 		t.Fatal("accepted frame index equal to frame count")
 	}
+}
+
+func TestScriptSISReferencesRejectInvalidPrefixesAndTransformMode(t *testing.T) {
+	valid := []byte{83, 73, 83, 8, 4, 64, 128, 16, 8, 191, 255, 255, 255, 255, 255, 255, 255, 192, 2, 16, 32, 0}
+	ninthBit := slices.Clone(valid)
+	scriptSISTestSetBit(ninthBit, 40+74+8)
+	transformMode := slices.Clone(valid)
+	scriptSISTestSetBit(transformMode, 40+74+9)
+	var firstReference scriptSISBits
+	firstReference.append(1, 5)
+	firstReference.append(0, 5)
+	firstReference.append(2, 5)
+	firstReference.append(2, 4)
+	firstReference.append(0, 1)
+	firstReference.append(0, 5)
+	firstReference.append(0, 3)
+	firstReference.append(0, 1)
+	firstReference.append(0, 4)
+	firstReference.append(1, 3)
+	firstReference.append(0, 4)
+	firstReference.append(0, 10)
+	for name, data := range map[string][]byte{
+		"first object":       firstReference.bytes(),
+		"truncated prefix":   valid[:18],
+		"nonzero ninth bit":  ninthBit,
+		"transform mode one": transformMode,
+	} {
+		if _, ok := decodeScriptSISLiteralFrame(data, 0); ok {
+			t.Fatalf("accepted invalid %s reference", name)
+		}
+	}
+}
+
+func scriptSISTestSetBit(data []byte, position int) {
+	data[3+position/8] |= 0x80 >> (position & 7)
 }
 
 func TestScriptImageFrameWritesPackedPrefixAndClearsRequestedSpan(t *testing.T) {
@@ -377,6 +451,65 @@ func TestScriptImageFrameLateFailureConsumesWorkWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestScriptImageFrameMaximumReferenceWorkIsChargedBeforeDecode(t *testing.T) {
+	data := authoredSISMaximumReferences()
+	frame, ok := decodeScriptSISLiteralFrame(data, 0)
+	if !ok || frame.width != 31*8 || frame.height != 15*8 || !bytes.Equal(frame.pixels, make([]byte, 31*15*8)) {
+		t.Fatal("maximum reference fixture did not decode successfully")
+	}
+	before := []byte("unchanged")
+	vm := sgsvm.New(&sgsvm.Program{Resources: []sgsvm.Resource{{Data: data}, {Data: slices.Clone(before)}}}, nil)
+	charged := scriptSISLiteralDecodeWork(data)
+	if err := vm.ChargeWork(sgsvm.MaxSteps - charged + 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, argument := range []int16{1, 1, 0, 1, 0, 0, 0} {
+		vm.Push(argument)
+	}
+	if err := scriptImageFrameCall(vm); err == nil {
+		t.Fatal("maximum reference fan-out bypassed the work limit")
+	}
+	if !bytes.Equal(vm.Resources[1].Data, before) {
+		t.Fatal("work-limited reference extraction mutated destination")
+	}
+}
+
+func authoredSISMaximumReferences() []byte {
+	var bits scriptSISBits
+	bits.append(1, 5)
+	bits.append(0, 5)
+	bits.append(31, 5)
+	bits.append(15, 4)
+	bits.append(0, 1)
+	bits.append(19, 5)
+	bits.append(0, 3)
+	bits.append(0, 1)
+	bits.append(0, 4)
+	bits.append(1, 3)
+	bits.append(0, 4)
+	bits.append(31, 5)
+	bits.append(12, 4)
+	for range 31 * 12 {
+		bits.append(0, 1)
+	}
+	for range 31 * 12 * 64 {
+		bits.append(0, 1)
+	}
+	for range 19 {
+		bits.append(0, 10)
+	}
+	bits.append(0, 1)
+	for range 20 {
+		bits.append(1, 1)
+	}
+	for range 20 {
+		bits.append(0, 8)
+		bits.append(0, 7)
+		bits.append(0, 4)
+	}
+	return bits.bytes()
+}
+
 func TestLocalScriptSISLiteralComparison(t *testing.T) {
 	path := os.Getenv("WFEATURE_SGS_SIS_LITERAL_COMPARISON")
 	if path == "" {
@@ -484,5 +617,75 @@ func TestLocalScriptSISLiteralComparison(t *testing.T) {
 	}
 	if rows != len(expected) {
 		t.Fatalf("compared %d native vectors, want %d", rows, len(expected))
+	}
+}
+
+func TestLocalScriptSISReferenceComparison(t *testing.T) {
+	path := os.Getenv("WFEATURE_SGS_SIS_REFERENCE_COMPARISON")
+	if path == "" {
+		t.Skip("set WFEATURE_SGS_SIS_REFERENCE_COMPARISON to an authored native-result JSONL file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	type nativeRow struct {
+		Name        string `json:"name"`
+		References  int    `json:"references"`
+		Data        []byte `json:"data"`
+		Output      []byte `json:"output"`
+		Result      int    `json:"result"`
+		Finished    bool   `json:"finished"`
+		BitPosition int    `json:"bit_position"`
+	}
+	type expectation struct {
+		references  int
+		bitPosition int
+		dataLength  int
+	}
+	expected := map[string]expectation{
+		"reference-only":    {1, 146, 22},
+		"reference-overlap": {1, 165, 24},
+		"reference-chain":   {2, 157, 23},
+	}
+	seen := make(map[string]bool)
+	scanner := bufio.NewScanner(file)
+	for rowNumber := 1; scanner.Scan(); rowNumber++ {
+		var row nativeRow
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			t.Fatalf("row %d: %v", rowNumber, err)
+		}
+		want, exists := expected[row.Name]
+		if !exists || seen[row.Name] {
+			t.Fatalf("row %d has unexpected or duplicate case %q", rowNumber, row.Name)
+		}
+		seen[row.Name] = true
+		if !row.Finished || row.Result != 1 || row.References != want.references || row.BitPosition != want.bitPosition || len(row.Data) != want.dataLength || len(row.Output) != 32 {
+			t.Fatalf("row %d has invalid native result: %+v", rowNumber, row)
+		}
+		frame, ok := decodeScriptSISLiteralFrame(row.Data, 0)
+		if !ok || !bytes.Equal(frame.pixels, row.Output) {
+			t.Fatalf("row %d: Go output %x valid=%v, native output %x", rowNumber, frame.pixels, ok, row.Output)
+		}
+		vm := sgsvm.New(&sgsvm.Program{Resources: []sgsvm.Resource{{Data: row.Data}, {Data: []byte("old")}}}, nil)
+		vm.Push(1234)
+		for _, argument := range []int16{1, 1, 0, 1, 0, 42, 43} {
+			vm.Push(argument)
+		}
+		if err := (&ScriptSession{}).Call(0xe7, vm); err != nil || vm.Pop() != 0 || vm.Pop() != 1234 {
+			t.Fatalf("row %d dispatch failed: %v", rowNumber, err)
+		}
+		wantResource := make([]byte, frame.width*frame.height+1)
+		copy(wantResource, row.Output)
+		if !bytes.Equal(vm.Resources[1].Data, wantResource) {
+			t.Fatalf("row %d dispatch output differs", rowNumber)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != len(expected) {
+		t.Fatalf("compared %d native vectors, want %d", len(seen), len(expected))
 	}
 }

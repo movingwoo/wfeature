@@ -69,6 +69,21 @@ not all be zero. For later objects, eight zero bits select the reference-object
 reader at `0x43ada0`; a nonzero lookahead selects `0x43aa90`. The lookahead is
 rewound before dispatch. No byte alignment is inserted between objects.
 
+The reference reader consumes nine zero bits, followed by a one-bit mode. Mode
+zero is an exact reference: it consumes no further payload and shares the most
+recent independent object's dimensions, tile coding selections and residual
+payload position. A chain of exact references continues to share that same
+independent source. Mode one introduces another bitstream whose field width
+depends on header bits 25 through 27; that transform stream remains unsupported.
+The first object cannot be a reference.
+
+Three authored original-runtime calls verify the exact-reference boundary. One
+composed only the reference at (8,8), one ORed an independent object and its
+reference at x offsets 0 and 1, and one selected the last member of a two-link
+reference chain at (7,7). All returned 1 and reached the sentinel; their final
+bit positions were 146, 165 and 157. The Go comparison repeats the exact packed
+outputs through the real `0xe7` dispatch.
+
 An independent object at `0x43aa90` contains:
 
 1. Five-bit tile-column count, nonzero.
@@ -94,8 +109,34 @@ packing rows. A fresh original-runtime probe selected literal input positions
 0, 1, 2, 5, 8, 9 and 63; they appeared at raster coordinates (0,0), (1,0),
 (0,1), (2,0), (1,2), (0,3) and (7,7). This is the conventional alternating
 diagonal traversal and can be generated without retaining a lookup table. The
-complete color-dependent codebook has not been independently specified. It
-must not be replaced by a guessed unary or generic RLE scheme.
+original helper is not reproduced as a private lookup table. The following
+comparison identifies its public-standard basis and measured divergence.
+
+An exhaustive original-runtime probe over every 12-bit lookahead found 64 valid
+run prefixes for each initial color. Comparison with
+[ITU-T Recommendation T.4, Tables 2 and 3a](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-T.4-199607-S%21%21PDF-E&lang=e&type=items)
+found that all 64 white runs match, while 57 of the 64 black runs match. The
+seven black differences are:
+
+| Run | T.4 code | Original-runtime code |
+|---:|---|---|
+| 14 | `00000111` | `00000001` |
+| 17 | `0000011000` | `0000001000` |
+| 18 | `0000001000` | `00001100111` |
+| 19 | `00001100111` | `00001101000` |
+| 20 | `00001101000` | `00001101100` |
+| 21 | `00001101100` | `00001101110` |
+| 64 | `0000001111` | `000001111` |
+
+Direct raw-lookahead calls confirmed the table comparison. For example,
+`000000010000` returns black run 14 with length 8, while the T.4 run-14 prefix
+padded to 12 bits returns zero. `000000100000` returns native run 17 rather than
+T.4 run 18. `000001111000` returns native run 64 with length 9, while the T.4
+run-64 prefix padded to 12 bits returns zero. Four end-to-end coded-tile calls
+also verified all-zero and all-one 64-pixel runs plus alternating 32-pixel runs
+in both directions. The measured codebook resembles T.4 but differs at these seven black runs;
+this comparison does not establish the historical derivation. Coded tiles remain a separate
+implementation slice with their own exact codebook and failure tests.
 
 Object parsing invokes the same tile reader in scan-only mode to locate the
 next object; extraction invokes it again with output enabled. The object
@@ -159,11 +200,12 @@ The exposed wrapper's inclusive upper-bound defect remains documented in
 [extended images](sgs-images.md).
 
 The implemented subset accepts type 1 streams with independent literal tiles,
-header variant 1, frame flag zero and zero transform fields. It reconstructs a
-requested frame into temporary packed storage before a guest resource changes.
-Coded tiles, reference objects, header inversion, other header variants, frame
-masks and composition transforms return failure. Type 2 and SAF extraction
-remain unsupported. The safe frame range is zero through frame count minus one;
-the original wrapper's inclusive upper-bound defect is not reproduced. Source
-resources above 65,535 bytes are rejected, matching the script resource size
-limit and keeping snapshot and decode work bounded.
+mode-zero exact references, header variant 1, frame flag zero and zero transform
+fields. It reconstructs a requested frame into temporary packed storage before
+a guest resource changes. Coded tiles, mode-one reference transforms, header
+inversion, other header variants, frame masks and composition transforms return
+failure. Type 2 and SAF extraction remain unsupported. The safe frame range is
+zero through frame count minus one; the original wrapper's inclusive upper-bound
+defect is not reproduced. Source resources above 65,535 bytes are rejected,
+matching the script resource size limit and keeping snapshot and decode work
+bounded.
