@@ -34,7 +34,11 @@ func installGuestStreamClass(t *testing.T, client *Client, overrides map[uint32]
 		if err := client.writeWord(class.VTable+4+slot*4, installThumbAt(t, client, offset, code...)); err != nil {
 			t.Fatal(err)
 		}
-		offset += 16
+		// Keep the next routine past this one. Some behavioral fixtures need
+		// more than the old fixed eight-instruction allowance, and map order is
+		// deliberately unspecified.
+		offset += uint32(len(code)) * 2
+		offset = (offset + 3) &^ 3
 	}
 	instance, err := client.allocateJavaObject(class)
 	if err != nil {
@@ -113,6 +117,152 @@ func TestAGuestStreamThatEndsIsReportedRatherThanPadded(t *testing.T) {
 	}
 	if _, err := javaStreamReadInt(client, ctx, client.thread, []uint32{wrapper}); err == nil {
 		t.Error("readInt past the end of a stream the title wrote is not reported")
+	}
+}
+
+// A DataInputStream delegates the mark contract to the InputStream it wraps.
+// A guest subclass may implement that contract even though the platform's
+// abstract InputStream does not, so the wrapper must inspect and call the
+// guest's vtable rather than its own stream flag.
+func TestDataInputStreamForwardsMarkContractToAGuestStream(t *testing.T) {
+	client := fixtureClient(t)
+	input := installGuestStreamClass(t, client, map[uint32][]uint16{
+		javaStreamSlotRead: {0x2041, 0x4770},
+		// Store the read limit in the instance's first field, making both
+		// forwarding and the second argument observable from the host.
+		javaStreamSlotMark: {0x6880, 0x6001, 0x4770},
+		// Replace that field with 123, proving reset reached its own entry.
+		javaStreamSlotReset:         {0x217b, 0x6880, 0x6001, 0x4770},
+		javaStreamSlotMarkSupported: {0x2001, 0x4770},
+	})
+	class, err := client.preparePlatformJavaClass(javaDataInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := client.allocateJavaObject(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaWrapStream(client, nil, nil, []uint32{wrapper, input}); err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := client.javaStreamOf(wrapper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.Source == nil || stream.Source.Mark == 0 || stream.Source.Reset == 0 ||
+		stream.Source.MarkSupported == 0 {
+		t.Fatalf("guest mark entries were not retained: %+v", stream.Source)
+	}
+	if got, err := javaStreamMarkSupported(client, t.Context(), client.thread, []uint32{wrapper}); err != nil || got != 1 {
+		t.Fatalf("markSupported = %d, %v", got, err)
+	}
+	if _, err := javaStreamMark(client, t.Context(), client.thread, []uint32{wrapper, 32}); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	data, err := client.readWord(input + 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := client.readWord(data); err != nil || got != 32 {
+		t.Fatalf("guest mark field = %d, %v", got, err)
+	}
+	if _, err := javaStreamReset(client, t.Context(), client.thread, []uint32{wrapper}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if got, err := client.readWord(data); err != nil || got != 123 {
+		t.Fatalf("guest reset field = %d, %v", got, err)
+	}
+}
+
+// The wrapper and its guest source must have the same logical cursor when a
+// mark is forwarded. Asking a block override for more than the caller needs
+// would advance the guest past bytes still buffered on the host.
+func TestGuestBlockStreamDoesNotReadAheadOfTheWrapper(t *testing.T) {
+	client := fixtureClient(t)
+	input := installGuestStreamClass(t, client, map[uint32][]uint16{
+		// Record the requested count in the first instance field, then end.
+		javaStreamSlotReadBlock: {0x6880, 0x6003, 0x2000, 0x3801, 0x4770},
+	})
+	class, err := client.preparePlatformJavaClass(javaDataInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := client.allocateJavaObject(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaWrapStream(client, nil, nil, []uint32{wrapper, input}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := javaStreamRead(client, t.Context(), client.thread, []uint32{wrapper}); err != nil || got != ^uint32(0) {
+		t.Fatalf("read = %#x, %v", got, err)
+	}
+	data, err := client.readWord(input + 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := client.readWord(data); err != nil || got != 1 {
+		t.Fatalf("guest read request = %d, %v; want the wrapper's one byte", got, err)
+	}
+}
+
+// Reset must rewind both halves of a guest-backed wrapper. The guest owns the
+// source cursor, while the host can still hold a partial multi-byte read and
+// remember that the source reached EOF.
+func TestGuestStreamResetRepeatsTheMarkedBytes(t *testing.T) {
+	client := fixtureClient(t)
+	input := installGuestStreamClass(t, client, map[uint32][]uint16{
+		// Cursor 0 and 1 answer 'A' and 'B'; later reads answer -1. The cursor
+		// is the first instance field.
+		javaStreamSlotRead: {
+			0x6881, 0x6808, 0x2802, 0xd204, 0x4602, 0x3201,
+			0x600a, 0x3041, 0x4770, 0x2000, 0x3801, 0x4770,
+		},
+		// Save the cursor in the second instance field.
+		javaStreamSlotMark: {0x6882, 0x6813, 0x6053, 0x4770},
+		// Restore the cursor from the second instance field.
+		javaStreamSlotReset:         {0x6881, 0x684a, 0x600a, 0x4770},
+		javaStreamSlotMarkSupported: {0x2001, 0x4770},
+	})
+	class, err := client.preparePlatformJavaClass(javaDataInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := client.allocateJavaObject(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaWrapStream(client, nil, nil, []uint32{wrapper, input}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := javaStreamRead(client, t.Context(), client.thread, []uint32{wrapper}); err != nil || got != 'A' {
+		t.Fatalf("first read = %#x, %v", got, err)
+	}
+	if _, err := javaStreamMark(client, t.Context(), client.thread, []uint32{wrapper, 8}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaStreamReadInt(client, t.Context(), client.thread, []uint32{wrapper}); err == nil {
+		t.Fatal("a partial four-byte read did not reach EOF")
+	}
+	stream, err := client.javaStreamOf(wrapper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.Data)-stream.Read != 1 || stream.Data[stream.Read] != 'B' || !stream.Source.Ended {
+		t.Fatalf("partial read state = data %v read %d ended %v", stream.Data, stream.Read, stream.Source.Ended)
+	}
+
+	if _, err := javaStreamReset(client, t.Context(), client.thread, []uint32{wrapper}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.Data) != 0 || stream.Read != 0 || stream.Source.Ended {
+		t.Fatalf("reset state = data %v read %d ended %v", stream.Data, stream.Read, stream.Source.Ended)
+	}
+	if got, err := javaStreamRead(client, t.Context(), client.thread, []uint32{wrapper}); err != nil || got != 'B' {
+		t.Fatalf("read after reset = %#x, %v; want the byte at the mark", got, err)
 	}
 }
 
