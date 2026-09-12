@@ -118,13 +118,14 @@ distinguishes it from portrait packages.
 
 The MIDP
 [`TextField`](https://mirusu400.github.io/wipi-wiki/midp/java-api/javax/microedition/lcdui/TextField.md)
-contract makes the field limit and constraints authoritative. The SKT Host
-adapter exposes three targets whose contents and focus are observable: the
+contract makes the field limit and constraints authoritative. Native Host entry
+is a follow-up change. Its adapter can expose three targets whose contents and
+focus are observable: the
 current `TextBox`, the selected `TextField` in the current `Form`, and a
-focused `XTextField` owned by the visible canvas. A commit checks the same
+focused `XTextField` owned by the visible canvas. A commit must check the same
 object, display, selection or focus, and original value before replacing text.
-It enforces input constraints, counts the maximum in Java UTF-16 `char` units,
-repaints the target, and reports a Form item-state callback.
+It must enforce input constraints, count the maximum in Java UTF-16 `char` units,
+repaint the target, and report a Form item-state callback.
 
 A title-owned `com.xce.lcdui.TextComponent` exposes editing operations and a
 size, but no operation that reads its characters. The Host cannot form an
