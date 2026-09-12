@@ -18,6 +18,18 @@ import (
 
 const javaCalendarClass = "java/util/Calendar"
 
+type javaCalendar struct {
+	millis int64
+	// Field assignments normalize when the calendar is read, so successive
+	// month/day assignments do not normalize an intermediate invalid date.
+	pending *javaCalendarFields
+}
+
+type javaCalendarFields struct {
+	year, month, day, hour, minute, second, millisecond int
+	zone                                                *time.Location
+}
+
 // The field numbers the specification fixes. They are `static final`, so the
 // compiler has already put them in the caller's instruction stream and this is
 // only what the other side of that has to mean.
@@ -48,20 +60,86 @@ func javaCalendarGetInstance(
 	if err != nil {
 		return 0, err
 	}
-	client.javaRuntimeState().calendars[object] = client.clock.unixMillis()
+	client.javaRuntimeState().calendars[object] = javaCalendar{millis: client.clock.unixMillis()}
 	return object, nil
 }
 
 // javaCalendarOf answers the instant a calendar object stands for.
 func (client *Client) javaCalendarOf(object uint32) (time.Time, error) {
-	millis, ok := client.javaRuntimeState().calendars[object]
+	calendar, ok := client.javaRuntimeState().calendars[object]
 	if !ok {
 		return time.Time{}, fmt.Errorf("the object at %#x is not a calendar this platform built", object)
 	}
-	return time.UnixMilli(millis), nil
+	if fields := calendar.pending; fields != nil {
+		moment := time.Date(fields.year, time.Month(fields.month), fields.day, fields.hour,
+			fields.minute, fields.second+fields.millisecond/1000,
+			fields.millisecond%1000*int(time.Millisecond), fields.zone)
+		calendar.millis, calendar.pending = moment.UnixMilli(), nil
+		client.javaRuntimeState().calendars[object] = calendar
+	}
+	return time.UnixMilli(calendar.millis), nil
 }
 
-// javaCalendarGet is `get(int)`, slot 14: one component of the date. The
+func javaCalendarSet(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	calendar, ok := client.javaRuntimeState().calendars[arguments[0]]
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a calendar this platform built", arguments[0])
+	}
+	fields := calendar.pending
+	if fields == nil {
+		moment := time.UnixMilli(calendar.millis)
+		fields = &javaCalendarFields{moment.Year(), int(moment.Month()), moment.Day(), moment.Hour(),
+			moment.Minute(), moment.Second(), moment.Nanosecond() / int(time.Millisecond), moment.Location()}
+	}
+	value := int(int32(arguments[2]))
+	switch int32(arguments[1]) {
+	case javaCalendarYear:
+		fields.year = value
+	case javaCalendarMonth:
+		fields.month = value + 1
+	case javaCalendarDate:
+		fields.day = value
+	case javaCalendarDayOfWeek:
+		moment := time.Date(fields.year, time.Month(fields.month), fields.day, 0, 0, 0, 0, fields.zone)
+		fields.day += value - (int(moment.Weekday()) + 1)
+	case javaCalendarAMPM:
+		fields.hour = fields.hour%12 + value*12
+	case javaCalendarHour:
+		fields.hour = fields.hour/12*12 + value
+	case javaCalendarHourOfDay:
+		fields.hour = value
+	case javaCalendarMinute:
+		fields.minute = value
+	case javaCalendarSecond:
+		fields.second = value
+	case javaCalendarMillisecond:
+		fields.millisecond = value
+	default:
+		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass, "invalid Calendar field")
+	}
+	calendar.pending = fields
+	client.javaRun.calendars[arguments[0]] = calendar
+	return 0, nil
+}
+
+func javaCalendarGetTime(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	moment, err := client.javaCalendarOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	class, err := client.preparePlatformJavaClass(javaDateClass)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	client.javaRun.dates[object] = moment.UnixMilli()
+	return object, nil
+}
+
+// javaCalendarGet is `get(int)`, slots 14 and 19: one component of the date. The
 // components are read in the handset's own zone, which is the zone the clock
 // behind them runs in — a title showing a date shows the one on the handset.
 func javaCalendarGet(
@@ -145,18 +223,6 @@ func javaDateTime(
 	return uint32(uint64(millis)), nil
 }
 
-// javaCalendarZone is `Calendar.getTimeZone()`, slot 19. There is one zone
-// here — the one the clock behind every date runs in — so every calendar
-// answers the same object, and the offset it reports is that clock's own.
-func javaCalendarZone(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
-) (uint32, error) {
-	if _, err := client.javaCalendarOf(arguments[0]); err != nil {
-		return 0, err
-	}
-	return javaPlatformSingleton(javaTimeZoneClass)(client, nil, nil, nil)
-}
-
 // javaTimeZoneOffset is `TimeZone.getRawOffset()`, slot 11: milliseconds east
 // of GMT. It is read at the instant the clock stands at rather than fixed,
 // because a zone that observes daylight saving has two of them.
@@ -181,6 +247,6 @@ func javaCalendarSetTime(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a date this platform built", arguments[1])
 	}
-	runtime.calendars[arguments[0]] = millis
+	runtime.calendars[arguments[0]] = javaCalendar{millis: millis}
 	return 0, nil
 }

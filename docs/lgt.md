@@ -6232,14 +6232,32 @@ the selected mechanism remains `unsupported`. The local evidence is under
 `var/diagnostics/lgt-startup/`; existing user saves were not changed.
 
 The whole-char-array `String(char[])` constructor also uses the existing
-bounded character-array constructor path. A story-skip route reaches a later
-unsupported `Calendar` slot 28 during gameplay initialization. Calendar
-compatibility is outside this startup/authentication repair; reaching the menu
-and story does not establish full gameplay support.
+bounded character-array constructor path. Continuing through story skip exposed
+Calendar slot 28 (`set(int,int)`), slot 22 (`getTime()`), and StringBuffer
+slots 30/34 (`insert(int,String)` / `insert(int,int)`). These calls are now
+implemented. Calendar field changes remain pending until read, preserving
+sequential month/day assignments across temporarily invalid dates; `getTime`
+returns an independent Date snapshot. Buffer insertion uses UTF-16 offsets and
+validates the insertion range and resulting length.
+
+Calendar slot 19 was previously inferred to be `getTimeZone()`. The native
+callers at return addresses `0xc5588` and `0x5bbc4` explicitly pass YEAR (1),
+then MONTH (2), DATE (5), and other field IDs, and consume integers. Returning
+a TimeZone reference corrupted date fields even during startup. Slot 19 now
+maps to `get(int)`; slot 14 remains supported for the smaller layout. This
+corrects the older inference recorded above. The field and Date contracts were
+checked against the [WIPI Calendar specification](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/util/Calendar).
+The specification defines method behavior, while the native call sites establish
+the vendor slot numbers.
+
+The story-skip CLI route now completes 6,500 ticks, reaches the shop with the
+expected March 2 date, and responds to right input. This is an initial gameplay
+check, not a full playthrough or proof of all save/progression paths.
 
 Chromium and WebKit both passed
 real-page startup over copied existing saves, confirm input through the menu
-into the story, and reload/reconnection, with zero page errors. An explicit
+into the story, story skip into the shop, directional selection, and
+reload/reconnection, with zero page errors. An explicit
 `-no-auth` CLI control also reaches the menu, confirming that scheduler repair,
 rather than a selected offline adapter, resolves this authentication wait.
 

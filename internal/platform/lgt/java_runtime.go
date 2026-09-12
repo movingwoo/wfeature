@@ -110,7 +110,7 @@ type javaRuntime struct {
 	// calendars is the instant each java/util/Calendar stands for, and sinks
 	// what each java/io/ByteArrayOutputStream has been written; see
 	// java_calendar.go and java_stream.go.
-	calendars map[uint32]int64
+	calendars map[uint32]javaCalendar
 	sinks     map[uint32][]byte
 	// wrapped is what a java/io/DataOutputStream writes through to: the sink
 	// object it was built on. A wrapper stands for the same open sink, so it
@@ -190,7 +190,7 @@ func newJavaRuntime() *javaRuntime {
 		threads:     map[uint32]*javaThread{},
 		monitors:    map[uint32]*javaMonitor{},
 		vectors:     map[uint32][]uint32{},
-		calendars:   map[uint32]int64{},
+		calendars:   map[uint32]javaCalendar{},
 		sinks:       map[uint32][]byte{},
 		wrapped:     map[uint32]uint32{},
 		sinkFiles:   map[uint32]uint32{},
