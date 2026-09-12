@@ -72,7 +72,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0x8c` | `0x0041aaa0` | I | Format three scalar arguments into destination resource using format resource. |
 | `0x8d` | `0x0041ab80` | I | Format four scalar arguments into destination resource using format resource. |
 | `0x8e` | `0x0041ac70` | I | Format five scalar arguments into destination resource using format resource, same core 0x41a500. |
-| `0x8f` | `0x0041ad70` | M | Begin host input/dialog operation with resource argument; stops timers via 0x41ae10. Exact UI contract unresolved. |
+| `0x8f` | `0x0041ad70` | I | Open native text dialog (prompt resource, initial/destination resource); stop all timers and yield. Host completion preserves cancel text or atomically commits at most 32 EUC-KR bytes, then invokes system callback 6 with parameter 2. |
 | `0x90` | `0x0041ae30` | P | Play resource audio through original sound wrapper; wrapper type/length precede payload. |
 | `0x91` | `0x0040be40` | I | Stop audio. |
 | `0x92` | `0x0041aeb0` | I | Pass resource audio data to original empty function 0x40bf80; resource is validated but no effect in inspected runtime. |

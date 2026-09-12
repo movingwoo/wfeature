@@ -76,3 +76,31 @@ func TestCodeCannotBranchIntoResources(t *testing.T) {
 		t.Fatal("branch into data accepted")
 	}
 }
+
+type yieldingServices struct{}
+
+func (yieldingServices) Call(_ byte, vm *VM) error {
+	vm.Yield()
+	return nil
+}
+
+func TestYieldEndsOnlyCurrentCallback(t *testing.T) {
+	program := &Program{
+		Data:      []byte{0, 0x80, 5, 7, 0x0a, 0, 0xff, 5, 9, 0x0a, 0, 0xff},
+		CodeStart: 1,
+		Variables: []Variable{{Mutable: true, Values: []int16{0}}},
+	}
+	vm := New(program, yieldingServices{})
+	if err := vm.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if vm.Exited() || vm.Value(0, 0) != 0 {
+		t.Fatal("yield continued the callback or marked the program exited")
+	}
+	if err := vm.Run(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if vm.Exited() || vm.Value(0, 0) != 9 {
+		t.Fatal("a fresh callback did not run after yield")
+	}
+}

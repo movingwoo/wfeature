@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/session"
+	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
 func TestTextInputCommitOwnershipAndRetry(t *testing.T) {
@@ -84,6 +86,24 @@ func TestTextInputStaleCommitCannotBecomeCurrentAgain(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("stale closure calls = %d, want 1", calls)
+	}
+}
+
+func TestTextInputStaleCancelCannotConsumeCurrentEdit(t *testing.T) {
+	game := &session.Session{}
+	runner := &sessionRunner{game: game, gameCtx: context.Background(), outText: make(chan outboundMessage, 1)}
+	calls := 0
+	runner.textInputGame, runner.textInputID = game, 10
+	runner.textInput = &backend.TextInput{
+		Commit: func(context.Context, string) error { return nil },
+		Cancel: func(context.Context) error { calls++; return nil },
+	}
+	runner.handleTextInput(clientMessage{Kind: clientText, Action: "cancel", ID: 11, Edit: 9})
+	if reply := textInputReply(t, runner); reply.Kind != serverResult || reply.ID != 11 {
+		t.Fatalf("stale cancel reply = %+v", reply)
+	}
+	if calls != 0 || runner.textInput == nil || runner.textInputID != 10 {
+		t.Fatal("stale cancel consumed the current edit")
 	}
 }
 
@@ -332,4 +352,161 @@ func TestTextInputSessionRoundTripAndResume(t *testing.T) {
 	}
 	send(t, connection, clientMessage{Kind: clientStop, ID: 11})
 	expectMessage(t, connection, serverResult)
+}
+
+func scriptTextInputArchive(t *testing.T, callback []byte) []byte {
+	t.Helper()
+	data := make([]byte, 52)
+	data[0] = 1
+	copy(data[10:26], "Input fixture")
+	entry := func(index int, code ...byte) {
+		binary.LittleEndian.PutUint16(data[28+index*2:], uint16(len(data)))
+		data = append(data, code...)
+	}
+	// Code after 0x8f must not run: it would set scratch variable 16.
+	entry(0, 5, 0, 5, 1, 0x8f, 5, 9, 0x0a, 16, 0xff)
+	entry(6, callback...)
+	vd := len(data)
+	for range 17 {
+		data = append(data, 1, 1, 0, 0)
+	}
+	vi := len(data)
+	rd := len(data)
+	resources := [][]byte{[]byte("First prompt\x00"), []byte("initial\x00"), []byte("Second prompt\x00"), []byte("next\x00")}
+	for index, resource := range resources {
+		mutable := byte(0)
+		if index == 1 || index == 3 {
+			mutable = 1
+		}
+		data = append(data, mutable, 0, byte(len(resource)), byte(len(resource)>>8))
+	}
+	ri := len(data)
+	for _, resource := range resources {
+		data = append(data, resource...)
+	}
+	for index, value := range []int{vd, vi, rd, ri} {
+		binary.LittleEndian.PutUint16(data[44+index*2:], uint16(value))
+	}
+
+	var descriptor []byte
+	for _, value := range []string{"application/x-gnex-sgs", "SGS"} {
+		descriptor = binary.LittleEndian.AppendUint32(descriptor, uint32(len(value)))
+		descriptor = append(descriptor, value...)
+	}
+	var packed bytes.Buffer
+	writer := zip.NewWriter(&packed)
+	for name, value := range map[string][]byte{"fixture.mod": descriptor, "fixture.sgs": data} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return packed.Bytes()
+}
+
+func scriptTextInputConnection(t *testing.T, callback []byte) *wsproto.Conn {
+	t.Helper()
+	root := t.TempDir()
+	gameRoot := filepath.Join(root, "games")
+	if err := os.MkdirAll(gameRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gameRoot, "input.zip"), scriptTextInputArchive(t, callback), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, Options{GameRoot: gameRoot, SaveRoot: filepath.Join(root, "savedata"), LogRoot: filepath.Join(root, "logs")})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	return connection
+}
+
+func TestScriptTextInputAutomaticallyOpensCompletesAndSurvivesResume(t *testing.T) {
+	// Completion immediately requests the next dialog. The instruction after
+	// it remains unreachable because 0x8f yields this callback too.
+	connection := scriptTextInputConnection(t, []byte{5, 2, 5, 3, 0x8f, 5, 8, 0x0a, 16, 0xff})
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/input.zip", ID: 1})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil || started.Started.Token == "" {
+		t.Fatalf("start = %+v", started)
+	}
+	expectMessage(t, connection, serverTextInput)
+
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 2})
+	first := expectMessage(t, connection, serverResult)
+	if first.TextInput == nil || first.TextInput.Prompt != "First prompt" || first.TextInput.Text != "initial" || first.TextInput.MaxBytes != 32 {
+		t.Fatalf("first input = %+v", first.TextInput)
+	}
+	// A distinct open receives a distinct capability. Browser-side duplicate
+	// suppression protects a live draft, while this keeps a late response's
+	// cancellation from consuming the replacement edit.
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 3})
+	reopened := expectMessage(t, connection, serverResult)
+	if reopened.TextInput == nil || reopened.TextInput.Edit == first.TextInput.Edit {
+		t.Fatalf("reopened input = %+v, first = %+v", reopened.TextInput, first.TextInput)
+	}
+	first = reopened
+
+	send(t, connection, clientMessage{Kind: clientText, Action: "commit", Edit: first.TextInput.Edit, Text: "complete", ID: 4})
+	expectMessage(t, connection, serverResult)
+	expectMessage(t, connection, serverTextInput)
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 5})
+	second := expectMessage(t, connection, serverResult)
+	if second.TextInput == nil || second.TextInput.Prompt != "Second prompt" || second.TextInput.Edit == first.TextInput.Edit {
+		t.Fatalf("second input = %+v", second.TextInput)
+	}
+	// A late close from the prior dialog is acknowledged without touching the
+	// next transaction or replacing its edit token.
+	send(t, connection, clientMessage{Kind: clientText, Action: "cancel", Edit: first.TextInput.Edit, ID: 6})
+	expectMessage(t, connection, serverResult)
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 7})
+	stillSecond := expectMessage(t, connection, serverResult)
+	if stillSecond.TextInput == nil || stillSecond.TextInput.Prompt != "Second prompt" || stillSecond.TextInput.Edit == second.TextInput.Edit {
+		t.Fatalf("current input did not survive stale cancellation: %+v", stillSecond.TextInput)
+	}
+
+	// Parking leaves the guest modal pending. The new page needs a fresh edge,
+	// while the old page's Host edit is discarded.
+	send(t, connection, clientMessage{Kind: clientPark, ID: 8})
+	expectMessage(t, connection, serverResult)
+	send(t, connection, clientMessage{Kind: clientResume, Token: started.Started.Token, ID: 9})
+	expectMessage(t, connection, serverStarted)
+	expectMessage(t, connection, serverTextInput)
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 10})
+	resumed := expectMessage(t, connection, serverResult)
+	if resumed.TextInput == nil || resumed.TextInput.Prompt != "Second prompt" {
+		t.Fatalf("resumed input = %+v", resumed.TextInput)
+	}
+}
+
+func TestScriptTextInputCallbackExitEndsTheHostRequestOnce(t *testing.T) {
+	connection := scriptTextInputConnection(t, []byte{0x46})
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/input.zip", ID: 1})
+	expectMessage(t, connection, serverStarted)
+	expectMessage(t, connection, serverTextInput)
+	send(t, connection, clientMessage{Kind: clientText, Action: "open", ID: 2})
+	opened := expectMessage(t, connection, serverResult)
+	if opened.TextInput == nil {
+		t.Fatal("input did not open")
+	}
+	send(t, connection, clientMessage{Kind: clientText, Action: "cancel", Edit: opened.TextInput.Edit, ID: 3})
+	if ended := expectMessage(t, connection, serverExited); ended.Message != "the script requested exit" {
+		t.Fatalf("ending = %+v", ended)
+	}
+	answer := expectMessage(t, connection, serverError)
+	if answer.ID != 3 || !answer.Exited {
+		t.Fatalf("cancel answer = %+v", answer)
+	}
 }

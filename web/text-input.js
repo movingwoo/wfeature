@@ -8,29 +8,44 @@ const explain = error => {
   }
 };
 
+const defaultLabel = "게임에 입력할 내용";
+
 export const createTextInputDialog = ({ document, getSession, releaseInput }) => {
   const node = name => document.getElementById(`text-input-${name}`);
-  const dialog = node("dialog"), status = node("status"), single = node("value"), multi = node("multiline");
-  const apply = node("apply"), cancel = node("cancel");
-  let generation = 0, owner = null, edit = null, field = single, composing = false, busy = false;
+  const dialog = node("dialog"), status = node("status"), label = node("label");
+  const single = node("value"), multi = node("multiline"), apply = node("apply"), cancel = node("cancel");
+  let generation = 0, opening = 0, detachedOpening = 0;
+  let owner = null, edit = null, field = single, composing = false, busy = false;
   const discard = (connection, token) => {
     if (connection && token != null) void connection.cancelTextInput(token).catch(() => {});
   };
-  const close = () => {
+  const finish = cancelGuest => {
     generation++;
-    discard(owner, edit);
+    if (!cancelGuest && opening !== 0) detachedOpening = opening;
+    opening = 0;
+    if (cancelGuest) discard(owner, edit);
     owner = null;
     edit = null;
+    label.textContent = defaultLabel;
     single.value = multi.value = "";
     composing = busy = false;
     if (dialog.open) dialog.close();
   };
+  const close = () => finish(true);
+  // Parking or losing ownership removes only this page's editor. The native
+  // guest dialog remains pending and is announced to the resumed page.
+  const detach = () => finish(false);
   const open = async () => {
-    close();
-    const current = generation, connection = getSession();
+    // The server emits one edge per native request, but a duplicate event or a
+    // settings click must not replace the token behind an active draft.
+    if (dialog.open || opening !== 0) return;
+    const current = ++generation, connection = getSession();
     if (!connection) return;
+    opening = current;
     owner = connection;
     releaseInput();
+    label.textContent = defaultLabel;
+    single.value = multi.value = "";
     single.hidden = false;
     multi.hidden = true;
     field = single;
@@ -41,9 +56,15 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     dialog.showModal();
     try {
       const { textInput } = await connection.openTextInput();
-      if (current !== generation) { discard(connection, textInput?.edit); return; }
+      if (current !== generation) {
+        if (current === detachedOpening) detachedOpening = 0;
+        else discard(connection, textInput?.edit);
+        return;
+      }
       if (!textInput || !Number.isSafeInteger(textInput.edit)) throw new Error("invalid text input response");
       edit = textInput.edit;
+      // Guest prompt text is always assigned as text, never parsed as markup.
+      label.textContent = textInput.prompt || defaultLabel;
       // Password contents must never be placed in a visible textarea.
       field = textInput.multiline && !textInput.password ? multi : single;
       single.hidden = field !== single;
@@ -53,13 +74,17 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       field.value = textInput.text;
       field.disabled = false;
       apply.disabled = false;
-      status.textContent = textInput.maxLength > 0
-        ? `최대 ${textInput.maxLength}칸(한글과 영문·숫자·기본 기호는 1칸, 이모지는 2칸 이상일 수 있습니다). 입력칸을 눌러 키보드를 여세요.`
-        : "입력칸을 눌러 키보드를 여세요.";
+      status.textContent = textInput.maxBytes > 0
+        ? `최대 ${textInput.maxBytes}바이트입니다. 입력칸을 눌러 키보드를 여세요.`
+        : textInput.maxLength > 0
+          ? `최대 ${textInput.maxLength}칸(한글과 영문·숫자·기본 기호는 1칸, 이모지는 2칸 이상일 수 있습니다). 입력칸을 눌러 키보드를 여세요.`
+          : "입력칸을 눌러 키보드를 여세요.";
       // Phones may require a fresh tap after the asynchronous response.
       field.focus();
     } catch (error) {
       if (current === generation) status.textContent = explain(error);
+    } finally {
+      if (opening === current) opening = 0;
     }
   };
   apply.addEventListener("click", async () => {
@@ -81,6 +106,13 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     }
   });
   cancel.addEventListener("click", close);
+  dialog.addEventListener("click", event => {
+    const bounds = dialog.getBoundingClientRect();
+    const backdrop = event.target === dialog &&
+      (event.clientX < bounds.left || event.clientX > bounds.right ||
+       event.clientY < bounds.top || event.clientY > bounds.bottom);
+    if (backdrop && !composing) close();
+  });
   dialog.addEventListener("cancel", event => {
     event.preventDefault();
     if (!composing) close();
@@ -90,5 +122,5 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
   // Keep dialog buttons and IME keys out of the emulator's document listener.
   dialog.addEventListener("keydown", event => event.stopPropagation());
   dialog.addEventListener("keyup", event => event.stopPropagation());
-  return { open, close };
+  return { open, close, detach };
 };

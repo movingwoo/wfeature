@@ -80,6 +80,18 @@ SGS receives one activation per key press, without a second event on release.
 Numeric keys, star, hash, directions, fire and function keys map to the script
 runtime's key codes. Pointer events and cheats remain unavailable.
 
+Service `0x8f` opens the browser's native text dialog automatically. Its older
+stack operand is a prompt resource; the top operand is both the initial value
+and destination resource. Both are NUL-terminated EUC-KR strings. Opening stops
+all three script timers and yields the current callback, and handset keys remain
+blocked while the modal request is pending. Commit accepts at most 32 bytes in
+the guest EUC-KR encoding and rejects an unencodable character, an embedded NUL,
+or an oversized value before changing the resource. Cancel preserves the exact
+initial resource bytes. Both outcomes consume the request once and start system
+callback 6 with parameter 2; that callback may exit or synchronously open the
+next dialog. A parked session retains the pending guest request and presents it
+again after the page resumes.
+
 ## Graphics, sound and storage
 
 The framebuffer is indexed RGB332 and is presented only when the script

@@ -554,6 +554,7 @@ const openSession = async handlers => {
     onFrame: bitmap => { if (playing()) drawFrame(bitmap); else bitmap.close(); },
     onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
+    onTextInput: () => { if (playing()) void textInputDialog.open(); },
     onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
     onStats: stats => recordSessionStats(stats),
   });
@@ -563,7 +564,10 @@ const openSession = async handlers => {
 
 const sessionStateChanged = state => {
   recordEvent(`session state: ${state}`);
-  if (state !== "playing") textInputDialog.close();
+  if (state !== "playing") {
+    if (["parked", "offline", "connecting", "occupied"].includes(state)) textInputDialog.detach();
+    else textInputDialog.close();
+  }
   document.getElementById("text-input-toggle")?.classList.toggle("hidden", state !== "playing");
   if (state !== "playing" && state !== "starting") {
     releaseInput();

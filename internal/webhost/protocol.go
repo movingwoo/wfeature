@@ -174,7 +174,9 @@ type serverMessage struct {
 type textInputMessage struct {
 	Edit      uint64 `json:"edit"`
 	Text      string `json:"text"`
+	Prompt    string `json:"prompt,omitempty"`
 	MaxLength int    `json:"maxLength"`
+	MaxBytes  int    `json:"maxBytes,omitempty"`
 	Multiline bool   `json:"multiline"`
 	Password  bool   `json:"password"`
 	InputMode string `json:"inputMode"`
@@ -217,16 +219,17 @@ func (result *cheatResult) normalize() *cheatResult {
 
 // Message kinds the server may send.
 const (
-	serverReady    = "ready"
-	serverStarted  = "started"
-	serverExited   = "exited"
-	serverError    = "error"
-	serverAudio    = "audio"
-	serverStats    = "stats"
-	serverResult   = "result"
-	serverResumed  = "resumed"
-	serverDetached = "detached"
-	serverVibrate  = "vibrate"
+	serverReady     = "ready"
+	serverStarted   = "started"
+	serverExited    = "exited"
+	serverError     = "error"
+	serverAudio     = "audio"
+	serverStats     = "stats"
+	serverResult    = "result"
+	serverResumed   = "resumed"
+	serverDetached  = "detached"
+	serverVibrate   = "vibrate"
+	serverTextInput = "textInput"
 )
 
 // vibrateMessage is one request of the handset's motor.

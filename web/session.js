@@ -25,8 +25,8 @@ export const sessionAvailable = () =>
   typeof WebSocket === "function" && typeof createImageBitmap === "function";
 
 export class GameSession {
-  // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onStarted(info), onExited(reason),
-  // onError(message), onStats(stats), onClosed().
+  // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onTextInput(),
+  // onStarted(info), onExited(reason), onError(message), onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
     this.socket = null;
@@ -151,6 +151,9 @@ export class GameSession {
         // rather than every tick. What to do with it — including nothing —
         // belongs to the page; see vibrate.js.
         this.handlers.onVibrate?.(message.vibrate ?? {});
+        break;
+      case "textInput":
+        this.handlers.onTextInput?.();
         break;
       case "error":
         if (message.exited) this.handlers.onExited?.(message.message ?? "");

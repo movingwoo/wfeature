@@ -135,16 +135,17 @@ type sessionRunner struct {
 	server        *Server
 	connection    *wsproto.Conn
 
-	handoffs      chan sessionHandoff
-	done          chan struct{}
-	connectionCtx context.Context
-	heldKeys      map[int32]struct{}
-	heldPointer   *clientMessage
-	textInput     *backend.TextInput
-	textInputGame *session.Session
-	textInputID   uint64
-	commands      chan clientMessage
-	frames        chan pendingFrame
+	handoffs         chan sessionHandoff
+	done             chan struct{}
+	connectionCtx    context.Context
+	heldKeys         map[int32]struct{}
+	heldPointer      *clientMessage
+	textInput        *backend.TextInput
+	textInputGame    *session.Session
+	textInputID      uint64
+	textInputRequest uint64
+	commands         chan clientMessage
+	frames           chan pendingFrame
 
 	// outText and outFrames are what the writer goroutine drains. They are
 	// separate because their backlogs mean opposite things. Text is small and
@@ -408,6 +409,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			r.send(serverMessage{Kind: serverExited, Message: progress.ExitReason})
 			continue
 		}
+		r.flushTextInputRequest()
 
 		// The guest's own next deadline is what paces the game. Waiting on the
 		// command channel rather than sleeping means a key does not have to
@@ -492,6 +494,7 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 }
 
 func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
+	defer r.flushTextInputRequest()
 	switch message.Kind {
 	case clientStart:
 		r.startGame(ctx, message)
@@ -712,6 +715,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		return
 	}
 	r.game = started
+	r.textInputRequest = 0
 	r.label = label
 	r.platform = summary.Platform
 	r.presented = 0
@@ -867,6 +871,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	}
 
 	r.game = parked.game
+	r.textInputRequest = 0
 	r.saveDirectory = parked.saveDirectory
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
@@ -910,6 +915,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 
 func (r *sessionRunner) stopGame() {
 	r.clearTextInput()
+	r.textInputRequest = 0
 	r.server.releaseSession(r.token, r)
 	clear(r.heldKeys)
 	r.heldPointer = nil

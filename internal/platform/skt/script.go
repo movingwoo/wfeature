@@ -31,20 +31,22 @@ const scriptStandaloneRuntimeMode byte = 2
 // ScriptSession drives SGS events on the host's session goroutine. Guest
 // timers use a virtual clock and cannot create unbounded goroutines.
 type ScriptSession struct {
-	vibrator      backend.Vibrator
-	overlayPolicy byte
-	audio         *backend.Audio
-	sound         backend.AudioHandle
-	vm            *sgsvm.VM
-	graphics      *scriptGraphics
-	options       ScriptOptions
-	timers        [3]scriptTimer
-	clock         time.Duration
-	last          time.Time
-	paused        bool
-	closed        bool
-	runtimeMode   byte
-	random        *rand.Rand
+	vibrator        backend.Vibrator
+	overlayPolicy   byte
+	audio           *backend.Audio
+	sound           backend.AudioHandle
+	vm              *sgsvm.VM
+	graphics        *scriptGraphics
+	options         ScriptOptions
+	timers          [3]scriptTimer
+	clock           time.Duration
+	last            time.Time
+	paused          bool
+	closed          bool
+	runtimeMode     byte
+	random          *rand.Rand
+	textInput       *scriptTextInput
+	textInputSerial uint64
 }
 
 func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (*ScriptSession, error) {
@@ -113,7 +115,7 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 	if elapsed < 0 || elapsed > 250*time.Millisecond {
 		return 0, fmt.Errorf("SGS elapsed tick outside 0..250ms")
 	}
-	if s.closed || s.paused || s.Exited() {
+	if s.closed || s.paused || s.Exited() || s.textInput != nil {
 		return 16 * time.Millisecond, nil
 	}
 	speed := backend.ClampSpeed(s.options.Speed)
@@ -164,7 +166,7 @@ func (s *ScriptSession) Close() error {
 	return s.event(context.Background(), 1, 0)
 }
 func (s *ScriptSession) SendKey(ctx context.Context, action string, code int32) error {
-	if s.closed || s.paused || s.Exited() {
+	if s.closed || s.paused || s.Exited() || s.textInput != nil {
 		return nil
 	}
 	if action != "press" {
@@ -280,6 +282,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		clear(resource.Data[:size])
 	case 0x8a, 0x8b, 0x8c, 0x8d, 0x8e:
 		return formatScriptResource(vm, int(op-0x89))
+	case 0x8f:
+		return s.beginTextInput(vm)
 	case 0x90:
 		resource := vm.Resource(int(vm.Pop()))
 		data := resource.Data
@@ -440,7 +444,7 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 }
 
 var scriptArguments = map[byte]int{
-	0x89: 3, 0xf0: 4, 0xf1: 2,
+	0x89: 3, 0x8f: 2, 0xf0: 4, 0xf1: 2,
 	0xcf: 4, 0xd0: 4,
 	0xcb: 5, 0xcc: 5,
 	0xce: 4,

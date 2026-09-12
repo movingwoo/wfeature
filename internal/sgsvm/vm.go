@@ -122,6 +122,10 @@ func (vm *VM) charge(n int) bool {
 func (vm *VM) Error() error { return vm.err }
 func (vm *VM) Exited() bool { return vm.exited }
 
+// Yield ends only the current callback. A later callback starts with fresh
+// execution state, unlike the guest exit instruction which ends the program.
+func (vm *VM) Yield() { vm.ended = true }
+
 func (vm *VM) Fail(err error) {
 	if vm.err == nil {
 		vm.err = err

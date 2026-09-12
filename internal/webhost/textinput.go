@@ -12,6 +12,30 @@ func (r *sessionRunner) clearTextInput() {
 	r.textInputGame = nil
 }
 
+// flushTextInputRequest turns the script runtime's standing native-dialog
+// request into one page event. The page opens through the ordinary request path
+// afterwards, so the edit token and snapshot still have one owner.
+func (r *sessionRunner) flushTextInputRequest() {
+	if r.game == nil {
+		return
+	}
+	request := r.game.TextInputRequest()
+	if request == 0 || request == r.textInputRequest {
+		return
+	}
+	r.textInputRequest = request
+	r.send(serverMessage{Kind: serverTextInput})
+}
+
+func (r *sessionRunner) sendTextInput(message clientMessage) {
+	edit := r.textInput
+	r.send(serverMessage{Kind: serverResult, ID: message.ID, TextInput: &textInputMessage{
+		Edit: r.textInputID, Text: edit.Text, Prompt: edit.Prompt,
+		MaxLength: edit.MaxLength, MaxBytes: edit.MaxBytes,
+		Multiline: edit.Multiline, Password: edit.Password, InputMode: edit.InputMode,
+	}})
+}
+
 func (r *sessionRunner) handleTextInput(message clientMessage) {
 	fail := func(err error) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
@@ -35,10 +59,7 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 		}
 		r.textInputID++
 		r.textInput, r.textInputGame = edit, r.game
-		r.send(serverMessage{Kind: serverResult, ID: message.ID, TextInput: &textInputMessage{
-			Edit: r.textInputID, Text: edit.Text, MaxLength: edit.MaxLength,
-			Multiline: edit.Multiline, Password: edit.Password, InputMode: edit.InputMode,
-		}})
+		r.sendTextInput(message)
 	case "commit":
 		if r.textInput == nil || r.textInputGame != r.game || message.Edit != r.textInputID {
 			fail(backend.ErrTextInputChanged)
@@ -65,9 +86,25 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 		r.clearTextInput()
 		r.send(serverMessage{Kind: serverResult, ID: message.ID})
 	case "cancel":
-		if message.Edit == r.textInputID {
-			r.clearTextInput()
+		// Late cancellation of an old page token is deliberately harmless. It
+		// must not consume a newer native dialog that now owns the session.
+		if r.textInput == nil || r.textInputGame != r.game || message.Edit != r.textInputID {
+			r.send(serverMessage{Kind: serverResult, ID: message.ID})
+			return
 		}
+		if r.textInput.Cancel != nil {
+			if err := r.textInput.Cancel(r.gameCtx); err != nil {
+				r.clearTextInput()
+				switch {
+				case errors.Is(err, session.ErrExited):
+					r.endTextInputOnExit(message)
+				default:
+					fail(err)
+				}
+				return
+			}
+		}
+		r.clearTextInput()
 		r.send(serverMessage{Kind: serverResult, ID: message.ID})
 	default:
 		fail(backend.ErrInvalidTextInput)

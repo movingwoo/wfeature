@@ -350,3 +350,11 @@ test("a guest exit during text commit settles the request and ends the session",
   });
   assert.equal(session.pending.size, 0);
 });
+
+
+test("native text request events are delivered independently of request replies", async () => {
+  let requests = 0;
+  const { socket } = await openFakeSession({ onTextInput: () => requests++ });
+  socket.deliver({ kind: "textInput" });
+  assert.equal(requests, 1);
+});

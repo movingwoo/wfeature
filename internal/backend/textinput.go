@@ -26,14 +26,23 @@ const MaxTextInputBytes = 64 << 10
 // platforms remain responsible for their guest-thread synchronization.
 type TextInput struct {
 	Text string
+	// Prompt is optional guest text describing the requested value. Hosts must
+	// render it as text, never as markup.
+	Prompt string
 	// MaxLength is the field limit in platform character units; zero is unlimited.
 	// Java fields count UTF-16 code units, so a supplementary character uses two.
 	MaxLength int
+	// MaxBytes is a limit in the guest platform's encoded bytes, not UTF-8
+	// transport bytes. A Host may describe it, but the platform must enforce it.
+	MaxBytes  int
 	Multiline bool
 	Password  bool
 	// InputMode is a browser keyboard hint, not a substitute for validation.
 	InputMode string
 	Commit    func(context.Context, string) error
+	// Cancel is optional. Platforms whose native dialog reports cancellation
+	// use it to complete the guest callback without changing the field.
+	Cancel func(context.Context) error
 }
 
 // ValidateTextInput checks transport-level invariants. Platforms enforce their

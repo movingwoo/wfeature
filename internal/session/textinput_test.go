@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 )
 
@@ -30,5 +31,25 @@ func TestTextInputCommitReportsGuestExit(t *testing.T) {
 	}
 	if reason := running.ExitReason(); !strings.Contains(reason, want.Error()) {
 		t.Fatalf("exit reason = %q, want %q", reason, want.Error())
+	}
+}
+
+func TestTextInputCancelUsesTheSameOwnershipGuard(t *testing.T) {
+	platform := &ktf.Session{}
+	running := &Session{ktf: platform}
+	called := 0
+	cancel := func(context.Context) error {
+		called++
+		return nil
+	}
+	if err := running.cancelTextInput(context.Background(), platform, cancel); err != nil {
+		t.Fatal(err)
+	}
+	running.ktf = &ktf.Session{}
+	if err := running.cancelTextInput(context.Background(), platform, cancel); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("stale cancel error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("cancel calls = %d, want 1", called)
 	}
 }
