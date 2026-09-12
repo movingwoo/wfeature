@@ -1,7 +1,7 @@
 # SGS corpus acceptance on 2026-09-12
 
-This record covers the first completed route in the twelve-ID local SGS
-corpus. It identifies the archive only by the stable ID and SHA-256 recorded in
+This record covers directed play routes and controlled save/reopen checks in
+the twelve-ID local SGS corpus. It identifies the archive only by the stable ID and SHA-256 recorded in
 the ignored manifest. Archives, saves, screenshots, and the manifest remain
 outside Git.
 
@@ -131,3 +131,74 @@ and `15b7e36c52e318dd9b2b67d44da9a8e16e6b44b6a94a5bbaaf95c6f19cd53646`.
 This result completes the main-play, save/load, and exit/restart cells for ID
 09 only. It does not establish audible output, fidelity, every saved field, or
 any acceptance dimension for the other eleven IDs.
+
+## ID 01-05 directed routes
+
+These routes resolve archives through the same ignored manifest and verify each
+archive against its recorded SHA-256 before opening it. Each session uses a new
+empty save directory. The session advances for 19200 ms before the first press,
+then advances for 2400 ms after each press. Thus press zero occurs at 19200 ms,
+press one at 21600 ms, and press number *n* at `19200 + 2400n` ms. The cited
+capture is taken at `21600 + 2400n` ms. These historical diagnostics use press
+events without paired release events.
+
+| ID | Press sequence | Active-play capture |
+| --- | --- | --- |
+| 01 | Fire, Fire, `1`, Fire, `5`, Fire, Fire, Fire | `sgs-route-reconstruct-01-inferred-randomcompat-mode2-20260912/key7.png` at 38400 ms |
+| 02 | Fire x10, `#`, Fire, `1`, `5`, Right, Left | `sgs-route-reconstruct-02-randomcompat-mode2-20260912/key15.png` at 57600 ms |
+| 03 | Fire, `1`, Fire, `5`, `5`, Right, `5`, Fire x4, Left, `5` | `sgs-route-reconstruct-03-randomcompat-mode2-20260912/key12.png` at 50400 ms |
+| 04 | Fire x10, `#`, Fire, `1`, `5`, Right, Left | `sgs-route-reconstruct-04-randomcompat-mode2-20260912/key15.png` at 57600 ms |
+| 05 | Fire, `1`, Fire, `5`, Fire x3, `#`, Fire, Right, Left, Up, Down, `2`, `4`, `6`, `8`, `5`, `1`, Fire | `sgs-route-reconstruct-05-generic-randomcompat-mode2-20260912/key6.png` at 36000 ms |
+
+All five current sessions reach a visibly interactive playfield and close
+without a start, advance, input, or close error. For ID 05, the first four
+presses are sufficient to enter the playfield; later directional and action
+inputs visibly change its state.
+
+The ID 01 route reconstructs a previously unrecorded input sequence from its
+archived frame series. Its captures match the archived PNG bytes through
+press four, including the opening, story, stage, and ready transitions. The
+first difference is press five, where the corrected random sequence selects a
+different scene outcome. The reconstructed route still reaches the active
+playfield by press seven. ID 02-04 use the exact input arrays preserved in the
+older diagnostics, now resolved by stable manifest ID instead of filesystem
+walk order.
+
+These artifacts remain ignored under `var/acceptance`; no archive or screenshot
+is added to Git. This evidence establishes directed main play for IDs 01-05.
+It does not yet establish user-visible save/load behavior, exit/restart from a
+saved checkpoint, or audible output for those IDs.
+
+## ID 01-05 save and lifecycle boundary
+
+Save-boundary tracing and controlled reopen runs distinguish initialization
+from progress:
+
+| ID | Observed save behavior | Controlled visible result |
+| --- | --- | --- |
+| 01 | The empty store is read at startup, a 64-byte default with digest `bbffe0aa61cc73c4b716e2f1f8be1b4e2d1bdbc7a9d591609b3cee2433d15edb` is written at 0 ms, and a distinct payload with digest `a6719ee8a2ca241a39b24fd67bf62ab4dc2638df0dc4b3819ad44c1ddf8c17d5` is written at 29616 ms after press four. | Reopen loads the distinct payload before any new input. Repeating the complete route against that payload and the startup default produces the same thirteen captures, so the tested route does not expose a causal visible progress distinction. |
+| 02 | The complete directed route performs no save load or write. | Close and reopen succeed from an empty store. No save or continue action is visible in the traversed main menu. |
+| 03 | Startup writes a 64-byte default with digest `8edccb6154be81c585c0de1615f7b9741e87e362281583322c3491169dfc4bb3`; the directed route reads it repeatedly but never changes it. | A seeded-default arm and an empty-store arm produce the same eighteen captures. The empty arm creates the same default at startup, so this is initialization rather than demonstrated progress. |
+| 04 | Startup writes a 64-byte default with digest `c65a363f975f4cfa7facb1ae53b5bf02a4d05312798320530b04ce4cb43b43ff`; the directed route reads it repeatedly but never changes it. | A seeded-default arm and an empty-store arm produce the same twenty-one captures. The empty arm creates the same default at startup, so this is initialization rather than demonstrated progress. |
+| 05 | The empty store is read at startup and a 64-byte payload with digest `5c0bfe68eb0efb627b6288421f7671c6768f80cf399c71b124351d936e9e1084` is written at 24064 ms after press two. | Reopen loads the payload. Repeating the complete route against that payload and an empty-store control produces the same twenty-five captures, so the tested route does not expose a causal visible progress distinction. |
+
+Every first session and reopened session in this comparison starts, advances,
+accepts input, and closes without an error. None reports a guest-initiated exit;
+the lifecycle evidence here is an orderly Host close followed by a new session
+over the same isolated store. The bounded absence findings apply to the menus
+and directed routes above, not to unvisited end-of-round, settings, or score
+flows.
+
+The same directed routes emitted the following activity through a recording
+audio sink:
+
+| ID | MIDI messages | Wave samples |
+| --- | ---: | ---: |
+| 01 | 1230 | 4164 |
+| 02 | 921 | 6584 |
+| 03 | 0 | 16570 |
+| 04 | 0 | 57360 |
+| 05 | 597 | 75740 |
+
+These counts identify applicable audio paths and do not establish that a person
+heard output. Audible acceptance remains pending for all five IDs.

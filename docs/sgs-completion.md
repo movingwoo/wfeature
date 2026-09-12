@@ -120,11 +120,11 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 
 | ID | Main play route | In-game save/load | Audio | Exit/restart |
 | --- | --- | --- | --- | --- |
-| 01 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 02 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 03 | Prior directed fight evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 04 | Prior directed fight evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 05 | Generic input evidence; directed route pending | Pending | Pending | Generic lifecycle only |
+| 01 | Directed play route reconstructed and verified | Changed payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 02 | Directed play route verified | No save activity in traversed route; wider applicability unresolved | Activity observed; audible check pending | Empty-store Host close/reopen verified |
+| 03 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
+| 04 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
+| 05 | Directed play entry and input verified | Payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 06 | User input replay; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
 | 07 | User input replay; main route acceptance pending | Pending | Pending | Generic lifecycle only |
 | 08 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
