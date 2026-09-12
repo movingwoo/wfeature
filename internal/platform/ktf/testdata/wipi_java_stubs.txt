@@ -186,7 +186,6 @@ com/ktf/kfc/GForm move (II)V noop
 com/ktf/kfc/GForm resize (II)V noop
 com/ktf/kfc/GForm setPluginLayer (II)V noop
 com/ktf/kfc/GForm setTransparent (Z)V noop
-com/ktf/kfc/GForm show ()V noop
 com/ktf/kfc/GForm showNotify (Z)V noop
 com/ktf/kfc/GMenubarForm getPluginPosition (I)I zero
 com/ktf/kfc/GMenubarForm layout ()V noop
@@ -194,7 +193,6 @@ com/ktf/kfc/GMenubarForm move (II)V noop
 com/ktf/kfc/GMenubarForm resize (II)V noop
 com/ktf/kfc/GMenubarForm setPluginLayer (II)V noop
 com/ktf/kfc/GMenubarForm setTransparent (Z)V noop
-com/ktf/kfc/GMenubarForm show ()V noop
 com/ktf/kfc/GMenubarForm showNotify (Z)V noop
 com/ktf/kfc/GMsgBox getPluginPosition (I)I zero
 com/ktf/kfc/GMsgBox layout ()V noop
@@ -202,7 +200,6 @@ com/ktf/kfc/GMsgBox move (II)V noop
 com/ktf/kfc/GMsgBox resize (II)V noop
 com/ktf/kfc/GMsgBox setPluginLayer (II)V noop
 com/ktf/kfc/GMsgBox setTransparent (Z)V noop
-com/ktf/kfc/GMsgBox show ()V noop
 com/ktf/kfc/GMsgBox showNotify (Z)V noop
 com/ktf/kfc/GTextField move (II)V noop
 com/ktf/kfc/GTextField resize (II)V noop

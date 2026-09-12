@@ -6,28 +6,12 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
-// `com/ktf/kfc` is the vendor's own widget toolkit, and exactly one local
-// title asks for it. **What it asks for is a text-entry dialog**, not a
-// toolkit in general: the five classes it names are a form, a form with a
-// menu bar, a message box, a text field and the listener that hears the field
-// change, and the members it resolves around them are the ones a modal
-// "type your name" box needs — `doModal`, `setString`, `getString`,
-// `setMaxLength`, `getGTextListener`, and the geometry a form is given.
-//
-// The whole surface was read out of the module's own string pool rather than
-// discovered one failure at a time: an AOT module stores every name and
-// descriptor it links against verbatim, so a scan for `com/ktf/kfc/` and the
-// entries beside it lists the demand in one pass. See docs/ktf.md, "A widget
-// toolkit that is one text box".
-//
-// **These classes answer rather than draw.** Nothing here puts a dialog in
-// front of anyone: a form is constructed, its geometry is kept, and a modal
-// dialog closes immediately with the field holding the text it was given.
-// That is a fixed-value answer and it is recorded as one in
-// testdata/wipi_java_stubs.txt. The editing surface the field would need
-// already exists for the lwc components (runtime_lwc_input.go), so a Host that
-// grows a text overlay can give this one the same one — the reason it is not
-// wired here is that nothing draws the form the field would sit in.
+// com/ktf/kfc is the vendor widget toolkit. Runtime classes preserve its
+// callable methods and component data, but do not draw a complete widget UI.
+// A settings name editor uses GForm.show rather than a synchronous modal call.
+// show and hide maintain visibility; doModal still returns immediately without
+// presenting a dialog. See docs/widget-input-lifecycle.md for verified routes
+// and the remaining focus, editing and dismissal requirements.
 const (
 	runtimeGFormClass          = "com/ktf/kfc/GForm"
 	runtimeGMenubarFormClass   = "com/ktf/kfc/GMenubarForm"
@@ -38,8 +22,8 @@ const (
 	runtimeGFormComponentClass = "com/ktf/kfc/GFormComponent"
 	runtimeDMInfoClass         = "wec/DMInfo"
 
-	// componentShownField is whether a form has been shown. `doModal` closes
-	// at once, so a form is never shown for longer than the call.
+	// componentShownField records explicit show and hide calls. The unsupported
+	// synchronous doModal path does not change it.
 	componentShownField = "shown:Z"
 )
 
@@ -60,7 +44,7 @@ func runtimeGFormClassDefinition(class, super string) runtimeJavaClass {
 			// once and answers zero — which is what a dialog closed without a
 			// choice answers.
 			{class: class, name: "doModal", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeGFormDoModal},
-			{class: class, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+			{class: class, name: "show", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentShown(true)},
 			{class: class, name: "hide", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeGFormHide},
 			{class: class, name: "isShown", descriptor: "()Z", accessFlags: 0x0001, implementation: runtimeCardIntField(componentShownField, 0)},
 			{class: class, name: "showNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},

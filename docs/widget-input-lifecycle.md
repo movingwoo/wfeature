@@ -128,3 +128,21 @@ fresh-save replay of the settings route reaches `GTextField.setString` without
 the previous argument-decoding failure. The captured display remains on the
 settings menu; editor visibility, host text submission and persistence are still
 separate acceptance requirements. General, debug, race and vet checks pass.
+
+### KTF non-modal form visibility
+
+The same settings route invokes `GForm.show()` after setting the field text.
+The vendor override previously did nothing even though `ShellComponent.show()`
+already maintained visibility. The override now uses that existing implementation;
+`show`, `hide`, and `isShown` agree for GForm and its runtime subclasses. The
+fixed-value stub inventory no longer lists these three `show` methods.
+
+A fresh-save replay reaches the show call and 60 subsequent ticks without a
+runtime error. The framebuffer still contains the settings menu. The captured
+route attaches a child through `ContainerComponent.addComponent` but makes no
+focus call. The host adapter requires `lwc:focus`, so visibility alone does not
+provide a native editor target. Focus traversal, host editing and dismissal must
+be verified together before claiming this real editor works. The WIPI
+[FormComponent contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/FormComponent.md)
+describes child focus traversal with the up/down keys; the vendor form's actual
+child selection still needs executable coverage.
