@@ -74,6 +74,7 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 // handleTextKey types into a TextBox. The editing is the shared keypad input
 // method, so a game types the same way here as it does in a KTF lwc field.
 func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, keyCode int32) error {
+	runtime.textMu.Lock()
 	editor := runtime.textEditor(content)
 	// The pad moves the caret, and only the pad: a digit is a letter here,
 	// so the 4 and 6 a game reads as left and right have to reach the
@@ -81,19 +82,24 @@ func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, k
 	switch keyCode {
 	case KeyCodeLeft:
 		editor.MoveCaret(-1)
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	case KeyCodeRight:
 		editor.MoveCaret(1)
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	}
 	if keyCode < 0 || keyCode > 0x7f {
+		runtime.textMu.Unlock()
 		return nil
 	}
 	if !editor.Key(rune(keyCode), runtime.editorClock()) {
+		runtime.textMu.Unlock()
 		return nil
 	}
 	content.text = []rune(editor.Text())
 	content.caret = editor.Caret()
+	runtime.textMu.Unlock()
 	return runtime.queueScreenPaint(screen)
 }
 

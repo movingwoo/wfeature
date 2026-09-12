@@ -90,6 +90,10 @@ type clientMessage struct {
 	// ID lets a page match an answer to the request that asked for it. Zero
 	// means the page is not waiting for one.
 	ID uint64 `json:"id,omitempty"`
+
+	// Text and Edit identify a native-keyboard edit, separate from key events.
+	Text string `json:"text,omitempty"`
+	Edit uint64 `json:"edit,omitempty"`
 }
 
 // Message kinds the page may send.
@@ -100,6 +104,7 @@ const (
 	clientPing    = "ping"
 	clientKey     = "key"
 	clientPointer = "pointer"
+	clientText    = "text"
 	clientSpeed   = "speed"
 	clientScale   = "scale"
 	clientCheat   = "cheat"
@@ -160,9 +165,19 @@ type serverMessage struct {
 	// token, which is the ordinary answer after a server restart rather than a
 	// failure. A true answer arrives as "started" instead, because a page that
 	// has its game back needs everything a page that just started one does.
-	Resumed      bool   `json:"resumed,omitempty"`
-	Occupied     bool   `json:"occupied,omitempty"`
-	Confirmation string `json:"confirmation,omitempty"`
+	Resumed      bool              `json:"resumed,omitempty"`
+	Occupied     bool              `json:"occupied,omitempty"`
+	Confirmation string            `json:"confirmation,omitempty"`
+	TextInput    *textInputMessage `json:"textInput,omitempty"`
+}
+
+type textInputMessage struct {
+	Edit      uint64 `json:"edit"`
+	Text      string `json:"text"`
+	MaxLength int    `json:"maxLength"`
+	Multiline bool   `json:"multiline"`
+	Password  bool   `json:"password"`
+	InputMode string `json:"inputMode"`
 }
 
 // cheatResult is the union of what the cheat operations answer. The panel that

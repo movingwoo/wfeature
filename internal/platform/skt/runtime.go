@@ -114,6 +114,10 @@ type Runtime struct {
 
 	lcduiOnce  sync.Once
 	lcduiState *lcduiState
+	// textMu serializes editable text and focus state with Host IME snapshots.
+	// Guest threads can call text setters outside a Host dispatch, so
+	// dispatchMu alone cannot protect the snapshot-to-commit boundary.
+	textMu sync.Mutex
 	// screenPaintQueued keeps at most one runtime-drawn screen repaint on the
 	// event queue at a time, the same way paintQueued does for a Canvas.
 	screenPaintQueued bool

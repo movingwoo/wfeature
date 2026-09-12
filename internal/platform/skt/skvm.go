@@ -35,6 +35,10 @@ type skvmState struct {
 	audioVolume    int32
 	smsListener    *jvm.Object
 	textFieldOwner *jvm.Object
+	// focusedTextField is the vendor field whose own focus flag is active.
+	// The Host text-input adapter uses the object identity to keep a stale IME
+	// commit from landing on a field selected after composition began.
+	focusedTextField *jvm.Object
 	// textHandler is the input method's single handler object, and
 	// textInput is what it is editing and how far its cycle has got.
 	// See text_input.go.
@@ -86,11 +90,12 @@ type xFileData struct {
 type xTextFieldData struct {
 	text    []rune
 	maxSize int32
+	owner   *jvm.Object
 	// input is the keypad editor behind the field, made on the first key.
 	input *textinput.State
 	// constraints is what a MIDP TextField would restrict its input to. It is
-	// kept because a title's constructor states it; nothing reads it, because
-	// nothing here composes the characters it would restrict.
+	// kept because a title's constructor states it; the Host IME adapter uses
+	// it to validate a composed value before committing it.
 	constraints int32
 	focus       bool
 	x, y        int32
@@ -1629,7 +1634,9 @@ func (runtime *Runtime) initXTextField(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	runtime.textMu.Lock()
 	receiver.Native = &xTextFieldData{maxSize: 64}
+	runtime.textMu.Unlock()
 	return jvm.VoidValue(), nil
 }
 
@@ -1650,6 +1657,8 @@ func xTextFieldArgument(arguments []jvm.Value) (*xTextFieldData, error) {
 }
 
 func (runtime *Runtime) xTextFieldText(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1658,6 +1667,8 @@ func (runtime *Runtime) xTextFieldText(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 }
 
 func (runtime *Runtime) setXTextFieldText(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1675,6 +1686,8 @@ func (runtime *Runtime) setXTextFieldText(_ *jvm.VM, arguments []jvm.Value) (jvm
 }
 
 func (runtime *Runtime) xTextFieldMaxSize(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1683,6 +1696,8 @@ func (runtime *Runtime) xTextFieldMaxSize(_ *jvm.VM, arguments []jvm.Value) (jvm
 }
 
 func (runtime *Runtime) setXTextFieldMaxSize(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1703,6 +1718,8 @@ func (runtime *Runtime) setXTextFieldMaxSize(_ *jvm.VM, arguments []jvm.Value) (
 }
 
 func (runtime *Runtime) xTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1714,6 +1731,12 @@ func (runtime *Runtime) xTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 }
 
 func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
+	receiver, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1722,11 +1745,26 @@ func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	state := runtime.skvm()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	data.focus = focus
+	if focus {
+		if previous := state.focusedTextField; previous != nil && previous != receiver {
+			if previousData, ok := previous.Native.(*xTextFieldData); ok && previousData != nil {
+				previousData.focus = false
+			}
+		}
+		state.focusedTextField = receiver
+	} else if state.focusedTextField == receiver {
+		state.focusedTextField = nil
+	}
 	return jvm.VoidValue(), nil
 }
 
 func (runtime *Runtime) setXTextFieldBounds(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1742,6 +1780,8 @@ func (runtime *Runtime) setXTextFieldBounds(_ *jvm.VM, arguments []jvm.Value) (j
 // xTextFieldInputChar is the only way characters reach the field: there is no
 // on-screen input method, so the game supplies them.
 func (runtime *Runtime) xTextFieldInputChar(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1758,10 +1798,15 @@ func (runtime *Runtime) xTextFieldInputChar(_ *jvm.VM, arguments []jvm.Value) (j
 }
 
 func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), err
 	}
+	text := append([]rune(nil), data.text...)
+	x, y := data.x, data.y
+	runtime.textMu.Unlock()
 	context, err := graphicsReceiver(arguments[1:])
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -1773,7 +1818,7 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	previous := context.color
 	context.color = screenForeground
 	context.withDestinationWrite(func() {
-		font.render(context, data.text, int64(data.x)+int64(context.translateX), int64(data.y)+int64(context.translateY))
+		font.render(context, text, int64(x)+int64(context.translateX), int64(y)+int64(context.translateY))
 	})
 	context.color = previous
 	return jvm.VoidValue(), nil

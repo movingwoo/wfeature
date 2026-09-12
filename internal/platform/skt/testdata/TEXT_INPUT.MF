@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Text Input Fixture
+MIDlet-1: Text Input Fixture, , TextInputMIDlet

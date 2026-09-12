@@ -154,6 +154,18 @@
           </div>
         </div>
 
+        <dialog id="text-input-dialog" aria-labelledby="text-input-title">
+          <h2 id="text-input-title">문자 입력</h2>
+          <p id="text-input-status" role="status"></p>
+          <label for="text-input-value">게임에 입력할 내용</label>
+          <input id="text-input-value" autocomplete="off" />
+          <textarea id="text-input-multiline" aria-label="게임에 입력할 내용" hidden></textarea>
+          <div class="confirm-actions">
+            <button id="text-input-cancel" class="confirm-button">취소</button>
+            <button id="text-input-apply" class="confirm-button">입력</button>
+          </div>
+        </dialog>
+
         <div id="status-message" class="status-message">
           <!-- The live region is the text, not the popup: the dismiss button
                never changes and would be read out with every message. -->
@@ -353,6 +365,7 @@
 
           <button id="cheat-toggle" class="panel-button hidden">🎯 치트</button>
           <button id="debug-log" class="panel-button hidden">🐞 디버그 로그 저장</button>
+          <button id="text-input-toggle" class="panel-button hidden">문자 입력</button>
           <button id="restart" class="panel-button hidden">🔄 재시작</button>
         </div>
 

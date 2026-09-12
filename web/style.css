@@ -1344,3 +1344,27 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
     height: calc(100dvh - 32px);
   }
 }
+
+#text-input-dialog {
+  width: min(88vw, 400px);
+  max-height: 80dvh;
+  overflow: auto;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 8px;
+  padding: 20px;
+  color: #e8e6e3;
+  background: #2b2b2b;
+}
+#text-input-dialog::backdrop { background: #0009; }
+#text-input-dialog h2 { font-size: 1.1rem; }
+#text-input-dialog input, #text-input-dialog textarea {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 12px 0;
+  padding: 8px;
+  font: inherit;
+  font-size: 16px;
+  user-select: text;
+}
+#text-input-dialog textarea { min-height: 6em; }
