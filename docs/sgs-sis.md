@@ -3,9 +3,10 @@
 SIS has two distinct encodings selected by the gate described in
 [extended images](sgs-images.md). This document records exact inspected header
 fields and the verified payload structure. It does **not** yet specify a complete
-SIS decoder: several composition fields, reference-object transforms and coded
+SIS decoder: several composition fields, reference-object transforms and type 2
 payload branches remain unresolved. Addresses refer to the original runtime;
-no original implementation, codebook, permutation table or asset is reproduced.
+no original implementation, lookup storage, permutation table or asset is
+reproduced.
 
 ## Type 1: fixed eight-byte header
 
@@ -135,8 +136,16 @@ T.4 run 18. `000001111000` returns native run 64 with length 9, while the T.4
 run-64 prefix padded to 12 bits returns zero. Four end-to-end coded-tile calls
 also verified all-zero and all-one 64-pixel runs plus alternating 32-pixel runs
 in both directions. The measured codebook resembles T.4 but differs at these seven black runs;
-this comparison does not establish the historical derivation. Coded tiles remain a separate
-implementation slice with their own exact codebook and failure tests.
+this comparison does not establish the historical derivation.
+
+The Go decoder uses the 128 independently observed color/run pairs and matches
+prefixes incrementally for at most 12 bits. A local differential test checks
+every pair rather than substituting the published table. Two further native
+calls covered failure: a white run of 63 followed by a black run of 2 returned
+zero at bit position 59, and a truncated black prefix with a zero-filled mapped
+tail returned zero at bit position 51. Both calls reached the sentinel and left
+the eight-byte destination unchanged. Go rejects both streams before changing
+the destination.
 
 Object parsing invokes the same tile reader in scan-only mode to locate the
 next object; extraction invokes it again with output enabled. The object
@@ -199,13 +208,14 @@ helpers for all frames, but the exposed `0xe7` wrapper rejects negative indexes.
 The exposed wrapper's inclusive upper-bound defect remains documented in
 [extended images](sgs-images.md).
 
-The implemented subset accepts type 1 streams with independent literal tiles,
-mode-zero exact references, header variant 1, frame flag zero and zero transform
-fields. It reconstructs a requested frame into temporary packed storage before
-a guest resource changes. Coded tiles, mode-one reference transforms, header
-inversion, other header variants, frame masks and composition transforms return
-failure. Type 2 and SAF extraction remain unsupported. The safe frame range is
-zero through frame count minus one; the original wrapper's inclusive upper-bound
-defect is not reproduced. Source resources above 65,535 bytes are rejected,
-matching the script resource size limit and keeping snapshot and decode work
-bounded.
+The implemented subset accepts type 1 streams with independent literal or coded
+tiles, mode-zero exact references, header variant 1, frame flag zero and zero
+transform fields. It reconstructs a requested frame into temporary packed
+storage before a guest resource changes. The pre-parse work reserve covers
+maximum coded expansion and exact-reference fan-out. Mode-one reference
+transforms, header inversion, other header variants, frame masks and composition
+transforms return failure. Type 2 and SAF extraction remain unsupported. The
+safe frame range is zero through frame count minus one; the original wrapper's
+inclusive upper-bound defect is not reproduced. Source resources above 65,535
+bytes are rejected, matching the script resource size limit and keeping
+snapshot and decode work bounded.

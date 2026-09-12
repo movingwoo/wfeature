@@ -250,11 +250,11 @@ func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
 		}
 	}
 	for name, data := range map[string][]byte{
-		"coded tile":       authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, coded: true}),
-		"reference object": authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, objects: 2}),
-		"frame mask":       authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, frameFlag: 1}),
-		"transform":        authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, transforms: 8}),
-		"inversion":        authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, invert: 1}),
+		"malformed coded tile": authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, coded: true}),
+		"reference object":     authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, objects: 2}),
+		"frame mask":           authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, frameFlag: 1}),
+		"transform":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, transforms: 8}),
+		"inversion":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, invert: 1}),
 	} {
 		if _, ok := decodeScriptSISLiteralFrame(data, 0); ok {
 			t.Fatalf("accepted unsupported %s", name)

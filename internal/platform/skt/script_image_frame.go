@@ -49,8 +49,8 @@ func (r *scriptSISBitReader) peek(count int) (uint, bool) {
 }
 
 // decodeScriptSISLiteralFrame implements the independently verified type-1
-// subset: independent objects containing literal 8-by-8 tiles, exact object
-// references, and additive frame records without transforms. Other coding and
+// subset: independent objects containing literal or coded 8-by-8 tiles, exact
+// object references, and additive frame records without transforms. Other
 // composition modes fail closed until their contracts have executable evidence.
 func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
 	var result scriptSISLiteralFrame
@@ -145,14 +145,22 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 		object.height = int(rows) * 8
 		object.pixels = make([]byte, int(columns)*object.height)
 		for tile, coded := range coding {
+			var encodedPixels [64]byte
 			if coded {
-				return result, false
-			}
-			for encodedPosition := 0; encodedPosition < 64; encodedPosition++ {
-				pixel, ok := r.read(1)
+				encodedPixels, ok = decodeScriptSISCodedTile(&r)
 				if !ok {
 					return result, false
 				}
+			} else {
+				for encodedPosition := range encodedPixels {
+					pixel, ok := r.read(1)
+					if !ok {
+						return result, false
+					}
+					encodedPixels[encodedPosition] = byte(pixel)
+				}
+			}
+			for encodedPosition, pixel := range encodedPixels {
 				if pixel == 0 {
 					continue
 				}
@@ -238,12 +246,13 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	return result, true
 }
 
-// A literal pixel consumes one stream bit. Exact references can make the same
-// maximum-size independent object render once for every declared object, so
-// source length alone is not a sufficient bound. The fixed header supplies a
-// bounded object count before parsing begins. The other terms cover source-bit
-// work and snapshotting. Charging this conservative total before decoding also
-// accounts for malformed references and other late format failures.
+// Coded tiles can expand a short run stream to a maximum-size object, and exact
+// references can render that object once for every declared object. Source
+// length alone is therefore not a sufficient bound. The fixed header supplies
+// a bounded object count before parsing begins. Four maximum-object terms cover
+// run iteration, coded expansion, tile placement and frame rendering; source
+// terms cover bit parsing and snapshotting. Charging the total before decoding
+// also accounts for malformed streams and other late format failures.
 func scriptSISLiteralDecodeWork(data []byte) int {
 	objectCount := 20
 	if len(data) >= 7 && bytes.Equal(data[:3], []byte("SIS")) {
@@ -252,7 +261,7 @@ func scriptSISLiteralDecodeWork(data []byte) int {
 		objectCount = min(objectCount, 20)
 	}
 	const maximumObjectPixelWork = (31 * 8 * 12 * 8) / 64
-	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*maximumObjectPixelWork
+	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*4*maximumObjectPixelWork
 }
 
 func scriptSISSignedMagnitude(value uint, magnitudeBits uint) int {
