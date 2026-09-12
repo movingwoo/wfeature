@@ -120,7 +120,7 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 
 | ID | Main play route | In-game save/load | Audio | Exit/restart |
 | --- | --- | --- | --- | --- |
-| 01 | Directed play route reconstructed and verified | Changed payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 01 | Directed play and settings routes verified | Changed audio setting survives restart and differs from immutable-seed control; gameplay progress remains outside this proof | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 02 | Directed play route verified | No save activity in traversed route; wider applicability unresolved | Activity observed; audible check pending | Empty-store Host close/reopen verified |
 | 03 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
 | 04 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
