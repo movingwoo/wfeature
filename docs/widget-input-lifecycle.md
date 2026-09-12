@@ -58,8 +58,10 @@ normal field constraints and notification behavior. Any new shown-shell or
 focus handle must also be a Java collection root; Go-side storage of a numeric
 guest handle alone does not preserve the guest object. Parent/child edges must
 remain traversable, and hiding, removing, or refocusing a component must
-invalidate its pending Host edit. These are requirements for the executable
-slice, not claims that the current runtime already satisfies them.
+invalidate its pending Host edit. The LGT adapter now records this ownership, rejects stale edits, and traces the
+shown/focused graphs. Its authored lifecycle regressions cover callback reentry,
+exact inherited signatures, and parent-cycle rejection. The sampled archive
+routes above still do not establish a real Java text-entry route.
 
 ## Whole-field replacement and IME callbacks
 

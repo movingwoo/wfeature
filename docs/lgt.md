@@ -3704,8 +3704,11 @@ message. The demand is the specification's TextComponent family — a field or a
 box built with a string and a constraint, `getString`, `setString`,
 `setMaxLength`, the `insert` and `delete` a handset's input method drives, the
 shell that holds them, and the `InputMethodHandler` a text component owns.
-Everything here **keeps what it was given and answers it back**, and nothing is
-drawn, which is the same limitation the other platform's toolkit carries.
+The widget layer stores field contents and constraints. It now retains parent
+relationships, shown shells, and focus for [native text input](native-text-input.md).
+A whole-string Host commit requires a focused field attached to a shown shell
+and no installed input-method delta listener. Lifecycle callbacks and collection
+roots preserve that ownership. This does not draw the complete widget toolkit.
 
 **A key offered to a widget is answered false.** A widget that took one would be
 taking it from the card that is the only thing drawing, and the player would be

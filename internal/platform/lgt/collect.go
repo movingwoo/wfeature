@@ -384,6 +384,15 @@ func (client *Client) markJavaPlatformRoots(mark func(uint32)) {
 	mark(runtime.card)
 	mark(runtime.screenGraphics)
 	mark(runtime.mainThread)
+	// The focused component can be handed to the Host as an editor, and a
+	// shown shell remains owned by the display even if guest code drops its
+	// local reference. Parent and child edges are followed below.
+	mark(runtime.focusedWidget)
+	for object, widget := range runtime.widgets {
+		if widget != nil && widget.kind == javaWidgetShell && widget.shown {
+			mark(object)
+		}
+	}
 	// One object for the life of the title, answered by name.
 	for _, object := range runtime.singletons {
 		mark(object)
@@ -456,12 +465,15 @@ func (client *Client) walkJavaPayload(object uint32, mark func(uint32)) {
 	for _, element := range runtime.vectors[object] {
 		mark(element)
 	}
-	// A container holds its children, and an input-method handler the listener
-	// it was told to hand characters to.
+	// A container holds its children, a child holds its parent, and a text
+	// component holds its input-method handler. The handler in turn holds the
+	// listener it was told to hand characters to.
 	if widget := runtime.widgets[object]; widget != nil {
 		for _, child := range widget.children {
 			mark(child)
 		}
+		mark(widget.parent)
+		mark(widget.inputHandler)
 		mark(widget.listener)
 	}
 	// A wrapper stands for another object's sink rather than a second one.
