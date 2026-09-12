@@ -374,6 +374,11 @@ them later. It was measured across all three platforms and **deliberately not
 built**; what follows is the evidence, because the interesting half is not the
 container but where a stopped game's state actually lives.
 
+On 2026-09-11 the user reopened this as an implementation project. The feature
+is still absent; the earlier decision below is historical, and its risks remain
+applicable. [state-and-auth.md](state-and-auth.md#quick-save-and-quick-load)
+records the current source review, implementation sequence, and acceptance path.
+
 State that lives in **data** can be written out. Guest memory is data: a page
 table of 4 KiB pages, and `Memory.CommittedRegions` already reports exactly the
 pages that have storage. An `armcore.Thread`'s `Context` — registers, CPSR,
