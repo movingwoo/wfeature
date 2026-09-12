@@ -496,32 +496,32 @@ func (client *Client) ServiceJavaThreads(ctx context.Context) (int, error) {
 	runtime := client.javaRun
 	now := client.clock.now()
 	serviced := 0
-	live := runtime.workers[:0]
-	for _, worker := range runtime.workers {
-		if worker.done {
-			continue
+	// A running worker may append children. Keep the shared list intact until
+	// every original worker has had its turn, then retain all live workers,
+	// including children that will receive their first slice next round.
+	defer func() {
+		live := runtime.workers[:0]
+		for _, worker := range runtime.workers {
+			if !worker.done {
+				live = append(live, worker)
+			}
 		}
-		if now < worker.wakeAt {
-			live = append(live, worker)
+		clear(runtime.workers[len(live):])
+		runtime.workers = live
+	}()
+	for _, worker := range runtime.workers {
+		if worker.done || now < worker.wakeAt {
 			continue
 		}
 		event, err := client.grantJavaSlice(ctx, worker)
 		if err != nil {
-			runtime.workers = append(live, worker)
 			return serviced, err
 		}
 		serviced++
-		if !event.done {
-			live = append(live, worker)
-			continue
-		}
-		worker.done = true
-		if event.err != nil && !errors.Is(event.err, ErrGuestExited) {
-			runtime.workers = live
+		if event.done && event.err != nil && !errors.Is(event.err, ErrGuestExited) {
 			return serviced, event.err
 		}
 	}
-	runtime.workers = live
 	return serviced, nil
 }
 

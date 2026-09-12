@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"unicode/utf16"
 
@@ -32,6 +33,9 @@ type javaStream struct {
 	Read   int
 	Closed bool
 	Source *javaStreamSource
+	// Byte-array streams retain their mark independently of the read limit.
+	Markable bool
+	Mark     int
 }
 
 const (
@@ -424,6 +428,40 @@ func javaStreamAvailable(
 	return uint32(len(stream.Data) - stream.Read), nil
 }
 
+func javaStreamMarkSupported(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Markable {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func javaStreamMark(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if stream.Markable {
+		stream.Mark = stream.Read
+	}
+	return 0, nil
+}
+
+func javaStreamReset(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if !stream.Markable {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, "stream does not support reset")
+	}
+	stream.Read = stream.Mark
+	return 0, nil
+}
+
 // javaStreamSkip is `skip(long)`: move the cursor forward without reading, and
 // answer how far it actually moved — which is less than asked for at the end of
 // the data. The answer comes back as the two words a long takes.
@@ -447,6 +485,13 @@ func javaStreamSkip(
 		return 0, err
 	}
 	return uint32(wanted), nil
+}
+
+func javaStreamSkipBytes(client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	if int32(arguments[1]) <= 0 {
+		return 0, nil
+	}
+	return javaStreamSkip(client, ctx, thread, []uint32{arguments[0], arguments[1], 0})
 }
 
 // javaWrapStream is the constructor of a stream built on another one — a
@@ -514,6 +559,23 @@ func javaStreamReadInt(
 		uint32(stream.Data[stream.Read+3])
 	stream.Read += 4
 	return value, nil
+}
+
+// javaStreamReadLong returns a big-endian long in the ABI's low/high registers.
+func javaStreamReadLong(client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 8)
+	if err != nil {
+		return 0, err
+	}
+	if len(stream.Data)-stream.Read < 8 {
+		return 0, client.throwJavaPlatform(thread, "java/io/EOFException", "readLong past the end of stream")
+	}
+	value := binary.BigEndian.Uint64(stream.Data[stream.Read : stream.Read+8])
+	if err := thread.SetRegister(1, uint32(value>>32)); err != nil {
+		return 0, err
+	}
+	stream.Read += 8
+	return uint32(value), nil
 }
 
 // javaStreamReadByte is `DataInputStream.readByte()`, slot 23: one byte read
@@ -899,7 +961,7 @@ func javaByteStreamConstructor(
 	held := make([]byte, len(data))
 	copy(held, data)
 	client.javaRuntimeState().streams[arguments[0]] = &javaStream{
-		Name: fmt.Sprintf("a byte array of %d", len(held)), Data: held}
+		Name: fmt.Sprintf("a byte array of %d", len(held)), Data: held, Markable: true}
 	return 0, nil
 }
 

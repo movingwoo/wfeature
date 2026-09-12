@@ -308,6 +308,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"java/lang/String.<init>([B)V":     {Words: 2, Implementat: javaStringConstructor},
 	"java/lang/String.<init>([BII)V":   {Words: 4, Implementat: javaStringConstructor},
 	"java/lang/String.<init>([CII)V":   {Words: 4, Implementat: javaStringFromChars},
+	"java/lang/String.<init>([C)V":     {Words: 2, Implementat: javaStringFromChars},
 	"java/lang/StringBuffer.<init>()V": {Words: 1, Implementat: javaBufferConstructor},
 	// The capacity form is a hint about a buffer this platform grows on
 	// demand, so it builds the same empty buffer the no-argument form does —
@@ -415,6 +416,9 @@ func init() {
 			13: {Called: "skip(J)J", Method: javaPlatformMethod{Words: 3, Implementat: javaStreamSkip}},
 			14: {Called: "available()I", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamAvailable}},
 			15: {Called: "close()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamClose}},
+			16: {Called: "mark(I)V", Method: javaPlatformMethod{Words: 2, Implementat: javaStreamMark}},
+			17: {Called: "reset()V", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReset}},
+			18: {Called: "markSupported()Z", Method: javaPlatformMethod{Words: 1, Implementat: javaStreamMarkSupported}},
 		},
 		// `java/io/DataInputStream` slot 25 takes the receiver alone and its answer
 		// is stored into an array the compiled code strides two bytes through, so
@@ -435,6 +439,8 @@ func init() {
 				Method: javaPlatformMethod{Words: 2, Implementat: javaStreamReadFully}},
 			20: {Called: "readFully([BII)V",
 				Method: javaPlatformMethod{Words: 4, Implementat: javaStreamReadFully}},
+			21: {Called: "skipBytes(I)I",
+				Method: javaPlatformMethod{Words: 2, Implementat: javaStreamSkipBytes}},
 			// Slot 22 takes the receiver alone — the register beside it still
 			// holds the stream this one was built on, which the site loaded to
 			// reach the receiver and never reloaded — and it sits one before the
@@ -466,6 +472,8 @@ func init() {
 			// a count with it before it reads the rows.
 			28: {Called: "readInt()I",
 				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadInt}},
+			29: {Called: "readLong()J",
+				Method: javaPlatformMethod{Words: 1, Implementat: javaStreamReadLong}},
 			// Slot 32 takes the receiver alone and is where this class's run ends:
 			// after `readInt` come `readLong`, `readFloat`, `readDouble` and then
 			// `readUTF()`, the last method of it that is not static. A title reads
@@ -882,6 +890,8 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// title that has just pushed comes back for.
 		33: {Called: "pop()Ljava/lang/Object;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaStackPop}},
+		35: {Called: "empty()Z",
+			Method: javaPlatformMethod{Words: 1, Implementat: javaVectorEmpty}},
 	},
 	javaStringBufferClass: {
 		4: {Called: "toString()Ljava/lang/String;",
@@ -894,6 +904,8 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendObject}},
 		18: {Called: "append(Ljava/lang/String;)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendText}},
+		21: {Called: "append(Z)Ljava/lang/StringBuffer;",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendBoolean}},
 		// Slot 23 takes one word and answers the buffer, the same shape as
 		// slot 18. **What the word is, is what tells them apart**: its call
 		// site loads a local that the loop around it increments by one and

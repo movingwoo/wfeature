@@ -6176,3 +6176,75 @@ A platform whose title is a bag of class files has no single loaded image, and
 the file it was read from is what identifies it instead. That is a real
 difference between the platforms rather than a gap, so no hash of something
 arbitrary is invented to fill it.
+
+
+## Startup after an existing save (2026-09-12)
+
+A reported LGT Java archive displayed its usage notice on a fresh save but
+failed during startup on the second launch. The page log and a CLI run over
+the same newly created save both stopped at `DataInputStream` slot 17.
+Continuing that path exposed four more missing virtual calls. The shared LGT
+platform now serves:
+
+- `InputStream` slots 16/17/18: `mark(int)`, `reset()`, `markSupported()`.
+  A byte-array stream starts marked at zero, retains subsequent marks without
+  a read-limit expiry, and shares its mark and cursor with a data-stream wrapper.
+  Other stream sources still report no mark support; reset throws `IOException`.
+  Forwarding custom guest stream mark/reset overrides remains unsupported.
+- `DataInputStream` slot 21: `skipBytes(int)`, with nonpositive counts returning
+  zero and the result limited to the remaining bytes.
+- `DataInputStream` slot 29: `readLong()`, reading eight big-endian bytes and
+  returning the low/high words in r0/r1. Truncation throws `EOFException`.
+- `StringBuffer` slot 21: `append(boolean)`, appending `true` or `false` and
+  returning the same buffer.
+- `Stack` slot 35: `empty()`, using the existing vector storage.
+
+The contracts were checked against the published CLDC pages for
+[InputStream](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/InputStream.md),
+[ByteArrayInputStream](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/ByteArrayInputStream.md),
+[DataInputStream](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataInputStream.md),
+[StringBuffer](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/lang/StringBuffer.md)
+and [Stack](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/util/Stack.md).
+Slot numbers follow the declaration-order rule documented above, anchored by
+existing adjacent slots and the failing call sites; the specification does not
+define this vendor ABI.
+
+Regression tests dispatch through the encoded virtual slots, including inherited
+stream calls, shared cursor reset, negative skips, truncated longs, both boolean
+values and stack push/pop transitions. No JVM bytecode implementation changed.
+
+The first correction completed 6,000 CLI ticks but left an authentication-progress
+dialog visible. That was not evidence of a missing authentication adapter:
+`ServiceJavaThreads` rebuilt its live-worker slice from the workers present at
+entry. A running worker could append a child, but assigning that rebuilt slice
+at the end discarded the child before its first grant. The frame loop survived
+while the connection thread never ran.
+
+The scheduler now leaves the shared list intact while granting the original
+workers their slices, then removes completed workers from the current list.
+Children survive for the next round, including when their parent finishes.
+Unserviced workers also survive an early error so session shutdown can reach them.
+Tests cover a parent that parks and a parent that finishes after creating a child.
+
+With that correction the same save reaches the game-start menu and story
+sequence. No new authentication adapter or success response is introduced;
+the selected mechanism remains `unsupported`. The local evidence is under
+`var/diagnostics/lgt-startup/`; existing user saves were not changed.
+
+The whole-char-array `String(char[])` constructor also uses the existing
+bounded character-array constructor path. A story-skip route reaches a later
+unsupported `Calendar` slot 28 during gameplay initialization. Calendar
+compatibility is outside this startup/authentication repair; reaching the menu
+and story does not establish full gameplay support.
+
+Chromium and WebKit both passed
+real-page startup over copied existing saves, confirm input through the menu
+into the story, and reload/reconnection, with zero page errors. An explicit
+`-no-auth` CLI control also reaches the menu, confirming that scheduler repair,
+rather than a selected offline adapter, resolves this authentication wait.
+
+Final isolated-tree checks passed: `make test`, `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, and debug/release CLI and server
+builds. The same source changes were copied back to the original working tree,
+and both server profiles were rebuilt there; running server processes still
+require a restart to use the new executable.

@@ -152,15 +152,19 @@ func javaStringConstructor(
 	return 0, nil
 }
 
-// javaStringFromChars is `String([CII)`, whose array is code units rather than
+// javaStringFromChars is `String([C)` or `String([CII)`, whose array is code units rather than
 // bytes and needs no decoding.
 func javaStringFromChars(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	object, array, offset, count := arguments[0], arguments[1], arguments[2], arguments[3]
+	object, array := arguments[0], arguments[1]
 	units, err := client.readJavaArrayChars(array)
 	if err != nil {
 		return 0, err
+	}
+	offset, count := uint32(0), uint32(len(units))
+	if len(arguments) == 4 {
+		offset, count = arguments[2], arguments[3]
 	}
 	if uint64(offset)+uint64(count) > uint64(len(units)) {
 		return 0, fmt.Errorf("%d characters from %d is past the end of %d", count, offset, len(units))
@@ -354,6 +358,18 @@ func javaBufferAppendInt(
 		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", buffer)
 	}
 	client.setJavaText(buffer, held+strconv.FormatInt(int64(int32(arguments[1])), 10))
+	return buffer, nil
+}
+
+func javaBufferAppendBoolean(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	buffer := arguments[0]
+	held, ok := client.javaText(buffer)
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", buffer)
+	}
+	client.setJavaText(buffer, held+strconv.FormatBool(arguments[1] != 0))
 	return buffer, nil
 }
 
