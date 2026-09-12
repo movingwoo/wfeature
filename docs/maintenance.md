@@ -68,14 +68,13 @@ and match archive bytes before rerunning the BREW observation or deciding which
 previously requested archives to include. Do not move game files during a plan
 review. Use the generated records under `var/acceptance/` for dated membership.
 
-`internal/ladder` still uses `StillRuns = 8` and `SettleRounds = 2`. A four-frame
-animation with a period around 38 ticks can satisfy the still test, allowing an
-animation change to be credited to a key. The KTF rung watches after the last
-round; the LGT and SKT rungs leave that round earlier. Increasing the common
-round count therefore needs controls on all three platforms. See [ktf.md](ktf.md),
-"A key cannot be credited on a screen that drifts" and "Two things worth knowing
-about these openings". Truly non-settling animation is an unanswerable grade,
-not an emulator defect.
+`internal/ladder` now uses the full 64-sample observation horizon for both
+still and cycling screens. A regression reproduces the former 38-tick animation
+false positive. A three-corpus comparison retained `SettleRounds = 2` because
+four rounds changed no outcome. The remaining final-round watch difference and
+finite-observation limits are recorded in
+[settling-validation.md](settling-validation.md). A non-settling animation is an
+unanswerable grade, not an emulator defect.
 
 [testing.md](testing.md), "Browser session retention and control" and
 "Destructive starts and pause observations", records local Chromium and WebKit
