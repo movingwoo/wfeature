@@ -1,7 +1,7 @@
 # W-Feature
 
 옛날 피처폰 게임을 구동해볼 수 있는 에뮬레이터입니다.  
-KTF·LGT·SKT 게임을 지원합니다.  
+KTF·LGT·SKT 게임을 지원합니다. SKT의 GNEX/GVM `.SGS` 실행 경로도 포함하며, 일부 서비스는 아직 미지원입니다.
 
 > [!IMPORTANT]
 > ⚠️ **개발 중인 베타버전입니다.**  
@@ -299,6 +299,7 @@ make acceptance    # 손에 있는 게임을 전부 돌려 보고서를 남김
 | [`docs/ktf.md`](docs/ktf.md) | KTF 플랫폼 |
 | [`docs/lgt.md`](docs/lgt.md) | LGT 플랫폼 |
 | [`docs/skvm.md`](docs/skvm.md) | SKT / SKVM |
+| [`docs/sgs.md`](docs/sgs.md) | SKT / GNEX·GVM SGS |
 | [`docs/lcdui.md`](docs/lcdui.md) | LCDUI |
 | [`docs/rms.md`](docs/rms.md) | RMS 저장소 |
 | [`docs/network.md`](docs/network.md) | 네트워크 — 전 플랫폼 거부 정책과 그 표면 |

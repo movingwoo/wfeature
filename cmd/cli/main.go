@@ -336,6 +336,16 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if archive.Script != nil {
+		if cheatConsole || len(patchTables) > 0 || traceInstructions {
+			fmt.Fprintln(stderr, "SGS does not support JVM tracing or cheats")
+			return 2
+		}
+		if !screenChosen {
+			screenWidth, screenHeight = 0, 0
+		}
+		return runScript(archive, scriptCLIRun{ticks: ticks, width: screenWidth, height: screenHeight, hold: keyHold, frame: framePath, frameDir: frameDir, saveRoot: saveRoot, diag: diagPath, audio: audioPrefix, keys: keyEvents, route: script, serve: serveSession}, stdout, stderr)
+	}
 	// Without -screen the archive decides, the same way a server session lets
 	// it: this vendor's descriptor declares no size and one local title's
 	// resource names do. See skt.PackagedScreen.
@@ -682,7 +692,7 @@ func inspect(path string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	logger.Debug("archive inspection complete", "entries", len(archive.Entries), "main_class", archive.MainClass.Name)
+	logger.Debug("archive inspection complete", "entries", len(archive.Entries), "main_class", archive.Descriptor.MainClass)
 
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
@@ -699,6 +709,10 @@ func invoke(path, method, descriptor string, argumentTexts []string, stdout, std
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if archive.Script != nil {
+		fmt.Fprintln(stderr, "invoke requires a Java archive; this archive contains SGS bytecode")
+		return 2
 	}
 	methodType, err := jvm.ParseMethodDescriptor(descriptor)
 	if err != nil {

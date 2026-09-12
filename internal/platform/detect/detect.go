@@ -200,6 +200,9 @@ func Classify(data []byte) (Platform, Reason, error) {
 	if isKTFNativePackage(names, wrapper) {
 		return claim(reader, KTF)
 	}
+	if IsScriptPackage(reader) {
+		return claim(reader, SKT)
+	}
 	// A zip of zips is refused by its own shape rather than by a marker it has
 	// no room for, and saying so is the difference between "there is a choice
 	// to make here" and "this is not a package".

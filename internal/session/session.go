@@ -122,6 +122,11 @@ func Inspect(archive []byte) (Summary, error) {
 		if err != nil {
 			return summary, err
 		}
+		if opened.Script != nil {
+			summary.Name = opened.Script.Name
+			summary.SaveOwner = opened.ScriptSaveOwner
+			return summary, nil
+		}
 		summary.Name = opened.Descriptor.Name
 		summary.SaveOwner = skt.SaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MainClass
@@ -194,6 +199,7 @@ type Session struct {
 	ktfNative *ktf.NativeSession
 	lgt       *lgt.Session
 	runtime   *skt.Runtime
+	script    *skt.ScriptSession
 
 	// surface receives frames on the platforms that draw into one. It also
 	// gives those platforms a flush counter they do not otherwise have.
@@ -347,6 +353,14 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		// packaged for. A Host that asked for a size keeps it; one that did
 		// not is given the archive's own answer. See skt.PackagedScreen.
 		screenWidth, screenHeight := options.width(), options.height()
+		if opened.Script != nil {
+			if options.Width == 0 {
+				screenWidth = opened.Script.Width
+			}
+			if options.Height == 0 {
+				screenHeight = opened.Script.Height
+			}
+		}
 		if options.Width == 0 && options.Height == 0 {
 			if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(opened); packaged {
 				screenWidth, screenHeight = packagedWidth, packagedHeight
@@ -357,6 +371,18 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			return nil, err
 		}
 		session.surface = surface
+		if opened.Script != nil {
+			started, err := skt.StartScript(ctx, opened, skt.ScriptOptions{
+				Framebuffer: surface, SaveStore: options.SaveStore,
+				AudioSink: options.AudioSink, Logger: options.Logger, Speed: options.Speed,
+			})
+			session.script = started
+			if err != nil {
+				session.Close()
+				return nil, startEndedOrFailed(err)
+			}
+			break
+		}
 		runtime, err := skt.Start(opened, skt.Options{
 			DisableAuthentication: options.DisableAuthentication,
 			JVM:                   jvm.Options{Logger: options.Logger},
@@ -564,6 +590,14 @@ func (s *Session) tick(ctx context.Context, budget time.Duration) (Progress, err
 			return progress, nil
 		}
 		return progress, err
+	case s.script != nil:
+		wait, err := s.script.Tick(ctx)
+		progress := Progress{Progressed: true, Wait: wait, Flushes: s.surface.Flushes(), Exited: s.script.Exited()}
+		if progress.Exited {
+			progress.ExitReason = "the script requested exit"
+			s.exitReason = progress.ExitReason
+		}
+		return progress, err
 	case s.runtime != nil:
 		// A MIDlet has no tick of its own: it runs on the callbacks the Host
 		// makes and whatever those deferred. Its audio timeline is advanced by
@@ -674,6 +708,11 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 		// The MIDP runtime takes the page's codes unchanged: they are the MIDP
 		// values, and translating them is the WIPI path's business.
 		return s.runtime.SendKey(skt.KeyEventType(action), code)
+	case s.script != nil:
+		if action != KeyPress && action != KeyRelease {
+			return fmt.Errorf("session: unknown key action %q", action)
+		}
+		return s.script.SendKey(ctx, action, code)
 	}
 	return ErrNotRunning
 }
@@ -704,7 +743,7 @@ func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) er
 	switch {
 	case s.ktf != nil:
 		return s.endedOrFailed(s.ktf.SendPointer(ctx, eventType, x, y))
-	case s.ktfNative != nil, s.lgt != nil, s.runtime != nil:
+	case s.ktfNative != nil, s.lgt != nil, s.runtime != nil, s.script != nil:
 		return ErrNoPointer
 	}
 	return ErrNotRunning
@@ -913,6 +952,8 @@ func (s *Session) ExitReason() string { return s.exitReason }
 // own mutex is what makes it safe beside a running tick.
 func (s *Session) Vibration() (backend.Vibration, bool) {
 	switch {
+	case s.script != nil:
+		return s.script.Vibration(), true
 	case s.ktf != nil:
 		return s.ktf.Vibration(), true
 	case s.runtime != nil:
@@ -1011,6 +1052,8 @@ func (s *Session) Screen() (width, height int) {
 // than being advanced by a Host, so there is no second clock to compare.
 func (s *Session) GuestElapsed() (time.Duration, bool) {
 	switch {
+	case s.script != nil:
+		return s.script.GuestElapsed(), true
 	case s.ktf != nil:
 		return s.ktf.GuestElapsed(), true
 	case s.ktfNative != nil:
@@ -1077,6 +1120,9 @@ func (s *Session) SetSpeed(multiplier float64) {
 	if s.runtime != nil {
 		s.runtime.SetSpeed(multiplier)
 	}
+	if s.script != nil {
+		s.script.SetSpeed(multiplier)
+	}
 }
 
 // guestPace is what an interval of guest time costs a Host at a given speed.
@@ -1100,7 +1146,7 @@ func (s *Session) Scale() int { return s.options.scale() }
 
 // Running reports whether there is still a game to tick.
 func (s *Session) Running() bool {
-	return s.ktf != nil || s.ktfNative != nil || s.lgt != nil || s.runtime != nil
+	return s.ktf != nil || s.ktfNative != nil || s.lgt != nil || s.runtime != nil || s.script != nil
 }
 
 // Paused reports whether the guest has been told that nobody is watching. A
@@ -1147,6 +1193,9 @@ func (s *Session) pause(ctx context.Context) error {
 		return s.endedOrFailed(s.lgt.Pause(ctx))
 	case s.runtime != nil:
 		return s.endedOrFailed(s.runtime.Pause())
+	case s.script != nil:
+		s.script.Pause()
+		return nil
 	case s.ktfNative != nil:
 		// The earlier KTF package has no lifecycle to call: its module is
 		// entered through one event callback and declares no pause entry.
@@ -1174,6 +1223,9 @@ func (s *Session) resume(ctx context.Context) error {
 		return s.endedOrFailed(s.lgt.Resume(ctx))
 	case s.runtime != nil:
 		return s.endedOrFailed(s.runtime.Resume())
+	case s.script != nil:
+		s.script.Resume()
+		return nil
 	case s.ktfNative != nil:
 		return nil
 	}
@@ -1191,6 +1243,8 @@ func (s *Session) resume(ctx context.Context) error {
 // a half-closed game that a second Close would enter again.
 func (s *Session) Close() {
 	ktfSession, nativeSession, lgtSession, runtime := s.ktf, s.ktfNative, s.lgt, s.runtime
+	script := s.script
+	s.script = nil
 	s.ktf, s.ktfNative, s.lgt, s.runtime = nil, nil, nil, nil
 	closing := func(where string, run func()) {
 		defer func() {
@@ -1211,6 +1265,9 @@ func (s *Session) Close() {
 	}
 	if runtime != nil {
 		closing("session close", func() { _ = runtime.Destroy(true) })
+	}
+	if script != nil {
+		closing("session close", func() { _ = script.Close() })
 	}
 	// Nothing is held once there is no game to hold it, and a repeat that
 	// outlived its session would name a key on a platform that is gone.

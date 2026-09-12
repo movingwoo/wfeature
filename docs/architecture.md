@@ -25,6 +25,8 @@ redefining its boundaries as Go packages.
      environments.
 3. Execution
    - `internal/jvm` executes SKT Java bytecode.
+   - `internal/sgsvm` executes SKT GNEX/GVM SGS bytecode; the SKT platform
+     composes it with shared backend services. See [sgs.md](sgs.md).
    - `internal/armcore` executes the initial ARMv4T subset for KTF/LGT. Shared
      memory belongs to the core, while each cooperative guest thread owns its
      register context. Instruction quanta are serialized and SVC handlers run
