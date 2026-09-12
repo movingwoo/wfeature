@@ -205,10 +205,11 @@ heard output. Audible acceptance remains pending for all five IDs.
 
 ## ID 06-08 and 10-12 directed acceptance
 
-The current random-compatible runtime replays the exact timed recordings for
-these IDs from the ignored `sgs-user-routes.json` file. Each archive is resolved
-through the stable manifest and verified before opening. The following table
-records the concrete visible endpoint and the boundary that remains:
+The current random-compatible runtime replays the exact timed recordings where
+they reach a useful endpoint, with focused directed routes for IDs 07 and 11.
+Each archive is resolved through the stable manifest and verified before
+opening. The following table records the concrete visible endpoint and the
+boundary that remains:
 
 | ID | Route and visible endpoint | Current boundary |
 | --- | --- | --- |
@@ -216,22 +217,34 @@ records the concrete visible endpoint and the boundary that remains:
 | 07 | The first six recorded Fire presses reach the main menu; a seventh Fire press at 9000 ms selects the start flow. `sgs-directed-07-start-randomcompat-mode2-20260912/first-final.png` at 14120 ms shows the existing-save path in its interactive management/HUD screen. | The original 75-press recording navigates settings, help, and ranking screens without selecting Start, so it is not the directed route. |
 | 08 | 44 events, including 22 presses, from 938 through 17614 ms. `sgs-directed-08-randomcompat-mode2-20260912/first-final.png` at 22614 ms shows an active battle field after directed input. | No save write occurs on this route. |
 | 10 | 40 events, including 20 presses, from 619 through 6487 ms. `sgs-directed-10-randomcompat-mode2-20260912/first-key005.png` shows the field and HUD; later captures show field dialogue after continued input. | No save write occurs on this route. |
-| 11 | The preserved one-press recording reaches the local title screen and closes/reopens cleanly. A focused route at 19200 ms shows the download prompt; the next non-Clear press deterministically reaches unsupported external-URL service `0xc4` at `0x13cd` in both the first and reopened sessions. Clear returns to the title screen. | **Blocked:** the tested route reaches a download gate; other local main-play paths remain unresolved. `sgs-directed-11-gate-randomcompat-mode2-20260912/summary.json` records the first failure. |
+| 11 | The title has six vertical selections. `Down, Fire`, then five more Fire presses advance the local story into an active room; later Down, Left, and Up presses move the visible player. `sgs-directed-11-local-mainplay-reopen-randomcompat-mode2-20260912/first-key011.png` through `first-key013.png` record that movement. | No save call occurs on this local main-play route. The external handoff on title selection zero remains unsupported but does not block local main play. |
 | 12 | 18 events, including nine presses, from 497 through 5974 ms. `sgs-directed-12-randomcompat-mode2-20260912/first-key009.png` and `first-final.png` show the active field after dialogue and movement input. | No save write occurs on this route. |
 
-All directed sessions except the deliberately exercised ID 11 gate start,
-advance, accept input, and close without an error. Their reopened sessions do
-the same. None reports a guest-initiated exit; this establishes Host
-close/reopen lifecycle behavior.
+The ID 11 route waits 19200 ms, then presses `Down, Fire, Fire, Fire, Fire,
+Fire, Fire, Right, Right, Down, Left, Up, 5, Fire` at 2400 ms intervals; each
+key is released 100 ms after its press. The first and reopened sessions use
+the same empty isolated store. Both finish without an execution or close error,
+make no save call, and remain guest-active. The first session records 2365 MIDI
+messages and no wave samples; the reopened session records 2218 MIDI messages
+and no wave samples.
 
-The ID 11 service argument is an absolute HTTP URL in script resource 65; the
-full value stays in ignored local evidence and no network request was made.
-After `0xc4`, the script unconditionally jumps to the invocation terminator.
-This indicates a Host handoff followed by local return, with no script callback
-expected. Main play remains blocked until the Host supports that handoff or a
-different local gate condition is identified. The tested handoff alone does
-not advance the local screen; whether the gate depends on external content or
-on an earlier local predicate remains unresolved.
+All directed main-play sessions start, advance, accept input, and close without
+an error. Their reopened sessions do the same. None reports a guest-initiated
+exit; this establishes Host close/reopen lifecycle behavior. For ID 11, all 16
+captures shared by the first and reopened sessions are byte-identical.
+
+The earlier ID 11 failure is an alternate title-menu path. Initialization calls
+the menu reset routine at `0x058c`, which stores zero in the selection element
+at `0x061c`. The key routine at `0x10f8` decrements that element at `0x117e`
+for Up and increments it at `0x1231` for Down; observed title input moves it
+from zero through five and clamps there. Fire on selection zero first enters
+state `[1, 0]`; a second Fire reaches external-URL service `0xc4` at `0x13cd`.
+The service argument is an absolute HTTP URL in script resource 65; the full
+value stays in ignored local evidence and no network request was made. State
+`[1, 5]` takes the local branch at the same gate and returns toward the title.
+Selection one instead enters the local story and main-play route described
+above. After `0xc4`, the script unconditionally jumps to the invocation
+terminator, so the alternate handoff does not expect a script callback.
 
 ## ID 06-08 and 10-12 save controls
 
@@ -273,7 +286,7 @@ The directed first sessions emit the following audio activity:
 | 07 | 363 | 4262 |
 | 08 | 496 | 980 |
 | 10 | 208 | 0 |
-| 11 | 414 | 0 |
+| 11 | 2365 | 0 |
 | 12 | 800 | 0 |
 
 These counters demonstrate service activity only. Audible output remains a
@@ -293,7 +306,7 @@ human acceptance item for every ID.
 | 08 | Active battle field | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
 | 09 | Active playfield and HUD | New payload causally restores visible progress | Host close/reopen passes | Audible output remains a human check. |
 | 10 | Field and HUD with continued dialogue | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
-| 11 | No local main-play route found | No save call before the gate | One-press Host close/reopen passes; gate route errors deterministically | **Blocked:** diagnose the local gate predicate and Host handoff; the tested route does not reach main play. |
+| 11 | Active room after local story and dialogue; movement changes the visible field | No save call on the route | Host close/reopen passes; all 16 shared captures match | Check later progress or menu flows for save applicability; the alternate title-menu URL handoff remains unsupported. |
 | 12 | Active field after dialogue and movement | No save write on the route | Host close/reopen passes | Check end-of-round or menu flows for save applicability. |
 
 Audio remains pending for all twelve IDs because no physical playback was
