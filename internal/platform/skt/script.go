@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"math/rand/v2"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -57,7 +56,7 @@ type ScriptSession struct {
 	requestStatus   int16
 	role            byte
 	userID          []byte
-	random          *rand.Rand
+	random          scriptRandom
 	textInput       *scriptTextInput
 	textInputSerial uint64
 }
@@ -84,7 +83,7 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 		requestStatus: 1,
 		role:          scriptStandaloneRole,
 		userID:        options.UserID,
-		random:        rand.New(rand.NewPCG(1, 2)),
+		random:        scriptRandom(1),
 	}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
@@ -246,6 +245,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		vm.Pop()
 	case 0xe0:
 		vm.Args(6)
+	case 0xe7:
+		return scriptImageFrameCall(vm)
 	case 0xe8:
 		return scriptImageInfoCall(vm)
 	case 0xe1:
@@ -462,8 +463,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 	case 0xb8, 0xb9:
 		return scriptCalendarCall(op, vm, time.Now())
 	case 0xa0:
-		seed := uint64(uint16(vm.Pop()))
-		s.random = rand.New(rand.NewPCG(seed, seed+1))
+		seed := uint32(int32(vm.Pop()))
+		s.random = scriptRandom(seed)
 	case 0xa1:
 		a := vm.Args(2)
 		lo, hi := int(a[0]), int(a[1])
@@ -472,12 +473,12 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		}
 		result := lo
 		if lo != hi {
-			result += s.random.IntN(hi - lo)
+			result += s.random.next() % (hi - lo)
 		}
 		vm.Push(int16(result))
 	case 0xa2:
 		p := int(vm.Pop())
-		if s.random.IntN(100) < p {
+		if s.random.next()%100 < p {
 			vm.Push(1)
 		} else {
 			vm.Push(0)
@@ -499,7 +500,7 @@ var scriptArguments = map[byte]int{
 	0xc8: 4, 0xca: 2,
 	0xa5: 1, 0xa6: 1, 0xa7: 1, 0xa8: 1, 0xa9: 1, 0xaa: 1,
 	0x73: 0, 0x74: 5, 0x75: 1,
-	0xd2: 0, 0xdb: 2, 0xdc: 1, 0xdd: 1, 0xe0: 6, 0xe1: 1, 0xe8: 7,
+	0xd2: 0, 0xdb: 2, 0xdc: 1, 0xdd: 1, 0xe0: 6, 0xe1: 1, 0xe7: 7, 0xe8: 7,
 	0xb8: 1, 0xa4: 1, 0xab: 2, 0xac: 3, 0xb0: 3, 0xb1: 2, 0xb3: 3,
 	0x51: 1, 0x52: 1, 0x53: 1, 0x54: 1, 0x55: 0, 0x56: 0, 0x57: 1, 0x58: 3, 0x59: 1,
 	0x5a: 0, 0x5b: 0, 0x5c: 0, 0x5d: 0, 0x5e: 1, 0x5f: 4, 0x60: 3, 0x61: 3, 0x62: 4, 0x63: 4, 0x64: 4, 0x65: 4,

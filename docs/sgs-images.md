@@ -193,11 +193,17 @@ result; the precise meaning of that successful value remains unestablished.
 Resource IDs and source address ranges are checked before the `0xe6` selector
 dispatch, including suboperation 3.
 
-`0xe7` requests width times height bytes for its destination and clears newly
-allocated storage, then calls `0x4104b0(source, destination, frameIndex)`. That
+`0xe7` requests width times height bytes for its destination. Its allocator
+returns success even when existing storage is retained, so the handler clears
+exactly that requested span on every successful allocation; retained allocator
+slack beyond the span is preserved. It then calls
+`0x4104b0(source, destination, frameIndex)`. That
 wrapper calls `0x421600(source, destination, frameIndex, 0)`. The final zero
 selects single-frame output; it is not a transparency argument. The underlying
 function also has a multi-frame branch, but this service does not expose it.
+The type 1 path writes packed one-bit pixels into the prefix, so only
+width-times-height divided by eight bytes contain decoded pixels even though
+the destination allocation is eight times larger.
 For SAF, frame reconstruction reaches `0x4218f0`. Original upper-bound tests
 allow a frame equal to the frame count, an apparent boundary defect that must
 not become unchecked indexing in a safe implementation.
@@ -216,13 +222,17 @@ object render attribute, and decoder completion limits remain to be specified.
 
 ## Implementation boundary
 
-No decoder implementation follows solely from these header and service
-contracts. A host must bound stream reads, declared lengths, record progress,
-object and frame indexes, aggregate decoded bytes, dimensions, and all callback
-loops. Decode to temporary storage before modifying guest resources or the
-framebuffer, and preserve source bytes when source and destination alias. Keep
-unsupported compressed formats explicit until their complete contracts and
-authored tests exist.
+The implemented `0xe7` slice derives dimensions and frame bounds from the same
+source it decodes instead of relying on process-global decoder state. It safely
+handles aliased source and destination resources, charges a conservative work
+bound before parsing, decodes into temporary storage, and changes the
+destination only after the complete supported frame validates. Its exact type
+1 subset is recorded in [SIS evidence](sgs-sis.md#extraction-contract-and-next-proof-boundary).
+
+Remaining decoders must likewise bound stream reads, declared lengths, record
+progress, indexes, aggregate decoded bytes, dimensions, and callback loops.
+Unsupported compressed formats stay explicit until their complete contracts
+and authored tests exist.
 
 ## Object compression 1 checkpoint
 

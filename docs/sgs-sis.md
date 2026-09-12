@@ -3,9 +3,10 @@
 SIS has two distinct encodings selected by the gate described in
 [extended images](sgs-images.md). This document records exact inspected header
 fields and the verified payload structure. It does **not** yet specify a complete
-SIS decoder: several composition fields, reference-object transforms and coded
-payload branches remain unresolved. Addresses refer to the original runtime;
-no original implementation, codebook, permutation table or asset is reproduced.
+SIS decoder: type 2 payload branches remain unresolved. Addresses refer to the
+original runtime;
+no original implementation, lookup storage, permutation table or asset is
+reproduced.
 
 ## Type 1: fixed eight-byte header
 
@@ -19,17 +20,24 @@ also selects type 1 at the outer image gate, which restricts it to 1 through 20.
 | 5 | 5 | Unresolved playback field; `0x5391f4` |
 | 10 | 5 | Width in eight-pixel units, nonzero; `0x5391f5` |
 | 15 | 4 | Height in eight-pixel units, nonzero; `0x5391f6` |
-| 19 | 1 | Unresolved flag; `0x5391f7` |
+| 19 | 1 | Complete-canvas inversion; `0x5391f7` |
 | 20 | 5 | Object count minus one; decoded count must be at most 20; `0x5391f3` |
-| 25 | 3 | Unresolved field; `0x5391f8` |
-| 28 | 1 | Unresolved flag; `0x5391f9` |
+| 25 | 3 | Reference-transform tile-index width; `0x5391f8` |
+| 28 | 1 | Stored field with no type 1 extraction consumer; `0x5391f9` |
 | 29 | 4 | Common delay field returned by metadata parser; `0x539202` |
 | 33 | 3 | Frame-record variant selector; `0x5391fa` |
-| 36 | 4 | Flags; `0x539408`; highest bit also stored at `0x5391fb` |
+| 36 | 4 | Stored fields with no type 1 extraction consumer; `0x539408`; highest bit also stored at `0x5391fb` and exported by the native metadata helper |
 
 The header therefore ends at byte 8. Width ranges from 8 to 248 and height
 from 8 to 120. Zero is rejected by this parser, so the outer wrapper's
 zero-to-256 normalization does not extend these type 1 dimensions.
+
+A whole-executable static scan found only the parser store for bit 28 and only
+the parser store for the complete four-bit field. The copied highest bit has
+two type 1 reads, both in the metadata helper where it is written to an output
+pointer. The type 1 extraction and rendering paths do not read any of these
+five stored values. Calling them extraction-inert does not discard the highest
+bit's separate metadata meaning.
 
 ## Type 2: variable byte header
 
@@ -69,6 +77,46 @@ not all be zero. For later objects, eight zero bits select the reference-object
 reader at `0x43ada0`; a nonzero lookahead selects `0x43aa90`. The lookahead is
 rewound before dispatch. No byte alignment is inserted between objects.
 
+The reference reader consumes nine zero bits, followed by a one-bit mode. Mode
+zero is an exact reference to the previous resolved object and consumes no
+further payload. Mode one snapshots the previous resolved object and then reads
+a tile-replacement stream. The first object cannot be a reference.
+
+Header bits 25 through 27 give the replacement tile-index width `n`. For `n=0`,
+the stream is immediately complete and consumes no further bits. Otherwise it
+repeats these records until the all-ones `n`-bit index:
+
+1. An `n`-bit tile index in row-major tile order.
+2. A one-bit coding selector.
+3. One complete 64-pixel tile using the same literal or coded representation as
+   an independent object.
+
+Each record replaces the indexed tile; it does not OR into the earlier pixels.
+Record order is significant, and the last of several records for one index
+wins. Consecutive mode-one references accumulate because each starts from the
+previous resolved object. A later mode-zero reference resolves to that latest
+state. Earlier independent and transformed objects retain their own snapshots.
+
+Three authored original-runtime calls verify the exact-reference boundary. One
+composed only the reference at (8,8), one ORed an independent object and its
+reference at x offsets 0 and 1, and one selected the last member of a two-link
+reference chain at (7,7). All returned 1 and reached the sentinel; their final
+bit positions were 146, 165 and 157. The Go comparison repeats the exact packed
+outputs through the real `0xe7` dispatch.
+
+Twelve further original-runtime results verify the replacement contract: an
+empty width-zero stream; literal replacement of one and two-tile objects;
+reverse-order and duplicate-index records; a coded replacement; two chained
+transforms; an exact reference after that chain; and all three separately
+rendered snapshots of one independent object followed by two transforms. The
+duplicate-index result retained only the last replacement. All native calls
+reached their sentinel, returned the declared frame count, and are compared to
+Go by exact packed output and final bit position. The native helper also
+accepted an index beyond a one-tile object's logical range and left its visible
+output unchanged. Go rejects that stream before changing the destination,
+because allowing the native unchecked write would violate the untrusted-input
+boundary.
+
 An independent object at `0x43aa90` contains:
 
 1. Five-bit tile-column count, nonzero.
@@ -89,23 +137,119 @@ uses the selection bit as follows:
   run's expected color becomes the opposite of the just-produced color.
 
 Only the consumed code length advances the real cursor; the 12-bit lookahead
-does not. The complete color-dependent codebook has not been independently
-specified here. It must not be replaced by a guessed unary or generic RLE
-scheme. The coded branch also applies a 64-position traversal permutation
-before packing rows (`0x43ba26`); its mathematical order remains unverified.
-Thus literal and coded tiles cannot be assumed to share the same scan order.
+does not. Both branches apply the same 64-position diagonal traversal before
+packing rows. A fresh original-runtime probe selected literal input positions
+0, 1, 2, 5, 8, 9 and 63; they appeared at raster coordinates (0,0), (1,0),
+(0,1), (2,0), (1,2), (0,3) and (7,7). This is the conventional alternating
+diagonal traversal and can be generated without retaining a lookup table. The
+original helper is not reproduced as a private lookup table. The following
+comparison checks the measured codes against a published standard.
+
+An exhaustive original-runtime probe over every 12-bit lookahead found 64 valid
+run prefixes for each initial color. Comparison with
+[ITU-T Recommendation T.4, Tables 2 and 3a](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-T.4-199607-S%21%21PDF-E&lang=e&type=items)
+found that all 64 white runs match, while 57 of the 64 black runs match. The
+seven black differences are:
+
+| Run | T.4 code | Original-runtime code |
+|---:|---|---|
+| 14 | `00000111` | `00000001` |
+| 17 | `0000011000` | `0000001000` |
+| 18 | `0000001000` | `00001100111` |
+| 19 | `00001100111` | `00001101000` |
+| 20 | `00001101000` | `00001101100` |
+| 21 | `00001101100` | `00001101110` |
+| 64 | `0000001111` | `000001111` |
+
+Direct raw-lookahead calls confirmed the table comparison. For example,
+`000000010000` returns black run 14 with length 8, while the T.4 run-14 prefix
+padded to 12 bits returns zero. `000000100000` returns native run 17 rather than
+T.4 run 18. `000001111000` returns native run 64 with length 9, while the T.4
+run-64 prefix padded to 12 bits returns zero. Four end-to-end coded-tile calls
+also verified all-zero and all-one 64-pixel runs plus alternating 32-pixel runs
+in both directions. The measured overlap does not establish how the native
+codebook was derived, and the codebook is not the standard table plus one
+exception.
+
+The Go decoder uses the 128 independently observed color/run pairs and matches
+prefixes incrementally for at most 12 bits. A local differential test checks
+every pair rather than substituting the published table. Two further native
+calls covered failure: a white run of 63 followed by a black run of 2 returned
+zero at bit position 59, and a truncated black prefix with a zero-filled mapped
+tail returned zero at bit position 51. Both calls reached the sentinel and left
+the eight-byte destination unchanged. Go rejects both streams before changing
+the destination.
 
 Object parsing invokes the same tile reader in scan-only mode to locate the
 next object; extraction invokes it again with output enabled. The object
 descriptor retains both the byte pointer and bit position. A decoder that
 forgets the residual bit offset will fail on non-byte-aligned objects.
 
-After objects, `0x43bbb0` reads each frame: one frame flag, one inclusion bit
+After objects, `0x43bbb0` reads each frame: one inversion bit, one inclusion bit
 per object, then a composition record through `0x43bd10` for each included
-object. That reader has a variant branch controlled by header field
-`0x5391fa`. Rendering at `0x43cdb0` reconstructs the selected frame using those
-records, object data, clipping and transforms. Full placement and transform
-contracts are still required before an executable raw-tile-only subset is safe.
+object. Header variant 1 omits the otherwise present three-bit pass selector;
+those records use pass zero. The record then stores signed-magnitude x in eight
+bits, signed-magnitude y in seven bits and four one-bit fields. Executable
+nonsquare, asymmetric probes establish the first three fields by their output:
+vertical mirror, horizontal mirror and 90-degree counterclockwise rotation.
+Rotation happens first, followed by the two mirrors in the rotated dimensions.
+The fourth field consumes two more bits when set. Values zero through three
+produced identical output in the verified path, and the renderer does not read
+the stored values.
+
+The variant is the number of ordered rendering passes. Rendering visits passes
+zero through variant minus one and includes an object only when its selector
+equals the current pass. Variant zero therefore renders no objects, and a
+selector greater than or equal to the variant is ignored. Each object is
+rendered at most once. Pass zero ORs set object pixels into the packed one-bit
+canvas. Later passes form a mask by filling the span between the first and last
+set pixel in each nonempty object row, then trimming above and below set pixels
+in each column. The native empty-column endpoint behavior leaves a filled span
+only on row zero. Inside the mask, zero and one object pixels replace the
+existing canvas pixel; set pixels outside it are ORed. Placement and clipping
+use the transformed dimensions and clip against all four canvas edges.
+
+Header bit 19 and the selected frame's leading bit each invert every byte in
+the complete packed canvas after composition. This includes background outside
+all objects. Setting both cancels. Frames retain separate composition records:
+a two-frame probe rendered the first normally and the second inverted without
+changing the first result.
+
+Forty-six authored original-runtime calls recorded this composition boundary
+on 2026-09-12. The vectors covered all eight transform
+combinations, three clipped negative placements, four values of the trailing
+two-bit field, variants 0, 2, 3 and 7 with selectors inside and outside their
+ranges, full-canvas and empty-canvas inversion, two-frame selection, overlap,
+later-pass replacement and the empty-column endpoint behavior. Every call
+reached its sentinel and returned the declared frame count; final bit positions
+were 181, 200, 203, 221, 343, 361 or 365 according to record shape. Exact packed
+output is compared both with the Go decoder and the actual `0xe7` dispatch. Six
+of these calls set header bit 28 or header bits 36 through 39 and were the first
+evidence that these values did not alter simple extraction.
+`TestLocalScriptSISCompositionComparison` validates the complete 46-row schema
+from the ignored JSONL file named by
+`WFEATURE_SGS_SIS_COMPOSITION_COMPARISON`.
+
+A second matrix varied bit 28 and all sixteen values of the four-bit field over
+four authored streams: a nonsquare asymmetric transformed object, clipped
+later-pass overlap, a literal tile replacement followed by an exact reference,
+and a coded tile. All 128 calls reached the sentinel and returned one. The
+parser globals retained bit 28 and the complete nibble exactly, while the
+separate metadata value equaled the nibble's highest bit. For each stream, all
+32 combinations had identical packed output, source length and final cursor;
+the four cursor positions were 203, 365, 338 and 95. Go repeats every vector
+through actual `0xe7`, and a permanent regression checks the same field matrix
+across literal composition, overlap, references and coded data. This dynamic
+result and the absence of extraction consumers establish that every combination of these five bits
+is accepted without changing extraction output.
+
+Earlier literal composition evidence covered the seven traversal points above,
+a full tile at offsets (0,0), (1,0), (-1,0), (0,1), (0,-1), (7,7) and (8,8), a
+two-tile object, two overlapping independent objects and selection of the
+second record in a two-frame stream. The Go comparison checks each packed
+output through actual `0xe7` dispatch, including its result, caller stack,
+packed prefix, zeroed requested tail and allocation rounding. A separate
+authored bytecode regression executes the extraction instruction inside the VM.
 
 ## Type 2 objects and payload dispatch
 
@@ -142,9 +286,18 @@ helpers for all frames, but the exposed `0xe7` wrapper rejects negative indexes.
 The exposed wrapper's inclusive upper-bound defect remains documented in
 [extended images](sgs-images.md).
 
-The smallest promising implementation is type 1 with independent literal
-tiles and a verified simple composition record. This still requires completing
-`0x43bd10` placement semantics and confirming raw tile packing at the frame
-boundary. It must explicitly reject coded tiles and reference objects until
-those contracts are complete. Current evidence establishes the headers and
-literal tile input bits, not an end-to-end executable SIS decoder.
+The implemented subset accepts type 1 streams with independent literal or coded
+tiles, mode-zero exact references, mode-one literal or coded tile replacements,
+header variants zero through seven, ordered pass composition, the measured
+geometric transforms, the consumed trailing record field and header/frame
+inversion. Header bit 28 and the four fields at bits 36 through 39 are consumed
+and accepted without changing extraction output. It reconstructs a requested
+frame into temporary packed storage before a guest resource changes. The
+pre-parse work reserve covers maximum coded expansion, reference fan-out,
+object snapshots, geometric transforms, mask construction and scans,
+composition, canvas inversion, and the maximum number of replacement records
+permitted by the source length and index width. Type 2 and SAF extraction remain
+unsupported. The safe frame range is zero through frame count minus one; the
+original wrapper's inclusive upper-bound defect is not reproduced. Source
+resources above 65,535 bytes are rejected, matching the script resource size
+limit and keeping snapshot and decode work bounded.

@@ -89,9 +89,9 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0x9d` | `0x0041b120` | I | Stop timer 0. |
 | `0x9e` | `0x0041b140` | I | Stop timer 1. |
 | `0x9f` | `0x0041b160` | I | Stop timer 2. |
-| `0xa0` | `0x0041b180` | P | Seed pseudo-random generator; host sequence differs from original C library. |
-| `0xa1` | `0x0041b1a0` | P | Random integer between two sorted bounds, lower inclusive/upper exclusive; equal bounds return that value. |
-| `0xa2` | `0x0041b1f0` | P | Percentage test: rand()%100 < input, boolean result. |
+| `0xa0` | `0x0041b180` | I | Sign-extend the seed into the session-local original 32-bit recurrence. See [random services](sgs-random.md). |
+| `0xa1` | `0x0041b1a0` | I | Original 15-bit draw modulo the sorted bound difference; equal bounds return without drawing. Wide intervals retain the original distribution. |
+| `0xa2` | `0x0041b1f0` | I | Always consume an original 15-bit draw; compare its remainder modulo 100 with the signed percentage. |
 | `0xa3` | `0x0041b220` | I | Absolute value with signed-word overflow behavior. |
 | `0xa4` | `0x0041b240` | I | Sign: -1,0,1. |
 | `0xa5` | `0x0041b270` | I | Sine of integer degrees, result scaled 100 and rounded; reduce angle modulo 360. |
@@ -160,7 +160,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xe4` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xe5` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xe6` | `0x0041d550` | M | Seven words: (1,suboperation,resource,p,q,unused,unused). Initialize SIS/SAF decoder, decode SAF object, or render decoded pixels. See [extended images](sgs-images.md). |
-| `0xe7` | `0x0041d6c0` | M | Seven words: (1,1,sourceResource,destinationResource,frameIndex,unused,unused). Extract a SIS/SAF frame into a resource. See [extended images](sgs-images.md). |
+| `0xe7` | `0x0041d6c0` | P | Seven words: (1,1,sourceResource,destinationResource,frameIndex,unused,unused). Extract type-1 literal/coded SIS frames with reference tile replacements, ordered composition, rotation, mirrors and canvas inversion into a resource. Extraction-inert header flags are accepted; type 2 and SAF remain unsupported. See [SIS contracts](sgs-sis.md). |
 | `0xe8` | `0x0041d830` | P | Local selector (1,1) now queries SIS headers and writes five words; focused tests cover the query; native comparison remains follow-up. SAF metadata and host selector 3 remain unsupported. See [pause status](sgs-completion.md#paused-at-user-request). |
 | `0xe9` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xea` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
