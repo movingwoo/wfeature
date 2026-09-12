@@ -160,7 +160,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xe4` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xe5` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xe6` | `0x0041d550` | M | Seven words: (1,suboperation,resource,p,q,unused,unused). Initialize SIS/SAF decoder, decode SAF object, or render decoded pixels. See [extended images](sgs-images.md). |
-| `0xe7` | `0x0041d6c0` | P | Seven words: (1,1,sourceResource,destinationResource,frameIndex,unused,unused). Extract type-1 literal SIS frames into a resource; coded/reference/transform modes, type 2 and SAF remain unsupported. See [extended images](sgs-images.md). |
+| `0xe7` | `0x0041d6c0` | P | Seven words: (1,1,sourceResource,destinationResource,frameIndex,unused,unused). Extract type-1 literal/coded SIS frames with exact object references into a resource; reference transforms, other composition modes, type 2 and SAF remain unsupported. See [extended images](sgs-images.md). |
 | `0xe8` | `0x0041d830` | P | Local selector (1,1) now queries SIS headers and writes five words; focused tests cover the query; native comparison remains follow-up. SAF metadata and host selector 3 remain unsupported. See [pause status](sgs-completion.md#paused-at-user-request). |
 | `0xe9` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
 | `0xea` | `0x0041d540` | I | Reserved original empty handler, no arguments or results. |
