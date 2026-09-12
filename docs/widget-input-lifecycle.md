@@ -79,8 +79,8 @@ Whole-field input needs the component's string-setting contract. It must not
 synthesize per-key automaton events with the complete string. An explicitly
 installed application listener needs a separately established contract; refusing
 that unsupported target is a limitation, not evidence that custom listeners work.
-The current follow-up reviews the KTF adapter against this distinction and uses
-it as a requirement for the LGT adapter.
+The KTF and LGT adapters follow this distinction: they refuse installed delta
+listeners and use the component string-setting contract for supported fields.
 
 ## Separate native input-method callers
 

@@ -143,29 +143,30 @@ trace or descriptor evidence before adding a selection rule.
 
 ## Native text input boundary
 
-The browser can safely open an operating-system text editor only when the
-runtime can identify one active editable field, snapshot its constraints and
-contents, and commit through the field's normal notification path. The LGT
-runtime does not currently retain enough state to do that.
+The LGT session now exposes a native-text provider for focused Java LWC
+TextField and TextBox components whose parent chain reaches a shown Shell.
+It snapshots contents, constraints, and lifecycle revisions. Complete-string
+commits validate those values again, enforce Java UTF-16 limits, and reject
+stale targets. Shown/focused widget graphs are collection roots, and lifecycle
+callbacks resolve exact signatures through guest inheritance.
 
-The Java lightweight-component implementation stores text, maximum length,
-input mode, child order, and visibility. It does not retain `focusNotify`, does
-not identify an active child of the shown shell, and deliberately declines text
-component key events because no component is drawn. Updating its stored string
-from the host would bypass the title's listener and any validation or screen
-transition tied to normal editing.
+The runtime uses the component string-setting contract. An explicitly installed
+InputMethodListener remains unsupported because its per-key composition delta
+interface cannot safely represent an arbitrary whole-field replacement. The
+adapter does not add a complete widget renderer or consume historical keypad
+composition events.
 
-The WIPI-C UI component path also provides no target: class lookup and component
-creation are refused, so no editable component exists. The WIPI-C input-method
-calls transform one key into caller-owned completion and composition buffers;
-they do not retain a field or a whole string that a later host commit can
-replace. Text drawn and edited by application code is opaque guest state and
-cannot be inferred from the framebuffer.
+An authored AOT archive initializes a field through Java imports, class tables,
+allocation, and virtual lifecycle calls. Shared session and actual WebSocket
+tests prove Korean/emoji commits, limit rejection/retry, and reopened readback.
+Chromium and WebKit also pass native-dialog composition isolation, key isolation,
+reload/resume, and length retry. See [native text input](native-text-input.md)
+for artifacts and the distinction between fixture proof and real-archive routes.
 
-The LGT session therefore does not expose a text-input provider. The shared
-host adapter should return `backend.ErrNoTextInput` for LGT, including for
-application-owned custom text screens. Support can be added after a real title
-proves a focus lifecycle, active component identity, constraint semantics, and
-the callback or notification a completed edit must trigger. A Java lightweight
-text component is the nearest candidate once those contracts are observed; a
-custom UI is not a safe target without an application-specific editing API.
+The WIPI-C UI component path still provides no target: class lookup and component
+creation are refused, so no editable component exists. WIPI-C input-method calls
+transform one key into caller-owned completion and composition buffers; they do
+not retain a field or whole string for a later Host commit. Text drawn and edited
+by application code remains opaque guest state. These paths report no supported
+active editor and require an established guest editing contract before support
+can be added.
