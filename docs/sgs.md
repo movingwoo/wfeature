@@ -18,10 +18,13 @@ problems. This closes the reported QA issues; it does not certify every SGS
 service or every gameplay route. The audit checkpoints below retain earlier
 failures as diagnostic history, not as the latest user acceptance result.
 
-External URL launch (`0xc4`) remains unsupported. The subsequent full-implementation
-work adds bitmap queue services; see the [opcode inventory](sgs-opcodes.md). Directed save/audio acceptance and unexercised gameplay paths are
-follow-up work. An archive running successfully does not imply its optional
-external-download route is implemented.
+External URL launch (`0xc4`) is connected to a bounded browser Host notice;
+see [the external-launch boundary](sgs-external-launch.md). The browser displays
+the validated destination as a link and never fetches or navigates to it without
+a click. CLI diagnostics still reject this browser-only Host capability. The
+subsequent full-implementation work adds bitmap queue services; see the
+[opcode inventory](sgs-opcodes.md). Directed save/audio acceptance and
+unexercised gameplay paths are follow-up work.
 
 ## Composition and packaging
 
@@ -91,6 +94,14 @@ initial resource bytes. Both outcomes consume the request once and start system
 callback 6 with parameter 2; that callback may exit or synchronously open the
 next dialog. A parked session retains the pending guest request and presents it
 again after the page resumes.
+
+Service `0xc4` consumes one NUL-terminated EUC-KR resource, validates an
+absolute HTTP or HTTPS destination within 2,048 guest bytes, and yields the
+current invocation. It does not stop timers, push a result, or schedule a guest
+callback. The browser Host retains at most one unacknowledged destination and
+coalesces later requests until the person opens or dismisses it. Parking keeps
+that request and a resumed page sees it again. The notice is nonmodal, so a
+later native text dialog retains sole ownership of keyboard input.
 
 ## Graphics, sound and storage
 

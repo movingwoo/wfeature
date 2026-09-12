@@ -1368,3 +1368,50 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
   user-select: text;
 }
 #text-input-dialog textarea { min-height: 6em; }
+
+/* A guest external handoff is visible without becoming a second modal. The
+   guest does not wait for an answer and can open a native text dialog later;
+   that top-layer dialog naturally covers this notice while it owns input. */
+.external-launch-notice {
+  display: none;
+  position: fixed;
+  top: calc(var(--safe-top) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 180;
+  box-sizing: border-box;
+  width: min(92vw, 420px);
+  padding: 12px;
+  gap: 9px;
+  border: 1px solid #756b45;
+  border-radius: 8px;
+  background: #2b2921;
+  color: #e8e6e3;
+  box-shadow: 0 6px 20px #0008;
+  text-align: center;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.external-launch-notice.visible {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.external-launch-link {
+  color: #9ecbff;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.external-launch-dismiss {
+  align-self: center;
+  font: inherit;
+  padding: 6px 18px;
+  border: 0;
+  border-radius: 4px;
+  background: #4a4a4a;
+  color: #fff;
+  cursor: pointer;
+}

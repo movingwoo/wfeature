@@ -150,6 +150,10 @@ type Options struct {
 	SaveStore             backend.SaveStore
 	AudioSink             backend.AudioSink
 	Logger                *slog.Logger
+	// ExternalLaunch receives a validated browser destination when this Host
+	// offers an intentional external-link action. A nil function makes the
+	// SGS service explicitly unsupported.
+	ExternalLaunch func(string)
 
 	// Speed scales the pace of the platforms that own a clock. Zero and 1 both
 	// mean the speed the game was written for.
@@ -375,6 +379,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			started, err := skt.StartScript(ctx, opened, skt.ScriptOptions{
 				Framebuffer: surface, SaveStore: options.SaveStore,
 				AudioSink: options.AudioSink, Logger: options.Logger, Speed: options.Speed,
+				ExternalLaunch: options.ExternalLaunch,
 			})
 			session.script = started
 			if err != nil {

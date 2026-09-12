@@ -34,7 +34,9 @@ type parkedSession struct {
 	started       startedMessage
 	postMortem    string
 	presented     uint64
-	parkedAt      time.Time
+
+	externalLaunch *externalLaunchMailbox
+	parkedAt       time.Time
 }
 
 // parkSession retains a game under its existing browser token. Ownership and

@@ -125,7 +125,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xc1` | `0x0041c5c0` | M | Resource download helper using address/length, calls 0x40c540. Exact completion behavior unresolved. |
 | `0xc2` | `0x0041c600` | M | SMS helper (type,dialResource,textResource), replaces three args with result from 0x40c680. |
 | `0xc3` | `0x0041c690` | M | Communication request using multiple resource descriptors and 0x412400; exact wire semantics unresolved. |
-| `0xc4` | `0x0041c750` | I | Request external URL launch from resource; current host explicitly rejects it. |
+| `0xc4` | `0x0041c750` | I | Consume one NUL-terminated URL resource and yield the invocation without stopping timers or creating a guest callback. The browser exposes one bounded HTTP(S) link request for intentional navigation; CLI diagnostics reject the unsupported Host capability. See [external launch](sgs-external-launch.md). |
 | `0xc5` | `0x0041c7c0` | M | Set host action 2 and redirect PC to invocation terminator; exit/return-to-shell effect requires host-action verification. |
 | `0xc6` | `0x0041c7e0` | M | Device/system query with multiple resource destinations through 0x40c9c0; exact argument layout unresolved. |
 | `0xc7` | `0x0041cb40` | M | Resource-based host operation through 0x40ca50; updates system variable 0 with result. |

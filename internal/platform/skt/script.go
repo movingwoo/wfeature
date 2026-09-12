@@ -19,6 +19,8 @@ type ScriptOptions struct {
 	AudioSink   backend.AudioSink
 	Logger      *slog.Logger
 	Speed       float64
+
+	ExternalLaunch func(string)
 }
 
 type scriptTimer struct {
@@ -377,18 +379,7 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 			}
 		}
 	case 0xc4:
-		resource := vm.Resource(int(vm.Pop()))
-		if vm.Error() != nil {
-			return vm.Error()
-		}
-		length, err := scriptResourceStringLength(vm, resource.Data)
-		if err != nil {
-			return err
-		}
-		if length > 2048 {
-			return fmt.Errorf("SGS external URL exceeds 2048 bytes")
-		}
-		return fmt.Errorf("SGS external URL launch is unsupported by this host")
+		return s.beginExternalLaunch(vm)
 	case 0x89:
 		return formatScriptStringResource(vm)
 	case 0xf0, 0xf1:

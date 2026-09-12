@@ -144,8 +144,11 @@ type sessionRunner struct {
 	textInputGame    *session.Session
 	textInputID      uint64
 	textInputRequest uint64
-	commands         chan clientMessage
-	frames           chan pendingFrame
+
+	externalLaunch        *externalLaunchMailbox
+	externalLaunchRequest uint64
+	commands              chan clientMessage
+	frames                chan pendingFrame
 
 	// outText and outFrames are what the writer goroutine drains. They are
 	// separate because their backlogs mean opposite things. Text is small and
@@ -410,6 +413,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			continue
 		}
 		r.flushTextInputRequest()
+		r.flushExternalLaunchRequest()
 
 		// The guest's own next deadline is what paces the game. Waiting on the
 		// command channel rather than sleeping means a key does not have to
@@ -495,6 +499,7 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 
 func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 	defer r.flushTextInputRequest()
+	defer r.flushExternalLaunchRequest()
 	switch message.Kind {
 	case clientStart:
 		r.startGame(ctx, message)
@@ -558,6 +563,8 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		}
 	case clientText:
 		r.handleTextInput(message)
+	case clientExternal:
+		r.handleExternalLaunch(message)
 	case clientSpeed:
 		if r.game != nil {
 			r.game.SetSpeed(message.Value)
@@ -665,6 +672,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	r.saveDirectory = directory
 
 	r.audio = &audioCollector{}
+	r.externalLaunch = &externalLaunchMailbox{}
+	r.externalLaunchRequest = 0
 	// The game's context keeps the request's values and drops its
 	// cancellation: what ends this game is closing it, not the page that
 	// happened to start it going away.
@@ -693,6 +702,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		Scale:     scale,
 		Width:     screenWidth,
 		Height:    screenHeight,
+
+		ExternalLaunch: r.externalLaunch.request,
 		// A debug build is the one that collects a report, and the ordered
 		// trace is what it collects.
 		TraceLimit: r.server.traceLimit,
@@ -816,9 +827,13 @@ func (r *sessionRunner) park() {
 		started:       r.started,
 		postMortem:    r.postMortem,
 		presented:     r.presented,
+
+		externalLaunch: r.externalLaunch,
 	})
 	// The context went with the game; this runner is not the one that ends it.
 	r.gameCtx, r.gameCancel = nil, nil
+	r.externalLaunch = nil
+	r.externalLaunchRequest = 0
 	r.saveDirectory = ""
 	r.token = ""
 }
@@ -872,6 +887,8 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 
 	r.game = parked.game
 	r.textInputRequest = 0
+	r.externalLaunch = parked.externalLaunch
+	r.externalLaunchRequest = 0
 	r.saveDirectory = parked.saveDirectory
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
@@ -916,6 +933,8 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 func (r *sessionRunner) stopGame() {
 	r.clearTextInput()
 	r.textInputRequest = 0
+	r.externalLaunch = nil
+	r.externalLaunchRequest = 0
 	r.server.releaseSession(r.token, r)
 	clear(r.heldKeys)
 	r.heldPointer = nil

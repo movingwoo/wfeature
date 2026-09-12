@@ -21,6 +21,7 @@ import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
 import { createTextInputDialog } from "./text-input.js";
+import { createExternalLaunchNotice } from "./external-launch.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
@@ -253,6 +254,7 @@ let resetCheatPanel = () => {};
 let sessionLink = null;
 let releaseInput = () => {};
 const textInputDialog = createTextInputDialog({ document, getSession: () => session, releaseInput: () => releaseInput() });
+const externalLaunchNotice = createExternalLaunchNotice({ document, getSession: () => session });
 document.getElementById("text-input-toggle")?.addEventListener("click", () => textInputDialog.open());
 
 const sendKey = (eventType, name) => {
@@ -449,7 +451,7 @@ const initInput = () => {
   // menu is refused everywhere the panels are not.
   document.addEventListener("contextmenu", event => {
     const target = event.target;
-    if (isTextEntry(target) || target?.closest?.(".cheat-panel, .log-view")) return;
+    if (isTextEntry(target) || target?.closest?.(".cheat-panel, .log-view, .external-launch-notice")) return;
     event.preventDefault();
   });
 
@@ -555,6 +557,7 @@ const openSession = async handlers => {
     onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
     onTextInput: () => { if (playing()) void textInputDialog.open(); },
+    onExternalLaunch: request => { if (playing()) externalLaunchNotice.show(request); },
     onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
     onStats: stats => recordSessionStats(stats),
   });
@@ -567,6 +570,7 @@ const sessionStateChanged = state => {
   if (state !== "playing") {
     if (["parked", "offline", "connecting", "occupied"].includes(state)) textInputDialog.detach();
     else textInputDialog.close();
+    externalLaunchNotice.detach();
   }
   document.getElementById("text-input-toggle")?.classList.toggle("hidden", state !== "playing");
   if (state !== "playing" && state !== "starting") {

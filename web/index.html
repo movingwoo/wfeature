@@ -166,6 +166,17 @@
           </div>
         </dialog>
 
+        <!-- An external destination is a Host notice rather than a guest
+             dialog. It stays nonmodal because the script continues after the
+             handoff and may open its own native text dialog later. -->
+        <aside id="external-launch-notice" class="external-launch-notice" role="status" aria-live="polite">
+          <strong>게임이 웹 주소를 열려고 합니다.</strong>
+          <a id="external-launch-link" class="external-launch-link" target="_blank" rel="noopener noreferrer">
+            <span id="external-launch-url"></span>
+          </a>
+          <button id="external-launch-dismiss" class="external-launch-dismiss">닫기</button>
+        </aside>
+
         <div id="status-message" class="status-message">
           <!-- The live region is the text, not the popup: the dismiss button
                never changes and would be read out with every message. -->

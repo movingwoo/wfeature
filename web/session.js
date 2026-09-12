@@ -26,7 +26,8 @@ export const sessionAvailable = () =>
 
 export class GameSession {
   // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onTextInput(),
-  // onStarted(info), onExited(reason), onError(message), onStats(stats), onClosed().
+  // onExternalLaunch(request), onStarted(info), onExited(reason), onError(message),
+  // onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
     this.socket = null;
@@ -155,6 +156,9 @@ export class GameSession {
       case "textInput":
         this.handlers.onTextInput?.();
         break;
+      case "externalLaunch":
+        this.handlers.onExternalLaunch?.(message.externalLaunch);
+        break;
       case "error":
         if (message.exited) this.handlers.onExited?.(message.message ?? "");
         this.handlers.onError?.(message.message ?? "세션 오류");
@@ -220,6 +224,7 @@ export class GameSession {
   openTextInput() { return this.ask({ kind: "text", action: "open" }); }
   commitTextInput(edit, text) { return this.ask({ kind: "text", action: "commit", edit, text }); }
   cancelTextInput(edit) { return this.ask({ kind: "text", action: "cancel", edit }); }
+  acknowledgeExternalLaunch(request) { return this.ask({ kind: "external", request }); }
 
   ping() { return this.ask({ kind: "ping" }, 10000); }
   park() { return this.ask({ kind: "park" }); }

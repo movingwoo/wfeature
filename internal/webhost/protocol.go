@@ -94,6 +94,8 @@ type clientMessage struct {
 	// Text and Edit identify a native-keyboard edit, separate from key events.
 	Text string `json:"text,omitempty"`
 	Edit uint64 `json:"edit,omitempty"`
+
+	Request uint64 `json:"request,omitempty"`
 }
 
 // Message kinds the page may send.
@@ -111,6 +113,8 @@ const (
 	clientReport  = "report"
 	clientStop    = "stop"
 )
+
+const clientExternal = "external"
 
 // serverMessage is anything the server sends in a text frame. A frame image
 // travels as a binary frame instead, with no envelope at all — it is the one
@@ -169,6 +173,13 @@ type serverMessage struct {
 	Occupied     bool              `json:"occupied,omitempty"`
 	Confirmation string            `json:"confirmation,omitempty"`
 	TextInput    *textInputMessage `json:"textInput,omitempty"`
+
+	ExternalLaunch *externalLaunchMessage `json:"externalLaunch,omitempty"`
+}
+
+type externalLaunchMessage struct {
+	Request uint64 `json:"request"`
+	URL     string `json:"url"`
 }
 
 type textInputMessage struct {
@@ -231,6 +242,8 @@ const (
 	serverVibrate   = "vibrate"
 	serverTextInput = "textInput"
 )
+
+const serverExternalLaunch = "externalLaunch"
 
 // vibrateMessage is one request of the handset's motor.
 //

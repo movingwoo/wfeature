@@ -358,3 +358,18 @@ test("native text request events are delivered independently of request replies"
   socket.deliver({ kind: "textInput" });
   assert.equal(requests, 1);
 });
+
+test("external launch events keep their request token and acknowledge separately", async () => {
+  const launches = [];
+  const { session, socket } = await openFakeSession({ onExternalLaunch: request => launches.push(request) });
+  socket.deliver({ kind: "externalLaunch", externalLaunch: { request: 73, url: "https://example.invalid/item" } });
+  assert.deepEqual(launches, [{ request: 73, url: "https://example.invalid/item" }]);
+
+  const acknowledging = session.acknowledgeExternalLaunch(73);
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.kind, "external");
+  assert.equal(sent.request, 73);
+  socket.deliver({ kind: "result", id: sent.id });
+  await acknowledging;
+  assert.equal(session.pending.size, 0);
+});
