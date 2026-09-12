@@ -13,9 +13,13 @@ type scriptSISLiteralObject struct {
 }
 
 type scriptSISComposition struct {
-	included bool
-	x        int
-	y        int
+	included         bool
+	pass             int
+	x                int
+	y                int
+	mirrorVertical   bool
+	mirrorHorizontal bool
+	rotateLeft       bool
 }
 
 type scriptSISLiteralFrame struct {
@@ -50,9 +54,9 @@ func (r *scriptSISBitReader) peek(count int) (uint, bool) {
 
 // decodeScriptSISLiteralFrame implements the independently verified type-1
 // subset: independent objects containing literal or coded 8-by-8 tiles,
-// reference objects with optional tile replacement streams, and additive frame
-// records without composition transforms. Other composition modes fail closed
-// until their contracts have executable evidence.
+// reference objects with optional tile replacement streams, and ordered frame
+// composition with the measured transforms and inversion fields. Unresolved
+// header fields fail closed until their contracts have executable evidence.
 func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
 	var result scriptSISLiteralFrame
 	if len(data) < 3 || !bytes.Equal(data[:3], []byte("SIS")) {
@@ -74,8 +78,8 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	if !ok || heightUnits == 0 {
 		return result, false
 	}
-	invert, ok := r.read(1)
-	if !ok || invert != 0 {
+	headerInvert, ok := r.read(1)
+	if !ok {
 		return result, false
 	}
 	objectField, ok := r.read(5)
@@ -95,7 +99,7 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 		return result, false
 	}
 	variant, ok := r.read(3)
-	if !ok || variant != 1 {
+	if !ok {
 		return result, false
 	}
 	unresolved, ok = r.read(4)
@@ -166,9 +170,10 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	}
 
 	var selected []scriptSISComposition
+	selectedInvert := false
 	for currentFrame := 0; currentFrame < int(frameCount); currentFrame++ {
-		frameFlag, ok := r.read(1)
-		if !ok || frameFlag != 0 {
+		frameInvert, ok := r.read(1)
+		if !ok {
 			return result, false
 		}
 		composition := make([]scriptSISComposition, objectCount)
@@ -183,6 +188,13 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 			if !composition[objectIndex].included {
 				continue
 			}
+			if variant != 1 {
+				pass, ok := r.read(3)
+				if !ok {
+					return result, false
+				}
+				composition[objectIndex].pass = int(pass)
+			}
 			x, ok := r.read(8)
 			if !ok {
 				return result, false
@@ -191,49 +203,55 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 			if !ok {
 				return result, false
 			}
-			flags, ok := r.read(4)
+			mirrorVertical, ok := r.read(1)
 			if !ok {
 				return result, false
 			}
-			if flags&1 != 0 {
+			mirrorHorizontal, ok := r.read(1)
+			if !ok {
+				return result, false
+			}
+			rotateLeft, ok := r.read(1)
+			if !ok {
+				return result, false
+			}
+			trailingFlag, ok := r.read(1)
+			if !ok {
+				return result, false
+			}
+			if trailingFlag != 0 {
 				if _, ok = r.read(2); !ok {
 					return result, false
 				}
 			}
-			if flags != 0 {
-				return result, false
-			}
 			composition[objectIndex].x = scriptSISSignedMagnitude(x, 7)
 			composition[objectIndex].y = scriptSISSignedMagnitude(y, 6)
+			composition[objectIndex].mirrorVertical = mirrorVertical != 0
+			composition[objectIndex].mirrorHorizontal = mirrorHorizontal != 0
+			composition[objectIndex].rotateLeft = rotateLeft != 0
 		}
 		if currentFrame == frameIndex {
 			selected = composition
+			selectedInvert = frameInvert != 0
 		}
 	}
 
 	result.width = int(widthUnits) * 8
 	result.height = int(heightUnits) * 8
 	result.pixels = make([]byte, int(widthUnits)*result.height)
-	for objectIndex, placement := range selected {
-		if !placement.included {
-			continue
-		}
-		object := &objects[objectIndex]
-		for sourceY := 0; sourceY < object.height; sourceY++ {
-			destinationY := placement.y + sourceY
-			if destinationY < 0 || destinationY >= result.height {
+	for pass := 0; pass < int(variant); pass++ {
+		for objectIndex, placement := range selected {
+			if !placement.included || placement.pass != pass {
 				continue
 			}
-			for sourceX := 0; sourceX < object.width; sourceX++ {
-				if object.pixels[sourceY*(object.width/8)+sourceX/8]&(0x80>>(sourceX&7)) == 0 {
-					continue
-				}
-				destinationX := placement.x + sourceX
-				if destinationX < 0 || destinationX >= result.width {
-					continue
-				}
-				result.pixels[destinationY*(result.width/8)+destinationX/8] |= 0x80 >> (destinationX & 7)
-			}
+			object := transformScriptSISObject(objects[objectIndex], placement)
+			compositeScriptSISObject(&result, object, placement.x, placement.y, pass != 0)
+		}
+	}
+	headerInverted := headerInvert != 0
+	if headerInverted != selectedInvert {
+		for index := range result.pixels {
+			result.pixels[index] = ^result.pixels[index]
 		}
 	}
 	return result, true
@@ -258,9 +276,11 @@ func decodeScriptSISTile(r *scriptSISBitReader, coded bool) ([64]byte, bool) {
 // references can render that object once for every declared object. Transform
 // references can also replace the same tile repeatedly. Source length alone is
 // therefore not a sufficient pixel-work bound. The fixed header supplies a
-// bounded object count and reference-index width before parsing begins. Five
+// bounded object count and reference-index width before parsing begins. Ten
 // maximum-object terms cover run iteration, coded expansion, tile placement,
-// reference snapshots and frame rendering. Each possible replacement adds
+// reference snapshots, geometric transformation, frame rendering, horizontal
+// mask scanning, row-span filling, vertical mask scanning and mask trimming.
+// Each possible replacement adds
 // three tile terms for run iteration, decoded expansion and placement. Source
 // terms cover bit parsing and the input snapshot. Charging the total before
 // decoding also accounts for malformed streams and other late format failures.
@@ -279,7 +299,7 @@ func scriptSISLiteralDecodeWork(data []byte) int {
 		}
 	}
 	const maximumObjectPixelWork = (31 * 8 * 12 * 8) / 64
-	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*5*maximumObjectPixelWork + replacementCount*3
+	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64 + objectCount*10*maximumObjectPixelWork + replacementCount*3
 }
 
 func scriptSISSignedMagnitude(value uint, magnitudeBits uint) int {

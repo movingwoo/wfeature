@@ -240,7 +240,7 @@ func TestScriptImageFrameInstruction(t *testing.T) {
 	}
 }
 
-func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
+func TestScriptSISLiteralRejectsMalformedAndTruncatedStreams(t *testing.T) {
 	var onePixel [64]byte
 	onePixel[0] = 1
 	valid := authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel})
@@ -251,13 +251,9 @@ func TestScriptSISLiteralRejectsUnsupportedAndTruncatedStreams(t *testing.T) {
 	}
 	for name, data := range map[string][]byte{
 		"malformed coded tile": authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, coded: true}),
-		"truncated reference":  authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, objects: 2}),
-		"frame mask":           authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, frameFlag: 1}),
-		"transform":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, transforms: 8}),
-		"inversion":            authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, invert: 1}),
 	} {
 		if _, ok := decodeScriptSISLiteralFrame(data, 0); ok {
-			t.Fatalf("accepted unsupported %s", name)
+			t.Fatalf("accepted malformed %s", name)
 		}
 	}
 	if _, ok := decodeScriptSISLiteralFrame(valid, -1); ok {
@@ -423,7 +419,8 @@ func TestScriptImageFrameValidatesOperandsAndResourceRangesBeforeMutation(t *tes
 func TestScriptImageFrameLateFailureConsumesWorkWithoutMutation(t *testing.T) {
 	var onePixel [64]byte
 	onePixel[63] = 1
-	data := authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel, transforms: 8})
+	valid := authoredSISLiteral(authoredSISLiteralOptions{pixels: onePixel})
+	data := valid[:len(valid)-1]
 	before := []byte("unchanged")
 	vm := sgsvm.New(&sgsvm.Program{Resources: []sgsvm.Resource{{Data: data}, {Data: slices.Clone(before)}}}, nil)
 	charged := scriptSISLiteralDecodeWork(data)

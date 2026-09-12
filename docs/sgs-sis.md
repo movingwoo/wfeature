@@ -3,8 +3,8 @@
 SIS has two distinct encodings selected by the gate described in
 [extended images](sgs-images.md). This document records exact inspected header
 fields and the verified payload structure. It does **not** yet specify a complete
-SIS decoder: several composition fields and type 2 payload branches remain
-unresolved. Addresses refer to the original runtime;
+SIS decoder: header bit 28, header bits 36 through 39 and type 2 payload
+branches remain unresolved. Addresses refer to the original runtime;
 no original implementation, lookup storage, permutation table or asset is
 reproduced.
 
@@ -20,7 +20,7 @@ also selects type 1 at the outer image gate, which restricts it to 1 through 20.
 | 5 | 5 | Unresolved playback field; `0x5391f4` |
 | 10 | 5 | Width in eight-pixel units, nonzero; `0x5391f5` |
 | 15 | 4 | Height in eight-pixel units, nonzero; `0x5391f6` |
-| 19 | 1 | Unresolved flag; `0x5391f7` |
+| 19 | 1 | Complete-canvas inversion; `0x5391f7` |
 | 20 | 5 | Object count minus one; decoded count must be at most 20; `0x5391f3` |
 | 25 | 3 | Reference-transform tile-index width; `0x5391f8` |
 | 28 | 1 | Unresolved flag; `0x5391f9` |
@@ -178,25 +178,58 @@ next object; extraction invokes it again with output enabled. The object
 descriptor retains both the byte pointer and bit position. A decoder that
 forgets the residual bit offset will fail on non-byte-aligned objects.
 
-After objects, `0x43bbb0` reads each frame: one frame flag, one inclusion bit
+After objects, `0x43bbb0` reads each frame: one inversion bit, one inclusion bit
 per object, then a composition record through `0x43bd10` for each included
-object. Header variant 1 omits the otherwise present three-bit composition
-pass. The record then stores signed-magnitude x in eight bits, signed-magnitude
-y in seven bits, and four one-bit transform fields. The last transform field
-adds two more bits when set.
+object. Header variant 1 omits the otherwise present three-bit pass selector;
+those records use pass zero. The record then stores signed-magnitude x in eight
+bits, signed-magnitude y in seven bits and four one-bit fields. Executable
+nonsquare, asymmetric probes establish the first three fields by their output:
+vertical mirror, horizontal mirror and 90-degree counterclockwise rotation.
+Rotation happens first, followed by the two mirrors in the rotated dimensions.
+The fourth field consumes two more bits when set. Values zero through three
+produced identical output in the verified path, and the renderer does not read
+the stored values.
 
-The verified simple record uses frame flag zero and clears all four transform
-fields. Rendering ORs set object pixels into a zeroed packed one-bit canvas,
-most significant bit first, and clips against every canvas edge. Seventeen
-authored calls to the original type 1 entry covered the seven traversal points
-above and a full tile at offsets (0,0), (1,0), (-1,0), (0,1), (0,-1), (7,7)
-and (8,8), followed by a two-tile object, two overlapping independent objects,
-and selection of the second record in a two-frame stream. Every call reached
-its sentinel. Single-frame calls returned 1 and the two-frame call returned 2;
-their final bit positions were 135, 200, 229 and 156 according to the record
-shape. The Go comparison checks every exact packed output byte, then repeats
-each vector through the actual `0xe7` dispatch to verify its result, caller
-stack, packed prefix, zeroed requested tail and allocation rounding. A separate
+The variant is the number of ordered rendering passes. Rendering visits passes
+zero through variant minus one and includes an object only when its selector
+equals the current pass. Variant zero therefore renders no objects, and a
+selector greater than or equal to the variant is ignored. Each object is
+rendered at most once. Pass zero ORs set object pixels into the packed one-bit
+canvas. Later passes form a mask by filling the span between the first and last
+set pixel in each nonempty object row, then trimming above and below set pixels
+in each column. The native empty-column endpoint behavior leaves a filled span
+only on row zero. Inside the mask, zero and one object pixels replace the
+existing canvas pixel; set pixels outside it are ORed. Placement and clipping
+use the transformed dimensions and clip against all four canvas edges.
+
+Header bit 19 and the selected frame's leading bit each invert every byte in
+the complete packed canvas after composition. This includes background outside
+all objects. Setting both cancels. Frames retain separate composition records:
+a two-frame probe rendered the first normally and the second inverted without
+changing the first result.
+
+Forty-six authored original-runtime calls recorded this composition boundary
+on 2026-09-12. Forty supported vectors covered all eight transform
+combinations, three clipped negative placements, four values of the trailing
+two-bit field, variants 0, 2, 3 and 7 with selectors inside and outside their
+ranges, full-canvas and empty-canvas inversion, two-frame selection, overlap,
+later-pass replacement and the empty-column endpoint behavior. Every call
+reached its sentinel and returned the declared frame count; final bit positions
+were 181, 200, 203, 221, 343, 361 or 365 according to record shape. Exact packed
+output is compared both with the Go decoder and the actual `0xe7` dispatch.
+The remaining six calls set header bit 28 or header bits 36 through 39. The
+native helper accepted these fields in the simple probe, but their interactions
+have no established contract, so Go rejects them before destination mutation.
+`TestLocalScriptSISCompositionComparison` validates the complete 46-row schema
+from the ignored JSONL file named by
+`WFEATURE_SGS_SIS_COMPOSITION_COMPARISON`.
+
+Earlier literal composition evidence covered the seven traversal points above,
+a full tile at offsets (0,0), (1,0), (-1,0), (0,1), (0,-1), (7,7) and (8,8), a
+two-tile object, two overlapping independent objects and selection of the
+second record in a two-frame stream. The Go comparison checks each packed
+output through actual `0xe7` dispatch, including its result, caller stack,
+packed prefix, zeroed requested tail and allocation rounding. A separate
 authored bytecode regression executes the extraction instruction inside the VM.
 
 ## Type 2 objects and payload dispatch
@@ -236,13 +269,15 @@ The exposed wrapper's inclusive upper-bound defect remains documented in
 
 The implemented subset accepts type 1 streams with independent literal or coded
 tiles, mode-zero exact references, mode-one literal or coded tile replacements,
-header variant 1, frame flag zero and zero composition-transform fields. It
-reconstructs a requested frame into temporary packed storage before a guest
-resource changes. The pre-parse work reserve covers maximum coded expansion,
-reference fan-out, object snapshots, and the maximum number of replacement
-records permitted by the source length and index width. Header inversion, other
-header variants, frame masks and composition transforms return failure. Type 2
-and SAF extraction remain unsupported. The safe frame range is zero through
-frame count minus one; the original wrapper's inclusive upper-bound defect is
-not reproduced. Source resources above 65,535 bytes are rejected, matching the
+header variants zero through seven, ordered pass composition, the measured
+geometric transforms, the consumed trailing record field and header/frame
+inversion. It reconstructs a requested frame into temporary packed storage
+before a guest resource changes. The pre-parse work reserve covers maximum
+coded expansion, reference fan-out, object snapshots, geometric transforms,
+mask construction and scans, composition, canvas inversion, and the maximum
+number of replacement records permitted by the source length and index width.
+Header bit 28 and header bits 36 through 39 return failure. Type 2 and SAF
+extraction remain unsupported. The safe frame range is zero through frame count
+minus one; the original wrapper's inclusive upper-bound defect is not
+reproduced. Source resources above 65,535 bytes are rejected, matching the
 script resource size limit and keeping snapshot and decode work bounded.
