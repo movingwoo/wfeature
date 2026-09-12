@@ -125,16 +125,16 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 | 03 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
 | 04 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
 | 05 | Directed play entry and input verified | Payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
-| 06 | User input replay; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
-| 07 | User input replay; main route acceptance pending | Pending | Pending | Generic lifecycle only |
-| 08 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
+| 06 | Interactive management route verified | Seeded and empty controls are visually identical; progress pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 07 | Existing-save route reaches management/HUD | Existing seed changes visible state; new progress pending | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 08 | Directed battle field verified | No save write on route; applicability pending | Activity observed; audible check pending | Directed Host close/reopen verified |
 | 09 | Directed restore-to-playfield route verified | New 64-byte save survives reopen and changes visible state versus immutable-seed control | Audible check pending | Directed close/reopen verified |
-| 10 | Browser field/HUD evidence; consolidate route | Pending | Pending | Browser session reuse |
-| 11 | User confirms running; record main route | Pending | Pending | Directed route pending |
-| 12 | Generic input evidence; directed route pending | Pending | Pending | Generic lifecycle only |
+| 10 | Directed field/HUD and dialogue verified | No save write on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 11 | Local title selection reaches room and player movement | No save call on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 12 | Directed field and movement verified | No save write on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
 
-The ID 09 route and its post-random-service validation are recorded in the
-[dated corpus evidence](sgs-corpus-2026-09-12.md). Its shared map alone did not
+Directed routes, save controls, and the ID 11 alternate-menu correction are recorded in the
+[dated corpus evidence](sgs-corpus-2026-09-12.md). For ID 09, the shared map alone did not
 prove progress restoration; the same-input seed control was necessary.
 
 ## Final gates
