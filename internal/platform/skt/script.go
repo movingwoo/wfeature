@@ -46,6 +46,8 @@ type ScriptSession struct {
 	paused          bool
 	closed          bool
 	runtimeMode     byte
+	requestID       int16
+	requestStatus   int16
 	random          *rand.Rand
 	textInput       *scriptTextInput
 	textInputSerial uint64
@@ -61,8 +63,10 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	}
 	s := &ScriptSession{
 		graphics: graphics, options: options, last: time.Now(),
-		runtimeMode: scriptStandaloneRuntimeMode,
-		random:      rand.New(rand.NewPCG(1, 2)),
+		runtimeMode:   scriptStandaloneRuntimeMode,
+		requestID:     -1,
+		requestStatus: 1,
+		random:        rand.New(rand.NewPCG(1, 2)),
 	}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
@@ -406,6 +410,13 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		}
 		vm.Args(2)
 		vm.Push(0)
+	case 0xbf:
+		requestID := vm.Pop()
+		result := int16(4)
+		if requestID == s.requestID {
+			result = s.requestStatus
+		}
+		vm.Push(result)
 	case 0xa3:
 		value := vm.Pop()
 		if value < 0 {
@@ -463,5 +474,5 @@ var scriptArguments = map[byte]int{
 	0x66: 4, 0x67: 1, 0x68: 2, 0x69: 1, 0x6a: 3, 0x6b: 3, 0x6c: 3, 0x6d: 3, 0x6e: 2, 0x6f: 3, 0x70: 4, 0x71: 4, 0x72: 5,
 	0x76: 0, 0x77: 0, 0x78: 0, 0x79: 1, 0x7a: 2, 0x7b: 2, 0x7c: 1, 0x7d: 2, 0x7e: 4, 0x7f: 2, 0x80: 2, 0x81: 2, 0x82: 3, 0x83: 1, 0x84: 2, 0x85: 2, 0x86: 3, 0x8a: 3, 0x8b: 4, 0x8c: 5, 0x8d: 6,
 	0x90: 1, 0x91: 0, 0x92: 1, 0x93: 0, 0x94: 1, 0x95: 0, 0x96: 1, 0x97: 1, 0x98: 2, 0x99: 2,
-	0x9a: 2, 0x9b: 2, 0x9c: 2, 0x9d: 0, 0x9e: 0, 0x9f: 0, 0xa0: 1, 0xa1: 2, 0xa2: 1, 0xa3: 1, 0xad: 2, 0xae: 3, 0xb2: 2, 0xb7: 3, 0xaf: 2, 0xb9: 1, 0xba: 1, 0xbe: 2, 0xc4: 1, 0xc9: 0,
+	0x9a: 2, 0x9b: 2, 0x9c: 2, 0x9d: 0, 0x9e: 0, 0x9f: 0, 0xa0: 1, 0xa1: 2, 0xa2: 1, 0xa3: 1, 0xad: 2, 0xae: 3, 0xb2: 2, 0xb7: 3, 0xaf: 2, 0xb9: 1, 0xba: 1, 0xbe: 2, 0xbf: 1, 0xc4: 1, 0xc9: 0,
 }

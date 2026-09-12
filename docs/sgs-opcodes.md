@@ -120,7 +120,7 @@ Status: **I** = a checked host dispatch path exists; **P** = a path exists with 
 | `0xbc` | `0x0041c3b0` | M | Begin mode-dependent communication request from (resource,value), yields current invocation. |
 | `0xbd` | `0x0041c4a0` | M | Encode word-memory bytes in an SG-prefixed communication packet; (address,length), cap payload 249, write result to system variable 0. |
 | `0xbe` | `0x0041c4f0` | P | Replace two operands with zero when runtime mode is not 3, without yielding or calling the mode-3 helper. Runtime mode 3 remains unsupported. See [host state](sgs-host-state.md#mode-gated-query). |
-| `0xbf` | `0x0041c540` | M | One-argument communication helper 0x410fe0; replaces argument with return value. |
+| `0xbf` | `0x0041c540` | P | Replace a request ID with its signed local status when it matches the last mode-3 request; return 4 on mismatch. Sessions start with ID -1 and status 1. Remote status transitions remain unavailable. See [host state](sgs-host-state.md#mode-three-request-and-local-status). |
 | `0xc0` | `0x0041c570` | M | Communication/download command using word-addressed data and other scalar arguments; calls 0x40c3d0. Exact argument order unresolved. |
 | `0xc1` | `0x0041c5c0` | M | Resource download helper using address/length, calls 0x40c540. Exact completion behavior unresolved. |
 | `0xc2` | `0x0041c600` | M | SMS helper (type,dialResource,textResource), replaces three args with result from 0x40c680. |

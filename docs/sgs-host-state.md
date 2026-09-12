@@ -135,7 +135,33 @@ The emulator implements that path, including its exact stack effect. This makes
 the query executable in the standalone mode without implying a communication
 session.
 
-In mode 3, the PC handler calls `0x410f10` with both word operands and replaces
-them with the helper's low-word result. The helper's host meaning and handset
-behavior remain unresolved. The emulator rejects that path before consuming the
-operands rather than fabricating a result.
+## Mode-three request and local status
+
+In mode 3, `0xbe` calls `0x410f10`. A zero status makes the helper return zero
+without changing its state. For any other status, the helper stores the first
+operand as the current request ID, builds a 19-byte packet beginning `SGGm` from
+two current-script metadata words and the second operand, resets the status to
+one, and calls the original transport sender. The inspected PC sender dispatches
+the bytes through its transport object. Therefore this path is an outbound
+request, not a local query. The emulator rejects it before consuming the
+operands because acknowledging a packet that was never sent would fabricate a
+result.
+
+Service `0xbf` is the corresponding local status lookup and does not check the
+runtime mode. It replaces one request-ID operand in place with the signed status
+when the ID matches the last request, or with 4 when it does not. It does not
+yield or call the transport. Direct execution of the original helper and full
+opcode handler confirmed this behavior across the signed-word range.
+
+The original PC image initializes the saved request ID to -1. Runtime startup
+calls `0x410cb0`, which resets the status to 1 but retains that ID. The receive
+path later writes 1 after its checksum comparison succeeds, 2 after a mismatch,
+and 3 after resource allocation fails. Those observations identify write
+conditions, not documented handset meanings for the numeric states.
+
+The saved ID is process-global in the inspected PC runtime and the reset routine
+can retain it across later script starts. The emulator instead owns this state
+per session and initializes every session to the clean-process values -1 and 1.
+This deliberate isolation prevents one browser session from observing another's
+request. Because the mode-3 sender remains unsupported, no implemented path
+currently changes those initial values.

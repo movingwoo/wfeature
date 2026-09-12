@@ -148,6 +148,101 @@ func TestScriptModeThreeQueryIsUnsupportedAtomically(t *testing.T) {
 	}
 }
 
+func TestScriptModeRequestStatusQuery(t *testing.T) {
+	// Reaching the second assignment proves that the local status query does
+	// not yield the current invocation.
+	s := newScriptTest(t, []byte{5, 0xff, 0xbf, 10, 16, 5, 7, 10, 15, 0xff}, nil)
+	if got := s.vm.Value(16, 0); got != 1 {
+		t.Fatalf("initial request status = %d, want 1", got)
+	}
+	if got := s.vm.Value(15, 0); got != 7 {
+		t.Fatalf("instruction after request status query did not run: got %d", got)
+	}
+
+	for _, test := range []struct {
+		query, want int16
+	}{
+		{query: -1, want: 1},
+		{query: 0, want: 4},
+		{query: 32767, want: 4},
+	} {
+		s.vm.Push(1234)
+		s.vm.Push(test.query)
+		if err := s.Call(0xbf, s.vm); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.vm.Pop(); got != test.want {
+			t.Fatalf("request %d status = %d, want %d", test.query, got, test.want)
+		}
+		if got := s.vm.Pop(); got != 1234 {
+			t.Fatalf("request %d changed caller stack: got %d", test.query, got)
+		}
+	}
+
+	s.requestID = -123
+	for _, state := range []int16{-32768, -1, 0, 1, 2, 3, 32767} {
+		s.requestStatus = state
+		s.vm.Push(-123)
+		if err := s.Call(0xbf, s.vm); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.vm.Pop(); got != state {
+			t.Fatalf("signed request state %d became %d", state, got)
+		}
+
+		s.vm.Push(321)
+		if err := s.Call(0xbf, s.vm); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.vm.Pop(); got != 4 {
+			t.Fatalf("mismatched request with state %d = %d, want 4", state, got)
+		}
+	}
+
+	// The non-mode-three 0xbe path does not enter the request helper or change
+	// its local status.
+	s.runtimeMode = scriptStandaloneRuntimeMode
+	s.requestStatus = 2
+	s.vm.Push(-123)
+	s.vm.Push(321)
+	if err := s.Call(0xbe, s.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Pop(); got != 0 {
+		t.Fatalf("mode-gated request result = %d, want 0", got)
+	}
+	s.vm.Push(-123)
+	if err := s.Call(0xbf, s.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.vm.Pop(); got != 2 {
+		t.Fatalf("mode-gated request changed status to %d, want 2", got)
+	}
+}
+
+func TestScriptModeRequestStatusIsSessionOwnedAndUnderflowIsAtomic(t *testing.T) {
+	first := newScriptTest(t, []byte{0xff}, nil)
+	second := newScriptTest(t, []byte{0xff}, nil)
+	first.requestID = 123
+	first.requestStatus = 2
+
+	second.vm.Push(-1)
+	if err := second.Call(0xbf, second.vm); err != nil {
+		t.Fatal(err)
+	}
+	if got := second.vm.Pop(); got != 1 {
+		t.Fatalf("second session inherited first session state: got %d", got)
+	}
+
+	beforeID, beforeState := second.requestID, second.requestStatus
+	if err := second.Call(0xbf, second.vm); err == nil || err.Error() != "operand stack underflow" {
+		t.Fatalf("empty request status query: %v", err)
+	}
+	if second.requestID != beforeID || second.requestStatus != beforeState {
+		t.Fatal("underflow changed request status state")
+	}
+}
+
 func TestScriptExitStopsFutureTimersAndKeys(t *testing.T) {
 	s := newScriptTest(t, []byte{0x46}, nil)
 	if !s.Exited() {
