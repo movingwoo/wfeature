@@ -212,6 +212,7 @@ func sameTextInputField(component *jvm.Object, name string, value jvm.Value, pre
 }
 
 type lwcInputListenerState struct {
+	revision      jvm.Value
 	handlerValue  jvm.Value
 	hasHandler    bool
 	handler       *jvm.Object
@@ -236,6 +237,7 @@ func lwcTextInputListenerState(component *jvm.Object) (lwcInputListenerState, bo
 		return state, true
 	}
 	state.handler = handler
+	state.revision = handler.Fields[inputMethodListenerRevisionField]
 	state.listenerValue, state.hasListener = handler.Fields[inputMethodListenerField]
 	if !state.hasListener {
 		return state, true
@@ -249,7 +251,8 @@ func lwcTextInputListenerState(component *jvm.Object) (lwcInputListenerState, bo
 }
 
 func sameLWCTextInputListenerState(left, right lwcInputListenerState) bool {
-	return left.handler == right.handler && left.hasHandler == right.hasHandler &&
+	return left.revision == right.revision &&
+		left.handler == right.handler && left.hasHandler == right.hasHandler &&
 		(!left.hasHandler || left.handlerValue == right.handlerValue) &&
 		left.listener == right.listener && left.hasListener == right.hasListener &&
 		(!left.hasListener || left.listenerValue == right.listenerValue)

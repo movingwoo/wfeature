@@ -108,9 +108,8 @@ the legacy keypad editor. A field with an explicitly installed
 `InputMethodListener` is not offered to the Host because sending the completed
 value as a guessed replacement operation could corrupt that listener's active
 composition. Installing a listener after the Host takes its snapshot invalidates
-the pending commit. Exact field snapshots do not detect a listener that starts
-explicitly null, is installed, and is restored to the same null value before
-commit; detecting that history requires a mutation generation.
+the pending commit. A handler-owned mutation revision also invalidates a pending edit when the
+guest installs a listener and restores the original null value before commit.
 
 The vendor modal path has an additional lifecycle gap: its text field is not
 associated with the form's active focus, and `doModal` returns synchronously.

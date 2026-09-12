@@ -563,6 +563,9 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 // inputMethodListenerField is the listener a handler was given.
 const inputMethodListenerField = "listener:Lorg/kwis/msp/lcdui/InputMethodListener;"
 
+// Host-only history invalidates edits even when a listener is restored to null.
+const inputMethodListenerRevisionField = "host:input-listener-revision"
+
 func runtimeInputMethodConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 2 {
 		return jvm.VoidValue(), fmt.Errorf("InputMethodHandler constructor expected receiver and constraint, got %d arguments", len(arguments))

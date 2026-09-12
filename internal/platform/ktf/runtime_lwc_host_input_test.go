@@ -121,11 +121,12 @@ func TestTextInputCommitRejectsAListenerInstalledAfterSnapshot(t *testing.T) {
 
 func TestTextInputCommitRejectsAListenerInstalledThenRemovedAfterSnapshot(t *testing.T) {
 	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
-	input, err := session.TextInput(context.Background())
+	handler, err := field.Fields[componentInputHandlerField].Reference()
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := field.Fields[componentInputHandlerField].Reference()
+	handler.Fields[inputMethodListenerField] = jvm.ReferenceValue(nil)
+	input, err := session.TextInput(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
