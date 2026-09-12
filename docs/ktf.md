@@ -4480,8 +4480,9 @@ before it was packed. `ParseNativeInfo` requires the file to end with the
 trailer, so it refuses. The bytes are in the archive as distributed and its zip
 CRC is correct, so this is a shape to tolerate rather than damage to detect.
 
-Both archives are kept under `var/games/test/errorFile/` with a note saying
-what each one is. Everything below is what happened when the gate was answered.
+At the time of this investigation, both archives were grouped in an ignored
+diagnostic directory with a note saying what each one was. Everything below is
+what happened when the gate was answered.
 
 ### The three readings undone, and what was behind them
 
@@ -4639,13 +4640,13 @@ Superseded by "Where the two stand, after the second pass" below; kept because
 what each of them was stopped by is what the sections between here and there
 answer.
 
-- **`[큰화]로맨스소드` reaches its title screen.** Start-up, its data, its
+- **The first later archive reaches its title screen.** Start-up, its data,
   publisher screen, its own artwork and its text all come out, and nothing on
   that route is still a trap. A key is delivered and **taken** — its "press any
   key" line stops being drawn and never comes back, which no run without a key
   ever does — but the screen after it has not arrived. That is the next thing to
   read.
-- **`컴투스_맞고_2006` starts and registers no frame.** It gets through the
+- **The second later archive starts and registers no frame.** It gets through
   entry, the factory, its start event and its own files, and then fails inside
   an initialisation it swallows: it asks a display interface this platform has
   not met for a font's line height, centres three lines of text on the screen
@@ -4736,7 +4737,7 @@ losing when that gap is closed.
 
 Superseded by "after the third pass" below.
 
-- **`[큰화]로맨스소드` reaches its title screen, with sound.** Reading the file
+- **The first later archive reaches its title screen, with sound.** Reading the
   test the later way puts it on the path that loads `lcdinfo.dat` and its own
   certificate and plays its opening music: four clips set, two started, two
   stopped, and 400 frames presented. Nothing on that route traps. A key still
@@ -4745,9 +4746,9 @@ Superseded by "after the third pass" below.
   that reads that code does not act on it. **That is a state this platform can
   no longer see the outside of: nothing is unanswered, so the next step is
   reading the title's own state machine rather than watching for a trap.**
-- **`컴투스_맞고_2006` starts, loads and presents.** It authenticates against
-  its own archive rather than the network, reads its handset record, loads
-  eighteen resources out of `matgo2006.bar`, registers its 80ms frame and
+- **The second later archive starts, loads and presents.** It authenticates
+  against its own archive rather than the network, reads its handset record,
+  loads eighteen resources from its resource archive, registers its 80ms frame and
   presents twice. Its screen is still almost empty: it blits twenty regions out
   of a surface of its own that it has not drawn into — re-decoding that surface
   on every blit changes nothing, so the surface really is empty — and its step
@@ -4785,9 +4786,9 @@ the release on its own. The 2005 module does not handle `0x100`: an event its
 dispatch does not know answers zero and does nothing, and its in-game route is
 byte-identical with the third event being sent.
 
-With it, `[큰화]로맨스소드` plays: title screen, a memory warning, its save-slot
-screen reading the `sav.dat` the archive ships (`SLOT 2 · LV 3 · PLAYTIME
-00:11:54`), the load prompt, and the game itself.
+With it, the first later archive plays: title screen, a memory warning, its
+save-slot screen reading the `sav.dat` the archive ships (`SLOT 2 · LV 3 ·
+PLAYTIME 00:11:54`), the load prompt, and the game itself.
 
 ### The factory owns the picture, because the title frees it
 
@@ -4814,11 +4815,11 @@ half of it. The 2005 archive is byte-identical through its in-game route.
 
 ### Where the two stand, after the third pass
 
-- **`[큰화]로맨스소드` plays.** Start-up, publisher screen, title screen with
+- **The first later archive plays.** Start-up, publisher screen, title screen with
   music, menus, its shipped save, and in-game. Its own layout leaves the top and
   bottom of a 240x320 screen black — a larger screen only makes the black taller,
   so that is the title's and not this platform's.
-- **`컴투스_맞고_2006` is still on its loading screen.** What is known about it
+- **The second later archive is still on its loading screen.** What is known
   now: its frame is 163 instructions, its step is gated on a flag at `+0x1748`
   of its own state that nothing sets, and the state it idles in waits on a word
   at `+0x3380`. It is not idle underneath — over six hundred frames it sets
@@ -4902,7 +4903,7 @@ now reads as its author wrote it.
 
 ### What writes this, for a title nothing is unanswered for
 
-`컴투스_맞고_2006` stops with **no trap left**, which is the state a trap list
+The second later archive stops with **no trap left**, which is the state a trap list
 cannot say anything about. `TestLocalNativeWatchProbe` is the tool for it: it
 watches words of the title's own state block — the word at `+0x24` of the object
 its factory built, which is where both local titles keep theirs — and reports

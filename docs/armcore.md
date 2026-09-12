@@ -1246,10 +1246,10 @@ Correctness was checked the way the boot sweeps check it rather than by the
 unit tests alone. **128 LGT archives — the 34 local ones and the 94-archive
 test corpus — run 400 ticks under both builds with `-framedir`, and `framediff`
 reports every frame of every one of them byte-identical.** The 43 local KTF
-archives were compared by first lit frame and its JSON summary, the way
-`NOT-WORKING.md` describes: all identical but one, and that one differs from
-*itself* between two runs of the same build, which is this platform's noise
-floor rather than a regression.
+archives were compared by first lit frame and its JSON summary, the way the
+earlier local failure report describes: all identical but one, and that one
+differs from *itself* between two runs of the same build, which is this
+platform's noise floor rather than a regression.
 
 Two things this did not need, both of which the sections above had argued for
 and against at length. It did not need a wider entry — the entry got *narrower*
