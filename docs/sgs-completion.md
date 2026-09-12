@@ -1,16 +1,99 @@
 # SGS completion acceptance
 
+## Resumed managed work
+
+The user resumed SGS work on 2026-09-12 using the managed workflow established
+for the carrier platforms. PR #136 is merged; the restart baseline is main at
+`2b56bad`. The pause below is historical and no longer prohibits SGS work.
+
+The five existing open areas remain in scope: systematic SIS metadata comparison,
+the twelve-title gameplay/save/audio/lifecycle matrix, Host UI/communication and
+identity services, extended SIS/SAF decoding and composition, and the remaining
+compatibility differences. A working subset does not complete this scope.
+
+Three `gpt-5.6-sol` workers at `xhigh` use isolated worktrees. Initial ownership
+is image contracts and metadata comparison, Host service contracts, and corpus
+acceptance. The manager owns shared integration, final review, testing and
+separate commits/PRs. Workers do not publish or merge. Runtime game archives and
+original saves remain read-only; each probe uses isolated save data.
+
+Implementation follows executable slices with evidence and regression tests.
+Unclear contracts remain explicit until compared with the original runtime or
+a demonstrated caller. The existing normal/debug/race/vet and profile-build
+gates still apply, and Host changes require session/browser verification.
+Physical audio and OS IME observations are reported separately from automated
+checks. No whole-platform completion follows from green unit tests alone.
+
+The systematic SIS metadata comparison is now complete in PR #154. The manager
+reran all 102 authored native results against the Go service in normal, debug
+and race builds; all return values and 510 output words matched. This closes
+only the metadata comparison item; the other four areas remain open.
+
+The standalone runtime-mode correction in PR #155 initializes the guest with mode 2 and
+implements `0xd2` without confusing that state with subsequent event parameters.
+The manager integration passed the normal/debug suites, internal race tests,
+vet, and both CLI/server build profiles. Matched, SHA-verified runs of all twelve
+archives produced identical frames and flush counts before and after the change.
+A real-server headless Chromium check rendered IDs 06 and 07, exercised key
+input, and returned to the launcher to start another session without page or
+protocol errors. This is startup/lifecycle evidence, not completion of their
+gameplay, save restoration or audible playback acceptance paths.
+
+PR #156, stacked on #155, corrects the random services to the observed 32-bit
+recurrence and 15-bit draw semantics. All 196 authored native service results
+and final states match the Go regression. The manager reran the full test,
+debug, race, vet and CLI/server profile-build gates and a twelve-archive startup
+probe. The directed ID 09 restore/control distinction also survives the change;
+later randomized play frames are not expected to match the former substitute
+generator. See [random evidence](sgs-random.md).
+
+The restart corpus manifest was checked against all twelve current archive
+SHA-256 values; every entry matched. A separate read-only descriptor inventory
+found one paired descriptor per archive: ten MOD files and two INF files.
+A subsequent descriptor audit found six distinct payloads and no `UserID` key.
+An optional connection-ID member is not proven to map to the installed UserID.
+The original PC Host instead reads external configuration with an empty
+default. Service `0x53` now supports that default and an internal, bounded
+session option; no release Host exposes a UserID setting. No identity is inferred
+from a filename, subscriber phone number or executable save-owner digest. See
+[the identity source evidence](sgs-host-state.md).
+
+## Combined extraction and Host checkpoint
+
+Combined revision `d250de9` includes type-1 SIS literal/coded tiles, reference
+replacements, ordered composition, geometric transforms, canvas inversion and
+extraction-inert header flags. It also includes native text input, intentional
+external-link handoff, invocation yielding, and the local request-status path.
+All eight native SIS comparison groups passed together, as did general/debug
+checks, internal race tests, vet and debug/release CLI and server builds.
+These results establish the documented contracts, not complete SIS/SAF support.
+
+At preceding revision `fc8e8ea`, a manifest-verified startup check opened every
+archive twice without a persistent save store. Each run advanced 1,200 ticks of
+16 ms and pressed/released Right at ticks 900/906. All 24 runs remained active
+and closed without error. Each pair had identical final framebuffer hashes and
+presentation counts. Counts by ID were 93, 74, 73, 73, 171, 93, 120, 75, 92,
+600, 92 and 48. This check covers bounded startup, input and Host restart; it
+does not establish directed play, restored progress, guest exit or audible output.
+
+Type-1 extraction returns packed resource bytes. A successful extraction is
+not proof of the complete extended-image drawing path through the browser.
+Type 2, SAF and remaining Host contracts still require their own executable
+acceptance paths. The corpus gate below remains open.
+
 ## Paused at user request
 
 Development of further compatibility features stopped on 2026-09-11 at the
 user's request. The user subsequently authorized a PR containing all SGS work
 completed so far. That PR is a partial-support delivery; it does not depend on
-finishing the full-compatibility requirements below. Further implementation
-remains paused. Unrelated workspace changes are excluded from the PR.
+finishing the full-compatibility requirements below. At that checkpoint, further implementation
+remained paused; the explicit resumption above supersedes that instruction.
+Unrelated workspace changes are excluded from the PR.
 
 The local SIS metadata query for `0xe8` is included, with focused header,
 instruction, address-bank, malformed-input and work-limit tests. Systematic
-comparison of the native SIS metadata probe with Go remains follow-up work.
+comparison of the native SIS metadata probe with Go was follow-up work at that
+checkpoint and is completed by the resumed comparison above.
 SAF metadata and the host image branch remain explicitly unsupported.
 
 The SAF zlib object-body component is tested but remains disconnected from
@@ -63,18 +146,22 @@ absence rather than inventing a passing test. Keep archives and captures ignored
 
 | ID | Main play route | In-game save/load | Audio | Exit/restart |
 | --- | --- | --- | --- | --- |
-| 01 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 02 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 03 | Prior directed fight evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 04 | Prior directed fight evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 05 | Generic input evidence; directed route pending | Pending | Pending | Generic lifecycle only |
-| 06 | User input replay; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
-| 07 | User input replay; main route acceptance pending | Pending | Pending | Generic lifecycle only |
-| 08 | Prior directed play evidence; consolidate route | Pending | Pending | Generic lifecycle only |
-| 09 | Browser menu evidence; main route acceptance pending | 64-byte reload observed; visible progress pending | MIDI events observed; audible check pending | Recorded route closes/reopens |
-| 10 | Browser field/HUD evidence; consolidate route | Pending | Pending | Browser session reuse |
-| 11 | User confirms running; record main route | Pending | Pending | Directed route pending |
-| 12 | Generic input evidence; directed route pending | Pending | Pending | Generic lifecycle only |
+| 01 | Directed play and settings routes verified | Changed audio setting survives restart and differs from immutable-seed control; gameplay progress remains outside this proof | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 02 | Directed play route verified | No save activity in traversed route; wider applicability unresolved | Activity observed; audible check pending | Empty-store Host close/reopen verified |
+| 03 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
+| 04 | Directed fight route verified | Startup default only; visible progress pending | Wave activity observed; audible check pending | Directed Host close/reopen verified |
+| 05 | Directed play entry and input verified | Payload reloads; visible-progress control still indistinguishable | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 06 | Interactive management route verified | Seeded and empty controls are visually identical; progress pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 07 | Directed purchase and restored management/HUD verified | New payload restores changed currency and supply quantity versus immutable seed | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 08 | Directed battle field verified | No save write on route; applicability pending | Activity observed; audible check pending | Directed Host close/reopen verified |
+| 09 | Directed restore-to-playfield route verified | New 64-byte save survives reopen and changes visible state versus immutable-seed control | Audible check pending | Directed close/reopen verified |
+| 10 | Directed field/HUD and dialogue verified | No save write on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 11 | Local title selection reaches room and player movement | No save call on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+| 12 | Directed field and movement verified | No save write on route; applicability pending | MIDI activity; audible check pending | Directed Host close/reopen verified |
+
+Directed routes, save controls, and the ID 11 alternate-menu correction are recorded in the
+[dated corpus evidence](sgs-corpus-2026-09-12.md). For ID 09, the shared map alone did not
+prove progress restoration; the same-input seed control was necessary.
 
 ## Final gates
 
