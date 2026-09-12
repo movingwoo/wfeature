@@ -50,10 +50,13 @@ generator. See [random evidence](sgs-random.md).
 The restart corpus manifest was checked against all twelve current archive
 SHA-256 values; every entry matched. A separate read-only descriptor inventory
 found one paired descriptor per archive: ten MOD files and two INF files.
-Their binary contents do not expose a line-based `UserID=` field. This does
-not establish that identity metadata is absent: the descriptor formats still
-need decoding before they can supply the identity service. No identity is
-inferred from a filename or the executable save-owner digest.
+A subsequent descriptor audit found six distinct payloads and no `UserID` key.
+An optional connection-ID member is not proven to map to the installed UserID.
+The original PC Host instead reads external configuration with an empty
+default. Service `0x53` now supports that default and an internal, bounded
+session option; no release Host exposes a UserID setting. No identity is inferred
+from a filename, subscriber phone number or executable save-owner digest. See
+[the identity source evidence](sgs-host-state.md).
 
 ## Combined extraction and Host checkpoint
 
