@@ -1,5 +1,9 @@
 # The LGT platform
 
+For the current post-#143 API gaps, scanner limitations, and dated validation,
+see [the 2026-09-12 coverage audit](lgt-audit-2026-09-12.md). Historical corpus
+counts and findings below describe their own runs rather than today's coverage.
+
 The network socket-creation API now accepts both observed slots, `0x7d0` and
 the standard-order `0x25a`. Both refuse sockets normally. The latter was verified
 inside a successful-dial callback; it is not inferred solely from slot order.
