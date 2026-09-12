@@ -93,16 +93,23 @@ The [text component
 specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/TextComponent.md)
 defines constraints 0 through 5 for unrestricted, numeric, numeric password,
 email, URL, and phone input. A text box is multiline; a text field is
-single-line. The maximum length counts Java UTF-16 code units. The LWC input
-listener receives a whole replacement through
-`notifyTextChanged(char[], int, int)` with replacement mode zero. A vendor text
-field instead reports the completed change through `textChanged(GTextField)`.
+single-line. The maximum length counts Java UTF-16 code units. The
+[input-method listener
+specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/InputMethodListener.md)
+defines per-key insert, replace, and delete operations. It has no cursor or
+range argument with which to describe an arbitrary whole-field replacement. A
+vendor text field instead reports the completed change through
+`textChanged(GTextField)`.
 
 The adapter validates the Host transport, applies the active constraint, rejects
 line breaks for a text field, and enforces the maximum without truncating a
-composition. After storing the new Java string it resets the legacy keypad editor
-and invokes the LWC listener with the full UTF-16 character array. A listener that
-reads the component during the callback therefore observes the committed value.
+composition. It stores the completed Java string as `setString` would and resets
+the legacy keypad editor. A field with an explicitly installed
+`InputMethodListener` is not offered to the Host because sending the completed
+value as a guessed replacement operation could corrupt that listener's active
+composition. Installing a listener after the Host takes its snapshot invalidates
+the pending commit. A handler-owned mutation revision also invalidates a pending edit when the
+guest installs a listener and restores the original null value before commit.
 
 The vendor modal path has an additional lifecycle gap: its text field is not
 associated with the form's active focus, and `doModal` returns synchronously.

@@ -35,7 +35,10 @@ creation. Supporting those paths requires their guest UI lifecycle first.
 ## Supported editors
 
 KTF supports active LWC TextField and TextBox instances, including guest subclasses.
-The adapter preserves field constraints and invokes the guest text-change callback.
+The adapter preserves field constraints and stores the complete value using the
+component string-setting contract. Fields with an explicitly installed
+InputMethodListener remain unsupported: its per-key composition deltas cannot
+safely describe an arbitrary whole-field replacement.
 KFC modal editors do not expose a live target and remain unsupported. SKT supports
 TextBox, the selected Form TextField, and a focused XTextField on the visible canvas.
 Limits count Java UTF-16 units; supplementary characters consume two units. Native

@@ -555,6 +555,10 @@ func runtimeComponentSetField(method, key string) runtimeJavaImplementation {
 			return jvm.VoidValue(), err
 		}
 		receiver.Fields[key] = arguments[1]
+		if key == inputMethodListenerField {
+			revision, _ := receiver.Fields[inputMethodListenerRevisionField].Int64()
+			receiver.Fields[inputMethodListenerRevisionField] = jvm.LongValue(revision + 1)
+		}
 		return jvm.VoidValue(), nil
 	}
 }

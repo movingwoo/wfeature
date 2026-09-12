@@ -32,10 +32,21 @@ One local archive, SHA-256
 `06c7a38343c7c48ad8ef362ffe1cd5ba2384a0b4e1cc8111acb6e2d72bf7b5e6`,
 contains 111 `invokeinterface` instructions across five classes. They call
 `readFully`, `readBoolean`, `readByte`, `readShort`, `readInt`,
-`writeBoolean`, `writeByte`, `writeShort`, and `writeInt`. A 64-tick
-instruction trace loaded the concrete stream classes but never entered those
-serialization methods. The archive establishes a real link surface; the
-bounded boot does not establish that its save route executed.
+`writeBoolean`, `writeByte`, `writeShort`, and `writeInt`. Two input-driven
+debug traces now establish both sides of that link surface:
+
+| Route | Actual caller evidence |
+| --- | --- |
+| Packaged-data load | `CLEAR` at tick 60 and `FIRE` at tick 100 reached gameplay by tick 360. The trace executed 5,318 `invokeinterface` calls through `DataInput`: 3,909 calls to `readShort` from an array helper, 134 calls in one object reader, 38 primitive-field call sites each executed 33 times in another reader, six calls in a third reader, and 15 in a fourth. These are reads from packaged game data, rather than save-file reads. |
+| Options write | With each key held for 12 ticks, `CLEAR` at tick 60, `DOWN` at tick 120, and `FIRE` at tick 180 opened Options. `FIRE` at tick 400 opened the selected value, `RIGHT` at tick 520 changed it, and `FIRE` at tick 640 applied it. The apply method ran once, called a `DataOutput`-typed array helper 10 times, and executed 50 interface calls to `writeShort`. It then called the vendor file write once and produced a 295-byte options file with SHA-256 `b6ab74a001a469246c7af5f030e94384d8c3652f0dee5b71084eed8a1fdf9847`. |
+
+Neither trace logged a warning or error, so no further stream implementation
+was warranted. The only missing-class diagnostic was guest class `i`. The
+archive contains guest classes `a` through `h`; its startup deliberately
+tries each name through `i` with `Class.forName` and catches `Exception`, so
+that diagnostic records a handled preload miss rather than a platform API
+gap. The review artifacts remain under
+`/tmp/wfeature-skt-api-route.cs0DHI/`.
 
 Repository-authored coverage now has both layers required for this JVM change.
 The class fixture passes streams through interface-typed methods, checks
