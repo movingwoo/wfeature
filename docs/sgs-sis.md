@@ -89,11 +89,13 @@ uses the selection bit as follows:
   run's expected color becomes the opposite of the just-produced color.
 
 Only the consumed code length advances the real cursor; the 12-bit lookahead
-does not. The complete color-dependent codebook has not been independently
-specified here. It must not be replaced by a guessed unary or generic RLE
-scheme. The coded branch also applies a 64-position traversal permutation
-before packing rows (`0x43ba26`); its mathematical order remains unverified.
-Thus literal and coded tiles cannot be assumed to share the same scan order.
+does not. Both branches apply the same 64-position diagonal traversal before
+packing rows. A fresh original-runtime probe selected literal input positions
+0, 1, 2, 5, 8, 9 and 63; they appeared at raster coordinates (0,0), (1,0),
+(0,1), (2,0), (1,2), (0,3) and (7,7). This is the conventional alternating
+diagonal traversal and can be generated without retaining a lookup table. The
+complete color-dependent codebook has not been independently specified. It
+must not be replaced by a guessed unary or generic RLE scheme.
 
 Object parsing invokes the same tile reader in scan-only mode to locate the
 next object; extraction invokes it again with output enabled. The object
@@ -102,10 +104,24 @@ forgets the residual bit offset will fail on non-byte-aligned objects.
 
 After objects, `0x43bbb0` reads each frame: one frame flag, one inclusion bit
 per object, then a composition record through `0x43bd10` for each included
-object. That reader has a variant branch controlled by header field
-`0x5391fa`. Rendering at `0x43cdb0` reconstructs the selected frame using those
-records, object data, clipping and transforms. Full placement and transform
-contracts are still required before an executable raw-tile-only subset is safe.
+object. Header variant 1 omits the otherwise present three-bit composition
+pass. The record then stores signed-magnitude x in eight bits, signed-magnitude
+y in seven bits, and four one-bit transform fields. The last transform field
+adds two more bits when set.
+
+The verified simple record uses frame flag zero and clears all four transform
+fields. Rendering ORs set object pixels into a zeroed packed one-bit canvas,
+most significant bit first, and clips against every canvas edge. Seventeen
+authored calls to the original type 1 entry covered the seven traversal points
+above and a full tile at offsets (0,0), (1,0), (-1,0), (0,1), (0,-1), (7,7)
+and (8,8), followed by a two-tile object, two overlapping independent objects,
+and selection of the second record in a two-frame stream. Every call reached
+its sentinel. Single-frame calls returned 1 and the two-frame call returned 2;
+their final bit positions were 135, 200, 229 and 156 according to the record
+shape. The Go comparison checks every exact packed output byte, then repeats
+each vector through the actual `0xe7` dispatch to verify its result, caller
+stack, packed prefix, zeroed requested tail and allocation rounding. A separate
+authored bytecode regression executes the extraction instruction inside the VM.
 
 ## Type 2 objects and payload dispatch
 
@@ -142,9 +158,12 @@ helpers for all frames, but the exposed `0xe7` wrapper rejects negative indexes.
 The exposed wrapper's inclusive upper-bound defect remains documented in
 [extended images](sgs-images.md).
 
-The smallest promising implementation is type 1 with independent literal
-tiles and a verified simple composition record. This still requires completing
-`0x43bd10` placement semantics and confirming raw tile packing at the frame
-boundary. It must explicitly reject coded tiles and reference objects until
-those contracts are complete. Current evidence establishes the headers and
-literal tile input bits, not an end-to-end executable SIS decoder.
+The implemented subset accepts type 1 streams with independent literal tiles,
+header variant 1, frame flag zero and zero transform fields. It reconstructs a
+requested frame into temporary packed storage before a guest resource changes.
+Coded tiles, reference objects, header inversion, other header variants, frame
+masks and composition transforms return failure. Type 2 and SAF extraction
+remain unsupported. The safe frame range is zero through frame count minus one;
+the original wrapper's inclusive upper-bound defect is not reproduced. Source
+resources above 65,535 bytes are rejected, matching the script resource size
+limit and keeping snapshot and decode work bounded.

@@ -1,0 +1,313 @@
+package skt
+
+import (
+	"bytes"
+
+	"github.com/movingwoo/wfeature/internal/sgsvm"
+)
+
+type scriptSISLiteralObject struct {
+	width  int
+	height int
+	pixels []byte
+}
+
+type scriptSISComposition struct {
+	included bool
+	x        int
+	y        int
+}
+
+type scriptSISLiteralFrame struct {
+	width  int
+	height int
+	pixels []byte
+}
+
+type scriptSISBitReader struct {
+	data     []byte
+	position int
+}
+
+func (r *scriptSISBitReader) read(count int) (uint, bool) {
+	if count < 0 || count > 32 || r.position > len(r.data)*8-count {
+		return 0, false
+	}
+	var value uint
+	for range count {
+		value = value<<1 | uint(r.data[r.position/8]>>(7-r.position%8)&1)
+		r.position++
+	}
+	return value, true
+}
+
+func (r *scriptSISBitReader) peek(count int) (uint, bool) {
+	position := r.position
+	value, ok := r.read(count)
+	r.position = position
+	return value, ok
+}
+
+// decodeScriptSISLiteralFrame implements the independently verified type-1
+// subset: independent objects containing literal 8-by-8 tiles, and additive
+// frame records without transforms. Other coding and composition modes fail
+// closed until their contracts have executable evidence.
+func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
+	var result scriptSISLiteralFrame
+	if len(data) < 3 || !bytes.Equal(data[:3], []byte("SIS")) {
+		return result, false
+	}
+	r := scriptSISBitReader{data: data[3:]}
+	frameCount, ok := r.read(5)
+	if !ok || frameCount < 1 || frameCount > 20 || frameIndex < 0 || frameIndex >= int(frameCount) {
+		return result, false
+	}
+	if _, ok = r.read(5); !ok { // Playback timing does not change a frame's pixels.
+		return result, false
+	}
+	widthUnits, ok := r.read(5)
+	if !ok || widthUnits == 0 {
+		return result, false
+	}
+	heightUnits, ok := r.read(4)
+	if !ok || heightUnits == 0 {
+		return result, false
+	}
+	invert, ok := r.read(1)
+	if !ok || invert != 0 {
+		return result, false
+	}
+	objectField, ok := r.read(5)
+	objectCount := int(objectField) + 1
+	if !ok || objectCount > 20 {
+		return result, false
+	}
+	unresolved, ok := r.read(3)
+	if !ok || unresolved != 0 {
+		return result, false
+	}
+	unresolved, ok = r.read(1)
+	if !ok || unresolved != 0 {
+		return result, false
+	}
+	if _, ok = r.read(4); !ok { // Frame delay does not change a frame's pixels.
+		return result, false
+	}
+	variant, ok := r.read(3)
+	if !ok || variant != 1 {
+		return result, false
+	}
+	unresolved, ok = r.read(4)
+	if !ok || unresolved != 0 {
+		return result, false
+	}
+
+	objects := make([]scriptSISLiteralObject, objectCount)
+	for objectIndex := range objects {
+		lookahead, ok := r.peek(8)
+		if !ok || lookahead == 0 {
+			// Eight zero bits select a reference object. The first object may
+			// not be a reference in the original parser either.
+			return result, false
+		}
+		columns, ok := r.read(5)
+		if !ok || columns < 1 {
+			return result, false
+		}
+		rows, ok := r.read(4)
+		if !ok || rows < 1 || rows > 12 {
+			return result, false
+		}
+		tileCount := int(columns * rows)
+		coding := make([]bool, tileCount)
+		for tile := range coding {
+			coded, ok := r.read(1)
+			if !ok {
+				return result, false
+			}
+			coding[tile] = coded != 0
+		}
+		object := &objects[objectIndex]
+		object.width = int(columns) * 8
+		object.height = int(rows) * 8
+		object.pixels = make([]byte, int(columns)*object.height)
+		for tile, coded := range coding {
+			if coded {
+				return result, false
+			}
+			for encodedPosition := 0; encodedPosition < 64; encodedPosition++ {
+				pixel, ok := r.read(1)
+				if !ok {
+					return result, false
+				}
+				if pixel == 0 {
+					continue
+				}
+				x, y := scriptSISLiteralPosition(encodedPosition)
+				x += tile % int(columns) * 8
+				y += tile / int(columns) * 8
+				object.pixels[y*int(columns)+x/8] |= 0x80 >> (x & 7)
+			}
+		}
+	}
+
+	var selected []scriptSISComposition
+	for currentFrame := 0; currentFrame < int(frameCount); currentFrame++ {
+		frameFlag, ok := r.read(1)
+		if !ok || frameFlag != 0 {
+			return result, false
+		}
+		composition := make([]scriptSISComposition, objectCount)
+		for objectIndex := range composition {
+			included, ok := r.read(1)
+			if !ok {
+				return result, false
+			}
+			composition[objectIndex].included = included != 0
+		}
+		for objectIndex := range composition {
+			if !composition[objectIndex].included {
+				continue
+			}
+			x, ok := r.read(8)
+			if !ok {
+				return result, false
+			}
+			y, ok := r.read(7)
+			if !ok {
+				return result, false
+			}
+			flags, ok := r.read(4)
+			if !ok {
+				return result, false
+			}
+			if flags&1 != 0 {
+				if _, ok = r.read(2); !ok {
+					return result, false
+				}
+			}
+			if flags != 0 {
+				return result, false
+			}
+			composition[objectIndex].x = scriptSISSignedMagnitude(x, 7)
+			composition[objectIndex].y = scriptSISSignedMagnitude(y, 6)
+		}
+		if currentFrame == frameIndex {
+			selected = composition
+		}
+	}
+
+	result.width = int(widthUnits) * 8
+	result.height = int(heightUnits) * 8
+	result.pixels = make([]byte, int(widthUnits)*result.height)
+	for objectIndex, placement := range selected {
+		if !placement.included {
+			continue
+		}
+		object := &objects[objectIndex]
+		for sourceY := 0; sourceY < object.height; sourceY++ {
+			destinationY := placement.y + sourceY
+			if destinationY < 0 || destinationY >= result.height {
+				continue
+			}
+			for sourceX := 0; sourceX < object.width; sourceX++ {
+				if object.pixels[sourceY*(object.width/8)+sourceX/8]&(0x80>>(sourceX&7)) == 0 {
+					continue
+				}
+				destinationX := placement.x + sourceX
+				if destinationX < 0 || destinationX >= result.width {
+					continue
+				}
+				result.pixels[destinationY*(result.width/8)+destinationX/8] |= 0x80 >> (destinationX & 7)
+			}
+		}
+	}
+	return result, true
+}
+
+// A literal pixel consumes one stream bit. At most that many pixels can be
+// decoded and then visited once more while composing one selected frame. The
+// additional term accounts for snapshotting the source bytes. Charging this
+// conservative bound before decoding also accounts for late format failures.
+func scriptSISLiteralDecodeWork(data []byte) int {
+	return 1 + 2*((len(data)+7)/8) + (len(data)+63)/64
+}
+
+func scriptSISSignedMagnitude(value uint, magnitudeBits uint) int {
+	magnitude := int(value & (1<<magnitudeBits - 1))
+	if value&(1<<magnitudeBits) != 0 {
+		return -magnitude
+	}
+	return magnitude
+}
+
+// scriptSISLiteralPosition generates the conventional diagonal 8-by-8 scan.
+// Generating it keeps the implementation independent of runtime lookup data.
+func scriptSISLiteralPosition(position int) (int, int) {
+	remaining := position
+	for diagonal := 0; diagonal <= 14; diagonal++ {
+		low := max(0, diagonal-7)
+		high := min(7, diagonal)
+		count := high - low + 1
+		if remaining >= count {
+			remaining -= count
+			continue
+		}
+		x := low + remaining
+		if diagonal&1 != 0 {
+			x = high - remaining
+		}
+		return x, diagonal - x
+	}
+	panic("unreachable SIS literal position")
+}
+
+func scriptImageFrameCall(vm *sgsvm.VM) error {
+	if err := vm.Require(7); err != nil {
+		return err
+	}
+	a := vm.Args(7)
+	source := vm.Resource(int(a[2]))
+	if err := vm.Error(); err != nil {
+		return err
+	}
+	if a[0] != 1 || a[1] != 1 {
+		vm.Push(-1)
+		return vm.Error()
+	}
+	destination := vm.Resource(int(a[3]))
+	if err := vm.Error(); err != nil {
+		return err
+	}
+	if len(source.Data) > 65535 {
+		vm.Push(-1)
+		return vm.Error()
+	}
+	if err := vm.ChargeWork(scriptSISLiteralDecodeWork(source.Data)); err != nil {
+		return err
+	}
+	// The native service retains a source pointer across destination growth.
+	// Snapshotting makes the supported path safe when both IDs alias.
+	data := bytes.Clone(source.Data)
+	frame, ok := decodeScriptSISLiteralFrame(data, int(a[4]))
+	if !ok {
+		vm.Push(-1)
+		return vm.Error()
+	}
+	destinationSize := frame.width * frame.height
+	if err := vm.ChargeWork(1 + destinationSize/64); err != nil {
+		return err
+	}
+	ok, err := resizeScriptResource(vm, destination, destinationSize)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		vm.Push(-1)
+		return vm.Error()
+	}
+	clear(destination.Data[:destinationSize])
+	copy(destination.Data, frame.pixels)
+	vm.Push(0)
+	return vm.Error()
+}
