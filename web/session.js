@@ -214,6 +214,10 @@ export class GameSession {
     return this.ask({ kind: "resume", token, ...(takeover ? { takeover: true } : {}) });
   }
 
+  openTextInput() { return this.ask({ kind: "text", action: "open" }); }
+  commitTextInput(edit, text) { return this.ask({ kind: "text", action: "commit", edit, text }); }
+  cancelTextInput(edit) { return this.ask({ kind: "text", action: "cancel", edit }); }
+
   ping() { return this.ask({ kind: "ping" }, 10000); }
   park() { return this.ask({ kind: "park" }); }
   stop() { return this.ask({ kind: "stop" }); }

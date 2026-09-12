@@ -20,6 +20,7 @@ import { browserToken, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
+import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
@@ -251,6 +252,8 @@ let resetCheatPanel = () => {};
 
 let sessionLink = null;
 let releaseInput = () => {};
+const textInputDialog = createTextInputDialog({ document, getSession: () => session, releaseInput: () => releaseInput() });
+document.getElementById("text-input-toggle")?.addEventListener("click", () => textInputDialog.open());
 
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
@@ -305,7 +308,7 @@ const initInput = () => {
 
   // Typing into the cheat panel must not reach the game.
   const isTextEntry = target =>
-    target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "SELECT");
+    target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
   // The pad is what a finger slides across: one grid of cells, the row of
   // * 0 # among them. The band above it is not part of it — Opts and whatever
@@ -560,6 +563,8 @@ const openSession = async handlers => {
 
 const sessionStateChanged = state => {
   recordEvent(`session state: ${state}`);
+  if (state !== "playing") textInputDialog.close();
+  document.getElementById("text-input-toggle")?.classList.toggle("hidden", state !== "playing");
   if (state !== "playing" && state !== "starting") {
     releaseInput();
     gameRunning = false;

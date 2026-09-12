@@ -1,5 +1,12 @@
 # SKT fixtures
 
+`src/TextInputMIDlet.java` and `text-input.jar` are a packaged Host keyboard
+and IME fixture. It starts on an empty 16-character TextBox; its `Next`
+command switches to a second four-character TextBox so a session test can
+check stale-target rejection as well as committed text and length limits.
+Compile it against the generated library signatures and package it with
+`TEXT_INPUT.MF`.
+
 `src/StreamMIDlet.java` and `streams.jar` are a packaged lifecycle fixture for
 the CLDC `DataInput` and `DataOutput` interfaces. It checks stream
 assignability and primitive round trips after the SKT archive loader starts

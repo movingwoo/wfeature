@@ -59,6 +59,7 @@ envelope at all.
 | `resume` | find the browser token's game; set `takeover: true` only to explicitly transfer control from another connected page |
 | `park` | release control and retain the game without closing this socket |
 | `ping` | check connection liveness independently of guest execution |
+| `text` | open, commit, or cancel a native text edit for a supported guest field; see [native text input](native-text-input.md) for identifiers, constraints, and support limits |
 | `pointer` | one touch — `press`, `drag` or `release` with `x` and `y` in the guest's own screen. The page undoes its own canvas geometry first; only it knows what it put between the finger and the game |
 
 | From the server | Means |

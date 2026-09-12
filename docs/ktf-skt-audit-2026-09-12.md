@@ -47,8 +47,10 @@ pages, and CLDC
 and [DataOutput](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataOutput.md).
 Vendor SIS/3D findings come from repository handlers, not a guessed WIPI contract.
 
-**Some old limitation lists are stale.** SKT Canvas pointer events now pass
-through `SendPointer` to the active canvas and have regression tests. Arcs and
+**Some old limitation lists are stale.** SKT runtime Canvas pointer events pass
+through `Runtime.SendPointer` to the active canvas and have regression tests.
+The shared session still rejects SKT pointer input and advertises pointer support
+only for KTF, so this does not establish browser touch support. Arcs and
 rounded rectangles are registered and covered by curve tests. Vibration requests
 reach the shared Host boundary. These are not wholly unimplemented despite
 older statements in `skvm.md` and `jvm.md`.

@@ -1558,8 +1558,8 @@ corpus disagrees with it.**
 
 ## Ninety archives, and the pass that made room for eleven of them
 
-The corpus went from fifteen local titles to ninety in one step, and
-`var/games/test_skt/NOT-WORKING.md` is what the first two rounds over it
+The corpus went from fifteen local titles to ninety in one step, and the
+now-removed local failure report recorded what the first two rounds over it
 measured. Sixty-one archives ran their four hundred ticks with a picture on the
 first round; twenty-nine did not, and this section is what the twenty-nine
 turned out to be. Everything below was found the same way: run all of them,

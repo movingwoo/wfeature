@@ -310,3 +310,43 @@ test("authentication is automatic and its result survives the protocol", async (
     assert.equal((await asking).started.authentication, status);
   }
 });
+
+test("native text requests retain the edit capability and complete Unicode value", async () => {
+  const { session, socket } = await openFakeSession();
+  const opening = session.openTextInput();
+  const request = socket.sent.at(-1);
+  assert.equal(request.kind, "text");
+  assert.equal(request.action, "open");
+  socket.deliver({ kind: "result", id: request.id, textInput: { edit: 17, text: "이름" } });
+  assert.equal((await opening).textInput.edit, 17);
+  const committing = session.commitTextInput(17, "한글 이름 😀");
+  const commit = socket.sent.at(-1);
+  assert.equal(commit.action, "commit");
+  assert.equal(commit.edit, 17);
+  assert.equal(commit.text, "한글 이름 😀");
+  socket.deliver({ kind: "error", id: commit.id, message: "the active text field changed; open text input again" });
+  await assert.rejects(committing, /active text field changed/);
+  const cancelling = session.cancelTextInput(17);
+  const cancel = socket.sent.at(-1);
+  assert.equal(cancel.action, "cancel");
+  assert.equal(cancel.edit, 17);
+  socket.deliver({ kind: "result", id: cancel.id });
+  await cancelling;
+  assert.equal(session.pending.size, 0);
+});
+
+test("a guest exit during text commit settles the request and ends the session", async () => {
+  const exits = [];
+  const { session, socket } = await openFakeSession({ onExited: reason => exits.push(reason) });
+  const committing = session.commitTextInput(3, "complete text");
+  const request = socket.sent.at(-1);
+
+  socket.deliver({ kind: "exited", message: "text listener requested exit" });
+  assert.deepEqual(exits, ["text listener requested exit"]);
+  socket.deliver({ kind: "error", id: request.id, exited: true, message: "the game exited" });
+  await assert.rejects(committing, error => {
+    assert.equal(error.exited, true);
+    return true;
+  });
+  assert.equal(session.pending.size, 0);
+});

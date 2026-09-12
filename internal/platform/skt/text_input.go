@@ -345,13 +345,15 @@ func (runtime *Runtime) initXTextFieldWithText(_ *jvm.VM, arguments []jvm.Value)
 	if int32(len(runes)) > maxSize {
 		runes = runes[:maxSize]
 	}
-	receiver.Native = &xTextFieldData{text: runes, maxSize: maxSize, constraints: constraints}
+	runtime.textMu.Lock()
+	receiver.Native = &xTextFieldData{text: runes, maxSize: maxSize, constraints: constraints, owner: owner}
 	// The Canvas is kept as a cheat root rather than on the field, because
 	// what a search has to be able to reach is the screen the field is on.
 	state := runtime.skvm()
 	state.mu.Lock()
 	state.textFieldOwner = owner
 	state.mu.Unlock()
+	runtime.textMu.Unlock()
 	return jvm.VoidValue(), nil
 }
 
@@ -359,6 +361,8 @@ func (runtime *Runtime) initXTextFieldWithText(_ *jvm.VM, arguments []jvm.Value)
 // holds the text, so it is the shared editor itself rather than the cycle
 // above — the same one a MIDP TextBox on this platform types with.
 func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err

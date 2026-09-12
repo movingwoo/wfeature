@@ -140,6 +140,9 @@ type sessionRunner struct {
 	connectionCtx context.Context
 	heldKeys      map[int32]struct{}
 	heldPointer   *clientMessage
+	textInput     *backend.TextInput
+	textInputGame *session.Session
+	textInputID   uint64
 	commands      chan clientMessage
 	frames        chan pendingFrame
 
@@ -550,6 +553,8 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		default:
 			r.send(serverMessage{Kind: serverError, Message: err.Error()})
 		}
+	case clientText:
+		r.handleTextInput(message)
 	case clientSpeed:
 		if r.game != nil {
 			r.game.SetSpeed(message.Value)
@@ -766,6 +771,7 @@ func (r *sessionRunner) endGameContext() {
 // park hands the running game to the server to hold under this runner's token,
 // and forgets it here. The runner is about to end; the game is not.
 func (r *sessionRunner) park() {
+	r.clearTextInput()
 	r.releaseHeldInput()
 	game := r.game
 	r.game = nil
@@ -903,6 +909,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 }
 
 func (r *sessionRunner) stopGame() {
+	r.clearTextInput()
 	r.server.releaseSession(r.token, r)
 	clear(r.heldKeys)
 	r.heldPointer = nil
@@ -1497,17 +1504,24 @@ func (r *sessionRunner) handoff(request sessionHandoff) {
 
 // The socket may disappear before keyup. Release at the last guest coordinates
 // while this runner still owns the game, before its pause callback runs.
-func (r *sessionRunner) releaseHeldInput() {
+func (r *sessionRunner) releaseHeldInput() (exited error) {
 	for code := range r.heldKeys {
 		if err := r.game.SendKey(r.gameCtx, session.KeyRelease, code); err != nil {
+			if exited == nil && errors.Is(err, session.ErrExited) {
+				exited = err
+			}
 			r.server.logger.Debug("releasing parked input failed", "error", err)
 		}
 	}
 	clear(r.heldKeys)
 	if point := r.heldPointer; point != nil {
 		if err := r.game.SendPointer(r.gameCtx, "release", point.X, point.Y); err != nil {
+			if exited == nil && errors.Is(err, session.ErrExited) {
+				exited = err
+			}
 			r.server.logger.Debug("releasing parked touch failed", "error", err)
 		}
 		r.heldPointer = nil
 	}
+	return exited
 }

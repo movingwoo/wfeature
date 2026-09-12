@@ -81,6 +81,8 @@ func (runtime *Runtime) paintPendingScreen() error {
 
 // paintScreen draws one screen into the Host framebuffer and presents it.
 func (runtime *Runtime) paintScreen(screen *jvm.Object) error {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	data := runtime.displayableState(screen)
 	content := runtime.screenState(screen, screenNone)
 	font, _ := fontReceiver(runtime.fontObject(fontSystem, fontPlain, fontMedium))

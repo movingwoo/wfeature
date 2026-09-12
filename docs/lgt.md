@@ -3749,11 +3749,11 @@ save a byte at a time would rewrite the whole file once per byte.
 
 A picture loaded from a resource is immutable — the specification says only a
 copy can be drawn into — so two Images of the same name are the same pixels.
-Decoding a second set of them costs a surface, and **nothing here reclaims one**:
-the Java path has no collector, and an Image is released by the language on a
-handset. One title reloads its sprite sheets from inside `paint`, 879 loads of a
-handful of names in two thousand ticks, and the surface region filled and ended
-the run.
+Decoding a second set of them costs a surface, and **at that stage nothing here
+reclaimed one**: the Java path did not yet have a collector, and an Image is
+released by the language on a handset. One title reloads its sprite sheets from
+inside `paint`, 879 loads of a handful of names in two thousand ticks, and the
+surface region filled and ended the run.
 
 `newSharedJavaImage` keeps the surface under what it was decoded from — the
 resource name for `Image.createImage(String)`. The object is still a new one:
@@ -3780,11 +3780,11 @@ across all fourteen archives at three thousand ticks: eight decode fewer than
 fifty, four decode none at all, and the largest decodes 517. That one is the
 case to watch and it is flat: six thousand ticks decode the same 517, so it
 loads its sprite set once and the cache serves every repeat after it. A title
-that built a genuinely *new* picture every frame would still climb, and closing
-that needs the collector the other platform has
-(`internal/platform/ktf/collect.go`, and `docs/ktf.md`'s "A screen that only
-waits still allocates" for what it bought) and this one does not. No local
-title is that one.
+that built a genuinely *new* picture every frame would still climb. Closing
+that required the collector described later in this document, based on the one
+the other platform already had (`internal/platform/ktf/collect.go`, and
+`docs/ktf.md`'s "A screen that only waits still allocates" for what it bought);
+the cache alone did not do it. No local title is that one.
 
 ### An exception nothing catches ends the callback, not the session
 

@@ -1525,8 +1525,8 @@ cover:
 - `checkgames` recursively walked below the depth the Host exposes, so the
   ignored diagnostic corpus produced ten collision reports and a nonzero exit
   over a library that has none. It also applied EUC-KR decoding to a KTF
-  display name the descriptor parser had already decoded, which printed
-  영웅전설3 as 곸썒꾩꽕3. **Both since fixed**: the scan and the picker now
+  display name the descriptor parser had already decoded, which corrupted the
+  Korean name in the report. **Both since fixed**: the scan and the picker now
   share one boundary in `internal/gameroot`, and each platform's name is
   printed in the form its own parser left it in. The audit did not notice the
   third defect the tool had: it checked KTF and LGT and **silently skipped

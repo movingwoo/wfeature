@@ -972,9 +972,9 @@ none. Point `-games` at that corpus to check it deliberately.
 **A title's name is printed in the form its parser left it in.** The KTF
 descriptor parser decodes its own non-UTF-8 fields, so a KTF name is already
 UTF-8 by the time the report has it; LGT's `app_info` is kept as the bytes it
-came as. Reading an already-decoded name as EUC-KR a second time is what
-printed 영웅전설3 as 곸썒꾩꽕3 in every KTF line, and an ASCII title survives
-either way, which is why it stayed invisible.
+came as. Reading an already-decoded name as EUC-KR a second time corrupted
+every Korean KTF name in the report, while an ASCII title survives either way.
+That is why the defect stayed invisible.
 
 ## ktfdump
 

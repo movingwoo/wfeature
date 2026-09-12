@@ -18,8 +18,10 @@ The fixed work list is:
 
 - KTF/BREW loading stall: locate the current archive, reproduce and investigate
   the resource-to-surface path; record an external-data blocker if absent.
-- Shared Hangul composition, commit and deletion, connected to existing shared
-  editors while retaining Latin and numeric input.
+- Host-native text entry: use the phone or PC keyboard/IME for composition,
+  commit text through the session protocol into supported guest editors, and
+  retain existing keypad input. The user steered this away from reproducing
+  historical keypad composition on 2026-09-12.
 - LGT Java scanner false positives, with actual dispatch and coverage boundaries
   represented accurately.
 - KTF/SKT missing API references versus actual menu/save/exit calls; implement

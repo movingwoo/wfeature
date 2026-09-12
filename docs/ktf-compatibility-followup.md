@@ -1,6 +1,6 @@
 # KTF compatibility follow-up
 
-This note preserves the evidence needed to resume two compatibility investigations
+This note preserves the evidence needed to resume compatibility investigations
 without relying on a local working tree or an archive label.
 
 ## Native loading stall
@@ -25,6 +25,35 @@ surface remained empty, and no later trap or surface write explained where the
 resource data should have been copied. A matching native archive is required to
 trace the resource destinations and the blit source. The current files do not
 support a loader change.
+
+## Requested landscape packages
+
+The two current archives requested for a 320 by 240 check are identified by these
+SHA-256 values, independent of their local filenames:
+
+| SHA-256 | `DisplaySize` | `ResizeType` | bytes |
+| --- | ---: | ---: | ---: |
+| `93d5b6b8ceb5cf4ce15784e369a7af9cd8ef7a49d6f15816d665aedadc487a4a` | `176*220` | `0` | 985530 |
+| `df5f0261a2f9315a745d181a52eb76ea6a89a0ab4bd4554a78e19cca076f4012` | `240*320` | `0` | 1326663 |
+
+All current copies of either requested package are byte-identical to those
+archives. A scan of all 543 files in the local library found 296 readable WIPI
+descriptors: 108 declare `176*220`, 184 declare `240*320`, one declares
+`240*400`, and three omit `DisplaySize`. None declares `320*240`.
+
+The available archives therefore provide no package evidence for automatically
+rotating either title or overriding its declared handset. The CLI's explicit
+`-screen 320x240` remains suitable for a diagnostic run, but selecting it in the
+runtime would require a matching archive or handset trace that demonstrates the
+landscape contract.
+
+A fresh 400-tick diagnostic confirms that the override itself is executable. The
+automatic runs report 240 by 320 for both archives. The first hash paints 258
+flushes and 76630 non-black pixels in either automatic or forced mode; the second
+paints 400 flushes, with 51795 non-black pixels automatically and 51340 when
+forced to 320 by 240. Both forced runs produce a populated 320 by 240 frame
+without a start failure. This proves that a person can inspect the landscape
+layout; it does not identify that layout as the handset contract.
 
 ## Unconditional Jlet teardown
 
@@ -54,10 +83,11 @@ workers still stop. The full KTF package tests pass in both profiles.
 ## Host-composed text
 
 Guest focus is recorded in the runtime's `lwc:focus` object by
-`Component.setFocus` and `FormComponent.setFocus`. That object, its current string,
-and its constraints must be captured under the client run lock. A later whole-text
-commit must reacquire the lock and reject the edit if either the focus object or
-the captured string changed.
+`Component.setFocus` and `FormComponent.setFocus`. `Session.TextInput` now captures
+that object, its current string, and its constraints under the client run lock. A
+later whole-text commit reacquires the lock and rejects the edit if the focus
+object, string value, constraint, or maximum length changed. Guest subclasses of
+an LWC text field or text box follow the same path.
 
 The [text component
 specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/TextComponent.md)
@@ -67,6 +97,12 @@ single-line. The maximum length counts Java UTF-16 code units. The LWC input
 listener receives a whole replacement through
 `notifyTextChanged(char[], int, int)` with replacement mode zero. A vendor text
 field instead reports the completed change through `textChanged(GTextField)`.
+
+The adapter validates the Host transport, applies the active constraint, rejects
+line breaks for a text field, and enforces the maximum without truncating a
+composition. After storing the new Java string it resets the legacy keypad editor
+and invokes the LWC listener with the full UTF-16 character array. A listener that
+reads the component during the callback therefore observes the committed value.
 
 The vendor modal path has an additional lifecycle gap: its text field is not
 associated with the form's active focus, and `doModal` returns synchronously.

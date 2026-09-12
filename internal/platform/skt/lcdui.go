@@ -666,6 +666,8 @@ func (runtime *Runtime) setItemCommandListener(_ *jvm.VM, arguments []jvm.Value)
 }
 
 func (runtime *Runtime) itemPreferredWidth(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	_, data, err := itemArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -675,6 +677,8 @@ func (runtime *Runtime) itemPreferredWidth(_ *jvm.VM, arguments []jvm.Value) (jv
 }
 
 func (runtime *Runtime) itemPreferredHeight(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	runtime.textMu.Lock()
+	defer runtime.textMu.Unlock()
 	_, data, err := itemArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -913,6 +917,8 @@ func (runtime *Runtime) textTargetArgument(arguments []jvm.Value, kind screenKin
 
 func (runtime *Runtime) initText(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -953,6 +959,8 @@ func (runtime *Runtime) initText(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) textString(kind screenKind) jvm.NativeMethod {
 	return func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -963,36 +971,45 @@ func (runtime *Runtime) textString(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) setTextString(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		text, err := optionalStringArgument(arguments, 1)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		runes := []rune(text)
 		if int32(len(runes)) > *target.maxSize {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				"text is longer than maxSize")
 		}
 		*target.text = runes
 		*target.caret = len(runes)
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
 	}
 }
 
 func (runtime *Runtime) textChars(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		array, values, err := primitiveArrayArgument(arguments, 1, jvm.TypeChar)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		units := utf16.Encode(*target.text)
+		runtime.textMu.Unlock()
 		if len(units) > len(values) {
 			return jvm.VoidValue(), newGuestException("java/lang/ArrayIndexOutOfBoundsException",
 				"destination array is shorter than the text")
@@ -1010,37 +1027,46 @@ func (runtime *Runtime) textChars(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) setTextChars(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		units, err := characterArraySlice(arguments, 1, 2, 3)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		runes := utf16.Decode(units)
 		if int32(len(runes)) > *target.maxSize {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				"text is longer than maxSize")
 		}
 		*target.text = runes
 		*target.caret = len(runes)
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
 	}
 }
 
 func (runtime *Runtime) insertText(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		text, err := stringArgument(arguments, 1)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		position, err := intArgument(arguments, 2)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		current := *target.text
@@ -1052,6 +1078,7 @@ func (runtime *Runtime) insertText(kind screenKind) jvm.NativeMethod {
 		}
 		inserted := []rune(text)
 		if int32(len(current)+len(inserted)) > *target.maxSize {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				"insertion would exceed maxSize")
 		}
@@ -1061,26 +1088,32 @@ func (runtime *Runtime) insertText(kind screenKind) jvm.NativeMethod {
 		combined = append(combined, current[position:]...)
 		*target.text = combined
 		*target.caret = int(position) + len(inserted)
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
 	}
 }
 
 func (runtime *Runtime) deleteText(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		offset, err := intArgument(arguments, 1)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		length, err := intArgument(arguments, 2)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		current := *target.text
 		if offset < 0 || length < 0 || int64(offset)+int64(length) > int64(len(current)) {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), newGuestException("java/lang/StringIndexOutOfBoundsException",
 				fmt.Sprintf("delete %d..%d of %d", offset, offset+length, len(current)))
 		}
@@ -1089,12 +1122,15 @@ func (runtime *Runtime) deleteText(kind screenKind) jvm.NativeMethod {
 		remaining = append(remaining, current[offset+length:]...)
 		*target.text = remaining
 		*target.caret = int(offset)
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
 	}
 }
 
 func (runtime *Runtime) textSize(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -1105,6 +1141,8 @@ func (runtime *Runtime) textSize(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) textMaxSize(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -1115,15 +1153,19 @@ func (runtime *Runtime) textMaxSize(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) setTextMaxSize(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		maxSize, err := intArgument(arguments, 1)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		if maxSize <= 0 {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				fmt.Sprintf("maxSize %d", maxSize))
 		}
@@ -1134,12 +1176,15 @@ func (runtime *Runtime) setTextMaxSize(kind screenKind) jvm.NativeMethod {
 			*target.text = (*target.text)[:maxSize]
 			*target.caret = int(maxSize)
 		}
+		runtime.textMu.Unlock()
 		return jvm.IntValue(maxSize), target.refresh()
 	}
 }
 
 func (runtime *Runtime) textCaretPosition(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -1150,6 +1195,8 @@ func (runtime *Runtime) textCaretPosition(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) textConstraints(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -1160,15 +1207,19 @@ func (runtime *Runtime) textConstraints(kind screenKind) jvm.NativeMethod {
 
 func (runtime *Runtime) setTextConstraints(kind screenKind) jvm.NativeMethod {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
 		target, err := runtime.textTargetArgument(arguments, kind)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		constraint, err := intArgument(arguments, 1)
 		if err != nil {
+			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
 		*target.constraint = constraint
+		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
 	}
 }
