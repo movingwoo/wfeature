@@ -68,5 +68,16 @@ page errors. Artifacts are in the ignored
 `var/diagnostics/native-text-e2e-20260912` directory. Composition events are driven
 by automation; physical-phone keyboard and IME interaction still needs a person.
 
+An authored LGT AOT archive also boots through the shared session and actual
+WebSocket. Its initializer resolves the Java tables, allocates a shell and text
+field, and invokes construction, attachment, visibility, length, and focus calls.
+The tests reject an over-limit string, retry the same edit with Korean and a
+supplementary character, and reopen the field to read the stored value. Chromium
+and WebKit both pass composition isolation, game-key isolation, reload/resume,
+length rejection/retry, and guest readback with this archive. Review artifacts
+are in `var/diagnostics/lgt-text-e2e-20260912`. The fixture does not draw a complete
+widget screen or provide a guest key route that changes focus; those lifecycle
+transitions remain covered by separate runtime regressions.
+
 The integrated normal and debug suites, internal race checks, and `go vet ./...`
 pass. Both CLI and embedded-server binaries build in debug and release profiles.
