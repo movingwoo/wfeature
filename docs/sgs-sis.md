@@ -3,8 +3,8 @@
 SIS has two distinct encodings selected by the gate described in
 [extended images](sgs-images.md). This document records exact inspected header
 fields and the verified payload structure. It does **not** yet specify a complete
-SIS decoder: header bit 28, header bits 36 through 39 and type 2 payload
-branches remain unresolved. Addresses refer to the original runtime;
+SIS decoder: type 2 payload branches remain unresolved. Addresses refer to the
+original runtime;
 no original implementation, lookup storage, permutation table or asset is
 reproduced.
 
@@ -23,14 +23,21 @@ also selects type 1 at the outer image gate, which restricts it to 1 through 20.
 | 19 | 1 | Complete-canvas inversion; `0x5391f7` |
 | 20 | 5 | Object count minus one; decoded count must be at most 20; `0x5391f3` |
 | 25 | 3 | Reference-transform tile-index width; `0x5391f8` |
-| 28 | 1 | Unresolved flag; `0x5391f9` |
+| 28 | 1 | Stored field with no type 1 extraction consumer; `0x5391f9` |
 | 29 | 4 | Common delay field returned by metadata parser; `0x539202` |
 | 33 | 3 | Frame-record variant selector; `0x5391fa` |
-| 36 | 4 | Flags; `0x539408`; highest bit also stored at `0x5391fb` |
+| 36 | 4 | Stored fields with no type 1 extraction consumer; `0x539408`; highest bit also stored at `0x5391fb` and exported by the native metadata helper |
 
 The header therefore ends at byte 8. Width ranges from 8 to 248 and height
 from 8 to 120. Zero is rejected by this parser, so the outer wrapper's
 zero-to-256 normalization does not extend these type 1 dimensions.
+
+A whole-executable static scan found only the parser store for bit 28 and only
+the parser store for the complete four-bit field. The copied highest bit has
+two type 1 reads, both in the metadata helper where it is written to an output
+pointer. The type 1 extraction and rendering paths do not read any of these
+five stored values. Calling them extraction-inert does not discard the highest
+bit's separate metadata meaning.
 
 ## Type 2: variable byte header
 
@@ -209,20 +216,32 @@ a two-frame probe rendered the first normally and the second inverted without
 changing the first result.
 
 Forty-six authored original-runtime calls recorded this composition boundary
-on 2026-09-12. Forty supported vectors covered all eight transform
+on 2026-09-12. The vectors covered all eight transform
 combinations, three clipped negative placements, four values of the trailing
 two-bit field, variants 0, 2, 3 and 7 with selectors inside and outside their
 ranges, full-canvas and empty-canvas inversion, two-frame selection, overlap,
 later-pass replacement and the empty-column endpoint behavior. Every call
 reached its sentinel and returned the declared frame count; final bit positions
 were 181, 200, 203, 221, 343, 361 or 365 according to record shape. Exact packed
-output is compared both with the Go decoder and the actual `0xe7` dispatch.
-The remaining six calls set header bit 28 or header bits 36 through 39. The
-native helper accepted these fields in the simple probe, but their interactions
-have no established contract, so Go rejects them before destination mutation.
+output is compared both with the Go decoder and the actual `0xe7` dispatch. Six
+of these calls set header bit 28 or header bits 36 through 39 and were the first
+evidence that these values did not alter simple extraction.
 `TestLocalScriptSISCompositionComparison` validates the complete 46-row schema
 from the ignored JSONL file named by
 `WFEATURE_SGS_SIS_COMPOSITION_COMPARISON`.
+
+A second matrix varied bit 28 and all sixteen values of the four-bit field over
+four authored streams: a nonsquare asymmetric transformed object, clipped
+later-pass overlap, a literal tile replacement followed by an exact reference,
+and a coded tile. All 128 calls reached the sentinel and returned one. The
+parser globals retained bit 28 and the complete nibble exactly, while the
+separate metadata value equaled the nibble's highest bit. For each stream, all
+32 combinations had identical packed output, source length and final cursor;
+the four cursor positions were 203, 365, 338 and 95. Go repeats every vector
+through actual `0xe7`, and a permanent regression checks the same field matrix
+across literal composition, overlap, references and coded data. This dynamic
+result and the absence of extraction consumers establish that every combination of these five bits
+is accepted without changing extraction output.
 
 Earlier literal composition evidence covered the seven traversal points above,
 a full tile at offsets (0,0), (1,0), (-1,0), (0,1), (0,-1), (7,7) and (8,8), a
@@ -271,13 +290,14 @@ The implemented subset accepts type 1 streams with independent literal or coded
 tiles, mode-zero exact references, mode-one literal or coded tile replacements,
 header variants zero through seven, ordered pass composition, the measured
 geometric transforms, the consumed trailing record field and header/frame
-inversion. It reconstructs a requested frame into temporary packed storage
-before a guest resource changes. The pre-parse work reserve covers maximum
-coded expansion, reference fan-out, object snapshots, geometric transforms,
-mask construction and scans, composition, canvas inversion, and the maximum
-number of replacement records permitted by the source length and index width.
-Header bit 28 and header bits 36 through 39 return failure. Type 2 and SAF
-extraction remain unsupported. The safe frame range is zero through frame count
-minus one; the original wrapper's inclusive upper-bound defect is not
-reproduced. Source resources above 65,535 bytes are rejected, matching the
-script resource size limit and keeping snapshot and decode work bounded.
+inversion. Header bit 28 and the four fields at bits 36 through 39 are consumed
+and accepted without changing extraction output. It reconstructs a requested
+frame into temporary packed storage before a guest resource changes. The
+pre-parse work reserve covers maximum coded expansion, reference fan-out,
+object snapshots, geometric transforms, mask construction and scans,
+composition, canvas inversion, and the maximum number of replacement records
+permitted by the source length and index width. Type 2 and SAF extraction remain
+unsupported. The safe frame range is zero through frame count minus one; the
+original wrapper's inclusive upper-bound defect is not reproduced. Source
+resources above 65,535 bytes are rejected, matching the script resource size
+limit and keeping snapshot and decode work bounded.

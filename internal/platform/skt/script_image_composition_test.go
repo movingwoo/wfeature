@@ -283,55 +283,54 @@ func TestLocalScriptSISCompositionComparison(t *testing.T) {
 		bitPosition  int
 		dataLength   int
 		outputLength int
-		reject       bool
 	}
 	expected := map[string]expectation{
-		"inversion-header0-frame0":          {0, 1, 200, 28, 72, false},
-		"inversion-header1-frame0":          {0, 1, 200, 28, 72, false},
-		"inversion-header0-frame1":          {0, 1, 200, 28, 72, false},
-		"inversion-header1-frame1":          {0, 1, 200, 28, 72, false},
-		"inversion-empty-frame":             {0, 1, 181, 26, 72, false},
-		"frame-snapshot-normal":             {0, 2, 221, 31, 72, false},
-		"frame-snapshot-inverted":           {1, 2, 221, 31, 72, false},
-		"transform-000":                     {0, 1, 200, 28, 72, false},
-		"transform-001":                     {0, 1, 200, 28, 72, false},
-		"transform-010":                     {0, 1, 200, 28, 72, false},
-		"transform-011":                     {0, 1, 200, 28, 72, false},
-		"transform-100":                     {0, 1, 200, 28, 72, false},
-		"transform-101":                     {0, 1, 200, 28, 72, false},
-		"transform-110":                     {0, 1, 200, 28, 72, false},
-		"transform-111":                     {0, 1, 200, 28, 72, false},
-		"negative-clip-vertical":            {0, 1, 200, 28, 72, false},
-		"negative-clip-horizontal":          {0, 1, 200, 28, 72, false},
-		"negative-clip-rotate-and-both":     {0, 1, 200, 28, 72, false},
-		"special-extra-0":                   {0, 1, 361, 49, 16, false},
-		"special-extra-1":                   {0, 1, 361, 49, 16, false},
-		"special-extra-2":                   {0, 1, 361, 49, 16, false},
-		"special-extra-3":                   {0, 1, 361, 49, 16, false},
-		"variant-0-pass-0":                  {0, 1, 203, 29, 72, false},
-		"variant-0-pass-7":                  {0, 1, 203, 29, 72, false},
-		"variant-2-pass-0":                  {0, 1, 203, 29, 72, false},
-		"variant-2-pass-1":                  {0, 1, 203, 29, 72, false},
-		"variant-2-pass-2":                  {0, 1, 203, 29, 72, false},
-		"variant-2-pass-7":                  {0, 1, 203, 29, 72, false},
-		"variant-3-pass-0":                  {0, 1, 203, 29, 72, false},
-		"variant-3-pass-2":                  {0, 1, 203, 29, 72, false},
-		"variant-3-pass-3":                  {0, 1, 203, 29, 72, false},
-		"variant-3-pass-7":                  {0, 1, 203, 29, 72, false},
-		"variant-7-pass-0":                  {0, 1, 203, 29, 72, false},
-		"variant-7-pass-6":                  {0, 1, 203, 29, 72, false},
-		"variant-7-pass-7":                  {0, 1, 203, 29, 72, false},
-		"later-pass-replaces-shape":         {0, 1, 365, 49, 16, false},
-		"later-pass-clears-background":      {0, 1, 365, 49, 16, false},
-		"later-pass-without-earlier-object": {0, 1, 343, 46, 16, false},
-		"later-pass-masked-write":           {0, 1, 365, 49, 16, false},
-		"later-pass-masked-write-clipped":   {0, 1, 365, 49, 16, false},
-		"header-bit28":                      {0, 1, 200, 28, 72, true},
-		"header-flags-1":                    {0, 1, 200, 28, 72, true},
-		"header-flags-2":                    {0, 1, 200, 28, 72, true},
-		"header-flags-4":                    {0, 1, 200, 28, 72, true},
-		"header-flags-8":                    {0, 1, 200, 28, 72, true},
-		"header-flags-15":                   {0, 1, 200, 28, 72, true},
+		"inversion-header0-frame0":          {0, 1, 200, 28, 72},
+		"inversion-header1-frame0":          {0, 1, 200, 28, 72},
+		"inversion-header0-frame1":          {0, 1, 200, 28, 72},
+		"inversion-header1-frame1":          {0, 1, 200, 28, 72},
+		"inversion-empty-frame":             {0, 1, 181, 26, 72},
+		"frame-snapshot-normal":             {0, 2, 221, 31, 72},
+		"frame-snapshot-inverted":           {1, 2, 221, 31, 72},
+		"transform-000":                     {0, 1, 200, 28, 72},
+		"transform-001":                     {0, 1, 200, 28, 72},
+		"transform-010":                     {0, 1, 200, 28, 72},
+		"transform-011":                     {0, 1, 200, 28, 72},
+		"transform-100":                     {0, 1, 200, 28, 72},
+		"transform-101":                     {0, 1, 200, 28, 72},
+		"transform-110":                     {0, 1, 200, 28, 72},
+		"transform-111":                     {0, 1, 200, 28, 72},
+		"negative-clip-vertical":            {0, 1, 200, 28, 72},
+		"negative-clip-horizontal":          {0, 1, 200, 28, 72},
+		"negative-clip-rotate-and-both":     {0, 1, 200, 28, 72},
+		"special-extra-0":                   {0, 1, 361, 49, 16},
+		"special-extra-1":                   {0, 1, 361, 49, 16},
+		"special-extra-2":                   {0, 1, 361, 49, 16},
+		"special-extra-3":                   {0, 1, 361, 49, 16},
+		"variant-0-pass-0":                  {0, 1, 203, 29, 72},
+		"variant-0-pass-7":                  {0, 1, 203, 29, 72},
+		"variant-2-pass-0":                  {0, 1, 203, 29, 72},
+		"variant-2-pass-1":                  {0, 1, 203, 29, 72},
+		"variant-2-pass-2":                  {0, 1, 203, 29, 72},
+		"variant-2-pass-7":                  {0, 1, 203, 29, 72},
+		"variant-3-pass-0":                  {0, 1, 203, 29, 72},
+		"variant-3-pass-2":                  {0, 1, 203, 29, 72},
+		"variant-3-pass-3":                  {0, 1, 203, 29, 72},
+		"variant-3-pass-7":                  {0, 1, 203, 29, 72},
+		"variant-7-pass-0":                  {0, 1, 203, 29, 72},
+		"variant-7-pass-6":                  {0, 1, 203, 29, 72},
+		"variant-7-pass-7":                  {0, 1, 203, 29, 72},
+		"later-pass-replaces-shape":         {0, 1, 365, 49, 16},
+		"later-pass-clears-background":      {0, 1, 365, 49, 16},
+		"later-pass-without-earlier-object": {0, 1, 343, 46, 16},
+		"later-pass-masked-write":           {0, 1, 365, 49, 16},
+		"later-pass-masked-write-clipped":   {0, 1, 365, 49, 16},
+		"header-bit28":                      {0, 1, 200, 28, 72},
+		"header-flags-1":                    {0, 1, 200, 28, 72},
+		"header-flags-2":                    {0, 1, 200, 28, 72},
+		"header-flags-4":                    {0, 1, 200, 28, 72},
+		"header-flags-8":                    {0, 1, 200, 28, 72},
+		"header-flags-15":                   {0, 1, 200, 28, 72},
 	}
 	seen := make(map[string]bool)
 	scanner := bufio.NewScanner(file)
@@ -349,24 +348,6 @@ func TestLocalScriptSISCompositionComparison(t *testing.T) {
 			t.Fatalf("row %d has invalid native result: %+v", rowNumber, row)
 		}
 		frame, ok := decodeScriptSISLiteralFrame(row.Data, row.FrameIndex)
-		if want.reject {
-			if ok {
-				t.Fatalf("row %d accepted a deliberately unsupported header field", rowNumber)
-			}
-			before := []byte("unchanged")
-			vm := sgsvm.New(&sgsvm.Program{Resources: []sgsvm.Resource{{Data: row.Data}, {Data: slices.Clone(before)}}}, nil)
-			vm.Push(1234)
-			for _, argument := range []int16{1, 1, 0, 1, int16(row.FrameIndex), 42, 43} {
-				vm.Push(argument)
-			}
-			if err := (&ScriptSession{}).Call(0xe7, vm); err != nil || vm.Pop() != -1 || vm.Pop() != 1234 {
-				t.Fatalf("row %d unsupported dispatch failed: %v", rowNumber, err)
-			}
-			if !bytes.Equal(vm.Resources[1].Data, before) {
-				t.Fatalf("row %d unsupported dispatch mutated the destination", rowNumber)
-			}
-			continue
-		}
 		if !ok || !bytes.Equal(frame.pixels, row.Output) {
 			t.Fatalf("row %d: Go output %x valid=%v, native output %x", rowNumber, frame.pixels, ok, row.Output)
 		}

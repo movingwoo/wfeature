@@ -55,8 +55,8 @@ func (r *scriptSISBitReader) peek(count int) (uint, bool) {
 // decodeScriptSISLiteralFrame implements the independently verified type-1
 // subset: independent objects containing literal or coded 8-by-8 tiles,
 // reference objects with optional tile replacement streams, and ordered frame
-// composition with the measured transforms and inversion fields. Unresolved
-// header fields fail closed until their contracts have executable evidence.
+// composition with the measured transforms and inversion fields. Header fields
+// that do not affect extraction are consumed without changing the pixels.
 func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralFrame, bool) {
 	var result scriptSISLiteralFrame
 	if len(data) < 3 || !bytes.Equal(data[:3], []byte("SIS")) {
@@ -91,8 +91,7 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	if !ok {
 		return result, false
 	}
-	unresolved, ok := r.read(1)
-	if !ok || unresolved != 0 {
+	if _, ok = r.read(1); !ok { // Stored by the parser but not consumed during extraction.
 		return result, false
 	}
 	if _, ok = r.read(4); !ok { // Frame delay does not change a frame's pixels.
@@ -102,8 +101,7 @@ func decodeScriptSISLiteralFrame(data []byte, frameIndex int) (scriptSISLiteralF
 	if !ok {
 		return result, false
 	}
-	unresolved, ok = r.read(4)
-	if !ok || unresolved != 0 {
+	if _, ok = r.read(4); !ok { // The high bit is metadata; none affect extraction.
 		return result, false
 	}
 
