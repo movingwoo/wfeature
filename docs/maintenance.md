@@ -137,10 +137,9 @@ The following are candidates, not speed claims or approved large rewrites:
 
 ## Documentation and provenance
 
-The root README still describes three keypad types and the former size panel,
-while the page ships four types and cell editing. `web/README.md` and early
-sections of `docs/session.md` also describe the former layout. These are
-documentation gaps, not missing keypad implementation.
+The root README, `web/README.md` and the keypad section of `docs/session.md`
+now describe four types, per-type cell editing and the shared sizing editor.
+These documentation corrections do not add another keypad implementation.
 
 Historical sections in [testing.md](testing.md) still name the removed
 `var/games/test_skt/NOT-WORKING.md` report and state that there is no session

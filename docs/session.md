@@ -92,18 +92,14 @@ keys are not bound one at a time — `pointerdown` is watched on the document, a
 what the finger went down on only decides whether a key is pressed straight
 away.
 
-What a slide runs across is the pad: the two key blocks and the row of `*`, `0`
-and `#` under them, which is `.keypad-main` and `.keypad-footer` in the markup.
-The keypad's top row is deliberately outside it. Opts, Menu, Call
-and CLR are aimed at one at a time — a slide that woke one of them on its way
-past would be a surprise, and CLR in the middle of a game is an expensive one —
-so a press there holds that one key until the finger lifts, wherever it wanders,
-and a slide crossing the row presses nothing. A slide does not begin on any
-button that is not a key, nor on the keypad's own frame, nor in the run log or
-the cheat panel, which scroll and are selected and belong to the finger that
-lands in them. `web/keypad.test.mjs` holds the pad and the top row apart in the
-markup, since which side of that line a button sits on is what decides its
-behaviour.
+A slide runs across the single `.keypad-pad` grid, including its bottom row.
+The band above it is outside the sliding region: Opts and its three assignable
+cells are held individually until release. Editing changes each cell's assigned
+key, while its region remains fixed. Type1 through Type3 provide shipped layouts;
+Type4 starts empty. Each type retains its own cell edits and size settings.
+The shared keypad editor changes both and resets the selected type. Non-key
+controls, text editors, logs and cheat panels retain their normal pointer behavior.
+`web/keypad.test.mjs` checks the grid and band distinction.
 
 Two details are what make it behave. A press that starts on a key captures the
 pointer, because otherwise the moves and the release stop arriving the moment

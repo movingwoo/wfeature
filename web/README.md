@@ -39,11 +39,12 @@ the token, so the restart button still starts a game over.
 - **Screen** — a 240x320 Host framebuffer presented on the canvas, scaled to the
   viewport with a 3:4 wrapper.
 - **Keypad** — `CLR`, `Call`, `Menu`, a direction pad and the twelve phone keys.
-  Which of the three keypads is drawn is a setting rather than a button here:
+  Which of the four keypads is drawn is a setting rather than a button here:
   Type1 drives the direction pad with `2/4/6/8`, Type2 with the arrow keys plus
   `OK`, and Type3 is Type1 with `1` and `3` moved off the number pad into the
   direction pad's top row, which is where a game that walks diagonally wants
-  them. `Call` is the handset's send key: a game that answers it usually
+  them. Type4 starts empty. Every type supports cell assignment and keeps its
+  own edits. `Call` is the handset's send key: a game that answers it usually
   answers with a quick save, and no other button reaches it.
   `Menu` is the handset's left soft key, the one its own screen labelled 메뉴
   and the one a title of this era puts its in-game menu on. It sends -6, which
@@ -57,7 +58,7 @@ the token, so the restart button still starts a game over.
   `M` for `Menu`, arrows and `Space` for the direction pad. Any of those can be
   moved from the settings panel; `keybindings.js` holds the table and the one
   rule it has, and a binding a user changed is remembered.
-  How much room the pad gets is a setting of its own, opened from `Opts` and
+  Cell assignment and sizing share the keypad editor, opened from `Opts` and
   drawn over the game screen rather than in the settings panel: that panel is a
   centred modal on a phone and covers the very keypad the sliders move. Four
   numbers, which are the keypad's four bands — the size of a key, how the middle
