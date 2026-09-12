@@ -55,6 +55,29 @@ not establish that identity metadata is absent: the descriptor formats still
 need decoding before they can supply the identity service. No identity is
 inferred from a filename or the executable save-owner digest.
 
+## Combined extraction and Host checkpoint
+
+Combined revision `d250de9` includes type-1 SIS literal/coded tiles, reference
+replacements, ordered composition, geometric transforms, canvas inversion and
+extraction-inert header flags. It also includes native text input, intentional
+external-link handoff, invocation yielding, and the local request-status path.
+All eight native SIS comparison groups passed together, as did general/debug
+checks, internal race tests, vet and debug/release CLI and server builds.
+These results establish the documented contracts, not complete SIS/SAF support.
+
+At preceding revision `fc8e8ea`, a manifest-verified startup check opened every
+archive twice without a persistent save store. Each run advanced 1,200 ticks of
+16 ms and pressed/released Right at ticks 900/906. All 24 runs remained active
+and closed without error. Each pair had identical final framebuffer hashes and
+presentation counts. Counts by ID were 93, 74, 73, 73, 171, 93, 120, 75, 92,
+600, 92 and 48. This check covers bounded startup, input and Host restart; it
+does not establish directed play, restored progress, guest exit or audible output.
+
+Type-1 extraction returns packed resource bytes. A successful extraction is
+not proof of the complete extended-image drawing path through the browser.
+Type 2, SAF and remaining Host contracts still require their own executable
+acceptance paths. The corpus gate below remains open.
+
 ## Paused at user request
 
 Development of further compatibility features stopped on 2026-09-11 at the
