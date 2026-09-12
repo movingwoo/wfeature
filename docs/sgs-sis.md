@@ -69,6 +69,32 @@ Header parsing by itself does not perform those later limits. Tiny nonzero
 dimension bytes can round to zero, so a host must validate final dimensions
 before allocation or division.
 
+## Metadata query comparison checkpoint
+
+On 2026-09-12, original helper `0x410310` was executed again in an isolated x86
+interpreter over 102 newly authored SIS headers. Every call returned to its
+sentinel within the 100,000-instruction limit. The matrix and exact results
+were:
+
+| Encoding | Authored combinations | Native result |
+|---|---|---|
+| Type 1 | Frame selectors 1 and 20; minimum and maximum dimensions; object counts 1, 20 and 21 | 8 returned 0; the four object-count-21 cases returned -1 |
+| Type 2 | Outer selectors 0, 29 and 30; common and per-frame delays; zero, sub-eight and rounded dimensions; actual subtypes 0, 1, 2, 8 and 9 | 72 returned 0; the eighteen subtype-8 cases returned -1 |
+
+For every successful call, the five signed words matched the Go header parser:
+actual subtype, one object, frame count, rounded width and rounded height. Every
+failure left the fresh five-word native output zeroed. The same result file was
+then applied to the real Go `0xe8` dispatch, not only to the parser helper; all
+102 return values and 510 output words matched, and the caller's earlier stack
+value was retained. `TestLocalScriptSISMetadataComparison` keeps this direct
+comparison repeatable with an ignored JSONL result file named by
+`WFEATURE_SGS_SIS_METADATA_COMPARISON`.
+
+This closes the systematic SIS header-metadata comparison without widening the
+decoder claim. Truncated input remains deliberately rejected by Go before a
+read, and SAF metadata, SIS object decoding, frame composition and host image
+operations remain separate work.
+
 ## Type 1 objects: raw tiles and coded runs
 
 Frame extraction at `0x43a1a0` reparses the header, reads all object definitions,
