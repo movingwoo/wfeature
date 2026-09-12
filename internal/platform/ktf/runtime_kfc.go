@@ -82,7 +82,7 @@ func runtimeGTextFieldClassDefinition() runtimeJavaClass {
 	const class = runtimeGTextFieldClass
 	return runtimeJavaClass{
 		name:        class,
-		superName:   runtimeTextComponentClass,
+		superName:   runtimeTextFieldComponentClass,
 		accessFlags: 0x0021,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(Lcom/ktf/kfc/GMenubarForm;Ljava/lang/String;I)V", accessFlags: 0x0001, implementation: runtimeGTextFieldConstructor},

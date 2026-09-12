@@ -113,3 +113,18 @@ tests pass. This is static reachability evidence, not a recorded editor executio
 and it does not rule out other entry paths in the same archive. A synthetic
 response would test a different acceptance path and must not be counted as real
 service behavior. See [network limitations](network.md).
+
+### KTF text-field virtual dispatch
+
+A KTF archive calls `TextFieldComponent.setString(String)` with a `GTextField`
+receiver when opening the name editor from its settings menu. `GTextField` must
+inherit `TextFieldComponent`: inheriting directly from `TextComponent` placed a
+constructor in the virtual slot resolved by that caller. The call then failed
+while decoding constructor arguments, before the editor could open.
+
+The corrected hierarchy preserves the parent method slot. A regression test
+checks the actual generated receiver table against the parent declaration. A
+fresh-save replay of the settings route reaches `GTextField.setString` without
+the previous argument-decoding failure. The captured display remains on the
+settings menu; editor visibility, host text submission and persistence are still
+separate acceptance requirements. General, debug, race and vet checks pass.
