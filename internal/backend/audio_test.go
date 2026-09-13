@@ -230,6 +230,9 @@ func TestAudioWithoutASinkStaysSilentRatherThanFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	audio.Advance(time.Second)
+	if audio.Playing(handle) {
+		t.Fatal("playback must complete even without an output sink")
+	}
 }
 
 // TestVolumeScalesWhatReachesTheSink pins the device level a guest sets

@@ -1898,18 +1898,28 @@ Two things about this block are easy to get wrong and silent when you do:
   id, and "Slots that are accepted without being understood" has the call site
   that settles it.
 
-A Java title also registers a `PlayListener` on a clip, and this platform
-**takes the registration and delivers nothing to it**. The specification's
-events are ERROR, END_OF_DATA, START, STOP, PAUSE, RESUME, RECORD and
-FULL_OF_DATA; of those, the only ones a title here could act on are START and
-END_OF_DATA, and the mixer behind this block has no end-of-clip signal to raise
-the second from. So a delivery would either be invented or would never come.
-Recording the listener is what lets the titles that only register one go on —
-one of them stopped dead at `Clip.setListener` and now runs — and a title that
-*waits* on an event will stop where it waits, which is a better place to find
-out than a callback made up out of a clip's byte count. The listener is kept
-because the delivery is the next thing to build here and it needs somewhere to
-send.
+C clips retain the `MEDIACB` passed to `MC_mdaClipCreate` and deliver
+`(clip, status)` between guest frames. STARTED, END_OF_DATA, STOPP, PAUSED and
+RESUMED follow the [WIPI media contract](https://mirusu400.github.io/wipi-wiki/c-api/media.md).
+Completion follows the mixer's playback state, including when no Host sink is
+attached. Repeating clips do not report completion while looping, and playing
+an already playing clip does not restart it. Pause/resume still restarts the
+score rather than preserving a paused cursor.
+
+Delivery uses a snapshot: callbacks may stop or free their clip without
+reentering an unfinished media call. Freed clips discard remaining callbacks,
+and each clip's pending queue is bounded to 64 transitions. Repeated stop
+does not generate an endless chain of STOPP callbacks.
+
+A local Clet regression played its startup clip but requested no further sound
+resources because its stop callback was responsible for releasing the clip.
+A fresh-save 7,000-tick title/menu/new-game route produced 68 MIDI messages
+before this fix and 3,864 afterward, with five distinct sound resources loaded.
+This verifies guest scheduling and recorded MIDI output, not speaker quality
+or a complete playthrough.
+
+Java `PlayListener` registration is retained but delivery remains unimplemented;
+a Java title waiting for that listener can still stall.
 
 `wfeature runlgt <game.zip> -audio out` records what a run played, which is how
 this was checked without a speaker: `out.mid` for the MIDI events and

@@ -280,6 +280,9 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 		return span, err
 	}
 	client.serviceAudio()
+	if err := client.serviceMediaCallbacks(ctx); err != nil {
+		return span, err
+	}
 	// Frozen values are rewritten after the game has drawn, so a cheat wins
 	// over whatever the tick just wrote rather than racing it.
 	if err := session.serviceCheat(); err != nil {

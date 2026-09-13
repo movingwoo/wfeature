@@ -281,7 +281,7 @@ func (audio *Audio) Playing(handle AudioHandle) bool {
 // batched Host whose clock jumps forward emits the skipped events in order
 // rather than dropping them, because a note-off that is skipped never stops.
 func (audio *Audio) Advance(now time.Duration) {
-	if audio == nil || audio.sink == nil {
+	if audio == nil {
 		return
 	}
 	audio.mutex.Lock()
@@ -320,6 +320,9 @@ func (audio *Audio) advanceSound(current *sound, now time.Duration) {
 }
 
 func (audio *Audio) emit(current *sound, event smaf.Event) {
+	if audio.sink == nil {
+		return
+	}
 	switch event.Type {
 	case smaf.EventWave:
 		audio.sink.PlayWave(event.WaveChannels, event.SamplingRate, audio.scaleWave(event.Wave))
