@@ -1180,7 +1180,8 @@ local diagnostics and is not exposed by the browser protocol.
 
 The `started` description reports `authentication` as `off`, `unsupported`,
 `ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `skt-license`,
-`lgt-cached-authentication`, `lgt-certificate-58`, or `lgt-offline-notification`.
+`lgt-cached-authentication`, `lgt-certificate-58`, `lgt-offline-notification`, or
+`lgt-offline-authentication`.
 Resume returns the existing runtime and its result. Unsupported retains ordinary
 guest behavior. Applied identifies a selected adapter, not successful gameplay.
 See [implementation and limits](authentication.md).

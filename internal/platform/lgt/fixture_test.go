@@ -30,7 +30,10 @@ const (
 	// 2 once it has started or resumed, 3 once it has been paused. The numbers
 	// are the MIDP fixture's, so the two platforms' lifecycle tests read the
 	// same way.
-	fixtureLifecycle = fixtureDataBase + 0xcc
+	fixtureLifecycle      = fixtureDataBase + 0xcc
+	fixtureInputCompleted = fixtureDataBase + 0xd0 // 16 bytes
+	fixtureInputComposing = fixtureDataBase + 0xe0 // 16 bytes
+	fixtureInputSizes     = fixtureDataBase + 0xf0 // two words
 )
 
 const (
@@ -45,6 +48,7 @@ const (
 	globalGetScreen    = 1
 	globalGetPointer   = 2
 	globalFlush        = 3
+	globalHandleInput  = 4
 )
 
 // A32 encodings. Only the handful the fixture needs are here; each is written
@@ -58,9 +62,15 @@ func armLdrPost(rd, rn, off uint32) uint32 { return 0xe4900000 | rn<<16 | rd<<12
 func armStrPost(rd, rn, off uint32) uint32 { return 0xe4800000 | rn<<16 | rd<<12 | off }
 func armStrh(rd, rn uint32) uint32         { return 0xe1c000b0 | rn<<16 | rd<<12 }
 func armCmpImm(rn, value uint32) uint32    { return 0xe3500000 | rn<<16 | value&0xff }
-func armBX(rm uint32) uint32               { return 0xe12fff10 | rm }
-func armBranch(offset int32) uint32        { return 0xea000000 | uint32(offset)&0xffffff }
-func armBranchEq(offset int32) uint32      { return 0x0a000000 | uint32(offset)&0xffffff }
+func armAddImm(rd, rn, value uint32) uint32 {
+	return 0xe2800000 | rn<<16 | rd<<12 | value&0xff
+}
+func armSubImm(rd, rn, value uint32) uint32 {
+	return 0xe2400000 | rn<<16 | rd<<12 | value&0xff
+}
+func armBX(rm uint32) uint32          { return 0xe12fff10 | rm }
+func armBranch(offset int32) uint32   { return 0xea000000 | uint32(offset)&0xffffff }
+func armBranchEq(offset int32) uint32 { return 0x0a000000 | uint32(offset)&0xffffff }
 
 const (
 	armPushLR  = 0xe92d40f0 // push {r4-r7, lr}
@@ -210,15 +220,33 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent, 
 	a.emit(armMovImm(0, 0))
 	a.emit(armPopPC)
 
-	// handleCletEvent(kind, param1, param2): record the key and paint it into
-	// the second pixel, so a test can see the event arrived.
+	// handleCletEvent(kind, param1, param2): pass the key through the same
+	// input-method call a native text widget uses, then record it and paint it
+	// into the second pixel so a test can see the event arrived.
 	handleEvent = a.here()
 	a.emit(armPushLR)
+	a.emit(armMovReg(4, 0)) // r4 = kind
+	a.emit(armMovReg(5, 1)) // r5 = key
+	a.literal(6, fixtureInputSizes)
+	a.emit(armMovImm(0, 16))
+	a.emit(armStr(0, 6, 0), armStr(0, 6, 4))
+	a.emit(armSubImm(13, 13, 8))
+	a.literal(7, fixtureInputComposing)
+	a.emit(armStr(7, 13, 0))
+	a.literal(7, fixtureInputSizes+4)
+	a.emit(armStr(7, 13, 4))
+	a.emit(armMovReg(0, 5), armMovReg(1, 4))
+	a.literal(2, fixtureInputCompleted)
+	a.emit(armMovReg(3, 6))
+	a.literal(7, fixtureGlobals+globalHandleInput*4)
+	a.emit(armLdr(7, 7, 0))
+	a.call(7)
+	a.emit(armAddImm(13, 13, 8))
 	a.literal(4, fixtureLastEvent)
-	a.emit(armStr(1, 4, 0))
-	a.literal(5, fixtureFrameBuffer)
-	a.emit(armLdr(6, 5, 0))
-	a.emit(armStrh(1, 6)) // the key code lands where the test can read it
+	a.emit(armStr(5, 4, 0))
+	a.literal(4, fixtureFrameBuffer)
+	a.emit(armLdr(6, 4, 0))
+	a.emit(armStrh(5, 6)) // the key code lands where the test can read it
 	a.emit(armMovImm(0, 0))
 	a.emit(armPopPC)
 
@@ -274,6 +302,7 @@ func fixtureData(initFunction, startClet, handleEvent, pauseClet, resumeClet uin
 		importTableWIPIC, slotGetScreenFramebuffer,
 		importTableWIPIC, slotFramebufferPointer,
 		importTableWIPIC, slotFlushLcd,
+		importTableWIPIC, slotIMHandleInput,
 		0, 0,
 	}
 	for index, value := range requests {

@@ -1,9 +1,10 @@
 # Native text input
 
-The browser composes text using the phone or PC keyboard and IME. The user opens
-**문자 입력** after selecting a supported input field in the game, edits the
-contents, and presses **입력** to submit the complete string. Intermediate IME
-composition is local to the browser. The existing game keypad remains available.
+The browser composes text using the phone or PC keyboard and IME. The user
+selects an input field in the game, opens **Opts → 문자 입력**, and presses
+**입력** to submit the completed string. Intermediate IME composition is local
+to the browser. The emulator does not implement a separate handset Hangul
+layout; the existing game keypad remains available for game controls.
 
 ## Boundary
 
@@ -26,11 +27,25 @@ performed before opening an edit ends the session and settles the outstanding
 request. Password
 fields use a password input and are cleared when the dialog closes.
 
-Custom game-owned input interfaces are not automatically discoverable. A platform
-without a proven active field reports that no supported field is active. In
-particular, WIPI-C UIC lacks component creation, and game-owned native widgets
-do not expose a field identity. Supporting those paths requires their guest UI
-lifecycle first.
+An append snapshot is used when a platform can pass completed text to the active
+guest cursor but cannot read or replace the existing value. The response carries
+`append: true`, starts with an empty Host field, and labels the operation as an
+insertion. The same stale-edit and transport rules apply.
+
+Custom game-owned input interfaces are supported only where the platform exposes
+a proven active target. SKT's `TextComponentHandler` identifies the title-owned
+component and exposes its size, cursor, limit, constraints, and character insertion,
+but no value getter. The Host therefore appends the completed string at the guest
+cursor and rejects commits after component, keypad, cursor, size, limit, or constraint
+changes. This character-at-a-time route accepts BMP text, including Korean, Latin,
+digits, and common symbols; it rejects supplementary characters that cannot survive
+separate Java `char` callbacks. LGT WIPI-C is the other bounded route: after a native widget selects or
+calls the platform input method, a Host commit enters its Clet with one character-key
+carrier. The widget's
+normal `MC_imHandleInput` call receives the complete EUC-KR string in its
+completion buffer. The carrier is substituted inside the platform and is not
+composed as a keypad character. If the current Clet route no longer reaches the
+input method, the edit is rejected as stale.
 
 ## Supported editors
 
@@ -44,7 +59,9 @@ exactly one directly attached GTextField that has an EventListener. The Host
 changes only that field's value. The guest listener receives keypad events and
 owns acceptance and dismissal. Ambiguous or changed form contents are rejected,
 and the synchronous KFC `doModal` path remains unsupported. SKT supports TextBox,
-the selected Form TextField, and a focused XTextField on the visible canvas.
+the selected Form TextField, a focused XTextField on the visible canvas, and the
+title-owned TextComponent attached to its input-method handler. The last route is
+append-only because the component interface cannot return its existing value.
 LGT supports a focused LWC TextField or TextBox whose parent chain reaches a
 shown Shell. Shell visibility and focus changes invalidate pending edits; field
 and listener revisions also reject guest changes that restore an earlier value.
@@ -52,6 +69,14 @@ Application lifecycle callbacks are dispatched by their exact method signature,
 and shown/focused widget graphs remain reachable by the Java collector. As with
 KTF, an installed InputMethodListener is unsupported. This adds text editing,
 not a complete LWC renderer.
+
+LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
+path appends at the guest cursor because WIPI-C exposes neither the field value
+nor a stable component identity. It accepts up to 64 completed characters per
+submission, rejects controls and text outside strict EUC-KR, and accepts only
+ASCII digits while the widget has selected `N123`. The widget still enforces
+its own smaller field and completion-buffer limits; an over-capacity submission
+changes nothing and can be retried.
 
 Limits count Java UTF-16 units; supplementary characters consume two units. Native
 entry does not infer fields drawn by game code.
@@ -91,6 +116,12 @@ length rejection/retry, and guest readback with this archive. Review artifacts
 are in `var/diagnostics/lgt-text-e2e-20260912`. The fixture does not draw a complete
 widget screen or provide a guest key route that changes focus; those lifecycle
 transitions remain covered by separate runtime regressions.
+
+An authored WIPI-C Clet additionally drives a Host composition through its real
+`handleCletEvent` entry point and `MC_imHandleInput` import. Tests cover Korean,
+English and digits in one completed EUC-KR string, numeric constraints, strict
+encoding, stale mode snapshots, output byte lengths, atomic capacity rejection,
+and retry.
 
 The integrated normal and debug suites, internal race checks, and `go vet ./...`
 pass. Both CLI and embedded-server binaries build in debug and release profiles.

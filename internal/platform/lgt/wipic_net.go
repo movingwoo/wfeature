@@ -8,8 +8,9 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
-// The network block normally reports failure. A recognized offline notification
-// contract has a bounded in-process responder; see authentication_notification.go.
+// The network block normally reports failure. A recognized offline protocol
+// contract has a bounded in-process responder; see authentication_notification.go
+// and authentication_handshake_contract.go.
 // MC_netConnect still owns the asynchronous result contract, because
 // it cannot report an accepted dial through its return value alone.
 //

@@ -13,6 +13,14 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
   const dialog = node("dialog"), status = node("status"), single = node("value"), multi = node("multiline");
   const apply = node("apply"), cancel = node("cancel");
   let generation = 0, owner = null, edit = null, field = single, composing = false, busy = false;
+  const clearStatus = () => {
+    status.textContent = "";
+    status.hidden = true;
+  };
+  const showError = error => {
+    status.textContent = explain(error);
+    status.hidden = false;
+  };
   const discard = (connection, token) => {
     if (connection && token != null) void connection.cancelTextInput(token).catch(() => {});
   };
@@ -23,6 +31,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     edit = null;
     single.value = multi.value = "";
     composing = busy = false;
+    clearStatus();
     if (dialog.open) dialog.close();
   };
   const open = async () => {
@@ -37,7 +46,6 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     single.type = "text";
     single.disabled = multi.disabled = true;
     apply.disabled = true;
-    status.textContent = "입력칸을 불러오는 중입니다.";
     dialog.showModal();
     try {
       const { textInput } = await connection.openTextInput();
@@ -53,13 +61,10 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       field.value = textInput.text;
       field.disabled = false;
       apply.disabled = false;
-      status.textContent = textInput.maxLength > 0
-        ? `최대 ${textInput.maxLength}칸(한글과 영문·숫자·기본 기호는 1칸, 이모지는 2칸 이상일 수 있습니다). 입력칸을 눌러 키보드를 여세요.`
-        : "입력칸을 눌러 키보드를 여세요.";
       // Phones may require a fresh tap after the asynchronous response.
       field.focus();
     } catch (error) {
-      if (current === generation) status.textContent = explain(error);
+      if (current === generation) showError(error);
     }
   };
   apply.addEventListener("click", async () => {
@@ -73,7 +78,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       if (current === generation) { edit = null; close(); }
     } catch (error) {
       if (current === generation) {
-        status.textContent = explain(error);
+        showError(error);
         busy = false;
         apply.disabled = false;
         field.disabled = false;

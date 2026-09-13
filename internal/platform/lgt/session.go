@@ -156,6 +156,13 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 				authentication = backend.AuthenticationLGTNotification
 			}
 		}
+		if authentication == backend.AuthenticationUnsupported {
+			model, _ := client.systemProperty("PHONEMODEL")
+			if network := newAuthenticationHandshakeNetwork(authenticationHandshake(client.module), archive, client.subscriberNumber, model); network != nil {
+				client.notificationNetwork = network
+				authentication = backend.AuthenticationLGTHandshake
+			}
+		}
 
 		if options.Logger != nil {
 			options.Logger.Debug("authentication compatibility", "status", authentication)

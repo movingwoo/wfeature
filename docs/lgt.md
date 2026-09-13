@@ -650,12 +650,14 @@ exactly the state it reached before — the reading it takes from `"EN/L"`
 produces the same mode table its constructor started with — which is why
 adopting the real contract changed no title's frames.
 
-**Numeric input is implemented; letter composition remains incomplete.** In
-`N123` mode, `MC_imHandleInput` returns one completed ASCII digit for a pressed
-or repeated numeric key, provided the completion buffer fits the digit and its
-terminator. It clears the composing buffer and preserves both input capacities.
-Release, navigation and flush keys remain unhandled. The widget continues to
-own its text, deletion and mode selection.
+**The browser owns letter and Hangul composition.** In `N123` mode,
+`MC_imHandleInput` still returns one completed ASCII digit for a pressed or
+repeated numeric key. For external text, the Host sends one character-key event
+while holding a completed, strictly EUC-KR string. A native widget routes that
+key through its normal `MC_imHandleInput` call, where the platform substitutes
+the complete string. This uses the phone or PC QWERTY keyboard and does not
+emulate a manufacturer keypad layout. The widget continues to own its text,
+cursor, deletion, field limit and mode selection.
 
 Earlier probes observed only constructor flushes. A later authentication
 acceptance route reaches a mandatory name widget that selects mode 3 and sends
@@ -665,8 +667,8 @@ the guest's own minimum-length check rejects a two-byte name. This supersedes
 the earlier claim that no local title sends character keys through the platform.
 The [WIPI input-method contract](https://mirusu400.github.io/wipi-wiki/hal/input-method.md)
 defines numeric mode and the completed/composing output buffers. Numeric entry
-does not require the whole-field editor in `internal/textinput`; multi-tap and
-Hangul composition still need an adapter to that separate output contract.
+also remains available through the game keypad. External input uses the shared
+Host editor and this separate completion-buffer contract.
 
 **The composing buffer is written now, and the reason it was not is worth
 keeping.** `(key, type, buf1, size1)` arrive in registers and `(buf2, size2)`
@@ -675,8 +677,11 @@ own stack rather than failing. There was no caller available to confirm where
 it sits; there is one now, and its own code settles it — the widget builds two
 eight-byte buffers on its stack, stores their addresses at `[sp]` and `[sp+4]`,
 and the platform stub balances its push before the supervisor call, so the
-stack pointer the handler sees is the caller's. Both sizes are the caller's
-capacities and the specification marks them in-only, so neither is rewritten.
+stack pointer the handler sees is the caller's. The specification marks both
+sizes as input capacities. The observed widget then reads those same words as
+output byte lengths. The platform therefore reads both capacities first and
+writes the completed and composing lengths afterwards. Leaving `16` in either
+word made the widget consume stale stack bytes and corrupt adjacent state.
 
 The `type` uses the same vendor event numbers as the Clet boundary: pressed
 502, released 503 and repeated 504. The observed name widget forwards 502.
@@ -4915,9 +4920,11 @@ are carried by `collect_test.go` rather than by the corpus.
   for a reference (`null` is a value a title can test) and wrong for a number,
   and no local title asks for one.
 
-- **Letter composition is incomplete.** `MC_imHandleInput` completes digits in
-  `N123` mode. English multi-tap and Hangul composition through this C boundary
-  remain unimplemented; see "Character input".
+- **WIPI-C text entry is append-only from the Host.** The native input-method
+  boundary exposes completed and composing buffers, but no stable component,
+  current value or cursor. **Opts → 문자 입력** can insert complete text at the
+  current guest cursor after the widget has used `MC_imHandleInput`; it cannot
+  display or replace text already held by the widget. See "Character input".
 - **A scene load takes seconds, and the screen holds its loading art for all
   of it.** Taken again after the page-permission change in `docs/armcore.md`,
   on an M-series desktop, release profile: the worst single tick across the
@@ -4952,7 +4959,8 @@ are carried by `collect_test.go` rather than by the corpus.
   free is a draw that reaches the guest's own bytes rather than a copy of them,
   and nothing local is waiting on it now.
 - **No external network.** Authentication compatibility can select the bounded
-  [local notification and empty-save responder](authentication.md#lgt-local-notification-and-empty-remote-save-service).
+  [local notification and empty-save responder](authentication.md#lgt-local-notification-and-empty-remote-save-service)
+  or [binary authentication responder](authentication.md#lgt-local-binary-authentication).
   Otherwise the block reports failure: a game's own state machine handles
   that, while claiming a connection would make it wait for data that never
   arrives. It is the *whole* block rather than only the connect call, because a
@@ -6261,3 +6269,38 @@ Final isolated-tree checks passed: `make test`, `make test-debug`,
 builds. The same source changes were copied back to the original working tree,
 and both server profiles were rebuilt there; running server processes still
 require a restart to use the new executable.
+
+## Local binary authentication confirmation (2026-09-13)
+
+A fresh native title offered certificate authentication, then remained on its
+authentication-progress screen after the user confirmed the connection. The
+baseline trace proved that `MC_netConnect` returned zero, its delayed failure
+callback ran, and the guest closed the network. The existing asynchronous fix
+was therefore working; this title intentionally retained the screen on failure.
+
+A controlled successful dial exposed the remaining contract. The guest creates
+a TCP socket, connects it through a callback, writes a 60-byte `KP` packet, reads
+a four-byte header and then its remaining bytes, dispatches command 12, and
+closes the socket. Its command-12 handler records completion without a payload.
+The new `lgt-offline-authentication` adapter recognizes the connected packet
+builder, send/dial/socket path, callback pointers, endpoint and response
+dispatcher. It rebuilds the exact request from the session identity, handset
+model and module-owned application/version strings, then returns the eight-byte
+completion frame in process. No OS socket, DNS lookup or external request occurs.
+
+The implementation follows the published
+[WIPI C network contract](https://mirusu400.github.io/wipi-wiki/c-api/network.md):
+accepted connects complete through callbacks, socket callbacks receive
+`(fd, error, param)`, and a read-ready callback is registered after
+`M_E_WOULDBLOCK`. Unknown data, endpoints and callbacks still fail. Recognition
+uses no archive name, digest, fixed application identifier or fixed code
+address.
+
+An authored module verifies relocated recognition, disconnected relationships,
+mutated code and literals, archive identity, all request-byte mutations,
+fragmented writes, bounds and diagnostic opt-out. A local scan selected two
+distinct modules among 127 parseable archive copies. The reported fresh-save
+route now completes write/read/close, leaves the progress screen, reaches the
+guest's next consent prompt and, after an explicit refusal, reaches character
+information input. The emulator does not choose consent. Ordinary progress save
+and a fresh-session restore remain to be verified separately.

@@ -10,16 +10,25 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
-// notificationNetwork is an in-process notification receipt and empty remote-save
-// service. It cannot open an OS socket, send SMS, upload saves or fetch data.
-// Guest choice and ordinary guest file writes remain authoritative.
+type localNetworkProtocol uint8
+
+const (
+	localNotificationProtocol localNetworkProtocol = iota
+	localAuthenticationProtocol
+)
+
+// notificationNetwork is the legacy name of the bounded in-process service
+// shared by the recognized notification and authentication exchanges. It
+// cannot open an OS socket, send data or fetch data. Guest choice and ordinary
+// guest file writes remain authoritative.
 type notificationNetwork struct {
-	contract notificationContract
-	identity string
-	active   bool
-	next     uint32
-	serial   uint64
-	sockets  map[uint32]*notificationSocketState
+	contract              notificationContract
+	identity              string
+	authenticationRequest []byte
+	active                bool
+	next                  uint32
+	serial                uint64
+	sockets               map[uint32]*notificationSocketState
 }
 type notificationCallback struct {
 	address, param uint32
@@ -47,6 +56,9 @@ func (n *notificationNetwork) close() {
 // application tokens can complete a recognized request. Trailing data, reordered
 // commands, uploads and unknown operations fail without a success response.
 func (n *notificationNetwork) writeRequest(s *notificationSocketState, data []byte) bool {
+	if n.contract.protocol == localAuthenticationProtocol {
+		return n.writeAuthenticationRequest(s, data)
+	}
 	if s.failed || len(s.response) != 0 || len(data) > 100-len(s.request) {
 		return false
 	}
@@ -85,6 +97,26 @@ func (n *notificationNetwork) writeRequest(s *notificationSocketState, data []by
 		return true
 	}
 	return false
+}
+
+func (n *notificationNetwork) writeAuthenticationRequest(s *notificationSocketState, data []byte) bool {
+	expected := n.authenticationRequest
+	if s.failed || len(s.response) != 0 || len(expected) == 0 || len(data) > len(expected)-len(s.request) {
+		return false
+	}
+	s.request = append(s.request, data...)
+	if !bytes.HasPrefix(expected, s.request) {
+		return false
+	}
+	if len(s.request) < len(expected) {
+		return true
+	}
+	s.request = nil
+	// The guest's packet reader dispatches byte 6 as the command when byte 7
+	// is zero. Command 12 marks this exact authentication request complete.
+	s.response = []byte{'K', 'P', 8, 0, 7, 0, 12, 0}
+	s.stage = 2
+	return true
 }
 
 // Called under the ordinary WIPI service lock. Callback execution happens later,

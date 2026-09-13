@@ -243,6 +243,108 @@ func TestTextInputCommitRejectsRestoredLifecycleAndGuestEdits(t *testing.T) {
 	}
 }
 
+func cTextInputFixture(t *testing.T, mode uint32) *Session {
+	t.Helper()
+	session, err := StartSession(t.Context(), fixtureArchive(t), SessionOptions{
+		Width: 16, Height: 8, MaxSteps: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied := callSlot(t, session.client, slotIMSetCurrentMode, mode); applied != 1 {
+		t.Fatalf("setting input mode %d answered %d", mode, applied)
+	}
+	return session
+}
+
+func TestCTextInputPassesACompleteHostCompositionThroughTheGuestWidget(t *testing.T) {
+	session := cTextInputFixture(t, 2)
+	input, err := session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Text != "" || !input.Append || input.MaxLength != maxCTextInputLength ||
+		input.Multiline || input.Password || input.InputMode != "text" {
+		t.Fatalf("TextInput() = %+v", input)
+	}
+
+	want := "한글A1"
+	if err := input.Commit(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
+	length, err := session.client.readWord(fixtureInputSizes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := validateCTextInput(want, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, length)
+	if err := session.client.core.Memory().Read(fixtureInputCompleted, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(encoded) || decodeEUCKR(got) != want {
+		t.Fatalf("completed text = %x (%q), want %x (%q)", got, decodeEUCKR(got), encoded, want)
+	}
+	if composing, err := session.client.readWord(fixtureInputSizes + 4); err != nil || composing != 0 {
+		t.Fatalf("composing length = %d, want 0: %v", composing, err)
+	}
+}
+
+func TestCTextInputValidatesModeEncodingAndCapacityBeforeInsertion(t *testing.T) {
+	session := cTextInputFixture(t, 3)
+	input, err := session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.InputMode != "numeric" {
+		t.Fatalf("input mode = %q, want numeric", input.InputMode)
+	}
+	for _, invalid := range []string{"12한", "12\n", "🙂"} {
+		if err := input.Commit(t.Context(), invalid); !errors.Is(err, backend.ErrInvalidTextInput) {
+			t.Fatalf("commit %q error = %v", invalid, err)
+		}
+	}
+	if err := input.Commit(t.Context(), "1203"); err != nil {
+		t.Fatalf("numeric commit: %v", err)
+	}
+
+	session = cTextInputFixture(t, 2)
+	input, err = session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Commit(t.Context(), "🙂"); !errors.Is(err, backend.ErrInvalidTextInput) {
+		t.Fatalf("unencodable commit error = %v", err)
+	}
+	// The fixture widget supplies a 16-byte buffer. A value that needs 17
+	// bytes including its terminator is rejected atomically and can be retried.
+	if err := input.Commit(t.Context(), "1234567890123456"); !errors.Is(err, backend.ErrInvalidTextInput) {
+		t.Fatalf("over-capacity commit error = %v", err)
+	}
+	if err := input.Commit(t.Context(), "123456789012345"); err != nil {
+		t.Fatalf("capacity retry: %v", err)
+	}
+}
+
+func TestCTextInputRejectsAChangedInputMethodSnapshot(t *testing.T) {
+	session := cTextInputFixture(t, 2)
+	input, err := session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	callSlot(t, session.client, slotIMSetCurrentMode, 2)
+	if err := input.Commit(t.Context(), "한글"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit after mode reset error = %v", err)
+	}
+
+	fresh := &Session{client: fixtureClient(t)}
+	if _, err := fresh.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("inactive C input error = %v", err)
+	}
+}
+
 func TestTextComponentEditingCountsUTF16Units(t *testing.T) {
 	client := fixtureClient(t)
 	const field = 0x1000

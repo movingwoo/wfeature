@@ -21,6 +21,7 @@ This is separate from the server access key and never contacts a license server.
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
 | `lgt-offline-notification` | Connected Thumb notification and remote-save contracts match. Acknowledge the explicit choice locally; report no remote save and finish that query. |
+| `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
 
 Selection is not evidence that a game reached playable input. Unknown certificate
@@ -320,11 +321,48 @@ required Go/Node validation gates pass. Local debug No and release Yes both
 produce the corresponding guest acknowledgement and ordinary receipt. Play and
 restart acceptance is recorded in [authentication-cases.md](authentication-cases.md).
 
+## LGT local binary authentication
+
+`lgt-offline-authentication` recognizes one connected native contract: its
+packet builder writes the `KP` header and protocol version 7, its request writer
+uses command 12 and a 60-byte record, its dial callback creates the socket named
+by the same endpoint wrapper, and both receive branches reach the dispatcher
+whose command-12 case records completion. The recognizer resolves relocated
+calls, callback pointers, the IPv4 endpoint, application token and protocol
+version from those relationships. It does not use an archive name, digest,
+fixed application identifier or fixed code address.
+
+The expected request is rebuilt from the session subscriber number and handset
+model plus the recognized module's application and version fields. Every byte,
+including padding and the trailing mode word, must match. Partial writes are
+bounded to 60 bytes. The local response is the eight-byte `KP` frame for
+protocol 7, command 12 and status zero. Other requests, callbacks, endpoints,
+application identities and trailing bytes fail without a success response.
+The endpoint is never opened or resolved.
+
+The published [WIPI C network contract](https://mirusu400.github.io/wipi-wiki/c-api/network.md)
+requires a zero-returning connect to report its later result through the
+callback, defines socket callbacks as `(fd, error, param)`, and makes read-ready
+callbacks one-shot after `M_E_WOULDBLOCK`. The responder uses that existing
+asynchronous path. A failure callback was already reaching the guest; the wait
+continued because this recognized title deliberately kept its progress screen
+on failure and expected the packet exchange.
+
+An authored relocated module covers connected recognition, changed code and
+literals, disconnected calls, exact fragmented requests, byte mutations,
+length bounds, archive binding and diagnostic opt-out. A scan of 127 parseable
+local archive copies selected three copies of two distinct modules; all other
+modules remained unselected. On the reported fresh-save route, confirming the
+connection now completes write, two short reads and socket close, leaves the
+authentication progress screen, reaches the guest's next explicit consent
+choice, and declining that choice reaches character information input. The
+emulator does not choose either consent button.
+
 
 ## Authentication acceptance boundary
 
-The seven recognized mechanisms have local routes through playable input,
-ordinary saving and a fresh release restart. The final notification route writes
+The seven previously recognized mechanisms have local routes through playable input,
+ordinary saving and a fresh release restart. The notification route writes
 a 10,128-byte guest container; its populated level-one slot restores the opening
 room with all three save-file hashes unchanged. Both explicit notification
 choices and a fresh disabled control are checked. Chromium and WebKit confirm
@@ -332,11 +370,14 @@ the new status, retained policy, disabled restart and unsupported control throug
 the real server. Concurrent clients with opposing choices/identities and a
 disabled client are isolated in the race-tested notification suite.
 
-This establishes the seven adapters within the validation scope above. Unknown schemes,
-cloud saves, purchases, missing resources, later campaign behavior, Hangul input
-and quick saves are not implied by this acceptance. The latter two remain
-separate implementation items. Detailed evidence and earlier failed hypotheses
-remain in [authentication-cases.md](authentication-cases.md).
+This establishes those seven adapters within the validation scope above. The
+eighth binary-handshake adapter has a fresh-start route through character input;
+ordinary save and fresh-release restart remain outside its current acceptance.
+Unknown schemes, cloud saves, purchases, missing resources, later campaign
+behavior and quick saves are not implied by this acceptance. Native keyboard
+and Hangul input have their own boundary in
+[native-text-input.md](native-text-input.md). Detailed evidence and earlier
+failed hypotheses remain in [authentication-cases.md](authentication-cases.md).
 
 
 ## Empty certificate regression and automatic defaults

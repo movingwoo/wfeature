@@ -34,7 +34,10 @@ import (
 // of it because a handset has one input method.
 type textInputState struct {
 	component *jvm.Object
-	mode      textinput.Mode
+	// revision invalidates a Host composition when the title attaches a new
+	// component or keypad input edits the attached component.
+	revision uint64
+	mode     textinput.Mode
 	// The cycle in progress: which key it belongs to, how far through that
 	// key's characters it has gone, and when the last press was. cycleKey is
 	// zero when the character has been committed and the next press of the
@@ -77,6 +80,7 @@ func (runtime *Runtime) setTextComponent(_ *jvm.VM, arguments []jvm.Value) (jvm.
 	state := runtime.skvm()
 	state.mu.Lock()
 	state.textInput.component = component
+	state.textInput.revision++
 	state.textInput.endCycle()
 	state.mu.Unlock()
 	return jvm.VoidValue(), nil
@@ -173,6 +177,7 @@ func (runtime *Runtime) textComponentKeyPressed(vm *jvm.VM, arguments []jvm.Valu
 	state := runtime.skvm()
 	state.mu.Lock()
 	component := state.textInput.component
+	revision := state.textInput.revision
 	edit := state.textInput.press(keyCode, runtime.editorClock())
 	state.mu.Unlock()
 	if component == nil || edit.kind == editNone {
@@ -181,6 +186,11 @@ func (runtime *Runtime) textComponentKeyPressed(vm *jvm.VM, arguments []jvm.Valu
 	if err := runtime.applyTextEdit(vm, component, edit); err != nil {
 		return jvm.VoidValue(), err
 	}
+	state.mu.Lock()
+	if state.textInput.component == component && state.textInput.revision == revision {
+		state.textInput.revision++
+	}
+	state.mu.Unlock()
 	return jvm.IntValue(1), nil
 }
 

@@ -3,13 +3,16 @@ package skt_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	_ "embed"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	apiskt "github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
@@ -102,6 +105,72 @@ func TestSKVMTextInputTypesThroughTheComponentInterface(t *testing.T) {
 	if state := fixtureString(t, runtime, "textInputState"); state != want {
 		t.Fatalf("textInputState() = %q, want %q: %s", state, want, fixtureString(t, runtime, "failure"))
 	}
+}
+
+func TestHostTextInputAppendsThroughTheTitleOwnedComponent(t *testing.T) {
+	runtime := startFixture(t, nil)
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	component := attachFixtureTextComponent(t, runtime)
+
+	edit, err := runtime.TextInput(context.Background())
+	if err != nil {
+		t.Fatalf("TextInput() error = %v", err)
+	}
+	if edit.Text != "" || edit.MaxLength != 8 || !edit.Append || edit.Multiline || edit.InputMode != "text" {
+		t.Fatalf("TextInput() = %+v", edit)
+	}
+	if err := edit.Commit(context.Background(), "😀"); !errors.Is(err, backend.ErrInvalidTextInput) {
+		t.Fatalf("Commit() with a supplementary character error = %v", err)
+	}
+	if err := edit.Commit(context.Background(), "한글A7"); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	value, err := runtime.VM.InvokeVirtual(component, "text", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatalf("Field.text() error = %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, ok := object.Native.(string)
+	if !ok || text != "한글A7" {
+		t.Fatalf("Field.text() = %q, %t", text, ok)
+	}
+
+	stale, err := runtime.TextInput(context.Background())
+	if err != nil {
+		t.Fatalf("second TextInput() error = %v", err)
+	}
+	if stale.MaxLength != 4 {
+		t.Fatalf("remaining MaxLength = %d, want 4", stale.MaxLength)
+	}
+	attachFixtureTextComponent(t, runtime)
+	if err := stale.Commit(context.Background(), "x"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("Commit() after component change error = %v", err)
+	}
+}
+
+func attachFixtureTextComponent(t *testing.T, runtime *skt.Runtime) *jvm.Object {
+	t.Helper()
+	component, err := runtime.VM.NewObject("SKVMMIDlet$Field", "()V")
+	if err != nil {
+		t.Fatalf("new Field error = %v", err)
+	}
+	value, err := runtime.VM.InvokeStatic(apiskt.TextComponentHandlerClass, "getTextComponentHandler",
+		"()L"+apiskt.TextComponentHandlerClass+";")
+	if err != nil {
+		t.Fatalf("getTextComponentHandler() error = %v", err)
+	}
+	handler, err := value.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.VM.InvokeVirtual(handler, "setTextComponent", "(L"+apiskt.TextComponentClass+";)V",
+		jvm.ReferenceValue(component)); err != nil {
+		t.Fatalf("setTextComponent() error = %v", err)
+	}
+	return component
 }
 
 // A Timer runs its task on a thread of its own, which is why the fixture can

@@ -97,7 +97,7 @@ timers fire.
 groups are permitted (`0xff`). A game may therefore attempt a dial; the network
 operation itself supplies the refusal rather than hiding the API group.
 
-## Local notification and remote-save compatibility
+## Local LGT protocol compatibility
 
 The automatically selected `lgt-offline-notification` status selects a contract recognized from
 connected Thumb code and referenced protocol fields. It handles only the guest's
@@ -105,6 +105,14 @@ explicit Yes/No notification, an empty remote-save lookup and that query's finis
 It never contacts the stored endpoint, sends SMS or transfers a save. Ordinary
 guest file writes remain unchanged. [authentication.md](authentication.md#lgt-local-notification-and-empty-remote-save-service)
 records recognition, response bytes, limits and the user-visible restart flow.
+
+The separately recognized `lgt-offline-authentication` contract answers one
+exact 60-byte binary request with its eight-byte completion frame. Its packet
+builder, command dispatcher, callbacks, endpoint, application token and version
+must all agree, and the request must match the session identity and handset
+model. The stored endpoint is compared but never contacted. The guest still
+owns every preceding and following consent choice. See
+[the binary authentication boundary](authentication.md#lgt-local-binary-authentication).
 
 The [WIPI C network specification](https://mirusu400.github.io/wipi-wiki/c-api/network.md)
 defines socket callbacks as `(fd, error, param)`, including the fifth stack

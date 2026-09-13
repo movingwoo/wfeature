@@ -17,6 +17,12 @@ func TestNumericInputMethodReturnsCompletedDigits(t *testing.T) {
 		callSlot(t, client, slotIMSetCurrentMode, mode)
 		for _, kind := range []uint32{EventKeyPressed, EventKeyReleased, EventKeyRepeated, 0xffffffff} {
 			for _, key := range []uint32{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#', imaFlushKey} {
+				if err := client.writeWord(sizes, 6); err != nil {
+					t.Fatal(err)
+				}
+				if err := client.writeWord(sizes+4, 6); err != nil {
+					t.Fatal(err)
+				}
 				thread := armcore.NewThread(armcore.NewContext())
 				for index, value := range []uint32{key, kind, completed, sizes} {
 					if err := thread.SetRegister(index, value); err != nil {
@@ -45,11 +51,13 @@ func TestNumericInputMethodReturnsCompletedDigits(t *testing.T) {
 				if err != nil || pending != "" {
 					t.Fatalf("composing = %q: %v", pending, err)
 				}
-				for _, address := range []uint32{sizes, sizes + 4} {
-					capacity, err := client.readWord(address)
-					if err != nil || capacity != 6 {
-						t.Fatalf("capacity changed: %d, %v", capacity, err)
-					}
+				completedLength, err := client.readWord(sizes)
+				if err != nil || completedLength != uint32(len(want)) {
+					t.Fatalf("completed length = %d, want %d: %v", completedLength, len(want), err)
+				}
+				composingLength, err := client.readWord(sizes + 4)
+				if err != nil || composingLength != 0 {
+					t.Fatalf("composing length = %d, want 0: %v", composingLength, err)
 				}
 			}
 		}
@@ -70,6 +78,14 @@ func TestNumericInputMethodRespectsCompletionCapacity(t *testing.T) {
 		want := []string{"xyz\x00", "\x00yz\x00", "2\x00z\x00"}[capacity]
 		if string(got) != want || (result == 1) != (capacity >= 2) {
 			t.Fatalf("capacity %d: %q, handled %d", capacity, got, result)
+		}
+		length, err := client.readWord(size)
+		wantLength := uint32(0)
+		if capacity >= 2 {
+			wantLength = 1
+		}
+		if err != nil || length != wantLength {
+			t.Fatalf("capacity %d: output length %d: %v", capacity, length, err)
 		}
 	}
 	if result := callSlot(t, client, slotIMHandleInput, '2', EventKeyPressed, 0, 0); result != 0 {
