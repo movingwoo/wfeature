@@ -469,12 +469,12 @@ func TestHandleInputComposesNothingAndSaysSo(t *testing.T) {
 	if text != "" {
 		t.Fatalf("the completed string is %q, want it emptied", text)
 	}
-	capacity, err := client.readWord(size)
+	length, err := client.readWord(size)
 	if err != nil {
 		t.Fatalf("the buffer size is not readable: %v", err)
 	}
-	if capacity != 8 {
-		t.Fatalf("the caller's capacity became %d, want it left at 8", capacity)
+	if length != 0 {
+		t.Fatalf("the completed length is %d, want 0", length)
 	}
 }
 
@@ -526,15 +526,15 @@ func TestHandleInputEmptiesTheComposingBufferFromTheStack(t *testing.T) {
 			t.Errorf("the %s string is %q, want it emptied", name, text)
 		}
 	}
-	// Both sizes are the caller's capacities and the specification marks them
-	// in-only, so neither may be rewritten.
+	// This widget treats both size words as output lengths after supplying the
+	// capacities, so empty output must leave zero in both.
 	for index, address := range []uint32{sizes, sizes + 4} {
-		capacity, err := client.readWord(address)
+		length, err := client.readWord(address)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if capacity != 8 {
-			t.Errorf("capacity %d became %d, want it left at 8", index, capacity)
+		if length != 0 {
+			t.Errorf("output length %d is %d, want 0", index, length)
 		}
 	}
 	result, err := thread.Register(0)

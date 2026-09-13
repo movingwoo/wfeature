@@ -177,6 +177,7 @@ type textInputMessage struct {
 	MaxLength int    `json:"maxLength"`
 	Multiline bool   `json:"multiline"`
 	Password  bool   `json:"password"`
+	Append    bool   `json:"append,omitempty"`
 	InputMode string `json:"inputMode"`
 }
 

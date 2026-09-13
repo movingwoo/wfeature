@@ -37,7 +37,7 @@ func (r *sessionRunner) handleTextInput(message clientMessage) {
 		r.textInput, r.textInputGame = edit, r.game
 		r.send(serverMessage{Kind: serverResult, ID: message.ID, TextInput: &textInputMessage{
 			Edit: r.textInputID, Text: edit.Text, MaxLength: edit.MaxLength,
-			Multiline: edit.Multiline, Password: edit.Password, InputMode: edit.InputMode,
+			Multiline: edit.Multiline, Password: edit.Password, Append: edit.Append, InputMode: edit.InputMode,
 		}})
 	case "commit":
 		if r.textInput == nil || r.textInputGame != r.game || message.Edit != r.textInputID {

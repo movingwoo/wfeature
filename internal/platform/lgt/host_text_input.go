@@ -2,8 +2,11 @@ package lgt
 
 import (
 	"context"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"golang.org/x/text/encoding/korean"
 )
 
 const (
@@ -15,16 +18,27 @@ const (
 	javaTextConstraintPhoneNumber  int32 = 5
 )
 
-// TextInput snapshots the focused, visible LWC text component for a Host that
-// composes a whole string with its native keyboard or IME. Session serializes
-// this call, guest ticks and Commit because the ARM guest is not re-entrant.
+// TextInput snapshots the active Java or C editor for a Host that composes a
+// whole string with its native keyboard or IME. Session serializes this call,
+// guest ticks and Commit because the ARM guest is not re-entrant.
 func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, error) {
-	if session == nil || session.client == nil || session.client.javaRun == nil {
+	if session == nil || session.client == nil {
 		return nil, backend.ErrNoTextInput
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if session.client.javaRun == nil {
+		edit := session.cTextInput()
+		if edit == nil {
+			return nil, backend.ErrNoTextInput
+		}
+		return edit, nil
+	}
+	return session.javaTextInput()
+}
+
+func (session *Session) javaTextInput() (*backend.TextInput, error) {
 	client := session.client
 	runtime := client.javaRun
 	target := runtime.focusedWidget
@@ -71,6 +85,84 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			return nil
 		},
 	}, nil
+}
+
+const maxCTextInputLength = 64
+
+// cTextInput bridges a game-owned WIPI-C widget through MC_imHandleInput. C
+// exposes neither the widget's value nor its cursor, so the Host truthfully
+// offers an append operation: one complete, OS-composed string is returned in
+// the widget's normal completion buffer at its current cursor.
+func (session *Session) cTextInput() *backend.TextInput {
+	client := session.client
+	state := &client.cTextInput
+	if !state.active || client.clet.HandleEvent == 0 {
+		return nil
+	}
+	revision, mode, handler := state.revision, client.inputMode, client.clet.HandleEvent
+	inputMode := "text"
+	if mode == uint32(len(inputModes)-1) {
+		inputMode = "numeric"
+	}
+	return &backend.TextInput{
+		MaxLength: maxCTextInputLength,
+		Append:    true,
+		InputMode: inputMode,
+		Commit: func(ctx context.Context, text string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !state.active || state.revision != revision || client.inputMode != mode ||
+				client.clet.HandleEvent != handler || len(state.pending) != 0 {
+				return backend.ErrTextInputChanged
+			}
+			encoded, err := validateCTextInput(text, mode)
+			if err != nil {
+				return err
+			}
+			if len(encoded) == 0 {
+				return nil
+			}
+
+			calls := state.calls
+			state.pending = encoded
+			err = client.callClet(ctx, "handleCletEvent", handler,
+				[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
+			consumed := len(state.pending) == 0
+			state.pending = nil
+			if err != nil {
+				return err
+			}
+			if consumed {
+				return nil
+			}
+			if state.calls == calls || state.revision != revision {
+				return backend.ErrTextInputChanged
+			}
+			// The widget reached MC_imHandleInput but its completion buffer
+			// could not hold the whole value. Nothing was inserted, so the
+			// same edit can be retried with a shorter string.
+			return backend.ErrInvalidTextInput
+		},
+	}
+}
+
+func validateCTextInput(text string, mode uint32) ([]byte, error) {
+	if err := backend.ValidateTextInput(text); err != nil ||
+		utf8.RuneCountInString(text) > maxCTextInputLength {
+		return nil, backend.ErrInvalidTextInput
+	}
+	for _, symbol := range text {
+		if symbol == 0 || unicode.IsControl(symbol) ||
+			(mode == uint32(len(inputModes)-1) && (symbol < '0' || symbol > '9')) {
+			return nil, backend.ErrInvalidTextInput
+		}
+	}
+	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
+	if err != nil {
+		return nil, backend.ErrInvalidTextInput
+	}
+	return encoded, nil
 }
 
 // A listener changes the callback contract of a commit. The current LGT

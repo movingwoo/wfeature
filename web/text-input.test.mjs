@@ -29,7 +29,8 @@ test("IME composition stays local until explicit complete-text submission", asyn
   });
   await f.controller.open();
   assert.equal(f.releases(), 1);
-  assert.match(f.node("status").textContent, /한글.*1칸.*이모지.*2칸 이상/);
+  assert.equal(f.node("status").textContent, "");
+  assert.equal(f.node("status").hidden, true);
   f.node("dialog").handlers.compositionstart();
   f.node("value").value = "한";
   f.node("dialog").handlers.cancel({ preventDefault() {} });
@@ -75,5 +76,16 @@ test("failed validation preserves draft and password never uses textarea", async
   assert.equal(f.node("value").value, "123한");
   assert.equal(f.node("value").disabled, false);
   assert.equal(f.node("dialog").open, true);
+  assert.equal(f.node("status").hidden, false);
   assert.match(f.node("status").textContent, /길이/);
+});
+
+test("append-only guest input opens without guidance text", async () => {
+  const f = fixture({
+    openTextInput: async () => ({ textInput: { edit: 3, text: "", append: true, inputMode: "text" } }),
+    commitTextInput: async () => {}, cancelTextInput: async () => {},
+  });
+  await f.controller.open();
+  assert.equal(f.node("status").textContent, "");
+  assert.equal(f.node("status").hidden, true);
 });

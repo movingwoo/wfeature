@@ -233,9 +233,12 @@ type Client struct {
 
 	// inputMode is the automaton's current mode, an index into inputModes, and
 	// inputModeTableAddress is the string array MC_imGetSupportedModes answers
-	// with, allocated on first use. See wipic_im.go.
+	// with, allocated on first use. cTextInput records enough of the native
+	// widget's use of that automaton for the Host to offer complete text from
+	// its own keyboard. See wipic_im.go and host_text_input.go.
 	inputMode             uint32
 	inputModeTableAddress uint32
+	cTextInput            cTextInputState
 
 	// javaApplication is set once the module resolves anything from the Java
 	// interface table. See java.go.

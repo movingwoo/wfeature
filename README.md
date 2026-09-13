@@ -145,14 +145,13 @@ Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/runn
 **인증 호환** — 지원하는 인증서·번호·라이선스 검사는 게임 실행 시 자동으로 적용됩니다.
 별도 설정 없이 동작합니다. 이전에 저장한 체크 상태는 사용하지 않습니다.
 원본 아카이브·저장된 인증서는 보존하고 일반 진행 저장은 평소처럼 동작합니다.
-일부 LGT의 동의 선택 통보·원격 세이브 조회도 로컬 처리하며 외부 전송은 하지 않습니다.
+일부 LGT의 동의 선택 통보·원격 세이브 조회와 연결 확인 인증도 로컬 처리하며 외부 전송은 하지 않습니다.
 다른 인증 방식이나 누락된 게임 데이터는 해결하지 못합니다.
 
 ## 조작
 
 키보드와 화면 키패드를 같이 쓸 수 있습니다.
-
-게임에서 문자 입력칸을 선택한 뒤 설정의 **문자 입력**을 누르면 폰·PC 기본 키보드로 입력할 수 있습니다. 한글 조합을 마치고 **입력**을 누르면 게임에 반영됩니다. KTF·LGT·SKT의 지원되는 입력칸에서 사용할 수 있습니다. LGT는 표시된 Shell에 속한 LWC 입력칸을 지원합니다. 게임이 직접 그린 입력창과 별도 IME 리스너가 설치된 KTF·LGT 입력칸은 아직 지원하지 않습니다.
+게임에서 문자 입력칸을 선택한 뒤 **Opts → 문자 입력**을 누르면 폰·PC 기본 쿼티 키보드와 한글 IME로 입력할 수 있습니다. 한글 조합을 마치고 **입력**을 누르면 게임에 반영됩니다. 
 
 | 키보드 | 전화기 키 |
 |---|---|
@@ -268,7 +267,7 @@ make serve-release      # 릴리즈
 make run ARGS="runktf var/games/ktf/game.zip -play"
 ```
 
-`runktf`, `runskt`, `runlgt`도 브라우저와 동일하게 인증 호환을 자동 적용합니다. 비교 진단할 때만 `-no-auth`로 끌 수 있습니다. 결과는 `authentication: ktf-certificate-52`, `authentication: skt-license`처럼 표시됩니다. `unsupported`는 지원하는 방식이 발견되지 않았다는 뜻입니다. LGT의 지원 방식은 `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-offline-notification`으로 표시됩니다. 마지막 방식은 게임에서 직접 고른 동의 여부를 로컬 처리하고 원격 세이브가 없다고 답합니다. 외부 전송은 하지 않으며 게임이 안내하는 재시작은 필요합니다.
+`runktf`, `runskt`, `runlgt`도 브라우저와 동일하게 인증 호환을 자동 적용합니다. 비교 진단할 때만 `-no-auth`로 끌 수 있습니다. 결과는 `authentication: ktf-certificate-52`, `authentication: skt-license`처럼 표시됩니다. `unsupported`는 지원하는 방식이 발견되지 않았다는 뜻입니다. LGT의 지원 방식은 `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-offline-notification`, `lgt-offline-authentication`으로 표시됩니다. 뒤의 두 방식은 게임에서 직접 고른 동의 여부나 연결 확인 요청을 로컬 처리합니다. 외부 전송은 하지 않으며 게임이 안내하는 재시작은 필요할 수 있습니다.
 
 `-framedir`로 남긴 프레임은 `contactsheet`로 한 장에 모아 보고 `framediff`로 두 빌드를 비교하며 `zoom`으로 한 프레임의 일부를 확대해 봅니다.  
 `framestats`는 프레임에 실제로 무엇이 그려졌는지를 색 수와 켜진 픽셀 수로 알려주고 전부 단색이면 0이 아닌 값으로 끝납니다.  

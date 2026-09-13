@@ -72,6 +72,8 @@ type notificationContract struct {
 	address        uint32
 	port           uint16
 	application    string
+	version        string
+	protocol       localNetworkProtocol
 }
 
 func authenticationNotification(module *Module) *notificationContract {

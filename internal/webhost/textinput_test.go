@@ -19,6 +19,25 @@ import (
 	"github.com/movingwoo/wfeature/internal/session"
 )
 
+func TestTextInputMessageCarriesAppendContract(t *testing.T) {
+	data, err := json.Marshal(serverMessage{
+		Kind: serverResult,
+		TextInput: &textInputMessage{
+			Edit: 1, Append: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply serverMessage
+	if err := json.Unmarshal(data, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.TextInput == nil || !reply.TextInput.Append {
+		t.Fatalf("append contract was lost: %s", data)
+	}
+}
+
 func TestTextInputCommitOwnershipAndRetry(t *testing.T) {
 	game := &session.Session{}
 	runner := &sessionRunner{game: game, gameCtx: context.Background(), outText: make(chan outboundMessage, 1)}

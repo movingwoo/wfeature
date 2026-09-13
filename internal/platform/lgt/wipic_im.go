@@ -50,6 +50,8 @@ func (client *Client) handleInputMethod(thread *armcore.Thread, slot uint32) err
 			return answer(0)
 		}
 		client.inputMode = mode
+		client.cTextInput.active = true
+		client.cTextInput.revision++
 		return answer(1)
 
 	case slotIMGetCurrentMode:
@@ -90,12 +92,34 @@ func (client *Client) inputModeTable() (uint32, error) {
 // the parameter is an M_Char, so it arrives as 0x9d.
 const imaFlushKey = 0x9d
 
+// hostTextInputCarrier is a numeric key that native widgets route to
+// MC_imHandleInput. It is sent only while a serialized Host commit has pending
+// text; the platform substitutes that complete text before the widget sees a
+// normal zero-key result. Using a key the widget already routes is necessary:
+// its dispatcher discards unknown key values before reaching the input method.
+const hostTextInputCarrier = '0'
+
+type cTextInputState struct {
+	active   bool
+	revision uint64
+	calls    uint64
+	pending  []byte
+}
+
+type inputBuffer struct {
+	address  uint32
+	size     uint32
+	capacity uint32
+}
+
 // handleInputKey services MC_imHandleInput: a key in, a completed string and a
 // composing string out, and 1 or 0 for whether the automaton took the key.
 //
 // Numeric mode returns one completed ASCII digit for a pressed or repeated
-// key. Other modes still have no composition implementation. The widget owns
-// editing, deletion and mode changes; navigation and flush keys remain unhandled.
+// key. A serialized Host commit returns its already-composed EUC-KR text as
+// one completed string. Other modes do not emulate a handset keyboard layout:
+// the browser or desktop IME owns letter and Hangul composition. The widget
+// continues to own editing, deletion, limits and mode changes.
 //
 // `(key, type, buf1, size1)` arrive in registers and `(buf2, size2)` on the
 // stack. The stacked pair used to be left alone because no caller had been
@@ -105,9 +129,10 @@ const imaFlushKey = 0x9d
 // the platform stub balances its own push before the supervisor call, so the
 // stack pointer the handler sees is the one the caller had.
 //
-// A size is the caller's capacity and stays as it stands — the specification
-// marks both as `[in]`, and the caller here reads its completion buffer as a
-// string rather than by length.
+// The specification marks each size as an input capacity. The native widget
+// observed here also reads it back as the output byte length. Read both
+// capacities before changing either word, then write the produced lengths;
+// leaving the capacities there makes that widget consume stale stack bytes.
 func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	composing, composingSize := client.stackedInputBuffer(thread)
 	completed, err := thread.Register(2)
@@ -118,11 +143,6 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	if err != nil {
 		return err
 	}
-	for _, buffer := range [2][2]uint32{{completed, completedSize}, {composing, composingSize}} {
-		if err := client.emptyInputBuffer(buffer[0], buffer[1]); err != nil {
-			return err
-		}
-	}
 	key, err := thread.Register(0)
 	if err != nil {
 		return err
@@ -131,20 +151,46 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	if err != nil {
 		return err
 	}
-	if client.inputMode == 3 && (kind == EventKeyPressed || kind == EventKeyRepeated) &&
-		key >= '0' && key <= '9' && completed != 0 && completedSize != 0 {
-		capacity, err := client.readWord(completedSize)
-		if err != nil {
-			return err
-		}
-		if int32(capacity) >= 2 {
-			if err := client.core.Memory().Write(completed, []byte{byte(key), 0}); err != nil {
-				return err
-			}
-			return thread.SetRegister(0, 1)
-		}
+	completedBuffer, err := client.readInputBuffer(completed, completedSize)
+	if err != nil {
+		return err
 	}
-	return thread.SetRegister(0, 0)
+	composingBuffer, err := client.readInputBuffer(composing, composingSize)
+	if err != nil {
+		return err
+	}
+
+	hostCommit := key == hostTextInputCarrier && len(client.cTextInput.pending) != 0
+	client.cTextInput.active = true
+	client.cTextInput.calls++
+	if !hostCommit {
+		client.cTextInput.revision++
+	}
+
+	var value []byte
+	if hostCommit {
+		value = client.cTextInput.pending
+	} else if client.inputMode == 3 &&
+		(kind == EventKeyPressed || kind == EventKeyRepeated) && key >= '0' && key <= '9' {
+		value = []byte{byte(key)}
+	}
+	handled := len(value) != 0 && completedBuffer.fits(value)
+	if !handled {
+		value = nil
+	}
+	if err := client.writeInputBuffer(completedBuffer, value); err != nil {
+		return err
+	}
+	if err := client.writeInputBuffer(composingBuffer, nil); err != nil {
+		return err
+	}
+	if !handled {
+		return thread.SetRegister(0, 0)
+	}
+	if hostCommit {
+		client.cTextInput.pending = nil
+	}
+	return thread.SetRegister(0, 1)
 }
 
 // stackedInputBuffer recovers `(buf2, size2)` — the fifth and sixth arguments,
@@ -171,20 +217,41 @@ func (client *Client) stackedInputBuffer(thread *armcore.Thread) (buffer, size u
 	return buffer, size
 }
 
-// emptyInputBuffer writes the terminator that says "nothing here" into one of
-// MC_imHandleInput's output buffers, leaving a caller that reads it as a
-// string with an empty one. A buffer with no capacity is left untouched
-// rather than written to.
-func (client *Client) emptyInputBuffer(buffer, size uint32) error {
-	if buffer == 0 || size == 0 {
-		return nil
+func (client *Client) readInputBuffer(address, size uint32) (inputBuffer, error) {
+	result := inputBuffer{address: address, size: size}
+	if size == 0 {
+		return result, nil
 	}
 	capacity, err := client.readWord(size)
 	if err != nil {
-		return err
+		return inputBuffer{}, err
 	}
-	if capacity == 0 {
-		return nil
+	result.capacity = capacity
+	return result, nil
+}
+
+func (buffer inputBuffer) fits(value []byte) bool {
+	return buffer.address != 0 && buffer.size != 0 &&
+		uint64(len(value))+1 <= uint64(buffer.capacity)
+}
+
+// writeInputBuffer writes one completed/composing result and its byte length.
+// An empty result still terminates a writable buffer. A missing buffer is
+// tolerated, but a supplied size word always receives zero so a caller never
+// mistakes its old capacity for produced text.
+func (client *Client) writeInputBuffer(buffer inputBuffer, value []byte) error {
+	if len(value) != 0 {
+		data := append(append([]byte(nil), value...), 0)
+		if err := client.core.Memory().Write(buffer.address, data); err != nil {
+			return err
+		}
+	} else if buffer.address != 0 && buffer.capacity != 0 {
+		if err := client.core.Memory().Write(buffer.address, []byte{0}); err != nil {
+			return err
+		}
 	}
-	return client.core.Memory().Write(buffer, []byte{0})
+	if buffer.size != 0 {
+		return client.writeWord(buffer.size, uint32(len(value)))
+	}
+	return nil
 }

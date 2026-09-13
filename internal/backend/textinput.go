@@ -31,6 +31,9 @@ type TextInput struct {
 	MaxLength int
 	Multiline bool
 	Password  bool
+	// Append means the platform can insert complete text at the active guest
+	// cursor but cannot read or replace the field's existing value.
+	Append bool
 	// InputMode is a browser keyboard hint, not a substitute for validation.
 	InputMode string
 	Commit    func(context.Context, string) error

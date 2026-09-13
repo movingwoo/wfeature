@@ -15,4 +15,5 @@ const (
 	AuthenticationLGTOptions       AuthenticationStatus = "lgt-cached-authentication"
 	AuthenticationLGTCertificate58 AuthenticationStatus = "lgt-certificate-58"
 	AuthenticationLGTNotification  AuthenticationStatus = "lgt-offline-notification"
+	AuthenticationLGTHandshake     AuthenticationStatus = "lgt-offline-authentication"
 )
