@@ -23,6 +23,10 @@ import (
 // version is stamped by the iOS build, matching the app bundle version.
 var version = "dev"
 
+// Web storage is scoped to an origin, including its port. Both native apps use
+// this port so their web views return to the same origin after a cold restart.
+const serverPort = 11541
+
 // running is the one server this library will start. An app that asked twice
 // would otherwise take a second port and leave the first one serving, and the
 // second web view would be looking at a different library from the first.
@@ -55,7 +59,7 @@ func WfeatureStart(root *C.char) C.int {
 		}
 	}
 
-	server, err := appserver.Start(appserver.Options{Root: directory, Version: version})
+	server, err := appserver.Start(appserver.Options{Root: directory, Version: version, Port: serverPort})
 	if err != nil {
 		failure = err.Error()
 		return 0

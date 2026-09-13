@@ -734,6 +734,9 @@ The current tests cover these boundaries:
   invalid event validation
 - PWA manifest, service worker, icon, portable relative URLs, and static-server
   content types
+- page-owned music and effects volume restoration, including zero volume and
+  denied browser storage, plus the stable loopback origin both native apps use
+  so all browser settings survive a cold restart
 - the server's routes against the real client files: the shell, refused
   traversals, the game listing and its Korean ordering, archive revalidation by
   `ETag`, the save API's round trip, key normalization, platform rerouting and

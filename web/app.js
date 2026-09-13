@@ -1,5 +1,6 @@
 import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
+import { initAudioSettings } from "./audio-settings.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import {
@@ -1148,18 +1149,9 @@ const initSettings = () => {
     if (!event.matches) document.getElementById("cheat-panel")?.classList.remove("visible");
   });
 
-  // The sliders trade the music against the sound effects. They apply
-  // immediately and also when audio comes up later, since the graph is built
-  // on the first user gesture rather than at load.
-  const midiSlider = document.getElementById("volume-midi");
-  const waveSlider = document.getElementById("volume-pcm");
-  const applyVolumes = () => {
-    pageAudio?.setMIDIVolume(Number(midiSlider.value) / 100);
-    pageAudio?.setWaveVolume(Number(waveSlider.value) / 100);
-  };
-  midiSlider?.addEventListener("input", applyVolumes);
-  waveSlider?.addEventListener("input", applyVolumes);
-  applyVolumes();
+  // The sliders trade the music against the sound effects. Their module
+  // restores the browser's values before the lazy audio graph is created.
+  initAudioSettings({ document, audio: pageAudio, storage: localStore });
 
   // The magnification filter costs real time per presented frame, so the
   // choice is the user's and it is remembered.
@@ -1718,11 +1710,11 @@ const main = async () => {
   initKeypad();
   initRestart();
   initModalBackdrop();
+  pageAudio = new PageAudio();
   initSettings();
   initVibrationSetting({ document, vibration });
   initKeyBindings();
 
-  pageAudio = new PageAudio();
   let profileWired = false;
   sessionLink = createSessionLink({
     confirmStart: message => askToConfirm({ document, message, confirmLabel: "종료하고 시작" }),
