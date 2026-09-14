@@ -21,7 +21,6 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
-import java.net.ServerSocket;
 import java.net.URL;
 
 /**
@@ -48,6 +47,12 @@ public class MainActivity extends Activity {
      * library for the installer to extract it at all.
      */
     private static final String SERVER_LIBRARY = "libwfeature.so";
+
+    /**
+     * Web storage is scoped to an origin, including its port. Keeping the
+     * loopback port stable lets settings survive a cold app restart.
+     */
+    private static final int SERVER_PORT = 11541;
 
     private WebView webView;
     private Process server;
@@ -76,7 +81,7 @@ public class MainActivity extends Activity {
     /** Starts the server, waits for it to answer, and then shows the page. */
     private void startServerAndShow() {
         try {
-            int port = freePort();
+            int port = SERVER_PORT;
             File root = dataRoot();
             server = launch(port, root);
             readLog(server);
@@ -103,18 +108,6 @@ public class MainActivity extends Activity {
     private File dataRoot() {
         File external = getExternalFilesDir(null);
         return external != null ? external : getFilesDir();
-    }
-
-    /**
-     * A port nothing else holds. The socket is closed before the server is
-     * told to take it, which is a race in principle and never one in practice:
-     * the alternative is parsing the server's log for the port it chose, and
-     * that costs a stream reader on the startup path.
-     */
-    private int freePort() throws Exception {
-        try (ServerSocket probe = new ServerSocket(0)) {
-            return probe.getLocalPort();
-        }
     }
 
     private Process launch(int port, File root) throws Exception {
@@ -177,6 +170,10 @@ public class MainActivity extends Activity {
     private boolean waitUntilServing(int port) {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
+            Process launched = server;
+            if (launched == null || !launched.isAlive()) {
+                return false;
+            }
             try {
                 HttpURLConnection connection =
                         (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/api/status")
@@ -185,7 +182,7 @@ public class MainActivity extends Activity {
                 connection.setReadTimeout(500);
                 int status = connection.getResponseCode();
                 connection.disconnect();
-                if (status == 200) {
+                if (status == 200 && launched.isAlive()) {
                     return true;
                 }
             } catch (Exception retry) {

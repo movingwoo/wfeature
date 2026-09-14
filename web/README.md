@@ -135,8 +135,8 @@ the token, so the restart button still starts a game over.
   a game. A value the browser refuses is kept in memory for the life of the
   page, so the control still works and only its memory is lost, and the run log
   says so once at load. `localStorage` holds the last game, the per-game screen
-  size and speed, the magnification, the keypad type, the keypad size and the
-  key bindings;
+  size and speed, the magnification, music and effects volume, vibration, the
+  keypad type, the keypad size and the key bindings;
   `sessionStorage` holds the resume token, which belongs to one tab.
 
 The run log and the report button are the developer's half of the page, and a

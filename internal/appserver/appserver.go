@@ -39,10 +39,9 @@ type Options struct {
 	// Version is the release identifier reported by /api/status. Empty reports dev.
 	Version string
 
-	// Port is the loopback port to take. Zero asks the operating system for
-	// one, which is what an app should do: a fixed port is a port another app
-	// can already be holding, and the app is the only thing that needs to know
-	// which one was taken.
+	// Port is the loopback port to take. Zero asks the operating system for one.
+	// A web-view app should use a stable nonzero port because browser storage is
+	// scoped to an origin, including its port.
 	Port int
 
 	// Logger receives the server's log. A nil logger discards it.

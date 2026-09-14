@@ -39,6 +39,16 @@ Neither app is a port of the page. The keypad, the touch handling, the audio
 synthesiser, the cheat panel and the save API are the same files a desktop
 serves, carried inside the binary.
 
+Both apps serve the page from `http://127.0.0.1:11541` on every launch. The
+port is part of the page's browser origin, so keeping it stable is what lets
+WebView storage retain volume, vibration, speed and keypad settings across a
+cold restart. If another process owns that port, the app reports a startup
+failure rather than moving to a new origin and silently appearing to lose its
+settings. Games and in-game saves remain files in the app's data directory.
+Settings left under the random ports used by older builds cannot cross the
+browser's origin boundary, so the first launch after this update starts from
+the defaults once; choices made there persist on later launches.
+
 ## Building
 
 Neither is part of `make dist`: each needs a toolchain the desktop build does
