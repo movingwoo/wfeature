@@ -78,6 +78,7 @@ type Runtime struct {
 	framebuffer  backend.Framebuffer
 	frameWidth   int
 	frameHeight  int
+	legacyClip   bool
 	renderMu     sync.Mutex
 	frameRGBA    []byte
 	refreshFrame []byte
@@ -362,6 +363,7 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		framebuffer:      options.Framebuffer,
 		frameWidth:       frameWidth,
 		frameHeight:      frameHeight,
+		legacyClip:       archive.legacyClipEndpoints(),
 		frameRGBA:        make([]byte, frameLength),
 		fullScreen:       make(map[*jvm.Object]bool),
 		fonts:            make(map[fontKey]*jvm.Object),

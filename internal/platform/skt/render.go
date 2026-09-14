@@ -469,7 +469,13 @@ func (runtime *Runtime) setGraphicsClip(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	context.clip = context.translatedRect(x, y, width, height).intersect(context.deviceClip)
+	clipWidth, clipHeight := int64(width), int64(height)
+	receiver, _ := arguments[0].Reference() // Validated by graphicsReceiver.
+	if runtime.legacyClip && receiver.ClassName == midp.GraphicsClass && width >= 0 && height >= 0 {
+		clipWidth++
+		clipHeight++
+	}
+	context.clip = context.translatedRect64(int64(x), int64(y), clipWidth, clipHeight).intersect(context.deviceClip)
 	return jvm.VoidValue(), nil
 }
 
@@ -682,13 +688,17 @@ func (runtime *Runtime) drawGraphicsRect(_ *jvm.VM, arguments []jvm.Value) (jvm.
 }
 
 func (context *graphicsContext) translatedRect(x, y, width, height int32) paintRect {
+	return context.translatedRect64(int64(x), int64(y), int64(width), int64(height))
+}
+
+func (context *graphicsContext) translatedRect64(x, y, width, height int64) paintRect {
 	if width <= 0 || height <= 0 {
 		return paintRect{}
 	}
-	minX := max(int64(x)+int64(context.translateX), 0)
-	minY := max(int64(y)+int64(context.translateY), 0)
-	maxX := min(int64(x)+int64(context.translateX)+int64(width), int64(context.width))
-	maxY := min(int64(y)+int64(context.translateY)+int64(height), int64(context.height))
+	minX := max(x+int64(context.translateX), 0)
+	minY := max(y+int64(context.translateY), 0)
+	maxX := min(x+int64(context.translateX)+width, int64(context.width))
+	maxY := min(y+int64(context.translateY)+height, int64(context.height))
 	if maxX <= minX || maxY <= minY {
 		return paintRect{}
 	}

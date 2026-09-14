@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "skt-inclusive-clip-001",
+      "platform": "skt",
+      "match": {
+        "kind": "java_class_set",
+        "sha256": "e6c776c9942551052a9285af559ded254bbd6201d3d64fe172cea148b0baa193"
+      },
+      "fixes": [
+        "skt.inclusive_set_clip"
+      ],
+      "evidence": "docs/skt-clip-compatibility.md"
+    }
+  ]
+}

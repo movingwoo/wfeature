@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-1: Clip Tiles Fixture, , ClipTilesMIDlet
+MIDlet-Name: Clip Tiles Fixture
+MicroEdition-Profile: M_Profile-1.0, SKTP-1.0
+MicroEdition-Configuration: M_Configuration-1.0
