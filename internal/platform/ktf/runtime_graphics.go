@@ -314,15 +314,21 @@ func runtimeGraphicsDrawLine(runtime *initializationRuntime, _ *jvm.VM, argument
 
 // graphicsTextWidth mirrors the runtime font advance used by Font metrics.
 func (runtime *initializationRuntime) graphicsTextWidth(text []rune) int32 {
-	face := runtime.fontFace()
 	width := int32(0)
 	for _, character := range text {
-		width += int32(face.Render(character).Advance)
+		width += runtime.graphicsCharAdvance(character)
 	}
 	return width
 }
 
 func (runtime *initializationRuntime) graphicsCharAdvance(character rune) int32 {
+	// WIPI Java uses five-pixel printable ASCII cells beside ten-pixel
+	// Korean syllables. Space-padded overlays replace ASCII with one space
+	// and Korean with two; the font asset's proportional advances would
+	// leave colored fringes after punctuation and narrow Latin characters.
+	if character >= ' ' && character <= '~' {
+		return 5
+	}
 	return int32(runtime.fontFace().Render(character).Advance)
 }
 
@@ -374,7 +380,7 @@ func (runtime *initializationRuntime) graphicsDrawText(state *runtimeGraphicsSta
 				}
 			}
 		}
-		cursor += int32(bitmap.Advance)
+		cursor += runtime.graphicsCharAdvance(character)
 	}
 	return nil
 }
