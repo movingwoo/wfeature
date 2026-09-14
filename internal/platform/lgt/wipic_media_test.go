@@ -1,11 +1,123 @@
 package lgt
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 )
+
+func TestMediaCallbacksReleaseClipBeforeNextSound(t *testing.T) {
+	client := mediaClient(t, nil)
+	// str r1, [r0]; bx lr: record MEDIACB's status in the clip record.
+	callback := guestThumbStub(t, client, 0x47706001)
+	sound := oneNoteSound(t)
+	clip := callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), callback)
+	data := writeGuest(t, client, sound)
+	callSlot(t, client, slotClipPutData, clip, data, uint32(len(sound)))
+	service := func(want uint32) {
+		t.Helper()
+		if err := client.serviceMediaCallbacks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := client.readWord(clip); err != nil || got != want {
+			t.Fatalf("callback status = %d, %v; want %d", got, err, want)
+		}
+	}
+	callSlot(t, client, slotClipPlay, clip, 0)
+	if got, _ := client.readWord(clip); got != 0 {
+		t.Fatal("callback entered before play returned")
+	}
+	service(2)
+	client.clock.advance(10 * time.Millisecond)
+	callSlot(t, client, slotClipPlay, clip, 0)
+	client.clock.advance(35 * time.Millisecond)
+	client.serviceAudio()
+	service(1)
+	callSlot(t, client, slotClipStop, clip)
+	service(3)
+	callSlot(t, client, slotClipStop, clip)
+	if len(client.clips[clip].pending) != 0 {
+		t.Fatal("repeated stop queued another callback")
+	}
+	callSlot(t, client, slotClipFree, clip)
+	// A second clip must also complete with no Host speaker attached.
+	clip = callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), callback)
+	callSlot(t, client, slotClipPutData, clip, data, uint32(len(sound)))
+	callSlot(t, client, slotClipPlay, clip, 0)
+	service(2)
+	client.clock.advance(50 * time.Millisecond)
+	client.serviceAudio()
+	service(1)
+}
+
+func TestMediaCallbackMayFreeItsClip(t *testing.T) {
+	client := mediaClient(t, &recordingSink{})
+	// ldr r3, [pc, #4]; mov r12, r3; svc #2; bx lr; clip-free slot.
+	callback := guestThumbStub(t, client, 0x469c4b01, 0x4770df02, slotClipFree)
+	sound := oneNoteSound(t)
+	clip := callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), callback)
+	callSlot(t, client, slotClipPutData, clip, writeGuest(t, client, sound), uint32(len(sound)))
+	callSlot(t, client, slotClipPlay, clip, 0)
+	client.clock.advance(50 * time.Millisecond)
+	client.serviceAudio()
+	if err := client.serviceMediaCallbacks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.clips[clip] != nil {
+		t.Fatal("callback did not free its clip")
+	}
+}
+
+func TestRepeatingClipDoesNotReportEnd(t *testing.T) {
+	client := mediaClient(t, nil)
+	sound := oneNoteSound(t)
+	clip := callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), guestThumbStub(t, client, 0x47706001))
+	callSlot(t, client, slotClipPutData, clip, writeGuest(t, client, sound), uint32(len(sound)))
+	callSlot(t, client, slotClipPlay, clip, 1)
+	client.clock.advance(time.Second)
+	client.serviceAudio()
+	if err := client.serviceMediaCallbacks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := client.readWord(clip); status != 2 {
+		t.Fatalf("loop status = %d, want started", status)
+	}
+}
+
+func TestMediaCallbackCanStopWithoutRecursiveNotifications(t *testing.T) {
+	client := mediaClient(t, nil)
+	// Record the status, then call MC_mdaStop on the same clip.
+	callback := guestThumbStub(t, client, 0x4b026001, 0xdf02469c, 0x00004770, slotClipStop)
+	sound := oneNoteSound(t)
+	clip := callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), callback)
+	callSlot(t, client, slotClipPutData, clip, writeGuest(t, client, sound), uint32(len(sound)))
+	callSlot(t, client, slotClipPlay, clip, 0)
+	for _, want := range []uint32{mediaStarted, mediaStopped, mediaStopped} {
+		if err := client.serviceMediaCallbacks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := client.readWord(clip); got != want {
+			t.Fatalf("callback = %d, want %d", got, want)
+		}
+	}
+	if len(client.clips[clip].pending) != 0 {
+		t.Fatal("stop callback rescheduled itself")
+	}
+}
+
+func TestMediaCallbackQueueIsBounded(t *testing.T) {
+	clip := &mediaClip{callback: 1}
+	for i := 0; i < 64; i++ {
+		if err := clip.notify(uint32(i%2) + 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := clip.notify(1); err == nil {
+		t.Fatal("unbounded callback queue")
+	}
+}
 
 // recordingSink counts what reached the audio device, which is the only way to
 // tell a clip that played from one that was accepted and dropped — the

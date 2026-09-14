@@ -74,14 +74,9 @@ func javaClipFromFile(
 // delivered to it**, which is a gap rather than an answer, and it is worth
 // being clear about which parts are which.
 //
-// The specification's events are ERROR, END_OF_DATA, START, STOP, PAUSE,
-// RESUME, RECORD and FULL_OF_DATA. Of those, the ones a title could act on here
-// are START and END_OF_DATA, and the mixer behind this platform has no
-// end-of-clip signal to raise the second from — so a delivery would either be
-// invented or would never come. Recording the listener is what lets a title
-// that only registers one go on; a title that *waits* on an event will stop
-// where it waits, which is a better place to find out than a callback made up
-// from a clip's byte count.
+// C media callbacks now report playback transitions using the shared mixer.
+// Java PlayListener invocation still needs its own guest object dispatch; a
+// Java title waiting on that listener can still stall.
 //
 // Registering is not nothing, either: the object has to be kept, because the
 // specification lets a title read it back and because the next thing to

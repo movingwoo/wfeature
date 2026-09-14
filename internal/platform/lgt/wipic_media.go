@@ -1,7 +1,9 @@
 package lgt
 
 import (
+	"context"
 	"fmt"
+	"sort"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -123,8 +125,19 @@ const mediaMaxVolume = 100
 // else's memory.
 const mediaClipRecordSize = 32
 
+const (
+	mediaEnded   uint32 = 1
+	mediaStarted uint32 = 2
+	mediaStopped uint32 = 3
+	mediaPaused  uint32 = 4
+	mediaResumed uint32 = 5
+)
+
 // mediaClip is one MC_MdaClip on the Host side.
 type mediaClip struct {
+	callback uint32
+	status   uint32
+	pending  []uint32
 	// mediaType is what MC_mdaClipCreate was asked for, answered back by
 	// MC_mdaClipGetType.
 	mediaType string
@@ -216,10 +229,17 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		if clip.loaded && client.audio != nil {
 			client.audio.Stop(clip.handle)
 		}
+		status := mediaStopped
+		if slot == slotClipPause {
+			status = mediaPaused
+		}
+		if err := clip.notify(status); err != nil {
+			return err
+		}
 		return answerInt(wipiSuccess)
 
 	case slotClipResume:
-		return client.playClip(thread)
+		return client.startClip(thread, mediaResumed)
 
 	case slotGetVolume:
 		return answerInt(client.volume)
@@ -342,6 +362,10 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 
 // createClip serves MC_mdaClipCreate(type, bufSize, callback).
 func (client *Client) createClip(thread *armcore.Thread) error {
+	callback, err := thread.Register(2)
+	if err != nil {
+		return err
+	}
 	typePointer, err := thread.Register(0)
 	if err != nil {
 		return err
@@ -359,7 +383,7 @@ func (client *Client) createClip(thread *armcore.Thread) error {
 	if client.clips == nil {
 		client.clips = map[uint32]*mediaClip{}
 	}
-	client.clips[address] = &mediaClip{mediaType: mediaType, volume: mediaMaxVolume}
+	client.clips[address] = &mediaClip{mediaType: mediaType, volume: mediaMaxVolume, callback: callback}
 	return thread.SetRegister(0, address)
 }
 
@@ -430,6 +454,10 @@ func (client *Client) putClipData(thread *armcore.Thread) error {
 // cannot decode answers failure rather than stopping the game: silence is what
 // a handset without that codec would give, and the game's own path handles it.
 func (client *Client) playClip(thread *armcore.Thread) error {
+	return client.startClip(thread, mediaStarted)
+}
+
+func (client *Client) startClip(thread *armcore.Thread, status uint32) error {
 	clip, err := client.clipArgument(thread)
 	if err != nil || clip == nil {
 		return answerIfMissing(thread, err)
@@ -440,6 +468,9 @@ func (client *Client) playClip(thread *armcore.Thread) error {
 	}
 	if client.audio == nil || len(clip.data) == 0 {
 		return answerCode(thread, wipiError)
+	}
+	if clip.loaded && client.audio.Playing(clip.handle) {
+		return answerCode(thread, wipiSuccess)
 	}
 	if !clip.loaded {
 		handle, loadErr := client.audio.Load(clip.data)
@@ -456,6 +487,9 @@ func (client *Client) playClip(thread *armcore.Thread) error {
 			client.logger.Debug("LGT clip cannot be played", "error", err)
 		}
 		return answerCode(thread, wipiError)
+	}
+	if err := clip.notify(status); err != nil {
+		return err
 	}
 	return answerCode(thread, wipiSuccess)
 }
@@ -482,6 +516,8 @@ func (client *Client) releaseClipSound(clip *mediaClip) {
 		_ = client.audio.Close(clip.handle)
 	}
 	clip.loaded = false
+	clip.status = 0
+	clip.pending = nil
 }
 
 func clampVolume(level int32) int32 {
@@ -503,4 +539,63 @@ func (client *Client) serviceAudio() {
 		return
 	}
 	client.audio.Advance(client.clock.now())
+}
+
+// notify records a transition, never reentering a guest's media call. Bound
+// the queue so untrusted code cannot accumulate notifications indefinitely.
+func (clip *mediaClip) notify(status uint32) error {
+	if clip.status == status {
+		return nil
+	}
+	if clip.callback != 0 {
+		if len(clip.pending) >= 64 {
+			return fmt.Errorf("LGT media callback queue exceeds 64 transitions")
+		}
+		clip.pending = append(clip.pending, status)
+	}
+	clip.status = status
+	return nil
+}
+
+// serviceMediaCallbacks delivers a snapshot between guest frames. A callback
+// may stop or free its own clip; resulting events wait until the next tick.
+func (client *Client) serviceMediaCallbacks(ctx context.Context) error {
+	client.mu.Lock()
+	type delivery struct {
+		handle uint32
+		clip   *mediaClip
+		status uint32
+	}
+	var due []delivery
+	handles := make([]uint32, 0, len(client.clips))
+	for handle := range client.clips {
+		handles = append(handles, handle)
+	}
+	sort.Slice(handles, func(i, j int) bool { return handles[i] < handles[j] })
+	for _, handle := range handles {
+		clip := client.clips[handle]
+		if (clip.status == mediaStarted || clip.status == mediaResumed) && clip.loaded && !client.audio.Playing(clip.handle) {
+			if err := clip.notify(mediaEnded); err != nil {
+				client.mu.Unlock()
+				return err
+			}
+		}
+		for _, status := range clip.pending {
+			due = append(due, delivery{handle, clip, status})
+		}
+		clip.pending = nil
+	}
+	client.mu.Unlock()
+	for _, event := range due {
+		client.mu.Lock()
+		valid := client.clips[event.handle] == event.clip
+		client.mu.Unlock()
+		if !valid {
+			continue
+		}
+		if _, err := client.call(ctx, event.clip.callback, []uint32{event.handle, event.status}); err != nil {
+			return fmt.Errorf("run LGT media callback: %w", err)
+		}
+	}
+	return nil
 }
