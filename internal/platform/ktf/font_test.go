@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
 // One face for the whole library. The screen size the descriptor declares
@@ -129,6 +130,111 @@ func TestStringWidthMeasuresWithTheDrawnFace(t *testing.T) {
 	}
 	if got := runtime.graphicsCharAdvance('A'); got == 0 {
 		t.Fatal("Latin must measure too")
+	}
+}
+
+func TestJavaTextOverlayUsesHalfWidthSpaces(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	graphics, err := runtime.newScreenGraphics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := graphics.Native.(*runtimeGraphicsState)
+	draw := func(text string, x int32, color uint16) error {
+		state.color = color
+		return runtime.graphicsDrawText(state, []rune(text), x, 40, 0)
+	}
+	want := drawnRegion(t, runtime, state, func() error {
+		if err := draw("가나", 30, 0xffff); err != nil {
+			return err
+		}
+		return draw("다라", 50, 0xfc00)
+	})
+	got := drawnRegion(t, runtime, state, func() error {
+		if err := draw("가나다라", 30, 0xffff); err != nil {
+			return err
+		}
+		return draw("    다라", 30, 0xfc00)
+	})
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("space-padded overlay differs at pixel %d: %#04x, want %#04x", i, got[i], want[i])
+		}
+	}
+	font := jvm.ReferenceValue(&jvm.Object{})
+	space, err := runtimeFontCharWidth(runtime, client.JVM(), []jvm.Value{font, jvm.IntValue(' ')})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width, _ := space.Int32(); width != 5 {
+		t.Fatalf("space width = %d, want 5", width)
+	}
+	for _, text := range []string{"가나다라", "    다라"} {
+		value, err := runtimeFontStringWidth(runtime, client.JVM(), []jvm.Value{font, jvm.ReferenceValue(client.JVM().NewString(text))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if width, _ := value.Int32(); width != 40 {
+			t.Fatalf("overlay string width = %d, want 40", width)
+		}
+	}
+}
+
+// The overlay replaces printable ASCII with one space, including punctuation
+// between words. Proportional punctuation leaves a one-pixel color fringe.
+func TestJavaTextOverlayAfterASCII(t *testing.T) {
+	for _, prefix := range []string{"가.", "가!", "가1", "가A", "가i"} {
+		t.Run(prefix, func(t *testing.T) {
+			_, runtime := newTestRuntime(t)
+			graphics, err := runtime.newScreenGraphics()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := graphics.Native.(*runtimeGraphicsState)
+			draw := func(text string, x int32, color uint16) error {
+				state.color = color
+				return runtime.graphicsDrawText(state, []rune(text), x, 40, 0)
+			}
+			want := drawnRegion(t, runtime, state, func() error {
+				if err := draw(prefix, 30, 0xffff); err != nil {
+					return err
+				}
+				return draw("나", 45, 0xfc00)
+			})
+			got := drawnRegion(t, runtime, state, func() error {
+				if err := draw(prefix+"나", 30, 0xffff); err != nil {
+					return err
+				}
+				return draw("   나", 30, 0xfc00)
+			})
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("overlay differs at pixel %d: %#04x, want %#04x", i, got[i], want[i])
+				}
+			}
+			if got := runtime.graphicsTextWidth([]rune(prefix + "나")); got != 25 {
+				t.Fatalf("width = %d, want 25", got)
+			}
+		})
+	}
+}
+
+func TestJavaASCIICellMetrics(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	font := jvm.ReferenceValue(&jvm.Object{})
+	for character := rune(' '); character <= '~'; character++ {
+		value, err := runtimeFontCharWidth(runtime, client.JVM(), []jvm.Value{font, jvm.IntValue(int32(character))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if width, _ := value.Int32(); width != 5 {
+			t.Fatalf("U+%04X width = %d, want 5", character, width)
+		}
+	}
+	for _, character := range []rune{'\t', '\n', '\x7f', '가', '。'} {
+		if got, want := runtime.graphicsCharAdvance(character), int32(runtime.fontFace().Render(character).Advance); got != want {
+			t.Fatalf("U+%04X width = %d, want original %d", character, got, want)
+		}
 	}
 }
 
