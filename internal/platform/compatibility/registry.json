@@ -12,6 +12,18 @@
         "skt.inclusive_set_clip"
       ],
       "evidence": "docs/skt-clip-compatibility.md"
+    },
+    {
+      "id": "lgt-visible-origin-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "9d8f286d632b3a77b32250b6b7216b38fec2fa1f544a43171c2606dee2189bcb"
+      },
+      "fixes": [
+        "lgt.visible_framebuffer_origin"
+      ],
+      "evidence": "docs/lgt-origin-compatibility.md"
     }
   ]
 }
