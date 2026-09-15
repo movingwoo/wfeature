@@ -16,8 +16,14 @@ var compatibilityJSON []byte
 // JavaClassSet identifies the sorted, length-prefixed Java class-set digest.
 const JavaClassSet = "java_class_set"
 
+// NativeModule identifies the SHA-256 digest of a complete native module.
+const NativeModule = "native_module"
+
 // SKTInclusiveSetClip selects the SKT runtime's inclusive clip correction.
 const SKTInclusiveSetClip = "skt.inclusive_set_clip"
+
+// LGTVisibleFramebufferOrigin removes a recognized native display-strip offset.
+const LGTVisibleFramebufferOrigin = "lgt.visible_framebuffer_origin"
 
 type target struct {
 	Platform string
@@ -74,7 +80,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		if entry.Platform != "skt" && entry.Platform != "ktf" && entry.Platform != "lgt" {
 			return nil, fmt.Errorf("entry %q has unsupported platform %q", entry.ID, entry.Platform)
 		}
-		if entry.Match.Kind != JavaClassSet {
+		if entry.Match.Kind != JavaClassSet && entry.Match.Kind != NativeModule {
 			return nil, fmt.Errorf("entry %q has unsupported fingerprint kind %q", entry.ID, entry.Match.Kind)
 		}
 		digest := entry.Match.SHA256
@@ -84,7 +90,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 			return nil, fmt.Errorf("entry %q needs a lowercase SHA-256 digest", entry.ID)
 		}
 		if _, exists := registry[key]; exists {
-			return nil, fmt.Errorf("duplicate class digest for entry %q", entry.ID)
+			return nil, fmt.Errorf("duplicate code digest for entry %q", entry.ID)
 		}
 		if strings.TrimSpace(entry.Evidence) == "" {
 			return nil, fmt.Errorf("entry %q needs evidence", entry.ID)
@@ -94,7 +100,9 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		}
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
-			if fix != SKTInclusiveSetClip || entry.Platform != "skt" || entry.Match.Kind != JavaClassSet {
+			supported := fix == SKTInclusiveSetClip && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
+				fix == LGTVisibleFramebufferOrigin && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
+			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}
 			if seen[fix] {

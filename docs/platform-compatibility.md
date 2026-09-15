@@ -16,7 +16,7 @@ The document has schema `version: 1` and an `entries` array. Each entry contains
 
 - `id`: a unique, behavior-based identifier, without an individual game name.
 - `platform`: `skt`, `ktf` or `lgt`.
-- `match.kind`: the fingerprint algorithm; currently `java_class_set`.
+- `match.kind`: the fingerprint algorithm, `java_class_set` or `native_module`.
 - `match.sha256`: the exact lowercase SHA-256 code fingerprint.
 - `fixes`: names of reviewed implementations in Go.
 - `evidence`: a repository documentation path, optionally with a section anchor,
@@ -29,7 +29,7 @@ Any added, removed or changed class changes the fingerprint. Archive filenames,
 display names, ZIP metadata and resources do not select compatibility. Identical
 code repackaged with different resources receives the same exception.
 
-Only `skt.inclusive_set_clip` is currently implemented. It enables the existing
+`skt.inclusive_set_clip` enables the existing
 MIDP clip-extent correction for the recognized session. Unrecognized code keeps
 normal clipping. The original archive is never rewritten. The
 [rendering investigation](skt-clip-compatibility.md)
@@ -40,9 +40,15 @@ The shared package owns metadata validation and matching. Each platform owns
 fingerprint calculation and correction behavior. Fix names are platform-prefixed
 and validated against their supported platform and fingerprint kind.
 
-LGT and KTF do not yet have registered fixes. Their native or AOT code may need
-a different fingerprint algorithm; add that algorithm and an evidence-backed
-fix together when an actual exception is identified. Do not hash an empty Java
+`native_module` hashes the complete, unmodified native executable bytes. LGT
+uses `binary.mod`, including its ELF headers and sections. Repackaging the same
+module with different resources does not change its fingerprint; changing any
+module byte does. `lgt.visible_framebuffer_origin` removes a recognized Clet's
+24-row display-strip addition in mapped initialization code. See the
+[LGT origin investigation](lgt-origin-compatibility.md) for evidence and limits.
+
+KTF has no registered fixes. Add a fingerprint algorithm and an evidence-backed
+fix together when an actual exception needs them. Do not hash an empty Java
 class set to identify a native archive or add placeholder exceptions.
 
 ## Adding or removing an exception
@@ -64,7 +70,7 @@ fingerprints, missing metadata, duplicate IDs or platform/kind/digest targets, a
 repeated fix names. Embedded-data errors fail initialization and are caught by
 the registry tests. Tests also check that evidence documents exist.
 
-Run `go test ./internal/platform/compatibility ./internal/platform/skt` after editing the registry. The optional
+Run `go test ./internal/platform/compatibility ./internal/platform/skt ./internal/platform/lgt` after editing the registry. The optional
 `TestLocalClipCompatibilityArchive` uses `WFEATURE_SKT_CLIP_ARCHIVE` with an
 absolute local archive path to verify the current original and rejection after
 class mutations. Real archives remain outside Git.

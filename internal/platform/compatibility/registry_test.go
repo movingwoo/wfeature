@@ -17,8 +17,10 @@ func TestEmbeddedCompatibilityRegistry(t *testing.T) {
 		t.Fatal("missing compatibility entries")
 	}
 	for key, entry := range registry {
-		if !registry.hasFix(key, SKTInclusiveSetClip) {
-			t.Fatalf("entry %q lost its clip fix", entry.ID)
+		for _, fix := range entry.Fixes {
+			if !registry.hasFix(key, fix) {
+				t.Fatalf("entry %q lost fix %q", entry.ID, fix)
+			}
 		}
 		document := strings.SplitN(entry.Evidence, "#", 2)[0]
 		if !strings.HasPrefix(document, "docs/") {
@@ -92,17 +94,20 @@ func TestCompatibilityRejectsInvalidEntries(t *testing.T) {
 }
 
 func TestCompatibilitySeparatesPlatformsAndFingerprintKinds(t *testing.T) {
-	for key := range embeddedRegistry {
-		if !HasFix(key.Platform, key.Kind, key.Digest, SKTInclusiveSetClip) {
+	for key, entry := range embeddedRegistry {
+		fix := entry.Fixes[0]
+		if !HasFix(key.Platform, key.Kind, key.Digest, fix) {
 			t.Fatal("registered fix missing")
 		}
-		for _, platform := range []string{"lgt", "ktf", ""} {
-			if HasFix(platform, key.Kind, key.Digest, SKTInclusiveSetClip) {
-				t.Fatalf("SKT fix leaked to %q", platform)
+		for _, platform := range []string{"skt", "lgt", "ktf", ""} {
+			if platform != key.Platform && HasFix(platform, key.Kind, key.Digest, fix) {
+				t.Fatalf("fix leaked to %q", platform)
 			}
 		}
-		if HasFix(key.Platform, "other", key.Digest, SKTInclusiveSetClip) {
-			t.Fatal("fingerprint kinds collided")
+		for _, kind := range []string{JavaClassSet, NativeModule, "other"} {
+			if kind != key.Kind && HasFix(key.Platform, kind, key.Digest, fix) {
+				t.Fatal("fingerprint kinds collided")
+			}
 		}
 		if HasFix(key.Platform, key.Kind, key.Digest, "unknown") {
 			t.Fatal("unknown fix selected")

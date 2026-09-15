@@ -437,6 +437,9 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		audio:  backend.NewAudio(options.AudioSink),
 		volume: mediaMaxVolume,
 	}
+	if err := client.applyOriginCompatibility(); err != nil {
+		return nil, err
+	}
 	if options.TraceSVC > 0 {
 		client.trace = newSVCTrace(options.TraceSVC)
 	}

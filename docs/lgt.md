@@ -851,8 +851,10 @@ screen surface would fix the one and break the other. Nothing in either
 archive's metadata separates them (both declare an empty `Resolution`), the
 title calls no slot this platform leaves unnamed, and the guess a per-title
 patch would encode is exactly what `binary_hooks.go` refuses to encode on the
-other platform — matching by shape rather than by game. It is left as a known
-difference until a second title asks for the same band.
+other platform — matching by shape rather than by game. It was left as a known
+difference at the time of this investigation. The explicitly requested,
+exact-module exception added on 2026-09-15 now removes this build's addition
+during initialization; see [the reproduction and correction boundary](lgt-origin-compatibility.md).
 
 ### `MC_grpGetRGBFromPixel` answers through its pointers
 
