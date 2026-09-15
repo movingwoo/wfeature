@@ -57,3 +57,23 @@ javac -source 1.8 -target 1.8 -nowarn -g:none -classpath "$stub_dir/classes" \
 jar cfm internal/platform/skt/testdata/license.jar \
   internal/platform/skt/testdata/LICENSE.MF -C "$fixture_dir" .
 ```
+
+## Legacy clip tiles
+
+`src/ClipTilesMIDlet.java` and `clip-tiles.jar` draw four solid tiles with
+legacy inclusive clip extents. Compile against the generated signatures from
+`docs/testing.md`, then package only the fixture classes with `CLIP_TILES.MF`:
+
+```sh
+fixture_dir="$(mktemp -d /tmp/wfeature-clip-fixture.XXXXXX)"
+javac -source 1.8 -target 1.8 -nowarn -g:none -classpath "$stub_dir/classes" \
+  -d "$fixture_dir" internal/platform/skt/testdata/src/ClipTilesMIDlet.java
+jar cfm internal/platform/skt/testdata/clip-tiles.jar \
+  internal/platform/skt/testdata/CLIP_TILES.MF -C "$fixture_dir" .
+```
+
+The Go test first checks ordinary count-based clipping with the legacy
+profile, which must not select compatibility. It then explicitly enables the
+internal compatibility flag and repaints the same guest to verify inclusive
+extents. Only the separately fingerprinted original code selects this flag
+automatically; the fixture does not appear in that allowlist.
