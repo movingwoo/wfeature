@@ -142,7 +142,9 @@ table, because the platform sessions spell those differently (a key event type
 on one, a pressed flag on the other) while a route reads the same either way.
 KTF and LGT both take `-route`; see [`cli.md`](cli.md).
 
-## Phase 1 startup path
+<a id="phase-1-startup-path"></a>
+
+## Java startup path
 
 The currently implemented path is:
 
@@ -178,7 +180,9 @@ event boundary. The web Host is an installable PWA served by the same binary
 that runs the sessions behind it. The current JVM scope and deliberate
 limitations are documented in [`jvm.md`](jvm.md).
 
-## Phase 2 execution boundary
+<a id="phase-2-execution-boundary"></a>
+
+## Native execution boundary
 
 The current KTF execution path is:
 
@@ -369,104 +373,76 @@ framing:
 
 ## Where a stopped game keeps its state
 
-A quick save writes a running session to bytes and starts an identical one from
-them later. It was measured across all three platforms and **deliberately not
-built**; what follows is the evidence, because the interesting half is not the
-container but where a stopped game's state actually lives.
+A parked session retains live objects and suspended Go call stacks in server
+memory. It survives a disconnected browser, but not server shutdown. Guest
+save files and `.wfs` exports do not capture that execution state.
 
-On 2026-09-11 the user reopened this as an implementation project. The feature
-is still absent; the earlier decision below is historical, and its risks remain
-applicable. [state-and-auth.md](state-and-auth.md#quick-save-and-quick-load)
-records the current source review, implementation sequence, and acceptance path.
+Quick save/load remains paused after its experimental implementation was rolled
+back. A correct restorer would need guest memory, JVM objects, nested ARM/Java
+continuations, clocks, callbacks, handles, and coherent save state. Earlier
+measurements and rejected approaches are preserved in the
+[snapshot investigation](history/maintenance.md#snapshot-feasibility).
 
-State that lives in **data** can be written out. Guest memory is data: a page
-table of 4 KiB pages, and `Memory.CommittedRegions` already reports exactly the
-pages that have storage. An `armcore.Thread`'s `Context` — registers, CPSR,
-entry stack — is data. A JVM object graph is data. State that lives on the **Go
-call stack** cannot be written out, and that is where the answer diverges per
-platform: `frame` is a local of `vm.execute` and the invoke path recurses into
-Go, so a Java call chain's depth is Go stack depth and `execution` keeps a
-counter and a free list rather than a list of active frames.
+## Documentation
 
-So the question for each platform is what is on the Go stack at the moment a
-guest thread comes to rest.
+[The documentation index](README.md) lists maintained references and subject
+histories. Use the platform overviews for current behavior and the histories
+for detailed traces, layouts, and dated measurements.
 
-- **LGT is the cheap case, because its Java is compiled ahead of time and its
-  Java state is therefore in guest memory.** A Java worker parks inside
-  `javaThreadSleep`, which ends in `return 0, worker.park()`; the twelve Go
-  frames above it are stateless dispatch, and the only work left in the whole
-  chain after the park is `thread.SetRegister(0, result)` at the tail of
-  `callJavaMethod`. Those frames can be thrown away: recreate the goroutine from
-  the saved context, write the result register, resume. Titles with no guest
-  thread are safe at every tick boundary; titles with one were safe at **none**
-  of 300 measured boundaries until the park itself is declared a safe point.
-- **SKT is possible but needs machinery.** Its guest threads are free-running
-  goroutines, and over 66,558 observations across five titles the chain between
-  a thread's entry and where it rested was **purely `vm.execute` frames every
-  time**, at most seven deep. A prototype captured such a stack and resumed it in
-  a VM that had executed nothing, matching an uninterrupted run — the parent
-  frame is already in a resumable shape, because the interpreter reads an
-  invoke's operands and pops its arguments before it calls, so resuming a caller
-  is "push the result and continue". Making frames walkable costs a pointer
-  write per call: allocation counts do not move and the time signal is +0.4% to
-  +2.0% against a noise floor of ±1.2%. Stopping a thread needs no new check —
-  the step-ceiling test at the top of the interpreter loop is already at an
-  instruction boundary with the operand stack settled.
-- **KTF is the expensive case.** Its stack alternates engines: JVM native
-  dispatch, an ARM run, more dispatch, another ARM run, 27 frames deep at a
-  `Thread.sleep`. Those Go layers are not stateless the way LGT's are — after
-  the inner call returns, one writes eight bytes to a guest address, another
-  converts registers to a typed value by descriptor and repairs an exception
-  handler head, another leaves a monitor. The layer alphabet is closed and small
-  (12,941 samples produced six distinct sequences over 26 frame kinds; the park
-  sites are five and nesting is bounded at 64), and bytecode frames cannot appear
-  at all because the platform builds its VM with no class source. So the stack
-  could be recorded as data and re-entered layer by layer. Two things stand in
-  the way. A derived `armcore.Thread` is registered nowhere and has no parent
-  link, so **a parked worker's guest registers are reachable only from the
-  sleeping goroutine's own Go frames** — measured at rest, `currentThread` is
-  nil and every worker's ARM thread still reads `pc=0`. That is additive to fix.
-  The second is not: roughly eight of the 26 frame kinds would need a resume
-  entry point, and every future parkable supervisor call would have to add one,
-  where forgetting is a silently wrong restore rather than a failure.
+<a id="shared-runtime-services"></a>
+<a id="services-shared-runtime-service-contracts"></a>
 
-**The size of a snapshot was never the problem.** Committed memory is 1-3% of
-what is mapped (0.79-2.83 MB against ~92 MB across six titles), `compress/flate`
-takes another 2.2-3.7x, and the committed page set is fixed after boot — ten
-times the ticks added no pages and changed the compressed size by five bytes.
-Two things follow. Dirty-page tracking is worth nothing: filtering out the
-committed pages that are still all zero wins 0.9% or loses, because the
-compressor already handles them, so it would add cost to every guest store to
-buy nothing. And the per-page decode caches are never carried — they rebuild
-from the page bytes and are sometimes larger than the whole snapshot.
+## Shared runtime service contracts
 
-Where the bytes would live is settled too, and by a fact rather than a
-preference: the page does not emulate. The server runs the game, so a snapshot
-never crosses the socket — which is as well, since the inbound message limit is
-1 MiB and a compressed snapshot has already been measured above it.
+The existing backend boundaries share services across the platforms. These
+contracts describe caller responsibilities without adding a runtime layer.
 
-**Why it was not built.** Every platform can be made to work, but KTF's third of
-it leaves a permanent maintenance surface with a silent failure mode, and the
-project would not ship a quick save that works on some titles and not others.
-It is reopenable: if the execution model changes for another reason and
-recording the layer stack becomes incidental, or if the feature becomes worth
-that hazard, the measurements above are the starting point rather than the work.
+<a id="services-audio-time"></a>
 
-## Where the rest of the documentation is
+### Audio time
 
-| Document | Covers |
-|---|---|
-| `armcore.md` | the ARM interpreter, its profiler, and why the browser was seven times slower |
-| `jvm.md` | class loading and the bytecode interpreter |
-| `ktf.md` | the KTF platform: client.bin, the AOT bridge, WIPI |
-| `lgt.md` | the LGT platform: ELF loading and the import table |
-| `skvm.md` | the SKT platform and the SKVM class surface |
-| `lcdui.md` | the high-level MIDP screens the runtime draws itself |
-| `rms.md` | MIDP record stores and where saves live |
-| `audio.md` | SMAF/MIDI decoding and the Host audio timeline |
-| `network.md` | why every platform refuses the network, and the surface that refusal covers |
-| `hqx.md` | the upscaling filter |
-| `session.md` | the server session: the protocol, pacing, frame skipping, saves |
-| `running.md` | building and running on Ubuntu, macOS and Windows |
-| `cli.md` | every CLI command and flag, repro routes, and `ktfdump` |
-| `testing.md` | the test layout and the opt-in acceptance probes |
+Each `backend.Audio` instance has one guest-time domain. `Play` and `Advance`
+receive durations with the same origin and rate. SMAF event times are millisecond
+offsets from `Play`'s timestamp; they are not wall-clock timestamps. Host speed
+changes affect the progression of guest time. Audio does not apply speed again.
+A new session clock needs a new timeline; a backwards timestamp does not rewind
+already emitted events. Paused guest time must not advance just because the
+browser disconnects or wall time passes.
+
+KTF uses `guestElapsed()` for both playback and advancement, LGT uses
+`client.clock.now()`, and SKT uses `GuestElapsed()` through `audioNow()` and
+`AdvanceAudio()`. The script runtime uses its own `clock` for both operations.
+Keeping those pairs together prevents a sound from being scheduled in a different
+clock domain and remaining indefinitely in the future.
+
+<a id="services-data-ownership-and-callbacks"></a>
+
+### Data ownership and callbacks
+
+`Framebuffer.Present` borrows `Frame.RGBA` for the call. A framebuffer retaining
+pixels must copy them before returning. A consumer must not infer ownership from
+whether a particular framebuffer currently copies.
+
+Audio sink PCM and SysEx slices are also borrowed and read-only during the call.
+A sink retaining or asynchronously transmitting them must copy them. This rule
+also applies at reduced volume: the implementation may allocate scaled samples,
+but allocation is not an ownership transfer.
+
+`Audio.LoadEvents` copies the outer event slice. Nested sample and SysEx slices
+remain shared with the caller and must remain immutable for the loaded handle's
+lifetime. Events must already be ordered by nonnegative millisecond offsets.
+Closing the handle releases the timeline's reference. These are explicit caller
+preconditions, not validations added by this documentation change.
+
+Audio serializes sink callbacks under its own mutex. Stop, close, restart and
+volume changes can emit callbacks as well as `Advance`. A sink must not reenter
+the same Audio instance, because its mutex remains held. Serialized callbacks do
+not imply that every caller is the Host's frame-loop goroutine.
+
+### Owned intermediate frames
+
+`FrameUpdate` is an ownership transfer, unlike borrowed `Frame` pixels. A Host
+may retain its RGBA bytes. `FrameSink.Offer` is nonblocking; the Host must detach
+the producer or stop the runtime before closing the channel. KTF sampling and
+the browser encoder use separate retained pixel storage. See
+[session presentation](session.md#presentation-and-audio).

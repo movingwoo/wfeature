@@ -10,7 +10,7 @@ LGT contract also has a local notification/empty-save responder; external networ
 remains disabled.
 [authentication.md](authentication.md) separates the recognized schemes and
 records their implementation boundaries.
-[authentication-cases.md](authentication-cases.md) records the subsequent corpus
+[authentication case history](history/authentication.md#cases-authentication-case-inventory) records the subsequent corpus
 inventory, current controlled experiments, and unresolved case distinctions.
 
 ## The decision

@@ -11,7 +11,7 @@ import (
 // A settings name editor uses GForm.show rather than a synchronous modal call.
 // The bounded non-modal path exposes its sole listened GTextField to Host text
 // input and leaves acceptance and dismissal to the guest. doModal still returns
-// immediately without presenting a dialog. See docs/widget-input-lifecycle.md.
+// immediately without presenting a dialog. See docs/native-text-input.md#lifecycle-widget-input-lifecycle-follow-up.
 const (
 	runtimeGFormClass          = "com/ktf/kfc/GForm"
 	runtimeGMenubarFormClass   = "com/ktf/kfc/GMenubarForm"
