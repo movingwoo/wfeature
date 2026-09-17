@@ -366,8 +366,11 @@ and past `maxToStringDepth` it gets the identity it would have had before.
   what a played game needs, and [`ktf.md`](ktf.md) is where it is described
 - the complete verifier and access control
 - complete assignability checks for interface inheritance and array covariance
-- complete guest thread lifecycle (`join`, daemon) and full interruption
-  semantics outside `Thread.sleep`. `Thread.currentThread` answers the running
+- complete guest thread lifecycle (daemon and timed join) and full interruption
+  semantics outside `Thread.sleep` and `Thread.join()`. Untimed join supports
+  multiple waiters, interruption and `VM.Close`; a live thread owned by a
+  cooperative scheduler is explicitly unsupported. Finished and failed-start
+  threads leave the root set while their objects retain restart prohibition. `Thread.currentThread` answers the running
   execution's thread, and the execution that is not a guest thread gets one
   object of its own and keeps it. **Priority is kept and not honoured**: guest
   threads here are driven in turn by the platform's own scheduler, so a title

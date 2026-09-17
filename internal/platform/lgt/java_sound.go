@@ -213,6 +213,9 @@ func javaPlayerPlay(
 	if client.audio == nil || len(clip.data) == 0 {
 		return javaFalse, nil
 	}
+	if clip.loaded && client.audio.Playing(clip.handle) {
+		return javaFalse, nil
+	}
 	if !clip.loaded {
 		handle, loadErr := client.audio.Load(clip.data)
 		if loadErr != nil {
@@ -230,6 +233,7 @@ func javaPlayerPlay(
 		}
 		return javaFalse, nil
 	}
+	clip.javaPaused, clip.javaRepeat = false, arguments[1] != 0
 	return javaTrue, nil
 }
 
@@ -247,16 +251,45 @@ func javaPlayerStop(
 		return javaFalse, nil
 	}
 	client.audio.Stop(clip.handle)
+	clip.javaPaused = false
 	return javaTrue, nil
 }
 
-// javaPlayerResume is `Player.resume(Clip)`. There is nothing paused to take
-// up again here — the mixer plays a clip or it does not — so it starts the clip
-// once, which is what a title that stopped one and asks for it again means.
+func javaPlayerPause(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	if !javaPlayerHasClip(client, arguments[0]) {
+		return javaFalse, nil
+	}
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if client.audio == nil || !clip.loaded || !client.audio.Playing(clip.handle) {
+		return javaFalse, nil
+	}
+	client.audio.Stop(clip.handle)
+	clip.javaPaused = true
+	return javaTrue, nil
+}
+
+// The mixer has no playback cursor, so resume restarts with the saved repeat mode.
 func javaPlayerResume(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	return javaPlayerPlay(client, ctx, thread, []uint32{arguments[0], 0})
+	if !javaPlayerHasClip(client, arguments[0]) {
+		return javaFalse, nil
+	}
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if !clip.javaPaused {
+		return javaFalse, nil
+	}
+	repeat := uint32(0)
+	if clip.javaRepeat {
+		repeat = 1
+	}
+	return javaPlayerPlay(client, ctx, thread, []uint32{arguments[0], repeat})
 }
 
 // javaPlayerHasClip reports whether a `Player` call was handed a clip at all.

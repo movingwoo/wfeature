@@ -163,6 +163,7 @@ java/util/TimerTask run ()V noop
 
 # Every write through a File's output stream is already through to the file,
 # so there is nothing held back for a flush or a close to release.
+org/kwis/msp/io/FileInputStream close ()V noop
 org/kwis/msp/io/FileOutputStream close ()V noop
 org/kwis/msp/io/FileOutputStream flush ()V noop
 

@@ -124,6 +124,7 @@ type Client struct {
 	module              *Module
 	logger              *slog.Logger
 	saveStore           backend.SaveStore
+	saveReadError       error
 	subscriberNumber    string
 	notificationNetwork *notificationNetwork
 

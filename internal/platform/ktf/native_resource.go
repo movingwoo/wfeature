@@ -166,17 +166,20 @@ func (file *nativeResourceFile) item(kind, number uint16) ([]byte, bool) {
 // resourceFile parses one of the title's files, keeping what it parsed: a
 // title reads several numbers out of the same file and the tables are the same
 // tables every time.
-func (platform *NativePlatform) resourceFile(name string) (*nativeResourceFile, bool) {
+func (platform *NativePlatform) resourceFile(name string) (*nativeResourceFile, bool, error) {
 	if file, ok := platform.resources[name]; ok {
-		return file, file != nil
+		return file, file != nil, nil
 	}
 	if platform.resources == nil {
 		platform.resources = map[string]*nativeResourceFile{}
 	}
-	data, ok := platform.contents(name)
+	data, ok, err := platform.contents(name)
+	if err != nil {
+		return nil, false, err
+	}
 	if !ok {
 		platform.resources[name] = nil
-		return nil, false
+		return nil, false, nil
 	}
 	file, err := parseNativeResourceFile(data)
 	if err != nil {
@@ -186,10 +189,10 @@ func (platform *NativePlatform) resourceFile(name string) (*nativeResourceFile, 
 		// is kept for a report to say.
 		platform.note(fmt.Sprintf("%s is not a resource file: %v", name, err))
 		platform.resources[name] = nil
-		return nil, false
+		return nil, false, nil
 	}
 	platform.resources[name] = file
-	return file, true
+	return file, true, nil
 }
 
 // loadResource answers the object's resource loader.
@@ -202,7 +205,10 @@ func (platform *NativePlatform) loadResource(thread *armcore.Thread) (uint32, er
 	if err != nil {
 		return 0, err
 	}
-	file, ok := platform.resourceFile(name)
+	file, ok, err := platform.resourceFile(name)
+	if err != nil {
+		return 0, err
+	}
 	if !ok {
 		return 0, nil
 	}

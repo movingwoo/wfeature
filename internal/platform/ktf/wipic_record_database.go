@@ -166,6 +166,9 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
 		return wipicErrorInvalid, nil
 	}
+	if runtime.nextRecordDatabaseHandle >= maxRecordDatabaseHandles {
+		return wipicErrorInvalid, nil
+	}
 	store, exists := runtime.recordDatabases[name]
 	if !exists {
 		// A database this title deleted is gone rather than empty: the list
@@ -173,6 +176,9 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		// something creates the name again.
 		deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
 		saved, hasSaved := runtime.loadSave("rdb/" + name)
+		if runtime.saveReadError != nil {
+			return 0, runtime.saveReadError
+		}
 		var records [][]byte
 		hasPackaged := false
 		// A save wins, empty or not — see the Java table for why an empty one
@@ -186,9 +192,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		if !hasPackaged && !hasSaved && int32(create) == 0 {
 			return wipicErrorNotFound, nil
 		}
-		if deleted {
-			runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, name, false)
-		}
+
 		store = &runtimeRecordDatabase{name: name, recordSize: recordSize}
 		switch {
 		case hasSaved:
@@ -196,7 +200,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 			// initial content, and a game that has written since owns them.
 			decoded, err := decodeSaveRecords(saved)
 			if err != nil {
-				runtime.countDiagnostic(fmt.Sprintf("rdb save decode failed %s: %v", name, err))
+				return 0, fmt.Errorf("corrupt record database %s: %w", name, err)
 			} else {
 				store.records = decoded
 			}
@@ -206,16 +210,19 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		if runtime.recordDatabases == nil {
 			runtime.recordDatabases = make(map[string]*runtimeRecordDatabase)
 		}
-		runtime.recordDatabases[name] = store
+
 		// A database opened for creation exists from that moment, with no
 		// record in it yet, so the next session finds it rather than
 		// answering M_E_NOENT. The Java table next door has always done this;
 		// this one did not, and after a delete it left a name the removal
 		// list and the save disagreed about.
 		if !hasSaved && !hasPackaged {
-			runtime.persistRecordDatabase(store)
+			if err := runtime.persistRecordDatabase(store); err != nil {
+				return 0, err
+			}
 		}
 	}
+	runtime.recordDatabases[name] = store
 	if runtime.recordDatabaseHandles == nil {
 		runtime.recordDatabaseHandles = make(map[uint32]*runtimeRecordDatabaseHandle)
 	}
@@ -270,6 +277,9 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	if !exists && !hasPackaged && !hasSaved {
 		return wipicErrorNotFound, nil
 	}
+	if err := runtime.saveChanges(map[string][]byte{"rdb/" + name: encodeSaveRecords(nil)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
+		return 0, err
+	}
 	delete(runtime.recordDatabases, name)
 	// Handles onto the store go with it, exactly as the file table's remove
 	// does it. A caller that kept one would otherwise still be holding the
@@ -286,8 +296,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	// deleted it asked for. The name is written down as well, because an
 	// emptied save still answers "the database exists" — see
 	// recordDatabaseRemovals.
-	runtime.storeSave("rdb/"+name, encodeSaveRecords(nil))
-	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, name, true)
+
 	return 0, nil
 }
 
@@ -313,8 +322,12 @@ func (runtime *initializationRuntime) wipicRecordDatabaseInsert(thread *armcore.
 			return 0, fmt.Errorf("read KTF record database insert buffer: %w", err)
 		}
 	}
-	state.store.records = append(state.store.records, data)
-	runtime.persistRecordDatabase(state.store)
+	staged := *state.store
+	staged.records = append(append([][]byte(nil), state.store.records...), data)
+	if err := runtime.persistRecordDatabase(&staged); err != nil {
+		return 0, err
+	}
+	state.store.records = staged.records
 	return uint32(len(state.store.records)), nil
 }
 
@@ -379,8 +392,13 @@ func (runtime *initializationRuntime) wipicRecordDatabaseUpdate(thread *armcore.
 			return 0, fmt.Errorf("read KTF record database update buffer: %w", err)
 		}
 	}
-	state.store.records[recordID-1] = data
-	runtime.persistRecordDatabase(state.store)
+	staged := *state.store
+	staged.records = append([][]byte(nil), state.store.records...)
+	staged.records[recordID-1] = data
+	if err := runtime.persistRecordDatabase(&staged); err != nil {
+		return 0, err
+	}
+	state.store.records = staged.records
 	return 0, nil
 }
 
@@ -398,8 +416,13 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDeleteRecord(thread *ar
 	}
 	// The slot stays, holding nothing. Compacting would renumber every record
 	// after it, and the ids are what the game stored.
-	state.store.records[recordID-1] = nil
-	runtime.persistRecordDatabase(state.store)
+	staged := *state.store
+	staged.records = append([][]byte(nil), state.store.records...)
+	staged.records[recordID-1] = nil
+	if err := runtime.persistRecordDatabase(&staged); err != nil {
+		return 0, err
+	}
+	state.store.records = staged.records
 	return 0, nil
 }
 
@@ -468,12 +491,8 @@ func (store *runtimeRecordDatabase) record(id uint32) ([]byte, bool) {
 	return data, true
 }
 
-func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecordDatabase) {
-	// Writing brings it back, as it does on the guest file table: a handle
-	// held across the title's own delete would otherwise write to a key the
-	// deletion list hides for ever.
-	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, store.name, false)
-	runtime.storeSave("rdb/"+store.name, encodeSaveRecords(store.records))
+func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecordDatabase) error {
+	return runtime.saveChanges(map[string][]byte{"rdb/" + store.name: encodeSaveRecords(store.records)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{store.name: false})
 }
 
 // packagedRecordDatabase reads a record database an archive ships with it. The
@@ -703,21 +722,8 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 // markDatabaseRemoved records or clears one name and writes the list back.
 // Creating a database again takes its name off, or a title that deleted a save
 // and started a new game would never see the new one.
-func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string, removed bool) {
-	names := runtime.recordDatabaseRemovals(key)
-	if names[name] == removed {
-		return
-	}
-	if removed {
-		names[name] = true
-	} else {
-		delete(names, name)
-	}
-	list := make([]string, 0, len(names))
-	for existing := range names {
-		list = append(list, existing)
-	}
-	runtime.storeSave(key, joinRemovalList(list))
+func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string, removed bool) error {
+	return runtime.saveChanges(nil, key, runtime.recordDatabaseRemovals(key), map[string]bool{name: removed})
 }
 
 // reservedStorageNames are the names the storage tables keep their own

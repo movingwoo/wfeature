@@ -292,9 +292,10 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	// not what a title that deleted its save asked; the list is what makes it
 	// gone. The empty save stays because a save tree written before the list
 	// existed has to keep hiding its packaged copy.
+	if err := runtime.saveChanges(map[string][]byte{"jdb/" + name: encodeSaveRecords(nil)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
 	store.records = nil
-	store.persist(runtime)
-	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, true)
 	delete(runtime.databases, name)
 	return jvm.VoidValue(), nil
 }
@@ -376,8 +377,13 @@ func runtimeDataBaseUpdateRange(runtime *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	store.records[index] = data
-	store.persist(runtime)
+	staged := *store
+	staged.records = append([][]byte(nil), store.records...)
+	staged.records[index] = data
+	if err := staged.persist(runtime); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
+	store.records = staged.records
 	return jvm.VoidValue(), nil
 }
 

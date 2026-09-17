@@ -592,7 +592,7 @@ func TestInitializationAOTCallsRejectExcessiveNesting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.aotCallDepth = map[*armcore.Thread]uint32{runtime.currentThread: maxAOTCallDepth}
+	runtime.aotCallDepth = map[*armcore.Thread]uint32{runtime.aotCallOwner(): maxAOTCallDepth}
 
 	callContext := armcore.NewContext()
 	callContext.Registers[0] = ImageBase + 0x11

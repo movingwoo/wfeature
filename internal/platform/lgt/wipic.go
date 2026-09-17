@@ -283,7 +283,7 @@ func knownWIPICSlot(slot uint32) bool {
 }
 
 // handleWIPICSVC services one WIPI C call.
-func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread, slot uint32) error {
+func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread, slot uint32) (err error) {
 	argument := func(index int) (uint32, error) { return thread.Register(index) }
 	answer := func(value uint32) error { return thread.SetRegister(0, value) }
 	answerInt := func(value int32) error { return thread.SetRegister(0, uint32(value)) }
@@ -300,6 +300,11 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
+	defer func() {
+		if client.saveReadError != nil {
+			err = client.saveReadError
+		}
+	}()
 	switch slot {
 	case slotCletRegister:
 		table, err := argument(0)
@@ -1178,6 +1183,8 @@ func (client *Client) contextFor(
 	}
 	context.foreground = uint16(words[grpContextForeground/4])
 	context.background = uint16(words[grpContextBackground/4])
+	context.offsetX = int(int16(words[grpContextOffset/4]))
+	context.offsetY = int(int16(words[grpContextOffset/4] >> 16))
 	left, top := int(words[grpContextClip/4]&0xffff), int(words[grpContextClip/4]>>16)
 	right, bottom := int(words[(grpContextClip+4)/4]&0xffff), int(words[(grpContextClip+4)/4]>>16)
 	// The top-left corner is inside the clip and **the bottom-right one is

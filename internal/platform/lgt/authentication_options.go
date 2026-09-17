@@ -218,11 +218,12 @@ func findOptionCode(module *Module, pattern []uint16) []uint32 {
 // Only the cached authentication word is private. Ordinary settings and game
 // progress still persist; writing a viewed record restores its original word.
 type authenticationOptionStore struct {
-	mu       sync.Mutex
-	base     backend.SaveStore
-	archive  *Archive
-	original [4]byte
-	volatile []byte
+	mu        sync.Mutex
+	base      backend.SaveStore
+	archive   *Archive
+	original  [4]byte
+	volatile  []byte
+	readError error
 }
 
 func newAuthenticationOptionStore(base backend.SaveStore, archive *Archive) *authenticationOptionStore {
@@ -235,7 +236,12 @@ func newAuthenticationOptionStore(base backend.SaveStore, archive *Archive) *aut
 
 func (store *authenticationOptionStore) loadOptions() ([]byte, bool) {
 	if store.base != nil {
-		if data, ok := store.base.LoadSave(authenticationOptionsKey); ok {
+		data, ok, err := backend.ReadSave(store.base, authenticationOptionsKey)
+		if err != nil {
+			store.readError = err
+			return nil, false
+		}
+		if ok {
 			return data, true
 		}
 	}
@@ -249,26 +255,37 @@ func (store *authenticationOptionStore) loadOptions() ([]byte, bool) {
 }
 
 func (store *authenticationOptionStore) LoadSave(name string) ([]byte, bool) {
+	data, present, _ := store.ReadSave(name)
+	return data, present
+}
+
+func (store *authenticationOptionStore) ReadSave(name string) ([]byte, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if name == authenticationOptionsKey {
+		if store.readError != nil {
+			return nil, false, store.readError
+		}
 		data, ok := store.loadOptions()
+		if store.readError != nil {
+			return nil, false, store.readError
+		}
 		data = bytes.Clone(data)
 		if ok && len(data) == 56 {
 			binary.LittleEndian.PutUint32(data[40:44], 1)
 		}
-		return data, ok
+		return data, ok, nil
 	}
-	if store.base != nil {
-		return store.base.LoadSave(name)
-	}
-	return nil, false
+	return backend.ReadSave(store.base, name)
 }
 
 func (store *authenticationOptionStore) StoreSave(name string, data []byte) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if name == authenticationOptionsKey {
+		if store.readError != nil {
+			return store.readError
+		}
 		data = bytes.Clone(data)
 		if len(data) > 40 {
 			copy(data[40:min(44, len(data))], store.original[:])

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -46,12 +47,17 @@ type certificateSaveStore struct {
 	certificate     []byte
 	removed         []byte
 	originalRemoved bool
+	readError       error
 }
 
 func newCertificateSaveStore(base SaveStore, certificate []byte) *certificateSaveStore {
 	store := &certificateSaveStore{base: base, certificate: bytes.Clone(certificate)}
 	if base != nil {
-		data, _ := base.LoadSave(databaseRemovedKey)
+		data, _, err := backend.ReadSave(base, databaseRemovedKey)
+		if err != nil {
+			store.readError = err
+			return store
+		}
 		var names []string
 		for _, name := range splitRemovalList(data) {
 			if name == certificateName {
@@ -66,52 +72,72 @@ func newCertificateSaveStore(base SaveStore, certificate []byte) *certificateSav
 }
 
 func (store *certificateSaveStore) LoadSave(name string) ([]byte, bool) {
+	data, present, _ := store.ReadSave(name)
+	return data, present
+}
+
+func (store *certificateSaveStore) ReadSave(name string) ([]byte, bool, error) {
 	key, err := NormalizeSaveKey(name)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	switch key {
 	case certificateSaveKey:
-		return bytes.Clone(store.certificate), true
+		return bytes.Clone(store.certificate), true, nil
 	case databaseRemovedKey:
-		return bytes.Clone(store.removed), true
+		return bytes.Clone(store.removed), true, store.readError
 	}
-	if store.base == nil {
-		return nil, false
-	}
-	return store.base.LoadSave(key)
+	return backend.ReadSave(store.base, key)
 }
 
 func (store *certificateSaveStore) StoreSave(name string, data []byte) error {
-	key, err := NormalizeSaveKey(name)
-	if err != nil {
-		return err
-	}
+	return store.StoreSaves(map[string][]byte{name: data})
+}
+
+func (store *certificateSaveStore) StoreSaves(entries map[string][]byte) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	switch key {
-	case certificateSaveKey:
-		store.certificate = bytes.Clone(data)
-		return nil
-	case databaseRemovedKey:
-		store.removed = bytes.Clone(data)
-		var names []string
-		for _, entry := range splitRemovalList(data) {
-			if entry != certificateName {
-				names = append(names, entry)
+	staged := make(map[string][]byte, len(entries))
+	certificate, removed := store.certificate, store.removed
+	seen := make(map[string]bool)
+	for name, data := range entries {
+		key, err := NormalizeSaveKey(name)
+		if err != nil {
+			return err
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate canonical save key %q", key)
+		}
+		seen[key] = true
+		switch key {
+		case certificateSaveKey:
+			certificate = bytes.Clone(data)
+			continue
+		case databaseRemovedKey:
+			if store.readError != nil {
+				return store.readError
 			}
+			removed = bytes.Clone(data)
+			var names []string
+			for _, entry := range splitRemovalList(data) {
+				if entry != certificateName {
+					names = append(names, entry)
+				}
+			}
+			if store.originalRemoved {
+				names = append(names, certificateName)
+			}
+			data = joinRemovalList(names)
 		}
-		if store.originalRemoved {
-			names = append(names, certificateName)
-		}
-		data = joinRemovalList(names)
+		staged[key] = data
 	}
-	if store.base == nil {
-		return nil
+	if err := backend.StoreSaves(store.base, staged); err != nil {
+		return err
 	}
-	return store.base.StoreSave(key, data)
+	store.certificate, store.removed = certificate, removed
+	return nil
 }
 
 // Every KTF identity API reads the same session snapshot used to issue the

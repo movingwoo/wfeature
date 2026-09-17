@@ -28,6 +28,14 @@ have is a game: no archive in this repository is real, so every probe below
 runs locally and by hand. See [`running.md`](running.md), "What was verified,
 and where".
 
+## Runtime boundary regressions
+
+The authored fixtures and remaining ABI evidence for the 2026-09-17 follow-up
+are recorded in [runtime-boundary-followup.md](runtime-boundary-followup.md).
+They cover thread lifecycle, archive names, UTF-16, JVM/ARM reentry, graphics and
+media lifetime, save failures and intermediate PNG frames. Synthetic coverage
+is separate from real-game and physical-device acceptance.
+
 ## The dependencies a game's bytes reach
 
 Every push also runs `govulncheck ./...`, which reports the known

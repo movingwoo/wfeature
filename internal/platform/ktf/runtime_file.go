@@ -141,28 +141,14 @@ func (runtime *initializationRuntime) removedGuestFiles() map[string]bool {
 }
 
 // markGuestFileRemoved records or clears one path and writes the list back.
-func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed bool) {
-	set := runtime.removedGuestFiles()
-	key := strings.TrimPrefix(name, "/")
-	if set[key] == removed {
-		return
-	}
-	if removed {
-		set[key] = true
-	} else {
-		delete(set, key)
-	}
-	names := make([]string, 0, len(set))
-	for entry := range set {
-		names = append(names, entry)
-	}
-	runtime.storeSave(guestFileRemovedKey, joinRemovalList(names))
+func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed bool) error {
+	return runtime.saveChanges(nil, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{strings.TrimPrefix(name, "/"): removed})
 }
 
 // storeGuestFile persists one guest file. Writing a path brings it back, so
 // this is the one way a guest file reaches the store: a write that left the
 // path on the removal list would be stored and then be unreadable.
-func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) {
+func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) error {
 	trimmed := strings.TrimPrefix(name, "/")
 	if reservedStorageName(guestFileScope, trimmed) {
 		// The name this table keeps its own list under. Writing it would put
@@ -171,10 +157,9 @@ func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) {
 		// refuses the name before reaching here; this is the backstop, and it
 		// is counted so a caller that does not is visible.
 		runtime.countDiagnostic("fs reserved name " + trimmed)
-		return
+		return fmt.Errorf("reserved file name %q", trimmed)
 	}
-	runtime.markGuestFileRemoved(trimmed, false)
-	runtime.storeSave("fs/"+trimmed, data)
+	return runtime.saveChanges(map[string][]byte{"fs/" + trimmed: data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{trimmed: false})
 }
 
 func runtimeFileSystemExists(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -224,9 +209,11 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 			// be true rather than nearly true.
 			return jvm.VoidValue(), newGuestIOException("cannot unlink a reserved name: " + name)
 		}
+		if err := runtime.markGuestFileRemoved(name, true); err != nil {
+			return jvm.VoidValue(), newGuestIOException(err.Error())
+		}
 		delete(runtime.guestFiles, name)
 		delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
-		runtime.markGuestFileRemoved(name, true)
 	}
 	return jvm.VoidValue(), nil
 }
@@ -343,6 +330,9 @@ func runtimeFileRead(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value)
 	if offset < 0 || length < 0 || offset+length > len(values) {
 		return jvm.VoidValue(), fmt.Errorf("File.read range [%d, %d) is out of bounds", offset, offset+length)
 	}
+	if length == 0 {
+		return jvm.IntValue(0), nil
+	}
 	remaining := len(state.data) - state.position
 	if remaining <= 0 {
 		return jvm.IntValue(-1), nil
@@ -399,18 +389,17 @@ func runtimeFileWrite(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm
 	if end > maxGuestFileBytes {
 		return jvm.VoidValue(), fmt.Errorf("File %q exceeds size limit", state.name)
 	}
-	if end > len(state.data) {
-		grown := make([]byte, end)
-		copy(grown, state.data)
-		state.data = grown
+	staged := make([]byte, max(end, len(state.data)))
+	copy(staged, state.data)
+	copy(staged[state.position:], data)
+	if err := runtime.storeGuestFile(state.name, staged); err != nil {
+		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
-	copy(state.data[state.position:], data)
-	state.position = end
+	state.data, state.position = staged, end
 	if runtime.guestFiles == nil {
 		runtime.guestFiles = make(map[string][]byte)
 	}
-	runtime.guestFiles[state.name] = append([]byte(nil), state.data...)
-	runtime.storeGuestFile(state.name, state.data)
+	runtime.guestFiles[state.name] = append([]byte(nil), staged...)
 	return jvm.IntValue(int32(len(data))), nil
 }
 
@@ -459,31 +448,39 @@ func runtimeFileSize(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value)
 	return jvm.IntValue(int32(len(state.data))), nil
 }
 
-func runtimeFileOpenStream(class string) runtimeJavaImplementation {
-	return func(_ *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func runtimeFileOpenStream(_ string) runtimeJavaImplementation {
+	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		_, state, err := runtimeFileState(arguments)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		array := jvm.NewByteArray(append([]byte(nil), state.data...))
-		stream, err := vm.NewObject(class, "([B)V", jvm.ReferenceValue(array))
-		if err != nil {
-			return jvm.VoidValue(), fmt.Errorf("open File stream for %q: %w", state.name, err)
-		}
-		return jvm.ReferenceValue(stream), nil
+		return jvm.ReferenceValue(&jvm.Object{ClassName: runtimeFileInputStreamClass, Native: state, Fields: make(map[string]jvm.Value)}), nil
 	}
 }
 
-// runtimeFileOutputStreamClass is the write side of a File, handed out as the
-// java/io/OutputStream a title asks for.
-//
-// The read side can be a snapshot — a ByteArrayInputStream over the bytes as
-// they are now — because reading cannot change them. Writing cannot: a stream
-// that collected bytes of its own would only reach the file if something
-// copied them back, and a title that closes the stream rather than the file
-// would have written its save into nothing. So the stream is the file: it
-// carries the same open-file state and every write goes straight through it,
-// persisted the same way File.write is.
+const runtimeFileInputStreamClass = "org/kwis/msp/io/FileInputStream"
+
+func runtimeFileInputStreamClassDefinition() runtimeJavaClass {
+	const class = runtimeFileInputStreamClass
+	return runtimeJavaClass{name: class, superName: "java/io/InputStream", accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{
+			{class: class, name: "read", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeFileReadByte},
+			{class: class, name: "read", descriptor: "([B)I", accessFlags: 0x0001, implementation: runtimeFileRead},
+			{class: class, name: "read", descriptor: "([BII)I", accessFlags: 0x0001, implementation: runtimeFileRead},
+			{class: class, name: "available", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeFileStreamAvailable},
+			{class: class, name: "close", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+		}}
+}
+
+func runtimeFileStreamAvailable(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtimeFileState(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.IntValue(int32(max(0, len(state.data)-state.position))), nil
+}
+
+// Both stream directions share the File's bytes and cursor.
 const runtimeFileOutputStreamClass = "org/kwis/msp/io/FileOutputStream"
 
 func runtimeFileOutputStreamClassDefinition() runtimeJavaClass {
@@ -606,19 +603,26 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 		return jvm.VoidValue(), newGuestIOException("cannot rename onto a reserved name: " + to)
 	}
 	data, exists := runtime.guestFile(from)
+	if runtime.saveReadError != nil {
+		return jvm.VoidValue(), runtime.saveReadError
+	}
 	if !exists {
 		return jvm.VoidValue(), newGuestIOException("file not found: " + from)
+	}
+	if strings.TrimPrefix(from, "/") == strings.TrimPrefix(to, "/") {
+		return jvm.VoidValue(), nil
+	}
+	if err := runtime.saveChanges(map[string][]byte{"fs/" + strings.TrimPrefix(to, "/"): data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{strings.TrimPrefix(from, "/"): true, strings.TrimPrefix(to, "/"): false}); err != nil {
+		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
 	if runtime.guestFiles == nil {
 		runtime.guestFiles = make(map[string][]byte)
 	}
 	runtime.guestFiles[strings.TrimPrefix(to, "/")] = append([]byte(nil), data...)
-	runtime.storeGuestFile(to, data)
 	// The old name is deleted, which is the same problem unlink has: the save
 	// underneath it outlives the rename unless the removal is written down.
 	delete(runtime.guestFiles, from)
 	delete(runtime.guestFiles, strings.TrimPrefix(from, "/"))
-	runtime.markGuestFileRemoved(from, true)
 	return jvm.VoidValue(), nil
 }
 

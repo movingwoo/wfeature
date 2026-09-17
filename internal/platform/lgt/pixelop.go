@@ -155,7 +155,7 @@ const (
 // applyPixelOp answers what a draw must write, given what the framebuffer holds
 // and what the draw wanted to put there.
 func (client *Client) applyPixelOp(
-	ctx context.Context, thread *armcore.Thread, op pixelOp, existing, incoming uint16,
+	ctx context.Context, thread *armcore.Thread, op pixelOp, existing, incoming uint16, unlock ...bool,
 ) (uint16, error) {
 	if !op.active() {
 		return incoming, nil
@@ -188,7 +188,15 @@ func (client *Client) applyPixelOp(
 	// The call is made on the thread that is running rather than the platform's
 	// own, because the guest is inside a draw call and its stack pointer is
 	// where it left it; see callOn.
-	value, err := client.callOn(ctx, thread, op.function, []uint32{uint32(existing), uint32(incoming), op.param})
+	var value uint32
+	var err error
+	func() {
+		if len(unlock) != 0 && unlock[0] {
+			client.mu.Unlock()
+			defer client.mu.Lock()
+		}
+		value, err = client.callOn(ctx, thread, op.function, []uint32{uint32(existing), uint32(incoming), op.param})
+	}()
 	if err != nil {
 		return 0, fmt.Errorf("run LGT pixel operation at %#x: %w", op.function, err)
 	}

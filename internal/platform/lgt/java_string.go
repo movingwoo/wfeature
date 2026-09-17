@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/korean"
 
@@ -40,6 +41,11 @@ func (client *Client) javaText(object uint32) (string, bool) {
 
 // setJavaText is what a constructor and every mutation of a buffer come to.
 func (client *Client) setJavaText(object uint32, text string) {
+	// A concatenation can reunite two isolated surrogate halves. Keep one
+	// representation so equality and resource lookup agree with char indexing.
+	if !utf8.ValidString(text) {
+		text = javaTextOfUnits(utf16Units(text))
+	}
 	client.javaRuntimeState().strings[object] = text
 }
 
@@ -175,11 +181,22 @@ func javaStringFromChars(
 
 // javaTextOfUnits is the same reading of UTF-16 the string constants arrive in.
 func javaTextOfUnits(units []uint16) string {
-	symbols := make([]rune, 0, len(units))
-	for _, unit := range units {
-		symbols = append(symbols, rune(unit))
+	var text strings.Builder
+	for i := 0; i < len(units); i++ {
+		unit := units[i]
+		if unit >= 0xd800 && unit <= 0xdbff && i+1 < len(units) && units[i+1] >= 0xdc00 && units[i+1] <= 0xdfff {
+			text.WriteRune(utf16.DecodeRune(rune(unit), rune(units[i+1])))
+			i++
+		} else if unit >= 0xd800 && unit <= 0xdfff {
+			// Preserve isolated UTF-16 units as WTF-8 until a text consumer renders them.
+			text.WriteByte(byte(0xe0 | unit>>12))
+			text.WriteByte(byte(0x80 | (unit>>6)&0x3f))
+			text.WriteByte(byte(0x80 | unit&0x3f))
+		} else {
+			text.WriteRune(rune(unit))
+		}
 	}
-	return string(symbols)
+	return text.String()
 }
 
 // javaStringTrim answers a String with the leading and trailing control
@@ -245,7 +262,7 @@ func javaStringLength(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
 	}
-	return uint32(len([]rune(held))), nil
+	return uint32(len(utf16Units(held))), nil
 }
 
 // javaStringSubstring is `substring(begin, end)`: the characters between two
@@ -257,7 +274,7 @@ func javaStringSubstring(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
 	}
-	symbols := []rune(held)
+	symbols := utf16Units(held)
 	// The one-argument form is the same method with the string's own end for
 	// its second bound, which is how the class library declares the pair.
 	begin, end := int(int32(arguments[1])), len(symbols)
@@ -267,7 +284,7 @@ func javaStringSubstring(
 	if begin < 0 || end < begin || end > len(symbols) {
 		return 0, fmt.Errorf("%d to %d of a string of %d", begin, end, len(symbols))
 	}
-	return client.newJavaString(string(symbols[begin:end]))
+	return client.newJavaString(javaTextOfUnits(symbols[begin:end]))
 }
 
 // javaStringToCharArray answers a `char[]` holding what the String holds. The
@@ -280,12 +297,12 @@ func javaStringToCharArray(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
 	}
-	return client.newJavaCharArray([]rune(held))
+	return client.newJavaCharArray(utf16Units(held))
 }
 
-// newJavaCharArray builds a `char[]` out of code points, as the UTF-16 code
+// newJavaCharArray builds a `char[]` out of UTF-16 code units, as the code
 // units a Java char is.
-func (client *Client) newJavaCharArray(symbols []rune) (uint32, error) {
+func (client *Client) newJavaCharArray(symbols []uint16) (uint32, error) {
 	class, err := client.javaArrayType(1, "C", 2)
 	if err != nil {
 		return 0, err
@@ -411,14 +428,14 @@ func javaBufferSetLength(
 		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", arguments[0])
 	}
 	length := int(int32(arguments[1]))
-	if length < 0 {
+	if length < 0 || length > maxJavaArrayLength {
 		return 0, fmt.Errorf("a length of %d", length)
 	}
-	symbols := []rune(held)
+	symbols := utf16Units(held)
 	for len(symbols) < length {
 		symbols = append(symbols, 0)
 	}
-	client.setJavaText(arguments[0], string(symbols[:length]))
+	client.setJavaText(arguments[0], javaTextOfUnits(symbols[:length]))
 	return 0, nil
 }
 
@@ -430,7 +447,7 @@ func javaBufferLength(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", arguments[0])
 	}
-	return uint32(len([]rune(held))), nil
+	return uint32(len(utf16Units(held))), nil
 }
 
 // javaBufferAppendChar is `StringBuffer.append(char)`, whose argument is one
@@ -443,7 +460,7 @@ func javaBufferAppendChar(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", buffer)
 	}
-	client.setJavaText(buffer, held+string(rune(uint16(arguments[1]))))
+	client.setJavaText(buffer, javaTextOfUnits(append(utf16Units(held), uint16(arguments[1]))))
 	return buffer, nil
 }
 
@@ -606,7 +623,23 @@ func (client *Client) javaTextPair(method string, arguments []uint32) (string, s
 // utf16Units is the text as the code units a Java index counts, which is what
 // every index a String method takes or answers is in.
 func utf16Units(text string) []uint16 {
-	return utf16.Encode([]rune(text))
+	units := make([]uint16, 0, len(text))
+	for len(text) > 0 {
+		if len(text) >= 3 && text[0] == 0xed && text[1] >= 0xa0 && text[1] <= 0xbf && text[2]&0xc0 == 0x80 {
+			units = append(units, uint16(text[0]&0xf)<<12|uint16(text[1]&0x3f)<<6|uint16(text[2]&0x3f))
+			text = text[3:]
+			continue
+		}
+		symbol, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+		if symbol > 0xffff {
+			high, low := utf16.EncodeRune(symbol)
+			units = append(units, uint16(high), uint16(low))
+		} else {
+			units = append(units, uint16(symbol))
+		}
+	}
+	return units
 }
 
 // encodeEUCKR is decodeEUCKR's inverse. Text this handset's encoding cannot

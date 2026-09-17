@@ -147,8 +147,10 @@ type mediaClip struct {
 	// handle is the loaded sound, claimed on first play and dropped whenever
 	// the data changes, so a clip refilled through putData reloads instead of
 	// replaying what it held before.
-	handle backend.AudioHandle
-	loaded bool
+	handle     backend.AudioHandle
+	loaded     bool
+	javaPaused bool
+	javaRepeat bool
 
 	// listener is the `PlayListener` a Java title registered for this clip's
 	// state changes, or zero. Nothing is delivered to it yet; see

@@ -2,9 +2,69 @@ package ktf
 
 import (
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
+
+func TestForcedSlicePaintRequiresARequestAndYieldRestoresFallback(t *testing.T) {
+	clock := NewManualClock(time.Unix(1700000000, 0))
+	client, runtime := newPacedTestRuntime(t, clock, 1)
+	paints := 0
+	if err := client.vm.RegisterNative("test/SliceCard", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+		paints++
+		return jvm.VoidValue(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.vm.RegisterNative("test/SliceWorker", "run", "()V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+		if err := client.activeWorker.parkSlice(true); err != nil {
+			return jvm.VoidValue(), err
+		}
+		return jvm.VoidValue(), runtime.yieldCurrentWorker()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = []*jvm.Object{{ClassName: "test/SliceCard"}}
+	runtime.pendingThreads = []*jvm.Object{{ClassName: "test/SliceWorker"}}
+	t.Cleanup(client.StopThreads)
+	if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ServicePaint(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if paints != 0 {
+		t.Fatal("forced slice triggered an unrequested paint")
+	}
+	runtime.repaintPending = true
+	if _, err := client.ServicePaint(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if paints != 1 {
+		t.Fatal("forced slice swallowed an explicit repaint")
+	}
+	clock.Advance(time.Second)
+	if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ServicePaint(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if paints != 2 {
+		t.Fatal("explicit yield starved automatic painting")
+	}
+	clock.Advance(time.Second)
+	if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ServicePaint(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if paints != 3 {
+		t.Fatal("idle boundary starved automatic painting")
+	}
+}
 
 // A worker can prepare its next frame in stages. An unsolicited paint between
 // those stages may clear the application's dirty flag before the next stage

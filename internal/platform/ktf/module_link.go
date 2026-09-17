@@ -741,7 +741,7 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 	if err := runtime.enterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 	summary, err := runtime.client.core.Call(ctx, thread, body, ReturnAddress, call, runtime.handleSupervisorCall)
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF module method %s%s: %w", method.Name, method.Descriptor, err)

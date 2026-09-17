@@ -158,9 +158,11 @@ type guestThread struct {
 	alive       bool
 	interrupted bool
 	wake        chan struct{}
+	done        chan struct{}
 }
 
 func (vm *VM) registerThreadBuiltins() {
+	vm.contextBuiltin(ThreadClass, "join", "()V", threadJoin)
 	vm.contextBuiltin(ThreadClass, "start", "()V", func(vm *VM, _ *execution, arguments []Value) (Value, error) {
 		thread, err := nativeReference(arguments, 0)
 		if err != nil {
@@ -175,8 +177,15 @@ func (vm *VM) registerThreadBuiltins() {
 		state.started = true
 		state.alive = true
 		state.mu.Unlock()
+		vm.threadMu.Lock()
+		vm.threads[thread] = state
+		vm.threadMu.Unlock()
 		if vm.config.GuestThreadStarter != nil {
-			return VoidValue(), vm.config.GuestThreadStarter(thread)
+			err := vm.config.GuestThreadStarter(thread)
+			if err != nil {
+				vm.EndGuestThread(thread)
+			}
+			return VoidValue(), err
 		}
 		go vm.runGuestThread(thread, state)
 		return VoidValue(), nil
@@ -821,12 +830,12 @@ func (vm *VM) contextBuiltin(class, name, descriptor string, method contextNativ
 }
 
 func (vm *VM) threadState(thread *Object) *guestThread {
-	vm.threadMu.Lock()
-	defer vm.threadMu.Unlock()
-	state := vm.threads[thread]
+	state := thread.thread.Load()
 	if state == nil {
-		state = &guestThread{wake: make(chan struct{}, 1)}
-		vm.threads[thread] = state
+		state = &guestThread{wake: make(chan struct{}, 1), done: make(chan struct{})}
+		if !thread.thread.CompareAndSwap(nil, state) {
+			state = thread.thread.Load()
+		}
 	}
 	return state
 }
@@ -844,8 +853,14 @@ func (vm *VM) EndGuestThread(thread *Object) {
 	}
 	state := vm.threadState(thread)
 	state.mu.Lock()
-	state.alive = false
+	if state.alive {
+		state.alive = false
+		close(state.done)
+	}
 	state.mu.Unlock()
+	vm.threadMu.Lock()
+	delete(vm.threads, thread)
+	vm.threadMu.Unlock()
 }
 
 // guestPanicStack bounds the stack a panicking guest thread reports. A guest
@@ -881,9 +896,7 @@ func (vm *VM) runGuestThread(thread *Object, state *guestThread) {
 		}()
 		_, err = vm.invokeInstance(execution, thread.ClassName, thread, "run", "()V", nil)
 	}()
-	state.mu.Lock()
-	state.alive = false
-	state.mu.Unlock()
+	vm.EndGuestThread(thread)
 	if err != nil {
 		wrapped := fmt.Errorf("run guest thread %s: %w", thread.ClassName, err)
 		if vm.config.AsyncError != nil {
@@ -908,6 +921,8 @@ func (vm *VM) sleepGuestThread(thread *Object, duration time.Duration) error {
 	select {
 	case <-timer.C:
 		return nil
+	case <-vm.closed:
+		return ErrClosed
 	case <-state.wake:
 		state.mu.Lock()
 		state.interrupted = false

@@ -147,7 +147,11 @@ func newAuthenticationCertificate58Store(base backend.SaveStore, archive *Archiv
 	var data []byte
 	var exists bool
 	if base != nil {
-		data, exists = base.LoadSave(authenticationCertificate58Key)
+		var err error
+		data, exists, err = backend.ReadSave(base, authenticationCertificate58Key)
+		if err != nil {
+			return nil, false
+		}
 	}
 	if !exists {
 		data, exists = archive.Resource(authenticationCertificate58Name)
@@ -170,7 +174,11 @@ func newAuthenticationCertificate58Store(base backend.SaveStore, archive *Archiv
 	for _, key := range []string{fileRemovedKey, fileCreatedKey} {
 		var original []byte
 		if base != nil {
-			original, _ = base.LoadSave(key)
+			var err error
+			original, _, err = backend.ReadSave(base, key)
+			if err != nil {
+				return nil, false
+			}
 		}
 		for _, name := range strings.Split(string(original), "\n") {
 			if strings.TrimSpace(name) == authenticationCertificate58Name {
@@ -198,22 +206,27 @@ func certificate58Ledger(data []byte, include bool) []byte {
 }
 
 func (store *authenticationCertificate58Store) LoadSave(name string) ([]byte, bool) {
+	data, present, _ := store.ReadSave(name)
+	return data, present
+}
+
+func (store *authenticationCertificate58Store) ReadSave(name string) ([]byte, bool, error) {
 	key, err := backend.NormalizeSaveKey(name)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if strings.EqualFold(key, authenticationCertificate58Key) {
-		return bytes.Clone(store.certificate), true
+		return bytes.Clone(store.certificate), true, nil
 	}
 	if data, ok := store.ledgers[key]; ok {
-		return bytes.Clone(data), true
+		return bytes.Clone(data), true, nil
 	}
 	if store.base == nil {
-		return nil, false
+		return nil, false, nil
 	}
-	return store.base.LoadSave(key)
+	return backend.ReadSave(store.base, key)
 }
 
 func (store *authenticationCertificate58Store) StoreSave(name string, data []byte) error {
@@ -230,7 +243,10 @@ func (store *authenticationCertificate58Store) StoreSave(name string, data []byt
 	if _, ok := store.ledgers[key]; ok {
 		persisted := certificate58Ledger(data, store.originalMembership[key])
 		if store.base != nil {
-			original, exists := store.base.LoadSave(key)
+			original, exists, err := backend.ReadSave(store.base, key)
+			if err != nil {
+				return err
+			}
 			if (exists || len(persisted) != 0) && !bytes.Equal(original, persisted) {
 				if err := store.base.StoreSave(key, persisted); err != nil {
 					return err
