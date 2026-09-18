@@ -1,16 +1,42 @@
-# Authentication case inventory
+# Authentication case history
+
+This file preserves implementation investigations and dated validation records.
+Statements about current behavior, missing APIs, corpus size, and planned work
+apply to their original revision; later records may supersede them.
+Start with [authentication.md](../authentication.md) for the maintained overview.
+This consolidation adds no execution or acceptance evidence.
+
+
+## Contents
+
+- [Case inventory and acceptance records](#cases-authentication-case-inventory)
+- [Scope and evidence](#cases-scope-and-evidence)
+- [Case families](#cases-case-families)
+- [Consequences for common logic](#cases-consequences-for-common-logic)
+- [Boundaries still to prove before enabling an adapter](#cases-boundaries-still-to-prove-before-enabling-an-adapter)
+- [Reproducible local evidence](#cases-reproducible-local-evidence)
+- [Cached LGT result follow-up](#cases-cached-lgt-result-follow-up)
+- [Additional offline control routes](#cases-additional-offline-control-routes)
+- [Final SKT checkpoint acceptance](#cases-final-skt-checkpoint-acceptance)
+- [Existing empty certificate and automatic defaults](#cases-existing-empty-certificate-and-automatic-defaults)
+
+<a id="cases-authentication-case-inventory"></a>
+
+## Case inventory and acceptance records
 
 Research date: 2026-09-11. Source revision: `6d62c35`. The initial investigation preceded
-[the common feature](authentication.md). Later sections
+[the common feature](../authentication.md). Later sections
 record the implementation and acceptance that followed;
-[authentication.md](authentication.md) describes current production support. The question is which guest state transition prevents
+[authentication.md](../authentication.md) describes current production support. The question is which guest state transition prevents
 local play, and what evidence distinguishes it from a similar-looking screen.
 
-## Scope and evidence
+<a id="cases-scope-and-evidence"></a>
+
+### Scope and evidence
 
 The later gameplay and checkpoint records were collected in a combined working
 tree with separate input/repaint fixes. Those fixes are excluded from the
-authentication-only change; see [validation scope](authentication.md#validation-scope).
+authentication-only change; see [validation scope](../authentication.md#validation-scope).
 These dated records must not be read as proof that this change supplies numeric
 name input, menu-key handling or repaint fixes.
 
@@ -71,9 +97,13 @@ so it is not an eleven-game regression count. The decisive negative control is
 the refusal-notice-to-menu transition becoming a connection wait, inspected
 in both builds. The new socket-import failure below was reproduced separately.
 
-## Case families
+<a id="cases-case-families"></a>
 
-### Failure permits play
+### Case families
+
+<a id="cases-failure-permits-play"></a>
+
+#### Failure permits play
 
 **A failed authentication attempt is an intended offline branch.** Several LGT
 Clets show a notice saying authentication failed and will be tried next time;
@@ -83,13 +113,13 @@ keys in the dial-success build leave it displaying a connection-in-progress
 notice. `2a8a3dcd07eb` and `3cc7a9b4cb15` show the same direction of change.
 The failure's timing and delivery matter as much as its value.
 
-[The earlier LGT investigation](lgt.md#network-authentication-is-a-path-the-titles-already-handle)
+[The earlier LGT investigation](lgt.md#implementation-network-authentication-is-a-path-the-titles-already-handle)
 traced negative transport results through this state machine and compared
 three originals with two-byte-patched copies. The originals already played.
 Do not count a patched copy as proof that this emulator needs that patch.
 
 **A certificate offer can be an optional route rather than a certificate
-reader.** [The recorded LGT route](network.md#a-certificate-is-the-same-gate-under-another-name-and-it-is-not-a-wall)
+reader.** [The recorded LGT route](../network.md#a-certificate-is-the-same-gate-under-another-name-and-it-is-not-a-wall)
 chooses Yes, receives a connection failure, dismisses it, and reaches menu and
 difficulty selection. The default No exits. Its trace opened five ordinary
 files over 1,500 ticks and no certificate file. A screen that mentions a
@@ -119,10 +149,12 @@ archives differ. `a2cb4a23f300` says play requires authentication when the
 request is declined; explicitly accepting it, then dismissing failure, reaches
 the title. The wording is not proof that a server response is mandatory.
 
-### Failure prevents the guest's own cleanup
+<a id="cases-failure-prevents-the-guests-own-cleanup"></a>
+
+#### Failure prevents the guest's own cleanup
 
 **An LGT Java save-backup check never dismisses its notice on `-1`.** The
-[guest branch analysis](lgt.md#the-gate-and-what-holds-it-open) identifies the
+[guest branch analysis](lgt.md#implementation-the-gate-and-what-holds-it-open) identifies the
 notice flag, its setters, the paint branch, and the sleeping Jlet method.
 `Network.connect` failure jumps past the notice teardown. Returning success
 instead reaches `URL.find`; the guest catches its `SchemeNotFoundException`,
@@ -131,7 +163,7 @@ operation for this caller. This is not evidence that a server needs to send
 backup data, nor a reason to rewrite the scheduler.
 
 **An LGT Clet has an offline choice behind a successful dial callback.** The
-[historical comparison](network.md#one-title-does-not-report-its-own-error-it-parks)
+[historical comparison](../network.md#one-title-does-not-report-its-own-error-it-parks)
 records `Connect CB Error [-1]` holding the authentication screen, then callback
 success exposing a certificate question whose No answer reaches play. Other
 archives with that log text do not necessarily share its transition graph.
@@ -155,13 +187,15 @@ address/port/socket-connect sequence. Slot `0x25a` now resolves and refuses norm
 alongside `0x7d0`. A repeated dial-success probe completes and reaches the menu;
 the original failed-dial route reaches it too. This repairs the missing API but
 does not establish an authentication gate or justify changing this case's dial
-policy. See [current evidence](authentication.md#lgt-socket-prerequisite).
+policy. See [current evidence](../authentication.md#lgt-socket-prerequisite).
 
-### Complete local content, but identity or certificate prevents entry
+<a id="cases-complete-local-content-but-identity-or-certificate-prevents-entry"></a>
+
+#### Complete local content, but identity or certificate prevents entry
 
 **KTF number-length branch (`93d5b6b8ceb5`).** The archive has five data files,
 plus a 64-byte `prefs` record. The
-[earlier trace and number sweep](ktf.md#a-second-download-gate-and-the-answer-that-opened-it)
+[earlier trace and number sweep](ktf.md#implementation-a-second-download-gate-and-the-answer-that-opened-it)
 found that a number of length 0–4 skips the download receipt path; length 5–11
 asks to fetch the data again. The files are read and their footers checked only
 after that branch. Current separate-save runs reproduce a 600 KB download
@@ -171,14 +205,14 @@ the `prefs` cipher having been decoded. The implementation follow-up found the
 accessor's embedded full-length fallback: input of length at most four is replaced
 with that number. Giving the full fallback directly also reaches the menu. The
 current adapter resolves that number from the recognized accessor and uses it only
-in this session; see [the corrected mechanism](authentication.md#ktf-certificates-and-identity).
+in this session; see [the corrected mechanism](../authentication.md#ktf-certificates-and-identity).
 
 **KTF 23-byte certificate (`974e0df9ab1e`).** The archive carries its resource
 databases and `cert.c2s`. Current ordinary startup reaches error 3001; using the
 existing `provision` command in a separate research save root reaches the title
 and scenario menu with the same keys. Provisioning for the full number and
 running with a different, short number is a negative control. The
-[decoded contract](ktf.md#the-certificate-behind-it) binds application identity
+[decoded contract](ktf.md#implementation-the-certificate-behind-it) binds application identity
 and subscriber number. `internal/platform/ktf/provision.go` implements the
 recognized 23-byte structure and its checksum checks. It is currently a CLI
 operation, not a session policy.
@@ -218,7 +252,7 @@ needs writer-format and malformed-input tests. No table or proprietary asset
 is added to tracked implementation code by this investigation.
 
 **SKT guest license checks.** The
-[historical five failures](skvm.md#five-titles-check-their-licence-against-the-handsets-number)
+[historical five failures](skt.md#implementation-five-titles-check-their-licence-against-the-handsets-number)
 hash subscriber identity, a service-ID slice from `MIDlet-Jar-URL`, and a
 constant before comparing `MIDlet-Key`. Four exit during startup; another
 checks after a logo. The earlier instruction trace reached the comparison
@@ -243,10 +277,12 @@ Their notices and `System.exit(-1)` evidence are retained. The CLI's opening
 response can continue reporting ticks after that guest exit, so tick counts
 alone would miss this case; read the lifecycle log and frame together.
 
-### Authentication-looking platform and persistence problems
+<a id="cases-authentication-looking-platform-and-persistence-problems"></a>
+
+#### Authentication-looking platform and persistence problems
 
 **KTF errors 1001 and 2001/2002 precede the certificate.** The
-[startup investigation](ktf.md#one-titles-startup-gate) separates capability
+[startup investigation](ktf.md#implementation-one-titles-startup-gate) separates capability
 mask, executable listing, and certificate. The current platform grants the API
 groups and supplies the identity listing; neither implies usable networking.
 A related free-space failure counted packaged data against the save budget and
@@ -256,17 +292,17 @@ is already fixed. Similar screen styling does not make these one auth adapter.
 application-ID string. A caller compared it with its compiled identity before
 showing an illegal-download notice. The current answer follows archive metadata;
 this was a platform contract correction, not a fabricated authorization.
-See [lgt.md](lgt.md#0x97-answers-the-programs-application-id-and-a-titles-copy-check-reads-it).
+See [lgt.md](lgt.md#implementation-0x97-answers-the-programs-application-id-and-a-titles-copy-check-reads-it).
 
 **Packaged Java database not loaded.** A KTF caller already carried
 `P/op_save.idx` and `P/op_save.db`. Treating its Java database as empty sent the
 guest to a download prompt. The current loader reads those packaged records;
 saved records, including deliberately empty ones, take precedence. Archive
 `5aa438fbdc87` still contains this pair. See the
-[database investigation](ktf.md#the-java-database-never-looked-at-the-archive-and-that-is-a-download-gate).
+[database investigation](ktf.md#implementation-the-java-database-never-looked-at-the-archive-and-that-is-a-download-gate).
 
 **An older saved record causes re-download.** The
-[controlled persistence investigation](ktf.md#a-download-prompt-that-one-saved-record-will-not-let-go-of)
+[controlled persistence investigation](ktf.md#implementation-a-download-prompt-that-one-saved-record-will-not-let-go-of)
 found that fresh saves and a second run of newly written saves worked. Copying
 one older record reproduced the prompt while the other three records did not.
 The data files were opened at their correct sizes. Clock shifts ruled out the
@@ -292,9 +328,11 @@ generations; the version-gated implementation now preserves both. Incorrect
 file status made a locally present marker look absent. These existing behaviors
 are controls, not new work for a WIPI network callback adapter. A native package
 still stopping on loading must be investigated at its drawing/resource boundary.
-See [ktf.md](ktf.md#a-certificate-and-the-object-both-later-archives-create).
+See [ktf.md](ktf.md#implementation-a-certificate-and-the-object-both-later-archives-create).
 
-### Content and container prerequisites
+<a id="cases-content-and-container-prerequisites"></a>
+
+#### Content and container prerequisites
 
 **Missing resource containers (`689c491586b9`).** An early investigation inferred
 completeness from 857 KB of packaged resources. That inference was disproved:
@@ -302,7 +340,7 @@ completeness from 857 KB of packaged resources. That inference was disproved:
 `5/0`–`5/1`, `7/0`–`7/5`, and `9/0`–`9/3`. The current entry inventory confirms
 all twelve are absent. Historical number changes, fourteen-byte `Config.dat`
 variants and forcing `8/StartMenu` did not supply the missing resources.
-[The full investigation](ktf.md#a-third-download-gate-and-the-lever-that-did-not-open-it)
+[The full investigation](ktf.md#implementation-a-third-download-gate-and-the-lever-that-did-not-open-it)
 ends at missing content. Aggregate size and absence of host errors were both
 insufficient proof that the archive was complete.
 
@@ -318,7 +356,9 @@ with detection reasons. They must not inflate the count of runnable games
 blocked by authentication. Static strings inside a bundled desktop utility
 are not evidence about the game's executed path.
 
-## Consequences for common logic
+<a id="cases-consequences-for-common-logic"></a>
+
+### Consequences for common logic
 
 The common layer should select and describe an evidenced strategy; it cannot
 collapse the preceding cases into one boolean result. Record, per session:
@@ -348,9 +388,11 @@ This inventory supports selecting the first implementation slice. It does not
 claim arbitrary authentication is solved, that static matches all execute, or
 that an opening probe proves saving and sustained gameplay. The acceptance
 requirements for the eventual feature remain in
-[authentication.md](authentication.md#validation-scope).
+[authentication.md](../authentication.md#validation-scope).
 
-## Boundaries still to prove before enabling an adapter
+<a id="cases-boundaries-still-to-prove-before-enabling-an-adapter"></a>
+
+### Boundaries still to prove before enabling an adapter
 
 | Case | What is established | What must not be assumed / next discriminating check |
 |---|---|---|
@@ -371,7 +413,9 @@ Three baseline process errors are also separate from authentication:
 remain in the logs. The successful-dial-only `0x25a` error is different because
 that intervention exposes it directly.
 
-## Reproducible local evidence
+<a id="cases-reproducible-local-evidence"></a>
+
+### Reproducible local evidence
 
 The report directory contains:
 
@@ -407,7 +451,9 @@ not implicit authentication successes. The future implementation must expand
 its acceptance routes as each recognized scheme is added.
 
 
-## Cached LGT result follow-up
+<a id="cases-cached-lgt-result-follow-up"></a>
+
+### Cached LGT result follow-up
 
 A fresh process after the ordinary first-run save clears the restart notice in
 four previously unresolved LGT cases. This is not itself authentication success:
@@ -425,7 +471,7 @@ controlled one-word sweep changes words 8, 9, 10 and 12 independently; only word
 clears the certificate request. Declining the subsequent optional remote-save
 recovery reaches the title, practice-mode setup and an actual batting screen.
 The production adapter and its limits are documented in
-[authentication.md](authentication.md#lgt-cached-authentication). The executable
+[authentication.md](../authentication.md#lgt-cached-authentication). The executable
 scan selects one of 109 distinct local LGT modules. The production adapter now
 also completes career creation, actual batting and ordinary saves. A fresh release
 runtime restores the career, cash and roster from a private copy while preserving
@@ -524,7 +570,9 @@ checkpoint file hashes match before further play. Neither save tree contains
 the session certificate. Later minigame completion and campaign progress are
 not part of this early-checkpoint evidence.
 
-## Additional offline control routes
+<a id="cases-additional-offline-control-routes"></a>
+
+### Additional offline control routes
 
 `a23f3c9fc2cb` now extends its initialized, targeted title-access route through
 New Game, an empty slot, the opening events and tutorial dialogue. Numeric 6
@@ -618,7 +666,9 @@ they did not establish an input defect. This offline control now reaches normal
 menu input without a transport or consent response being synthesized.
 
 
-## Final SKT checkpoint acceptance
+<a id="cases-final-skt-checkpoint-acceptance"></a>
+
+### Final SKT checkpoint acceptance
 
 `44b6356d13f8` completes its training through normal keypad input: aiming,
 shooting, kills on both sides, crouching and standing, weapon pickup, two kills
@@ -638,7 +688,9 @@ Evidence is `complete-training-diagnostics`, `complete-training-release` and
 `complete/skt-final-restore-result.json`. This proves the ordinary checkpoint
 route, not an emulator snapshot or completion of the following mission.
 
-## Existing empty certificate and automatic defaults
+<a id="cases-existing-empty-certificate-and-automatic-defaults"></a>
+
+### Existing empty certificate and automatic defaults
 
 Case `caf9d76ffd13` exposed an existing-save regression: a failed connection had
 left an empty `fs/audio.adt`, which the 58-byte adapter rejected. The private

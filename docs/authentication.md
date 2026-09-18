@@ -27,7 +27,7 @@ This is separate from the server access key and never contacts a license server.
 Selection is not evidence that a game reached playable input. Unknown certificate
 formats, other LGT transport/application protocols, and encrypted executables are not
 silently treated as one of these mechanisms. Research and acceptance evidence
-are in [authentication-cases.md](authentication-cases.md).
+are in [authentication case history](history/authentication.md#cases-authentication-case-inventory).
 
 ## KTF certificates and identity
 
@@ -149,9 +149,9 @@ Local evidence under `var/acceptance/auth/2026-09-11/cases/` records:
   `complete/skt-final-restore-result.json`. This completes the five observed SKT
   refusal cases' checkpoint save/restart routes; it does not prove entire campaigns.
   The first soft key needed its handset menu mapping when a Canvas has no MIDP
-  commands; [the input contract](skvm.md#input) records that prerequisite. A
+  commands; [the input contract](history/skt.md#implementation-input) records that prerequisite. A
   second route exposed stale queued callbacks after `serviceRepaints`; the
-  [queue correction](skvm.md#synchronous-repaint-queue) preserves input while
+  [queue correction](history/skt.md#implementation-synchronous-repaint-queue) preserves input while
   the Host waits. The real route now remains responsive across those waits.
   During manual CLI investigation, a live worker and its clock can continue while
   the Host awaits the next command. The last route has timed tutorial goals; its
@@ -319,7 +319,7 @@ query ordering, relocated and disconnected recognition contracts, guest callback
 arguments, short reads, memory bounds, queue limits and cancellation. The four
 required Go/Node validation gates pass. Local debug No and release Yes both
 produce the corresponding guest acknowledgement and ordinary receipt. Play and
-restart acceptance is recorded in [authentication-cases.md](authentication-cases.md).
+restart acceptance is recorded in [authentication case history](history/authentication.md#cases-authentication-case-inventory).
 
 ## LGT local binary authentication
 
@@ -377,7 +377,7 @@ Unknown schemes, cloud saves, purchases, missing resources, later campaign
 behavior and quick saves are not implied by this acceptance. Native keyboard
 and Hangul input have their own boundary in
 [native-text-input.md](native-text-input.md). Detailed evidence and earlier
-failed hypotheses remain in [authentication-cases.md](authentication-cases.md).
+failed hypotheses remain in [authentication case history](history/authentication.md#cases-authentication-case-inventory).
 
 
 ## Empty certificate regression and automatic defaults

@@ -288,25 +288,7 @@ make acceptance    # 손에 있는 게임을 전부 돌려 보고서를 남김
 
 ## 문서
 
-| 문서 | 내용 |
-|---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Host / Runtime / Execution 계층 |
-| [`docs/session.md`](docs/session.md) | 서버 세션 — 프로토콜, 페이싱, 프레임 스킵 |
-| [`docs/running.md`](docs/running.md) | OS별 실행, 데이터 위치 |
-| [`docs/mobile.md`](docs/mobile.md) | 안드로이드·iOS 앱 — 구조, 빌드, 한계 |
-| [`docs/cli.md`](docs/cli.md) | CLI 명령과 플래그, 재현 스크립트, ktfdump |
-| [`docs/armcore.md`](docs/armcore.md) | ARM 코어와 성능 |
-| [`docs/jvm.md`](docs/jvm.md) | 바이트코드 인터프리터 |
-| [`docs/ktf.md`](docs/ktf.md) | KTF 플랫폼 |
-| [`docs/lgt.md`](docs/lgt.md) | LGT 플랫폼 |
-| [`docs/skvm.md`](docs/skvm.md) | SKT / SKVM |
-| [`docs/sgs.md`](docs/sgs.md) | SKT / GNEX·GVM SGS |
-| [`docs/lcdui.md`](docs/lcdui.md) | LCDUI |
-| [`docs/rms.md`](docs/rms.md) | RMS 저장소 |
-| [`docs/network.md`](docs/network.md) | 네트워크 — 전 플랫폼 거부 정책과 그 표면 |
-| [`docs/audio.md`](docs/audio.md) | 소리 |
-| [`docs/hqx.md`](docs/hqx.md) | hqx 화면 확대 |
-| [`docs/testing.md`](docs/testing.md) | 테스트 전략과 로컬 검증 |
+전체 기술 문서는 [문서 목차](docs/README.md)에서 찾을 수 있습니다. 현재 사용법·구현 개요와 과거 조사·검증 기록을 구분했습니다.
 
 작업 규칙은 [`AGENTS.md`](AGENTS.md)에 있습니다.
 
@@ -329,4 +311,4 @@ MIT — [`LICENSE`](LICENSE)
 ## 후원
 
 이 프로젝트가 마음에 드셨다면 [GitHub Sponsors](https://github.com/sponsors/movingwoo)로 후원할 수 있습니다.  
-후원은 전적으로 선택 사항이며, 후원 여부와 관계없이 모든 기능은 동일하게 제공됩니다.  
+후원은 전적으로 선택 사항이며, 후원 여부와 관계없이 모든 기능은 동일하게 제공됩니다.

@@ -33,7 +33,7 @@ func (client *Client) applyOriginCompatibility() error {
 // This revision adds a 24-row handset strip to its own display origin during
 // initialization. Our framebuffer starts at the visible origin. Remove only
 // that addition in mapped memory, before execution; archive bytes remain intact.
-// See docs/lgt-origin-compatibility.md. Never select this by instruction shape.
+// See docs/platform-compatibility.md#lgt-lgt-visible-framebuffer-origin-2026-09-15. Never select this by instruction shape.
 func correctFramebufferOrigin(memory *armcore.Memory) error {
 	var code [8]byte
 	if err := memory.Read(framebufferOriginAddress, code[:]); err != nil {

@@ -11,7 +11,7 @@
       "fixes": [
         "skt.inclusive_set_clip"
       ],
-      "evidence": "docs/skt-clip-compatibility.md"
+      "evidence": "docs/platform-compatibility.md#skt-skt-original-specific-clip-compatibility"
     },
     {
       "id": "lgt-visible-origin-001",
@@ -23,7 +23,7 @@
       "fixes": [
         "lgt.visible_framebuffer_origin"
       ],
-      "evidence": "docs/lgt-origin-compatibility.md"
+      "evidence": "docs/platform-compatibility.md#lgt-lgt-visible-framebuffer-origin-2026-09-15"
     }
   ]
 }

@@ -19,7 +19,7 @@ blocking audio calls. A guest thread distinguishes natural completion from
 clip after its wait is registered. No sound asset is bundled in the JAR.
 
 After compiling the generated library signatures described in
-[`docs/testing.md`](../../../../docs/testing.md#compiling-a-java-fixture), compile
+[fixture compilation guide](../../../../docs/history/testing.md#implementation-compiling-a-java-fixture), compile
 this source against those classes and package its class files with this manifest:
 
 ```text
@@ -47,7 +47,7 @@ observable update counter and ordinary RMS persistence. Its Java 8 compiler layo
 matches a supported license-check shape without bundling external license code.
 
 After generating and compiling the signatures described in
-[`docs/testing.md`](../../../../docs/testing.md#compiling-a-java-fixture), build it
+[fixture compilation guide](../../../../docs/history/testing.md#implementation-compiling-a-java-fixture), build it
 with a private output directory:
 
 ```sh
