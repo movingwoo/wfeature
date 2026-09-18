@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+MIDlet-Name: Persistence Fixture
+MIDlet-1: Persistence Fixture, , PersistenceMIDlet
+

@@ -196,6 +196,15 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
+Activation retires only older `wfeature-shell-*` caches. A controlled navigation
+also retires caches recreated by a replaced worker's late response. Offline
+fallback reads only the current shell, never another app's cache or an older
+shell. Cache writes extend the fetch event lifetime.
+
+Game-key presses and supported canvas touches ask the existing audio boundary
+to resume a suspended AudioContext. Actual audible recovery still needs a
+physical-device observation. The optional two-version browser route and manual
+PWA checklist are in [PWA acceptance](../docs/pwa-acceptance.md).
 
 ## Known gaps
 

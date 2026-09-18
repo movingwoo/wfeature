@@ -1368,3 +1368,14 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
   user-select: text;
 }
 #text-input-dialog textarea { min-height: 6em; }
+
+#text-input-status {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #363636;
+  font-weight: 600;
+}
+#text-input-status[data-state="available"] { color: #a6e3b5; }
+#text-input-status[data-state="unavailable"],
+#text-input-status[data-state="error"] { color: #ff8f8f; }
+#text-input-dialog button:disabled { opacity: 0.45; cursor: default; }

@@ -77,3 +77,27 @@ profile, which must not select compatibility. It then explicitly enables the
 internal compatibility flag and repaints the same guest to verify inclusive
 extents. Only the separately fingerprinted original code selects this flag
 automatically; the fixture does not appear in that allowlist.
+
+
+## Browser persistence acceptance
+
+`src/PersistenceMIDlet.java` and `persistence.jar` implement a visible RMS counter
+for the two-version [PWA acceptance route](../../../../docs/pwa-acceptance.md).
+Confirm cycles red/green/blue and writes the new counter. A fresh runtime reads
+it back. Magenta indicates storage failure; a corner marker tracks key release.
+Compile with the generated MIDP signatures and package only `PersistenceMIDlet`
+and its nested class, using `PERSISTENCE.MF`. Do not package the generated stubs.
+
+```sh
+fixture_dir="$(mktemp -d /tmp/wfeature-persistence-fixture.XXXXXX)"
+javac -source 1.8 -target 1.8 -nowarn -g:none -classpath "$stub_dir/classes" \
+  -d "$fixture_dir" internal/platform/skt/testdata/src/PersistenceMIDlet.java
+jar cfm internal/platform/skt/testdata/persistence.jar \
+  internal/platform/skt/testdata/PERSISTENCE.MF -C "$fixture_dir" .
+```
+
+The browser Host detects SKT containers, so `persistence-skt.zip` wraps
+`persistence.jar` and `PERSISTENCE.MF` renamed to `persistence.msd` at the ZIP
+root. `text-input-skt.zip` similarly wraps the existing `text-input.jar` and
+`TEXT_INPUT.MF` renamed to `text-input.msd`. Both ZIPs contain only authored
+fixtures. Regenerate the outer ZIP after rebuilding either JAR.

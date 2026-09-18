@@ -1,9 +1,9 @@
 // The name is the shell's version, and it moves whenever the list below does:
-// activate deletes every cache that is not this one, so a new name is what
+// activate deletes older shell caches, so a new name is what
 // retires the entries an older shell left behind. The fetch handler is network
 // first, so a stale entry is not what this prevents — an entry for a file the
 // shell no longer has is.
-const cacheName = "wfeature-shell-v27";
+const cacheName = "wfeature-shell-v29";
 
 // The shell is what the page needs to come up, which is now only the page: a
 // game runs on the server and this page draws what it sends.
@@ -44,11 +44,13 @@ self.addEventListener("install", event => {
   self.skipWaiting();
 });
 
+const retireOldShells = () => caches.keys().then(keys => Promise.all(
+  keys.filter(key => key.startsWith("wfeature-shell-") && key !== cacheName)
+    .map(key => caches.delete(key)),
+));
+
 self.addEventListener("activate", event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(
-    keys.filter(key => key !== cacheName).map(key => caches.delete(key)),
-  )));
-  self.clients.claim();
+  event.waitUntil(self.clients.claim().then(retireOldShells));
 });
 
 self.addEventListener("fetch", event => {
@@ -68,8 +70,16 @@ self.addEventListener("fetch", event => {
   event.respondWith(fetch(event.request).then(response => {
     if (response.ok) {
       const copy = response.clone();
-      void caches.open(cacheName).then(cache => cache.put(event.request, copy));
+      event.waitUntil(caches.open(cacheName).then(async cache => {
+        await cache.put(event.request, copy);
+        // An older worker can finish a fetch after activation and recreate
+        // its retired cache. Sweep again on a controlled navigation.
+        if (event.request.mode === "navigate") await retireOldShells();
+      }));
     }
     return response;
-  }).catch(() => caches.match(event.request)));
+  }).catch(async () => {
+    const cache = await caches.open(cacheName);
+    return cache.match(event.request);
+  }));
 });

@@ -259,6 +259,7 @@ document.getElementById("text-input-toggle")?.addEventListener("click", () => te
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
   if (code === undefined || !gameRunning) return;
+  if (eventType === "press") pageAudio?.ensure();
   // Input lands in the log too, so a live watcher can line up what the guest
   // did against what was actually pressed.
   recordEvent(`key ${eventType} ${name} (${code})`);
@@ -388,6 +389,7 @@ const initInput = () => {
       return;
     }
     if (touchesTheGame(target) && touch.down(event.pointerId, touchPoint(event))) {
+      pageAudio?.ensure();
       // The canvas keeps the moves and the release once the finger leaves it,
       // for the same reason a key button does — and without it a drag off the
       // screen would simply stop arriving.

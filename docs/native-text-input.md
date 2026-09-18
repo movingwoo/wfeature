@@ -1,10 +1,21 @@
 # Native text input
 
 The browser composes text using the phone or PC keyboard and IME. The user
-selects an input field in the game, opens **Opts → 문자 입력**, and presses
+selects an input field in the game, opens **Opts → 🔤 문자 입력**, and presses
 **입력** to submit the completed string. Intermediate IME composition is local
 to the browser. The emulator does not implement a separate handset Hangul
 layout; the existing game keypad remains available for game controls.
+
+
+The dialog checks the actual target when opened. It shows only green
+**입력 가능** or red **입력 불가능**, with no explanatory status text.
+The status stays hidden while checking or submitting. An unsupported screen
+has no empty editable field. A stale target preserves
+the draft for copying and disables resubmission until the dialog is reopened.
+Constraint failures show the red status while keeping editing and retry
+available. Append-only targets label the action as insertion.
+Availability describes the opening snapshot; it is not a continuously polled
+claim about the game's current focus. The platform still validates at commit.
 
 ## Boundary
 
