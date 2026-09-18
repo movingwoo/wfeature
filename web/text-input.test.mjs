@@ -4,10 +4,10 @@ import { createTextInputDialog } from "./text-input.js";
 
 const fixture = connection => {
   const nodes = new Map();
-  for (const name of ["dialog", "status", "value", "multiline", "apply", "cancel"]) {
+  for (const name of ["dialog", "status", "value", "multiline", "apply", "cancel", "hint"]) {
     const handlers = {};
     nodes.set(`text-input-${name}`, {
-      value: "", open: false, handlers,
+      value: "", open: false, handlers, dataset: {},
       addEventListener(name, handler) { handlers[name] = handler; },
       showModal() { this.open = true; }, close() { this.open = false; }, focus() {},
     });
@@ -29,8 +29,8 @@ test("IME composition stays local until explicit complete-text submission", asyn
   });
   await f.controller.open();
   assert.equal(f.releases(), 1);
-  assert.equal(f.node("status").textContent, "");
-  assert.equal(f.node("status").hidden, true);
+  assert.equal(f.node("status").dataset.state, "available");
+  assert.equal(f.node("status").hidden, false);
   f.node("dialog").handlers.compositionstart();
   f.node("value").value = "한";
   f.node("dialog").handlers.cancel({ preventDefault() {} });
@@ -77,15 +77,48 @@ test("failed validation preserves draft and password never uses textarea", async
   assert.equal(f.node("value").disabled, false);
   assert.equal(f.node("dialog").open, true);
   assert.equal(f.node("status").hidden, false);
-  assert.match(f.node("status").textContent, /길이/);
+  assert.match(f.node("hint").textContent, /길이/);
 });
 
-test("append-only guest input opens without guidance text", async () => {
+test("append-only guest input explains insertion instead of replacement", async () => {
   const f = fixture({
     openTextInput: async () => ({ textInput: { edit: 3, text: "", append: true, inputMode: "text" } }),
     commitTextInput: async () => {}, cancelTextInput: async () => {},
   });
   await f.controller.open();
-  assert.equal(f.node("status").textContent, "");
-  assert.equal(f.node("status").hidden, true);
+  assert.equal(f.node("status").dataset.state, "available");
+  assert.equal(f.node("status").hidden, false);
+  assert.equal(f.node("apply").textContent, "삽입");
+  assert.match(f.node("hint").textContent, /커서 위치에 추가/);
+});
+
+
+test("opening distinguishes checking from an unavailable target", async () => {
+  let reject;
+  const f = fixture({ openTextInput: () => new Promise((_, fail) => { reject = fail; }) });
+  const opening = f.controller.open();
+  assert.equal(f.node("status").dataset.state, "checking");
+  assert.equal(f.node("value").hidden, true);
+  assert.equal(f.node("apply").disabled, true);
+  reject(new Error("no supported text field is active"));
+  await opening;
+  assert.equal(f.node("status").dataset.state, "unavailable");
+  assert.match(f.node("hint").textContent, /먼저 선택/);
+  assert.equal(f.node("apply").disabled, true);
+  assert.equal(f.node("cancel").textContent, "닫기");
+});
+
+test("a stale target keeps the draft readable but prevents another submission", async () => {
+  const f = fixture({
+    openTextInput: async () => ({ textInput: { edit: 4, text: "" } }),
+    commitTextInput: async () => { throw new Error("the active text field changed; open text input again"); },
+    cancelTextInput: async () => {},
+  });
+  await f.controller.open();
+  f.node("value").value = "draft";
+  await f.node("apply").handlers.click();
+  assert.equal(f.node("status").dataset.state, "unavailable");
+  assert.equal(f.node("value").value, "draft");
+  assert.equal(f.node("value").readOnly, true);
+  assert.equal(f.node("apply").disabled, true);
 });

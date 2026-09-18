@@ -99,6 +99,8 @@ its cause remains unresolved. Preserve lifecycle phase, browser version, Blob
 properties, origin/navigation, and server frame evidence on recurrence. See
 [WebKit observations](history/testing.md#webkit-webkit-frame-decoding-investigation).
 
+The [PWA release acceptance route](pwa-acceptance.md) defines an opt-in two-version
+Chromium/WebKit check and separate physical-device steps.
 There is no complete automated PWA acceptance claim. Installation, service-worker
 replacement, audible audio activation/recovery, touch, real-phone suspension,
 and saved progression need explicit routes and observations. A mocked bitmap

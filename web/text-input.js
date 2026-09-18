@@ -11,15 +11,22 @@ const explain = error => {
 export const createTextInputDialog = ({ document, getSession, releaseInput }) => {
   const node = name => document.getElementById(`text-input-${name}`);
   const dialog = node("dialog"), status = node("status"), single = node("value"), multi = node("multiline");
-  const apply = node("apply"), cancel = node("cancel");
+  const apply = node("apply"), cancel = node("cancel"), hint = node("hint");
   let generation = 0, owner = null, edit = null, field = single, composing = false, busy = false;
-  const clearStatus = () => {
-    status.textContent = "";
-    status.hidden = true;
+  const showStatus = (state, message, guidance = "") => {
+    status.dataset.state = state;
+    status.textContent = message;
+    status.hidden = false;
+    hint.textContent = guidance;
+    hint.hidden = !guidance;
   };
   const showError = error => {
-    status.textContent = explain(error);
-    status.hidden = false;
+    const stale = error?.message === "the active text field changed; open text input again";
+    const unavailable = edit == null || stale;
+    showStatus(unavailable ? "unavailable" : "error",
+      unavailable ? "지금은 입력할 수 없습니다" : "입력 내용을 확인해 주세요", explain(error));
+    apply.disabled = unavailable;
+    if (stale) field.readOnly = true;
   };
   const discard = (connection, token) => {
     if (connection && token != null) void connection.cancelTextInput(token).catch(() => {});
@@ -31,7 +38,10 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     edit = null;
     single.value = multi.value = "";
     composing = busy = false;
-    clearStatus();
+    showStatus("checking", "입력칸을 확인하고 있습니다…");
+    single.readOnly = multi.readOnly = false;
+    apply.textContent = "입력";
+    cancel.textContent = "닫기";
     if (dialog.open) dialog.close();
   };
   const open = async () => {
@@ -40,8 +50,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     if (!connection) return;
     owner = connection;
     releaseInput();
-    single.hidden = false;
-    multi.hidden = true;
+    single.hidden = multi.hidden = true;
     field = single;
     single.type = "text";
     single.disabled = multi.disabled = true;
@@ -61,6 +70,12 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       field.value = textInput.text;
       field.disabled = false;
       apply.disabled = false;
+      apply.textContent = textInput.append ? "삽입" : "입력";
+      cancel.textContent = "취소";
+      const guidance = textInput.append
+        ? "입력한 문자를 게임의 커서 위치에 추가합니다."
+        : "입력 버튼을 누르면 게임의 입력칸에 반영됩니다.";
+      showStatus("available", "입력할 수 있습니다", guidance);
       // Phones may require a fresh tap after the asynchronous response.
       field.focus();
     } catch (error) {
@@ -68,11 +83,12 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     }
   };
   apply.addEventListener("click", async () => {
-    if (edit == null || busy || composing) return;
+    if (edit == null || busy || composing || field.readOnly) return;
     const current = generation;
     busy = true;
     apply.disabled = true;
     field.disabled = true;
+    showStatus("checking", "게임에 반영하고 있습니다…");
     try {
       await owner.commitTextInput(edit, field.value);
       if (current === generation) { edit = null; close(); }
@@ -80,7 +96,6 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       if (current === generation) {
         showError(error);
         busy = false;
-        apply.disabled = false;
         field.disabled = false;
       }
     }
