@@ -191,6 +191,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/media/Player.play(Lorg/kwis/msp/media/Clip;Z)Z": {
 		Words: 2, Implementat: javaPlayerPlay},
 	"org/kwis/msp/media/Player.stop(Lorg/kwis/msp/media/Clip;)Z":   {Words: 1, Implementat: javaPlayerStop},
+	"org/kwis/msp/media/Player.pause(Lorg/kwis/msp/media/Clip;)Z":  {Words: 1, Implementat: javaPlayerPause},
 	"org/kwis/msp/media/Player.resume(Lorg/kwis/msp/media/Clip;)Z": {Words: 1, Implementat: javaPlayerResume},
 	// The motor, which records what the guest asked for and drives nothing —
 	// the same answer the WIPI C call now gives. See javaVibratorOn.

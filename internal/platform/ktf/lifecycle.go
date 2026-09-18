@@ -334,7 +334,7 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 	if err := runtime.enterAOTCall(); err != nil {
 		return jvm.VoidValue(), runs, err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 
 	headAddress := runtime.exceptionHead()
 	entryHandler, err := runtime.client.core.ThreadLocalWord(thread, headAddress)

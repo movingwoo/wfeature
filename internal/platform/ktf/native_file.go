@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // The title's own files sit beside its module in the package, and the module
@@ -194,9 +195,9 @@ func nativeSaveKey(name string) string {
 // name and without regard to case: the module names its files the way they
 // were written into the archive, and the archive's entry names are the
 // title's directory rather than a bare name.
-func (platform *NativePlatform) contents(name string) ([]byte, bool) {
+func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	if platform.archive == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	wanted := strings.ToLower(path.Base(strings.ReplaceAll(name, "\\", "/")))
 	// What the title has written this session comes first: a save it wrote and
@@ -205,22 +206,26 @@ func (platform *NativePlatform) contents(name string) ([]byte, bool) {
 	// save has to win over the archive's copy of the same name, or a title
 	// would start every session from its shipped settings.
 	if data, ok := platform.written[wanted]; ok {
-		return data, true
+		return data, true, nil
 	}
 	if platform.saves != nil {
-		if data, ok := platform.saves.LoadSave(nativeSaveKey(wanted)); ok {
-			return data, true
+		data, ok, err := backend.ReadSave(platform.saves, nativeSaveKey(wanted))
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return data, true, nil
 		}
 	}
 	if data, ok := platform.archive.Files[name]; ok {
-		return data, true
+		return data, true, nil
 	}
 	for entry, data := range platform.archive.Files {
 		if strings.ToLower(path.Base(entry)) == wanted {
-			return data, true
+			return data, true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // readName reads a name argument out of guest memory.
@@ -257,7 +262,10 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		return 0, err
 	}
 	writable := int32(mode) != nativeModeRead
-	data, ok := platform.contents(name)
+	data, ok, err := platform.contents(name)
+	if err != nil {
+		return 0, err
+	}
 	platform.opens = append(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	if ok && int32(mode) == nativeModeWriteTruncate {
 		// The file is there and the mode says to empty it. Emptying it here
@@ -312,7 +320,10 @@ func (platform *NativePlatform) fileInformation(thread *armcore.Thread) (uint32,
 		return 0, err
 	}
 	record := make([]byte, nativeFileRecordSize)
-	data, ok := platform.contents(name)
+	data, ok, err := platform.contents(name)
+	if err != nil {
+		return 0, err
+	}
 	if ok {
 		binary.LittleEndian.PutUint32(record[nativeFileLengthOffset:], uint32(len(data)))
 	}
@@ -348,7 +359,10 @@ func (platform *NativePlatform) fileExists(thread *armcore.Thread) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	_, ok := platform.contents(name)
+	_, ok, err := platform.contents(name)
+	if err != nil {
+		return 0, err
+	}
 	if platform.archive.AsksForInterfaceVersion() {
 		return platform.fileResult(ok), nil
 	}
@@ -371,7 +385,11 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	if _, ok := platform.contents(name); !ok {
+	_, ok, err := platform.contents(name)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
 		platform.create(strings.ToLower(path.Base(name)))
 	}
 	return platform.fileResult(true), nil

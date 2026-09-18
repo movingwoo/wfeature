@@ -92,6 +92,7 @@ type SessionOptions struct {
 	// what a Host without an audio device wants; the game still runs its
 	// playback calls and still gets the answers it expects.
 	AudioSink backend.AudioSink
+	FrameSink backend.FrameSink
 	// Width and Height name the handset the game is told it runs on. Zero for
 	// either selects the platform's own 240x320, which is what all but a
 	// title packaged for a smaller phone wants. It is what the guest is told
@@ -278,6 +279,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	client.SetScreen(options.Width, options.Height)
 	client.SetDiagnostics(options.TraceLimit, options.Logger)
 	client.audio = backend.NewAudio(options.AudioSink)
+	client.frameSink = options.FrameSink
 	client.log("KTF session loading",
 		"aid", archive.Descriptor.AID,
 		"main_class", archive.Descriptor.MainClass,

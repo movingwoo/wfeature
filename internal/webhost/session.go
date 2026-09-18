@@ -19,6 +19,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/filter/hqx"
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
@@ -124,10 +125,7 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 // pendingFrame is one finished picture on its way to the page. It carries its
 // own copy of the pixels: the session's buffer is overwritten by the next
 // tick, and the encoder runs on another goroutine.
-type pendingFrame struct {
-	rgba          []byte
-	width, height int
-}
+type pendingFrame = backend.FrameUpdate
 
 type sessionRunner struct {
 	startApproval *startApproval
@@ -331,11 +329,20 @@ var pngBuffers = &pngBufferPool{}
 func (r *sessionRunner) writeFrames(ctx context.Context) {
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers}
 	buffer := &bytes.Buffer{}
+	scaler := &hqx.Scaler{}
 	for frame := range r.frames {
+		if frame.Scale > 1 {
+			pixels, width, height, err := scaler.ScaleRGBA(frame.RGBA, frame.Width, frame.Height, frame.Scale)
+			if err != nil {
+				r.server.logger.Warn("frame could not be scaled", "error", err)
+				continue
+			}
+			frame.RGBA, frame.Width, frame.Height = pixels, width, height
+		}
 		picture := &image.RGBA{
-			Pix:    frame.rgba,
-			Stride: frame.width * 4,
-			Rect:   image.Rect(0, 0, frame.width, frame.height),
+			Pix:    frame.RGBA,
+			Stride: frame.Width * 4,
+			Rect:   image.Rect(0, 0, frame.Width, frame.Height),
 		}
 		buffer.Reset()
 		if err := encoder.Encode(buffer, picture); err != nil {
@@ -684,12 +691,13 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		screenWidth, screenHeight = message.Width, message.Height
 	}
 	started, err := session.Start(r.gameCtx, archive, session.Options{
-		SaveStore: r.server.saveStoreIn(directory),
-		AudioSink: r.audio,
-		Logger:    r.server.logger,
-		Scale:     scale,
-		Width:     screenWidth,
-		Height:    screenHeight,
+		SaveStore:    r.server.saveStoreIn(directory),
+		AudioSink:    r.audio,
+		FrameUpdates: r.frames,
+		Logger:       r.server.logger,
+		Scale:        scale,
+		Width:        screenWidth,
+		Height:       screenHeight,
 		// A debug build is the one that collects a report, and the ordered
 		// trace is what it collects.
 		TraceLimit: r.server.traceLimit,
@@ -775,6 +783,7 @@ func (r *sessionRunner) park() {
 	r.releaseHeldInput()
 	game := r.game
 	r.game = nil
+	game.SetFrameUpdates(nil)
 	// The game is told before it is handed over. A handset suspended an
 	// application when a call arrived and called its pause entry point, and
 	// this is the same moment: nobody is watching, the game stops being
@@ -867,6 +876,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	}
 
 	r.game = parked.game
+	r.game.SetFrameUpdates(r.frames)
 	r.saveDirectory = parked.saveDirectory
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
@@ -947,7 +957,7 @@ func (r *sessionRunner) pushFrame() {
 	// copying a copy — a third of a megabyte per frame, made only to be
 	// collected.
 	select {
-	case r.frames <- pendingFrame{rgba: rgba, width: width, height: height}:
+	case r.frames <- pendingFrame{RGBA: rgba, Width: width, Height: height}:
 	default:
 		r.skipped++
 	}

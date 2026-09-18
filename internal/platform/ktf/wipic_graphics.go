@@ -1377,11 +1377,17 @@ func (runtime *initializationRuntime) wipicTransferRGBPixels(thread *armcore.Thr
 // frame. A run of flushes with no Host collection between them now costs one
 // conversion instead of one each.
 func (runtime *initializationRuntime) presentScreen() error {
+	runtime.recordScreenFlush()
+	return runtime.publishIntermediateFrame()
+}
+
+func (runtime *initializationRuntime) recordScreenFlush() {
 	if runtime.screenFramebuffer == 0 {
 		// Nothing was drawn through the screen framebuffer yet.
-		return nil
+		return
 	}
 	runtime.client.framePending = true
+	runtime.client.partialFrame = false
 	runtime.client.flushCount++
 	// A flush from outside the card paint is the title publishing a frame of
 	// its own. Which of the two paths owns the screen is decided in
@@ -1399,7 +1405,6 @@ func (runtime *initializationRuntime) presentScreen() error {
 		worker.publishedFrame = true
 	}
 	runtime.countDiagnostic("flush lcd")
-	return nil
 }
 
 // convertScreen turns the guest's RGB565 screen buffer into the Host-owned

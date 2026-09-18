@@ -185,8 +185,8 @@ func (vm *VM) HeapRoots() []*Object {
 	return roots
 }
 
-// ThreadObjects lists the java.lang.Thread objects the VM is holding state
-// for, including the main thread. A thread's own fields are as much game state
+// ThreadObjects lists active java.lang.Thread objects, including the main
+// thread. A thread's own fields are as much game state
 // as any other object's, and the objects a running thread holds are reachable
 // only through it.
 func (vm *VM) ThreadObjects() []*Object {

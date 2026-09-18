@@ -177,7 +177,7 @@ func (runtime *initializationRuntime) runAOTClassInitializer(ctx context.Context
 	if err := runtime.enterAOTCall(); err != nil {
 		return err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 	for {
 		_, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
 		if callErr == nil {

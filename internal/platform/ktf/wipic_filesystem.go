@@ -3,7 +3,6 @@ package ktf
 import (
 	"encoding/binary"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -39,8 +38,8 @@ type runtimeCFile struct {
 }
 
 // persist writes the record through the Host save store when one is attached.
-func (store *runtimeCFile) persist(runtime *initializationRuntime) {
-	runtime.storeSave("db/"+store.name, store.data)
+func (store *runtimeCFile) persist(runtime *initializationRuntime) error {
+	return runtime.saveChanges(map[string][]byte{"db/" + store.name: store.data}, databaseRemovedKey, runtime.removedDatabases(), map[string]bool{store.name: false})
 }
 
 type runtimeCFileHandle struct {
@@ -214,6 +213,9 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	if !live && !seeded {
 		return wipicErrorNotFound, nil
 	}
+	if err := runtime.saveChanges(map[string][]byte{"db/" + name: nil}, databaseRemovedKey, runtime.removedDatabases(), map[string]bool{name: true}); err != nil {
+		return 0, err
+	}
 	delete(runtime.cFiles, name)
 	// Handles onto the store go with it; a caller holding one after the delete
 	// would otherwise keep reading a database nothing else can see.
@@ -222,8 +224,7 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 			delete(runtime.cFileHandles, handle)
 		}
 	}
-	runtime.markDatabaseRemoved(name, true)
-	runtime.storeSave("db/"+name, nil)
+
 	return 0, nil
 }
 
@@ -337,16 +338,16 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 			store.packaged = len(packaged)
 		}
 	}
+	if err := runtime.saveChanges(map[string][]byte{"db/" + newName: store.data, "db/" + oldName: nil}, databaseRemovedKey, runtime.removedDatabases(), map[string]bool{oldName: true, newName: false}); err != nil {
+		return 0, err
+	}
 	delete(runtime.cFiles, oldName)
 	store.name = newName
 	if runtime.cFiles == nil {
 		runtime.cFiles = make(map[string]*runtimeCFile)
 	}
 	runtime.cFiles[newName] = store
-	runtime.markDatabaseRemoved(newName, false)
-	store.persist(runtime)
-	runtime.markDatabaseRemoved(oldName, true)
-	runtime.storeSave("db/"+oldName, nil)
+
 	runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s", oldName, newName))
 	return 0, nil
 }
@@ -373,21 +374,8 @@ func (runtime *initializationRuntime) removedDatabases() map[string]bool {
 // markDatabaseRemoved records or clears one name and writes the list back.
 // Opening a database for creation clears it, because a store that was written
 // and then still read as deleted is worse than one that was never deleted.
-func (runtime *initializationRuntime) markDatabaseRemoved(name string, removed bool) {
-	set := runtime.removedDatabases()
-	if set[name] == removed {
-		return
-	}
-	if removed {
-		set[name] = true
-	} else {
-		delete(set, name)
-	}
-	names := make([]string, 0, len(set))
-	for entry := range set {
-		names = append(names, entry)
-	}
-	runtime.storeSave(databaseRemovedKey, joinRemovalList(names))
+func (runtime *initializationRuntime) markDatabaseRemoved(name string, removed bool) error {
+	return runtime.saveChanges(nil, databaseRemovedKey, runtime.removedDatabases(), map[string]bool{name: removed})
 }
 
 // wipicMakeDirectory serves MC_fsMkDir(dirName, aMode).
@@ -421,7 +409,9 @@ func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread)
 		runtime.countDiagnostic(fmt.Sprintf("fs mkdir %s -> exists", name))
 		return wipicErrorExists, nil
 	}
-	runtime.markDirectoryCreated(name)
+	if err := runtime.markDirectoryCreated(name); err != nil {
+		return 0, err
+	}
 	runtime.countDiagnostic(fmt.Sprintf("fs mkdir %s", name))
 	return 0, nil
 }
@@ -448,23 +438,10 @@ func (runtime *initializationRuntime) createdDirectories() map[string]bool {
 }
 
 // markDirectoryCreated records one name and writes the list back.
-func (runtime *initializationRuntime) markDirectoryCreated(name string) {
-	set := runtime.createdDirectories()
-	if set[name] {
-		return
-	}
-	set[name] = true
-	names := make([]string, 0, len(set))
-	for entry := range set {
-		names = append(names, entry)
-	}
-	sort.Strings(names)
-	runtime.storeSave(directoryListKey, []byte(strings.Join(names, "\n")))
+func (runtime *initializationRuntime) markDirectoryCreated(name string) error {
+	return runtime.saveChanges(nil, directoryListKey, runtime.createdDirectories(), map[string]bool{name: true})
 }
 
-// databaseSeed is what an open would start a store from: the persisted copy
-// first, the archive's packaged copy second, and neither once the name has
-// been deleted.
 func (runtime *initializationRuntime) databaseSeed(name string) ([]byte, bool) {
 	if runtime.removedDatabases()[name] {
 		return nil, false
@@ -516,17 +493,27 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		if runtime.cFiles == nil {
 			runtime.cFiles = make(map[string]*runtimeCFile)
 		}
-		runtime.cFiles[name] = store
 	}
 	// Create mode wipes prior contents unless the database is backed by
 	// packaged archive data.
+	staged := *store
 	if int32(mode) == 4 && !hasPackaged {
-		store.data = nil
+		staged.data = nil
 	}
+	if runtime.nextCDatabaseHandle >= maxCFileHandles {
+		return wipicErrorInvalid, nil
+	}
+	if (!exists && !hasSeed) || (int32(mode) == 4 && !hasPackaged) || runtime.removedDatabases()[name] {
+		if err := staged.persist(runtime); err != nil {
+			return 0, err
+		}
+	}
+	store.data = staged.data
+	runtime.cFiles[name] = store
 	// Opening a deleted name brings it back: the store is live again from
 	// here, and a removal list that still held it would hide the writes the
 	// caller is about to make.
-	runtime.markDatabaseRemoved(name, false)
+
 	if runtime.cFileHandles == nil {
 		runtime.cFileHandles = make(map[uint32]*runtimeCFileHandle)
 	}
@@ -576,14 +563,13 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 		if end > maxCFileBytes {
 			return wipicErrorInvalid, nil
 		}
-		if end > len(state.store.data) {
-			grown := make([]byte, end)
-			copy(grown, state.store.data)
-			state.store.data = grown
+		staged := make([]byte, max(end, len(state.store.data)))
+		copy(staged, state.store.data)
+		copy(staged[state.position:], data)
+		if err := runtime.saveChanges(map[string][]byte{"db/" + state.store.name: staged}, databaseRemovedKey, runtime.removedDatabases(), map[string]bool{state.store.name: false}); err != nil {
+			return 0, err
 		}
-		copy(state.store.data[state.position:], data)
-		state.position = end
-		state.store.persist(runtime)
+		state.store.data, state.position = staged, end
 		return length, nil
 	}
 	remaining := len(state.store.data) - state.position

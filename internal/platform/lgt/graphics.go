@@ -46,15 +46,18 @@ func (buffer *framebuffer) bytesPerLine() int { return buffer.width * 2 }
 // and hands to every draw call, so this is a view read out of guest memory for
 // the duration of one call rather than a registered object.
 type graphicsContext struct {
-	target      *framebuffer
-	clipX       int
-	clipY       int
-	clipWidth   int
-	clipHeight  int
-	foreground  uint16
-	background  uint16
-	fontHeight  int
-	transparent bool
+	target         *framebuffer
+	offsetX        int
+	offsetY        int
+	callbackUnlock bool
+	clipX          int
+	clipY          int
+	clipWidth      int
+	clipHeight     int
+	foreground     uint16
+	background     uint16
+	fontHeight     int
+	transparent    bool
 	// xor draws the difference between the colour and what is already there,
 	// which is the mode a Java title sets with `Graphics.setXORMode`.
 	xor bool
@@ -506,6 +509,8 @@ func (context *graphicsContext) clipped(x, y int) bool {
 }
 
 func (context *graphicsContext) put(x, y int, color uint16) {
+	x += context.offsetX
+	y += context.offsetY
 	if context.clipped(x, y) {
 		return
 	}
@@ -519,7 +524,7 @@ func (context *graphicsContext) put(x, y int, color uint16) {
 			return
 		}
 		result, err := context.client.applyPixelOp(
-			context.ctx, context.thread, context.op, context.target.pixels[index], color)
+			context.ctx, context.thread, context.op, context.target.pixels[index], color, context.callbackUnlock)
 		if err != nil {
 			context.err = err
 			return

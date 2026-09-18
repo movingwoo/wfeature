@@ -28,9 +28,20 @@ var (
 // on its own argument check rather than quietly answering with someone else's.
 type NativeMethod func(vm *VM, arguments []Value) (Value, error)
 
-// AOTInvoker executes a platform-owned AOT method when interpreted bytecode
+// ContextAOTInvoker executes a platform-owned AOT method when interpreted bytecode
 // dispatches into a class that exists only as registered AOT metadata. The
 // receiver is the first argument for instance methods.
+type ContextAOTInvoker func(call *Invocation, className, name, descriptor string, arguments []Value) (Value, error)
+
+// SetContextAOTInvoker preserves execution ownership across a platform round trip.
+func (vm *VM) SetContextAOTInvoker(invoker ContextAOTInvoker) {
+	vm.mu.Lock()
+	vm.contextAOTInvoker = invoker
+	vm.aotInvoker = nil
+	vm.mu.Unlock()
+}
+
+// AOTInvoker bridges AOT methods without preserving an invocation context.
 type AOTInvoker func(className, name, descriptor string, arguments []Value) (Value, error)
 
 // SetAOTInvoker installs the platform bridge used when interpreted code calls
@@ -38,20 +49,26 @@ type AOTInvoker func(className, name, descriptor string, arguments []Value) (Val
 func (vm *VM) SetAOTInvoker(invoker AOTInvoker) {
 	vm.mu.Lock()
 	vm.aotInvoker = invoker
+	vm.contextAOTInvoker = nil
 	vm.mu.Unlock()
 }
 
 // invokeAOTFallback delegates a failed bytecode resolution to the platform
 // AOT bridge when the lookup class is registered AOT metadata.
-func (vm *VM) invokeAOTFallback(className, name, descriptor string, arguments []Value) (Value, bool, error) {
+func (vm *VM) invokeAOTFallback(state *execution, className, name, descriptor string, arguments []Value) (Value, bool, error) {
 	vm.mu.RLock()
 	invoker := vm.aotInvoker
+	contextual := vm.contextAOTInvoker
 	vm.mu.RUnlock()
-	if invoker == nil {
+	if invoker == nil && contextual == nil {
 		return VoidValue(), false, nil
 	}
 	if _, ok := vm.AOTClass(className); !ok {
 		return VoidValue(), false, nil
+	}
+	if contextual != nil {
+		result, err := contextual(&Invocation{vm: vm, state: state}, className, name, descriptor, arguments)
+		return result, true, err
 	}
 	result, err := invoker(className, name, descriptor, arguments)
 	return result, true, err
@@ -182,18 +199,21 @@ type VM struct {
 	// declaringFields caches field resolution: which class in a reference's
 	// chain actually declares the field it names. It is cleared whenever a
 	// class is defined, because a class that arrives later can be the answer.
-	declaringFields map[fieldKey]fieldResolution
-	classMonitors   map[string]*monitor
-	nextExecution   atomic.Uint64
-	nextObject      atomic.Uint32
-	arraycopyMu     sync.Mutex
-	threadMu        sync.Mutex
-	threads         map[*Object]*guestThread
-	mainThread      *Object
-	aotClasses      map[string]AOTClassMetadata
-	aotAddresses    map[uint32]string
-	aotObjects      map[uint32]aotBinding
-	aotInvoker      AOTInvoker
+	declaringFields   map[fieldKey]fieldResolution
+	classMonitors     map[string]*monitor
+	nextExecution     atomic.Uint64
+	nextObject        atomic.Uint32
+	arraycopyMu       sync.Mutex
+	threadMu          sync.Mutex
+	threads           map[*Object]*guestThread
+	mainThread        *Object
+	closeOnce         sync.Once
+	closed            chan struct{}
+	aotClasses        map[string]AOTClassMetadata
+	aotAddresses      map[uint32]string
+	aotObjects        map[uint32]aotBinding
+	aotInvoker        AOTInvoker
+	contextAOTInvoker ContextAOTInvoker
 
 	initMu       sync.Mutex
 	initCond     *sync.Cond
@@ -266,6 +286,7 @@ func New(source ClassSource, options Options) *VM {
 		declaringFields: make(map[fieldKey]fieldResolution),
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
+		closed:          make(chan struct{}),
 		aotClasses:      make(map[string]AOTClassMetadata),
 		aotAddresses:    make(map[uint32]string),
 		aotObjects:      make(map[uint32]aotBinding),
@@ -545,7 +566,7 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 
 	class, method, err := vm.resolveStaticMethod(className, name, descriptor)
 	if err != nil {
-		if result, handled, aotErr := vm.invokeAOTFallback(className, name, descriptor, arguments); handled {
+		if result, handled, aotErr := vm.invokeAOTFallback(state, className, name, descriptor, arguments); handled {
 			return result, aotErr
 		}
 		return VoidValue(), err
@@ -659,7 +680,7 @@ func (vm *VM) invokeInstanceReceived(
 		if receiver.ClassName != "" {
 			dispatchClass = receiver.ClassName
 		}
-		if result, handled, aotErr := vm.invokeAOTFallback(dispatchClass, name, descriptor, combined); handled {
+		if result, handled, aotErr := vm.invokeAOTFallback(state, dispatchClass, name, descriptor, combined); handled {
 			return result, aotErr
 		}
 		return VoidValue(), resolveErr

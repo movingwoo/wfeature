@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -751,6 +752,7 @@ func init() {
 		},
 		"org/kwis/msp/io/File":       runtimeFileClassDefinition(),
 		runtimeFileOutputStreamClass: runtimeFileOutputStreamClassDefinition(),
+		runtimeFileInputStreamClass:  runtimeFileInputStreamClassDefinition(),
 		runtimeTimerClass:            runtimeTimerClassDefinition(),
 		runtimeTimerTaskClass:        runtimeTimerTaskClassDefinition(),
 		"org/kwis/msp/io/FileSystem": runtimeFileSystemClassDefinition(),
@@ -1919,6 +1921,7 @@ func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, argument
 		return jvm.VoidValue(), err
 	}
 	if err := runtime.fillWIPICFramebuffer(handle, 0xffff); err != nil {
+		runtime.destroyWIPICFramebufferRecord(handle)
 		return jvm.VoidValue(), err
 	}
 	image := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Fields: map[string]jvm.Value{
@@ -1927,6 +1930,10 @@ func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, argument
 		"mutable:Z":          jvm.IntValue(1),
 		"guestFramebuffer:I": jvm.IntValue(int32(handle)),
 	}}
+	if runtime.imageSurfaces == nil {
+		runtime.imageSurfaces = make(map[weak.Pointer[jvm.Object]]uint32)
+	}
+	runtime.imageSurfaces[weak.Make(image)] = handle
 	return jvm.ReferenceValue(image), nil
 }
 
@@ -2441,12 +2448,11 @@ func runtimeDataBaseException(message string) error {
 }
 
 // persist writes the serialized record list through the Host save store.
-func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) {
+func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) error {
 	// Writing a database brings it back, exactly as writing a guest file does
 	// (storeGuestFile). A title holding a handle across its own delete would
 	// otherwise write records to a key the deletion list hides for ever.
-	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, store.name, false)
-	runtime.storeSave("jdb/"+store.name, encodeSaveRecords(store.records))
+	return runtime.saveChanges(map[string][]byte{"jdb/" + store.name: encodeSaveRecords(store.records)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{store.name: false})
 }
 
 const maxDataBaseRecords = 1 << 16
@@ -2486,14 +2492,17 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// name, and nothing on this side ever took that name off the other
 		// table's list, so the save was gone for good.
 		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
-		saved, present := runtime.loadSave("jdb/" + name)
+		saved, present, readErr := backend.ReadSave(runtime.client.saveStore, "jdb/"+name)
+		if readErr != nil {
+			return jvm.VoidValue(), runtimeDataBaseException(readErr.Error())
+		}
 		if deleted {
 			present = false
 		}
 		if present {
 			records, decodeErr := decodeSaveRecords(saved)
 			if decodeErr != nil {
-				runtime.countDiagnostic(fmt.Sprintf("jdb load error %s: %v", name, decodeErr))
+				return jvm.VoidValue(), runtimeDataBaseException(fmt.Sprintf("corrupt database %s: %v", name, decodeErr))
 			} else {
 				store.records = records
 			}
@@ -2525,21 +2534,18 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 			runtime.countDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
 		}
-		if runtime.databases == nil {
-			runtime.databases = make(map[string]*runtimeDataBaseStore)
-		}
-		runtime.databases[name] = store
-		// Creating it again is what takes it off the list: a database written
-		// and still read as deleted is worse than one never deleted.
-		if deleted {
-			runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, name, false)
-		}
 		// A database opened for creation exists from that moment, even with
 		// no record in it yet, so the next open finds it rather than throwing
 		// again. One the archive carries is already found without a save.
 		if !present && !packaged {
-			store.persist(runtime)
+			if err := store.persist(runtime); err != nil {
+				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+			}
 		}
+		if runtime.databases == nil {
+			runtime.databases = make(map[string]*runtimeDataBaseStore)
+		}
+		runtime.databases[name] = store
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",
@@ -2598,8 +2604,11 @@ func runtimeDataBaseInsert(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	if len(store.records) >= maxDataBaseRecords {
 		return jvm.VoidValue(), fmt.Errorf("DataBase record count exceeds %d", maxDataBaseRecords)
 	}
-	store.records = append(store.records, data)
-	store.persist(runtime)
+	staged := &runtimeDataBaseStore{name: store.name, records: append(append([][]byte(nil), store.records...), data)}
+	if err := staged.persist(runtime); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
+	store.records = staged.records
 	// WIPI record identifiers are zero-based, unlike one-based MIDP records.
 	return jvm.IntValue(int32(len(store.records) - 1)), nil
 }
@@ -2688,8 +2697,12 @@ func runtimeDataBaseUpdate(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	store.records[index] = data
-	store.persist(runtime)
+	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
+	staged.records[index] = data
+	if err := staged.persist(runtime); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
+	store.records = staged.records
 	return jvm.VoidValue(), nil
 }
 
@@ -2710,8 +2723,12 @@ func runtimeDataBaseDelete(runtime *initializationRuntime, _ *jvm.VM, arguments 
 		// was the difference between its opening screen and a dead thread.
 		return jvm.VoidValue(), runtimeDataBaseRecordException(err)
 	}
-	store.records[index] = nil
-	store.persist(runtime)
+	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
+	staged.records[index] = nil
+	if err := staged.persist(runtime); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
+	store.records = staged.records
 	return jvm.VoidValue(), nil
 }
 
@@ -2998,6 +3015,10 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	if err := runtime.ensureResultBound(graphics); err != nil {
 		return jvm.VoidValue(), err
 	}
+	finish, err := runtime.beginCardPaint()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	if _, err := vm.InvokeVirtual(receiver, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
 		return jvm.VoidValue(), fmt.Errorf("service repaint of %s: %w", receiver.ClassName, err)
 	}
@@ -3017,7 +3038,7 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	}
 	runtime.guestHasPainted = true
 	runtime.roundsSinceGuestPaint = 0
-	return jvm.VoidValue(), runtime.presentScreen()
+	return jvm.VoidValue(), finish()
 }
 
 func runtimeGetDefaultDisplay(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -3042,7 +3063,14 @@ func (runtime *initializationRuntime) registerRuntimeJavaNatives() error {
 				continue
 			}
 			if err := runtime.client.vm.RegisterNative(method.class, method.name, method.descriptor, func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-				return implementation(runtime, vm, arguments)
+				if runtime.saveReadError != nil {
+					return jvm.VoidValue(), runtime.saveReadError
+				}
+				value, err := implementation(runtime, vm, arguments)
+				if runtime.saveReadError != nil {
+					return jvm.VoidValue(), runtime.saveReadError
+				}
+				return value, err
 			}); err != nil {
 				return fmt.Errorf("register KTF runtime Java native %s.%s%s: %w", method.class, method.name, method.descriptor, err)
 			}
@@ -3337,9 +3365,17 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 			}
 		}
 	}
+	invokeStatic := runtime.client.vm.InvokeStatic
+	invokeVirtual := runtime.client.vm.InvokeVirtual
+	invokeSpecial := runtime.client.vm.InvokeSpecial
+	if runtime.currentContext != nil {
+		if call, ok := runtime.currentContext.Value(jvmInvocationKey{}).(*jvm.Invocation); ok {
+			invokeStatic, invokeVirtual, invokeSpecial = call.InvokeStatic, call.InvokeVirtual, call.InvokeSpecial
+		}
+	}
 	var result jvm.Value
 	if method.accessFlags&0x0008 != 0 {
-		result, err = runtime.client.vm.InvokeStatic(method.class, method.name, method.descriptor, arguments...)
+		result, err = invokeStatic(method.class, method.name, method.descriptor, arguments...)
 	} else {
 		receiver, referenceErr := arguments[0].Reference()
 		if referenceErr != nil {
@@ -3350,9 +3386,9 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 			// An abstract declaration has no body to call non-virtually. The
 			// guest reaches this stub having resolved through the declaring
 			// class, so the receiver is what says which override runs.
-			result, err = runtime.client.vm.InvokeVirtual(receiver, method.name, method.descriptor, arguments[1:]...)
+			result, err = invokeVirtual(receiver, method.name, method.descriptor, arguments[1:]...)
 		} else {
-			result, err = runtime.client.vm.InvokeSpecial(receiver, method.class, method.name, method.descriptor, arguments[1:]...)
+			result, err = invokeSpecial(receiver, method.class, method.name, method.descriptor, arguments[1:]...)
 		}
 		if err == nil {
 			runtime.traceStringConversion(method, receiver, result)

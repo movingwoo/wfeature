@@ -460,7 +460,10 @@ func TestNativeSavesOutliveTheSession(t *testing.T) {
 	// and not what the package carries.
 	second := newTestNativePlatform(t, map[string][]byte{"a title/config.dat": []byte("shipped")})
 	second.AttachSaves(store)
-	contents, ok := second.contents("config.dat")
+	contents, ok, readErr := second.contents("config.dat")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
 	if !ok || string(contents) != "written!" {
 		t.Fatalf("second session read %q (%v), want the save", contents, ok)
 	}
@@ -671,7 +674,7 @@ func TestNativeTruncatingOpenEmptiesTheFile(t *testing.T) {
 	nativeCall(t, platform.writeFile, object, chunk, 5)
 	nativeCall(t, platform.closeFile, object)
 
-	if got, _ := platform.contents("settings.dat"); string(got) != "short" {
+	if got, _, _ := platform.contents("settings.dat"); string(got) != "short" {
 		t.Errorf("file = %q, want %q", got, "short")
 	}
 

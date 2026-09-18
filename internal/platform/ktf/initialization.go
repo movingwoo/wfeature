@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -283,6 +284,7 @@ type initializationRuntime struct {
 	classes             map[string]uint32
 	loadedClasses       map[string]uint32
 	nativeMethods       map[uint32]runtimeJavaInvocation
+	saveReadError       error
 	nextNativeMethod    uint32
 	initializedClasses  map[uint32]bool
 	databases           map[string]*runtimeDataBaseStore
@@ -351,7 +353,8 @@ type initializationRuntime struct {
 	madeDirectories map[string]bool
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
-	clips map[*jvm.Object]*clipState
+	clips         map[weak.Pointer[jvm.Object]]*clipState
+	imageSurfaces map[weak.Pointer[jvm.Object]]uint32
 	// wipicClips is the same thing for the WIPI C media block, whose clips are
 	// guest addresses rather than Java objects. wipicClipOrder is their
 	// creation order, which is what bounds how many keep their bytes. See
@@ -599,7 +602,7 @@ func newInitializationRuntime(client *Client) (*initializationRuntime, error) {
 	if err := runtime.registerRuntimeJavaNatives(); err != nil {
 		return nil, err
 	}
-	client.vm.SetAOTInvoker(runtime.invokeAOTFromJVM)
+	client.vm.SetContextAOTInvoker(runtime.invokeAOTFromJVMContext)
 	return runtime, nil
 }
 
@@ -625,6 +628,18 @@ func (runtime *initializationRuntime) hasAOTMethod(className, name, descriptor s
 	}
 	_, found, err := runtime.aotMethodFromGuestRecords(metadata.Address, name, descriptor)
 	return err == nil && found
+}
+
+type jvmInvocationKey struct{}
+
+func (runtime *initializationRuntime) invokeAOTFromJVMContext(call *jvm.Invocation, className, name, descriptor string, arguments []jvm.Value) (jvm.Value, error) {
+	previous := runtime.currentContext
+	if previous == nil {
+		return jvm.VoidValue(), fmt.Errorf("KTF JVM reentry has no guest context")
+	}
+	runtime.currentContext = context.WithValue(previous, jvmInvocationKey{}, call)
+	defer func() { runtime.currentContext = previous }()
+	return runtime.invokeAOTFromJVM(className, name, descriptor, arguments)
 }
 
 func (runtime *initializationRuntime) invokeAOTFromJVM(className, name, descriptor string, arguments []jvm.Value) (jvm.Value, error) {
@@ -1031,7 +1046,7 @@ func (runtime *initializationRuntime) callAOTJump(ctx context.Context, thread *a
 	if err := runtime.enterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 	summary, err := runtime.client.core.Call(ctx, thread, address, ReturnAddress, arguments, runtime.handleSupervisorCall)
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF AOT Java jump %#x: %w", id, err)
@@ -1076,7 +1091,7 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 	if err := runtime.enterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 
 	summary, err := runtime.client.core.Call(
 		ctx,
@@ -1107,18 +1122,30 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 }
 
 func (runtime *initializationRuntime) enterAOTCall() error {
-	if runtime.aotCallDepth[runtime.currentThread] >= maxAOTCallDepth {
+	owner := runtime.aotCallOwner()
+	if runtime.aotCallDepth[owner] >= maxAOTCallDepth {
 		return fmt.Errorf("KTF AOT guest call nesting exceeds %d", maxAOTCallDepth)
 	}
 	if runtime.aotCallDepth == nil {
 		runtime.aotCallDepth = make(map[*armcore.Thread]uint32)
 	}
-	runtime.aotCallDepth[runtime.currentThread]++
+	runtime.aotCallDepth[owner]++
 	return nil
 }
 
-func (runtime *initializationRuntime) leaveAOTCall() {
-	thread := runtime.currentThread
+// Derived ARM call frames belong to the worker holding the grant, not to a
+// new logical thread. Host callbacks belong to the root client thread.
+func (runtime *initializationRuntime) aotCallOwner() *armcore.Thread {
+	if worker := runtime.client.activeWorker; worker != nil {
+		return worker.armThread
+	}
+	if runtime.client.thread != nil {
+		return runtime.client.thread
+	}
+	return runtime.currentThread
+}
+
+func (runtime *initializationRuntime) leaveAOTCall(thread *armcore.Thread) {
 	if depth := runtime.aotCallDepth[thread]; depth > 1 {
 		runtime.aotCallDepth[thread] = depth - 1
 		return
@@ -1162,7 +1189,12 @@ func (runtime *initializationRuntime) resumeAOTException(thread *armcore.Thread,
 	return nil
 }
 
-func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id uint32) (uint32, error) {
+func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id uint32) (result uint32, err error) {
+	defer func() {
+		if err == nil && runtime.saveReadError != nil {
+			err = runtime.saveReadError
+		}
+	}()
 	runtime.recordDiagnostic(diagEvent{kind: diagWIPICCall, nums: [5]uint32{id}})
 	if id >= 1<<16 {
 		return runtime.handleWIPICTableCall(thread, id>>16, id&0xffff)
@@ -1484,8 +1516,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	case table == wipicTableGraphics && function == 20:
 		return runtime.wipicTransferRGBPixels(thread, true)
 	case table == wipicTableGraphics && function == 21:
-		// MC_grpFlushLcd presents the screen pixel buffer to the Host frame.
-		return 0, runtime.presentScreen()
+		return 0, runtime.flushLCD(thread)
 	case table == wipicTableGraphics && function == 5:
 		return runtime.wipicInitGraphicsContext(thread)
 	case table == wipicTableGraphics && function == 6:
@@ -2026,6 +2057,11 @@ func (runtime *initializationRuntime) freeWIPIC(id uint32) {
 		return
 	}
 	delete(runtime.wipicAllocations, id)
+	for owner, handle := range runtime.imageSurfaces {
+		if handle == id {
+			delete(runtime.imageSurfaces, owner)
+		}
+	}
 	// Transparency is recorded against the handle of the framebuffer or image
 	// that lives in the block, so a released address must not carry its mask
 	// into whatever is allocated there next.

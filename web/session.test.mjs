@@ -109,6 +109,9 @@ const fakeSocket = () => {
         handler({ data: JSON.stringify(message) });
       }
     },
+    deliverFrame: data => {
+      for (const handler of listeners.get("message") ?? []) handler({ data });
+    },
   };
   return socket;
 };
@@ -134,6 +137,28 @@ const openFakeSession = async (handlers = {}) => {
   globalThis.location = previousLocation;
   return { session, socket };
 };
+
+test("intermediate PNG frames arrive while start is still pending", async t => {
+  const frames = [];
+  const { session, socket } = await openFakeSession({ onFrame: bitmap => frames.push(bitmap) });
+  const previous = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async blob => ({ blob, close() {} });
+  t.after(() => { globalThis.createImageBitmap = previous; session.close(); });
+  const starting = session.start("fixture.zip");
+  const request = socket.sent.at(-1);
+  let finished = false;
+  starting.then(() => { finished = true; });
+  const first = new Blob(["first PNG"], { type: "image/png" });
+  const second = new Blob(["second PNG"], { type: "image/png" });
+  socket.deliverFrame(first);
+  await new Promise(resolve => setImmediate(resolve));
+  socket.deliverFrame(second);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  assert.deepEqual(frames.map(frame => frame.blob), [first, second]);
+  socket.deliver({ kind: "started", id: request.id, started: { platform: "ktf", width: 240, height: 320 } });
+  await starting;
+});
 
 test("a resume asks by token and takes the game back from the answer", async () => {
   const { session, socket } = await openFakeSession();

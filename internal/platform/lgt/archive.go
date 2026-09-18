@@ -9,8 +9,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
@@ -101,7 +104,7 @@ func SaveOwner(descriptor Descriptor) string {
 // than rejected because a title that carries an extra one is not broken.
 func ParseDescriptor(data []byte) (Descriptor, error) {
 	descriptor := Descriptor{Fields: make(map[string]string)}
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(archiveText(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -205,7 +208,39 @@ func selectJAR(files map[string][]byte, descriptor Descriptor) ([]byte, error) {
 	case 1:
 		return found, nil
 	}
-	return nil, fmt.Errorf("LGT archive has no %s.jar and %d JARs to fall back to", descriptor.AID, count)
+	var executable []byte
+	names := make([]string, 0, count)
+	for name := range files {
+		if !strings.EqualFold(filepath.Ext(name), ".jar") {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	remaining := defaultArchiveLimits.total
+	for _, name := range names {
+		data := files[name]
+		limits := defaultArchiveLimits
+		limits.total, limits.entry = remaining, min(limits.entry, remaining)
+		entries, err := readZIPWithin(data, "LGT candidate JAR", limits)
+		if err != nil {
+			return nil, fmt.Errorf("inspect candidate %q: %w", name, err)
+		}
+		for _, entry := range entries {
+			remaining -= uint64(len(entry))
+		}
+		if _, err := ParseModule(entries[binaryModuleName]); err != nil {
+			continue
+		}
+		if executable != nil {
+			return nil, fmt.Errorf("LGT archive has multiple executable JARs")
+		}
+		executable = data
+	}
+	if executable != nil {
+		return executable, nil
+	}
+	return nil, fmt.Errorf("LGT archive has no %s.jar and no unique executable among %d JARs", descriptor.AID, count)
 }
 
 // Resource reads one packaged file, tolerating the leading slash a guest path
@@ -214,25 +249,38 @@ func (archive *Archive) Resource(name string) ([]byte, bool) {
 	if archive == nil {
 		return nil, false
 	}
-	trimmed := strings.TrimPrefix(name, "/")
-	if data, ok := archive.Resources[trimmed]; ok {
-		return data, true
+	trimmed, err := safeEntryName(strings.TrimPrefix(archiveText([]byte(name)), "/"))
+	if err != nil {
+		return nil, false
 	}
-	// Guests name resources without regard to case on a case-insensitive
-	// handset filesystem.
-	for key, data := range archive.Resources {
-		if strings.EqualFold(key, trimmed) {
-			return data, true
+	names := []string{trimmed}
+	if strings.HasPrefix(trimmed, "P/") {
+		alias := strings.TrimPrefix(trimmed, "P/")
+		if archive.Descriptor.AID != "" {
+			alias = strings.TrimPrefix(alias, archive.Descriptor.AID+"/")
 		}
+		names = append(names, alias)
 	}
-	// Then what the archive packaged beside the JAR. Second, so the
-	// application's own resources win a name collision.
-	if data, ok := archive.Packaged[trimmed]; ok {
-		return data, true
+	base := names[len(names)-1]
+	names = append(names, "P/"+base)
+	if archive.Descriptor.AID != "" {
+		names = append(names, "P/"+archive.Descriptor.AID+"/"+base)
 	}
-	for key, data := range archive.Packaged {
-		if strings.EqualFold(key, trimmed) {
-			return data, true
+	for _, files := range []map[string][]byte{archive.Resources, archive.Packaged} {
+		for _, candidate := range names {
+			if data, ok := files[candidate]; ok {
+				return data, true
+			}
+			// Choose a stable spelling when a handset's case-insensitive lookup collides.
+			matched := ""
+			for key := range files {
+				if strings.EqualFold(key, candidate) && (matched == "" || key < matched) {
+					matched = key
+				}
+			}
+			if matched != "" {
+				return files[matched], true
+			}
 		}
 	}
 	return nil, false
@@ -264,7 +312,7 @@ func readZIPWithin(data []byte, what string, limits archiveLimits) (map[string][
 		if file.FileInfo().IsDir() {
 			continue
 		}
-		name, err := safeEntryName(file.Name)
+		name, err := safeEntryName(archiveText([]byte(file.Name)))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", what, err)
 		}
@@ -290,6 +338,9 @@ func readZIPWithin(data []byte, what string, limits archiveLimits) (map[string][
 			return nil, fmt.Errorf("%s expands beyond %d bytes", what, limits.total)
 		}
 		expanded += uint64(len(content))
+		if _, exists := entries[name]; exists {
+			return nil, fmt.Errorf("%s duplicate entry %q", what, name)
+		}
 		entries[name] = content
 	}
 	return entries, nil
@@ -297,9 +348,22 @@ func readZIPWithin(data []byte, what string, limits archiveLimits) (map[string][
 
 // safeEntryName rejects the traversal names a hostile archive would use.
 func safeEntryName(name string) (string, error) {
-	cleaned := strings.TrimPrefix(strings.ReplaceAll(name, "\\", "/"), "./")
-	if cleaned == "" || strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "../") {
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	for _, part := range strings.Split(normalized, "/") {
+		if part == ".." {
+			return "", fmt.Errorf("entry name %q is unsafe", name)
+		}
+	}
+	cleaned := path.Clean(normalized)
+	if cleaned == "." || strings.HasPrefix(cleaned, "/") || strings.ContainsAny(cleaned, ":\x00") {
 		return "", fmt.Errorf("entry name %q is unsafe", name)
 	}
 	return cleaned, nil
+}
+
+func archiveText(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	return decodeEUCKR(data)
 }

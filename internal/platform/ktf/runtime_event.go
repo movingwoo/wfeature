@@ -356,6 +356,9 @@ func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event guest
 	case eventKindNotify:
 		return runtime.dispatchNotifyEvent(vm, event)
 	default:
+		if event.kind >= 0x5000 {
+			return runtime.dispatchNotifyEvent(vm, guestEvent{kind: eventKindNotify, param1: event.kind, param2: event.param1, param3: event.param2})
+		}
 		message := fmt.Sprintf("invalid event queue event type %d", event.kind)
 		return &jvm.GuestException{
 			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: message},
@@ -557,10 +560,14 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	}
 	runtime.repaintServicing = true
 	defer func() { runtime.repaintServicing = false }()
+	finish, err := runtime.beginCardPaint()
+	if err != nil {
+		return false, err
+	}
 	if _, err := runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
 		return true, fmt.Errorf("paint KTF card %s: %w", card.ClassName, err)
 	}
-	return true, runtime.presentScreen()
+	return true, finish()
 }
 
 // inputMethodListenerField is the listener a handler was given.

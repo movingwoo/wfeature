@@ -2,10 +2,12 @@ package backend
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -19,12 +21,31 @@ type SaveStore interface {
 	StoreSave(name string, data []byte) error
 }
 
+// SaveReader distinguishes a missing entry from a failed read. Legacy stores
+// remain usable through ReadSave, but cannot report errors they already hide.
+type SaveReader interface {
+	ReadSave(name string) ([]byte, bool, error)
+}
+
+// ReadSave uses the error-aware boundary when a store implements SaveReader.
+func ReadSave(store SaveStore, name string) ([]byte, bool, error) {
+	if store == nil {
+		return nil, false, nil
+	}
+	if reader, ok := store.(SaveReader); ok {
+		return reader.ReadSave(name)
+	}
+	data, exists := store.LoadSave(name)
+	return data, exists, nil
+}
+
 // DirectorySaveStore persists save entries as files under one root
 // directory, one file per key with key slashes as subdirectories. It backs
 // the native CLI Host; the browser Host supplies its own store over the same
 // layout so both address the same entries.
 type DirectorySaveStore struct {
 	root string
+	mu   sync.RWMutex
 }
 
 // NewDirectorySaveStore roots a directory-backed save store. The directory
@@ -78,15 +99,33 @@ func (store *DirectorySaveStore) savePath(name string) (string, error) {
 // LoadSave reads one persisted entry; a missing or unreadable file reports
 // absence.
 func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
+	data, exists, _ := store.ReadSave(name)
+	return data, exists
+}
+
+// ReadSave reports absence only for a missing file, preserving all other errors.
+func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
+	if store == nil {
+		return nil, false, fmt.Errorf("save store has no root")
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.readSave(name)
+}
+
+func (store *DirectorySaveStore) readSave(name string) ([]byte, bool, error) {
 	path, err := store.savePath(name)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
 	}
-	return data, true
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 // StoreSave writes one entry, creating the key's directories as needed.
@@ -102,6 +141,15 @@ func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
 // rename is the one operation a file system will not do halfway, so what
 // survives a failure is either the previous save or the new one.
 func (store *DirectorySaveStore) StoreSave(name string, data []byte) error {
+	if store == nil {
+		return fmt.Errorf("save store has no root")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.storeSave(name, data)
+}
+
+func (store *DirectorySaveStore) storeSave(name string, data []byte) error {
 	path, err := store.savePath(name)
 	if err != nil {
 		return err
@@ -243,6 +291,9 @@ func DecodeSaveRecords(encoded []byte) ([][]byte, error) {
 		}
 		records = append(records, append([]byte(nil), encoded[offset:offset+int(length)]...))
 		offset += int(length)
+	}
+	if offset != len(encoded) {
+		return nil, fmt.Errorf("save records have trailing data")
 	}
 	return records, nil
 }

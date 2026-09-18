@@ -125,7 +125,7 @@ func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, dest
 	if err := runtime.enterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall()
+	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 	summary, err := runtime.client.core.Call(
 		runtime.currentContext,
 		thread,

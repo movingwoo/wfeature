@@ -1906,7 +1906,9 @@ RESUMED follow the [WIPI media contract](https://mirusu400.github.io/wipi-wiki/c
 Completion follows the mixer's playback state, including when no Host sink is
 attached. Repeating clips do not report completion while looping, and playing
 an already playing clip does not restart it. Pause/resume still restarts the
-score rather than preserving a paused cursor.
+score rather than preserving a paused cursor. Java `Player.pause` preserves the
+repeat setting for `resume`; `stop` clears paused state, and duplicate play or
+resume requests do not create another voice.
 
 Delivery uses a snapshot: callbacks may stop or free their clip without
 reentering an unfinished media call. Freed clips discard remaining callbacks,

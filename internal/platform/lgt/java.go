@@ -223,7 +223,12 @@ func (client *Client) javaInterfaceFunction(index uint32) (uint32, error) {
 // handleJavaSVC services one call on the Java interface table. Every one of
 // them records what it was handed and then stops the title, because answering
 // would be claiming the class metadata was accepted.
-func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread, slot uint32) error {
+func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread, slot uint32) (err error) {
+	defer func() {
+		if client.saveReadError != nil {
+			err = client.saveReadError
+		}
+	}()
 	argument := func(index int) (uint32, error) {
 		if index < 4 {
 			return thread.Register(index)

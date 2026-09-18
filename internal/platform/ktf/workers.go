@@ -64,8 +64,9 @@ func justBelow(base, address uint32) bool {
 }
 
 type workerEvent struct {
-	done bool
-	err  error
+	done   bool
+	err    error
+	forced bool
 }
 
 type guestWorker struct {
@@ -139,7 +140,7 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 		slice = defaultThreadSliceSteps
 	}
 	worker.armThread.SetStepBudget(slice)
-	worker.armThread.SetLimitHook(func(context.Context) error { return worker.park() })
+	worker.armThread.SetLimitHook(func(context.Context) error { return worker.parkSlice(true) })
 	if client.module && client.runtime != nil {
 		if err := client.runtime.prepareModuleThread(worker.armThread); err != nil {
 			return nil, err
@@ -152,7 +153,11 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 // park reports the worker as still running and blocks until the Host grants
 // the next slice. A closed grant channel aborts the guest run.
 func (worker *guestWorker) park() error {
-	worker.events <- workerEvent{}
+	return worker.parkSlice(false)
+}
+
+func (worker *guestWorker) parkSlice(forced bool) error {
+	worker.events <- workerEvent{forced: forced}
 	if _, ok := <-worker.grant; !ok {
 		return errWorkersStopped
 	}

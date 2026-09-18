@@ -54,6 +54,7 @@ type Runtime struct {
 	stateMu    sync.RWMutex
 	state      LifecycleState
 	lastError  error
+	asyncError error
 
 	// pad makes a keyboard's overlapping holds look like a thumb on a handset
 	// pad. It is guarded because a Host may send keys from a different
@@ -295,6 +296,17 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		}
 	}
 	runtime := &Runtime{}
+	observer := options.JVM.AsyncError
+	options.JVM.AsyncError = func(err error) {
+		runtime.stateMu.Lock()
+		if runtime.asyncError == nil && runtime.state != StateDestroyed && runtime.state != StateError {
+			runtime.asyncError = err
+		}
+		runtime.stateMu.Unlock()
+		if observer != nil {
+			observer(err)
+		}
+	}
 	// A title's own thread is the game: it decodes its images, loads its world
 	// and runs its frames, and it does that for as long as the title is up. So
 	// the JVM's step limit is a window here rather than a ceiling, renewed
@@ -466,6 +478,17 @@ func (runtime *Runtime) Destroy(unconditional bool) error {
 func (runtime *Runtime) RunPending() error {
 	runtime.dispatchMu.Lock()
 	defer runtime.dispatchMu.Unlock()
+	runtime.stateMu.RLock()
+	pending, previous, state := runtime.asyncError, runtime.lastError, runtime.state
+	runtime.stateMu.RUnlock()
+	if state == StateError && previous != nil {
+		return previous
+	}
+	if pending != nil {
+		err := runtime.fail("background thread", pending)
+		runtime.endAudioWaits()
+		return err
+	}
 	if err := runtime.postDeferredPaint(); err != nil {
 		return err
 	}
@@ -1198,6 +1221,7 @@ func (runtime *Runtime) transition(event string, next LifecycleState) {
 	}
 	if next == StateDestroyed || next == StateError {
 		runtime.endAudioWaits()
+		runtime.VM.Close()
 	}
 }
 
@@ -1217,6 +1241,10 @@ func (runtime *Runtime) recordFailure(action string, cause, failure error, next 
 	runtime.state = next
 	runtime.lastError = failure
 	runtime.stateMu.Unlock()
+	if next == StateDestroyed || next == StateError {
+		runtime.endAudioWaits()
+		runtime.VM.Close()
+	}
 	if runtime.logger != nil {
 		runtime.logger.Error("MIDlet lifecycle failed", "action", action, "from", previous, "to", next, "error", cause)
 	}

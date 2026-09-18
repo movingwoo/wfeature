@@ -32,6 +32,7 @@ type Object struct {
 	Native    any
 	monitor   monitor
 	identity  atomic.Uint32
+	thread    atomic.Pointer[guestThread]
 	// aotAddress is the guest address this object is bound behind, or zero
 	// while it is Go-only. It lives on the object rather than in a second map
 	// so the binding costs nothing per object to look up or to forget.

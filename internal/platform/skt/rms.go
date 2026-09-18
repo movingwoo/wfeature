@@ -120,14 +120,17 @@ func (runtime *Runtime) rms() *rmsState {
 
 // loadIndex seeds the known store names once per session: the ones the Host
 // wrote down, and then the ones the archive brought with it.
-func (runtime *Runtime) loadIndex(state *rmsState) {
+func (runtime *Runtime) loadIndex(state *rmsState) error {
 	if state.loaded {
-		return
+		return nil
 	}
-	state.loaded = true
 	store := runtime.saveStoreBoundary()
 	if store != nil {
-		if data, ok := store.LoadSave(rmsIndexKey); ok {
+		data, ok, err := backend.ReadSave(store, rmsIndexKey)
+		if err != nil {
+			return newGuestException(midp.RecordStoreExceptionClass, err.Error())
+		}
+		if ok {
 			for _, name := range splitStoreIndex(data) {
 				if state.contains(name) {
 					continue
@@ -155,7 +158,11 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 		records := carried[name]
 		if store != nil {
 			if key, err := recordStoreKey(name); err == nil {
-				if _, written := store.LoadSave(key); written {
+				_, written, err := backend.ReadSave(store, key)
+				if err != nil {
+					return newGuestException(midp.RecordStoreExceptionClass, err.Error())
+				}
+				if written {
 					// The Host has the last word about this store, whether
 					// that is records the title wrote or the empty list a
 					// delete leaves behind. Neither the name nor the archive's
@@ -177,6 +184,8 @@ func (runtime *Runtime) loadIndex(state *rmsState) {
 		// kept out of it when the store beside it is written.
 		state.unwritten[name] = true
 	}
+	state.loaded = true
+	return nil
 }
 
 func (state *rmsState) contains(name string) bool {
@@ -301,7 +310,9 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	boundary := runtime.saveStoreBoundary()
-	runtime.loadIndex(state)
+	if err := runtime.loadIndex(state); err != nil {
+		return nil, err
+	}
 
 	if store, ok := state.stores[name]; ok {
 		store.mu.Lock()
@@ -342,7 +353,11 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		// `unwritten` until something writes it. See persistStore.
 	}
 	if found && boundary != nil {
-		if data, ok := boundary.LoadSave(key); ok {
+		data, ok, err := backend.ReadSave(boundary, key)
+		if err != nil {
+			return nil, newGuestException(midp.RecordStoreExceptionClass, err.Error())
+		}
+		if ok {
 			decoded, decodeErr := backend.DecodeSaveRecords(data)
 			if decodeErr != nil {
 				// A save this runtime cannot read is reported rather than
@@ -463,7 +478,9 @@ func (runtime *Runtime) rmsOpenRecordStore(_ *jvm.VM, arguments []jvm.Value) (jv
 func (runtime *Runtime) rmsListRecordStores(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	state := runtime.rms()
 	state.mu.Lock()
-	runtime.loadIndex(state)
+	if err := runtime.loadIndex(state); err != nil {
+		return jvm.VoidValue(), err
+	}
 	names := append([]string(nil), state.names...)
 	state.mu.Unlock()
 	if len(names) == 0 {
@@ -493,7 +510,9 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 	state := runtime.rms()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	runtime.loadIndex(state)
+	if err := runtime.loadIndex(state); err != nil {
+		return jvm.VoidValue(), err
+	}
 	store, known := state.stores[name]
 	if known {
 		store.mu.Lock()

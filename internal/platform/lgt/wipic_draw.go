@@ -57,6 +57,7 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 	// A Clet may have written the surface directly since the last call, so the
 	// runtime's copy is refreshed before it draws and written back after — over
 	// the rows this call can reach and no more. See rowBand.
+	drawContext.callbackUnlock = true
 	band := drawBand(slot, drawContext, values)
 	if err := client.syncRowsFromGuest(target, band); err != nil {
 		return err
@@ -150,7 +151,11 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 // this same surface's own pixels for a copy inside it, and a separate surface
 // for a blit, which narrows itself where it syncs.
 func drawBand(slot uint32, context *graphicsContext, values []int32) rowBand {
+	// Keep all clipped rows when translation makes argument-space bands differ.
 	clip := rowsAt(context.clipY, context.clipHeight)
+	if context.offsetY != 0 {
+		return rowsAt(0, context.target.height)
+	}
 	switch slot {
 	case slotPutPixel:
 		return clip.meet(rowsAt(int(values[2]), 1))
@@ -323,13 +328,17 @@ func (client *Client) copyFramebuffer(context *graphicsContext, values []int32) 
 	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
 		return err
 	}
+	pixels := source.pixels
+	if source == context.target {
+		pixels = append([]uint16(nil), pixels...)
+	}
 	for row := 0; row < height; row++ {
 		for column := 0; column < width; column++ {
 			sx, sy := sourceX+column, sourceY+row
 			if sx < 0 || sy < 0 || sx >= source.width || sy >= source.height {
 				continue
 			}
-			pixel := source.pixels[sy*source.width+sx]
+			pixel := pixels[sy*source.width+sx]
 			if pixel == maskPixel {
 				continue
 			}

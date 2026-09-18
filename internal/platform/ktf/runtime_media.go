@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -40,12 +41,13 @@ type clipState struct {
 
 func (runtime *initializationRuntime) clip(receiver *jvm.Object) *clipState {
 	if runtime.clips == nil {
-		runtime.clips = map[*jvm.Object]*clipState{}
+		runtime.clips = map[weak.Pointer[jvm.Object]]*clipState{}
 	}
-	state, ok := runtime.clips[receiver]
+	key := weak.Make(receiver)
+	state, ok := runtime.clips[key]
 	if !ok {
 		state = &clipState{}
-		runtime.clips[receiver] = state
+		runtime.clips[key] = state
 	}
 	return state
 }

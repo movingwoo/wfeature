@@ -295,6 +295,7 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 		stats.Freed++
 		stats.Bytes += uint64(record.size)
 	}
+	runtime.collectHostResources()
 	runtime.scheduleNextCollection()
 	return stats, nil
 }
@@ -489,4 +490,27 @@ func (client *Client) CollectGuestObjects(extraRoots []uint32) (CollectionStats,
 			"micros", time.Since(started).Microseconds())
 	}
 	return stats, nil
+}
+
+// collectHostResources follows Go liveness without rooting guest objects in
+// bookkeeping maps. Playing orphan clips keep their mixer handle until done.
+func (runtime *initializationRuntime) collectHostResources() {
+	for owner, handle := range runtime.imageSurfaces {
+		if owner.Value() == nil {
+			runtime.destroyWIPICFramebufferRecord(handle)
+			delete(runtime.imageSurfaces, owner)
+		}
+	}
+	for owner, state := range runtime.clips {
+		if owner.Value() != nil {
+			continue
+		}
+		if state.loaded && runtime.client.audio != nil {
+			if runtime.client.audio.Playing(state.handle) {
+				continue
+			}
+			_ = runtime.client.audio.Close(state.handle)
+		}
+		delete(runtime.clips, owner)
+	}
 }

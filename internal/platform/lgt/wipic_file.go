@@ -526,7 +526,7 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 		return nil, false
 	}
 	if key, err := fileSaveKey(name); err == nil && client.saveStore != nil {
-		if data, ok := client.saveStore.LoadSave(key); ok {
+		if data, ok := client.loadSave(key); ok {
 			return data, true
 		}
 	}
@@ -565,7 +565,7 @@ func (client *Client) writeFile(name string, data []byte) {
 	// succeeds: the session's own view has the file from here on.
 	client.markFileRemoved(name, false)
 	client.markFileCreated(name)
-	if client.saveStore == nil {
+	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
 	key, err := fileSaveKey(name)
@@ -593,10 +593,10 @@ func (client *Client) createdFiles() map[string]bool {
 		return client.created
 	}
 	client.created = make(map[string]bool)
-	if client.saveStore == nil {
+	if client.saveStore == nil || client.saveReadError != nil {
 		return client.created
 	}
-	data, ok := client.saveStore.LoadSave(fileCreatedKey)
+	data, ok := client.loadSave(fileCreatedKey)
 	if !ok {
 		return client.created
 	}
@@ -619,7 +619,7 @@ func (client *Client) markFileCreated(name string) {
 		return
 	}
 	set[key] = true
-	if client.saveStore == nil {
+	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
 	names := make([]string, 0, len(set))
@@ -694,10 +694,10 @@ func (client *Client) removedFiles() map[string]bool {
 		return client.removed
 	}
 	client.removed = make(map[string]bool)
-	if client.saveStore == nil {
+	if client.saveStore == nil || client.saveReadError != nil {
 		return client.removed
 	}
-	data, ok := client.saveStore.LoadSave(fileRemovedKey)
+	data, ok := client.loadSave(fileRemovedKey)
 	if !ok {
 		return client.removed
 	}
@@ -721,7 +721,7 @@ func (client *Client) markFileRemoved(name string, removed bool) {
 	} else {
 		delete(set, key)
 	}
-	if client.saveStore == nil {
+	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
 	names := make([]string, 0, len(set))
@@ -741,3 +741,13 @@ func fileSaveKey(name string) (string, error) {
 // storageQuotaBytes is what MC_fsTotalSpace and MC_fsAvailable report. See the
 // slots themselves for why it is a constant rather than the host's free space.
 const storageQuotaBytes int32 = 1 << 20
+
+// loadSave records an unrecoverable read failure so a native boundary reports
+// it instead of allowing an absent-file fallback to overwrite the old save.
+func (client *Client) loadSave(name string) ([]byte, bool) {
+	data, present, err := backend.ReadSave(client.saveStore, name)
+	if err != nil && client.saveReadError == nil {
+		client.saveReadError = fmt.Errorf("read save %s: %w", name, err)
+	}
+	return data, present
+}

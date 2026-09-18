@@ -322,6 +322,9 @@ func (runtime *initializationRuntime) graphicsTextWidth(text []rune) int32 {
 }
 
 func (runtime *initializationRuntime) graphicsCharAdvance(character rune) int32 {
+	if character == 0 {
+		return 0
+	}
 	// WIPI Java uses five-pixel printable ASCII cells beside ten-pixel
 	// Korean syllables. Space-padded overlays replace ASCII with one space
 	// and Korean with two; the font asset's proportional advances would
@@ -368,6 +371,9 @@ func (runtime *initializationRuntime) graphicsDrawText(state *runtimeGraphicsSta
 	baseline := y + runtime.fontBaseline()
 	cursor := x
 	for _, character := range text {
+		if character == 0 {
+			continue
+		}
 		bitmap := face.Render(character)
 		if character != ' ' && character != '\t' {
 			for row := range bitmap.Rows {

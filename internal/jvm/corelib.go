@@ -309,6 +309,7 @@ func threadDefinition() ClassDefinition {
 			{Name: "start", Descriptor: "()V", Access: AccessPublic | AccessNative},
 			{Name: "interrupt", Descriptor: "()V", Access: AccessPublic | AccessNative},
 			{Name: "isAlive", Descriptor: "()Z", Access: AccessPublic | AccessNative},
+			{Name: "join", Descriptor: "()V", Access: AccessPublic | AccessFinal | AccessNative, Throws: []string{"java/lang/InterruptedException"}},
 			{Name: "run", Descriptor: "()V", Access: AccessPublic, Body: threadRun},
 			{Name: "sleep", Descriptor: "(J)V", Access: AccessPublic | AccessStatic | AccessNative, Throws: []string{"java/lang/InterruptedException"}},
 			{Name: "yield", Descriptor: "()V", Access: AccessPublic | AccessStatic | AccessNative},

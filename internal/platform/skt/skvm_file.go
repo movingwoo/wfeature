@@ -107,7 +107,11 @@ func (runtime *Runtime) initXFileName(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 
 	found := false
 	if store := runtime.saveStoreBoundary(); store != nil {
-		if data, ok := store.LoadSave(key); ok {
+		data, ok, readErr := backend.ReadSave(store, key)
+		if readErr != nil {
+			return jvm.VoidValue(), newGuestException("java/io/IOException", readErr.Error())
+		}
+		if ok {
 			file.data = data
 			found = true
 		}
@@ -314,15 +318,20 @@ func (runtime *Runtime) persistXFile(file *xFileData) {
 
 // xFileContents resolves a path to its bytes without opening it: the save
 // first, then the packaged resource.
-func (runtime *Runtime) xFileContents(name string) ([]byte, bool) {
-	if key, err := xFileKey(name); err == nil {
-		if store := runtime.saveStoreBoundary(); store != nil {
-			if data, ok := store.LoadSave(key); ok {
-				return data, true
-			}
-		}
+func (runtime *Runtime) xFileContents(name string) ([]byte, bool, error) {
+	key, err := xFileKey(name)
+	if err != nil {
+		return nil, false, err
 	}
-	return runtime.Archive.Resource(xFileResourceName(name))
+	data, present, err := backend.ReadSave(runtime.saveStoreBoundary(), key)
+	if err != nil {
+		return nil, false, newGuestException("java/io/IOException", err.Error())
+	}
+	if present {
+		return data, true, nil
+	}
+	data, present = runtime.Archive.Resource(xFileResourceName(name))
+	return data, present, nil
 }
 
 func (runtime *Runtime) xFileExists(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -330,7 +339,11 @@ func (runtime *Runtime) xFileExists(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if _, ok := runtime.xFileContents(name); ok {
+	_, ok, err := runtime.xFileContents(name)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if ok {
 		return jvm.IntValue(1), nil
 	}
 	return jvm.IntValue(0), nil
@@ -341,7 +354,10 @@ func (runtime *Runtime) xFileSize(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, 
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	data, ok := runtime.xFileContents(name)
+	data, ok, err := runtime.xFileContents(name)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	if !ok {
 		return jvm.IntValue(-1), nil
 	}

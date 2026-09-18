@@ -107,6 +107,12 @@ type Client struct {
 	// framePending records that the guest flushed since the last conversion,
 	// so Frame knows it has work to do. See presentScreen.
 	framePending     bool
+	partialFrame     bool // The retained LCD differs from unflushed screen pixels.
+	forcedSlice      bool // Last thread service paused unfinished computation.
+	frameSink        backend.FrameSink
+	frameSampleAt    time.Time
+	frameSampleClock func() time.Time
+	lastSample       []byte
 	workers          []*guestWorker
 	activeWorker     *guestWorker
 	workerStackCount int
@@ -215,6 +221,7 @@ func (client *Client) serviceAudio() {
 		return
 	}
 	client.audio.Advance(client.runtime.guestElapsed())
+	client.runtime.collectHostResources()
 }
 
 // SetDiagnostics configures how much boundary history the client retains and
@@ -361,6 +368,7 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 	}
 	client.run.Lock()
 	defer client.run.Unlock()
+	client.forcedSlice = false
 	if client.runtime == nil {
 		return 0, fmt.Errorf("KTF client initialization has not completed")
 	}
@@ -462,6 +470,7 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 		client.activeWorker = worker
 		worker.grant <- struct{}{}
 		event := <-worker.events
+		client.forcedSlice = event.forced
 		client.activeWorker = nil
 		serviced++
 		spent += client.core.Steps() - before
@@ -506,7 +515,7 @@ func (client *Client) ServicePaint(ctx context.Context) (bool, error) {
 	// stalls more than the screen: the serial queue waits on an outstanding
 	// repaint, and the repaint is cleared by the paint, so a gated one leaves
 	// both parked on each other. See NextDeadline.
-	if !runtime.repaintQueued() && client.now().Before(client.nextRoundPaint) {
+	if !runtime.repaintQueued() && (client.forcedSlice || client.now().Before(client.nextRoundPaint)) {
 		return false, nil
 	}
 	defer client.beginHostService(ctx)()

@@ -149,7 +149,10 @@ type Options struct {
 	DisableAuthentication bool
 	SaveStore             backend.SaveStore
 	AudioSink             backend.AudioSink
-	Logger                *slog.Logger
+	// FrameUpdates optionally receives owned intermediate frames during long
+	// callbacks. The Host must drain it independently of session execution.
+	FrameUpdates chan<- backend.FrameUpdate
+	Logger       *slog.Logger
 
 	// Speed scales the pace of the platforms that own a clock. Zero and 1 both
 	// mean the speed the game was written for.
@@ -317,6 +320,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		started, err := ktf.StartSession(ctx, archive, ktf.SessionOptions{
 			DisableAuthentication: options.DisableAuthentication,
 			AudioSink:             options.AudioSink,
+			FrameSink:             backend.FrameSink{Output: options.FrameUpdates, Scale: options.Scale},
 			SaveStore:             options.SaveStore,
 			Speed:                 options.Speed,
 			TraceLimit:            options.TraceLimit,
@@ -1139,6 +1143,16 @@ func (s *Session) SetScale(scale int) {
 		scale = 1
 	}
 	s.options.Scale = scale
+	s.SetFrameUpdates(s.options.FrameUpdates)
+}
+
+// SetFrameUpdates attaches or detaches the Host's optional intermediate queue.
+// Detach before the Host closes that queue, including when parking a session.
+func (s *Session) SetFrameUpdates(output chan<- backend.FrameUpdate) {
+	s.options.FrameUpdates = output
+	if s.ktf != nil {
+		s.ktf.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale()})
+	}
 }
 
 // Scale reports the magnification in effect.
