@@ -1,30 +1,18 @@
 // The OS owns composition. Only an explicit submission sends complete text.
-const explain = error => {
-  switch (error?.message) {
-    case "no supported text field is active": return "게임에서 입력할 칸을 먼저 선택해 주세요. 게임 자체 입력창은 지원되지 않을 수 있습니다.";
-    case "the active text field changed; open text input again": return "게임의 입력칸이 바뀌었습니다. 닫고 다시 열어 주세요.";
-    case "text does not satisfy the active field constraints": return "입력 가능한 문자와 길이를 확인해 주세요.";
-    default: return "문자 입력에 실패했습니다. 연결 상태를 확인해 주세요.";
-  }
-};
-
 export const createTextInputDialog = ({ document, getSession, releaseInput }) => {
   const node = name => document.getElementById(`text-input-${name}`);
   const dialog = node("dialog"), status = node("status"), single = node("value"), multi = node("multiline");
-  const apply = node("apply"), cancel = node("cancel"), hint = node("hint");
+  const apply = node("apply"), cancel = node("cancel");
   let generation = 0, owner = null, edit = null, field = single, composing = false, busy = false;
-  const showStatus = (state, message, guidance = "") => {
+  const showStatus = state => {
     status.dataset.state = state;
-    status.textContent = message;
-    status.hidden = false;
-    hint.textContent = guidance;
-    hint.hidden = !guidance;
+    status.hidden = state === "checking";
+    status.textContent = status.hidden ? "" : state === "available" ? "입력 가능" : "입력 불가능";
   };
   const showError = error => {
     const stale = error?.message === "the active text field changed; open text input again";
     const unavailable = edit == null || stale;
-    showStatus(unavailable ? "unavailable" : "error",
-      unavailable ? "지금은 입력할 수 없습니다" : "입력 내용을 확인해 주세요", explain(error));
+    showStatus(unavailable ? "unavailable" : "error");
     apply.disabled = unavailable;
     if (stale) field.readOnly = true;
   };
@@ -38,7 +26,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     edit = null;
     single.value = multi.value = "";
     composing = busy = false;
-    showStatus("checking", "입력칸을 확인하고 있습니다…");
+    showStatus("checking");
     single.readOnly = multi.readOnly = false;
     apply.textContent = "입력";
     cancel.textContent = "닫기";
@@ -72,10 +60,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       apply.disabled = false;
       apply.textContent = textInput.append ? "삽입" : "입력";
       cancel.textContent = "취소";
-      const guidance = textInput.append
-        ? "입력한 문자를 게임의 커서 위치에 추가합니다."
-        : "입력 버튼을 누르면 게임의 입력칸에 반영됩니다.";
-      showStatus("available", "입력할 수 있습니다", guidance);
+      showStatus("available");
       // Phones may require a fresh tap after the asynchronous response.
       field.focus();
     } catch (error) {
@@ -88,7 +73,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     busy = true;
     apply.disabled = true;
     field.disabled = true;
-    showStatus("checking", "게임에 반영하고 있습니다…");
+    showStatus("checking");
     try {
       await owner.commitTextInput(edit, field.value);
       if (current === generation) { edit = null; close(); }

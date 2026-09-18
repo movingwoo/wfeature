@@ -4,7 +4,7 @@ import { createTextInputDialog } from "./text-input.js";
 
 const fixture = connection => {
   const nodes = new Map();
-  for (const name of ["dialog", "status", "value", "multiline", "apply", "cancel", "hint"]) {
+  for (const name of ["dialog", "status", "value", "multiline", "apply", "cancel"]) {
     const handlers = {};
     nodes.set(`text-input-${name}`, {
       value: "", open: false, handlers, dataset: {},
@@ -77,10 +77,10 @@ test("failed validation preserves draft and password never uses textarea", async
   assert.equal(f.node("value").disabled, false);
   assert.equal(f.node("dialog").open, true);
   assert.equal(f.node("status").hidden, false);
-  assert.match(f.node("hint").textContent, /길이/);
+  assert.equal(f.node("status").textContent, "입력 불가능");
 });
 
-test("append-only guest input explains insertion instead of replacement", async () => {
+test("append-only guest input keeps the insertion action and compact status", async () => {
   const f = fixture({
     openTextInput: async () => ({ textInput: { edit: 3, text: "", append: true, inputMode: "text" } }),
     commitTextInput: async () => {}, cancelTextInput: async () => {},
@@ -89,7 +89,7 @@ test("append-only guest input explains insertion instead of replacement", async 
   assert.equal(f.node("status").dataset.state, "available");
   assert.equal(f.node("status").hidden, false);
   assert.equal(f.node("apply").textContent, "삽입");
-  assert.match(f.node("hint").textContent, /커서 위치에 추가/);
+  assert.equal(f.node("status").textContent, "입력 가능");
 });
 
 
@@ -98,12 +98,14 @@ test("opening distinguishes checking from an unavailable target", async () => {
   const f = fixture({ openTextInput: () => new Promise((_, fail) => { reject = fail; }) });
   const opening = f.controller.open();
   assert.equal(f.node("status").dataset.state, "checking");
+  assert.equal(f.node("status").hidden, true);
+  assert.equal(f.node("status").textContent, "");
   assert.equal(f.node("value").hidden, true);
   assert.equal(f.node("apply").disabled, true);
   reject(new Error("no supported text field is active"));
   await opening;
   assert.equal(f.node("status").dataset.state, "unavailable");
-  assert.match(f.node("hint").textContent, /먼저 선택/);
+  assert.equal(f.node("status").textContent, "입력 불가능");
   assert.equal(f.node("apply").disabled, true);
   assert.equal(f.node("cancel").textContent, "닫기");
 });

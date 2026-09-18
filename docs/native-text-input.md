@@ -7,12 +7,13 @@ to the browser. The emulator does not implement a separate handset Hangul
 layout; the existing game keypad remains available for game controls.
 
 
-The dialog checks the actual target when opened and shows checking, available,
-unavailable, or validation-failed status in text as well as color. An unsupported
-screen shows the reason without an empty editable field. A stale target preserves
+The dialog checks the actual target when opened. It shows only green
+**입력 가능** or red **입력 불가능**, with no explanatory status text.
+The status stays hidden while checking or submitting. An unsupported screen
+has no empty editable field. A stale target preserves
 the draft for copying and disables resubmission until the dialog is reopened.
-Constraint failures keep editing and retry available. Append-only targets label
-the action as insertion and explain that existing guest text is retained.
+Constraint failures show the red status while keeping editing and retry
+available. Append-only targets label the action as insertion.
 Availability describes the opening snapshot; it is not a continuously polled
 claim about the game's current focus. The platform still validates at commit.
 
