@@ -1379,3 +1379,12 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 #text-input-status[data-state="unavailable"],
 #text-input-status[data-state="error"] { color: #ff8f8f; }
 #text-input-dialog button:disabled { opacity: 0.45; cursor: default; }
+
+/* The local switch carries both its purpose and current mode on a small cell. */
+.button-container button[data-key="RAPID_FIRE"] {
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 2px;
+}

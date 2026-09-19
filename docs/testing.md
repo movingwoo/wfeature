@@ -106,6 +106,12 @@ replacement, audible audio activation/recovery, touch, real-phone suspension,
 and saved progression need explicit routes and observations. A mocked bitmap
 decoder does not establish successful decoding in a real browser.
 
+## Rapid-fire input
+
+[Rapid-fire behavior and measurements](rapid-fire.md) records the deterministic
+input tests, real WebSocket route, Chromium/WebKit checks, and the separate
+server CPU probe. Its authored fixture does not establish all-game input cost.
+
 ## Reading old validation
 
 [Testing history](history/testing.md) keeps detailed experiments and release
