@@ -14,6 +14,11 @@ It maps the image at `0x00100000`, enters Thumb code at `0x00100001`, and
 validates the returned initialization and class metadata before using it.
 The combined image and BSS are limited to 256 MiB.
 
+The JVM context sits beside an ordinary image so representable object-header
+displacements retain canonical image class addresses during compiled access
+checks. Runtime aliases and inherited field payloads are described in the
+[startup compatibility investigation](startup-compatibility-2026-09-19.md#ktf-startup-exception-1379b56de66e).
+
 The earlier native package path accepts the supported `.mif`/`.mod` shape.
 It has its own loader and platform interfaces inside the same platform package.
 A folder name containing BREW does not identify that format; detection uses
@@ -25,6 +30,9 @@ worker execution use bounded instruction windows. AOT nesting is bounded per
 logical worker, including derived ARM calls. The JVM/ARM bridge carries the
 current `jvm.Invocation`, preserving monitors, class initialization, and the
 instruction budget across Java → ARM → Java reentry.
+A client-thread serial callback does not consume a guest worker grant, so a
+self-requeueing UI cannot starve a receiver. Each round retains the configured
+worker limit and the existing serial callback pacing.
 
 Normal native returns use the established register convention. No environment
 return-slot precedence is implemented: its address, width, initialization, and

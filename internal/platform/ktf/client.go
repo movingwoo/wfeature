@@ -443,7 +443,10 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 	// entitled to, so retiring a hundred threads that each cost a few thousand
 	// steps is allowed and one that spends a whole slice before returning ends
 	// the round.
-	slices := serialRan
+	// The serial callback runs on the client thread. It does not spend a
+	// guest worker grant: a callback that requeues itself every round would
+	// otherwise starve all workers when the host supplies a limit of one.
+	slices := 0
 	spent := uint64(0)
 	allowance := client.threadSliceSteps
 	if allowance == 0 {

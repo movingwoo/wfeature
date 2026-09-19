@@ -426,6 +426,12 @@ func init() {
 				{class: "java/lang/Math", name: "max", descriptor: "(JJ)J", accessFlags: 0x0009},
 			},
 		},
+		"java/lang/Character": {
+			name: "java/lang/Character", superName: "java/lang/Object", accessFlags: 0x0031,
+			methods: []runtimeJavaMethod{
+				{class: "java/lang/Character", name: "isDigit", descriptor: "(C)Z", accessFlags: 0x0009},
+			},
+		},
 		// java/lang/Integer exposes the JVM-owned CLDC implementation. A class
 		// missing from this table still resolves — ensureJavaClass allocates an
 		// empty record for it — so the omission only shows up as a failed
@@ -750,6 +756,7 @@ func init() {
 				{class: runtimeBackLightClass, name: "before", descriptor: "()V", accessFlags: 0x0009, implementation: runtimeBackLightNoop},
 			},
 		},
+		runtimeKernelClass:           runtimeKernelClassDefinition(),
 		"org/kwis/msp/io/File":       runtimeFileClassDefinition(),
 		runtimeFileOutputStreamClass: runtimeFileOutputStreamClassDefinition(),
 		runtimeFileInputStreamClass:  runtimeFileInputStreamClassDefinition(),
@@ -1423,6 +1430,9 @@ func init() {
 	// stops inside its own error handling with no sign of what it was
 	// handling. Declaring the chain costs one record each and makes the
 	// records say what the `catch` matching has always said.
+	for _, definition := range runtimeRelayClasses() {
+		runtimeJavaClasses[definition.name] = definition
+	}
 	for name, parent := range jvm.ThrowableParents() {
 		if _, published := runtimeJavaClasses[name]; published {
 			continue
@@ -3089,6 +3099,13 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		parent, err = runtime.ensureJavaClass(definition.superName)
 		if err != nil {
 			return 0, fmt.Errorf("create KTF runtime Java class %s parent: %w", definition.name, err)
+		}
+		// A fieldless runtime subclass still carries its inherited payload.
+		// The guest uses this size to place fields in its own subclasses.
+		if definition.instanceSize == 0 {
+			if metadata, ok := runtime.client.vm.AOTClassAt(parent); ok {
+				definition.instanceSize = metadata.InstanceSize
+			}
 		}
 	}
 	classAddress, err := runtime.allocate(javaClassSize)

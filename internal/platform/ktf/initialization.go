@@ -302,6 +302,8 @@ type initializationRuntime struct {
 	pendingTimers            []wipicTimer
 	// pendingNetCallbacks are the MC_netConnect failures owed to callers that
 	// registered one; see wipic_net.go.
+	relayOnline         bool
+	relaySocket         *relaySocket
 	pendingNetCallbacks []wipicNetCallback
 	pendingThreads      []*jvm.Object
 	// pendingSerial holds Display.callSerially Runnables. They are dispatched
@@ -394,6 +396,7 @@ type initializationRuntime struct {
 	moduleClassByName   map[string]uint32
 	linkedModuleClasses map[uint32]bool
 	jvmContext          uint32
+	classArena          *guestArena
 	exceptionContext    uint32
 	screenFramebuffer   uint32
 	callbacks           InitializationCallbacks
@@ -730,7 +733,7 @@ func (runtime *initializationRuntime) prepare() ([]uint32, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime.jvmContext, err = runtime.allocateWords(make([]uint32, 3+128))
+	runtime.jvmContext, err = runtime.prepareClassContext()
 	if err != nil {
 		return nil, err
 	}

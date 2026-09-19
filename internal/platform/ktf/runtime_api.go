@@ -127,8 +127,8 @@ func runtimeNetworkClassDefinition() runtimeJavaClass {
 
 // runtimeURLClassDefinition is the one entry point to a socket: every socket a
 // WIPI title opens comes from URL.find with an RFC 1738 string, and the scheme
-// in that string decides what it gets. There is no network boundary here, so
-// no scheme can be served.
+// in that string decides what it gets. Only the recognized local relay
+// endpoint is served; other addresses retain the offline refusal.
 func runtimeURLClassDefinition() runtimeJavaClass {
 	const class = runtimeURLClass
 	return runtimeJavaClass{
@@ -153,6 +153,14 @@ func runtimeURLFind(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 			address, _ = jvm.StringText(object)
 		}
 	}
+	if address == relayAddress && runtime.hasSlotRelay() && runtime.relayOnline && (runtime.relaySocket == nil || runtime.relaySocket.closed) {
+		if runtime.relaySocket != nil {
+			runtime.relaySocket.close()
+		}
+		runtime.relaySocket = &relaySocket{}
+		runtime.countDiagnostic("local slot relay opened")
+		return jvm.ReferenceValue(&jvm.Object{ClassName: runtimeRelaySocketClass, Native: runtime.relaySocket}), nil
+	}
 	runtime.countDiagnostic("socket refused " + address)
 	return jvm.VoidValue(), &jvm.GuestException{
 		Object:  &jvm.Object{ClassName: runtimeSchemeExceptionClass, Native: address},
@@ -160,16 +168,24 @@ func runtimeURLFind(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 	}
 }
 
-// runtimeNetworkConnect reports a failed connection. The emulator has no
-// network boundary, and a game that is told the network is unavailable takes
-// its documented offline path; a fake success would strand it waiting for data
-// that never arrives.
+// runtimeNetworkConnect enables the recognized local service only.
+// Other applications retain the ordinary offline connection result.
 func runtimeNetworkConnect(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	if runtime.hasSlotRelay() {
+		runtime.relayOnline = true
+		runtime.countDiagnostic("local slot relay connected")
+		return jvm.IntValue(0), nil
+	}
 	runtime.countDiagnostic("network connect refused")
 	return jvm.IntValue(-1), nil
 }
 
-func runtimeNetworkDisconnect(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+func runtimeNetworkDisconnect(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	runtime.relayOnline = false
+	if runtime.relaySocket != nil {
+		runtime.relaySocket.close()
+		runtime.relaySocket = nil
+	}
 	return jvm.VoidValue(), nil
 }
 

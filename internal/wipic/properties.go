@@ -34,20 +34,23 @@ var SystemProperties = map[string]string{
 	"VOLUMELEVEL":   "5",
 	"VIBRATORLEVEL": "0",
 	// A Korean handset's zone, in the format the specification gives.
-	"TIMEZONE":       "GMT+09:00",
-	"PHONEMODEL":     "Emulator",
-	"PHONENUMBER":    defaultSubscriberNumber,
-	"MIN":            defaultSubscriberNumber,
-	"ESN":            "00000000",
-	"ANNUN_CALL":     "0",
-	"ANNUN_SMS":      "0",
-	"ANNUN_SILENT":   "0",
-	"ANNUN_ALARM":    "0",
-	"ANNUN_SECURITY": "0",
-	"CURRENTCH":      "0",
-	"AIRPLANE_MODE":  "0",
-	"ROAMING_AREA":   "0",
-	"DS_LOCK":        "0",
+	"TIMEZONE": "GMT+09:00",
+	// The emulated standard baseline, not a claim of complete conformance.
+	// Relay middleware serializes this value and marks its first byte.
+	"WIPISTANDARDVERSION": "1.2.1",
+	"PHONEMODEL":          "Emulator",
+	"PHONENUMBER":         defaultSubscriberNumber,
+	"MIN":                 defaultSubscriberNumber,
+	"ESN":                 "00000000",
+	"ANNUN_CALL":          "0",
+	"ANNUN_SMS":           "0",
+	"ANNUN_SILENT":        "0",
+	"ANNUN_ALARM":         "0",
+	"ANNUN_SECURITY":      "0",
+	"CURRENTCH":           "0",
+	"AIRPLANE_MODE":       "0",
+	"ROAMING_AREA":        "0",
+	"DS_LOCK":             "0",
 }
 
 // defaultSubscriberNumber is what this platform answers with when nothing asks
