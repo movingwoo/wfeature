@@ -1,3 +1,4 @@
+import { RAPID_FIRE } from "./rapid-fire.js";
 // Which phone key sits in which cell of the keypad.
 //
 // The pad this page draws had three shapes, and they were three blocks of
@@ -6,8 +7,8 @@
 // in them.
 //
 //     where            type1       type2            type3
-//     direction pad    2 4 6 8     ↑ ← 확인 → ↓     1 2 3 4 6 8
-//     number pad       1 3 5 7 9   1‥9              5 7 9
+//     direction pad    ↑ ← 확인 → ↓     2 4 6 8     1 2 3 4 6 8
+//     number pad       1‥9              1 3 5 7 9   5 7 9
 //
 // So this module is that table. The shapes are entries in it rather than a mode
 // the stylesheet implements. What the person gets for it is the thing the
@@ -145,21 +146,10 @@ const fill = assignment => {
   return { ...table, ...assignment };
 };
 
-// The band is the same in all three, which is why it was never part of the
-// shape: Opts, 메뉴, 통화, CLR, left to right.
-//
-// The three sat at hand-written offsets — the left edge for Opts, a little
-// either side of the centre for 메뉴 and 통화, the right edge for CLR — and
-// these are the columns they land in now. It is a column rather than the same
-// pixel because a column's width depends on the screen and those offsets did
-// not, so the row keeps how it reads rather than where it measured: 통화 near
-// the middle, CLR anchored at the end a thumb looks for it at.
-//
-// 메뉴 is a column further left than the nearest one, which leaves the middle
-// column empty between it and 통화. That is deliberate: it is the key a title
-// puts its in-game menu on, so it is worth reaching without the send key next
-// to it — brushing 통화 in a game is a quick save nobody asked for.
-const band = { "band-c3": "MENU", "band-c5": "CALL", "band-c7": "CLR" };
+// Type1–Type3 share the top band. The local rapid-fire switch sits between
+// Menu and Call; Type4 stays empty. Saved cell edits still replace the whole
+// table, so the new default does not overwrite a user's arrangement.
+const band = { "band-c3": "MENU", "band-c4": RAPID_FIRE, "band-c5": "CALL", "band-c7": "CLR" };
 // The last row's three, centred in it: the row is seven cells wide and these
 // are the middle three, which is where they sat when the row was a band of its
 // own that centred whatever was in it.
@@ -173,26 +163,6 @@ const lastRow = { "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#" };
 // Read the tables as the grid: seven columns, and the two former pads are
 // columns 1-3 and 5-7 with the new one between them.
 export const shipped = {
-  // The arrows are the number keys a handset put them on, so the left is
-  // 2 4 6 8 and the right keeps the corners and the centre.
-  //
-  //     .  2  .  |  .  |  1  .  3
-  //     4  .  6  |  .  |  .  5  .
-  //     .  8  .  |  .  |  7  .  9
-  //           *  0  #
-  type1: fill({
-    ...band,
-    ...lastRow,
-    "pad-r1c2": "2",
-    "pad-r2c1": "4",
-    "pad-r2c3": "6",
-    "pad-r3c2": "8",
-    "pad-r1c5": "1",
-    "pad-r1c7": "3",
-    "pad-r2c6": "5",
-    "pad-r3c5": "7",
-    "pad-r3c7": "9",
-  }),
   // Named direction keys on the left and the whole number pad on the right,
   // which is the shape for a title that reads the arrows rather than the
   // digits. It is the only one with a 확인 key: the other two spend that cell
@@ -202,7 +172,7 @@ export const shipped = {
   //     ←  확 →  |  .  |  4  5  6
   //     .  ↓  .  |  .  |  7  8  9
   //           *  0  #
-  type2: fill({
+  type1: fill({
     ...band,
     ...lastRow,
     "pad-r1c2": "UP",
@@ -220,7 +190,27 @@ export const shipped = {
     "pad-r3c6": "8",
     "pad-r3c7": "9",
   }),
-  // type1 with the two upper diagonals brought over, so the row a thumb rests
+  // The arrows are the number keys a handset put them on, so the left is
+  // 2 4 6 8 and the right keeps the corners and the centre.
+  //
+  //     .  2  .  |  .  |  1  .  3
+  //     4  .  6  |  .  |  .  5  .
+  //     .  8  .  |  .  |  7  .  9
+  //           *  0  #
+  type2: fill({
+    ...band,
+    ...lastRow,
+    "pad-r1c2": "2",
+    "pad-r2c1": "4",
+    "pad-r2c3": "6",
+    "pad-r3c2": "8",
+    "pad-r1c5": "1",
+    "pad-r1c7": "3",
+    "pad-r2c6": "5",
+    "pad-r3c5": "7",
+    "pad-r3c7": "9",
+  }),
+  // type2 with the two upper diagonals brought over, so the row a thumb rests
   // on reads 1 2 3. The same keys moved rather than added — the number pad
   // gives them up while this shape holds.
   //
@@ -261,10 +251,9 @@ export const shapes = ["type1", "type2", "type3", "type4"];
 // `draw` reads to know what to put back when a pad stops being edited. A second
 // list of the same four names would be a second place for them to be wrong.
 
-// The keys a cell may hold. It is the keyboard panel's list, because the two
-// answer the same question — which phone keys does this handset have — and a
-// second list would be a second place to forget one.
-export const assignable = keyOrder;
+// Cells offer the handset keys plus a local rapid-fire switch. The switch
+// is not a handset key and cannot be assigned a keyboard binding.
+export const assignable = [...keyOrder, RAPID_FIRE];
 const knownKey = new Set(assignable);
 
 // What a key is called *on a pad button*, where it differs from what it is
@@ -273,7 +262,7 @@ const knownKey = new Set(assignable);
 // the faces the pad has always printed; the Korean stays as the button's
 // accessible name, which is `keyLabel`. Everything else — the digits, the
 // arrows, CLR — reads the same either way and falls through.
-const faces = { CALL: "Call", MENU: "Menu", OK: "OK" };
+const faces = { [RAPID_FIRE]: "연사", CALL: "Call", MENU: "Menu", OK: "OK" };
 
 export const keyFace = name => faces[name] ?? keyLabel(name);
 

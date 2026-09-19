@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { createRapidFire } from "./rapid-fire.js";
 import { GameSession, decodeSamples, playAudioEvents } from "./session.js";
 
 // The audio path is where the session protocol has to be exactly right and
@@ -374,4 +375,23 @@ test("a guest exit during text commit settles the request and ends the session",
     return true;
   });
   assert.equal(session.pending.size, 0);
+});
+
+
+test("rapid fire sends ordinary press and release packets through GameSession", async () => {
+  const { session, socket } = await openFakeSession();
+  let next;
+  const fire = createRapidFire({
+    send: (action, name) => session.sendKey(action, name === "OK" ? 148 : 53),
+    schedule: callback => { next = callback; return 1; },
+    cancel: () => { next = null; },
+  });
+  fire.cycle(); fire.cycle();
+  fire.press("OK"); fire.release("OK");
+  for (let i = 0; i < 19; i++) next();
+  fire.reset();
+  assert.equal(socket.sent.length, 20);
+  assert.deepEqual(socket.sent, Array.from({ length: 20 }, (_, i) => ({
+    kind: "key", action: i % 2 === 0 ? "press" : "release", code: 148,
+  })));
 });

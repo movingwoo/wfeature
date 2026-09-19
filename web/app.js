@@ -1,6 +1,7 @@
 import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
 import { initAudioSettings } from "./audio-settings.js";
+import { createRapidFire, RAPID_FIRE } from "./rapid-fire.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
 import {
@@ -268,6 +269,14 @@ const sendKey = (eventType, name) => {
   session?.sendKey(eventType, code);
 };
 
+const drawRapidFire = () => {
+  for (const button of document.querySelectorAll(`button[data-key="${RAPID_FIRE}"]`)) {
+    button.textContent = `연사 ${rapidFire.mode()}`;
+    button.setAttribute("aria-label", `연사 ${rapidFire.mode()}`);
+  }
+};
+const rapidFire = createRapidFire({ send: sendKey, changed: drawRapidFire });
+
 const initInput = () => {
   // A key can be printed on more than one button — the shipped type3 puts 1 and
   // 3 on the direction pad while the number pad keeps them, and the editor lets
@@ -300,11 +309,11 @@ const initInput = () => {
   const holds = createKeyHolds({
     press: name => {
       showPressed(name, true);
-      sendKey("press", name);
+      rapidFire.press(name);
     },
     release: name => {
       showPressed(name, false);
-      sendKey("release", name);
+      rapidFire.release(name);
     },
   });
 
@@ -325,7 +334,7 @@ const initInput = () => {
   // it, because that row was already inside the region a slide runs through.
   const padKey = element => {
     const button = element?.closest?.("button[data-key]");
-    return button?.closest(".keypad-pad") ? button.dataset.key : null;
+    return button?.closest(".keypad-pad") && button.dataset.key !== RAPID_FIRE ? button.dataset.key : null;
   };
 
   // Where a slide may begin. A finger that goes down on the screen or in the
@@ -400,6 +409,7 @@ const initInput = () => {
     const button = target?.closest("button[data-key]");
     if (button) {
       event.preventDefault();
+      if (button.dataset.key === RAPID_FIRE) return;
       // Capture keeps the moves and the release coming once the finger leaves
       // the button it started on. A finger that started beside the keys needs
       // nothing of the sort: its events already belong to no button, and the
@@ -411,6 +421,13 @@ const initInput = () => {
       return;
     }
     if (slidesFrom(target)) holds.track(event.pointerId);
+  });
+
+  document.addEventListener("click", event => {
+    const button = event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`);
+    if (!button || keypadArranging || !gameRunning || document.hidden) return;
+    pageAudio?.ensure();
+    rapidFire.cycle();
   });
 
   // Capture also means the event no longer says what is under the finger — it
@@ -444,6 +461,7 @@ const initInput = () => {
   };
   window.addEventListener("pointerup", release);
   window.addEventListener("pointercancel", release);
+  window.addEventListener("lostpointercapture", release);
 
   // Resting on a key or smearing across the pad is a gesture the browser reads
   // as its own: Android offers to translate or search the word under the
@@ -468,6 +486,9 @@ const initInput = () => {
     // arrives. What the keyboard sends is a different panel's setting and is
     // not what this editor moves, so nothing here is a way to change it.
     if (keypadArranging) return;
+    // Let a focused switch use the button's native Space/Enter activation.
+    if (event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`) &&
+        (event.code === "Space" || event.code === "Enter")) return;
     // A key arriving at all is the proof that there is a keyboard, which is
     // what puts the key settings in the panel.
     noticeKeyboard();
@@ -487,8 +508,7 @@ const initInput = () => {
     // the platforms that have the event — so this one goes nowhere.
     if (event.repeat) return;
     keysDown.set(event.code, name);
-    showPressed(name, true);
-    sendKey("press", name);
+    holds.latch(`keyboard:${event.code}`, name);
   });
   // A release answers what is held rather than what is bound: a modifier
   // pressed between the two, or a rebinding, would otherwise lose the keyup and
@@ -498,20 +518,16 @@ const initInput = () => {
     if (name === undefined) return;
     event.preventDefault();
     keysDown.delete(event.code);
-    showPressed(name, false);
-    sendKey("release", name);
+    holds.lift(`keyboard:${event.code}`);
   });
 
   // A window that loses focus stops being told about keyup, so a key held
   // across the switch would stay down in the game and lit on the keypad for
   // the rest of the run. Letting go on the way out is what actually happened.
   releaseInput = () => {
+    rapidFire.reset();
     holds.clear();
     touch.cancel();
-    for (const name of keysDown.values()) {
-      showPressed(name, false);
-      sendKey("release", name);
-    }
     keysDown.clear();
   };
   window.addEventListener("blur", releaseInput);
@@ -599,12 +615,12 @@ const sessionStateChanged = state => {
 
 const initResumeOnReturn = () => {
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) void sessionLink.suspend();
+    if (document.hidden) { releaseInput(); void sessionLink.suspend(); }
     else void sessionLink.wake();
   });
   window.addEventListener("online", () => { void sessionLink.wake(); });
   window.addEventListener("pageshow", () => { void sessionLink.wake(); });
-  window.addEventListener("pagehide", () => sessionLink.leave());
+  window.addEventListener("pagehide", () => { releaseInput(); sessionLink.leave(); });
   document.getElementById("session-takeover")?.addEventListener("click", () => {
     pageAudio?.ensure();
     void sessionLink.wake(true);
@@ -639,6 +655,7 @@ const startServerGame = async (path, scale) => {
 // A session is running from here on: reveal the panels that only mean
 // something against a live game and say which platform answered.
 const sessionStarted = info => {
+  releaseInput();
   gameRunning = true;
   currentPlatform = info.platform ?? "";
   currentGameLabel = info.name ?? "";
@@ -800,6 +817,7 @@ let keypadArranging = false;
 let relistKeypadButtons = () => {};
 
 const applyKeypadKeys = table => {
+  releaseInput();
   for (const button of document.querySelectorAll("button[data-cell]")) {
     const name = table[button.dataset.cell] ?? "";
     if (!name) {
@@ -818,12 +836,13 @@ const applyKeypadKeys = table => {
     // The face is what fits on the button and the label is what the key is
     // called; where they differ the second is the accessible name, and where
     // they agree an aria-label would only repeat the text.
-    const spoken = keyLabel(name);
+    const spoken = name === RAPID_FIRE ? "연사" : keyLabel(name);
     if (spoken === button.textContent) button.removeAttribute("aria-label");
     else button.setAttribute("aria-label", spoken);
     button.classList.remove("empty");
   }
   relistKeypadButtons();
+  drawRapidFire();
 };
 
 // initKeypad is the whole of it: the shape, its size, and its cells, on one
@@ -936,7 +955,7 @@ const initKeypad = () => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = keypadKeyFace(name);
-    const spoken = keyLabel(name);
+    const spoken = name === RAPID_FIRE ? "연사" : keyLabel(name);
     if (spoken !== button.textContent) button.setAttribute("aria-label", spoken);
     button.addEventListener("click", () => {
       if (!picked) return;
@@ -996,6 +1015,7 @@ const initKeypad = () => {
   };
 
   const visible = on => {
+    if (on) releaseInput();
     keypadArranging = on;
     container.classList.toggle("arranging", on);
     panel.classList.toggle("visible", on);

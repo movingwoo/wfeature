@@ -66,8 +66,8 @@ const asDrawn = {
   // because "no keys at all" has to be a shape to be stored as one. It is here
   // so the loop below covers it, and it is empty.
   type4: {},
-  type1: {
-    "band-c3": "MENU", "band-c5": "CALL", "band-c7": "CLR",
+  type2: {
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
     "pad-r1c2": "2",
     "pad-r2c1": "4", "pad-r2c3": "6",
     "pad-r3c2": "8",
@@ -76,8 +76,8 @@ const asDrawn = {
     "pad-r3c5": "7", "pad-r3c7": "9",
     "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
   },
-  type2: {
-    "band-c3": "MENU", "band-c5": "CALL", "band-c7": "CLR",
+  type1: {
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
     "pad-r1c2": "UP",
     "pad-r2c1": "LEFT", "pad-r2c2": "OK", "pad-r2c3": "RIGHT",
     "pad-r3c2": "DOWN",
@@ -87,7 +87,7 @@ const asDrawn = {
     "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
   },
   type3: {
-    "band-c3": "MENU", "band-c5": "CALL", "band-c7": "CLR",
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
     "pad-r1c1": "1", "pad-r1c2": "2", "pad-r1c3": "3",
     "pad-r2c1": "4", "pad-r2c3": "6",
     "pad-r3c2": "8",
@@ -97,7 +97,8 @@ const asDrawn = {
   },
 };
 
-test("each shape is the keypad it was when it was markup", () => {
+// The current defaults add the requested rapid-fire switch between Menu and Call.
+test("each shape preserves its handset keys and includes the default local controls", () => {
   for (const name of shapes) {
     for (const id of cellIds) {
       assert.equal(
@@ -173,7 +174,7 @@ test("a shape names only keys the editor can also choose", () => {
     }
     assert.deepEqual(Object.keys(shipped[name]).sort(), [...cellIds].sort());
   }
-  assert.deepEqual(assignable, keyOrder, "the editor's list has drifted from the keyboard panel's");
+  assert.deepEqual(assignable.filter(name => name !== "RAPID_FIRE"), keyOrder, "the editor's list has drifted from the keyboard panel's");
 });
 
 test("a pad face is the key's name where one fits, and the name is what is spoken", () => {
@@ -181,7 +182,7 @@ test("a pad face is the key's name where one fits, and the name is what is spoke
   // cannot carry 통화 beside a 5 without one of them being a different size of
   // text. Everything else has to read the same either way, or the editor's list
   // and the pad would name the same key two ways.
-  const shortened = assignable.filter(name => keyFace(name) !== keyLabel(name));
+  const shortened = keyOrder.filter(name => keyFace(name) !== keyLabel(name));
   assert.deepEqual(shortened, ["CALL", "MENU", "OK"]);
   for (const name of assignable) assert.ok(keyFace(name), `${name} has no face`);
 });
@@ -224,10 +225,8 @@ test("a key may sit in two cells, and a cell may be emptied", () => {
   assert.equal(clear(table, "no-such-cell"), table);
 });
 
-test("a page that never opened the editor draws the keypad it always drew", () => {
-  // The whole of the migration. `wfeature:keypadLayout` is the entry this page
-  // has always written; the second one appears only once a cell moves. A page
-  // with only the first has to be pixel-for-pixel the keypad it was.
+test("an unedited page uses the current default without changing its selected type", () => {
+  // Defaults can change; the selected type and storage remain untouched.
   for (const name of shapes) {
     const storage = fakeStorage();
     storage.setItem(LAYOUT_KEY, name);
@@ -248,16 +247,16 @@ test("an edit is stored, and is what the pad draws next time", () => {
   const storage = fakeStorage();
   storage.setItem(LAYOUT_KEY, "type1");
   const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.set("pad-r2c2", "OK");
+  layout.set("pad-r2c2", "5");
   assert.equal(layout.edited(), true);
-  assert.equal(layout.keyAt("pad-r2c2"), "OK");
+  assert.equal(layout.keyAt("pad-r2c2"), "5");
   assert.ok(storage.entries.has(KEYS_KEY), "the edit was not stored");
   // The shape it started from stays stored, so 되돌리기 has somewhere to go.
   assert.equal(storage.getItem(LAYOUT_KEY), "type1");
 
   const reopened = createKeypadLayout(storage, LAYOUT_KEY);
   assert.equal(reopened.edited(), true);
-  assert.equal(reopened.keyAt("pad-r2c2"), "OK");
+  assert.equal(reopened.keyAt("pad-r2c2"), "5");
   assert.equal(reopened.shape(), "type1");
 });
 
@@ -267,9 +266,9 @@ test("an edit that lands back on a shape is not an edit", () => {
   const storage = fakeStorage();
   storage.setItem(LAYOUT_KEY, "type1");
   const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.set("pad-r2c2", "OK");
+  layout.set("pad-r2c2", "5");
   assert.equal(layout.edited(), true);
-  layout.set("pad-r2c2", EMPTY);
+  layout.set("pad-r2c2", "OK");
   assert.equal(layout.edited(), false, "the pad is type1 again and does not say so");
   assert.ok(!storage.entries.has(KEYS_KEY), "the table outlived the edit");
 
@@ -291,7 +290,7 @@ test("each shape keeps its own cells, and choosing another does not disturb them
   const storage = fakeStorage();
   const layout = createKeypadLayout(storage, LAYOUT_KEY);
   layout.useShape("type1");
-  layout.set("pad-r2c2", "OK");
+  layout.set("pad-r2c2", "5");
   assert.equal(layout.edited(), true);
 
   layout.useShape("type4");
@@ -301,7 +300,7 @@ test("each shape keeps its own cells, and choosing another does not disturb them
   assert.equal(layout.edited(), true);
 
   layout.useShape("type1");
-  assert.equal(layout.keyAt("pad-r2c2"), "OK", "the shape's own cells did not come back");
+  assert.equal(layout.keyAt("pad-r2c2"), "5", "the shape's own cells did not come back");
   assert.equal(layout.edited(), true);
   layout.useShape("type4");
   assert.equal(layout.keyAt("pad-r1c1"), "5");
@@ -311,7 +310,7 @@ test("each shape keeps its own cells, and choosing another does not disturb them
   assert.equal(reopened.shape(), "type4");
   assert.equal(reopened.keyAt("pad-r1c1"), "5");
   reopened.useShape("type1");
-  assert.equal(reopened.keyAt("pad-r2c2"), "OK");
+  assert.equal(reopened.keyAt("pad-r2c2"), "5");
 });
 
 test("reset is one shape's, and forgets the entry rather than storing its cells", () => {
@@ -320,7 +319,7 @@ test("reset is one shape's, and forgets the entry rather than storing its cells"
   layout.useShape("type2");
   layout.set("pad-r4c1", "7");
   layout.useShape("type1");
-  layout.set("pad-r2c2", "OK");
+  layout.set("pad-r2c2", "5");
 
   assert.deepEqual(layout.reset(), shipped.type1);
   assert.equal(layout.edited(), false);
