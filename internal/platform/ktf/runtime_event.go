@@ -427,6 +427,20 @@ func runtimeEventQueuePostEventStatic(runtime *initializationRuntime, _ *jvm.VM,
 // A card's keyNotify returning true propagates to the card below it, matching
 // the original runtime's card stack traversal.
 func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) error {
+	// External key actions invalidate snapshots even if the C widget does not
+	// call its input method (for example, dismissing the name dialog).
+	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
+		runtime.cInput.revision++
+		activations, calls := runtime.cInput.activations, runtime.cInput.calls
+		defer func() {
+			// CLR edits the current field even when its only IM call flushes
+			// composition. Other keys need evidence of continued text editing.
+			if runtime.cInput.activations == activations && !(key == KeyClear && runtime.cInput.calls > calls) {
+				runtime.cInput.active = false
+			}
+		}()
+	}
+
 	if listener := runtime.grabbedKeys[key]; listener != nil {
 		if _, err := runtime.client.vm.InvokeVirtual(listener, "notifyEvent", "(III)V",
 			jvm.IntValue(eventKindKey), jvm.IntValue(eventType), jvm.IntValue(key)); err != nil {

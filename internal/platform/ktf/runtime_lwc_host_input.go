@@ -20,8 +20,9 @@ const (
 	textConstraintPhoneNumber  int32 = 5
 )
 
-// TextInput snapshots the active LWC editor for a Host that composes text with
-// its native keyboard or IME. Normal LWC fields use explicit guest focus. The
+// TextInput snapshots the active Java or C editor for a Host that composes text with
+// its native keyboard or IME. LWC fields use explicit guest focus or a shown
+// shell's sole direct text child when the guest has not assigned focus. The
 // verified vendor path instead uses the sole listened GTextField in the shown
 // non-modal GForm. Guest execution and this snapshot share the client run lock.
 func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, error) {
@@ -39,6 +40,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	}
 	focus := client.runtime.runtimeObjects["lwc:focus"]
 	component := focus
+	shellState := client.shellTextInput()
+	if component == nil && shellState.shell != nil {
+		component = shellState.field
+	}
 	vendorState, vendorActive := client.runtime.activeVendorTextInput()
 	if vendorActive {
 		component = vendorState.field
@@ -48,7 +53,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 		return nil, backend.ErrNoTextInput
 	}
 	if !ok {
-		return nil, backend.ErrNoTextInput
+		if component != nil {
+			return nil, backend.ErrNoTextInput
+		}
+		return client.cTextInputLocked()
 	}
 	constraintValue, hasConstraint := component.Fields[componentConstraintField]
 	constraint, ok := lwcTextConstraint(constraintValue, hasConstraint)
@@ -86,6 +94,7 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
 			currentVendorState, currentVendorActive := client.runtime.activeVendorTextInput()
 			if client.runtime.runtimeObjects["lwc:focus"] != focus ||
+				client.shellTextInput() != shellState ||
 				vendorActive != currentVendorActive ||
 				(vendorActive && !sameVendorTextInputState(currentVendorState, vendorState)) ||
 				!listenerStateOK || !sameLWCTextInputListenerState(currentListenerState, listenerState) ||

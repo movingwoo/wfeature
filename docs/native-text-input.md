@@ -61,6 +61,14 @@ input method, the edit is rejected as stale.
 ## Supported editors
 
 KTF supports active LWC TextField and TextBox instances, including guest subclasses.
+When the guest has not assigned explicit focus, the most recently shown
+ShellComponent also exposes its sole direct text child (or sole work component).
+This covers an observed KTF name editor that calls `addComponent` and `show`
+without `setFocus`. It is a bounded Host compatibility path, not automatic
+keypad focus: the WIPI ContainerComponent contract requires explicit focus for
+key delivery. Nested or ambiguous layouts are not inferred. Hiding/reopening
+the shell, replacing it, or changing its children/work component invalidates a
+pending edit. Existing explicit guest focus retains precedence.
 The adapter preserves field constraints and stores the complete value using the
 component string-setting contract. Fields with an explicitly installed
 InputMethodListener remain unsupported: its per-key composition deltas cannot
@@ -81,6 +89,17 @@ and shown/focused widget graphs remain reachable by the Java collector. As with
 KTF, an installed InputMethodListener is unsupported. This adds text editing,
 not a complete LWC renderer.
 
+KTF also supports a C-backed card editor that activates the WIPI-C input method.
+Completed Host text is appended through the guest's existing key callback and
+completion buffer. Input-mode selection describes the handset keypad automaton,
+not a Java-style field constraint; Host text must be strict EUC-KR without
+controls. A Host submission is delivered as complete EUC-KR characters through
+successive guest callbacks, so a small completion buffer does not restrict the
+whole field to one or two characters. The guest retains its field-length policy.
+CLR invalidates the old edit snapshot while keeping an editor that flushes its
+composition available for another submission. Key and editor lifecycle changes
+invalidate pending edits; queued guest event loops are not supported. See the [implementation and local replay](ktf-c-input-bitmap-investigation.md).
+
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value
 nor a stable component identity. It accepts up to 64 completed characters per
@@ -93,6 +112,24 @@ Limits count Java UTF-16 units; supplementary characters consume two units. Nati
 entry does not infer fields drawn by game code.
 
 ## Validation
+
+The 2026-09-19 KTF Shell regression reproduces a direct TextBox child opened
+without explicit focus. Authored tests cover complete-string commit, hidden
+and reopened shells, changed/restored children, replacement work components,
+ambiguous layouts, installed delta listeners, and explicit-focus precedence.
+A local archive probe in isolated saves reached the reported name editor,
+committed a two-character Korean name, and used the guest's existing OK route
+to close the shell and continue gameplay. The isolated save contained the
+submitted UTF-8 name. It did not add a renderer or change key dispatch.
+`make test` (including Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, and the debug server build passed.
+Artifacts are under the ignored
+`var/diagnostics/ktf-shell-input-20260919/`. This is core-path acceptance;
+physical iPhone keyboard interaction was not rechecked by the automated probe.
+The user subsequently confirmed that input works with the fix applied.
+
+Specification: [ShellComponent](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/ShellComponent.md)
+and [ContainerComponent](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lwc/ContainerComponent.md).
 
 Go tests exercise adapter constraints, stale fields, UTF-16 limits, notifications,
 concurrent SKT editing/rendering, and an authored MIDlet packaged as a JAR. An actual

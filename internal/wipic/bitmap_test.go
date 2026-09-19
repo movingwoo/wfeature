@@ -74,10 +74,7 @@ func TestBitmapWithoutTheDeclarationStaysOpaque(t *testing.T) {
 	}
 }
 
-// One title's status bar declares an index of 304 against a 256-entry palette.
-// Whatever that means, it is not an index, and an image that names no palette
-// entry has to stay whole rather than lose whichever entry the number wrapped
-// onto.
+// Even an extended index must name an entry in the actual palette.
 func TestBitmapIgnoresAnIndexOutsideThePalette(t *testing.T) {
 	decoded, err := DecodeBitmap(paletteBitmap(1, 304, []byte{0, 1, 0}))
 	if err != nil {
@@ -164,5 +161,55 @@ func TestBitmapWithAMissingPaletteEntryAndADeclarationIsRejected(t *testing.T) {
 	}
 	if decoded != nil {
 		t.Fatalf("a refused bitmap came back with an image as well: %T", decoded)
+	}
+}
+
+func TestBitmapExtendedTransparency(t *testing.T) {
+	for _, important := range []uint32{0x100, 0x101} {
+		encoded := paletteBitmap(1, important, []byte{0, 1, 0})
+		decoded, err := DecodeBitmap(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for x, index := range []uint32{0, 1, 0} {
+			transparent := alphaAt(t, decoded, x) == 0
+			if transparent != (index == important&0xff) {
+				t.Fatalf("important=%#x pixel=%d transparent=%v", important, x, transparent)
+			}
+		}
+	}
+}
+
+func TestBitmapCompactPaletteWithExtendedTransparency(t *testing.T) {
+	encoded := paletteBitmap(1, 0x100, []byte{0, 1, 0})
+	binary.LittleEndian.PutUint32(encoded[46:], 256)
+	original := append([]byte(nil), encoded...)
+	decoded, err := DecodeBitmap(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alphaAt(t, decoded, 0) != 0 || alphaAt(t, decoded, 1) == 0 {
+		t.Fatal("compact palette lost transparency or foreground")
+	}
+	for i := range encoded {
+		if encoded[i] != original[i] {
+			t.Fatal("decoder modified source")
+		}
+	}
+	for _, modify := range []func([]byte){
+		func(b []byte) { binary.LittleEndian.PutUint16(b[6:], 0) },
+		func(b []byte) { binary.LittleEndian.PutUint32(b[50:], 0x200) },
+		func(b []byte) { binary.LittleEndian.PutUint32(b[10:], 61) },
+		func(b []byte) { b[62] = 5 },
+		func(b []byte) { binary.LittleEndian.PutUint32(b[18:], 0x7fffffff) },
+	} {
+		b := append([]byte(nil), encoded...)
+		modify(b)
+		if _, err := DecodeBitmap(b); err == nil {
+			t.Fatal("malformed or unmarked compact palette accepted")
+		}
+	}
+	if _, err := DecodeBitmap(encoded[:len(encoded)-2]); err == nil {
+		t.Fatal("truncated pixels accepted")
 	}
 }

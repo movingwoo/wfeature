@@ -274,6 +274,7 @@ type initializationRuntime struct {
 	// inputModeTableAddress is the `M_Char **` the input-method table answers
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
+	cInput                cInputState
 	// shadowedBlocks and checkedBlocks are how much the detector covered.
 	// They are reported because a clean report otherwise cannot be told apart
 	// from a detector that never ran.
