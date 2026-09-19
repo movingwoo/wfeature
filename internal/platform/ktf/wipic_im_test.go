@@ -55,12 +55,11 @@ func TestInputMethodAnswersItsModesAndTheirCount(t *testing.T) {
 	}
 }
 
-// The three entries this table has not identified answer zero and keep being
-// counted with their call site, which is how the next one gets named.
-func TestInputMethodLeavesItsUnidentifiedEntriesStubbed(t *testing.T) {
+// Unknown extensions remain counted stubs.
+func TestInputMethodLeavesUnknownExtensionsStubbed(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	for _, function := range []uint32{0, 1, 2} {
+	for _, function := range []uint32{5, 6} {
 		if result := inputMethodCall(t, runtime, function); result != 0 {
 			t.Fatalf("function %d answered %#x, want 0", function, result)
 		}
@@ -68,7 +67,7 @@ func TestInputMethodLeavesItsUnidentifiedEntriesStubbed(t *testing.T) {
 	// The name carries the call site, which is the whole point of counting a
 	// stub at all: a table number appears nowhere in the guest's own code.
 	counts := runtime.diagnosticCounts()
-	if counts["wipic stub table 4 function 0 @0x0"] == 0 {
+	if counts["wipic stub table 4 function 5 @0x0"] == 0 {
 		t.Fatalf("an unidentified entry was not counted with its call site: %v", counts)
 	}
 }

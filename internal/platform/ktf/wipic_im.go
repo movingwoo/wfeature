@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
 // Table 4 is the input-method block, and the title that reaches it said so
@@ -19,21 +20,11 @@ import (
 // input-method block follows graphics on the LGT side too, and why this one
 // is table 4 immediately after table 3.
 //
-// Two entries are identified and the other three are not, which is exactly
-// what the evidence supports:
-//
-//   - **entry 4** takes no arguments and answers a pointer the caller uses as
-//     the base of a word array — `MC_imGetSupportedModes`, the only function
-//     in the block returning `M_Char**`.
-//   - **entry 3** takes no arguments and answers a count the caller runs down
-//     to zero as the array's length — `MC_imGetSurpportModeCount`.
-//
-// The remaining `MC_imSetCurrentMode`, `MC_imGetCurrentMode` and
-// `MC_imHandleInput` are somewhere in entries 0 to 2 — this vendor's order is
-// not the specification's, since the specification would have put the count
-// first — and no local title has called one, so they stay counted stubs with
-// their call sites rather than guesses.
+// Caller evidence establishes the vendor order; see the C input investigation.
 const (
+	wipicIMHandleInput           = 0
+	wipicIMSetCurrentMode        = 1
+	wipicIMGetCurrentMode        = 2
 	wipicIMGetSupportedModeCount = 3
 	wipicIMGetSupportedModes     = 4
 )
@@ -46,14 +37,30 @@ var inputModes = []string{"EN/L", "EN/S", "KO", "N123"}
 // handleWIPICInputMethodCall services the input-method table.
 func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore.Thread, function uint32) (uint32, error) {
 	switch function {
+	case wipicIMSetCurrentMode:
+		mode, err := runtime.wipicArgument(thread, 0)
+		if err != nil {
+			return 0, err
+		}
+		if mode >= uint32(len(inputModes)) {
+			return 0, nil
+		}
+		runtime.cInput.mode = mode
+		runtime.cInput.active = true
+		runtime.cInput.card = runtime.cInputCard()
+		runtime.cInput.revision++
+		return 1, nil
+	case wipicIMGetCurrentMode:
+		return runtime.cInput.mode, nil
+	case wipicIMHandleInput:
+		return runtime.wipicHandleInput(thread)
+
 	case wipicIMGetSupportedModeCount:
 		return uint32(len(inputModes)), nil
 	case wipicIMGetSupportedModes:
 		return runtime.inputModeTable()
 	}
-	// The entries that are not identified answer zero and are counted under the
-	// name every stubbed table has always used, so a report from before this
-	// table was named still lines up with one from after it.
+	// Unknown extensions keep the existing counted-stub behavior.
 	runtime.countDiagnostic(fmt.Sprintf("wipic stub table %d function %d%s",
 		wipicTableInputMethod, function, runtime.callerMark(thread)))
 	return 0, nil
@@ -81,4 +88,104 @@ func (runtime *initializationRuntime) inputModeTable() (uint32, error) {
 	}
 	runtime.inputModeTableAddress = address
 	return address, nil
+}
+
+// A C widget owns its value and cursor. The Host can append completed text
+// through the widget's existing key callback, but cannot replace its value.
+type cInputState struct {
+	card     *jvm.Object
+	active   bool
+	mode     uint32
+	revision uint64
+	calls    uint64
+	pending  []byte
+}
+
+const cInputCarrier int32 = '0'
+const cInputFlush byte = 0x9d
+
+// The observed KTF C widget supplies 2 for a pressed key. This is its C
+// input-method type, not Java Card.KeyReleased despite the shared number.
+const cInputPressed uint32 = 2
+
+type cInputBuffer struct{ address, size, capacity uint32 }
+
+func (runtime *initializationRuntime) wipicHandleInput(thread *armcore.Thread) (uint32, error) {
+	var args [6]uint32
+	for i := range args {
+		value, err := runtime.wipicArgument(thread, i)
+		if err != nil {
+			return 0, err
+		}
+		args[i] = value
+	}
+	buffers := [2]cInputBuffer{{address: args[2], size: args[3]}, {address: args[4], size: args[5]}}
+	for i := range buffers {
+		if buffers[i].size != 0 {
+			words, err := runtime.readAOTWords(buffers[i].size, 1, "input buffer capacity")
+			if err != nil {
+				return 0, err
+			}
+			buffers[i].capacity = words[0]
+		}
+	}
+	state := &runtime.cInput
+	host := len(state.pending) != 0 && byte(args[0]) == byte(cInputCarrier) && args[1] == cInputPressed
+	state.calls++
+	if !host {
+		state.revision++
+		state.active = byte(args[0]) != cInputFlush
+		state.card = runtime.cInputCard()
+	}
+	var value []byte
+	if host {
+		value = state.pending
+	} else if state.mode == 3 &&
+		args[1] == cInputPressed && args[0] >= '0' && args[0] <= '9' {
+		value = []byte{byte(args[0])}
+	}
+	complete := buffers[0]
+	handled := len(value) > 0 && complete.address != 0 && complete.size != 0 && uint64(len(value))+1 <= uint64(complete.capacity)
+	if !handled {
+		value = nil
+	}
+	for i, buffer := range buffers {
+		var text []byte
+		if i == 0 {
+			text = value
+		}
+		if buffer.address != 0 && buffer.capacity != 0 {
+			data := append(append([]byte(nil), text...), 0)
+			if err := runtime.client.core.Memory().Write(buffer.address, data); err != nil {
+				return 0, err
+			}
+		}
+		if buffer.size != 0 {
+			if err := runtime.writeWord(buffer.size, uint32(len(text))); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if !handled {
+		if host {
+			// Consume the carrier with an empty result, retaining pending text so
+			// the Host reports rejection. Returning unhandled makes the widget
+			// flush and invalidates an otherwise retryable edit.
+			return 1, nil
+		}
+		return 0, nil
+	}
+	if host {
+		state.pending = nil
+	}
+	return 1, nil
+}
+
+// Remember which visible card owned activation so a later overlay cannot
+// inherit an old C editor merely by requesting a fresh Host snapshot.
+func (runtime *initializationRuntime) cInputCard() *jvm.Object {
+	if len(runtime.displayCards) == 0 {
+		return nil
+	}
+	return runtime.displayCards[len(runtime.displayCards)-1]
 }

@@ -43,7 +43,7 @@ const (
 // so it carries its transparency the same way an encoding with an alpha
 // channel does and every caller reads it the same way.
 func DecodeBitmap(encoded []byte) (stdimage.Image, error) {
-	decoded, err := bmp.Decode(bytes.NewReader(encoded))
+	decoded, err := bmp.Decode(bytes.NewReader(bitmapPaletteHeader(encoded)))
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +91,8 @@ func bitmapTransparentIndex(encoded []byte) (int, bool) {
 	}
 	// The info header's size gives where the palette starts and the pixel
 	// offset gives where it ends, which bounds the index without trusting it.
-	// One title's status bar declares an index of 304 against a 256-entry
-	// palette; whatever that means, it is not an index, and an image that
-	// names no palette entry stays opaque.
+	// The extended 8-bit variant carries a 0x100 flag above the index.
+	// Other high bits remain invalid, and the actual palette still bounds it.
 	infoSize := binary.LittleEndian.Uint32(encoded[bitmapInfoHeaderOffset:])
 	pixelOffset := binary.LittleEndian.Uint32(encoded[bitmapPixelOffset:])
 	paletteStart := uint64(bitmapInfoHeaderOffset) + uint64(infoSize)
@@ -102,6 +101,9 @@ func bitmapTransparentIndex(encoded []byte) (int, bool) {
 	}
 	entries := (uint64(pixelOffset) - paletteStart) / bitmapPaletteEntrySize
 	index := binary.LittleEndian.Uint32(encoded[bitmapClrImportant:])
+	if binary.LittleEndian.Uint16(encoded[bitmapBitCountOffset:]) == 8 && index&^uint32(0xff) == 0x100 {
+		index &= 0xff
+	}
 	if uint64(index) >= entries {
 		return 0, false
 	}
@@ -120,4 +122,42 @@ func EncodeBitmap(image stdimage.Image) ([]byte, error) {
 		return nil, err
 	}
 	return encoded.Bytes(), nil
+}
+
+// bitmapPaletteHeader normalizes the observed extended 8-bit BMP variant:
+// biClrUsed remains 256 even when the encoder writes a shorter palette. Only
+// its explicit transparency marker admits this repair; standard BMPs retain
+// the decoder's normal validation. Pixel indices and row lengths are still
+// checked by bmp.Decode, and the source bytes are never changed.
+func bitmapPaletteHeader(encoded []byte) []byte {
+	if len(encoded) < 54 || string(encoded[:2]) != "BM" ||
+		binary.LittleEndian.Uint16(encoded[6:]) != 1 ||
+		binary.LittleEndian.Uint32(encoded[14:]) != 40 ||
+		binary.LittleEndian.Uint16(encoded[28:]) != 8 ||
+		binary.LittleEndian.Uint32(encoded[30:]) != 0 ||
+		binary.LittleEndian.Uint32(encoded[46:]) != 256 ||
+		binary.LittleEndian.Uint32(encoded[50:])&^uint32(0xff) != 0x100 {
+		return encoded
+	}
+	offset := uint64(binary.LittleEndian.Uint32(encoded[10:]))
+	if offset <= 54 || offset > uint64(len(encoded)) || (offset-54)%4 != 0 {
+		return encoded
+	}
+	entries := (offset - 54) / 4
+	if entries >= 256 {
+		return encoded
+	}
+	// Do not turn a rejected header into a large allocation before the pixel
+	// payload is checked. An 8-bit row is padded to four bytes.
+	width := int64(int32(binary.LittleEndian.Uint32(encoded[18:])))
+	height := int64(int32(binary.LittleEndian.Uint32(encoded[22:])))
+	if height < 0 {
+		height = -height
+	}
+	if width <= 0 || height == 0 || offset+uint64((width+3)&^3)*uint64(height) > uint64(len(encoded)) {
+		return encoded
+	}
+	normalized := append([]byte(nil), encoded...)
+	binary.LittleEndian.PutUint32(normalized[46:], uint32(entries))
+	return normalized
 }

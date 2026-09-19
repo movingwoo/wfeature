@@ -20,7 +20,7 @@ const (
 	textConstraintPhoneNumber  int32 = 5
 )
 
-// TextInput snapshots the active LWC editor for a Host that composes text with
+// TextInput snapshots the active Java or C editor for a Host that composes text with
 // its native keyboard or IME. LWC fields use explicit guest focus or a shown
 // shell's sole direct text child when the guest has not assigned focus. The
 // verified vendor path instead uses the sole listened GTextField in the shown
@@ -53,7 +53,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 		return nil, backend.ErrNoTextInput
 	}
 	if !ok {
-		return nil, backend.ErrNoTextInput
+		if component != nil {
+			return nil, backend.ErrNoTextInput
+		}
+		return client.cTextInputLocked()
 	}
 	constraintValue, hasConstraint := component.Fields[componentConstraintField]
 	constraint, ok := lwcTextConstraint(constraintValue, hasConstraint)
