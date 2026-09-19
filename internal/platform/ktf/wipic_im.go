@@ -46,6 +46,7 @@ func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore
 			return 0, nil
 		}
 		runtime.cInput.mode = mode
+		runtime.cInput.activations++
 		runtime.cInput.active = true
 		runtime.cInput.card = runtime.cInputCard()
 		runtime.cInput.revision++
@@ -93,12 +94,13 @@ func (runtime *initializationRuntime) inputModeTable() (uint32, error) {
 // A C widget owns its value and cursor. The Host can append completed text
 // through the widget's existing key callback, but cannot replace its value.
 type cInputState struct {
-	card     *jvm.Object
-	active   bool
-	mode     uint32
-	revision uint64
-	calls    uint64
-	pending  []byte
+	card        *jvm.Object
+	active      bool
+	mode        uint32
+	revision    uint64
+	calls       uint64
+	activations uint64
+	pending     []byte
 }
 
 const cInputCarrier int32 = '0'
@@ -134,8 +136,12 @@ func (runtime *initializationRuntime) wipicHandleInput(thread *armcore.Thread) (
 	state.calls++
 	if !host {
 		state.revision++
-		state.active = byte(args[0]) != cInputFlush
-		state.card = runtime.cInputCard()
+		// Flushing finishes composition; it does not dismiss the widget.
+		if byte(args[0]) != cInputFlush {
+			state.active = true
+			state.activations++
+			state.card = runtime.cInputCard()
+		}
 	}
 	var value []byte
 	if host {

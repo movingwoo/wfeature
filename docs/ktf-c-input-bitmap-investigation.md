@@ -65,7 +65,9 @@ from the Java card event constants. Its first four arguments are in registers;
 the composing buffer and size pointer are on the stack. The caller initializes
 capacities of 6 and 8 bytes and then reads the size words as produced byte
 lengths. Both output strings are terminated and both lengths are written.
-A flush ends the current input epoch. Numeric keypad input is supported; other
+A flush invalidates old snapshots but does not by itself close the editor.
+CLR that flushes composition retains input availability. Numeric keypad input
+is supported; other
 handset keypad composition remains outside this change because the Host IME
 provides completed text.
 
@@ -75,13 +77,19 @@ Host therefore validates controls, encoding and length without treating that
 keypad mode as a digits-only field policy. It does not reorder the published
 mode list to suit one caller.
 
-A submission must fit the guest completion buffer including its terminator.
-The observed six-byte buffer accepts two Korean characters or five ASCII
-characters per submission; additional text can be appended in another edit.
-Larger submissions are rejected as a whole and may be retried. Rejection returns
-an empty handled result to the guest, preventing its unhandled-key flush from
-invalidating that retry. This is a buffer-capacity check, not a claim that the
-Host can infer every widget's remaining field capacity.
+The completion buffer holds an automaton result, not the whole field. A Host
+submission is validated for encoding and controls before any guest callback,
+then delivered one complete EUC-KR character at a time. Each character and its
+terminator must fit the completion buffer. Up to 64 characters may be submitted;
+the guest continues to apply its own field limit on each callback. The reported
+five-character field accepts five Korean characters in one Host submission.
+
+A character that cannot fit is rejected without splitting its encoding. A
+changed target or interrupted callback stops further delivery and invalidates
+a snapshot that already inserted a prefix. Previously accepted characters remain
+owned by the guest; this C interface cannot promise whole-field rollback after
+a mid-submission guest failure. It must not replay the prefix through the same
+edit token. No game-specific field size or guest-memory offset is hard-coded.
 
 Key activity, mode changes, flushing, card replacement, a newly focused Java
 editor, shutdown and successful submission invalidate existing snapshots. A
@@ -93,16 +101,20 @@ guest event loops remain unsupported: commits require synchronous consumption.
 Authored regressions cover extended transparency, compact palettes, source-byte
 preservation, malformed palette offsets and pixel indices, truncated rows, mode
 state, buffer lengths and termination, pressed-key handling, Korean Host input,
-capacity rejection and retry, unsupported characters, stale targets and
-cancellation. Existing Java editor tests remain in the affected package gate.
+single-character capacity rejection and retry, unsupported characters, stale
+targets, cancellation and stopping a composition when the guest changes mode. Existing Java editor tests remain in the affected package gate.
 
-The isolated-save local replay reached the reported name editor, rejected a
-three-character Korean submission without changing the frame, accepted a
-two-character Korean submission, and confirmed it through the game's existing
-buttons into the following story scene. The submitted EUC-KR text was present
-in guest memory before and after confirmation. A saved edit was rejected after
-closing the editor. The replay also captured both startup logos without the
-green backdrop and recorded no remaining image-decode errors on that route.
+The initial isolated-save replay proved only two-character insertion. User
+feedback exposed two missed requirements: the field accepts five characters,
+and CLR deletion must not disable input. Those cases now have authored
+regressions and a fresh real-archive replay.
+
+The final replay submitted five Korean characters at once, deleted one with
+CLR, appended a replacement, cleared all five with CLR, and submitted five again.
+Captured frames and retained EUC-KR guest strings establish the resulting field
+value. The guest's existing confirmation buttons then continued into the story.
+Old snapshots were rejected after deletion and dismissal. Both startup logos
+rendered without the green backdrop, with no image-decode errors on that route.
 This does not establish whole-game rendering or saved-name restoration.
 
 Artifacts and the opt-in replay probe are retained under the ignored

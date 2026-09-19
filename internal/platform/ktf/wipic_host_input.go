@@ -35,15 +35,17 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
-			if client.runtime != runtime || client.workersStopped {
-				return backend.ErrTextInputChanged
+			unchanged := func() bool {
+				if client.runtime != runtime || client.workersStopped {
+					return false
+				}
+				currentVendor, currentVendorActive := runtime.activeVendorTextInput()
+				return runtime.runtimeObjects["lwc:focus"] == focus && client.shellTextInput() == shell &&
+					currentVendorActive == vendorActive && (!vendorActive || sameVendorTextInputState(vendor, currentVendor)) &&
+					!runtime.guestEventLoop && state.active && state.revision == revision && state.mode == mode && len(state.pending) == 0 &&
+					len(runtime.displayCards) == cards && runtime.displayCards[cards-1] == card
 			}
-			currentVendor, currentVendorActive := runtime.activeVendorTextInput()
-			if runtime.runtimeObjects["lwc:focus"] != focus || client.shellTextInput() != shell ||
-				currentVendorActive != vendorActive || (vendorActive && !sameVendorTextInputState(vendor, currentVendor)) ||
-				runtime.guestEventLoop || !state.active ||
-				state.revision != revision || state.mode != mode || len(state.pending) != 0 ||
-				len(runtime.displayCards) != cards || runtime.displayCards[cards-1] != card {
+			if !unchanged() {
 				return backend.ErrTextInputChanged
 			}
 			encoded, err := validateCInput(text)
@@ -53,29 +55,49 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 			if len(encoded) == 0 {
 				return nil
 			}
-			calls := state.calls
-			state.pending = encoded
-			defer func() { state.pending = nil }()
+			inserted := false
+			defer func() {
+				state.pending = nil
+				if inserted {
+					state.revision++
+				}
+			}()
 			defer client.beginHostService(ctx)()
 			previousThread, previousContext := runtime.currentThread, runtime.currentContext
 			runtime.currentThread, runtime.currentContext = client.thread, ctx
 			defer func() { runtime.currentThread, runtime.currentContext = previousThread, previousContext }()
-			err = runtime.dispatchKeyToCards(KeyPressed, cInputCarrier)
-			consumed := len(state.pending) == 0
-			if consumed {
-				state.revision++
+			// A completion buffer holds one automaton result, not the entire field.
+			// Replay complete EUC-KR characters through bounded guest key callbacks.
+			// Never split a two-byte character or infer a field limit from this buffer.
+			for offset := 0; offset < len(encoded); {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if !unchanged() {
+					return backend.ErrTextInputChanged
+				}
+				size := 1
+				if encoded[offset] >= 0x80 {
+					size = 2
+				}
+				calls := state.calls
+				state.pending = encoded[offset : offset+size]
+				err := runtime.dispatchKeyToCards(KeyPressed, cInputCarrier)
+				consumed := len(state.pending) == 0
+				inserted = inserted || consumed
+				if err != nil {
+					return err
+				}
+				if !consumed {
+					if state.calls == calls || state.revision != revision {
+						state.active = false
+						return backend.ErrTextInputChanged
+					}
+					return backend.ErrInvalidTextInput
+				}
+				offset += size
 			}
-			if err != nil {
-				return err
-			}
-			if consumed {
-				return nil
-			}
-			if state.calls == calls || state.revision != revision {
-				state.active = false
-				return backend.ErrTextInputChanged
-			}
-			return backend.ErrInvalidTextInput
+			return nil
 		},
 	}, nil
 }

@@ -93,12 +93,12 @@ KTF also supports a C-backed card editor that activates the WIPI-C input method.
 Completed Host text is appended through the guest's existing key callback and
 completion buffer. Input-mode selection describes the handset keypad automaton,
 not a Java-style field constraint; Host text must be strict EUC-KR without
-controls. The whole submission must fit the completion buffer, including its
-terminator. An observed six-byte buffer accepts two Korean or five ASCII
-characters per submission, with another append available afterwards. Oversized
-submissions are rejected without partial insertion and can be retried. Key and
-editor lifecycle changes invalidate pending edits; queued guest event loops are
-not supported. See the [implementation and local replay](ktf-c-input-bitmap-investigation.md).
+controls. A Host submission is delivered as complete EUC-KR characters through
+successive guest callbacks, so a small completion buffer does not restrict the
+whole field to one or two characters. The guest retains its field-length policy.
+CLR invalidates the old edit snapshot while keeping an editor that flushes its
+composition available for another submission. Key and editor lifecycle changes
+invalidate pending edits; queued guest event loops are not supported. See the [implementation and local replay](ktf-c-input-bitmap-investigation.md).
 
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value

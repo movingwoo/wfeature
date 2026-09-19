@@ -89,21 +89,36 @@ func TestCInputModesAndNumericBuffers(t *testing.T) {
 // stack arguments as a C-backed Java card. Its accumulated bytes represent
 // the value owned by the guest, not a Host-side shadow of that value.
 func cInputFixture(t *testing.T) (*Session, *[]byte, *bool) {
+	return cInputFixtureCapacity(t, 6)
+}
+
+func cInputFixtureCapacity(t *testing.T, capacity uint32) (*Session, *[]byte, *bool) {
 	t.Helper()
 	client, runtime := newTestRuntime(t)
 	completed, _ := runtime.allocateBytes(make([]byte, 6))
 	composing, _ := runtime.allocateBytes(make([]byte, 8))
-	size1, _ := runtime.allocateWords([]uint32{6})
+	size1, _ := runtime.allocateWords([]uint32{capacity})
 	size2, _ := runtime.allocateWords([]uint32{8})
 	text := []byte{}
 	visible := true
 	if err := client.vm.RegisterNative("test/CInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		kind, _ := args[1].Int32()
 		key, _ := args[2].Int32()
+		if visible && kind == KeyPressed && key == KeyClear {
+			if len(text) > 0 {
+				size := 1
+				if text[len(text)-1] >= 0x80 {
+					size = 2
+				}
+				text = text[:len(text)-size]
+			}
+			_, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, 0, 0, 0, 0)
+			return jvm.IntValue(0), err
+		}
 		if !visible || kind != KeyPressed || key < '0' || key > '9' {
 			return jvm.IntValue(0), nil
 		}
-		writeWord(t, runtime, size1, 6)
+		writeWord(t, runtime, size1, capacity)
 		writeWord(t, runtime, size2, 8)
 		result, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
 		if err != nil {
@@ -135,7 +150,7 @@ func cInputFixture(t *testing.T) (*Session, *[]byte, *bool) {
 	return &Session{Client: client}, &text, &visible
 }
 
-func TestCInputHostCommitAndCapacityRetry(t *testing.T) {
+func TestCInputHostCommitValidationAndReuse(t *testing.T) {
 	s, text, _ := cInputFixture(t)
 	edit, err := s.TextInput(t.Context())
 	if err != nil {
@@ -144,7 +159,7 @@ func TestCInputHostCommitAndCapacityRetry(t *testing.T) {
 	if !edit.Append || edit.InputMode != "text" {
 		t.Fatalf("edit=%+v", edit)
 	}
-	for _, bad := range []string{"\uD55C\uAE00\uC785", "\x00", "\n", "\U0001f600", strings.Repeat("a", 65)} {
+	for _, bad := range []string{"\x00", "\n", "\U0001f600", strings.Repeat("a", 65)} {
 		if err := edit.Commit(t.Context(), bad); !errors.Is(err, backend.ErrInvalidTextInput) {
 			t.Fatalf("invalid commit: %v", err)
 		}
@@ -243,5 +258,114 @@ func TestCInputNewCardDoesNotInheritEditor(t *testing.T) {
 	s.Client.runtime.displayCards = append(s.Client.runtime.displayCards, newWidget("test/Overlay"))
 	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
 		t.Fatalf("overlay input: %v", err)
+	}
+}
+
+func TestCInputHostFiveKoreanCharactersInOneSubmission(t *testing.T) {
+	s, text, _ := cInputFixture(t)
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := "\uAC00\uB098\uB2E4\uB77C\uB9C8"
+	if err := edit.Commit(t.Context(), value); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := korean.EUCKR.NewEncoder().Bytes([]byte(value))
+	if !bytes.Equal(*text, want) {
+		t.Fatalf("guest text=%x want=%x", *text, want)
+	}
+}
+
+func TestCInputClearKeepsEditorAvailable(t *testing.T) {
+	s, text, _ := cInputFixture(t)
+	initial, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initial.Commit(t.Context(), "\uAC00\uB098\uB2E4\uB77C\uB9C8"); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendKey(t.Context(), KeyPressed, KeyClear); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendKey(t.Context(), KeyReleased, KeyClear); err != nil {
+		t.Fatal(err)
+	}
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("editor after clear: %v", err)
+	}
+	if err := stale.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("old edit after clear: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "\uBC14"); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := korean.EUCKR.NewEncoder().Bytes([]byte("\uAC00\uB098\uB2E4\uB77C\uBC14"))
+	if !bytes.Equal(*text, want) {
+		t.Fatalf("guest text after clear and append=%x want=%x", *text, want)
+	}
+}
+
+func TestCInputTooSmallBufferCanRetryASCII(t *testing.T) {
+	s, text, _ := cInputFixtureCapacity(t, 2)
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "\uAC00"); !errors.Is(err, backend.ErrInvalidTextInput) {
+		t.Fatalf("small buffer: %v", err)
+	}
+	if len(*text) != 0 {
+		t.Fatal("rejected character modified field")
+	}
+	if err := edit.Commit(t.Context(), "A"); err != nil {
+		t.Fatal(err)
+	}
+	if string(*text) != "A" {
+		t.Fatalf("retry=%q", *text)
+	}
+}
+
+func TestCInputCompositionStopsWhenGuestChangesMode(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	complete, _ := runtime.allocateBytes(make([]byte, 6))
+	composing, _ := runtime.allocateBytes(make([]byte, 8))
+	size1, _ := runtime.allocateWords([]uint32{6})
+	size2, _ := runtime.allocateWords([]uint32{8})
+	calls := 0
+	if err := client.vm.RegisterNative("test/ChangingCInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
+		calls++
+		key, _ := args[2].Int32()
+		_, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, complete, size1, composing, size2)
+		if err == nil {
+			_, err = cInputCall(t, runtime, wipicIMSetCurrentMode, 1)
+		}
+		return jvm.IntValue(0), err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = append(runtime.displayCards, newWidget("test/ChangingCInputCard"))
+	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Client: client}
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("changed widget: %v", err)
+	}
+	if calls != 1 || len(runtime.cInput.pending) != 0 {
+		t.Fatalf("calls=%d pending=%x", calls, runtime.cInput.pending)
+	}
+	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("retrying consumed prefix: %v", err)
 	}
 }

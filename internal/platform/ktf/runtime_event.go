@@ -431,9 +431,11 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	// call its input method (for example, dismissing the name dialog).
 	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
 		runtime.cInput.revision++
-		revision, calls := runtime.cInput.revision, runtime.cInput.calls
+		activations, calls := runtime.cInput.activations, runtime.cInput.calls
 		defer func() {
-			if runtime.cInput.revision == revision && runtime.cInput.calls == calls {
+			// CLR edits the current field even when its only IM call flushes
+			// composition. Other keys need evidence of continued text editing.
+			if runtime.cInput.activations == activations && !(key == KeyClear && runtime.cInput.calls > calls) {
 				runtime.cInput.active = false
 			}
 		}()
