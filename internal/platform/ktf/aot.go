@@ -448,13 +448,6 @@ func (runtime *initializationRuntime) allocateAOTObject(metadata jvm.AOTClassMet
 	return address, nil
 }
 
-// aotVTableHeader builds the object-header word read by guest virtual
-// dispatch and array-store checks. Real clients decode it as a class-record
-// offset relative to the JVM context: dispatch reads the vtable through
-// header>>5 plus 12 and type checks read the descriptor through header>>5
-// plus 8. Client class records live in the native image, beyond the shifted
-// offset range, so every class gets one bounded dispatch-alias record inside
-// the platform arena and the header encodes that alias.
 // aotArrayElementBytes reads or writes one element of a bound guest array.
 // Values follow the primitive sizes; references store the paired guest
 // address word.
@@ -510,9 +503,20 @@ func (runtime *initializationRuntime) allocateGuestCharArray(units []uint16) (ui
 	return address, nil
 }
 
+// aotVTableHeader encodes a signed class displacement relative to the JVM
+// context. Image classes retain their canonical identity; distant runtime
+// records use aliases allocated beside the context.
 func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetadata) (uint32, error) {
 	if runtime.jvmContext == 0 {
 		return 0, fmt.Errorf("KTF JVM context is not prepared")
+	}
+	// Compiled access checks compare class addresses, not descriptor names.
+	// Preserve image records when the signed header displacement can name them.
+	offset := int64(metadata.Address) - int64(runtime.jvmContext)
+	if runtime.classArena != nil && metadata.Address >= ImageBase &&
+		uint64(metadata.Address)+javaClassSize <= uint64(ImageBase)+runtime.client.mapped &&
+		offset >= -(1<<26) && offset < 1<<26 {
+		return uint32(int32(offset)) << 5, nil
 	}
 	alias, ok := runtime.classAliases[metadata.Address]
 	if !ok {
@@ -522,7 +526,7 @@ func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetad
 		}
 		aliasData := make([]byte, javaClassSize)
 		copy(aliasData, record)
-		alias, err = runtime.allocateBytes(aliasData)
+		alias, err = runtime.allocateClassAlias(aliasData)
 		if err != nil {
 			return 0, fmt.Errorf("allocate KTF dispatch alias for %s: %w", metadata.Name, err)
 		}
@@ -545,11 +549,11 @@ func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetad
 	if alias < runtime.jvmContext {
 		return 0, fmt.Errorf("KTF dispatch alias %#x precedes the JVM context", alias)
 	}
-	offset := alias - runtime.jvmContext
-	if offset >= 1<<26 {
-		return 0, fmt.Errorf("KTF dispatch alias offset %#x exceeds the header range", offset)
+	aliasOffset := alias - runtime.jvmContext
+	if aliasOffset >= 1<<26 {
+		return 0, fmt.Errorf("KTF dispatch alias offset %#x exceeds the header range", aliasOffset)
 	}
-	return offset << 5, nil
+	return aliasOffset << 5, nil
 }
 
 func aotArrayElementSize(name string) (uint64, error) {
@@ -629,14 +633,8 @@ func (runtime *initializationRuntime) describeDispatchWord(address uint32) strin
 		bound = metadata.Name
 	}
 	dispatched := "unknown"
-	for classAddress, candidate := range runtime.classAliases {
-		if candidate != alias {
-			continue
-		}
-		if metadata, ok := runtime.client.vm.AOTClassAt(classAddress); ok {
-			dispatched = metadata.Name
-		}
-		break
+	if metadata, ok := runtime.client.vm.AOTClassAt(alias); ok {
+		dispatched = metadata.Name
 	}
 	agreement := "ok"
 	if dispatched != bound {

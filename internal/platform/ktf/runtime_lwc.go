@@ -29,7 +29,7 @@ const (
 	// specification declares it protected on TextComponent and a title reads
 	// it off the component rather than asking for it, so it is published into
 	// the guest payload as well; see textComponentFieldsSize.
-	componentInputHandlerField = "imHandler:Lorg/kwis/msp/lcdui/InputMethodHandler;"
+	componentInputHandlerField = runtimeTextComponentClass + ".imHandler:Lorg/kwis/msp/lcdui/InputMethodHandler;"
 )
 
 // textComponentFieldsSize is how many payload bytes TextComponent's own field

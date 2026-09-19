@@ -108,6 +108,7 @@ func runtimeInputMethodHandlerClassDefinition() runtimeJavaClass {
 		accessFlags: 0x0021,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeInputMethodConstructor},
+			{class: class, name: "getCurrentMode", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentField("mode:I")},
 			{class: class, name: "setCurrentMode", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeInputMethodSetMode},
 			// The listener the handler hands its characters to. There is no
 			// automaton behind this to hand any over — text reaches a

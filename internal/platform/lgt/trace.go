@@ -384,6 +384,7 @@ var wipicSlotNames = map[uint32]string{
 	slotCreateImage:                 "createImage",
 	slotDestroyImage:                "destroyImage",
 	slotDecodeNextImage:             "decodeNextImage",
+	slotEncodeImage:                 "encodeImage",
 	slotPostEvent:                   "postEvent",
 	slotIMGetSupportedModeCount:     "imGetSupportedModeCount",
 	slotIMGetSupportedModes:         "imGetSupportedModes",
