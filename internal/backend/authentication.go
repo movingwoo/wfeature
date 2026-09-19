@@ -6,14 +6,15 @@ package backend
 type AuthenticationStatus string
 
 const (
-	AuthenticationOff              AuthenticationStatus = "off"
-	AuthenticationUnsupported      AuthenticationStatus = "unsupported"
-	AuthenticationKTFCertificate23 AuthenticationStatus = "ktf-certificate-23"
-	AuthenticationKTFCertificate52 AuthenticationStatus = "ktf-certificate-52"
-	AuthenticationSKTLicense       AuthenticationStatus = "skt-license"
-	AuthenticationKTFSubscriber    AuthenticationStatus = "ktf-subscriber-fallback"
-	AuthenticationLGTOptions       AuthenticationStatus = "lgt-cached-authentication"
-	AuthenticationLGTCertificate58 AuthenticationStatus = "lgt-certificate-58"
-	AuthenticationLGTNotification  AuthenticationStatus = "lgt-offline-notification"
-	AuthenticationLGTHandshake     AuthenticationStatus = "lgt-offline-authentication"
+	AuthenticationOff               AuthenticationStatus = "off"
+	AuthenticationUnsupported       AuthenticationStatus = "unsupported"
+	AuthenticationKTFCertificate23  AuthenticationStatus = "ktf-certificate-23"
+	AuthenticationKTFCertificate52  AuthenticationStatus = "ktf-certificate-52"
+	AuthenticationSKTLicense        AuthenticationStatus = "skt-license"
+	AuthenticationKTFSubscriber     AuthenticationStatus = "ktf-subscriber-fallback"
+	AuthenticationLGTOptions        AuthenticationStatus = "lgt-cached-authentication"
+	AuthenticationLGTCertificate100 AuthenticationStatus = "lgt-certificate-100"
+	AuthenticationLGTCertificate58  AuthenticationStatus = "lgt-certificate-58"
+	AuthenticationLGTNotification   AuthenticationStatus = "lgt-offline-notification"
+	AuthenticationLGTHandshake      AuthenticationStatus = "lgt-offline-authentication"
 )

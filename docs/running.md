@@ -594,3 +594,11 @@ curl -sS http://127.0.0.1:11541/games.json | head -c 120
 On Windows the first run also raises a firewall prompt, because the server
 binds every interface. Allowing it on the private network is what lets a phone
 reach the page.
+
+## A game asks to restart
+
+If an LGT title asks to press its OZ key and restart, press the emulator’s
+OK/confirmation key and let the game exit before launching it again. The guest
+may save its acknowledgment only through that action; immediately restarting
+the emulator repeats the notice. Do not delete saves to dismiss it. See the
+[recorded restart investigation](startup-compatibility-2026-09-19.md#lgt-restart-notice-e934256c238a).

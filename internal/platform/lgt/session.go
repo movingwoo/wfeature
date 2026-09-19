@@ -138,6 +138,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if err != nil {
 		return nil, err
 	}
+	var embeddedCertificate *authenticationCertificate100Store
 	authentication := backend.AuthenticationOff
 	if !options.DisableAuthentication {
 		authentication = backend.AuthenticationUnsupported
@@ -164,6 +165,13 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			}
 		}
 
+		if authentication == backend.AuthenticationUnsupported {
+			if contract := authenticationCertificate100(client.module); contract != nil {
+				embeddedCertificate = newAuthenticationCertificate100Store(client.saveStore, contract)
+				client.saveStore = embeddedCertificate
+			}
+		}
+
 		if options.Logger != nil {
 			options.Logger.Debug("authentication compatibility", "status", authentication)
 		}
@@ -177,6 +185,13 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if err := client.StartClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
 		return nil, &StartFailure{Err: err, Trace: client.SVCTrace()}
 	}
+	if embeddedCertificate != nil && embeddedCertificate.activate(client) {
+		authentication = backend.AuthenticationLGTCertificate100
+		if options.Logger != nil {
+			options.Logger.Debug("authentication compatibility", "status", authentication)
+		}
+	}
+
 	tick := options.Tick
 	if tick <= 0 {
 		tick = defaultTick

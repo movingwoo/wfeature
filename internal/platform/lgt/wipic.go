@@ -110,6 +110,7 @@ const (
 	slotCreateImage     uint32 = 0xe9
 	slotDestroyImage    uint32 = 0xea
 	slotDecodeNextImage uint32 = 0xeb
+	slotEncodeImage     uint32 = 0xed
 	slotPostEvent       uint32 = 0xee
 	// The graphics block ends with the two polygon calls, which is where the
 	// specification's function order puts them once the block's two unnamed
@@ -255,7 +256,7 @@ func knownWIPICSlot(slot uint32) bool {
 		slotGetRGBFromPixel, slotGetDisplayInfo, slotRepaint, slotGetFont,
 		slotGetFontHeight, slotGetFontAscent, slotGetFontDescent,
 		slotGetStringWidth, slotCreateImage, slotDestroyImage,
-		slotDecodeNextImage, slotPostEvent, slotDrawPolygon, slotFillPolygon,
+		slotDecodeNextImage, slotEncodeImage, slotPostEvent, slotDrawPolygon, slotFillPolygon,
 		slotIMGetSupportedModeCount, slotIMGetSupportedModes,
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
 		slotFsOpen, slotFsRead, slotFsWrite,
@@ -721,6 +722,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotDestroyImage:
 		return client.destroyImage(thread)
+
+	case slotEncodeImage:
+		return client.handleEncodeImage(thread)
 
 	case slotDecodeNextImage:
 		return client.decodeNextImage(thread)

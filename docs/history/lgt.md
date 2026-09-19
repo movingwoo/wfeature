@@ -2195,6 +2195,11 @@ and +2 after the second. The last two functions in the block are
 `MC_grpDrawPolygon` and `MC_grpFillPolygon`, which lands them on `0xef` and
 `0xf0`.
 
+A later caller identifies `MC_grpEncodeImage` at `0xed`: six arguments
+encode a framebuffer crop into an owned BMP buffer, immediately consumed by
+`CreateImage`. Thus the second gap is before that encoder, not between it
+and `PostEvent`. [Follow-up evidence](../startup-compatibility-2026-09-19.md#follow-up-entering-a-campaign).
+
 The call settles it without needing the arithmetic to be trusted:
 
 ```

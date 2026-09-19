@@ -1045,7 +1045,7 @@ The old `-auth` flag remains accepted for existing scripts. After startup, stder
 `authentication: ktf-certificate-52` or `authentication: skt-license`.
 `authentication: unsupported` leaves ordinary behavior in place, including for
 earlier native KTF packages. A recognized LGT cached-result layout reports
-`authentication: lgt-cached-authentication`, `authentication: lgt-certificate-58`,
+`authentication: lgt-cached-authentication`, `authentication: lgt-certificate-58`, `authentication: lgt-certificate-100`,
 `authentication: lgt-offline-notification`, or `authentication: lgt-offline-authentication`.
 The last two handle an exact notification/remote-save exchange or binary authentication
 exchange locally; they send nothing outside the emulator.

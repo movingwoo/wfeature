@@ -20,6 +20,7 @@ This is separate from the server access key and never contacts a license server.
 | `ktf-subscriber-fallback` | A complete Thumb subscriber accessor matches, alongside a packaged 64-byte `prefs` record and no `cert.c2s`. Resolve its embedded fallback number and use that full number throughout this session. |
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
+| `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
 | `lgt-offline-notification` | Connected Thumb notification and remote-save contracts match. Acknowledge the explicit choice locally; report no remote save and finish that query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
@@ -423,3 +424,6 @@ this branch, but its shortened run reports one Blob access-control error from
 `createImageBitmap`. The final no-page-error assertion therefore fails. The
 error remains an open frame-decoding issue, not a clean WebKit acceptance result;
 its stack and route observations are retained beside the Chromium evidence.
+
+The embedded 100-byte format and first-run initialization behavior are documented
+in the [2026-09-19 startup investigation](startup-compatibility-2026-09-19.md#lgt-embedded-certificate-74b0ff2230f7).
