@@ -416,6 +416,7 @@ func runtimeComponentSetWorkComponent(_ *initializationRuntime, _ *jvm.VM, argum
 		return jvm.VoidValue(), err
 	}
 	receiver.Fields[componentWorkField] = arguments[1]
+	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
 
@@ -431,10 +432,10 @@ const (
 	componentCommandGrabbed = "commandGrab:Z"
 )
 
-// runtimeComponentShown records whether a shell is on the screen, which is the
-// whole of what showing one does here.
+// runtimeComponentShown tracks the latest shell for Host text entry. Rendering
+// and acceptance remain guest-owned; showing a shell does not invent focus.
 func runtimeComponentShown(shown bool) runtimeJavaImplementation {
-	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	return func(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		receiver, err := runtimeComponentReceiver("ShellComponent show", arguments, 1)
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -444,6 +445,12 @@ func runtimeComponentShown(shown bool) runtimeJavaImplementation {
 			value = 1
 		}
 		receiver.Fields["shown:Z"] = jvm.IntValue(value)
+		runtimeComponentIncrementRevision(receiver, componentShellVisibilityRevisionField)
+		if shown {
+			runtime.runtimeObjects[runtimeLWCShownShellObject] = receiver
+		} else if runtime.runtimeObjects[runtimeLWCShownShellObject] == receiver {
+			delete(runtime.runtimeObjects, runtimeLWCShownShellObject)
+		}
 		return jvm.VoidValue(), nil
 	}
 }

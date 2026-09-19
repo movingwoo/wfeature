@@ -43,7 +43,8 @@ events at or above `0x5000` retain their type and two arguments. Unknown reserve
 event kinds below that boundary remain errors. WIPI Java supports Host pointer
 events; earlier native packages do not gain pointer support from that fact.
 
-Host keyboard/IME entry supports active LWC fields and the observed non-modal
+Host keyboard/IME entry supports active LWC fields, the sole direct text child
+of a shown Shell when explicit focus is absent, and the observed non-modal
 KFC form containing one listened text field. The guest owns acceptance and
 persistence. Synchronous `doModal` remains unsupported. See
 [native text input](native-text-input.md) for target ownership and validation.
