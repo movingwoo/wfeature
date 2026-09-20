@@ -98,14 +98,19 @@ func unpackArchiveWithin(data []byte, limits archiveLimits) (Descriptor, []byte,
 	// The JAR is named after the descriptor. A title whose archive was
 	// repacked can have lost the pairing, so the one JAR that is there wins —
 	// the same rule the LGT loader applies for the same reason.
-	jar, err := readArchiveEntry(reader, strings.TrimSuffix(msdName, path.Ext(msdName))+".jar", spent)
+	jarName := strings.TrimSuffix(msdName, path.Ext(msdName)) + ".jar"
+	jar, err := readArchiveEntry(reader, jarName, spent)
 	if err != nil {
-		jar, err = onlyJAR(reader, spent)
+		jarName, err = onlyJARName(reader)
+		if err != nil {
+			return Descriptor{}, nil, nil, err
+		}
+		jar, err = readArchiveEntry(reader, jarName, spent)
 		if err != nil {
 			return Descriptor{}, nil, nil, err
 		}
 	}
-	installed, err := installedFiles(reader, spent)
+	installed, err := installedFiles(reader, spent, jarName)
 	if err != nil {
 		return Descriptor{}, nil, nil, err
 	}
@@ -119,15 +124,16 @@ func unpackArchiveWithin(data []byte, limits archiveLimits) (Descriptor, []byte,
 //
 // Nothing but the packaging tells them apart from the descriptor and the
 // module, so what is excluded is named rather than guessed at: the JAR, the
-// .msd, and the two files the platform itself was sent.
-func installedFiles(reader *zip.Reader, spent *budget) (map[string][]byte, error) {
+// .msd, and the two files the platform itself was sent. Additional JARs are
+// installed resources that XFile can open independently of the class path.
+func installedFiles(reader *zip.Reader, spent *budget, primaryJAR string) (map[string][]byte, error) {
 	installed := make(map[string][]byte)
 	for _, file := range reader.File {
-		if file.FileInfo().IsDir() {
+		if file.FileInfo().IsDir() || file.Name == primaryJAR {
 			continue
 		}
 		switch strings.ToLower(path.Ext(file.Name)) {
-		case ".jar", msdSuffix, ".mod", ".wmr":
+		case msdSuffix, ".mod", ".wmr":
 			continue
 		}
 		name := path.Base(file.Name)
@@ -150,21 +156,21 @@ func installedFiles(reader *zip.Reader, spent *budget) (map[string][]byte, error
 	return installed, nil
 }
 
-func onlyJAR(reader *zip.Reader, spent *budget) ([]byte, error) {
+func onlyJARName(reader *zip.Reader) (string, error) {
 	var found *zip.File
 	for _, file := range reader.File {
 		if !strings.EqualFold(path.Ext(file.Name), ".jar") {
 			continue
 		}
 		if found != nil {
-			return nil, fmt.Errorf("SKT archive holds more than one JAR (%q and %q)", found.Name, file.Name)
+			return "", fmt.Errorf("SKT archive holds more than one JAR (%q and %q)", found.Name, file.Name)
 		}
 		found = file
 	}
 	if found == nil {
-		return nil, fmt.Errorf("SKT archive has no JAR")
+		return "", fmt.Errorf("SKT archive has no JAR")
 	}
-	return readArchiveEntry(reader, found.Name, spent)
+	return found.Name, nil
 }
 
 // readArchiveEntry reads one entry by its exact stored name. It walks the

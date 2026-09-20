@@ -30,6 +30,7 @@ func (runtime *Runtime) xFileRegistrations() []nativeRegistration {
 	return []nativeRegistration{
 		{skvm.XFileClass, "initHandle", "(I)V", runtime.initXFileHandle},
 		{skvm.XFileClass, "initName", "(" + text + "I)V", runtime.initXFileName},
+		{skvm.XFileClass, "initArchive", "(" + text + text + ")V", runtime.initXFileArchive},
 		{skvm.XFileClass, "available", "()I", runtime.xFileAvailable},
 		{skvm.XFileClass, "close", "()V", runtime.xFileClose},
 		{skvm.XFileClass, "flush", "()V", runtime.xFileFlush},
@@ -135,6 +136,42 @@ func (runtime *Runtime) initXFileName(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such file: "+name)
 	}
 	receiver.Native = file
+	return jvm.VoidValue(), nil
+}
+
+func (runtime *Runtime) initXFileArchive(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	name, err := stringArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	entry, err := stringArgument(arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	entry, err = safeEntryName(strings.TrimPrefix(entry, "/"))
+	if err != nil {
+		return jvm.VoidValue(), newGuestException("java/io/IOException", err.Error())
+	}
+	data, found, err := runtime.xFileContents(name)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if !found {
+		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such archive: "+name)
+	}
+	entries, err := readJAR(data)
+	if err != nil {
+		return jvm.VoidValue(), newGuestException("java/io/IOException", err.Error())
+	}
+	contents, found := entries[entry]
+	if !found {
+		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such archive entry: "+entry)
+	}
+	receiver.Native = &xFileData{name: name + "!/" + entry, data: contents, mode: xFileRead, open: true}
 	return jvm.VoidValue(), nil
 }
 

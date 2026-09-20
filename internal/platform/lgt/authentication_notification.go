@@ -15,6 +15,7 @@ type localNetworkProtocol uint8
 const (
 	localNotificationProtocol localNetworkProtocol = iota
 	localAuthenticationProtocol
+	localTerminatedNotificationProtocol
 )
 
 // notificationNetwork is the legacy name of the bounded in-process service
@@ -56,6 +57,9 @@ func (n *notificationNetwork) close() {
 // application tokens can complete a recognized request. Trailing data, reordered
 // commands, uploads and unknown operations fail without a success response.
 func (n *notificationNetwork) writeRequest(s *notificationSocketState, data []byte) bool {
+	if n.contract.protocol == localTerminatedNotificationProtocol {
+		return n.writeTerminatedNotificationRequest(s, data)
+	}
 	if n.contract.protocol == localAuthenticationProtocol {
 		return n.writeAuthenticationRequest(s, data)
 	}
@@ -94,6 +98,31 @@ func (n *notificationNetwork) writeRequest(s *notificationSocketState, data []by
 			s.stage = 2
 		}
 		s.request = nil
+		return true
+	}
+	return false
+}
+
+const localNotificationMessage = "Handled locally. Nothing sent."
+
+// The ARM notification client sends a NUL-terminated command from a 64-byte
+// buffer. Its reply is a command byte, payload length and informational text.
+// This exchange only acknowledges the choice the guest already made.
+func (n *notificationNetwork) writeTerminatedNotificationRequest(s *notificationSocketState, data []byte) bool {
+	if s.failed || s.stage != 0 || len(s.response) != 0 || len(data) > 64-len(s.request) {
+		return false
+	}
+	s.request = append(s.request, data...)
+	for i, choice := range []string{"N", "Y"} {
+		candidate := []byte("SMSAGREE " + n.identity + " " + n.contract.application + " " + choice + "\x00")
+		if len(candidate) > 64 || !bytes.HasPrefix(candidate, s.request) {
+			continue
+		}
+		if len(s.request) == len(candidate) {
+			s.response = append([]byte{byte(i + 2), byte(len(localNotificationMessage))}, localNotificationMessage...)
+			s.request = nil
+			s.stage = 2
+		}
 		return true
 	}
 	return false

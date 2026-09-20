@@ -109,13 +109,22 @@ func TestStreamsOpenThroughXFile(t *testing.T) {
 		t.Errorf("output stream opened mode %d, want %d", openedMode, xfileWrite)
 	}
 
-	// The textual mode is the C-style spelling, and it has to reach the same
-	// bits.
+	var archiveName, entryName string
+	if err := machine.RegisterNative(XFileClass, "initArchive", "(Ljava/lang/String;Ljava/lang/String;)V",
+		func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			archive, _ := arguments[1].Reference()
+			entry, _ := arguments[2].Reference()
+			archiveName, _ = jvm.StringText(archive)
+			entryName, _ = jvm.StringText(entry)
+			return jvm.VoidValue(), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := machine.NewObject(XFileClass, "(Ljava/lang/String;Ljava/lang/String;)V",
-		jvm.ReferenceValue(machine.NewString("save.dat")), jvm.ReferenceValue(machine.NewString("rw"))); err != nil {
+		jvm.ReferenceValue(machine.NewString("maps.jar")), jvm.ReferenceValue(machine.NewString("/0.bin"))); err != nil {
 		t.Fatalf("new XFile(String, String) error = %v", err)
 	}
-	if openedMode != xfileRead|xfileWrite {
-		t.Errorf(`XFile(name, "rw") opened mode %d, want %d`, openedMode, xfileRead|xfileWrite)
+	if archiveName != "maps.jar" || entryName != "/0.bin" {
+		t.Errorf("archive=%q entry=%q", archiveName, entryName)
 	}
 }

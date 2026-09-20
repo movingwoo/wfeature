@@ -35,6 +35,15 @@ normal clipping. The original archive is never rewritten. The
 [rendering investigation](#skt-skt-original-specific-clip-compatibility)
 records the current entry's evidence and rendering tests.
 
+`skt.tutorial_name_cache` clears an item-name cache when one verified code
+revision returns from its tutorial equipment menu to combat. It replaces a
+redundant phase assignment in an in-memory class copy; JVM array checks stay
+unchanged. See the [tutorial reproduction](gameplay-qa-2026-09-20.md#skt-tutorial-reproduction)
+for independent Java replay and the verified input route. The optional
+`TestLocalTutorialCompatibilityFingerprint` uses the absolute local path in
+`WFEATURE_SKT_TUTORIAL_ARCHIVE` to check selection and rejection of a changed
+class set.
+
 Matching always includes the platform and fingerprint kind, not just the hash.
 The shared package owns metadata validation and matching. Each platform owns
 fingerprint calculation and correction behavior. Fix names are platform-prefixed

@@ -1330,11 +1330,11 @@ func (runtime *Runtime) emptyStringArray(vm *jvm.VM, _ []jvm.Value) (jvm.Value, 
 
 // xDisplayRefresh is how a title on this vendor says the screen is ready: it
 // draws into the Graphics whenever it likes and then pushes, rather than
-// waiting to be asked for a paint. What it does here is mark the screen ready
-// and return; the Host pass presents it.
+// waiting to be asked for a paint. The producer is paced in guest time before
+// marking the screen ready; the Host pass presents it.
 //
-// **It used to present on the spot, and one title family calls it about a
-// hundred times per Host pass** — 496,029 calls in 4,000 ticks, against
+// Before producer pacing, one title family called it about a hundred times
+// per Host pass — 496,029 calls in 4,000 ticks, against
 // another title's 3.7. Their loop draws as fast as the machine will let it and
 // pushes every time round, so every call allocated a copy of the framebuffer
 // and handed it to a surface that copied it again, for a picture no Host could
@@ -1348,14 +1348,16 @@ func (runtime *Runtime) emptyStringArray(vm *jvm.VM, _ []jvm.Value) (jvm.Value, 
 // the game happened to be halfway through drawing, which is a torn frame and,
 // worse, a different one every run. What waits for the pass is the *present*.
 //
-// One reusable buffer holds it, so a hundred pushes a pass cost a hundred
-// memcpys and no allocation, and the Host is handed one frame. That is a fifth
-// of the host CPU off that family's runs with the pictures unchanged.
+// One reusable buffer holds the snapshot without a per-refresh allocation,
+// and the Host receives the latest completed frame.
 //
 // The rectangle is validated and then ignored, as it was before: this
 // runtime's surface is presented whole.
 func (runtime *Runtime) xDisplayRefresh(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if _, _, _, _, err := rectArguments(arguments, 0); err != nil {
+		return jvm.VoidValue(), err
+	}
+	if err := runtime.paceRefresh(); err != nil {
 		return jvm.VoidValue(), err
 	}
 	runtime.renderMu.Lock()
@@ -1369,6 +1371,31 @@ func (runtime *Runtime) xDisplayRefresh(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	runtime.refreshPending = true
 	runtime.displayMu.Unlock()
 	return jvm.VoidValue(), nil
+}
+
+// paceRefresh supplies a frame boundary for loops with no guest sleep. A cap
+// of 60 refreshes per guest second is an emulator policy, not a handset timing
+// claim. Slower producers do not accumulate credit or pay an additional full
+// frame wait. Speed changes are observed while waiting, and terminal states
+// release the producer without requiring another Host tick.
+func (runtime *Runtime) paceRefresh() error {
+	if runtime.pace == nil {
+		return nil
+	}
+	runtime.refreshPaceMu.Lock()
+	defer runtime.refreshPaceMu.Unlock()
+	for {
+		if state := runtime.State(); state == StateDestroyed || state == StateError {
+			return jvm.ErrClosed
+		}
+		now := runtime.pace.Now()
+		remaining := runtime.lastRefresh.Add(time.Second / 60).Sub(now)
+		if runtime.lastRefresh.IsZero() || remaining <= 0 {
+			runtime.lastRefresh = now
+			return nil
+		}
+		time.Sleep(min(runtime.pace.SourceDuration(remaining), 10*time.Millisecond))
+	}
 }
 
 // presentRefresh shows the picture a title pushed with XDisplay.refresh, once

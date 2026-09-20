@@ -87,6 +87,13 @@ The SKT async JAR uses the authored MIDlet stubs and packages
 Do not include runtime stub classes. General fixture commands remain in
 [the fixture guide](history/testing.md#implementation-compiling-a-java-fixture).
 
+The SKT `tutorial-cache.jar` packages only the authored
+`TutorialCacheMIDlet.class`, compiled from `testdata/src/TutorialCacheMIDlet.java`
+with Java 8 target settings and the authored MIDlet stub on the compilation
+class path. Its manifest selects `TutorialCacheMIDlet` with MIDP-2.0 and
+CLDC-1.1. Do not package the stub. This fixture tests a revision-scoped cache
+adaptation, including the original bounds exception and the corrected reload.
+
 ## Browser and device acceptance
 
 Go handler tests and Node client tests are ordinary gates. Local Chromium and

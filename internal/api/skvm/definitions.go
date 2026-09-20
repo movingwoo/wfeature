@@ -355,7 +355,8 @@ func definitions() []jvm.ClassDefinition {
 			Methods: []jvm.MethodDefinition{
 				{Name: "<init>", Descriptor: "(I)V", Access: jvm.AccessPublic, Body: xfileInitHandle},
 				{Name: "<init>", Descriptor: "(Ljava/lang/String;I)V", Access: jvm.AccessPublic, Throws: []string{"java/io/IOException"}, Body: xfileInitName},
-				{Name: "<init>", Descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", Access: jvm.AccessPublic, Throws: []string{"java/io/IOException"}, Body: xfileInitMode},
+				{Name: "<init>", Descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", Access: jvm.AccessPublic, Throws: []string{"java/io/IOException"}, Body: xfileInitArchive},
+				{Name: "initArchive", Descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", Access: jvm.AccessPrivate | jvm.AccessNative, Throws: []string{"java/io/IOException"}},
 				{Name: "initHandle", Descriptor: "(I)V", Access: jvm.AccessPrivate | jvm.AccessNative},
 				{Name: "initName", Descriptor: "(Ljava/lang/String;I)V", Access: jvm.AccessPrivate | jvm.AccessNative, Throws: []string{"java/io/IOException"}},
 				{Name: "available", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},

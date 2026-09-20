@@ -21,7 +21,7 @@ This is separate from the server access key and never contacts a license server.
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
 | `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
-| `lgt-offline-notification` | Connected Thumb notification and remote-save contracts match. Acknowledge the explicit choice locally; report no remote save and finish that query. |
+| `lgt-offline-notification` | Connected Thumb or ARM notification contracts match. Acknowledge the explicit choice locally; the Thumb variant also supports its empty remote-save query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
 
@@ -283,11 +283,12 @@ declines SMS reception before reaching character creation and outpost input
 
 ## LGT local notification and empty remote-save service
 
-`lgt-offline-notification` recognizes connected notification writer/reader,
-dial callbacks, remote-save command writers, reply parsing and opcode dispatch.
+`lgt-offline-notification` recognizes connected notification writer/reader and
+dial/socket callbacks. The Thumb variant also requires its remote-save command
+writers, reply parsing and opcode dispatch.
 It resolves the application token and IPv4 endpoint from those relationships;
-neither an archive name nor a fixed application identifier selects it. Of 109
-local LGT modules, one matches this contract. The endpoint is compared as data
+neither an archive name nor a fixed application identifier selects it. The earlier scan of 109
+local LGT modules found one matching the Thumb contract. The endpoint is compared as data
 and never contacted. No OS socket, DNS lookup, SMS transmission, remote-save
 upload, deletion, download or purchase operation is implemented.
 
@@ -306,6 +307,23 @@ zero variable-field length. These exchanges remain local; their status is
 available in diagnostics.
 The guest may show its own restart and no-remote-save notices; those notices are
 not evidence of an external service or cloud backup.
+
+The ARM variant uses a separate contract: its virtual tables connect the
+agreement initializer, command builder, reply handler and stream decoder.
+The dial and socket callbacks must share the transport state, and their methods
+must appear together in the transport table. Instruction windows and connected
+literal pools establish the contract; names, hashes and fixed image addresses
+are not selection keys. Changed compiler layouts remain unsupported.
+
+Its command is `SMSAGREE <identity> <application> <N-or-Y>` plus a terminating
+NUL, bounded to 64 bytes rather than padded to 100. The reply contains the
+choice's opcode, a one-byte text length, and the local informational message
+`Handled locally. Nothing sent.` The guest displays and dismisses this notice
+through its own UI. This variant acknowledges only the agreement; it does not
+accept the Thumb variant's remote-save commands. The guest remains responsible
+for writing its own receipt and progressing after confirmation. The local
+reproduction and its limits are recorded in
+[the gameplay QA report](gameplay-qa-2026-09-20.md#lgt-agreement-reproduction).
 
 Only the recognized dial callbacks, socket callback, endpoint, session subscriber
 and application token qualify. Four sockets and 64 pending dials are the limits.
