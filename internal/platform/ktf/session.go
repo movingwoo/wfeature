@@ -357,6 +357,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 					client.authentication = backend.AuthenticationKTFCertificate52
 				} else if number, ok := authenticationSubscriber(archive, image); ok {
 					client.subscriberNumber = number
+					client.AttachSaveStore(authenticationSubscriberReceipt(client.saveStore, archive, number))
 					client.authentication = backend.AuthenticationKTFSubscriber
 				}
 			}

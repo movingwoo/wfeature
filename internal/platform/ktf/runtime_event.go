@@ -536,7 +536,8 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// paint: a title whose frame loop steps the world inside `paint` takes a
 	// step it never asked for. See runtimeCardServiceRepaints.
 	//
-	// A live worker that services this card owns its frame cadence. Counting
+	// A live worker that requests or services this card owns its frame cadence.
+	// A rearmed C timer that requests repaint has the same ownership. Counting
 	// idle Host rounds cannot establish that it stopped: a slow scene can
 	// leave a long gap between requested paints. An extra paint in that gap
 	// can clear the dirty flag before the worker advances the next scene stage.
@@ -544,6 +545,11 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// whose worker has returned.
 	if !runtime.repaintPending {
 		card := runtime.topCard()
+		for _, timer := range runtime.pendingTimers {
+			if timer.paintedCard == card {
+				return false, nil
+			}
+		}
 		for _, worker := range runtime.client.workers {
 			if worker.paintedCard == card {
 				return false, nil

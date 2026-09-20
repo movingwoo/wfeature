@@ -163,6 +163,7 @@ type Client struct {
 	// chargedFramePeriod for the first and framePeriodDeadline for the second.
 	workBaseline uint64
 	servingDue   time.Time
+	activeTimer  *wipicTimer
 	// paintLoad is the running ratio of what an entry costs to the wait the
 	// guest asks for after it; above one the host is oversubscribed.
 	paintLoad float64
@@ -665,6 +666,7 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 		// The frame period this callback arms for its next frame runs from the
 		// deadline this one was due at, wherever in the callback it is armed.
 		client.servingDue = timer.due
+		client.activeTimer = &timer
 		run, err := client.core.Call(
 			ctx,
 			client.thread,
@@ -674,6 +676,14 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 			client.runtime.handleSupervisorCall,
 		)
 		client.servingDue = time.Time{}
+		client.activeTimer = nil
+		// Only the same rearmed callback inherits its repaint cadence.
+		for i := range client.runtime.pendingTimers {
+			next := &client.runtime.pendingTimers[i]
+			if next.task == nil && next.pointer == timer.pointer && next.callback == timer.callback {
+				next.paintedCard = timer.paintedCard
+			}
+		}
 		if err != nil {
 			// A fault inside a timer callback gets the same evidence a fault
 			// inside an AOT call gets. The address a fault names is never the

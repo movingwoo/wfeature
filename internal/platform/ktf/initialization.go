@@ -49,6 +49,8 @@ const (
 	// jumps to through the table its segment header names. See
 	// module_link.go.
 	svcCategoryModuleJump uint32 = 7
+	// A revision-scoped replacement for one camera store; see camera_bounds.go.
+	svcCategoryCameraBounds uint32 = 8
 
 	initSVCGetInterface  uint32 = 0
 	initSVCJavaThrow     uint32 = 1
@@ -187,6 +189,9 @@ func (client *Client) prepareInitialization() (*initializationRuntime, []uint32,
 	if _, err := runtime.installImageHooks(); err != nil {
 		return nil, nil, err
 	}
+	if err := runtime.installCameraBoundsCompatibility(); err != nil {
+		return nil, nil, err
+	}
 	client.prepared, client.initParameters = runtime, parameters
 	return runtime, parameters, nil
 }
@@ -300,6 +305,7 @@ type initializationRuntime struct {
 	displayCards             []*jvm.Object
 	dockedCard               *jvm.Object
 	pendingTimers            []wipicTimer
+	cameraBoundsStore        uint32
 	// pendingNetCallbacks are the MC_netConnect failures owed to callers that
 	// registered one; see wipic_net.go.
 	relayOnline         bool
@@ -895,6 +901,8 @@ func (runtime *initializationRuntime) handleSupervisorCall(ctx context.Context, 
 	}()
 	var result uint32
 	switch call.Immediate {
+	case svcCategoryCameraBounds:
+		return runtime.storeCameraBounds(thread, call)
 	case svcCategoryInit:
 		result, err = runtime.handleInitCall(thread, id)
 	case svcCategoryJavaInterface:
@@ -1536,6 +1544,10 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	case table == wipicTableGraphics && function == 25:
 		// MC_grpRepaint(lcd, x, y, w, h) queues a repaint rather than painting
 		// here; the region is discarded because a card is repainted whole.
+		runtime.repaintPending = true
+		if timer := runtime.client.activeTimer; timer != nil {
+			timer.paintedCard = runtime.topCard()
+		}
 		runtime.postRepaintEvent()
 		return 0, nil
 	case table == wipicTableGraphics && function == 26:
@@ -1872,10 +1884,12 @@ func (runtime *initializationRuntime) wipicGetDisplayInfo(thread *armcore.Thread
 // wipicTimer is a registered MC_knlSetTimer request. The lifecycle event loop
 // services pending timers; the bounded acceptance probes only record them.
 type wipicTimer struct {
-	pointer  uint32
-	callback uint32
-	param    uint32
-	delay    uint64
+	// A rearmed callback that requests paint owns this card between requests.
+	paintedCard *jvm.Object
+	pointer     uint32
+	callback    uint32
+	param       uint32
+	delay       uint64
 	// due is when the callback may run. A timer is the other way a KTF game
 	// paces itself, so the delay is a real wait rather than a label.
 	due time.Time
