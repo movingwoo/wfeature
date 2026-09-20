@@ -37,7 +37,9 @@ subscriber accessor need relocated pointers; selection occurs after runtime
 initialization and before application construction. Recognition never changes
 guest instructions. It checks bounded instruction windows, branches/call targets,
 pointer-table locations and referenced strings. Conflicting candidates are refused.
-Names, archive digests and fixed instruction addresses do not select an adapter.
+These identity and certificate recognizers do not select by archive name or
+digest. The receipt recovery below additionally limits a private data layout to
+one compiled image revision.
 
 The 52-byte reader decrypts 48 bytes, checks AID at offset 10, subscriber identity
 at 36, and a 16-byte application token at 20. Recognition also checks the decoded
@@ -52,9 +54,27 @@ The number-length investigation originally established that short input opens an
 offline path. Disassembly explains why: the accessor replaces input of length at
 most four with an embedded 11-digit number. A fresh run given that full embedded
 number also reaches the menu. The adapter therefore uses the executable's own
-fallback, rather than exposing a short number to other guest APIs. It does not
-decode, rewrite or delete `prefs`. Earlier statements that *every* full-length
-number fails were stronger than the original sweep supported.
+fallback, rather than exposing a short number to other guest APIs. Earlier
+statements that *every* full-length number fails were stronger than the original
+sweep supported.
+
+A subsequent saved-record reproduction found another gate in compiled image
+SHA-256 `390284cd703b23cd3fddd25991a290fe2a8d9f2104a61db4437fcb39cfec44fc`.
+Its 64-byte `prefs` can retain five zero content lengths despite complete
+packaged files. For this revision only, the recognized subscriber adapter
+validates the record checksum and marker, obtains the cipher table from the
+archive, and restores the five 19-bit lengths on reads. The packaged receipt
+must agree with all five file lengths, excluding their 44-byte footers. Any
+saved data override must be byte-identical to the packaged data; missing,
+removed or changed data, read errors, invalid receipts, and partially populated
+length tables prevent recovery. No absent content is fabricated.
+
+The recovery changes only length fields and their encrypted checksum. Settings,
+slot files, timestamps, nonce, and reserved bits remain intact. Reading does not
+rewrite the backing receipt; ordinary later guest writes use the existing save
+boundary and persist normally. This deliberately revision-scoped recovery does
+not claim a general receipt format for other executables. Evidence and remaining
+QA are in [the gameplay investigation](ktf-gameplay-qa-2026-09-20.md).
 
 KTF, LGT and SKT snapshot the Host identity after Host configuration. KTF's recognized
 fallback can change its own snapshot before application construction. KTF's C,

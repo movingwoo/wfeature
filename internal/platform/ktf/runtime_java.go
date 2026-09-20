@@ -2976,7 +2976,14 @@ func runtimeCardGetDisplay(runtime *initializationRuntime, _ *jvm.VM, arguments 
 
 // runtimeCardRepaint records a pending repaint request. MIDP-style frame
 // loops pair it with serviceRepaints, which performs the actual paint.
-func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	// Asynchronous requests own the same cadence as serviceRepaints.
+	// Sleeping between requests must not add world steps inside paint.
+	if worker := runtime.client.activeWorker; worker != nil && len(arguments) > 0 {
+		if card, err := arguments[0].Reference(); err == nil && card != nil && runtime.cardIsShown(card) {
+			worker.paintedCard = card
+		}
+	}
 	runtime.repaintPending = true
 	// A game driving its own event loop is waiting in getNextEvent, so the
 	// repaint request has to reach it as an event too.
