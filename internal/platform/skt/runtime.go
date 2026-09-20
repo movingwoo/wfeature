@@ -71,6 +71,10 @@ type Runtime struct {
 	// refreshPending is set by XDisplay.refresh and cleared by the Host pass
 	// that presents; refreshFrame is the picture it took. See presentRefresh.
 	refreshPending bool
+	// refreshPaceMu serializes producer frame boundaries without holding the
+	// render lock during waits.
+	refreshPaceMu sync.Mutex
+	lastRefresh   time.Time
 	// pendingSerial holds the Runnables Display.callSerially was handed. One
 	// comes off per Host pass rather than all of them at once: see
 	// callSeriallyRunnable.
@@ -294,6 +298,9 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		if options.JVM.Logger != nil {
 			options.JVM.Logger.Debug("authentication compatibility", "status", authentication, "classes", len(adapted))
 		}
+	}
+	if adapted := prepareTutorialCompatibility(archive); len(adapted) != 0 {
+		source = append(jvm.ClassSources{adapted}, source...)
 	}
 	runtime := &Runtime{}
 	observer := options.JVM.AsyncError

@@ -24,6 +24,18 @@
         "lgt.visible_framebuffer_origin"
       ],
       "evidence": "docs/platform-compatibility.md#lgt-lgt-visible-framebuffer-origin-2026-09-15"
+    },
+    {
+      "id": "skt-tutorial-cache-001",
+      "platform": "skt",
+      "match": {
+        "kind": "java_class_set",
+        "sha256": "d70497e3b4fae79a2b552c0cdad418494e01faa282a29a2eb8b7c4a702e45347"
+      },
+      "fixes": [
+        "skt.tutorial_name_cache"
+      ],
+      "evidence": "docs/gameplay-qa-2026-09-20.md#skt-tutorial-reproduction"
     }
   ]
 }

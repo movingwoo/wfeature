@@ -37,34 +37,13 @@ func xfileInitName(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, erro
 	return jvm.VoidValue(), err
 }
 
-// xfileInitMode opens by the textual mode a C-style caller passes. An
-// unrecognized mode reads: refusing it would fail a title that opens its save
-// with a spelling this table does not have, and reading is the harmless half.
-func xfileInitMode(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
+// xfileInitArchive opens a resource inside a separately installed JAR.
+func xfileInitArchive(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 	file, err := receiver(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	mode, err := arguments[2].Reference()
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	bits := xfileRead
-	if text, ok := jvm.StringText(mode); ok {
-		bits = 0
-		for _, character := range text {
-			switch character {
-			case 'r':
-				bits |= xfileRead
-			case 'w', 'a':
-				bits |= xfileWrite
-			}
-		}
-		if bits == 0 {
-			bits = xfileRead
-		}
-	}
-	_, err = call.InvokeSpecial(file, XFileClass, "initName", "(Ljava/lang/String;I)V", arguments[1], jvm.IntValue(bits))
+	_, err = call.InvokeSpecial(file, XFileClass, "initArchive", "(Ljava/lang/String;Ljava/lang/String;)V", arguments[1], arguments[2])
 	return jvm.VoidValue(), err
 }
 

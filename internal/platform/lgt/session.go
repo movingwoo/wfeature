@@ -152,7 +152,11 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			}
 		}
 		if authentication == backend.AuthenticationUnsupported {
-			if contract := authenticationNotification(client.module); contract != nil {
+			contract := authenticationNotification(client.module)
+			if contract == nil {
+				contract = authenticationARMNotification(client.module)
+			}
+			if contract != nil {
 				client.notificationNetwork = &notificationNetwork{contract: *contract, identity: client.subscriberNumber}
 				authentication = backend.AuthenticationLGTNotification
 			}

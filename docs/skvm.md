@@ -10,6 +10,9 @@ remains paused.
 ## Loading and lifecycle
 
 The loader validates the descriptor, JAR entries, class names, sizes, and paths.
+Secondary JARs remain installed files. `XFile(String, String)` reads a bounded,
+read-only entry from a named resource JAR; it does not interpret the second
+string as a file mode or add secondary classes to the primary class path.
 MIDlet lifecycle work enters through bounded event processing. Guest Java
 threads run independently of Host ticks. Their first uncaught asynchronous
 error is retained and returned at the next `RunPending` boundary. Terminal
@@ -42,6 +45,10 @@ live carrier service. See [network policy](network.md).
 
 MIDP Canvas and high-level LCDUI paths provide the supported screen, image,
 font, repaint, clipping, and input contracts. Normal clipping is count-based.
+`XDisplay.refresh` limits producer loops to 60 refreshes per guest second,
+scaled by the selected speed. This supplies pacing for loops without sleeps;
+slower drawing already counts toward the interval. See the
+[gameplay QA evidence](gameplay-qa-2026-09-20.md#skt-refresh-driven-speed).
 An exact Java-class fingerprint can enable the recorded inclusive `setClip`
 exception; a legacy profile string alone cannot. The selected correction does
 not change WIPI Graphics, `clipRect`, fills, or image dimensions. See
