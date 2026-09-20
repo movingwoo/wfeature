@@ -8,7 +8,7 @@ import (
 )
 
 // `org/kwis/msp/io/File`, which is the same filesystem a Clet writes its save
-// into: one store, one set of open handles, one set of mode flags. A Java title
+// into: one store and one set of open handles. A Java title
 // and a Clet of the same game would see each other's files, which is what makes
 // this the right layer to put it on rather than a second store beside it.
 //
@@ -22,8 +22,9 @@ const javaFileClass = "org/kwis/msp/io/File"
 // javaFileOpen is `File(String, int mode, int access)`. The access argument is
 // the sharing level, and this platform has one application and one private
 // store, so there is nothing for it to select. The mode is the specification's
-// own flag set — the same numbers `MC_fsOpen` takes, which is why the C path's
-// own reading of them is reused rather than repeated.
+// enum: 1 read-only, 2 append, 3 truncate, 4 read-write. Translate it to the
+// C bit flags before opening; treating Java mode 4 as C mode 4 discards the
+// contents of an existing save before the caller can read it.
 //
 // **A file that will not open is an IOException**, which is what the
 // specification says the constructor throws, and what the call sites are
@@ -36,7 +37,21 @@ func javaFileOpen(
 	if !ok {
 		return 0, fmt.Errorf("the name at %#x is not a string this platform built", name)
 	}
-	handle := client.openFile(path, mode)
+	var flag uint32
+	switch mode {
+	case 1:
+		flag = fileOpenReadOnly
+	case 2:
+		flag = fileOpenWriteOnly
+	case 3:
+		flag = fileOpenWriteTruncate
+	case 4:
+		flag = fileOpenReadWrite
+	default:
+		return 0, client.throwJavaPlatform(thread, "java/lang/IllegalArgumentException",
+			fmt.Sprintf(": invalid file mode %d", mode))
+	}
+	handle := client.openFile(path, flag)
 	if handle < 0 {
 		if client.logger != nil {
 			client.logger.Debug("LGT java file will not open", "name", path, "mode", mode)

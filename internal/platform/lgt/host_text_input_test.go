@@ -258,50 +258,55 @@ func cTextInputFixture(t *testing.T, mode uint32) *Session {
 }
 
 func TestCTextInputPassesACompleteHostCompositionThroughTheGuestWidget(t *testing.T) {
-	session := cTextInputFixture(t, 2)
-	input, err := session.TextInput(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if input.Text != "" || !input.Append || input.MaxLength != maxCTextInputLength ||
-		input.Multiline || input.Password || input.InputMode != "text" {
-		t.Fatalf("TextInput() = %+v", input)
-	}
+	for mode := uint32(0); mode < uint32(len(inputModes)); mode++ {
+		t.Run(inputModes[mode], func(t *testing.T) {
+			session := cTextInputFixture(t, mode)
+			input, err := session.TextInput(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if input.Text != "" || !input.Append || input.MaxLength != maxCTextInputLength ||
+				input.Multiline || input.Password || input.InputMode != "text" {
+				t.Fatalf("TextInput() = %+v", input)
+			}
 
-	want := "한글A1"
-	if err := input.Commit(t.Context(), want); err != nil {
-		t.Fatal(err)
-	}
-	length, err := session.client.readWord(fixtureInputSizes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := validateCTextInput(want, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make([]byte, length)
-	if err := session.client.core.Memory().Read(fixtureInputCompleted, got); err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(encoded) || decodeEUCKR(got) != want {
-		t.Fatalf("completed text = %x (%q), want %x (%q)", got, decodeEUCKR(got), encoded, want)
-	}
-	if composing, err := session.client.readWord(fixtureInputSizes + 4); err != nil || composing != 0 {
-		t.Fatalf("composing length = %d, want 0: %v", composing, err)
+			want := "한글A1"
+			if err := input.Commit(t.Context(), want); err != nil {
+				t.Fatal(err)
+			}
+			length, err := session.client.readWord(fixtureInputSizes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := validateCTextInput(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, length)
+			if err := session.client.core.Memory().Read(fixtureInputCompleted, got); err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(encoded) || decodeEUCKR(got) != want {
+				t.Fatalf("completed text = %x (%q), want %x (%q)", got, decodeEUCKR(got), encoded, want)
+			}
+			if composing, err := session.client.readWord(fixtureInputSizes + 4); err != nil || composing != 0 {
+				t.Fatalf("composing length = %d, want 0: %v", composing, err)
+			}
+
+		})
 	}
 }
 
-func TestCTextInputValidatesModeEncodingAndCapacityBeforeInsertion(t *testing.T) {
+func TestCTextInputValidatesEncodingAndCapacityBeforeInsertion(t *testing.T) {
 	session := cTextInputFixture(t, 3)
 	input, err := session.TextInput(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.InputMode != "numeric" {
-		t.Fatalf("input mode = %q, want numeric", input.InputMode)
+	if input.InputMode != "text" {
+		t.Fatalf("input mode = %q, want text for host composition", input.InputMode)
 	}
-	for _, invalid := range []string{"12한", "12\n", "🙂"} {
+	for _, invalid := range []string{"12\n", "🙂"} {
 		if err := input.Commit(t.Context(), invalid); !errors.Is(err, backend.ErrInvalidTextInput) {
 			t.Fatalf("commit %q error = %v", invalid, err)
 		}

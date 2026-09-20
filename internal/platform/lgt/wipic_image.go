@@ -148,10 +148,41 @@ func (client *Client) framebufferFromImage(decoded stdimage.Image) (*framebuffer
 		}
 	}
 	buffer.opaque = opaque
+	buffer.setImageColorKey()
 	if err := client.syncToGuest(buffer); err != nil {
 		return nil, err
 	}
 	return buffer, nil
+}
+
+// setImageColorKey preserves transparency when a guest reflects decoded
+// pixels in place. Use a key only when it exactly represents the encoded mask,
+// including after RGB565 quantization; opaque pixels of that color preclude it.
+func (buffer *framebuffer) setImageColorKey() {
+	if buffer.opaque == nil {
+		return
+	}
+	var key uint16
+	found := false
+	for index, opaque := range buffer.opaque {
+		if opaque {
+			continue
+		}
+		pixel := buffer.pixels[index]
+		if found && pixel != key {
+			return
+		}
+		key, found = pixel, true
+	}
+	if !found {
+		return
+	}
+	for index, opaque := range buffer.opaque {
+		if opaque && buffer.pixels[index] == key {
+			return
+		}
+	}
+	buffer.transparentKey, buffer.colorKeyed = key, true
 }
 
 // decodeImage decodes what a title packages. BMP and the handset's own bitmap
@@ -254,6 +285,13 @@ func (client *Client) drawImage(context *graphicsContext, values []int32) error 
 				continue
 			}
 			index := sy*source.width + sx
+			if source.colorKeyed {
+				pixel := source.pixels[index]
+				if pixel != source.transparentKey {
+					context.put(destinationX+column, destinationY+row, pixel)
+				}
+				continue
+			}
 			if source.opaque != nil {
 				// The encoding said which pixels are transparent, and that is
 				// the answer: a picture that carries a mask of its own is

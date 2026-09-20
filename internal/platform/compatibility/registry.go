@@ -28,6 +28,9 @@ const SKTTutorialNameCache = "skt.tutorial_name_cache"
 // LGTVisibleFramebufferOrigin removes a recognized native display-strip offset.
 const LGTVisibleFramebufferOrigin = "lgt.visible_framebuffer_origin"
 
+// LGTWideGraphicsContext selects the evidenced 56-byte native context ABI.
+const LGTWideGraphicsContext = "lgt.wide_graphics_context"
+
 type target struct {
 	Platform string
 	Kind     string
@@ -104,7 +107,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				fix == LGTVisibleFramebufferOrigin && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
+				(fix == LGTVisibleFramebufferOrigin || fix == LGTWideGraphicsContext) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

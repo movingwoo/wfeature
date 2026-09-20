@@ -300,3 +300,74 @@ func TestATransparentPixelKeepsItsColourForAGuestThatBlitsItself(t *testing.T) {
 		t.Fatal("the mask does not match the half the encoding declared")
 	}
 }
+
+// Guest engines reflect decoded sprites by swapping RGB565 words through the
+// framebuffer pointer. A unique encoded color key must move with those words.
+func TestDrawImageTransparencyFollowsGuestPixelSwaps(t *testing.T) {
+	client := fixtureClient(t)
+	decoded := image.NewNRGBA(image.Rect(0, 0, 3, 1))
+	decoded.SetNRGBA(0, 0, color.NRGBA{R: 255, B: 255})
+	decoded.SetNRGBA(1, 0, color.NRGBA{G: 255, A: 255})
+	decoded.SetNRGBA(2, 0, color.NRGBA{R: 255, A: 255})
+	source, err := client.framebufferFromImage(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const background = uint16(0x001f)
+	context := &graphicsContext{target: client.screen, clipWidth: client.screen.width, clipHeight: client.screen.height}
+	for _, pixels := range [][]byte{{0x00, 0xf8, 0xe0, 0x07, 0x1f, 0xf8}, {0x1f, 0xf8, 0xe0, 0x07, 0x00, 0xf8}} {
+		if err := client.core.Memory().Write(source.address, pixels); err != nil {
+			t.Fatal(err)
+		}
+		for i := range client.screen.pixels {
+			client.screen.pixels[i] = background
+		}
+		if err := client.drawImage(context, []int32{0, 0, 3, 1, int32(source.handle), 0, 0}); err != nil {
+			t.Fatal(err)
+		}
+		for x := 0; x < 3; x++ {
+			want := uint16(pixels[2*x]) | uint16(pixels[2*x+1])<<8
+			if want == maskPixel {
+				want = background
+			}
+			if got := client.screen.pixels[x]; got != want {
+				t.Fatalf("pixel %d = %#x, want %#x", x, got, want)
+			}
+		}
+	}
+}
+
+func TestDrawImagePreservesAmbiguousEncodedTransparency(t *testing.T) {
+	for _, colors := range [][]color.NRGBA{
+		{{R: 255, B: 255}, {R: 255, B: 255, A: 255}},
+		{{R: 248}, {R: 255, A: 255}}, // Distinct RGB colors collide in RGB565.
+		{{R: 255}, {B: 255}, {R: 255, B: 255, A: 255}},
+	} {
+		client := fixtureClient(t)
+		decoded := image.NewNRGBA(image.Rect(0, 0, len(colors), 1))
+		for x, pixel := range colors {
+			decoded.SetNRGBA(x, 0, pixel)
+		}
+		source, err := client.framebufferFromImage(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const background = uint16(0x07e0)
+		for i := range client.screen.pixels {
+			client.screen.pixels[i] = background
+		}
+		context := &graphicsContext{target: client.screen, clipWidth: client.screen.width, clipHeight: client.screen.height}
+		if err := client.drawImage(context, []int32{0, 0, int32(len(colors)), 1, int32(source.handle), 0, 0}); err != nil {
+			t.Fatal(err)
+		}
+		for x, pixel := range colors {
+			want := source.pixels[x]
+			if pixel.A < 128 {
+				want = background
+			}
+			if got := client.screen.pixels[x]; got != want {
+				t.Fatalf("colors %v pixel %d = %#x, want %#x", colors, x, got, want)
+			}
+		}
+	}
+}

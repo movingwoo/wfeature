@@ -844,6 +844,11 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// those two slots.
 		24: {Called: "firstElement()Ljava/lang/Object;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaVectorFirst}},
+		// The declaration order between firstElement (24) and removeElementAt
+		// (27) places setElementAt at 26. The observed caller supplies the
+		// receiver, a replacement object and an index.
+		26: {Called: "setElementAt(Ljava/lang/Object;I)V",
+			Method: javaPlatformMethod{Words: 3, Implementat: javaVectorSetAt}},
 		27: {Called: "removeElementAt(I)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorRemoveAt}},
 		// Slot 28 takes the receiver, one reference and a number, and the

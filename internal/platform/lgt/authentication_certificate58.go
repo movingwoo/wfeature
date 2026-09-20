@@ -264,6 +264,11 @@ func (store *authenticationCertificate58Store) StoreSave(name string, data []byt
 
 // Both language boundaries use the identity captured when this client loaded.
 func (client *Client) systemProperty(name string) (string, bool) {
+	if name == "MEDIADEVICES" {
+		// The shared mixer decodes SMAF score and sample streams. Games
+		// consult this device name before constructing their sound clips.
+		return "Yamaha_MA3", true
+	}
 	if name == "PHONENUMBER" || name == "MIN" {
 		return client.subscriberNumber, true
 	}

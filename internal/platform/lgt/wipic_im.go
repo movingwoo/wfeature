@@ -1,6 +1,9 @@
 package lgt
 
 import (
+	"encoding/binary"
+	"math"
+
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
@@ -159,6 +162,10 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	if err != nil {
 		return err
 	}
+	outputOnly := client.outputOnlyInputBuffers(thread, completedBuffer, composingBuffer)
+	if outputOnly {
+		completedBuffer.capacity, composingBuffer.capacity = 5, 5
+	}
 
 	hostCommit := key == hostTextInputCarrier && len(client.cTextInput.pending) != 0
 	client.cTextInput.active = true
@@ -170,6 +177,22 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	var value []byte
 	if hostCommit {
 		value = client.cTextInput.pending
+		if outputOnly {
+			// The SDK reserves four data bytes and a terminator. Deliver
+			// complete EUC-KR characters over successive widget callbacks.
+			n := 0
+			for n < len(value) {
+				width := 1
+				if value[n] >= 0x80 {
+					width = 2
+				}
+				if n+width > 4 || n+width > len(value) {
+					break
+				}
+				n += width
+			}
+			value = value[:n]
+		}
 	} else if client.inputMode == 3 &&
 		(kind == EventKeyPressed || kind == EventKeyRepeated) && key >= '0' && key <= '9' {
 		value = []byte{byte(key)}
@@ -188,9 +211,49 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 		return thread.SetRegister(0, 0)
 	}
 	if hostCommit {
-		client.cTextInput.pending = nil
+		client.cTextInput.pending = client.cTextInput.pending[len(value):]
 	}
 	return thread.SetRegister(0, 1)
+}
+
+// outputOnlyInputBuffers recognizes an SDK caller that initializes two local
+// five-byte strings but treats the size words as outputs only. The published
+// API specifies input capacities; applying this convention to an arbitrary
+// caller would turn a zero-capacity buffer into an unchecked write. Require
+// both the complete argument setup and its live stack addresses instead.
+func (client *Client) outputOnlyInputBuffers(thread *armcore.Thread, completed, composing inputBuffer) bool {
+	lr, err := thread.Register(armcore.RegisterLR)
+	if err != nil || lr&1 == 0 || lr < 40 || client.module == nil {
+		return false
+	}
+	end := lr &^ 1
+	low, high := client.module.Span()
+	if end-40 < low || end > high {
+		return false
+	}
+	var code [40]byte
+	if client.core.Memory().Read(end-40, code[:]) != nil {
+		return false
+	}
+	// movs r6,0; address and terminate each string; pass buf2/size2 on
+	// the stack and buf1/size1 in r2/r3, then call through the SDK stub.
+	want := [...]uint16{0x2600, 0xaa4a, 0xab48, 0xa947, 0x7016, 0x701e,
+		0x0638, 0x9100, 0xab05, 0x21fb, 0x9301, 0xaa49, 0x9649,
+		0x9647, 0x0e00, 0x0049, 0xab06}
+	for index, instruction := range want {
+		if binary.LittleEndian.Uint16(code[index*2:]) != instruction {
+			return false
+		}
+	}
+	if binary.LittleEndian.Uint16(code[34:])&0xff00 != 0x4c00 ||
+		binary.LittleEndian.Uint16(code[36:])&0xf800 != 0xf000 ||
+		binary.LittleEndian.Uint16(code[38:])&0xf800 != 0xf800 {
+		return false
+	}
+	stack, err := thread.Register(armcore.RegisterSP)
+	return err == nil && stack <= math.MaxUint32-0x129 &&
+		completed.address == stack+0x124 && completed.size == stack+0x18 &&
+		composing.address == stack+0x11c && composing.size == stack+0x14
 }
 
 // stackedInputBuffer recovers `(buf2, size2)` — the fifth and sixth arguments,

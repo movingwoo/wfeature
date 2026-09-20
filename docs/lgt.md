@@ -42,13 +42,20 @@ slots. A method name alone does not count as an implemented body. Startup
 imports are a lower bound: later lazy imports and virtual calls can reach
 additional unsupported methods. The Java library remains partial.
 
+Vector slot 26 implements `setElementAt(Object, int)`: it replaces one reference
+without resizing or shifting the list, permits null, and throws
+`ArrayIndexOutOfBoundsException` for an invalid index. See the
+[crash investigation](lgt-qa-2026-09-20.md#vector-replacement-crash).
+
 ## Display and input
 
 Graphics contexts belong to guest memory. Supported drawing honors compact
 context origins, clips, overlapping self-blits, and nested pixel callbacks.
-Callback errors restore the client lock. The alternate direct 52-byte context
-has no established field layout or discriminator; mixed compact/direct context
-support is not claimed.
+Callback errors restore the client lock. Two verified native revisions use a
+56-byte context with direct callbacks; the compatibility registry selects that
+ABI explicitly. See [rendering evidence](lgt-qa-2026-09-20.md#wide-graphics-context).
+Arbitrary mixed compact/direct contexts and the previously proposed alternate
+52-byte layout remain unverified.
 
 The panel image follows the supported flush path. A revision-specific
 initialization correction removes a verified 24-row origin addition for one
@@ -65,7 +72,10 @@ infer arbitrary game-owned fields. See [native text input](native-text-input.md)
 
 File/record services use the common save boundary. Storage read errors remain
 visible at native boundaries, and a retained read failure prevents subsequent
-writes. Existing save formats and canonical paths remain unchanged.
+writes. Java File modes (1 read-only, 2 append, 3 truncate, 4 read-write)
+are translated to the C file flags before opening the shared store. In
+particular, Java mode 4 preserves existing contents. Existing save formats and
+canonical paths remain unchanged.
 
 Java Player distinguishes pause from stop, preserves repeat across pause/resume,
 and rejects duplicate play/resume. Resume restarts the score because the mixer

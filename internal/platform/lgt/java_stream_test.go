@@ -198,7 +198,7 @@ func TestFileOutputStreamWritesReachTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := uint32(0x1000)
-	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, fileOpenReadWrite, 1}); err != nil {
+	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, 4, 1}); err != nil {
 		t.Fatalf("File() error = %v", err)
 	}
 	stream, err := javaFileOpenOutputStream(client, nil, nil, []uint32{file})
@@ -267,7 +267,7 @@ func TestFileInputStreamReadsFromTheFilesPosition(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := uint32(0x1100)
-	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, fileOpenReadWrite, 1}); err != nil {
+	if _, err := javaFileOpen(client, nil, nil, []uint32{file, name, 4, 1}); err != nil {
 		t.Fatalf("File() error = %v", err)
 	}
 	// One byte read through the File first, so the stream has to start at 1

@@ -36,6 +36,30 @@
         "skt.tutorial_name_cache"
       ],
       "evidence": "docs/gameplay-qa-2026-09-20.md#skt-tutorial-reproduction"
+    },
+    {
+      "id": "lgt-wide-context-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "e0d05b47a6feeb046d9b5d74ac696c21e2eb7017e34113cf1cd9dd56ac0d5a5c"
+      },
+      "fixes": [
+        "lgt.wide_graphics_context"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-20.md#wide-graphics-context"
+    },
+    {
+      "id": "lgt-wide-context-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "d52006885e2da5503cc78546151a2a69ed2199512908f678a91c1991c45078a1"
+      },
+      "fixes": [
+        "lgt.wide_graphics_context"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-20.md#wide-graphics-context"
     }
   ]
 }

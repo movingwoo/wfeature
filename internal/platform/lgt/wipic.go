@@ -1017,6 +1017,9 @@ func (client *Client) applicationID(identity uint32) (uint32, error) {
 // this platform's own, which meant every later call named a structure this
 // platform had never heard of and every draw through it was refused.
 func (client *Client) initContext(pointer uint32) int32 {
+	if client.wideGraphicsContexts {
+		return client.initWideContext(pointer)
+	}
 	if pointer == 0 {
 		return wipiError
 	}
@@ -1061,6 +1064,9 @@ func (client *Client) transferContextField(thread *armcore.Thread, slot uint32) 
 	}
 	if pointer == 0 {
 		return wipiError
+	}
+	if client.wideGraphicsContexts {
+		return client.transferWideContext(pointer, field, value, slot)
 	}
 	offset, count := contextFieldOffset(field)
 	if count == 0 {
@@ -1176,6 +1182,9 @@ func (client *Client) contextFor(
 	}
 	if pointer == 0 {
 		return context, nil
+	}
+	if client.wideGraphicsContexts {
+		return client.readWideContext(context, pointer)
 	}
 	words := make([]uint32, grpContextSize/4)
 	for index := range words {

@@ -419,3 +419,40 @@ func TestSystemVolumeCategoriesCarryTheSpecifiedSet(t *testing.T) {
 		t.Errorf("there are %d categories, want the specification's 10", len(systemVolumeCategories))
 	}
 }
+
+func TestAdvertisedMediaDeviceCanPlayThroughBothPropertyBoundaries(t *testing.T) {
+	sink := &recordingSink{}
+	client := mediaClient(t, sink)
+	name := writeGuest(t, client, append([]byte("MEDIADEVICES"), 0))
+	out := writeGuest(t, client, make([]byte, 32))
+	if code := int32(callSlot(t, client, slotGetProperty, name, out, 32)); code != wipiSuccess {
+		t.Fatalf("MEDIADEVICES status = %d", code)
+	}
+	kind, err := client.readCString(out)
+	if err != nil || kind != "Yamaha_MA3" {
+		t.Fatalf("MEDIADEVICES = %q: %v", kind, err)
+	}
+	if code := int32(callSlot(t, client, slotGetProperty, name, out, 4)); code == wipiSuccess {
+		t.Fatal("short property buffer accepted")
+	}
+	property, err := client.newJavaString("MEDIADEVICES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := javaSystemProperty(client, t.Context(), client.thread, []uint32{property})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := client.javaText(value); !ok || got != kind {
+		t.Fatalf("Java device = %q, %v", got, ok)
+	}
+	sound := oneNoteSound(t)
+	clip := callSlot(t, client, slotClipCreate, out, uint32(len(sound)), 0)
+	callSlot(t, client, slotClipPutData, clip, writeGuest(t, client, sound), uint32(len(sound)))
+	callSlot(t, client, slotClipPlay, clip, 0)
+	client.clock.advance(50 * time.Millisecond)
+	client.serviceAudio()
+	if sink.notes == 0 {
+		t.Fatal("advertised device emitted no notes")
+	}
+}
