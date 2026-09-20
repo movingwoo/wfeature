@@ -1,6 +1,6 @@
 {
   "name": "wfeature",
-  "version": "0.5.0-pre",
+  "version": "0.5.0-pre02",
   "private": true,
   "type": "module",
   "scripts": {
