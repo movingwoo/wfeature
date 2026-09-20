@@ -118,6 +118,8 @@ type CletFunctions struct {
 
 // Client is one loaded LGT game.
 type Client struct {
+	wideGraphicsContexts bool
+
 	core                *armcore.Core
 	thread              *armcore.Thread
 	archive             *Archive
@@ -438,6 +440,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		audio:  backend.NewAudio(options.AudioSink),
 		volume: mediaMaxVolume,
 	}
+	client.wideGraphicsContexts = hasWideGraphicsContexts(client.archive.Module)
 	if err := client.applyOriginCompatibility(); err != nil {
 		return nil, err
 	}

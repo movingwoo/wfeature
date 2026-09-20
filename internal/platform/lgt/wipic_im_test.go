@@ -92,3 +92,85 @@ func TestNumericInputMethodRespectsCompletionCapacity(t *testing.T) {
 		t.Fatalf("missing completion buffer handled key: %d", result)
 	}
 }
+
+// The authored caller uses two five-byte local strings and output length
+// words. Matching the code alone is insufficient: its live arguments must
+// identify those exact stack objects before capacity can be supplied.
+func TestOutputOnlyInputBuffersRequireCallerAndStackAgreement(t *testing.T) {
+	client := fixtureClient(t)
+	instructions := []uint16{0x2600, 0xaa4a, 0xab48, 0xa947, 0x7016, 0x701e,
+		0x0638, 0x9100, 0xab05, 0x21fb, 0x9301, 0xaa49, 0x9649,
+		0x9647, 0x0e00, 0x0049, 0xab06, 0x4c00, 0xf000, 0xf800}
+	code := installThumb(t, client, instructions...)
+	stack, err := client.allocateBytes(make([]byte, 0x130))
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := inputBuffer{address: stack + 0x124, size: stack + 0x18}
+	composing := inputBuffer{address: stack + 0x11c, size: stack + 0x14}
+	thread := armcore.NewThread(armcore.NewContext())
+	for index, value := range []uint32{hostTextInputCarrier, EventKeyPressed, complete.address, complete.size} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread.SetRegister(armcore.RegisterSP, stack)
+	thread.SetRegister(armcore.RegisterLR, code+40)
+	if err := client.writeWord(stack, composing.address); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.writeWord(stack+4, composing.size); err != nil {
+		t.Fatal(err)
+	}
+	if !client.outputOnlyInputBuffers(thread, complete, composing) {
+		t.Fatal("SDK caller was not recognized")
+	}
+	wrong := complete
+	wrong.address++
+	if client.outputOnlyInputBuffers(thread, wrong, composing) {
+		t.Fatal("mismatched stack accepted")
+	}
+	thread.SetRegister(armcore.RegisterLR, code+39)
+	if client.outputOnlyInputBuffers(thread, complete, composing) {
+		t.Fatal("ARM return address accepted")
+	}
+	thread.SetRegister(armcore.RegisterLR, code+40)
+	for i, word := range instructions {
+		if err := client.writeHalfword((code&^1)+uint32(i*2), word^0x8000); err != nil {
+			t.Fatal(err)
+		}
+		if client.outputOnlyInputBuffers(thread, complete, composing) {
+			t.Fatalf("changed caller word %d accepted", i)
+		}
+		if err := client.writeHalfword((code&^1)+uint32(i*2), word); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every size word contains residue, including an unsafe large value.
+	// The recognized caller's five-byte bound overrides it on every call.
+	encoded, err := validateCTextInput("A한별B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.cTextInput.pending = encoded
+	for _, want := range []string{"A한", "별B"} {
+		client.writeWord(complete.size, 0xffffffff)
+		client.writeWord(composing.size, 0xffffffff)
+		client.core.Memory().Write(complete.address+5, []byte{0x7e})
+		thread.SetRegister(0, hostTextInputCarrier)
+		if err := client.handleInputKey(thread); err != nil {
+			t.Fatal(err)
+		}
+		got, err := client.readCText(complete.address)
+		if err != nil || got != want {
+			t.Fatalf("completed %q, want %q: %v", got, want, err)
+		}
+		var guard [1]byte
+		if err := client.core.Memory().Read(complete.address+5, guard[:]); err != nil || guard[0] != 0x7e {
+			t.Fatalf("buffer guard = %x: %v", guard, err)
+		}
+	}
+	if len(client.cTextInput.pending) != 0 {
+		t.Fatal("pending text remains")
+	}
+}

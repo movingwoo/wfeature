@@ -100,14 +100,14 @@ func (session *Session) cTextInput() *backend.TextInput {
 		return nil
 	}
 	revision, mode, handler := state.revision, client.inputMode, client.clet.HandleEvent
-	inputMode := "text"
-	if mode == uint32(len(inputModes)-1) {
-		inputMode = "numeric"
-	}
+	// MC_imSetCurrentMode selects the handset keypad automaton, not a
+	// widget validation constraint. A name widget can select N123 while
+	// holding Korean text. The Host IME supplies completed text independently
+	// of that keypad mode; the guest widget still owns field validation.
 	return &backend.TextInput{
 		MaxLength: maxCTextInputLength,
 		Append:    true,
-		InputMode: inputMode,
+		InputMode: "text",
 		Commit: func(ctx context.Context, text string) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -116,7 +116,7 @@ func (session *Session) cTextInput() *backend.TextInput {
 				client.clet.HandleEvent != handler || len(state.pending) != 0 {
 				return backend.ErrTextInputChanged
 			}
-			encoded, err := validateCTextInput(text, mode)
+			encoded, err := validateCTextInput(text)
 			if err != nil {
 				return err
 			}
@@ -126,8 +126,14 @@ func (session *Session) cTextInput() *backend.TextInput {
 
 			calls := state.calls
 			state.pending = encoded
-			err = client.callClet(ctx, "handleCletEvent", handler,
-				[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
+			for len(state.pending) != 0 {
+				before := len(state.pending)
+				err = client.callClet(ctx, "handleCletEvent", handler,
+					[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
+				if err != nil || len(state.pending) >= before || state.revision != revision {
+					break
+				}
+			}
 			consumed := len(state.pending) == 0
 			state.pending = nil
 			if err != nil {
@@ -147,14 +153,13 @@ func (session *Session) cTextInput() *backend.TextInput {
 	}
 }
 
-func validateCTextInput(text string, mode uint32) ([]byte, error) {
+func validateCTextInput(text string) ([]byte, error) {
 	if err := backend.ValidateTextInput(text); err != nil ||
 		utf8.RuneCountInString(text) > maxCTextInputLength {
 		return nil, backend.ErrInvalidTextInput
 	}
 	for _, symbol := range text {
-		if symbol == 0 || unicode.IsControl(symbol) ||
-			(mode == uint32(len(inputModes)-1) && (symbol < '0' || symbol > '9')) {
+		if symbol == 0 || unicode.IsControl(symbol) {
 			return nil, backend.ErrInvalidTextInput
 		}
 	}

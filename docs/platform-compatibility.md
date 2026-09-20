@@ -254,3 +254,10 @@ comparison remain outside this correction's validation.
 Local screenshots, routes and logs remain ignored under
 `var/diagnostics/lgt-origin-20260915/`. Probe save data uses separate directories
 under `var/savedata/`; the user's existing saves are not used or modified.
+
+## LGT wide graphics context
+
+`lgt.wide_graphics_context` selects the verified 56-byte context ABI for two
+native code revisions. The ordinary compact ABI remains the default. See the
+[layout and rendering evidence](lgt-qa-2026-09-20.md#wide-graphics-context) for
+field offsets, direct callbacks, selection boundaries, and acceptance status.

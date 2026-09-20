@@ -181,3 +181,47 @@ Physical installation, actual sound, phone suspension, APK/IPA upgrades and
 per-platform real-game progression remain the explicit manual routes above.
 The user's report that text input already works is retained as user feedback;
 this UI change does not expand platform editor support.
+
+
+## iPhone initial audio recovery (2026-09-20)
+
+A physical iPhone PWA report identifies silence on first launch, with audio
+starting after a trip to the Home Screen and back. The reported OS version is
+iOS 27; this environment has no matching physical device. The earlier desktop
+browser audio checks exercised playback after additional game input and did not
+prove this first-launch route.
+
+The page now resumes both `suspended` and `interrupted` audio contexts. A game
+start, game input, or foreground return also checks whether the audio clock
+advances over 500 ms. If a visible page still reports `running` with an unchanged
+clock, it attempts one suspend/resume cycle, preserving the graph and volumes.
+The check does not use signal amplitude: a musical rest or a muted slider is not
+a device failure. Audio events themselves do not schedule recovery checks, and
+returning to the library does not create an audio context. State transitions and
+recovery errors use the existing browser debug report boundary.
+
+This addresses the missing interruption state and the stalled-clock mechanism
+reported in [WebKit issue 263627](https://bugs.webkit.org/show_bug.cgi?id=263627).
+It does not establish that either mechanism caused the reported iOS 27 silence.
+A device that advances its audio clock but produces no physical output cannot
+be detected by this check. A resume promise that the OS never settles also
+remains outside the verified recovery path.
+
+Regression tests cover initial interruption, a stalled running clock, healthy
+muted playback, foreground return, background/closed contexts, and recovery
+failure without an automatic retry loop. Physical acceptance remains: launch
+the installed PWA fresh, enter a known audible route without leaving the app,
+then visit the Home Screen and return. Confirm both music and effects before
+and after the switch; save the debug report if silence persists.
+
+Validation: all 226 page tests and `go test ./internal/webhost ./web` pass;
+`make server` builds the embedded debug client. Fresh Chromium and desktop
+WebKit contexts produce a nonzero signal on the first click (peak about 0.0266).
+With a deliberately frozen `currentTime` getter until `suspend()`, each engine
+performs exactly one recovery and produces the same signal; normal playback
+performs none. This is fault injection, not reproduction of an iPhone OS bug.
+The existing real-archive route also produces nonzero output in both engines.
+Local evidence is in `build/qa-ios-audio-first.log`,
+`build/qa-ios-audio-{chromium,webkit}.log`, and
+`build/qa-ios-audio-node.log`. The interruption regression fails against the
+previous `web/audio.js` because it never calls `resume()` for `interrupted`.

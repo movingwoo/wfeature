@@ -103,10 +103,16 @@ invalidate pending edits; queued guest event loops are not supported. See the [i
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value
 nor a stable component identity. It accepts up to 64 completed characters per
-submission, rejects controls and text outside strict EUC-KR, and accepts only
-ASCII digits while the widget has selected `N123`. The widget still enforces
-its own smaller field and completion-buffer limits; an over-capacity submission
-changes nothing and can be retried.
+submission and rejects controls and text outside strict EUC-KR. Input-mode
+selection describes the handset keypad automaton, not a field constraint, so
+Host composition accepts Korean even when the widget selected `N123`. Numeric
+keypad events still produce digits in that mode. The widget still enforces
+its own smaller field limits. Ordinary capacity-taking callers reject an
+oversized submission atomically. One recognized SDK caller uses output-only
+lengths with five-byte local buffers; completed EUC-KR characters are delivered
+in batches of at most four bytes through successive guest callbacks. Recognition
+requires the instruction sequence and matching live stack arguments, not a game
+name or a zero size value. Other callers retain their declared capacities.
 
 Limits count Java UTF-16 units; supplementary characters consume two units. Native
 entry does not infer fields drawn by game code.
@@ -167,7 +173,7 @@ transitions remain covered by separate runtime regressions.
 
 An authored WIPI-C Clet additionally drives a Host composition through its real
 `handleCletEvent` entry point and `MC_imHandleInput` import. Tests cover Korean,
-English and digits in one completed EUC-KR string, numeric constraints, strict
+English and digits in one completed EUC-KR string across all keypad modes, strict
 encoding, stale mode snapshots, output byte lengths, atomic capacity rejection,
 and retry.
 

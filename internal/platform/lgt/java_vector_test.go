@@ -1,6 +1,11 @@
 package lgt
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+)
 
 // newFixtureVector builds a vector the way the module does: an object of the
 // class, then the constructor that gives it its list.
@@ -217,5 +222,53 @@ func TestJavaVectorElementAtIsTheSlotASaveStopsOn(t *testing.T) {
 	// would fault on somewhere else entirely.
 	if _, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, 3}); err == nil {
 		t.Error("elementAt(3) of a vector of three answered rather than failing")
+	}
+}
+
+func TestJavaVectorSetElementAtSlotReplacesWithoutResizing(t *testing.T) {
+	slot, ok := javaBakedVirtualSlots[javaVectorClass][26]
+	if !ok || slot.Called != "setElementAt(Ljava/lang/Object;I)V" || slot.Method.Words != 3 {
+		t.Fatal("Vector slot 26 must accept receiver, object, and index")
+	}
+	client := fixtureClient(t)
+	vector := newFixtureVector(t, client)
+	for _, element := range []uint32{0x1000, 0x2000, 0x3000} {
+		if _, err := javaVectorAdd(client, nil, nil, []uint32{vector, element}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, replacement := range []struct{ value, index uint32 }{{0x4000, 1}, {0, 0}, {0x5000, 2}} {
+		for register, value := range []uint32{vector, replacement.value, replacement.index} {
+			if err := client.thread.SetRegister(register, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		served, err := client.callJavaPlatformVirtual(context.Background(), client.thread, javaVirtualSlot(javaVectorClass, 26))
+		if err != nil || !served {
+			t.Fatalf("setElementAt dispatch: served=%v error=%v", served, err)
+		}
+	}
+	want := []uint32{0, 0x4000, 0x5000}
+	held, err := client.javaVectorOf(vector)
+	if err != nil || !reflect.DeepEqual(held, want) {
+		t.Fatalf("contents = %v, %v; want %v", held, err, want)
+	}
+	for _, index := range []uint32{3, ^uint32(0), 0x80000000} {
+		_, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, 0x6000, index})
+		var thrown *javaUncaughtThrow
+		if !errors.As(err, &thrown) || thrown.Class != javaThrowArrayClass {
+			t.Fatalf("index %d: expected ArrayIndexOutOfBoundsException, got %v", int32(index), err)
+		}
+		held, _ = client.javaVectorOf(vector)
+		if !reflect.DeepEqual(held, want) {
+			t.Fatalf("invalid index changed contents: %v", held)
+		}
+	}
+	empty := newFixtureVector(t, client)
+	if _, err := slot.Method.Implementat(client, nil, nil, []uint32{empty, 0x6000, 0}); err == nil {
+		t.Fatal("empty vector accepted index zero")
+	}
+	if _, err := slot.Method.Implementat(client, nil, nil, []uint32{0xdeadbeef, 0x6000, 0}); err == nil {
+		t.Fatal("unknown receiver accepted")
 	}
 }

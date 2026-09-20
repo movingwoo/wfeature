@@ -260,7 +260,7 @@ document.getElementById("text-input-toggle")?.addEventListener("click", () => te
 const sendKey = (eventType, name) => {
   const code = keyCodes.get(name);
   if (code === undefined || !gameRunning) return;
-  if (eventType === "press") pageAudio?.ensure();
+  if (eventType === "press") pageAudio?.activate();
   // Input lands in the log too, so a live watcher can line up what the guest
   // did against what was actually pressed.
   recordEvent(`key ${eventType} ${name} (${code})`);
@@ -398,7 +398,7 @@ const initInput = () => {
       return;
     }
     if (touchesTheGame(target) && touch.down(event.pointerId, touchPoint(event))) {
-      pageAudio?.ensure();
+      pageAudio?.activate();
       // The canvas keeps the moves and the release once the finger leaves it,
       // for the same reason a key button does — and without it a drag off the
       // screen would simply stop arriving.
@@ -426,7 +426,7 @@ const initInput = () => {
   document.addEventListener("click", event => {
     const button = event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`);
     if (!button || keypadArranging || !gameRunning || document.hidden) return;
-    pageAudio?.ensure();
+    pageAudio?.activate();
     rapidFire.cycle();
   });
 
@@ -616,13 +616,13 @@ const sessionStateChanged = state => {
 const initResumeOnReturn = () => {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { releaseInput(); void sessionLink.suspend(); }
-    else void sessionLink.wake();
+    else { pageAudio?.foreground(); void sessionLink.wake(); }
   });
   window.addEventListener("online", () => { void sessionLink.wake(); });
-  window.addEventListener("pageshow", () => { void sessionLink.wake(); });
+  window.addEventListener("pageshow", () => { pageAudio?.foreground(); void sessionLink.wake(); });
   window.addEventListener("pagehide", () => { releaseInput(); sessionLink.leave(); });
   document.getElementById("session-takeover")?.addEventListener("click", () => {
-    pageAudio?.ensure();
+    pageAudio?.activate();
     void sessionLink.wake(true);
   });
 };
@@ -648,7 +648,7 @@ const recordSessionStats = stats => {
 // it, which is also why there is nothing to upload and nothing to preload:
 // saves are read and written on the same side as the emulator.
 const startServerGame = async (path, scale) => {
-  pageAudio?.ensure();
+  pageAudio?.activate();
   await sessionLink.start(path, scale, storedScreen(path));
 };
 
@@ -662,7 +662,7 @@ const sessionStarted = info => {
   currentGamePath = info.game || lastGame() || "";
   if (info.game) rememberGame(info.game);
   applySpeed(storedSpeed(info.game || lastGame()));
-  pageAudio?.ensure();
+  pageAudio?.activate();
   hideGameSelect();
   canWatchWrites = info.can_watch === true;
   canTouch = info.can_touch === true;
@@ -1732,7 +1732,7 @@ const main = async () => {
   initKeypad();
   initRestart();
   initModalBackdrop();
-  pageAudio = new PageAudio();
+  pageAudio = new PageAudio({ report: recordEvent });
   initSettings();
   initVibrationSetting({ document, vibration });
   initKeyBindings();

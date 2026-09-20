@@ -39,7 +39,10 @@ const FAMILY_WAVES = [
 ];
 
 export class PageAudio {
-  constructor() {
+  constructor({ report = () => {} } = {}) {
+    this.report = report;
+    this.activationCheck = null;
+    this.recovering = false;
     this.context = null;
     this.master = null;
     // Melody and sound effects get their own gain so the page's two sliders
@@ -78,6 +81,7 @@ export class PageAudio {
       }
       try {
         this.context = new AudioContextClass();
+        this.context.onstatechange = () => this.reportState("state changed");
         this.master = this.context.createGain();
         this.master.gain.value = this.masterVolume;
         this.master.connect(this.context.destination);
@@ -93,10 +97,41 @@ export class PageAudio {
         return null;
       }
     }
-    if (this.context.state === "suspended") {
-      this.context.resume().catch(() => {});
+    if (!this.recovering && (this.context.state === "suspended" || this.context.state === "interrupted")) {
+      this.context.resume().catch(error => this.report(`audio resume failed: ${error.message}`));
     }
     return this.context;
+  }
+
+  reportState(reason) {
+    this.report(`audio ${reason}: state ${this.context.state}, time ${this.context.currentTime}`);
+  }
+
+  // Called on gestures and foreground return, never for each MIDI event.
+  // WebKit can report running while its render clock is stalled. Check the
+  // clock, not the signal level: an intentional rest or muted volume is valid.
+  activate() {
+    const context = this.ensure();
+    if (!context || this.activationCheck !== null || this.recovering) return;
+    this.reportState("activation");
+    const time = context.currentTime;
+    this.activationCheck = setTimeout(() => {
+      this.activationCheck = null;
+      if (globalThis.document?.hidden || context.state !== "running" || context.currentTime !== time) return;
+      this.reportState("clock stalled; restarting output");
+      this.recovering = true;
+      // One attempt per activation. Do not loop if the OS still owns audio,
+      // replace the graph, or replay notes accumulated while it was stopped.
+      context.suspend().then(() => {
+        if (!globalThis.document?.hidden) return context.resume();
+      }).catch(error => this.report(`audio recovery failed: ${error.message}`))
+        .finally(() => { this.recovering = false; });
+    }, 500);
+  }
+
+  foreground() {
+    // A page opened only to browse the library must not create an audio graph.
+    if (this.context) this.activate();
   }
 
   setMasterVolume(value) {

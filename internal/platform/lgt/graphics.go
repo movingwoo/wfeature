@@ -28,6 +28,10 @@ type framebuffer struct {
 	// is not a decoded image. RGB565 has no alpha channel to carry it. See
 	// wipic_image.go.
 	opaque []bool
+	// A unique, noncolliding encoded color key follows guest pixel edits;
+	// ambiguous alpha masks retain their positional representation.
+	colorKeyed     bool
+	transparentKey uint16
 	// drawnHere marks a surface an AOT Java `Graphics` has drawn into, which
 	// makes the runtime's copy the only correct one. A Java title never
 	// receives a surface's address and never writes a pixel through guest

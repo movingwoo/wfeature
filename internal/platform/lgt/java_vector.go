@@ -96,6 +96,24 @@ func javaVectorAt(
 	return held[index], nil
 }
 
+// javaVectorSetAt replaces an existing element without changing the size or
+// shifting adjacent elements. A null reference is a valid replacement.
+func javaVectorSetAt(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	index := int32(arguments[2])
+	if index < 0 || uint64(index) >= uint64(len(held)) {
+		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass,
+			fmt.Sprintf("element %d of a vector of %d", index, len(held)))
+	}
+	held[index] = arguments[1]
+	return 0, nil
+}
+
 // javaVectorFirst is `firstElement()`. The language throws on an empty vector
 // rather than answering null, so an empty one is reported here: a caller that
 // gets a null back would fault on it later, somewhere that says nothing about

@@ -215,10 +215,9 @@ func (client *Client) deliverJavaKey(ctx context.Context, pressed bool, key uint
 	if err := client.callJavaCardMethod(ctx, client.thread, javaCardKeyMethod, kind, key); err != nil {
 		return err
 	}
-	// A key is a reason to draw the next frame: a card that repaints itself
-	// from its own handler has already said so, and one that does not would
-	// otherwise show the state before the key until something else asked.
-	client.javaRun.cardDirty = true
+	// Repaint requests belong to the card or its game thread. An implicit
+	// paint here advances simulation in paint once per key event, making
+	// repeated input change the game's speed. Preserve any pending request.
 	return nil
 }
 
