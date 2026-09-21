@@ -124,3 +124,126 @@ func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
 		t.Fatalf("cancelled repaint timer blocked fallback: %d paints", steps)
 	}
 }
+
+func TestRepeatingJavaTimerKeepsPaintCadenceAfterTaskReturns(t *testing.T) {
+	clock := NewManualClock(time.Unix(1700000000, 0))
+	client, runtime := newPacedTestRuntime(t, clock, 1)
+	steps := 0
+	card := &jvm.Object{ClassName: "test/TimerPaintCard"}
+	owner := &jvm.Object{ClassName: "java/util/Timer"}
+	task := &jvm.Object{ClassName: "test/RepeatingPaintTask"}
+	if err := client.JVM().RegisterNative(card.ClassName, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) { steps++; return jvm.VoidValue(), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JVM().RegisterNative(task.ClassName, "run", "()V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+		return runtimeCardRepaint(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(card)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = []*jvm.Object{card}
+	runtime.pendingTimers = []wipicTimer{{owner: owner, task: task, period: 100 * time.Millisecond, due: client.now()}}
+	t.Cleanup(client.StopThreads)
+	for frame := 1; frame <= 3; frame++ {
+		if _, err := client.ServiceTimers(t.Context(), 1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+			t.Fatal(err)
+		}
+		if len(client.workers) != 0 {
+			t.Fatal("timer task did not return")
+		}
+		for idle := 0; idle < 20; idle++ {
+			if _, err := runtime.paintTopCard(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if steps != frame {
+			t.Fatalf("%d timer requests caused %d world steps", frame, steps)
+		}
+		clock.Advance(100 * time.Millisecond)
+	}
+	// An unrelated task on the same Timer does not retain this card's cadence.
+	runtime.pendingTimers = []wipicTimer{{owner: owner, task: &jvm.Object{ClassName: "test/OtherTask"}, due: client.now().Add(time.Second)}}
+	if _, err := runtime.paintTopCard(); err != nil {
+		t.Fatal(err)
+	}
+	if steps != 4 {
+		t.Fatal("removed task retained paint ownership")
+	}
+}
+
+func TestSerialRepaintKeepsCadenceWhileRunnablePolls(t *testing.T) {
+	for _, synchronous := range []bool{false, true} {
+		name := "async"
+		if synchronous {
+			name = "sync"
+		}
+		t.Run(name, func(t *testing.T) {
+			clock := NewManualClock(time.Unix(1700000000, 0))
+			client, runtime := newPacedTestRuntime(t, clock, 1)
+			card := &jvm.Object{ClassName: "test/SerialPaintCard"}
+			runnable := &jvm.Object{ClassName: "test/SerialPaintLoop"}
+			other := &jvm.Object{ClassName: runnable.ClassName}
+			paints, calls := 0, 0
+			requeue := true
+			if err := client.JVM().RegisterNative(card.ClassName, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+				paints++
+				return jvm.VoidValue(), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := client.JVM().RegisterNative(runnable.ClassName, "run", "()V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+				if calls%3 == 0 {
+					args := []jvm.Value{jvm.ReferenceValue(card)}
+					if _, err := runtimeCardRepaint(runtime, client.JVM(), args); err != nil {
+						return jvm.VoidValue(), err
+					}
+					if synchronous {
+						if _, err := runtimeCardServiceRepaints(runtime, client.JVM(), args); err != nil {
+							return jvm.VoidValue(), err
+						}
+					}
+				}
+				calls++
+				if requeue {
+					return runtimeDisplayCallSerially(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(runnable)})
+				}
+				return runtimeDisplayCallSerially(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(other)})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runtime.displayCards = []*jvm.Object{card}
+			runtime.pendingSerial = []*jvm.Object{runnable}
+			for round := 0; round < 6; round++ {
+				if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+					t.Fatal(err)
+				}
+				for idle := 0; idle < 20; idle++ {
+					if _, err := runtime.paintTopCard(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if want := round/3 + 1; paints != want {
+					t.Fatalf("%d requests caused %d paints", want, paints)
+				}
+				clock.Advance(serialDispatchInterval)
+			}
+			// The last invocation stops queueing itself. Its final requested
+			// frame still runs, then automatic painting becomes eligible again.
+			// Another instance of the same Runnable class inherits nothing.
+			requeue = false
+			if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+				t.Fatal(err)
+			}
+			for idle := 0; idle < 20; idle++ {
+				if _, err := runtime.paintTopCard(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if paints <= 3 {
+				t.Fatal("finished serial loop retained paint ownership")
+			}
+		})
+	}
+}

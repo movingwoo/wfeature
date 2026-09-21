@@ -74,10 +74,11 @@ intermediate frame delivery. The ordinary, debug, internal race, and vet gates
 passed after those runtime changes. The implementation record retains precise
 [fixture and ABI evidence](history/testing.md#runtime-runtime-boundary-follow-up-2026-09-17).
 
-The two undefined ABI claims remain unconfirmed: an alternate LGT graphics
-context layout and a KTF environment return slot. Their surrounding regressions
-do not establish those contracts. No new real-game, physical-device, or
-real-browser acceptance was performed for that runtime change.
+The alternate LGT graphics context layout remains unconfirmed. The later
+[KTF investigation](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case)
+establishes tag-2 word results in the environment; other tags and wide
+environment returns remain unconfirmed. The earlier runtime-boundary change
+itself did not include new real-game, physical-device, or browser acceptance.
 
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.

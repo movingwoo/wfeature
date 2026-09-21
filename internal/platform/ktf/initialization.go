@@ -51,6 +51,8 @@ const (
 	svcCategoryModuleJump uint32 = 7
 	// A revision-scoped replacement for one camera store; see camera_bounds.go.
 	svcCategoryCameraBounds uint32 = 8
+	// A revision-scoped dialog coordinate correction; see menu_text.go.
+	svcCategoryMenuText uint32 = 9
 
 	initSVCGetInterface  uint32 = 0
 	initSVCJavaThrow     uint32 = 1
@@ -192,6 +194,9 @@ func (client *Client) prepareInitialization() (*initializationRuntime, []uint32,
 	if err := runtime.installCameraBoundsCompatibility(); err != nil {
 		return nil, nil, err
 	}
+	if err := runtime.installMenuTextCompatibility(); err != nil {
+		return nil, nil, err
+	}
 	client.prepared, client.initParameters = runtime, parameters
 	return runtime, parameters, nil
 }
@@ -306,6 +311,7 @@ type initializationRuntime struct {
 	dockedCard               *jvm.Object
 	pendingTimers            []wipicTimer
 	cameraBoundsStore        uint32
+	menuTextCompatibility    bool
 	// pendingNetCallbacks are the MC_netConnect failures owed to callers that
 	// registered one; see wipic_net.go.
 	relayOnline         bool
@@ -315,10 +321,12 @@ type initializationRuntime struct {
 	// pendingSerial holds Display.callSerially Runnables. They are dispatched
 	// one per idle pass rather than as fast as the Host can turn rounds; see
 	// runtimeDisplayCallSerially and serialDispatchInterval.
-	pendingSerial    []*jvm.Object
-	serialDueAt      time.Time
-	repaintPending   bool
-	repaintServicing bool
+	pendingSerial     []*jvm.Object
+	serialDueAt       time.Time
+	serialPaintOwners map[*jvm.Object]*jvm.Object
+	activeSerialPaint *serialPaintOwner
+	repaintPending    bool
+	repaintServicing  bool
 	// guestFlushedOwnFrame records that the guest put a frame on the screen
 	// from its own code rather than from inside the card paint this platform
 	// drives. See paintTopCard: a title that draws its frame and flushes it
@@ -425,6 +433,9 @@ type initializationRuntime struct {
 	// hold is the only thing that separates a real release from a double free
 	// or a pointer that never came from here.
 	wipicAllocations map[uint32]uint64
+	// imageSourceBuffers tracks ownership, not just addresses stored in guest
+	// image records. Releasing a source revokes that ownership before reuse.
+	imageSourceBuffers map[uint32]uint32
 	// releasedWIPIC remembers addresses freeWIPIC gave back, most recent last.
 	// A title that destroys an image and draws it again is asking to read a
 	// block it freed — on a handset the pixels are still there and it draws
@@ -753,6 +764,11 @@ func (runtime *initializationRuntime) prepare() ([]uint32, error) {
 		if err := runtime.client.core.RegisterThreadLocalWord(runtime.exceptionHead()); err != nil {
 			return nil, fmt.Errorf("register KTF Java exception handler head: %w", err)
 		}
+		for _, offset := range []uint32{nativeReturnTagOffset, nativeReturnValueOffset} {
+			if err := runtime.client.core.RegisterThreadLocalWord(runtime.exceptionContext + offset); err != nil {
+				return nil, fmt.Errorf("register KTF native return word: %w", err)
+			}
+		}
 	}
 	param0, err := runtime.allocateWords([]uint32{0})
 	if err != nil {
@@ -903,6 +919,8 @@ func (runtime *initializationRuntime) handleSupervisorCall(ctx context.Context, 
 	switch call.Immediate {
 	case svcCategoryCameraBounds:
 		return runtime.storeCameraBounds(thread, call)
+	case svcCategoryMenuText:
+		return runtime.storeMenuTextY(thread, call)
 	case svcCategoryInit:
 		result, err = runtime.handleInitCall(thread, id)
 	case svcCategoryJavaInterface:
@@ -1105,6 +1123,12 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 	}
 	defer runtime.leaveAOTCall(runtime.aotCallOwner())
 
+	returnScope, err := runtime.beginNativeReturn(thread)
+	if err != nil {
+		return 0, fmt.Errorf("prepare KTF native return: %w", err)
+	}
+	defer returnScope.restore()
+
 	summary, err := runtime.client.core.Call(
 		ctx,
 		thread,
@@ -1123,7 +1147,11 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 	// because r1 after a call that returns one word is whatever the callee
 	// happened to be holding rather than part of its answer.
 	var result [8]byte
-	binary.LittleEndian.PutUint32(result[:4], summary.Context.Registers[0])
+	low, err := returnScope.result(summary.Context.Registers[0])
+	if err != nil {
+		return 0, fmt.Errorf("read KTF native return: %w", err)
+	}
+	binary.LittleEndian.PutUint32(result[:4], low)
 	if runtime.nativeCallIsWide(address) {
 		binary.LittleEndian.PutUint32(result[4:], summary.Context.Registers[1])
 	}
@@ -2075,6 +2103,11 @@ func (runtime *initializationRuntime) freeWIPIC(id uint32) {
 		return
 	}
 	delete(runtime.wipicAllocations, id)
+	for image, source := range runtime.imageSourceBuffers {
+		if image == id || source == id {
+			delete(runtime.imageSourceBuffers, image)
+		}
+	}
 	for owner, handle := range runtime.imageSurfaces {
 		if handle == id {
 			delete(runtime.imageSurfaces, owner)

@@ -490,6 +490,16 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 		if event.err != nil {
 			return serviced, fmt.Errorf("run KTF guest thread %s: %w", worker.javaThread.ClassName, event.err)
 		}
+		// A repeating task's worker ends after each run, but the scheduled
+		// task still owns its requested frame cadence until cancellation.
+		if worker.timerOwner != nil && worker.paintedCard != nil {
+			for i := range runtime.pendingTimers {
+				timer := &runtime.pendingTimers[i]
+				if timer.owner == worker.timerOwner && timer.task == worker.javaThread {
+					timer.paintedCard = worker.paintedCard
+				}
+			}
+		}
 	}
 	return serviced, nil
 }
@@ -703,17 +713,40 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 	return serviced, nil
 }
 
+type serialPaintOwner struct {
+	card *jvm.Object
+}
+
 // runSerialRunnable invokes one Display.callSerially Runnable's run() on the
 // client thread. The caller holds the run lock.
 func (client *Client) runSerialRunnable(ctx context.Context, runnable *jvm.Object) error {
 	runtime := client.runtime
 	previousThread, previousContext := runtime.currentThread, runtime.currentContext
+	previousPaintOwner := runtime.activeSerialPaint
+	paintOwner := &serialPaintOwner{card: runtime.serialPaintOwners[runnable]}
+	delete(runtime.serialPaintOwners, runnable)
+	runtime.activeSerialPaint = paintOwner
 	runtime.currentThread, runtime.currentContext = client.thread, ctx
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
+		runtime.activeSerialPaint = previousPaintOwner
 	}()
 	if _, err := client.vm.InvokeVirtual(runnable, "run", "()V"); err != nil {
 		return fmt.Errorf("run KTF serial runnable %s: %w", runnable.ClassName, err)
+	}
+	// A self-queued loop can poll many times between requested frames.
+	// Keep its cadence while the same Runnable remains queued, and release
+	// it when that loop ends. Unrelated queued work inherits nothing.
+	if paintOwner.card != nil {
+		for _, pending := range runtime.pendingSerial {
+			if pending == runnable {
+				if runtime.serialPaintOwners == nil {
+					runtime.serialPaintOwners = make(map[*jvm.Object]*jvm.Object)
+				}
+				runtime.serialPaintOwners[runnable] = paintOwner.card
+				break
+			}
+		}
 	}
 	return nil
 }
