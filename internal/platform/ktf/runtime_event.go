@@ -545,6 +545,11 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// whose worker has returned.
 	if !runtime.repaintPending {
 		card := runtime.topCard()
+		for _, runnable := range runtime.pendingSerial {
+			if runtime.serialPaintOwners[runnable] == card {
+				return false, nil
+			}
+		}
 		for _, timer := range runtime.pendingTimers {
 			if timer.paintedCard == card {
 				return false, nil

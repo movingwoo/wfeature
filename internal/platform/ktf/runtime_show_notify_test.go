@@ -89,3 +89,53 @@ func TestPushingTheCardAlreadyOnTopNotifiesNobody(t *testing.T) {
 		t.Fatalf("showNotify calls after removing a duplicate = %d, want 1", calls)
 	}
 }
+
+// A worker may wait for initialization performed by the first paint. Its
+// instruction budget is not a reason to withhold the display's initial frame.
+func TestShownCardPaintUnblocksBusyWorker(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	ready := false
+	for name, body := range map[string]jvm.NativeMethod{
+		"showNotify": func(*jvm.VM, []jvm.Value) (jvm.Value, error) { return jvm.VoidValue(), nil },
+		"paint":      func(*jvm.VM, []jvm.Value) (jvm.Value, error) { ready = true; return jvm.VoidValue(), nil },
+	} {
+		descriptor := "(Z)V"
+		if name == "paint" {
+			descriptor = "(Lorg/kwis/msp/lcdui/Graphics;)V"
+		}
+		if err := client.JVM().RegisterNative("test/InitialCard", name, descriptor, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.JVM().RegisterNative("test/InitialWorker", "run", "()V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+		for !ready {
+			if err := client.activeWorker.parkSlice(true); err != nil {
+				return jvm.VoidValue(), err
+			}
+		}
+		return jvm.VoidValue(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	card := &jvm.Object{ClassName: "test/InitialCard"}
+	if _, err := runtimeDisplayPushCard(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(card)}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.pendingThreads = []*jvm.Object{{ClassName: "test/InitialWorker"}}
+	t.Cleanup(client.StopThreads)
+	if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if !client.forcedSlice {
+		t.Fatal("worker did not wait for initial paint")
+	}
+	if painted, err := client.ServicePaint(t.Context()); err != nil || !painted {
+		t.Fatalf("initial paint=%v error=%v", painted, err)
+	}
+	if _, err := client.ServiceThreads(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.workers) != 0 {
+		t.Fatal("initial paint did not release waiting worker")
+	}
+}

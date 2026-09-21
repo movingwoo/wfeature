@@ -968,30 +968,14 @@ func (runtime *initializationRuntime) wipicDestroyImage(thread *armcore.Thread) 
 	return 0, nil
 }
 
-// releaseImageSourceBuffer frees the encoded buffer an MC_GrpImage record names,
-// before the record itself goes back and takes the word naming it with it.
-//
-// The word is only read when the block is a whole image record. A handle that
-// is something smaller — an off-screen framebuffer handed to the wrong destroy
-// is the case that happens — has no word thirteen of its own, and reading past
-// the block would find whatever the next allocation holds. That is not merely
-// nonsense: the neighbouring blocks here are framebuffer records, whose fields
-// are themselves handles, so a stray word could name a live block and free
-// something the game is still drawing with.
+// releaseImageSourceBuffer releases only the source allocation the image still
+// owns. The guest can free it earlier and its address can then name another
+// live allocation; rereading word thirteen would free that unrelated object.
+// Ownership is also absent for a framebuffer passed to the image destructor.
 func (runtime *initializationRuntime) releaseImageSourceBuffer(handle uint32) {
-	const imageRecordWords = 17
-	if runtime.wipicAllocations[handle] < uint64(wipicAllocationOverhead)+imageRecordWords*4 {
-		return
-	}
-	fields, err := runtime.readAOTWords(handle, 1, "image handle")
-	if err != nil {
-		return
-	}
-	record, err := runtime.readAOTWords(fields[0]+8, 14, "image record")
-	if err != nil {
-		return
-	}
-	runtime.releaseWIPICIfOwned(record[13])
+	source := runtime.imageSourceBuffers[handle]
+	delete(runtime.imageSourceBuffers, handle)
+	runtime.releaseWIPICIfOwned(source)
 }
 
 // releaseWIPICIfOwned frees a block this platform handed out and ignores
@@ -1117,6 +1101,12 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 	binary.LittleEndian.PutUint32(word[:], image)
 	if err := memory.Write(targetPointer, word[:]); err != nil {
 		return 0, fmt.Errorf("write KTF image result at %#x: %w", targetPointer, err)
+	}
+	if _, owned := runtime.wipicAllocations[dataHandle]; owned {
+		if runtime.imageSourceBuffers == nil {
+			runtime.imageSourceBuffers = make(map[uint32]uint32)
+		}
+		runtime.imageSourceBuffers[image] = dataHandle
 	}
 	return 1, nil
 }

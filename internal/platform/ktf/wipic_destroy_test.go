@@ -234,3 +234,35 @@ func TestDestroyImageLeavesNothingReadable(t *testing.T) {
 		t.Fatal("the destroyed image kept its transparency mask")
 	}
 }
+
+func TestImageDestroyPreservesReusedSourceAllocation(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	encoded := encodePalettedPNG(t, 2, 2)
+	result := callocThroughSVC(t, runtime, 4)
+	data := callocThroughSVC(t, runtime, uint32(len(encoded)))
+	if err := client.core.Memory().Write(data+wipicAllocationOverhead, encoded); err != nil {
+		t.Fatal(err)
+	}
+	context := armcore.NewContext()
+	for index, value := range []uint32{result + wipicAllocationOverhead, data, 0, uint32(len(encoded))} {
+		context.Registers[index] = value
+	}
+	if code, err := runtime.wipicCreateImage(armcore.NewThread(context)); err != nil || code != 1 {
+		t.Fatalf("create image=%d error=%v", code, err)
+	}
+	handles, err := runtime.readAOTWords(result+wipicAllocationOverhead, 1, "image result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A caller releases the encoded source itself. Reusing its address must
+	// not transfer ownership of the new allocation to the old image.
+	runtime.freeWIPIC(data)
+	replacement := callocThroughSVC(t, runtime, uint32(len(encoded)))
+	if replacement != data {
+		t.Fatalf("source address was not reused: %#x != %#x", replacement, data)
+	}
+	destroyThroughTable(t, runtime, 33, handles[0])
+	if _, live := runtime.wipicAllocations[replacement]; !live {
+		t.Fatal("image destruction freed a replacement source allocation")
+	}
+}

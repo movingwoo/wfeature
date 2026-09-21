@@ -1874,10 +1874,7 @@ collection. These paths already satisfy those fixtures and were not rewritten.
 Helper stacks and argument containers still use the existing arena lifetime;
 these tests establish no premature reuse, not a new reclamation policy.
 
-The environment return-slot address, width, initialization value and validity
-convention remain unspecified. Existing register returns cannot establish slot
-precedence. No speculative environment layout has been added. An SDK definition
-or affected native caller is needed to complete this part of the candidate.
+The later [KTF QA investigation](../ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case) supplies an affected native caller: tag 2 at environment offset 36 publishes a 32-bit result at offset 40. That convention now has bounded call scopes, logical-thread isolation, and authored return tests. Other tags and wide environment returns remain unspecified; the older module ABI still uses its existing register-return path.
 
 <a id="runtime-save-integrity"></a>
 

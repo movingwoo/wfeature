@@ -1647,7 +1647,15 @@ func (runtime *initializationRuntime) notifyCardShown(hidden, shown *jvm.Object)
 		}
 	}
 	if shown != nil {
-		return runtime.invokeShowNotify(shown, true)
+		if err := runtime.invokeShowNotify(shown, true); err != nil {
+			return err
+		}
+		// Showing or uncovering a card invalidates the display. Queue its
+		// first paint even when a worker exhausts its instruction slice while
+		// waiting for state that paint initializes. This is a display request,
+		// not ownership of the worker's later frame cadence.
+		runtime.repaintPending = true
+		runtime.postRepaintEvent()
 	}
 	return nil
 }
@@ -2984,6 +2992,11 @@ func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 			worker.paintedCard = card
 		}
 	}
+	if owner := runtime.activeSerialPaint; owner != nil && len(arguments) > 0 {
+		if card, err := arguments[0].Reference(); err == nil && card != nil && runtime.cardIsShown(card) {
+			owner.card = card
+		}
+	}
 	runtime.repaintPending = true
 	// A game driving its own event loop is waiting in getNextEvent, so the
 	// repaint request has to reach it as an event too.
@@ -3052,6 +3065,9 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	// and its ground ran off the bottom of the screen.
 	if worker := runtime.client.activeWorker; worker != nil {
 		worker.paintedCard = receiver
+	}
+	if owner := runtime.activeSerialPaint; owner != nil {
+		owner.card = receiver
 	}
 	runtime.guestHasPainted = true
 	runtime.roundsSinceGuestPaint = 0
