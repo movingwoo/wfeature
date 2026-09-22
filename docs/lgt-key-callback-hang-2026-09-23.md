@@ -59,3 +59,11 @@ progress would be lost.
 This fixes the evidenced input/worker wait. It does not add out-of-band report
 export for arbitrary blocked guest callbacks or claim all later gameplay has
 been exercised.
+
+
+## User acceptance
+
+After restarting the corrected debug server, the user reported that the other
+cases passed and identified only case 7's download prompt as remaining. The
+key-callback hang is therefore accepted on the user's gameplay route. The
+separate stale download-state recovery is recorded in the ten-case QA report.
