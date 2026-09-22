@@ -430,6 +430,11 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 		}
 		return thread.SetRegister(0, object)
 	case javaSVCEnterMethod, javaSVCLeaveMethod:
+		if slot == javaSVCLeaveMethod {
+			if err := client.serviceJavaKeyWorkers(ctx); err != nil {
+				return err
+			}
+		}
 		// A method enters through one and leaves through the other, carrying a
 		// small constant in. Nothing reads the answer, and what the pair is for
 		// — a frame the collector can walk is the guess — does not have to be

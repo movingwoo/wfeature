@@ -153,3 +153,14 @@ the guest set and save its own certificate-present flag. Responses are deferred
 to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
 this behavior. See the [protocol evidence](lgt-qa-2026-09-21.md#certificate-message-compatibility).
+
+
+### Key callbacks waiting on workers
+
+Key callbacks can wait for state updated by a Java worker. Eligible workers
+receive a slice at bounded compiler checkpoints inside such callbacks, except
+while the platform holds a monitor. Exception regions, jump buffers and native
+call depth belong to each worker across scheduling boundaries. The original
+instruction ceiling still bounds the callback. See the
+[gameplay hang investigation](lgt-key-callback-hang-2026-09-23.md) for the live
+server evidence, failing input replay and corrected path.

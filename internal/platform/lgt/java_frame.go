@@ -191,6 +191,11 @@ func (client *Client) callJavaCardMethod(
 		return nil
 	}
 	call := append([]uint32{runtime.card}, arguments...)
+	if name == javaCardKeyMethod && client.activeJavaWorker == nil {
+		previous, checks := runtime.keyCallback, runtime.keyChecks
+		runtime.keyCallback, runtime.keyChecks = true, 0
+		defer func() { runtime.keyCallback, runtime.keyChecks = previous, checks }()
+	}
 	if _, err := client.callOn(ctx, thread, method.Body, call); err != nil {
 		// A card's callback is entered with none of the title's own handlers
 		// under it, so an exception its own loop would have caught arrives
