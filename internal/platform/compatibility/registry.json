@@ -60,6 +60,91 @@
         "lgt.wide_graphics_context"
       ],
       "evidence": "docs/lgt-qa-2026-09-20.md#wide-graphics-context"
+    },
+    {
+      "id": "lgt-wide-context-003",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "ac4d6ce5b68c0972b39aab7dea6944dd9a1ea398eba790d95316778a038cd06d"
+      },
+      "fixes": [
+        "lgt.wide_graphics_context"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#blank-rendering-and-context-layout"
+    },
+    {
+      "id": "lgt-direct-origin-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "e418a6186814fdd850d3de53092c1e19fb941741057a646ebfd5ce1267241389"
+      },
+      "fixes": [
+        "lgt.direct_framebuffer_origin"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#direct-framebuffer-origin"
+    },
+    {
+      "id": "lgt-image-origin-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "a408002a417064d1041adf47b93436eb81b445afbc656c85bcf0127984c2106e"
+      },
+      "fixes": [
+        "lgt.image_framebuffer_origin"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#image-path-origin"
+    },
+    {
+      "id": "lgt-color-key-origin-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "a94d19252edfcee2346cd166c4d4e1f1303dbfce987b50992d51de519b3ac942"
+      },
+      "fixes": [
+        "lgt.color_key_sample_origin"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#transparency-calibration-origin"
+    },
+    {
+      "id": "lgt-wide-context-004",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "d1f59407b0101ff266a06b09c70e826c435691e0f3007ffc1612848c653aca10"
+      },
+      "fixes": [
+        "lgt.wide_graphics_context",
+        "lgt.wide_exclusive_clip"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#second-color-report-wide-context-proof"
+    },
+    {
+      "id": "lgt-save-subscriber-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "b2437411838c04e13f62fd6b9a206c348d87b3eac4119971226c30169286168a"
+      },
+      "fixes": [
+        "lgt.save_subscriber_identity"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#save-subscriber-comparison"
+    },
+    {
+      "id": "lgt-certificate-message-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "e73ff5c0e4ea82d53291faec14bc9a33ac9d85bc95124f6058d523ee5621fea1"
+      },
+      "fixes": [
+        "lgt.certificate_message"
+      ],
+      "evidence": "docs/lgt-qa-2026-09-21.md#certificate-message-compatibility"
     }
   ]
 }

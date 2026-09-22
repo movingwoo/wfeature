@@ -49,3 +49,29 @@ func TestJavaKeyDeliveryPreservesExplicitRepaintScheduling(t *testing.T) {
 		t.Fatal("key delivery lost a pending repaint")
 	}
 }
+
+func TestRemoveCurrentJavaCard(t *testing.T) {
+	client := fixtureClient(t)
+	method, ok := javaGraphicsMethods[javaDisplayClass+".removeCard(Lorg/kwis/msp/lcdui/Card;)Z"]
+	if !ok {
+		t.Fatal("Display.removeCard is not implemented")
+	}
+	runtime := client.javaRuntimeState()
+	runtime.card = 0x1000
+	runtime.cardDirty = true
+	for _, step := range []struct{ card, want uint32 }{{0, 0}, {0x2000, 0}, {0x1000, 1}, {0x1000, 0}} {
+		got, err := method.Implementat(client, t.Context(), client.thread, []uint32{0, step.card})
+		if err != nil || got != step.want {
+			t.Fatalf("removeCard(%#x) = %d, %v", step.card, got, err)
+		}
+		if step.want == 1 && (runtime.card != 0 || runtime.cardDirty) {
+			t.Fatal("removed card remains scheduled")
+		}
+		if step.card != 0x1000 && (runtime.card != 0x1000 || !runtime.cardDirty) {
+			t.Fatal("unrelated removal changed current card")
+		}
+	}
+	if err := client.PaintJava(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}

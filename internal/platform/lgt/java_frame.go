@@ -62,6 +62,20 @@ func javaCardRepaint(
 	return 0, nil
 }
 
+// javaRemoveCard removes the active card from the current single-card display.
+// An unrelated or null card leaves the active card and repaint request intact.
+func javaRemoveCard(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	if arguments[1] == 0 || runtime.card != arguments[1] {
+		return 0, nil
+	}
+	runtime.card = 0
+	runtime.cardDirty = false
+	return 1, nil
+}
+
 // javaRemoveAllCards is `Display.removeAllCards()`. Nothing is shown after it
 // until something is pushed again, and the platform has no card to paint.
 func javaRemoveAllCards(

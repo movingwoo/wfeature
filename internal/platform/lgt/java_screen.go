@@ -285,8 +285,9 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 
 	// Taking the card off the display, and painting one that has asked to be
 	// painted without waiting for the next frame; see java_frame.go.
-	"org/kwis/msp/lcdui/Display.removeAllCards()V": {Words: 1, Implementat: javaRemoveAllCards},
-	"org/kwis/msp/lcdui/Card.serviceRepaints()V":   {Words: 1, Implementat: javaServiceRepaints},
+	"org/kwis/msp/lcdui/Display.removeAllCards()V":                      {Words: 1, Implementat: javaRemoveAllCards},
+	"org/kwis/msp/lcdui/Display.removeCard(Lorg/kwis/msp/lcdui/Card;)Z": {Words: 2, Implementat: javaRemoveCard},
+	"org/kwis/msp/lcdui/Card.serviceRepaints()V":                        {Words: 1, Implementat: javaServiceRepaints},
 
 	"org/kwis/msp/lcdui/Graphics.drawString(Ljava/lang/String;III)V": {
 		Words: 5, Implementat: javaDrawString},

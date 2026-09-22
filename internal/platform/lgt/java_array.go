@@ -403,7 +403,7 @@ func (client *Client) newJavaStringArray(values []string) (uint32, error) {
 }
 
 // storeJavaArrayWide is the same store for an eight-byte element: the value
-// arrives as two words, low first, the way every long does here. The element
+// is supplied low word first after the interface adapter decodes its ABI. The element
 // width is the array's own rather than assumed, so an array that is not one of
 // eight-byte elements is refused instead of being written past.
 func (client *Client) storeJavaArrayWide(array, index, low, high uint32) error {

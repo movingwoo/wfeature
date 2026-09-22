@@ -16,6 +16,7 @@ const (
 	localNotificationProtocol localNetworkProtocol = iota
 	localAuthenticationProtocol
 	localTerminatedNotificationProtocol
+	localCertificateMessageProtocol
 )
 
 // notificationNetwork is the legacy name of the bounded in-process service
@@ -26,6 +27,7 @@ type notificationNetwork struct {
 	contract              notificationContract
 	identity              string
 	authenticationRequest []byte
+	certificateRequests   [2][]byte
 	active                bool
 	next                  uint32
 	serial                uint64
@@ -40,6 +42,7 @@ type notificationSocketState struct {
 	failed               bool
 	stage                uint8
 	request, response    []byte
+	pendingResponse      []byte
 	connect, read, write notificationCallback
 }
 
@@ -57,6 +60,9 @@ func (n *notificationNetwork) close() {
 // application tokens can complete a recognized request. Trailing data, reordered
 // commands, uploads and unknown operations fail without a success response.
 func (n *notificationNetwork) writeRequest(s *notificationSocketState, data []byte) bool {
+	if n.contract.protocol == localCertificateMessageProtocol {
+		return n.writeCertificateMessageRequest(s, data)
+	}
 	if n.contract.protocol == localTerminatedNotificationProtocol {
 		return n.writeTerminatedNotificationRequest(s, data)
 	}
@@ -218,6 +224,7 @@ func (client *Client) notificationSocketCall(thread *armcore.Thread, slot uint32
 			s.failed = true
 			s.request = nil
 			s.response = nil
+			s.pendingResponse = nil
 			return wipiError
 		}
 		return int32(len(data))
@@ -265,6 +272,9 @@ func (client *Client) serviceNotificationSockets(ctx context.Context) error {
 	slices.Sort(fds)
 	for _, fd := range fds {
 		s := n.sockets[fd]
+		if !s.failed && len(s.pendingResponse) > 0 && len(s.response) == 0 {
+			s.response, s.pendingResponse = s.pendingResponse, nil
+		}
 		if s.connect.address != 0 {
 			events = append(events, event{fd, s, 0, s.connect})
 		}

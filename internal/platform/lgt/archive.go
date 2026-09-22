@@ -74,6 +74,9 @@ type Archive struct {
 	// It is kept apart from Resources rather than merged because the JAR is
 	// the application and has to win a name collision.
 	Packaged map[string][]byte
+	// supplemental aliases a unique outer wrapper/AID directory. Canonical
+	// packaged paths and JAR resources take precedence over these aliases.
+	supplemental map[string][]byte
 }
 
 // SaveOwner names the directory this title's saves live in. It is the PID,
@@ -176,12 +179,49 @@ func Open(data []byte) (*Archive, error) {
 		}
 		packaged[name] = data
 	}
+	supplemental, err := supplementalFiles(packaged, descriptor.AID)
+	if err != nil {
+		return nil, err
+	}
 	return &Archive{
-		Descriptor: descriptor,
-		Module:     module,
-		Resources:  entries,
-		Packaged:   packaged,
+		Descriptor:   descriptor,
+		Module:       module,
+		Resources:    entries,
+		Packaged:     packaged,
+		supplemental: supplemental,
 	}, nil
+}
+
+// Supplemental handset files may be preserved in one containing directory
+// beside the executable JAR. Only the declared application's directory is
+// mounted; unrelated application trees are never searched by basename.
+func supplementalFiles(files map[string][]byte, aid string) (map[string][]byte, error) {
+	root := ""
+	for name := range files {
+		wrapper, rest, ok := strings.Cut(name, "/")
+		if !ok || strings.EqualFold(wrapper, "P") {
+			continue
+		}
+		application, _, ok := strings.Cut(rest, "/")
+		if !ok || aid == "" || !strings.EqualFold(application, aid) {
+			continue
+		}
+		candidate := wrapper + "/" + application + "/"
+		if root != "" && root != candidate {
+			return nil, fmt.Errorf("ambiguous LGT supplemental data directories")
+		}
+		root = candidate
+	}
+	if root == "" {
+		return nil, nil
+	}
+	aliases := make(map[string][]byte)
+	for name, data := range files {
+		if strings.HasPrefix(name, root) {
+			aliases[strings.TrimPrefix(name, root)] = data
+		}
+	}
+	return aliases, nil
 }
 
 // selectJAR finds the game's JAR. It is normally named after the AID, but
@@ -266,7 +306,7 @@ func (archive *Archive) Resource(name string) ([]byte, bool) {
 	if archive.Descriptor.AID != "" {
 		names = append(names, "P/"+archive.Descriptor.AID+"/"+base)
 	}
-	for _, files := range []map[string][]byte{archive.Resources, archive.Packaged} {
+	for _, files := range []map[string][]byte{archive.Resources, archive.Packaged, archive.supplemental} {
 		for _, candidate := range names {
 			if data, ok := files[candidate]; ok {
 				return data, true

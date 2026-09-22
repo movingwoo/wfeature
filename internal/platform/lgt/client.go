@@ -119,6 +119,7 @@ type CletFunctions struct {
 // Client is one loaded LGT game.
 type Client struct {
 	wideGraphicsContexts bool
+	wideExclusiveClip    bool
 
 	core                *armcore.Core
 	thread              *armcore.Thread
@@ -441,6 +442,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		volume: mediaMaxVolume,
 	}
 	client.wideGraphicsContexts = hasWideGraphicsContexts(client.archive.Module)
+	client.wideExclusiveClip = hasWideExclusiveClip(client.archive.Module)
 	if err := client.applyOriginCompatibility(); err != nil {
 		return nil, err
 	}
@@ -927,7 +929,17 @@ func (client *Client) allocateSurface(size uint64) (uint32, error) {
 		// first, and the collector is what gives those surfaces back. See
 		// collectForAllocation, and newSharedJavaImage for the shape of title
 		// this happens to.
-		if client.collectForAllocation() {
+		collected := client.collectForAllocation()
+		// Only surface pressure may evict decoded pixels. A data allocation
+		// can be building an Image around a cache hit held in a Go local.
+		evicted := 0
+		if client.javaRun != nil && !client.collectorOff {
+			evicted = client.evictUnusedJavaImages()
+		}
+		if evicted > 0 && client.logger != nil {
+			client.logger.Debug("LGT evicted unused decoded images", "surfaces", evicted)
+		}
+		if collected || evicted > 0 {
 			address, ok = client.surfaces.allocate(size)
 		}
 	}

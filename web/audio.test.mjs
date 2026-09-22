@@ -106,3 +106,35 @@ test("a rejected recovery is reported and a later gesture can retry", async t =>
   await check();
   assert.equal(audio.context.resumes, 1);
 });
+
+test("an older percussion source ending preserves its retriggered voice", () => {
+  const audio = new PageAudio();
+  const sources = [];
+  const parameter = () => ({ value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {} });
+  audio.context = {
+    currentTime: 0,
+    state: "running",
+    createGain: () => ({ gain: parameter(), connect() {} }),
+    createBufferSource() {
+      const source = { connect() {}, start() {}, stop() {} };
+      sources.push(source);
+      return source;
+    },
+    createBiquadFilter: () => ({ frequency: parameter(), connect() {} }),
+  };
+  audio._noise = {};
+  audio.midiGain = {};
+  audio.noteOn(9, 29, 100);
+  audio.context.currentTime = 0.046;
+  audio.noteOn(9, 29, 110);
+  audio.noteOn(9, 70, 100);
+  const replacement = audio.voices.get("9:29");
+  sources[0].onended();
+  assert.equal(audio.voices.get("9:29"), replacement);
+  assert.equal(audio.voices.size, 2);
+  sources[1].onended();
+  assert.equal(audio.voices.has("9:29"), false);
+  assert.equal(audio.voices.size, 1);
+  sources[2].onended();
+  assert.equal(audio.voices.size, 0);
+});

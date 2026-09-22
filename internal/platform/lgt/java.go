@@ -402,7 +402,9 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 		}
 		return thread.SetRegister(0, 0)
 	case javaSVCStoreWide:
-		if err := client.storeJavaArrayWide(values[0], values[1], values[2], values[3]); err != nil {
+		// This compiler helper takes the high word before the low word,
+		// unlike the low-first array storage and long return convention.
+		if err := client.storeJavaArrayWide(values[0], values[1], values[3], values[2]); err != nil {
 			return fmt.Errorf("%w (storing into a long array: %w)", ErrJavaAppUnsupported, err)
 		}
 		return thread.SetRegister(0, 0)

@@ -28,6 +28,24 @@ const SKTTutorialNameCache = "skt.tutorial_name_cache"
 // LGTVisibleFramebufferOrigin removes a recognized native display-strip offset.
 const LGTVisibleFramebufferOrigin = "lgt.visible_framebuffer_origin"
 
+// LGTDirectFramebufferOrigin removes a strip offset used by direct pixel writers.
+const LGTDirectFramebufferOrigin = "lgt.direct_framebuffer_origin"
+
+// LGTImageFramebufferOrigin removes a strip offset from a native image path.
+const LGTImageFramebufferOrigin = "lgt.image_framebuffer_origin"
+
+// LGTColorKeySampleOrigin aligns a native transparency calibration sample.
+const LGTColorKeySampleOrigin = "lgt.color_key_sample_origin"
+
+// LGTSaveSubscriberIdentity permits a recognized save reader's foreign identity.
+const LGTSaveSubscriberIdentity = "lgt.save_subscriber_identity"
+
+// LGTCertificateMessage selects the recognized two-stage local certificate exchange.
+const LGTCertificateMessage = "lgt.certificate_message"
+
+// LGTWideExclusiveClip selects a wide context with exclusive clip edges.
+const LGTWideExclusiveClip = "lgt.wide_exclusive_clip"
+
 // LGTWideGraphicsContext selects the evidenced 56-byte native context ABI.
 const LGTWideGraphicsContext = "lgt.wide_graphics_context"
 
@@ -107,7 +125,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTVisibleFramebufferOrigin || fix == LGTWideGraphicsContext) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
+				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

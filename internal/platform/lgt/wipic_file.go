@@ -668,6 +668,9 @@ func (client *Client) listDirectory(name string) []string {
 		for path := range client.archive.Packaged {
 			consider(path)
 		}
+		for path := range client.archive.supplemental {
+			consider(path)
+		}
 	}
 	for path := range client.createdFiles() {
 		consider(path)
