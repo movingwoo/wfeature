@@ -45,6 +45,10 @@ make serve-release               # release profile, in the foreground
 ./stop.sh                        # stop it again
 ```
 
+`build.sh` reports only the CLI and server binaries it builds. Temporary
+diagnostic executables in the same output directory are not additional build
+profiles and are not listed in that summary.
+
 ```powershell
 # Windows PowerShell — what `make serve` does, spelled out
 go run -tags debug .\cmd\server

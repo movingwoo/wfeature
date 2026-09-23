@@ -1,7 +1,7 @@
 // Fixed-rate server load probe. The auto phase models an already toggled-on OK stream. Requires Node 22+, ps (macOS/Linux), and a server binary.
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, copyFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import net from "node:net";
 
@@ -83,4 +83,5 @@ try {
   await new Promise(done => { if (server.exitCode !== null) done(); else server.once("exit", done); });
   writeFileSync(join(output, "result.json"), JSON.stringify(result, null, 2));
   writeFileSync(join(output, "server.log"), logs);
+  rmSync(ext, { recursive: true, force: true });
 }

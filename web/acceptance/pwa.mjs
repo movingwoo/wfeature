@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
@@ -250,5 +250,6 @@ try {
   result.seconds = (Date.now() - startedAt) / 1000;
   result.durationNote = "Browser automation; no physical-device, audible-output or OS-install claim.";
   writeFileSync(join(output, "result.json"), JSON.stringify(result, null, 2));
+  rmSync(ext, { recursive: true, force: true });
   console.log(`Evidence: ${output}`);
 }

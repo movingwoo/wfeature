@@ -97,6 +97,11 @@ adaptation, including the original bounds exception and the corrected reload.
 
 ## Browser and device acceptance
 
+The checked-in browser and load acceptance runners remove their own temporary
+`var/ext/<run>` trees after stopping their server. Reports, screenshots, and
+isolated saves remain available for diagnosis. The installation's root
+`var/ext/.adopted` marker and user uploads are outside those temporary trees.
+
 Go handler tests and Node client tests are ordinary gates. Local Chromium and
 WebKit records additionally cover selected retention/takeover, reconnect,
 restart, native-text, and save-confirmation routes. Automated composition events

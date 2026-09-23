@@ -35,6 +35,7 @@ make $targets
 
 echo
 echo "built the $profile profile:"
-ls -lh "build/$profile" | tail -n +2 | awk '{ printf "  %-24s %s\n", $9, $5 }'
+ls -lh "build/$profile/wfeature" "build/$profile/wfeature-server" |
+	awk '{ name = $9; sub(/^.*\//, "", name); printf "  %-24s %s\n", name, $5 }'
 echo
 echo "start the server with ./start.sh $profile"
