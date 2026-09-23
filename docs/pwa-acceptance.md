@@ -1,6 +1,6 @@
 # PWA release acceptance
 
-This is the bounded acceptance path for the 0.5.0 prerelease. The browser PWA
+This is the bounded acceptance path for the 0.5.0 release. The browser PWA
 remains the primary distribution target. A release candidate must distinguish
 browser automation, physical-device observations, and untested routes. An
 installed shell does not run the emulator offline: the server owns execution
@@ -225,3 +225,31 @@ Local evidence is in `build/qa-ios-audio-first.log`,
 `build/qa-ios-audio-{chromium,webkit}.log`, and
 `build/qa-ios-audio-node.log`. The interruption regression fails against the
 previous `web/audio.js` because it never calls `resume()` for `interrupted`.
+
+## 0.5.0 final candidate (2026-09-23)
+
+The local release-profile candidate uses runtime revision `47b07bb`, stamped
+`0.5.0`, with Go 1.27.1 on darwin/arm64. Its SHA-256 is
+`03d7da36a44daa57ca5d53cc63b92d5c4427196ad3c3ca133624c68bcb9f5f36`.
+The baseline is the embedded client from `v0.4.2`.
+
+Both complete upgrade routes pass all ten assertions with no page errors:
+
+| Engine | Version | Seconds | Local evidence under `var/acceptance/` |
+| --- | --- | --- | --- |
+| Chromium | 153.0.8010.12 | 13.098 | `pwa-chromium-1790160630932/result.json` |
+| WebKit | 26.6 | 5.344 | `pwa-webkit-1790160630932/result.json` |
+
+These runs retire `wfeature-shell-v15` for `wfeature-shell-v30`, preserve
+settings and archive/save bytes, restore guest progress and backups, and check
+touch, text input, audio-context resumption, reconnection and cached-shell load.
+The first attempts stopped because the runner selected an `OK` key absent from
+the new Type2 layout. The runner now taps `5`, which both Type2 layouts contain
+and the authored fixture maps to FIRE. The failed attempts remain recorded as
+`pwa-chromium-1790160524887` and `pwa-webkit-1790160524919`; no runtime fix was
+needed.
+
+The ordinary suite (including 227 Node tests), debug suite, internal race suite,
+vet and both server-profile builds pass. The keypad checks also pass after the
+runner correction. This is browser automation; physical-device, audible-output,
+native-app upgrade and per-platform real-game coverage remains as described above.
