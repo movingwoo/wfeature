@@ -983,26 +983,45 @@ func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
 }
 
 func (s *Session) frame() (rgba []byte, width, height int, ok bool) {
+	frame, ok := s.frameUpdate()
+	if !ok {
+		return nil, 0, 0, false
+	}
+	if frame.Scale > 1 {
+		return s.magnify(frame.RGBA, frame.Width, frame.Height)
+	}
+	return frame.RGBA, frame.Width, frame.Height, true
+}
+
+// FrameUpdate transfers an unscaled picture and its presentation scale to a
+// Host that processes frames asynchronously. Frame keeps its synchronous,
+// already-scaled contract for other Hosts.
+func (s *Session) FrameUpdate() (frame backend.FrameUpdate, ok bool) {
+	if err := s.guarded("session frame", func() error {
+		frame, ok = s.frameUpdate()
+		return nil
+	}); err != nil {
+		return backend.FrameUpdate{}, false
+	}
+	return frame, ok
+}
+
+func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
+	frame.Scale = s.options.scale()
 	switch {
 	case s.ktf != nil:
-		frame, frameWidth, frameHeight, _ := s.ktf.Frame()
-		return s.magnify(frame, frameWidth, frameHeight)
+		frame.RGBA, frame.Width, frame.Height, _ = s.ktf.Frame()
 	case s.ktfNative != nil:
-		frame, frameWidth, frameHeight, _ := s.ktfNative.Frame()
-		return s.magnify(frame, frameWidth, frameHeight)
+		frame.RGBA, frame.Width, frame.Height, _ = s.ktfNative.Frame()
 	case s.lgt != nil:
-		frame, frameWidth, frameHeight, _ := s.lgt.Frame()
-		return s.magnify(frame, frameWidth, frameHeight)
+		frame.RGBA, frame.Width, frame.Height, _ = s.lgt.Frame()
 	case s.surface != nil:
-		frame, frameWidth, frameHeight := s.surface.Frame()
+		frame.RGBA, frame.Width, frame.Height = s.surface.Frame()
 		// The MIDP runtimes own their surface's size, so what they drew is
 		// what is shown.
-		if len(frame) == 0 || frameWidth <= 0 || frameHeight <= 0 {
-			return nil, 0, 0, false
-		}
-		return frame, frameWidth, frameHeight, true
+		frame.Scale = 1
 	}
-	return nil, 0, 0, false
+	return frame, len(frame.RGBA) > 0 && frame.Width > 0 && frame.Height > 0
 }
 
 // Screen is the guest's own screen, before any magnification. A Host lays out
