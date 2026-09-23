@@ -44,7 +44,7 @@ func (service *slotRelay) respond(payload []byte) ([]byte, error) {
 		service.identity = append([]byte(nil), body[1:]...)
 		service.phase = 2
 		return reply(nil)
-	case kind == 5 && command == 1410 && service.phase == 2 && len(body) == 1 && body[0] > 0 && body[0] <= 127:
+	case kind == 5 && command == 1410 && service.phase == 2 && len(body) == 1 && body[0] <= 127:
 		service.slot = body[0]
 		service.phase = 3
 		message := encodeEUCKR("\uC774 \uAE30\uAE30\uC5D0 \uC2AC\uB86F\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4.")

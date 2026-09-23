@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"testing"
 )
 
@@ -80,7 +81,8 @@ func TestSlotRelayRejectsMalformedOrOutOfOrderRequests(t *testing.T) {
 		{"identity before handshake", 0, slotMessage(5, 1400, []byte{1, 1})},
 		{"identity length mismatch", 1, slotMessage(5, 1400, []byte{2, 1})},
 		{"empty identity", 1, slotMessage(5, 1400, []byte{0})},
-		{"invalid slot", 2, slotMessage(5, 1410, []byte{0})},
+		{"missing slot", 2, slotMessage(5, 1410, nil)},
+		{"extra slot data", 2, slotMessage(5, 1410, []byte{0, 1})},
 		{"signed slot overflow", 2, slotMessage(5, 1410, []byte{128})},
 		{"commit before confirmation", 3, slotMessage(5, 1430, nil)},
 		{"commit with extra data", 4, slotMessage(5, 1430, []byte{0})},
@@ -93,6 +95,38 @@ func TestSlotRelayRejectsMalformedOrOutOfOrderRequests(t *testing.T) {
 			}
 			if service.phase != test.phase {
 				t.Fatal("failed request advanced state")
+			}
+		})
+	}
+}
+
+func TestSlotRelayCreatesZeroBasedSlots(t *testing.T) {
+	for _, slot := range []byte{0, 1, 2, 3, 4, 5} {
+		t.Run(fmt.Sprint(slot), func(t *testing.T) {
+			var service slotRelay
+			requests := [][]byte{
+				slotMessage(1, 1000, []byte{30}),
+				slotMessage(5, 1400, []byte{3, 1, 2, 3}),
+				slotMessage(5, 1410, []byte{slot}),
+				slotMessage(5, 1420, nil),
+				slotMessage(5, 1430, nil),
+			}
+			var receipt []byte
+			for _, request := range requests {
+				var err error
+				receipt, err = service.respond(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(receipt) < 22 || int(receipt[13]) != len(receipt)-22 {
+				t.Fatalf("invalid receipt %x", receipt)
+			}
+			if name := decodeEUCKR(receipt[14 : len(receipt)-8]); name != fmt.Sprintf(" \uB85C\uCEEC%d", int(slot)+1) {
+				t.Fatalf("slot %d label = %q", slot, name)
+			}
+			if service.phase != 5 || service.slot != slot {
+				t.Fatalf("slot not committed: %+v", service)
 			}
 		})
 	}

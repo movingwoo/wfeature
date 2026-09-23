@@ -26,7 +26,7 @@ import (
 // weak binding reports, which covers the Go stacks of parked guest workers
 // that nothing else can enumerate.
 //
-// Roots are the thread registers and thread-local words, every committed
+// Roots are all active call registers and thread-local words, every committed
 // read-write span outside a tracked object, and the objects Go still holds.
 // Tracing from there reaches every live object, and a group of dead objects
 // that only reference each other is reached by nothing — which is how a cycle
@@ -190,9 +190,10 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 
 	// Registers and thread-local words of every thread that can resume.
 	for _, thread := range runtime.collectionThreads() {
-		context := thread.Context()
-		for _, register := range context.Registers {
-			mark(register)
+		for _, context := range thread.LiveContexts() {
+			for _, register := range context.Registers {
+				mark(register)
+			}
 		}
 		for _, word := range runtime.client.core.ThreadLocalWords(thread) {
 			mark(word)

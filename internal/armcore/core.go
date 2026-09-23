@@ -124,6 +124,7 @@ type Thread struct {
 	threadLocal *threadLocalState
 	stepBudget  uint64
 	limitHook   func(context.Context) error
+	calls       []*Thread
 	// entryStack is the stack pointer this thread's run started from. A
 	// derived call inherits the guest stack rather than getting one of its
 	// own, so this is the only way to tell a frame that belongs to the run
@@ -173,6 +174,43 @@ func (thread *Thread) Context() Context {
 	thread.mu.Lock()
 	defer thread.mu.Unlock()
 	return thread.context
+}
+
+// LiveContexts snapshots this thread and every active call derived from it.
+// Callers must park execution first: a running thread's saved context may lag
+// behind its registers. Suspended calls and calls parked by a limit hook have
+// their current registers saved, including callers beneath a nested call.
+func (thread *Thread) LiveContexts() []Context {
+	var contexts []Context
+	pending := []*Thread{thread}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		current.mu.Lock()
+		contexts = append(contexts, current.context)
+		pending = append(pending, current.calls...)
+		current.mu.Unlock()
+	}
+	return contexts
+}
+
+func (thread *Thread) addCall(derived *Thread) {
+	thread.mu.Lock()
+	thread.calls = append(thread.calls, derived)
+	thread.mu.Unlock()
+}
+
+func (thread *Thread) removeCall(derived *Thread) {
+	thread.mu.Lock()
+	defer thread.mu.Unlock()
+	for index, call := range thread.calls {
+		if call == derived {
+			copy(thread.calls[index:], thread.calls[index+1:])
+			thread.calls[len(thread.calls)-1] = nil
+			thread.calls = thread.calls[:len(thread.calls)-1]
+			return
+		}
+	}
 }
 
 // SetRegister is available before a run and while a supervisor-call handler
@@ -302,6 +340,8 @@ func (core *Core) Call(
 	derived.context = callContext
 	derived.entryStack = callContext.Registers[RegisterSP]
 	derived.entryKnown = true
+	parent.addCall(derived)
+	defer parent.removeCall(derived)
 	return core.Run(ctx, derived, end, handler)
 }
 
