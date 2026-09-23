@@ -50,7 +50,11 @@ but no value getter. The Host therefore appends the completed string at the gues
 cursor and rejects commits after component, keypad, cursor, size, limit, or constraint
 changes. This character-at-a-time route accepts BMP text, including Korean, Latin,
 digits, and common symbols; it rejects supplementary characters that cannot survive
-separate Java `char` callbacks. LGT WIPI-C is the other bounded route: after a native widget selects or
+separate Java `char` callbacks. Each callback is followed by an ownership and
+cancellation check before another character or repaint is delivered. A detached
+or replaced target, queued screen change, or cancellation stops delivery; any
+accepted prefix remains guest-owned and the consumed snapshot cannot be retried.
+LGT WIPI-C is the other bounded route: after a native widget selects or
 calls the platform input method, a Host commit enters its Clet with one character-key
 carrier. The widget's
 normal `MC_imHandleInput` call receives the complete EUC-KR string in its
@@ -69,6 +73,11 @@ keypad focus: the WIPI ContainerComponent contract requires explicit focus for
 key delivery. Nested or ambiguous layouts are not inferred. Hiding/reopening
 the shell, replacing it, or changing its children/work component invalidates a
 pending edit. Existing explicit guest focus retains precedence.
+Explicit focus follows the recorded parent chain to the currently shown shell,
+including nested containers and shell subclasses. Detached children and hidden
+ancestors are unavailable. A field that has never belonged to a container remains
+supported for a card that draws it directly. Moving focus away and back through
+either the component or form API invalidates the earlier edit.
 The adapter preserves field constraints and stores the complete value using the
 component string-setting contract. Fields with an explicitly installed
 InputMethodListener remain unsupported: its per-key composition deltas cannot
@@ -81,6 +90,9 @@ and the synchronous KFC `doModal` path remains unsupported. SKT supports TextBox
 the selected Form TextField, a focused XTextField on the visible canvas, and the
 title-owned TextComponent attached to its input-method handler. The last route is
 append-only because the component interface cannot return its existing value.
+SKT tracks revisions for screens, command overlays, selected Form children,
+field values, limits and constraints, and vendor focus. Restoring an earlier
+state does not revive its pending Host edit.
 LGT supports a focused LWC TextField or TextBox whose parent chain reaches a
 shown Shell. Shell visibility and focus changes invalidate pending edits; field
 and listener revisions also reject guest changes that restore an earlier value.
@@ -123,11 +135,24 @@ lengths with five-byte local buffers; completed EUC-KR characters are delivered
 in batches of at most four bytes through successive guest callbacks. Recognition
 requires the instruction sequence and matching live stack arguments, not a game
 name or a zero size value. Other callers retain their declared capacities.
+Consuming any completion bytes invalidates the snapshot even if a later guest
+callback faults. Errors before delivery and atomic capacity rejections retain
+the retry path. Opening a fresh edit is required after consumed input.
 
-Limits count Java UTF-16 units; supplementary characters consume two units. Native
-entry does not infer fields drawn by game code.
+Java field limits count UTF-16 units in both Host composition and the shared
+keypad editor; supplementary characters consume two units. Keypad caret movement,
+backspace and truncation keep complete characters. Native entry does not infer
+fields drawn by game code.
 
 ## Validation
+
+The [2026-09-23 exception audit](text-input-audit-2026-09-23.md) records five
+additional defect categories, their authored reproductions, supported-route
+coverage and an acceptance matrix that distinguishes unsupported and unreached
+editors from regressions. All five categories now have fixes and ordinary Go
+regression tests, including restoration, nested ownership, callback interruption,
+consumed versus unconsumed retries, and mixed Host/keypad UTF-16 limits. See the
+audit's resolution section for validation and remaining manual acceptance limits.
 
 The 2026-09-19 KTF Shell regression reproduces a direct TextBox child opened
 without explicit focus. Authored tests cover complete-string commit, hidden

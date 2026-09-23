@@ -66,6 +66,7 @@ type Runtime struct {
 	displayOwner        *jvm.Object
 	display             *jvm.Object
 	currentDisplayable  *jvm.Object
+	displayRevision     uint64
 	pendingDisplayable  *jvm.Object
 	displayUpdateQueued bool
 	// refreshPending is set by XDisplay.refresh and cleared by the Host pass
@@ -845,6 +846,9 @@ func (runtime *Runtime) applyCurrentDisplayable() error {
 	previous := runtime.currentDisplayable
 	next := runtime.pendingDisplayable
 	runtime.currentDisplayable = next
+	if previous != next {
+		runtime.displayRevision++
+	}
 	runtime.pendingDisplayable = nil
 	runtime.displayUpdateQueued = false
 	runtime.displayMu.Unlock()

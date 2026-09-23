@@ -501,7 +501,7 @@ func runtimeFormComponentClassDefinition() runtimeJavaClass {
 
 // runtimeFormSetFocus moves the focus to the named child rather than to the
 // form, which is the whole difference between this and Component.setFocus.
-func runtimeFormSetFocus(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func runtimeFormSetFocus(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if _, err := runtimeComponentReceiver("FormComponent.setFocus", arguments, 2); err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -510,7 +510,7 @@ func runtimeFormSetFocus(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		return jvm.VoidValue(), err
 	}
 	if child != nil {
-		runtime.runtimeObjects["lwc:focus"] = child
+		return runtimeComponentSetFocus(runtime, vm, []jvm.Value{arguments[1]})
 	}
 	return jvm.VoidValue(), nil
 }

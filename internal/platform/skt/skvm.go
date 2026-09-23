@@ -88,9 +88,10 @@ type xFileData struct {
 }
 
 type xTextFieldData struct {
-	text    []rune
-	maxSize int32
-	owner   *jvm.Object
+	textRevision uint64
+	text         []rune
+	maxSize      int32
+	owner        *jvm.Object
 	// input is the keypad editor behind the field, made on the first key.
 	input *textinput.State
 	// constraints is what a MIDP TextField would restrict its input to. It is
@@ -1708,6 +1709,7 @@ func (runtime *Runtime) setXTextFieldText(_ *jvm.VM, arguments []jvm.Value) (jvm
 	if int32(len(runes)) > data.maxSize {
 		runes = runes[:data.maxSize]
 	}
+	data.textRevision++
 	data.text = runes
 	return jvm.VoidValue(), nil
 }
@@ -1737,6 +1739,7 @@ func (runtime *Runtime) setXTextFieldMaxSize(_ *jvm.VM, arguments []jvm.Value) (
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 			fmt.Sprintf("max size %d", size))
 	}
+	data.textRevision++
 	data.maxSize = size
 	if int32(len(data.text)) > size {
 		data.text = data.text[:size]
@@ -1775,10 +1778,12 @@ func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jv
 	state := runtime.skvm()
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	data.textRevision++
 	data.focus = focus
 	if focus {
 		if previous := state.focusedTextField; previous != nil && previous != receiver {
 			if previousData, ok := previous.Native.(*xTextFieldData); ok && previousData != nil {
+				previousData.textRevision++
 				previousData.focus = false
 			}
 		}
@@ -1820,6 +1825,7 @@ func (runtime *Runtime) xTextFieldInputChar(_ *jvm.VM, arguments []jvm.Value) (j
 	if int32(len(data.text)) >= data.maxSize {
 		return jvm.VoidValue(), nil
 	}
+	data.textRevision++
 	data.text = append(data.text, rune(uint16(character)))
 	return jvm.VoidValue(), nil
 }

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"context"
+	"slices"
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -71,6 +72,15 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 		return nil, backend.ErrNoTextInput
 	}
 	textValue, hasText := component.Fields[componentTextField]
+	focusRevision := component.Fields[componentFocusRevisionField]
+	var ownership []lwcTextAncestor
+	if !vendor {
+		var visible bool
+		ownership, visible = client.lwcTextOwnership(component)
+		if !visible {
+			return nil, backend.ErrNoTextInput
+		}
+	}
 	maxValue, hasMax := component.Fields[componentMaxLengthField]
 	text := componentText(component)
 	maxLength := int(componentMaxLength(component))
@@ -92,8 +102,14 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 				return backend.ErrTextInputChanged
 			}
 			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
+			if !vendor {
+				currentOwnership, visible := client.lwcTextOwnership(component)
+				if !visible || !slices.Equal(ownership, currentOwnership) {
+					return backend.ErrTextInputChanged
+				}
+			}
 			currentVendorState, currentVendorActive := client.runtime.activeVendorTextInput()
-			if client.runtime.runtimeObjects["lwc:focus"] != focus ||
+			if client.runtime.runtimeObjects["lwc:focus"] != focus || component.Fields[componentFocusRevisionField] != focusRevision ||
 				client.shellTextInput() != shellState ||
 				vendorActive != currentVendorActive ||
 				(vendorActive && !sameVendorTextInputState(currentVendorState, vendorState)) ||
@@ -115,7 +131,7 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			textEditorFor(component).SetText(replacement)
 			client.textMu.Lock()
 			if client.focusedText == component {
-				client.textEditor = textinput.New(replacement, maxLength)
+				client.textEditor = textinput.NewUTF16(replacement, maxLength)
 			}
 			client.textMu.Unlock()
 			return nil

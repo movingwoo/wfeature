@@ -81,11 +81,11 @@ func textEditorFor(receiver *jvm.Object) *textinput.State {
 	limit := int(runtimeComponentMaxLength(receiver))
 	editor, ok := receiver.Native.(*textinput.State)
 	if !ok {
-		editor = textinput.New(text, limit)
+		editor = textinput.NewUTF16(text, limit)
 		receiver.Native = editor
 		return editor
 	}
-	editor.SetMaxRunes(limit)
+	editor.SetMaxUTF16Units(limit)
 	if editor.Text() != text {
 		editor.SetText(text)
 	}

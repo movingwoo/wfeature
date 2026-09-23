@@ -384,13 +384,16 @@ func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (
 	editor := data.editor()
 	switch keyCode {
 	case KeyCodeLeft:
+		data.textRevision++
 		editor.MoveCaret(-1)
 		return jvm.VoidValue(), nil
 	case KeyCodeRight:
+		data.textRevision++
 		editor.MoveCaret(1)
 		return jvm.VoidValue(), nil
 	case KeyCodeClear:
 		editor.Backspace()
+		data.textRevision++
 		data.text = []rune(editor.Text())
 		return jvm.VoidValue(), nil
 	}
@@ -398,6 +401,7 @@ func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (
 		return jvm.VoidValue(), nil
 	}
 	if editor.Key(rune(keyCode), runtime.editorClock()) {
+		data.textRevision++
 		data.text = []rune(editor.Text())
 	}
 	return jvm.VoidValue(), nil
@@ -407,12 +411,12 @@ func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (
 // text the title set through setText.
 func (data *xTextFieldData) editor() *textinput.State {
 	if data.input == nil {
-		data.input = textinput.New(string(data.text), int(data.maxSize))
+		data.input = textinput.NewUTF16(string(data.text), int(data.maxSize))
 		return data.input
 	}
 	if data.input.Text() != string(data.text) {
 		data.input.SetText(string(data.text))
 	}
-	data.input.SetMaxRunes(int(data.maxSize))
+	data.input.SetMaxUTF16Units(int(data.maxSize))
 	return data.input
 }
