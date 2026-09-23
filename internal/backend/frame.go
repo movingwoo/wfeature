@@ -6,6 +6,9 @@ type FrameUpdate struct {
 	RGBA          []byte
 	Width, Height int
 	Scale         int
+	// Force asks the Host to present even an unchanged picture, for example
+	// after reconnecting or changing display settings. It is not guest state.
+	Force bool
 }
 
 // FrameSink offers owned frames without waiting for the Host. The Host supplies

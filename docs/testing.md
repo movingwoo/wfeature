@@ -120,6 +120,29 @@ decoder does not establish successful decoding in a real browser.
 input tests, real WebSocket route, Chromium/WebKit checks, and the separate
 server CPU probe. Its authored fixture does not establish all-game input cost.
 
+## Frame delivery
+
+`internal/webhost/frame_encoding_test.go` checks pixel changes, dimensions,
+scaling, explicit redraws under queue pressure and lifecycle-message ordering.
+Session tests preserve owned raw snapshots and the synchronous scaled-frame API.
+`BenchmarkFrameEncoding` compares unchanged and changing pictures at original
+scale and hq4x through the actual encoder goroutine; it excludes guest execution.
+
+The opt-in browser route uses repository-authored SKT and LGT fixtures:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/frame-delivery.mjs build/release/wfeature-server chromium
+```
+
+Use `webkit` for the second engine. `WFEATURE_FRAME_ARCHIVE` may name a local
+archive under `var/games` for an additional six-second original-scale probe.
+The runner uses isolated game and save directories and records results under
+`var/acceptance`. It exercises static presentation, restart, park/resume,
+reconnection, changed input frames and WIPI scale changes. A static picture
+without new PNGs is expected; the runtime must keep ticking. Measured scope and
+results are in [the CPU investigation](cpu-saturation-investigation-2026-09-23.md).
+
 ## Reading old validation
 
 [Testing history](history/testing.md) keeps detailed experiments and release

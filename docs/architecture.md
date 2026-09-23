@@ -439,10 +439,13 @@ volume changes can emit callbacks as well as `Advance`. A sink must not reenter
 the same Audio instance, because its mutex remains held. Serialized callbacks do
 not imply that every caller is the Host's frame-loop goroutine.
 
-### Owned intermediate frames
+### Owned presentation frames
 
 `FrameUpdate` is an ownership transfer, unlike borrowed `Frame` pixels. A Host
 may retain its RGBA bytes. `FrameSink.Offer` is nonblocking; the Host must detach
 the producer or stop the runtime before closing the channel. KTF sampling and
-the browser encoder use separate retained pixel storage. See
+the browser encoder use separate retained pixel storage. Ordinary server frames
+use `Session.FrameUpdate` with the same ownership and scale contract. `Force`
+requests an explicit redraw across lifecycle or display-setting boundaries;
+otherwise the encoder can omit an identical consecutive picture. See
 [session presentation](session.md#presentation-and-audio).
