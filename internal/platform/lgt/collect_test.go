@@ -443,3 +443,108 @@ func TestJavaAllocationFailureRunsACollectionAndTheRetrySucceeds(t *testing.T) {
 		t.Fatal("no surface came back")
 	}
 }
+
+// Cached pixels may outlive their Image objects, but must not prevent a new
+// image allocation once the bounded surface region fills.
+func TestJavaSurfacePressureEvictsOnlyUnusedDecodedImages(t *testing.T) {
+	client := fixtureClient(t)
+	client.surfaces = newArena(surfaceBase, 3*128)
+	runtime := client.javaRuntimeState()
+	runtime.decodedImages = make(map[string]uint32)
+	var handles []uint32
+	for _, key := range []string{"unused", "image", "graphics"} {
+		surface, err := client.newFramebuffer(8, 8, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.decodedImages[key] = surface.handle
+		handles = append(handles, surface.handle)
+	}
+	image := newCollectableObject(t, client, javaImageClass)
+	runtime.images[image] = handles[1]
+	runtime.jlet = image
+	graphics := newCollectableObject(t, client, javaGraphicsClass)
+	runtime.graphics[graphics] = newJavaGraphicsState(handles[2])
+	runtime.card = graphics
+	// Two keys can point to one cached surface; both must disappear on eviction.
+	runtime.decodedImages["alias"] = handles[0]
+	replacement, err := client.newFramebuffer(8, 8, false)
+	if err != nil {
+		t.Fatalf("unused cache prevented allocation: %v", err)
+	}
+	if replacement == nil {
+		t.Fatal("missing replacement surface")
+	}
+	for _, key := range []string{"unused", "alias"} {
+		if _, ok := runtime.decodedImages[key]; ok {
+			t.Fatalf("stale cache entry %s", key)
+		}
+	}
+	for _, key := range []string{"image", "graphics"} {
+		if handle, ok := runtime.decodedImages[key]; !ok || client.framebuffer(handle) == nil {
+			t.Fatalf("live %s surface lost", key)
+		}
+	}
+	if _, err := client.newFramebuffer(8, 8, false); err == nil {
+		t.Fatal("live surfaces did not retain the allocation bound")
+	}
+}
+
+func TestJavaEvictedImageCanBeDecodedAgain(t *testing.T) {
+	client := fixtureClient(t)
+	client.surfaces = newArena(surfaceBase, 2*128)
+	encoded := encodedTestImage(t, 8, 8)
+	key := imageDigestKey(encoded)
+	object, err := client.newSharedJavaImage(key, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := client.javaImageSurface(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pixels := append([]uint16(nil), original.pixels...)
+	client.releaseJavaPins(0)
+	collect(t, client)
+	collect(t, client)
+	// Occupy the remaining half, then force eviction of the cache-only image.
+	if _, err := client.newFramebuffer(8, 8, false); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := client.newFramebuffer(8, 8, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := client.javaRun.decodedImages[key]; ok {
+		t.Fatal("cache retained a reused surface")
+	}
+	client.releaseSurface(replacement)
+	reloaded, err := client.newSharedJavaImage(key, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, err := client.javaImageSurface(reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, pixel := range pixels {
+		if surface.pixels[i] != pixel {
+			t.Fatalf("reloaded pixel %d changed", i)
+		}
+	}
+}
+
+// A cache hit keeps its handle in a Go local while allocating the Image
+// object. Data-arena collection must not evict that not-yet-bound surface.
+func TestJavaDataPressureKeepsDecodedCacheHandles(t *testing.T) {
+	client := fixtureClient(t)
+	surface, err := client.newFramebuffer(8, 8, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.javaRuntimeState().decodedImages = map[string]uint32{"pending": surface.handle}
+	client.collectForAllocation()
+	if client.framebuffer(surface.handle) != surface {
+		t.Fatal("data pressure evicted a pending cache handle")
+	}
+}

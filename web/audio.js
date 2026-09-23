@@ -208,8 +208,12 @@ export class PageAudio {
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
       source.start(now);
       source.stop(now + 0.2);
-      this.voices.set(key, { source, gain, drum: true });
-      source.onended = () => this.voices.delete(key);
+      const voice = { source, gain, drum: true };
+      this.voices.set(key, voice);
+      source.onended = () => {
+        // A retrigger can replace this key before the older source ends.
+        if (this.voices.get(key) === voice) this.voices.delete(key);
+      };
       return;
     }
 

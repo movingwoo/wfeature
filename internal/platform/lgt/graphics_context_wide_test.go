@@ -96,3 +96,39 @@ func TestWideContextDoesNotSelectUnregisteredModules(t *testing.T) {
 		t.Fatal("fixture lost compact ABI")
 	}
 }
+
+func TestWideExclusiveClipKeepsNativeBoundsAndColorKey(t *testing.T) {
+	client := fixtureClient(t)
+	client.wideGraphicsContexts, client.wideExclusiveClip = true, true
+	pointer := writeGuest(t, client, make([]byte, wideContextSize))
+	client.initContext(pointer)
+	for i, want := range []uint32{0, 0, 16, 8} {
+		got, err := client.readWord(pointer + uint32(i)*4)
+		if err != nil || got != want {
+			t.Fatalf("initial clip[%d]=%d, %v", i, got, err)
+		}
+	}
+	// Direct native key and offset writes share a context with platform fields.
+	client.writeWord(pointer+32, 0xf81f)
+	client.writeWord(pointer+48, 0xffffffff)
+	client.writeWord(pointer+52, 2)
+	clip := writeGuest(t, client, make([]byte, 16))
+	for i, v := range []uint32{1, 2, 5, 7} {
+		client.writeWord(clip+uint32(i)*4, v)
+	}
+	callSlot(t, client, slotSetContext, pointer, grpFieldClip, clip)
+	callSlot(t, client, slotSetContext, pointer, grpFieldForeground, 0x1234)
+	gc, err := client.contextFor(context.Background(), client.thread, client.screen, pointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gc.clipWidth != 4 || gc.clipHeight != 5 || gc.foreground != 0x1234 || gc.offsetX != -1 || gc.offsetY != 2 {
+		t.Fatalf("context = %+v", gc)
+	}
+	for offset, want := range map[uint32]uint32{8: 5, 12: 7, 32: 0xf81f} {
+		got, err := client.readWord(pointer + offset)
+		if err != nil || got != want {
+			t.Fatalf("native field %d=%#x, %v", offset, got, err)
+		}
+	}
+}

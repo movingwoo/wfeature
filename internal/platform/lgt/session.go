@@ -175,9 +175,25 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 				client.saveStore = embeddedCertificate
 			}
 		}
+		if authentication == backend.AuthenticationUnsupported && embeddedCertificate == nil {
+			model, _ := client.systemProperty("PHONEMODEL")
+			if network := newCertificateMessageNetwork(archive, client.subscriberNumber, model); network != nil {
+				client.notificationNetwork = network
+				authentication = backend.AuthenticationLGTCertificateMessage
+			}
+		}
 
 		if options.Logger != nil {
 			options.Logger.Debug("authentication compatibility", "status", authentication)
+		}
+		if hasSaveIdentityCompatibility(archive.Module) {
+			if err := correctSaveSubscriberIdentity(client.core.Memory()); err != nil {
+				return nil, err
+			}
+			authentication = backend.AuthenticationLGTSaveSubscriber
+			if options.Logger != nil {
+				options.Logger.Debug("authentication compatibility", "status", authentication)
+			}
 		}
 	}
 	// A title that fails during startup takes its client with it, and the

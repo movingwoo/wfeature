@@ -264,7 +264,18 @@ func javaFileOpenOutputStream(
 func javaFileOpenInputStream(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	file := arguments[0]
+	return client.openJavaFileInputStream(thread, arguments[0], javaInputStreamClass)
+}
+
+// The typed opener uses the same file binding, with DataInputStream's vtable
+// so the returned object also serves big-endian primitive reads.
+func javaFileOpenDataInputStream(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return client.openJavaFileInputStream(thread, arguments[0], javaDataInputStreamClass)
+}
+
+func (client *Client) openJavaFileInputStream(thread *armcore.Thread, file uint32, className string) (uint32, error) {
 	_, open, err := client.javaFileHandle(file)
 	if err != nil {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": the file is not open")
@@ -276,7 +287,7 @@ func javaFileOpenInputStream(
 				": an input stream is already open on this file")
 		}
 	}
-	class, err := client.preparePlatformJavaClass(javaInputStreamClass)
+	class, err := client.preparePlatformJavaClass(className)
 	if err != nil {
 		return 0, err
 	}

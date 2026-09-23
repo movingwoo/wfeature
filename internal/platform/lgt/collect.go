@@ -616,6 +616,20 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 // a holder, because the next Image built from that picture is handed the same
 // surface.
 func (client *Client) javaSurfaceHeld(handle uint32) bool {
+	if client.javaSurfaceOwned(handle) {
+		return true
+	}
+	for _, cached := range client.javaRun.decodedImages {
+		if cached == handle {
+			return true
+		}
+	}
+	return false
+}
+
+// javaSurfaceOwned excludes the optional decode cache. Image and Graphics
+// owners include objects awaiting the collector's grace cycle.
+func (client *Client) javaSurfaceOwned(handle uint32) bool {
 	runtime := client.javaRun
 	if client.screen != nil && client.screen.handle == handle {
 		return true
@@ -630,12 +644,32 @@ func (client *Client) javaSurfaceHeld(handle uint32) bool {
 			return true
 		}
 	}
-	for _, cached := range runtime.decodedImages {
-		if cached == handle {
-			return true
+	return false
+}
+
+// evictUnusedJavaImages drops cache-only surfaces under allocation pressure.
+// Every cache alias is removed before releasing the handle for reuse.
+func (client *Client) evictUnusedJavaImages() int {
+	handles := make(map[uint32]bool)
+	for key, handle := range client.javaRun.decodedImages {
+		if !client.javaSurfaceOwned(handle) {
+			delete(client.javaRun.decodedImages, key)
+			handles[handle] = true
 		}
 	}
-	return false
+	ordered := make([]uint32, 0, len(handles))
+	for handle := range handles {
+		ordered = append(ordered, handle)
+	}
+	slices.Sort(ordered)
+	freed := 0
+	for _, handle := range ordered {
+		if surface := client.framebuffer(handle); surface != nil && !surface.screen {
+			client.releaseSurface(surface)
+			freed++
+		}
+	}
+	return freed
 }
 
 // javaFileHeld reports whether another File object still stands for the same

@@ -17,11 +17,20 @@ func hasWideGraphicsContexts(module []byte) bool {
 	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTWideGraphicsContext)
 }
 
+func hasWideExclusiveClip(module []byte) bool {
+	digest := sha256.Sum256(module)
+	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTWideExclusiveClip)
+}
+
 func (client *Client) initWideContext(pointer uint32) int32 {
 	if pointer == 0 {
 		return wipiError
 	}
 	words := [wideContextSize / 4]uint32{0, 0, uint32(client.screen.width - 1), uint32(client.screen.height - 1), 0xffff, 0, 0xff}
+	if client.wideExclusiveClip {
+		words[2]++
+		words[3]++
+	}
 	for i, word := range words {
 		if err := client.writeWord(pointer+uint32(i)*4, word); err != nil {
 			return wipiError
@@ -63,7 +72,7 @@ func (client *Client) transferWideContext(pointer, field, value, slot uint32) in
 			if err != nil {
 				return wipiError
 			}
-			if field == grpFieldClip && i >= 2 {
+			if field == grpFieldClip && i >= 2 && !client.wideExclusiveClip {
 				word++
 			}
 			if err := client.writeWord(value+i*4, word); err != nil {
@@ -78,7 +87,7 @@ func (client *Client) transferWideContext(pointer, field, value, slot uint32) in
 					return wipiError
 				}
 			}
-			if field == grpFieldClip && i >= 2 {
+			if field == grpFieldClip && i >= 2 && !client.wideExclusiveClip {
 				word--
 			}
 			if err := client.writeWord(address, word); err != nil {
@@ -98,9 +107,13 @@ func (client *Client) readWideContext(context *graphicsContext, pointer uint32) 
 		}
 		words[i] = word
 	}
+	edge := int64(1)
+	if client.wideExclusiveClip {
+		edge = 0
+	}
 	context.clipX, context.clipY = int(int32(words[0])), int(int32(words[1]))
-	context.clipWidth = int(int64(int32(words[2])) - int64(int32(words[0])) + 1)
-	context.clipHeight = int(int64(int32(words[3])) - int64(int32(words[1])) + 1)
+	context.clipWidth = int(int64(int32(words[2])) - int64(int32(words[0])) + edge)
+	context.clipHeight = int(int64(int32(words[3])) - int64(int32(words[1])) + edge)
 	context.foreground, context.background = uint16(words[4]), uint16(words[5])
 	context.offsetX, context.offsetY = int(int32(words[12])), int(int32(words[13]))
 	context.xor = words[11] != 0

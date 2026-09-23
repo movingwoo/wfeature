@@ -104,6 +104,9 @@ type javaRuntime struct {
 	// monitors are the locks `synchronized` takes, by the object each is on.
 	monitors   map[uint32]*javaMonitor
 	mainThread uint32
+	// Key callbacks can wait for a worker between compiler checkpoints.
+	keyCallback bool
+	keyChecks   uint32
 	// vectors is what each java/util/Vector holds; see java_vector.go, and
 	// databases the record stores a title has open; see java_database.go.
 	vectors map[uint32][]uint32

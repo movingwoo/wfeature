@@ -407,10 +407,14 @@ func javaStreamClose(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a stream this platform opened", arguments[0])
 	}
-	stream.Closed = true
 	// A stream opened on a File leaves that file where the reading got to; a
 	// plain one is bound to nothing and this is nothing. See java_file.go.
-	return 0, client.syncJavaStreamToFile(arguments[0])
+	if err := client.syncJavaStreamToFile(arguments[0]); err != nil {
+		return 0, err
+	}
+	delete(client.javaRun.streamFiles, arguments[0])
+	stream.Closed = true
+	return 0, nil
 }
 
 // javaStreamAvailable is `InputStream.available()`: how much is left, which for

@@ -402,7 +402,9 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 		}
 		return thread.SetRegister(0, 0)
 	case javaSVCStoreWide:
-		if err := client.storeJavaArrayWide(values[0], values[1], values[2], values[3]); err != nil {
+		// This compiler helper takes the high word before the low word,
+		// unlike the low-first array storage and long return convention.
+		if err := client.storeJavaArrayWide(values[0], values[1], values[3], values[2]); err != nil {
 			return fmt.Errorf("%w (storing into a long array: %w)", ErrJavaAppUnsupported, err)
 		}
 		return thread.SetRegister(0, 0)
@@ -428,6 +430,11 @@ func (client *Client) handleJavaSVC(ctx context.Context, thread *armcore.Thread,
 		}
 		return thread.SetRegister(0, object)
 	case javaSVCEnterMethod, javaSVCLeaveMethod:
+		if slot == javaSVCLeaveMethod {
+			if err := client.serviceJavaKeyWorkers(ctx); err != nil {
+				return err
+			}
+		}
 		// A method enters through one and leaves through the other, carrying a
 		// small constant in. Nothing reads the answer, and what the pair is for
 		// — a frame the collector can walk is the guess — does not have to be

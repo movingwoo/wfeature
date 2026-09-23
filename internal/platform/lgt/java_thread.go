@@ -76,6 +76,10 @@ type javaWorker struct {
 	// synchronized body is not parked, because nothing else may run there.
 	monitors int
 	renewals int
+	// Exception regions and call depth belong to this suspended guest thread.
+	tryFrames  []javaTryFrame
+	tryBuffers []uint32
+	callDepth  int
 	// waitSite is the address the thread last slept from, waits how many
 	// sleeps in a row came from it, and waitReported whether that wait has
 	// been reported. See noteJavaWait.
@@ -239,6 +243,30 @@ func javaThreadYield(
 // frame loop's single yield free while a spin still parks almost at once, and
 // the counter is per slice: it is cleared wherever the thread parks.
 const javaYieldBurst = 8
+
+// serviceJavaKeyWorkers lets a key callback waiting on a worker make progress.
+// Compiler boundaries provide a safe point outside an ARM execution quantum;
+// this does not change their guest return value or the overall step ceiling.
+func (client *Client) serviceJavaKeyWorkers(ctx context.Context) error {
+	runtime := client.javaRun
+	if runtime == nil || !runtime.keyCallback || client.activeJavaWorker != nil {
+		return nil
+	}
+	runtime.keyChecks++
+	if runtime.keyChecks < 64 {
+		return nil
+	}
+	runtime.keyChecks = 0
+	// Preserve the scheduler's indivisible synchronized regions. A worker
+	// cannot acquire a monitor still held by this suspended callback.
+	for _, monitor := range runtime.monitors {
+		if monitor.platform && monitor.count > 0 {
+			return nil
+		}
+	}
+	_, err := client.ServiceJavaThreads(ctx)
+	return err
+}
 
 // otherJavaWorkerReady reports whether some other guest thread could run now,
 // which is what decides whether a yield has anywhere to go.
@@ -595,8 +623,14 @@ func (client *Client) grantJavaSlice(
 		return javaWorkerEvent{done: true}, nil
 	}
 	previous := client.activeJavaWorker
+	previousTry, previousBuffers, previousDepth := client.javaTry, client.javaTryBuffers, client.javaCallDepth
 	client.activeJavaWorker = worker
-	defer func() { client.activeJavaWorker = previous }()
+	client.javaTry, client.javaTryBuffers, client.javaCallDepth = worker.tryFrames, worker.tryBuffers, worker.callDepth
+	defer func() {
+		worker.tryFrames, worker.tryBuffers, worker.callDepth = client.javaTry, client.javaTryBuffers, client.javaCallDepth
+		client.javaTry, client.javaTryBuffers, client.javaCallDepth = previousTry, previousBuffers, previousDepth
+		client.activeJavaWorker = previous
+	}()
 	// The deadline is spent the moment the slice is granted. Leaving it set
 	// would make `nextJavaThreadDue` keep reporting a wait that has already
 	// been served, and a tick would then stand for no time at all for as long

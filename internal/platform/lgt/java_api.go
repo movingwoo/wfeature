@@ -265,6 +265,8 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 		Words: 1, Implementat: javaFileOpenOutputStream},
 	"org/kwis/msp/io/File.openInputStream()Ljava/io/InputStream;": {
 		Words: 1, Implementat: javaFileOpenInputStream},
+	"org/kwis/msp/io/File.openDataInputStream()Ljava/io/DataInputStream;": {
+		Words: 1, Implementat: javaFileOpenDataInputStream},
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;)Z": {Words: 1, Implementat: javaFileExists},
 	// The form that names which directory to look in. A title here has one —
 	// its own — so the flag chooses nothing and the two forms answer the same

@@ -62,6 +62,20 @@ func javaCardRepaint(
 	return 0, nil
 }
 
+// javaRemoveCard removes the active card from the current single-card display.
+// An unrelated or null card leaves the active card and repaint request intact.
+func javaRemoveCard(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	if arguments[1] == 0 || runtime.card != arguments[1] {
+		return 0, nil
+	}
+	runtime.card = 0
+	runtime.cardDirty = false
+	return 1, nil
+}
+
 // javaRemoveAllCards is `Display.removeAllCards()`. Nothing is shown after it
 // until something is pushed again, and the platform has no card to paint.
 func javaRemoveAllCards(
@@ -177,6 +191,11 @@ func (client *Client) callJavaCardMethod(
 		return nil
 	}
 	call := append([]uint32{runtime.card}, arguments...)
+	if name == javaCardKeyMethod && client.activeJavaWorker == nil {
+		previous, checks := runtime.keyCallback, runtime.keyChecks
+		runtime.keyCallback, runtime.keyChecks = true, 0
+		defer func() { runtime.keyCallback, runtime.keyChecks = previous, checks }()
+	}
 	if _, err := client.callOn(ctx, thread, method.Body, call); err != nil {
 		// A card's callback is entered with none of the title's own handlers
 		// under it, so an exception its own loop would have caught arrives
