@@ -108,7 +108,8 @@ const color = expected => page.waitForFunction(rgb => {
   const pixel = document.querySelector("#canvas").getContext("2d").getImageData(40, 40, 1, 1).data;
   return rgb.every((value, index) => Math.abs(value - pixel[index]) < 8);
 }, expected);
-const fire = async () => { await page.locator('[data-key="OK"]').first().tap(); };
+// Both Type2 layouts contain 5, which the fixture maps to FIRE.
+const fire = async () => { await page.locator('[data-key="5"]').first().tap(); };
 const storage = () => page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([key]) => /keypad|keyBindings|frameScale/.test(key))));
 const download = async name => {
   const pending = page.waitForEvent("download"); await page.locator("#save-export").click();
