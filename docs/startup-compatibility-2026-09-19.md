@@ -273,3 +273,7 @@ and `go vet ./...` passed. Debug and release CLI/server builds succeeded.
 The temporary probe was retained as text under ignored evidence, outside Go
 package discovery. These checks do not establish offline new-character
 completion or a browser playthrough.
+
+The later [slot creation and save overlay check](ktf-save-slots-2026-09-23.md)
+validates sequential creation and restart of all six slots in both profiles,
+including the zero-based first-slot request and a save/resource path collision.

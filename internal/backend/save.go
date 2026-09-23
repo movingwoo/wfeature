@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -103,7 +104,8 @@ func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
 	return data, exists
 }
 
-// ReadSave reports absence only for a missing file, preserving all other errors.
+// ReadSave reports absence for a missing file or a path below a non-directory,
+// preserving other read errors.
 func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	if store == nil {
 		return nil, false, fmt.Errorf("save store has no root")
@@ -119,7 +121,10 @@ func (store *DirectorySaveStore) readSave(name string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	// Save keys form one overlay of the guest filesystem. A saved file may
+	// share its name with an archive directory, so looking below that file
+	// means this overlay has no entry; the archive can still supply one.
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return nil, false, nil
 	}
 	if err != nil {

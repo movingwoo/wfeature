@@ -34,3 +34,21 @@ func TestSaveRecordsRejectTrailingData(t *testing.T) {
 		t.Fatal("trailing corruption accepted")
 	}
 }
+
+func TestSaveReadBelowFileReportsMissing(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	if err := store.StoreSave("fs/state", []byte("progress")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"fs/state/asset", "fs/state/scene/asset"} {
+		if _, exists, err := ReadSave(store, name); exists || err != nil {
+			t.Fatalf("read %s = %t, %v; want missing", name, exists, err)
+		}
+	}
+	if err := store.StoreSave("fs/state/asset", []byte("invalid")); err == nil {
+		t.Fatal("write below a file succeeded")
+	}
+	if data, exists, err := ReadSave(store, "fs/state"); string(data) != "progress" || !exists || err != nil {
+		t.Fatalf("parent file = %q, %t, %v", data, exists, err)
+	}
+}

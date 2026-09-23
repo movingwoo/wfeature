@@ -92,6 +92,11 @@ ledgers before publishing changes. Multi-key changes use `SaveBatchStore`.
 The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 
+A saved file can share its name with a packaged resource directory. A lookup
+below that saved file falls through to the archive without recording a storage
+failure. The bounded local slot service also accepts the first, zero-based
+slot. See [slot creation and save overlay evidence](ktf-save-slots-2026-09-23.md).
+
 ## Diagnostics and limits
 
 Use [CLI commands](cli.md) for `runktf`, `ktfdump`, routes, imports, profiles,

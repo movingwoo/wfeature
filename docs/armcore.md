@@ -12,6 +12,10 @@ Execution is serialized per instruction quantum. At SVC, the core saves the
 thread context and releases its execution lock before calling the runtime.
 Nested calls derive a temporary context, pass arguments in registers and a
 bounded stack tail, and preserve the outer registers on return.
+`Thread.LiveContexts` includes every active derived call as well as the
+logical thread's own context. At a parked execution boundary, collectors must
+scan all of these contexts: an object address can live only in a nested
+call's register. Calls leave this set on return, error, or cancellation.
 
 Selected aligned guest words can be registered as logical-thread state.
 Nested calls inherit that state; unrelated threads keep private values. KTF
