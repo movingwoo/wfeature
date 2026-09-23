@@ -93,6 +93,11 @@ append-only because the component interface cannot return its existing value.
 SKT tracks revisions for screens, command overlays, selected Form children,
 field values, limits and constraints, and vendor focus. Restoring an earlier
 state does not revive its pending Host edit.
+An XTextField with a placeholder constructor Canvas is also supported after
+the focused field paints directly onto the current screen. Offscreen painting
+does not qualify; focus and display changes invalidate that evidence. Host
+commits repaint the visible Canvas. See the
+[SKT name-input regression](skt-name-input-2026-09-23.md).
 LGT supports a focused LWC TextField or TextBox whose parent chain reaches a
 shown Shell. Shell visibility and focus changes invalidate pending edits; field
 and listener revisions also reject guest changes that restore an earlier value.

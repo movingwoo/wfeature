@@ -1,7 +1,7 @@
 // Opt-in browser checks for unchanged frames and explicit redraw boundaries.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
@@ -182,5 +182,6 @@ try {
   }
   writeFileSync(join(output, "server.log"), logs);
   writeFileSync(join(output, "result.json"), JSON.stringify(result, null, 2));
+  rmSync(ext, { recursive: true, force: true });
   console.log(`Frame delivery report: ${output}`);
 }
