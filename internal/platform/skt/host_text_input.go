@@ -115,7 +115,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	vendor := runtime.skvm()
 	vendor.mu.Lock()
 	field := vendor.focusedTextField
-	if data, ok := nativeXTextField(field); ok && data.focus && data.owner == current &&
+	if data, ok := nativeXTextField(field); ok && data.focus && data.visibleOn(current, displayRevision) &&
 		data.constraints&textFieldUneditable == 0 {
 		target := hostTextTarget{
 			kind: hostXTextField, display: current, field: field, original: string(data.text),
@@ -476,7 +476,7 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 	state := runtime.skvm()
 	state.mu.Lock()
 	data, ok := nativeXTextField(target.field)
-	if !ok || data.textRevision != target.revision || state.focusedTextField != target.field || !data.focus || data.owner != target.display ||
+	if !ok || data.textRevision != target.revision || state.focusedTextField != target.field || !data.focus || !data.visibleOn(target.display, target.displayRevision) ||
 		string(data.text) != target.original || data.maxSize != target.maxSize || data.constraints != target.constraint ||
 		data.constraints&textFieldUneditable != 0 {
 		state.mu.Unlock()
@@ -495,8 +495,14 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 	}
 	state.mu.Unlock()
 	runtime.textMu.Unlock()
-	_, err := runtime.VM.InvokeVirtual(target.field, "repaint", "()V")
-	return err
+	if _, err := runtime.VM.InvokeVirtual(target.field, "repaint", "()V"); err != nil {
+		return err
+	}
+	return runtime.repaintNewCurrentCanvas(target.display)
+}
+
+func (data *xTextFieldData) visibleOn(display *jvm.Object, revision uint64) bool {
+	return data.owner == display || data.paintedDisplay == display && data.paintedDisplayRevision == revision
 }
 
 func nativeXTextField(field *jvm.Object) (*xTextFieldData, bool) {

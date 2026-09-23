@@ -92,6 +92,10 @@ type xTextFieldData struct {
 	text         []rune
 	maxSize      int32
 	owner        *jvm.Object
+	// Some callers supply a placeholder Canvas and paint the field themselves.
+	// Direct screen painting proves which display currently presents the field.
+	paintedDisplay         *jvm.Object
+	paintedDisplayRevision uint64
 	// input is the keypad editor behind the field, made on the first key.
 	input *textinput.State
 	// constraints is what a MIDP TextField would restrict its input to. It is
@@ -1780,6 +1784,7 @@ func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jv
 	defer state.mu.Unlock()
 	data.textRevision++
 	data.focus = focus
+	data.paintedDisplay = nil
 	if focus {
 		if previous := state.focusedTextField; previous != nil && previous != receiver {
 			if previousData, ok := previous.Native.(*xTextFieldData); ok && previousData != nil {
@@ -1831,6 +1836,10 @@ func (runtime *Runtime) xTextFieldInputChar(_ *jvm.VM, arguments []jvm.Value) (j
 }
 
 func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	context, err := graphicsReceiver(arguments[1:])
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	runtime.textMu.Lock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
@@ -1839,11 +1848,13 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	text := append([]rune(nil), data.text...)
 	x, y := data.x, data.y
-	runtime.textMu.Unlock()
-	context, err := graphicsReceiver(arguments[1:])
-	if err != nil {
-		return jvm.VoidValue(), err
+	if data.focus && context.screen == &runtime.renderMu {
+		runtime.displayMu.RLock()
+		data.paintedDisplay = runtime.currentDisplayable
+		data.paintedDisplayRevision = runtime.displayRevision
+		runtime.displayMu.RUnlock()
 	}
+	runtime.textMu.Unlock()
 	font, err := fontReceiver(context.font)
 	if err != nil || font == nil {
 		font, _ = fontReceiver(runtime.fontObject(fontSystem, fontPlain, fontMedium))
