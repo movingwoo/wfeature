@@ -95,6 +95,9 @@ const (
 type outboundMessage struct {
 	text   string
 	binary []byte
+	// A forced picture must follow the lifecycle messages already queued
+	// for it, so a reconnecting page can accept its only unchanged frame.
+	redraw bool
 }
 
 // serveSession upgrades the connection and runs one game on it.
@@ -162,6 +165,9 @@ type sessionRunner struct {
 	label     string
 	platform  string
 	presented uint64
+	// forceFrame survives a full frame queue until an explicit redraw is
+	// accepted. A static game may never flush again to retry it for us.
+	forceFrame bool
 	// saveDirectory is the claim this session holds on the game's saves for
 	// as long as it has the game; see saveclaim.go. Empty for a game with no
 	// saves of its own.
@@ -330,14 +336,25 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers}
 	buffer := &bytes.Buffer{}
 	scaler := &hqx.Scaler{}
+	var previous pendingFrame
 	for frame := range r.frames {
+		if frame.Scale < 1 {
+			frame.Scale = 1
+		}
+		if !frame.Force && frame.Width == previous.Width && frame.Height == previous.Height &&
+			frame.Scale == previous.Scale && bytes.Equal(frame.RGBA, previous.RGBA) {
+			continue
+		}
+		// Each queued frame owns its pixels. Keep the raw picture for the
+		// next comparison; scaling below produces a separate buffer.
+		raw := frame
 		if frame.Scale > 1 {
 			pixels, width, height, err := scaler.ScaleRGBA(frame.RGBA, frame.Width, frame.Height, frame.Scale)
 			if err != nil {
 				r.server.logger.Warn("frame could not be scaled", "error", err)
-				continue
+			} else {
+				frame.RGBA, frame.Width, frame.Height = pixels, width, height
 			}
-			frame.RGBA, frame.Width, frame.Height = pixels, width, height
 		}
 		picture := &image.RGBA{
 			Pix:    frame.RGBA,
@@ -354,7 +371,8 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 		// pushFrame drop the next one rather than queue it.
 		encoded := append([]byte(nil), buffer.Bytes()...)
 		select {
-		case r.outFrames <- outboundMessage{binary: encoded}:
+		case r.outFrames <- outboundMessage{binary: encoded, redraw: frame.Force}:
+			previous = raw
 		case <-r.writerDone:
 			return
 		case <-ctx.Done():
@@ -392,7 +410,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 		r.ticks++
 		r.tickTotal += time.Since(entered)
 
-		if progress.Flushes != r.presented {
+		if progress.Flushes != r.presented || r.forceFrame {
 			r.presented = progress.Flushes
 			r.pushFrame()
 		}
@@ -572,6 +590,7 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 			// The next frame is the magnified one, and the game may not draw
 			// again for a while, so the current picture is resent at the new
 			// size rather than leaving the page on the old one.
+			r.forceFrame = true
 			r.pushFrame()
 		}
 	case clientCheat:
@@ -762,6 +781,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
 	// A game that painted while starting has a picture already.
 	r.presented = started.Flushes()
+	r.forceFrame = true
 	r.pushFrame()
 	r.flushAudio()
 }
@@ -836,6 +856,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 		if r.token == message.Token {
 			identity := r.started
 			r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
+			r.forceFrame = true
 			r.pushFrame()
 		} else {
 			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "stop the current game before resuming another"})
@@ -914,6 +935,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
 	// The game did not move while it was parked, so the picture it had is the
 	// picture to show — the page has nothing on its canvas after reconnecting.
+	r.forceFrame = true
 	r.pushFrame()
 	r.flushAudio()
 }
@@ -927,6 +949,7 @@ func (r *sessionRunner) stopGame() {
 		r.game.Close()
 	}
 	r.game = nil
+	r.forceFrame = false
 	r.server.releaseSaveDirectory(r.saveDirectory)
 	r.saveDirectory = ""
 	r.endGameContext()
@@ -948,16 +971,16 @@ func (r *sessionRunner) pushFrame() {
 	if r.game == nil {
 		return
 	}
-	rgba, width, height, ok := r.game.Frame()
+	frame, ok := r.game.FrameUpdate()
 	if !ok {
 		return
 	}
-	// The frame is handed straight to the encoder's goroutine: session.Frame
-	// answers with bytes that are the caller's, so copying them here would be
-	// copying a copy — a third of a megabyte per frame, made only to be
-	// collected.
+	// Scaling and duplicate detection belong to the encoder. A full queue
+	// must not make the emulator magnify a picture that will be discarded.
+	frame.Force = r.forceFrame
 	select {
-	case r.frames <- pendingFrame{RGBA: rgba, Width: width, Height: height}:
+	case r.frames <- frame:
+		r.forceFrame = false
 	default:
 		r.skipped++
 	}
@@ -1303,18 +1326,7 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 	// notice eventually; a dead socket does not deserve a core until it does.
 	defer cancel()
 	defer close(r.writerDone)
-	for {
-		var message outboundMessage
-		select {
-		case <-ctx.Done():
-			return
-		case message = <-r.outFrames:
-		case message = <-r.outText:
-		}
-		// Text and pictures are ordered against themselves but not against
-		// each other, which costs nothing: a picture carries no reference to
-		// any message, and a frame that arrives just after the game said it
-		// had exited is the last thing the player saw either way.
+	write := func(message outboundMessage) bool {
 		_ = r.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
 		var err error
 		if message.binary != nil {
@@ -1326,11 +1338,35 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 			if !errors.Is(err, wsproto.ErrClosed) {
 				r.server.logger.Debug("session write failed", "error", err)
 			}
-			return
+			return false
 		}
 		if message.binary != nil {
 			r.frameBytes.Add(uint64(len(message.binary)))
 			r.sent.Add(1)
+		}
+		return true
+	}
+	for {
+		var message outboundMessage
+		select {
+		case <-ctx.Done():
+			return
+		case message = <-r.outFrames:
+		case message = <-r.outText:
+		}
+		if message.redraw {
+			// Start/resume queues its answer before the forced picture. Drain
+			// that existing prefix first; a static game owes no later frame
+			// to recover one the page ignored before receiving the answer.
+			// Snapshot the count so incoming audio cannot starve the picture.
+			for pending := len(r.outText); pending > 0; pending-- {
+				if !write(<-r.outText) {
+					return
+				}
+			}
+		}
+		if !write(message) {
+			return
 		}
 	}
 }

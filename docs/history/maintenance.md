@@ -134,9 +134,12 @@ The following are candidates, not speed claims or approved large rewrites:
   [ktf.md](ktf.md#implementation-ktf-platform-implementation-status), "The two allocations a busy session made".
 - KTF/LGT frame getters and the SKT memory framebuffer still return copied
   pixels. A 240 by 320 RGBA frame is 307,200 bytes; at twenty copies per second
-  that is 6,144,000 bytes per session before encoding. Establish current cost
-  before changing ownership. `internal/backend/framebuffer.go` explicitly
-  requires retained presentation bytes to be copied.
+  that is 6,144,000 bytes per copy site before encoding. The
+  [2026-09-23 remeasurement](../cpu-saturation-investigation-2026-09-23.md#frame-copy-remeasurement)
+  found high allocation share but low copy time and GC CPU in one KTF server
+  scene. Retain ownership unless a relevant workload establishes material CPU
+  cost. `internal/backend/framebuffer.go` explicitly requires retained
+  presentation bytes to be copied.
 - `walkGuestStack` and `encodeProfileKey` in `internal/armcore/profile.go` still
   allocate a stack and encode it as a string key. The old 2,000-tick debug
   observation attributed roughly 1.1 million objects to this path. That is

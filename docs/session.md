@@ -47,10 +47,21 @@ Quick save/load work remains paused. Guest-written saves survive normally.
 
 ## Presentation and audio
 
-Ordinary ticks use the platform frame path. Encoding runs separately with a
-bounded one-frame queue, allowing stale frames to be dropped under backpressure.
+Ordinary ticks use `Session.FrameUpdate`, which transfers owned, unscaled pixels
+and a presentation scale. Scaling and PNG encoding run on the encoder goroutine
+behind a bounded one-frame queue. A discarded picture therefore costs no scaling
+work on the emulator goroutine. The synchronous `Session.Frame` API still returns
+already-scaled pixels for other Hosts; MIDP surfaces remain at their native size.
 The page decodes PNGs and draws them; it does not execute guest instructions.
 Speed and scaling are distinct settings.
+
+The encoder compares consecutive raw pictures, dimensions and scale before
+scaling or encoding. An unchanged picture needs no new PNG or network message;
+guest callbacks, timers and drawing still execute. A static screen may therefore
+report zero delivered frames per second while guest ticks continue normally.
+Start, resume and display-setting changes force presentation even when pixels
+match. That request survives a full queue until accepted, and its queued lifecycle
+answer is written before the forced PNG. The page needs no new wire format.
 
 KTF additionally offers explicit LCD flushes through `backend.FrameSink` and
 `session.Options.FrameUpdates`, including while startup or a long callback holds
@@ -61,8 +72,10 @@ the pull-only path. No timer invents a flush that guest code did not request.
 
 Parking detaches the sink before its queue closes; resume installs the new
 queue before guest execution resumes. Intermediate frames use the same PNG wire
-format. Synthetic tests cover these boundaries; they are not real-game timing
-or physical-browser acceptance measurements.
+format. [The CPU investigation](cpu-saturation-investigation-2026-09-23.md)
+records component benchmarks, authored-fixture Chromium/WebKit checks and a
+bounded local KTF browser run. These do not establish all-game performance or
+physical-phone acceptance.
 
 Audio uses shared backend timelines. The page's synthesizer consumes audio
 messages, subject to browser audio activation. Borrowed PCM/SysEx slices must
