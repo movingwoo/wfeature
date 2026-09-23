@@ -1677,7 +1677,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 		table, function, runtime.callerSite(thread))
 }
 
-// The MC_GrpContext record is 52 bytes: mask, four 16-bit clip bounds, the
+// The MC_GrpContext record is 52 bytes: clip flag, four 16-bit clip bounds, the
 // foreground/background/transparent pixels, alpha, a 16-bit x/y offset pair,
 // the pixel-op function with its parameter, one reserved word, font, and
 // style.
@@ -1779,6 +1779,16 @@ func (runtime *initializationRuntime) wipicAccessGraphicsContext(thread *armcore
 	switch operation {
 	case 0:
 		accessErr = transferInts(4, 4) // clip bounds
+		if set && accessErr == nil {
+			// The SDK checks this word before reading the clip through
+			// GetContext. Leaving it zero makes nested drawing restore the
+			// full surface instead of the caller's clipping rectangle.
+			var enabled uint32
+			if value != 0 {
+				enabled = 1
+			}
+			accessErr = runtime.writeWord(contextAddress, enabled)
+		}
 	case 1:
 		accessErr = transfer(12, 4, false) // foreground pixel
 	case 2:

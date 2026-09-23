@@ -611,6 +611,12 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 	}
 	client.run.Lock()
 	defer client.run.Unlock()
+	return client.serviceTimersLocked(ctx, limit)
+}
+
+// serviceTimersLocked also lets a Host text commit finish a timer-owned key
+// delivery without releasing the guest execution lock between characters.
+func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, error) {
 	if client.runtime == nil {
 		return 0, fmt.Errorf("KTF client initialization has not completed")
 	}
@@ -687,6 +693,9 @@ func (client *Client) ServiceTimers(ctx context.Context, limit int) (int, error)
 		)
 		client.servingDue = time.Time{}
 		client.activeTimer = nil
+		if input := &client.runtime.cInput; input.timerPointer == timer.pointer && input.timerCallback == timer.callback {
+			input.clearPending = false
+		}
 		// Only the same rearmed callback inherits its repaint cadence.
 		for i := range client.runtime.pendingTimers {
 			next := &client.runtime.pendingTimers[i]

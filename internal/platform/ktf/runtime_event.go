@@ -431,13 +431,17 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	// External key actions invalidate snapshots even if the C widget does not
 	// call its input method (for example, dismissing the name dialog).
 	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
+		runtime.cInput.discardCarrier = false
+		runtime.cInput.clearPending = key == KeyClear && (runtime.cInput.active || runtime.cInput.clearPending) && runtime.cInput.timerCallback != 0
 		runtime.cInput.revision++
 		activations, calls := runtime.cInput.activations, runtime.cInput.calls
 		defer func() {
 			// CLR edits the current field even when its only IM call flushes
-			// composition. Other keys need evidence of continued text editing.
+			// composition. A recognized controller can also prove that an
+			// ignored confirmation left the editor open. Other callers still
+			// need input-method activity to establish continued editing.
 			if runtime.cInput.activations == activations && !(key == KeyClear && runtime.cInput.calls > calls) {
-				runtime.cInput.active = false
+				runtime.cInput.active = runtime.cInput.owner.current(runtime)
 			}
 		}()
 	}
