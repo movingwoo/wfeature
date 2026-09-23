@@ -104,6 +104,11 @@ consumption before returning. Deferred CLR flushes retain the active editor.
 General guest event loops remain unsupported. See the
 [initial implementation](ktf-c-input-bitmap-investigation.md) and
 [timer delivery and clipping regression](ktf-graphics-input-qa-2026-09-23.md).
+A recognized C controller also preserves availability after an ignored empty
+confirmation. Its live state blocks input while a validation message covers the
+editor, permits a fresh edit on return, and blocks input after acceptance.
+Unknown callers keep the conservative input-method-activity requirement. See
+the [controller lifetime regression](ktf-input-lifetime-2026-09-23.md).
 
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value

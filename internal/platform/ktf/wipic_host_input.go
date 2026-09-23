@@ -20,10 +20,18 @@ const maxCInputLength = 64
 func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 	runtime := client.runtime
 	state := &runtime.cInput
+	if state.owner.address != 0 {
+		active := state.owner.current(runtime)
+		if state.active != active {
+			state.active = active
+			state.revision++
+		}
+	}
 	if !state.active || runtime.guestEventLoop || len(runtime.displayCards) == 0 || state.card != runtime.cInputCard() {
 		return nil, backend.ErrNoTextInput
 	}
 	revision, mode := state.revision, state.mode
+	owner := state.owner
 	cards := len(runtime.displayCards)
 	card := runtime.displayCards[cards-1]
 	shell := client.shellTextInput()
@@ -42,6 +50,7 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 				}
 				currentVendor, currentVendorActive := runtime.activeVendorTextInput()
 				return runtime.runtimeObjects["lwc:focus"] == focus && client.shellTextInput() == shell &&
+					state.owner == owner && (owner.address == 0 || owner.current(runtime)) &&
 					currentVendorActive == vendorActive && (!vendorActive || sameVendorTextInputState(vendor, currentVendor)) &&
 					!runtime.guestEventLoop && state.active && state.revision == revision && state.mode == mode &&
 					len(runtime.displayCards) == cards && runtime.displayCards[cards-1] == card

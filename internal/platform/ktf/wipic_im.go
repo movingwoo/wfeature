@@ -45,6 +45,7 @@ func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore
 		if mode >= uint32(len(inputModes)) {
 			return 0, nil
 		}
+		runtime.rememberCInputOwner(thread)
 		runtime.cInput.mode = mode
 		runtime.cInput.activations++
 		runtime.cInput.active = true
@@ -97,6 +98,7 @@ func (runtime *initializationRuntime) inputModeTable() (uint32, error) {
 // through the widget's existing key callback, but cannot replace its value.
 type cInputState struct {
 	card                        *jvm.Object
+	owner                       cInputOwner
 	active                      bool
 	mode                        uint32
 	revision                    uint64

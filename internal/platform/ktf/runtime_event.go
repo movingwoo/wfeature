@@ -437,9 +437,11 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 		activations, calls := runtime.cInput.activations, runtime.cInput.calls
 		defer func() {
 			// CLR edits the current field even when its only IM call flushes
-			// composition. Other keys need evidence of continued text editing.
+			// composition. A recognized controller can also prove that an
+			// ignored confirmation left the editor open. Other callers still
+			// need input-method activity to establish continued editing.
 			if runtime.cInput.activations == activations && !(key == KeyClear && runtime.cInput.calls > calls) {
-				runtime.cInput.active = false
+				runtime.cInput.active = runtime.cInput.owner.current(runtime)
 			}
 		}()
 	}
