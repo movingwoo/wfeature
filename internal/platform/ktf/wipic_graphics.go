@@ -188,22 +188,23 @@ func (runtime *initializationRuntime) wipicImageFramebuffer(handle uint32) (uint
 // framebuffer's own coordinates: the top-left corner is inside it and the
 // bottom-right corner is not, which is what the specification says.
 //
-// A context that has never been given one holds zeroes, because
-// MC_grpInitContext zeroes the record and nothing there knows what framebuffer
-// the context will be used against. An empty rectangle therefore means "no
-// clip" rather than "draw nothing" — the reading that keeps a title which
-// never sets one drawing exactly as it did.
+// The leading context word distinguishes an explicitly empty clip from a
+// disabled clip. Nonempty bounds also remain usable in directly written
+// contexts whose caller does not populate that word.
 type wipicClip struct {
 	left, top, right, bottom int32
+	enabled                  bool
 }
 
 func (clip wipicClip) empty() bool {
 	return clip.right <= clip.left || clip.bottom <= clip.top
 }
 
+func (clip wipicClip) active() bool { return clip.enabled || !clip.empty() }
+
 // contains reports whether one pixel survives the clip.
 func (clip wipicClip) contains(x, y int32) bool {
-	if clip.empty() {
+	if !clip.active() {
 		return true
 	}
 	return x >= clip.left && x < clip.right && y >= clip.top && y < clip.bottom
@@ -229,7 +230,7 @@ func (framebuffer wipicFramebuffer) clipRect(clip wipicClip, x, y, width, height
 	if bottom > int64(framebuffer.height) {
 		bottom = int64(framebuffer.height)
 	}
-	if !clip.empty() {
+	if clip.active() {
 		if int64(clip.left) > int64(x) {
 			x = clip.left
 		}
@@ -266,15 +267,16 @@ func (runtime *initializationRuntime) wipicReadContextClip(contextAddress uint32
 	if contextAddress == 0 {
 		return wipicClip{}, nil
 	}
-	words, err := runtime.readAOTWords(contextAddress+4, 2, "graphics context clip")
+	words, err := runtime.readAOTWords(contextAddress, 3, "graphics context clip")
 	if err != nil {
 		return wipicClip{}, err
 	}
 	return wipicClip{
-		left:   int32(int16(words[0])),
-		top:    int32(int16(words[0] >> 16)),
-		right:  int32(int16(words[1])),
-		bottom: int32(int16(words[1] >> 16)),
+		enabled: words[0] != 0,
+		left:    int32(int16(words[1])),
+		top:     int32(int16(words[1] >> 16)),
+		right:   int32(int16(words[2])),
+		bottom:  int32(int16(words[2] >> 16)),
 	}, nil
 }
 

@@ -431,6 +431,8 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	// External key actions invalidate snapshots even if the C widget does not
 	// call its input method (for example, dismissing the name dialog).
 	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
+		runtime.cInput.discardCarrier = false
+		runtime.cInput.clearPending = key == KeyClear && (runtime.cInput.active || runtime.cInput.clearPending) && runtime.cInput.timerCallback != 0
 		runtime.cInput.revision++
 		activations, calls := runtime.cInput.activations, runtime.cInput.calls
 		defer func() {

@@ -94,7 +94,9 @@ edit token. No game-specific field size or guest-memory offset is hard-coded.
 Key activity, mode changes, flushing, card replacement, a newly focused Java
 editor, shutdown and successful submission invalidate existing snapshots. A
 callback that no longer routes to the C input method rejects the edit. Queued
-guest event loops remain unsupported: commits require synchronous consumption.
+guest event loops remain unsupported: commits require consumption before
+returning. The later [timer-delivery correction](ktf-graphics-input-qa-2026-09-23.md)
+also supports cards that defer keys and CLR flushing to their owning C timer.
 
 ## Validation
 

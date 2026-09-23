@@ -49,6 +49,8 @@ func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore
 		runtime.cInput.activations++
 		runtime.cInput.active = true
 		runtime.cInput.card = runtime.cInputCard()
+		runtime.cInput.clearPending = false
+		runtime.rememberCInputTimer()
 		runtime.cInput.revision++
 		return 1, nil
 	case wipicIMGetCurrentMode:
@@ -94,13 +96,25 @@ func (runtime *initializationRuntime) inputModeTable() (uint32, error) {
 // A C widget owns its value and cursor. The Host can append completed text
 // through the widget's existing key callback, but cannot replace its value.
 type cInputState struct {
-	card        *jvm.Object
-	active      bool
-	mode        uint32
-	revision    uint64
-	calls       uint64
-	activations uint64
-	pending     []byte
+	card                        *jvm.Object
+	active                      bool
+	mode                        uint32
+	revision                    uint64
+	calls                       uint64
+	activations                 uint64
+	pending                     []byte
+	pendingValid                func() bool
+	discardCarrier              bool
+	clearPending                bool
+	timerPointer, timerCallback uint32
+}
+
+func (runtime *initializationRuntime) rememberCInputTimer() {
+	runtime.cInput.timerPointer, runtime.cInput.timerCallback = 0, 0
+	if timer := runtime.client.activeTimer; timer != nil {
+		runtime.cInput.timerPointer = timer.pointer
+		runtime.cInput.timerCallback = timer.callback
+	}
 }
 
 const cInputCarrier int32 = '0'
@@ -132,12 +146,18 @@ func (runtime *initializationRuntime) wipicHandleInput(thread *armcore.Thread) (
 		}
 	}
 	state := &runtime.cInput
-	host := len(state.pending) != 0 && byte(args[0]) == byte(cInputCarrier) && args[1] == cInputPressed
+	host := (len(state.pending) != 0 || state.discardCarrier) && byte(args[0]) == byte(cInputCarrier) && args[1] == cInputPressed
 	state.calls++
 	if !host {
+		// A queued CLR may flush composition only after keyNotify returns.
+		// Restore availability only in its owning timer and visible card.
+		timer := runtime.client.activeTimer
+		clearing := state.clearPending && timer != nil && state.card == runtime.cInputCard() &&
+			timer.pointer == state.timerPointer && timer.callback == state.timerCallback
+		runtime.rememberCInputTimer()
 		state.revision++
 		// Flushing finishes composition; it does not dismiss the widget.
-		if byte(args[0]) != cInputFlush {
+		if byte(args[0]) != cInputFlush || clearing {
 			state.active = true
 			state.activations++
 			state.card = runtime.cInputCard()
@@ -145,7 +165,16 @@ func (runtime *initializationRuntime) wipicHandleInput(thread *armcore.Thread) (
 	}
 	var value []byte
 	if host {
-		value = state.pending
+		valid := state.pendingValid == nil || state.pendingValid()
+		if timer := runtime.client.activeTimer; timer != nil && state.timerCallback != 0 {
+			valid = valid && timer.pointer == state.timerPointer && timer.callback == state.timerCallback
+		}
+		if !valid {
+			state.revision++
+		} else if !state.discardCarrier {
+			value = state.pending
+		}
+		state.discardCarrier = false
 	} else if state.mode == 3 &&
 		args[1] == cInputPressed && args[0] >= '0' && args[0] <= '9' {
 		value = []byte{byte(args[0])}

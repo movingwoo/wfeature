@@ -98,7 +98,12 @@ successive guest callbacks, so a small completion buffer does not restrict the
 whole field to one or two characters. The guest retains its field-length policy.
 CLR invalidates the old edit snapshot while keeping an editor that flushes its
 composition available for another submission. Key and editor lifecycle changes
-invalidate pending edits; queued guest event loops are not supported. See the [implementation and local replay](ktf-c-input-bitmap-investigation.md).
+invalidate pending edits. Cards that defer keys to the C timer owning their
+input method are supported: the commit waits for that timer and verifies
+consumption before returning. Deferred CLR flushes retain the active editor.
+General guest event loops remain unsupported. See the
+[initial implementation](ktf-c-input-bitmap-investigation.md) and
+[timer delivery and clipping regression](ktf-graphics-input-qa-2026-09-23.md).
 
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value
