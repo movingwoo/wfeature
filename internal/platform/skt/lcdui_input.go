@@ -50,6 +50,7 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 		switch {
 		case len(commands) > 2:
 			state.mu.Lock()
+			data.menuRevision++
 			data.menuOpen = true
 			data.menuIndex = 0
 			state.mu.Unlock()
@@ -81,10 +82,12 @@ func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, k
 	// keypad table instead. Without that neither "ghi" nor "mno" is typable.
 	switch keyCode {
 	case KeyCodeLeft:
+		content.textRevision++
 		editor.MoveCaret(-1)
 		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	case KeyCodeRight:
+		content.textRevision++
 		editor.MoveCaret(1)
 		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
@@ -97,6 +100,7 @@ func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, k
 		runtime.textMu.Unlock()
 		return nil
 	}
+	content.textRevision++
 	content.text = []rune(editor.Text())
 	content.caret = editor.Caret()
 	runtime.textMu.Unlock()
@@ -107,13 +111,13 @@ func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, k
 // step with a value the application set programmatically.
 func (runtime *Runtime) textEditor(content *screenData) *textinput.State {
 	if content.input == nil {
-		content.input = textinput.New(string(content.text), int(content.maxSize))
+		content.input = textinput.NewUTF16(string(content.text), int(content.maxSize))
 		return content.input
 	}
 	if content.input.Text() != string(content.text) {
 		content.input.SetText(string(content.text))
 	}
-	content.input.SetMaxRunes(int(content.maxSize))
+	content.input.SetMaxUTF16Units(int(content.maxSize))
 	return content.input
 }
 
@@ -139,6 +143,7 @@ func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData,
 	case isFireKey(keyCode) || keyCode == KeyCodeSoft1:
 		state.mu.Lock()
 		index := data.menuIndex
+		data.menuRevision++
 		data.menuOpen = false
 		state.mu.Unlock()
 		if err := runtime.queueScreenPaint(screen); err != nil {
@@ -150,6 +155,7 @@ func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData,
 		return nil
 	case keyCode == KeyCodeSoft2:
 		state.mu.Lock()
+		data.menuRevision++
 		data.menuOpen = false
 		state.mu.Unlock()
 		return runtime.queueScreenPaint(screen)
@@ -222,10 +228,12 @@ func (runtime *Runtime) handleFormKey(screen *jvm.Object, content *screenData, k
 	}
 	switch {
 	case isUpKey(keyCode):
+		content.textRevision++
 		content.selection = runtime.previousFocusableItem(content)
 		content.subSelection = 0
 		return runtime.queueScreenPaint(screen)
 	case isDownKey(keyCode):
+		content.textRevision++
 		content.selection = runtime.nextFocusableItem(content)
 		content.subSelection = 0
 		return runtime.queueScreenPaint(screen)

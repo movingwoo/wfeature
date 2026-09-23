@@ -21,15 +21,18 @@ const (
 )
 
 type hostTextTarget struct {
-	kind       hostTextTargetKind
-	display    *jvm.Object
-	field      *jvm.Object
-	original   string
-	maxSize    int32
-	constraint int32
-	size       int32
-	caret      int32
-	revision   uint64
+	kind            hostTextTargetKind
+	display         *jvm.Object
+	field           *jvm.Object
+	original        string
+	maxSize         int32
+	constraint      int32
+	size            int32
+	caret           int32
+	revision        uint64
+	displayRevision uint64
+	menuRevision    uint64
+	screenRevision  uint64
 }
 
 // TextInput exposes the active field to a Host keyboard or IME. The snapshot
@@ -55,6 +58,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	runtime.textMu.Lock()
 	runtime.displayMu.RLock()
 	current := runtime.currentDisplayable
+	displayRevision := runtime.displayRevision
 	runtime.displayMu.RUnlock()
 	if current == nil {
 		runtime.textMu.Unlock()
@@ -64,6 +68,10 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	state := runtime.lcdui()
 	state.mu.Lock()
 	display := state.displayables[current]
+	var menuRevision uint64
+	if display != nil {
+		menuRevision = display.menuRevision
+	}
 	if display != nil && display.menuOpen {
 		state.mu.Unlock()
 		runtime.textMu.Unlock()
@@ -76,6 +84,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 			if screen.constraint&textFieldUneditable == 0 {
 				target := hostTextTarget{
 					kind: hostTextBox, display: current, original: string(screen.text),
+					displayRevision: displayRevision, menuRevision: menuRevision, revision: screen.textRevision,
 					maxSize: screen.maxSize, constraint: screen.constraint,
 				}
 				result := hostTextInput(runtime, target, screen.maxSize, screen.constraint, true)
@@ -90,6 +99,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 					data.constraint&textFieldUneditable == 0 {
 					target := hostTextTarget{
 						kind: hostFormTextField, display: current, field: field, original: string(data.text),
+						displayRevision: displayRevision, menuRevision: menuRevision, revision: data.textRevision, screenRevision: screen.textRevision,
 						maxSize: data.maxSize, constraint: data.constraint,
 					}
 					result := hostTextInput(runtime, target, data.maxSize, data.constraint, false)
@@ -109,6 +119,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 		data.constraints&textFieldUneditable == 0 {
 		target := hostTextTarget{
 			kind: hostXTextField, display: current, field: field, original: string(data.text),
+			displayRevision: displayRevision, menuRevision: menuRevision, revision: data.textRevision,
 			maxSize: data.maxSize, constraint: data.constraints,
 		}
 		result := hostTextInput(runtime, target, data.maxSize, data.constraints, false)
@@ -123,7 +134,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	if component == nil {
 		return nil, backend.ErrNoTextInput
 	}
-	return runtime.hostTextComponentInput(current, component, revision)
+	return runtime.hostTextComponentInput(current, component, revision, displayRevision, menuRevision)
 }
 
 func hostTextInput(runtime *Runtime, target hostTextTarget, maxSize, constraint int32, multiline bool) *backend.TextInput {
@@ -170,13 +181,7 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if runtime.State() != StateActive {
-		return backend.ErrTextInputChanged
-	}
-	runtime.displayMu.RLock()
-	current := runtime.currentDisplayable
-	runtime.displayMu.RUnlock()
-	if current != target.display {
+	if !runtime.hostTextDisplayUnchanged(target) {
 		return backend.ErrTextInputChanged
 	}
 
@@ -189,7 +194,7 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 	case hostXTextField:
 		err = runtime.commitXTextField(target, text)
 	case hostTextComponent:
-		err = runtime.commitTextComponent(target, text)
+		err = runtime.commitTextComponent(ctx, target, text)
 	default:
 		err = backend.ErrTextInputChanged
 	}
@@ -206,7 +211,7 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 // target. The interface deliberately has no text getter: the title owns the
 // buffer and the handset input method can only send edits to its current
 // cursor.
-func (runtime *Runtime) hostTextComponentInput(display, component *jvm.Object, revision uint64) (*backend.TextInput, error) {
+func (runtime *Runtime) hostTextComponentInput(display, component *jvm.Object, revision, displayRevision, menuRevision uint64) (*backend.TextInput, error) {
 	target, err := readHostTextComponent(runtime.VM, component)
 	if err != nil {
 		return nil, err
@@ -215,6 +220,7 @@ func (runtime *Runtime) hostTextComponentInput(display, component *jvm.Object, r
 	target.display = display
 	target.field = component
 	target.revision = revision
+	target.displayRevision, target.menuRevision = displayRevision, menuRevision
 	if !validHostTextComponent(target) {
 		return nil, backend.ErrNoTextInput
 	}
@@ -289,7 +295,41 @@ func validHostTextComponentAppend(text string, remaining, constraint int32) bool
 	return true
 }
 
-func (runtime *Runtime) commitTextComponent(target hostTextTarget, text string) error {
+func (runtime *Runtime) hostTextDisplayUnchanged(target hostTextTarget) bool {
+	if runtime.State() != StateActive {
+		return false
+	}
+	runtime.displayMu.RLock()
+	current, revision := runtime.currentDisplayable, runtime.displayRevision
+	pendingChange := runtime.displayUpdateQueued && runtime.pendingDisplayable != current
+	runtime.displayMu.RUnlock()
+	if current != target.display || revision != target.displayRevision || pendingChange {
+		return false
+	}
+	state := runtime.lcdui()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	display := state.displayables[current]
+	return display == nil && target.menuRevision == 0 || display != nil && !display.menuOpen && display.menuRevision == target.menuRevision
+}
+
+func (runtime *Runtime) checkTextComponentDelivery(ctx context.Context, target hostTextTarget) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !runtime.hostTextDisplayUnchanged(target) {
+		return backend.ErrTextInputChanged
+	}
+	state := runtime.skvm()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.textInput.component != target.field || state.textInput.revision != target.revision {
+		return backend.ErrTextInputChanged
+	}
+	return nil
+}
+
+func (runtime *Runtime) commitTextComponent(ctx context.Context, target hostTextTarget, text string) error {
 	stateUI := runtime.lcdui()
 	stateUI.mu.Lock()
 	display := stateUI.displayables[target.display]
@@ -332,12 +372,19 @@ func (runtime *Runtime) commitTextComponent(target hostTextTarget, text string) 
 		return backend.ErrTextInputChanged
 	}
 	state.textInput.revision++
+	target.revision = state.textInput.revision
 	state.textInput.endCycle()
 	state.mu.Unlock()
 	for _, character := range utf16.Encode([]rune(text)) {
+		if err := runtime.checkTextComponentDelivery(ctx, target); err != nil {
+			return err
+		}
 		if _, err := runtime.VM.InvokeVirtual(target.field, "insert", "(C)V", jvm.IntValue(int32(character))); err != nil {
 			return err
 		}
+	}
+	if err := runtime.checkTextComponentDelivery(ctx, target); err != nil {
+		return err
 	}
 	_, err = runtime.VM.InvokeVirtual(target.field, "repaint", "()V")
 	return err
@@ -354,7 +401,7 @@ func (runtime *Runtime) commitTextBox(target hostTextTarget, text string) error 
 		return backend.ErrTextInputChanged
 	}
 	screen := display.screen
-	if string(screen.text) != target.original || screen.maxSize != target.maxSize ||
+	if screen.textRevision != target.revision || string(screen.text) != target.original || screen.maxSize != target.maxSize ||
 		screen.constraint != target.constraint || screen.constraint&textFieldUneditable != 0 {
 		state.mu.Unlock()
 		runtime.textMu.Unlock()
@@ -366,6 +413,7 @@ func (runtime *Runtime) commitTextBox(target hostTextTarget, text string) error 
 		return backend.ErrInvalidTextInput
 	}
 	screen.text = []rune(text)
+	screen.textRevision++
 	screen.caret = len(screen.text)
 	if screen.input != nil {
 		screen.input.SetText(text)
@@ -386,13 +434,13 @@ func (runtime *Runtime) commitFormTextField(target hostTextTarget, text string) 
 		return backend.ErrTextInputChanged
 	}
 	form := display.screen
-	if form.selection < 0 || form.selection >= len(form.items) || form.items[form.selection] != target.field {
+	if form.textRevision != target.screenRevision || form.selection < 0 || form.selection >= len(form.items) || form.items[form.selection] != target.field {
 		state.mu.Unlock()
 		runtime.textMu.Unlock()
 		return backend.ErrTextInputChanged
 	}
 	data, ok := target.field.Native.(*itemData)
-	if !ok || data == nil || data.kind != itemText || data.owner != target.display ||
+	if !ok || data == nil || data.textRevision != target.revision || data.kind != itemText || data.owner != target.display ||
 		string(data.text) != target.original || data.maxSize != target.maxSize || data.constraint != target.constraint ||
 		data.constraint&textFieldUneditable != 0 {
 		state.mu.Unlock()
@@ -405,6 +453,7 @@ func (runtime *Runtime) commitFormTextField(target hostTextTarget, text string) 
 		return backend.ErrInvalidTextInput
 	}
 	data.text = []rune(text)
+	data.textRevision++
 	state.mu.Unlock()
 	runtime.textMu.Unlock()
 	if err := runtime.refreshItemOwner(target.field, data); err != nil {
@@ -427,7 +476,7 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 	state := runtime.skvm()
 	state.mu.Lock()
 	data, ok := nativeXTextField(target.field)
-	if !ok || state.focusedTextField != target.field || !data.focus || data.owner != target.display ||
+	if !ok || data.textRevision != target.revision || state.focusedTextField != target.field || !data.focus || data.owner != target.display ||
 		string(data.text) != target.original || data.maxSize != target.maxSize || data.constraints != target.constraint ||
 		data.constraints&textFieldUneditable != 0 {
 		state.mu.Unlock()
@@ -440,6 +489,7 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 		return backend.ErrInvalidTextInput
 	}
 	data.text = []rune(text)
+	data.textRevision++
 	if data.input != nil {
 		data.input.SetText(text)
 	}

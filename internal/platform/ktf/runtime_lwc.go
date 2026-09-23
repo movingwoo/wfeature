@@ -354,6 +354,7 @@ func runtimeComponentAddComponent(_ *initializationRuntime, _ *jvm.VM, arguments
 		return jvm.VoidValue(), fmt.Errorf("KTF container child count exceeds %d", maxContainerChildren)
 	}
 	receiver.Native = append(children, child)
+	runtimeComponentAttachChild(receiver, child)
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.IntValue(int32(len(children))), nil
 }
@@ -376,6 +377,7 @@ func runtimeComponentRemoveComponent(_ *initializationRuntime, _ *jvm.VM, argume
 		for index, current := range children {
 			if current == child {
 				receiver.Native = append(children[:index:index], children[index+1:]...)
+				runtimeComponentDetachChild(receiver, children[index])
 				runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 				return jvm.VoidValue(), nil
 			}
@@ -390,6 +392,7 @@ func runtimeComponentRemoveComponent(_ *initializationRuntime, _ *jvm.VM, argume
 		return jvm.VoidValue(), nil
 	}
 	receiver.Native = append(children[:index:index], children[index+1:]...)
+	runtimeComponentDetachChild(receiver, children[index])
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
@@ -415,7 +418,14 @@ func runtimeComponentSetWorkComponent(_ *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	child, err := arguments[1].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	previous, _ := receiver.Fields[componentWorkField].Reference()
 	receiver.Fields[componentWorkField] = arguments[1]
+	runtimeComponentDetachChild(receiver, previous)
+	runtimeComponentAttachChild(receiver, child)
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
@@ -502,6 +512,7 @@ func runtimeComponentAddComponentAt(_ *initializationRuntime, _ *jvm.VM, argumen
 	copy(children[at+1:], children[at:])
 	children[at] = child
 	receiver.Native = children
+	runtimeComponentAttachChild(receiver, child)
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
@@ -526,8 +537,11 @@ func runtimeComponentSetComponentAt(_ *initializationRuntime, _ *jvm.VM, argumen
 	if index < 0 || int(index) >= len(children) {
 		return jvm.VoidValue(), fmt.Errorf("ContainerComponent.setComponent index %d is outside %d children", index, len(children))
 	}
+	previous := children[index]
 	children[index] = child
 	receiver.Native = children
+	runtimeComponentDetachChild(receiver, previous)
+	runtimeComponentAttachChild(receiver, child)
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }
@@ -538,6 +552,12 @@ func runtimeComponentSetFocus(runtime *initializationRuntime, _ *jvm.VM, argumen
 	receiver, err := runtimeComponentReceiver("Component.setFocus", arguments, 1)
 	if err != nil {
 		return jvm.VoidValue(), err
+	}
+	if previous := runtime.runtimeObjects["lwc:focus"]; previous != receiver {
+		if previous != nil {
+			runtimeComponentIncrementRevision(previous, componentFocusRevisionField)
+		}
+		runtimeComponentIncrementRevision(receiver, componentFocusRevisionField)
 	}
 	runtime.runtimeObjects["lwc:focus"] = receiver
 	return jvm.VoidValue(), nil
@@ -589,7 +609,11 @@ func runtimeComponentRemoveAllComponents(_ *initializationRuntime, _ *jvm.VM, ar
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	children := runtimeComponentChildren(receiver)
 	receiver.Native = nil
+	for _, child := range children {
+		runtimeComponentDetachChild(receiver, child)
+	}
 	runtimeComponentIncrementRevision(receiver, componentChildrenRevisionField)
 	return jvm.VoidValue(), nil
 }

@@ -67,6 +67,36 @@ type State struct {
 	cycleCaret int
 	lastKey    time.Time
 	maxRunes   int
+	utf16Limit bool
+}
+
+// NewUTF16 uses a Java field's UTF-16 length limit while keeping the caret
+// between complete Unicode characters. A supplementary character costs two.
+func NewUTF16(initial string, maxUnits int) *State {
+	state := &State{maxRunes: maxUnits, utf16Limit: true, cycleCaret: -1}
+	state.SetText(initial)
+	return state
+}
+
+func (state *State) units(character rune) int {
+	if state.utf16Limit && character > 0xffff {
+		return 2
+	}
+	return 1
+}
+
+func (state *State) prefix(text []rune) []rune {
+	if state.maxRunes <= 0 {
+		return text
+	}
+	used := 0
+	for i, character := range text {
+		used += state.units(character)
+		if used > state.maxRunes {
+			return text[:i]
+		}
+	}
+	return text
 }
 
 // New returns an editor over an initial value.
@@ -90,9 +120,7 @@ func (state *State) Mode() Mode { return state.mode }
 // SetText replaces the value, ending any cycle in progress.
 func (state *State) SetText(value string) {
 	runes := []rune(value)
-	if state.maxRunes > 0 && len(runes) > state.maxRunes {
-		runes = runes[:state.maxRunes]
-	}
+	runes = state.prefix(runes)
 	state.text = runes
 	state.caret = len(runes)
 	state.commit()
@@ -100,11 +128,23 @@ func (state *State) SetText(value string) {
 
 // SetMaxRunes changes the limit, truncating if the value no longer fits.
 func (state *State) SetMaxRunes(limit int) {
+	state.utf16Limit = false
+	state.setLimit(limit)
+}
+
+// SetMaxUTF16Units changes a Java field limit without splitting a character.
+func (state *State) SetMaxUTF16Units(limit int) {
+	state.utf16Limit = true
+	state.setLimit(limit)
+}
+
+func (state *State) setLimit(limit int) {
 	state.maxRunes = limit
-	if limit > 0 && len(state.text) > limit {
-		state.text = state.text[:limit]
-		if state.caret > limit {
-			state.caret = limit
+	trimmed := state.prefix(state.text)
+	if len(trimmed) < len(state.text) {
+		state.text = trimmed
+		if state.caret > len(trimmed) {
+			state.caret = len(trimmed)
 		}
 		state.commit()
 	}
@@ -193,8 +233,14 @@ func Characters(key rune) (string, bool) {
 
 // insert adds one character at the caret, reporting whether it fit.
 func (state *State) insert(character rune) bool {
-	if state.maxRunes > 0 && len(state.text) >= state.maxRunes {
-		return false
+	if state.maxRunes > 0 {
+		used := state.units(character)
+		for _, existing := range state.text {
+			used += state.units(existing)
+		}
+		if used > state.maxRunes {
+			return false
+		}
 	}
 	if state.caret < 0 || state.caret > len(state.text) {
 		state.caret = len(state.text)

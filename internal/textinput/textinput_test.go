@@ -146,3 +146,57 @@ func TestMovingTheCaretEndsTheCycle(t *testing.T) {
 		t.Fatalf("text = %q, want the cycle to have ended", state.Text())
 	}
 }
+
+func TestUTF16LimitKeepsWholeCharactersAcrossEditing(t *testing.T) {
+	state := NewUTF16("AB🙂", 4)
+	if state.Key('2', at(0)) || state.Text() != "AB🙂" {
+		t.Fatalf("insertion exceeded UTF-16 limit: %q", state.Text())
+	}
+	if !state.Backspace() || state.Text() != "AB" || state.Caret() != 2 {
+		t.Fatalf("backspace split a character: %q caret %d", state.Text(), state.Caret())
+	}
+	state.MoveCaret(-1)
+	state.Key('2', at(100))
+	state.Key('2', at(200))
+	state.Key('3', at(300))
+	if state.Text() != "AbdB" || state.Caret() != 3 || state.Key('4', at(400)) {
+		t.Fatalf("caret insertion or cycling changed capacity: %q caret %d", state.Text(), state.Caret())
+	}
+	state.SetText("A🙂B")
+	state.SetMaxUTF16Units(2)
+	if state.Text() != "A" || state.Caret() != 1 {
+		t.Fatalf("lowered limit split a character: %q caret %d", state.Text(), state.Caret())
+	}
+	state.Key('2', at(500))
+	if state.Text() != "Aa" {
+		t.Fatalf("capacity after truncation: %q", state.Text())
+	}
+	state.SetMaxUTF16Units(0)
+	state.SetText("🙂🙂🙂")
+	if !state.Key('2', at(600)) || state.Text() != "🙂🙂🙂a" {
+		t.Fatalf("unlimited UTF-16 editor: %q", state.Text())
+	}
+}
+
+func TestUTF16InitialLimitAndRuneCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		limit int
+		want  string
+	}{
+		{"🙂B", 1, ""},
+		{"🙂B", 2, "🙂"},
+		{"🙂B", 3, "🙂B"},
+		{"한글AB", 3, "한글A"},
+	} {
+		state := NewUTF16(tc.text, tc.limit)
+		if state.Text() != tc.want {
+			t.Errorf("NewUTF16(%q, %d) = %q, want %q", tc.text, tc.limit, state.Text(), tc.want)
+		}
+	}
+	state := New("A🙂B", 3)
+	state.SetMaxRunes(2)
+	if state.Text() != "A🙂" {
+		t.Fatalf("rune limit changed: %q", state.Text())
+	}
+}

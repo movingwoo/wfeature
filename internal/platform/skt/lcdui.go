@@ -94,24 +94,26 @@ func (choice *choiceData) selectExclusive(index int) {
 }
 
 type itemData struct {
-	kind       itemKind
-	label      string
-	layout     int32
-	text       []rune
-	maxSize    int32
-	constraint int32
-	appearance int32
-	image      *jvm.Object
-	altText    string
-	font       *jvm.Object
-	choice     *choiceData
-	commands   []*jvm.Object
-	listener   *jvm.Object
-	owner      *jvm.Object
+	textRevision uint64
+	kind         itemKind
+	label        string
+	layout       int32
+	text         []rune
+	maxSize      int32
+	constraint   int32
+	appearance   int32
+	image        *jvm.Object
+	altText      string
+	font         *jvm.Object
+	choice       *choiceData
+	commands     []*jvm.Object
+	listener     *jvm.Object
+	owner        *jvm.Object
 }
 
 // screenData is the content of a runtime-drawn screen.
 type screenData struct {
+	textRevision  uint64
 	kind          screenKind
 	items         []*jvm.Object
 	text          []rune
@@ -143,13 +145,14 @@ type screenData struct {
 // state of the command menu the runtime opens when there are more commands
 // than soft keys.
 type displayableData struct {
-	title     string
-	ticker    *jvm.Object
-	commands  []*jvm.Object
-	listener  *jvm.Object
-	screen    *screenData
-	menuOpen  bool
-	menuIndex int
+	title        string
+	ticker       *jvm.Object
+	commands     []*jvm.Object
+	listener     *jvm.Object
+	screen       *screenData
+	menuOpen     bool
+	menuRevision uint64
+	menuIndex    int
 	// game is the GameCanvas buffer, present only for a GameCanvas.
 	game *gameCanvasData
 }
@@ -874,6 +877,7 @@ func (runtime *Runtime) setImageItemAltText(_ *jvm.VM, arguments []jvm.Value) (j
 // screen. The two have identical text methods, so they share one
 // implementation and differ only in where the characters live.
 type textTarget struct {
+	revision   *uint64
 	text       *[]rune
 	maxSize    *int32
 	constraint *int32
@@ -894,6 +898,7 @@ func (runtime *Runtime) textTargetArgument(arguments []jvm.Value, kind screenKin
 		screen := runtime.screenState(object, screenTextBox)
 		return &textTarget{
 			text:       &screen.text,
+			revision:   &screen.textRevision,
 			maxSize:    &screen.maxSize,
 			constraint: &screen.constraint,
 			caret:      &screen.caret,
@@ -907,6 +912,7 @@ func (runtime *Runtime) textTargetArgument(arguments []jvm.Value, kind screenKin
 	}
 	return &textTarget{
 		text:       &data.text,
+		revision:   &data.textRevision,
 		maxSize:    &data.maxSize,
 		constraint: &data.constraint,
 		caret:      new(int),
@@ -949,6 +955,7 @@ func (runtime *Runtime) initText(kind screenKind) jvm.NativeMethod {
 				data.kind = itemText
 			}
 		}
+		(*target.revision)++
 		*target.text = runes
 		*target.maxSize = maxSize
 		*target.constraint = constraint
@@ -988,6 +995,7 @@ func (runtime *Runtime) setTextString(kind screenKind) jvm.NativeMethod {
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				"text is longer than maxSize")
 		}
+		(*target.revision)++
 		*target.text = runes
 		*target.caret = len(runes)
 		runtime.textMu.Unlock()
@@ -1044,6 +1052,7 @@ func (runtime *Runtime) setTextChars(kind screenKind) jvm.NativeMethod {
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				"text is longer than maxSize")
 		}
+		(*target.revision)++
 		*target.text = runes
 		*target.caret = len(runes)
 		runtime.textMu.Unlock()
@@ -1086,6 +1095,7 @@ func (runtime *Runtime) insertText(kind screenKind) jvm.NativeMethod {
 		combined = append(combined, current[:position]...)
 		combined = append(combined, inserted...)
 		combined = append(combined, current[position:]...)
+		(*target.revision)++
 		*target.text = combined
 		*target.caret = int(position) + len(inserted)
 		runtime.textMu.Unlock()
@@ -1120,6 +1130,7 @@ func (runtime *Runtime) deleteText(kind screenKind) jvm.NativeMethod {
 		remaining := make([]rune, 0, len(current)-int(length))
 		remaining = append(remaining, current[:offset]...)
 		remaining = append(remaining, current[offset+length:]...)
+		(*target.revision)++
 		*target.text = remaining
 		*target.caret = int(offset)
 		runtime.textMu.Unlock()
@@ -1169,6 +1180,7 @@ func (runtime *Runtime) setTextMaxSize(kind screenKind) jvm.NativeMethod {
 			return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 				fmt.Sprintf("maxSize %d", maxSize))
 		}
+		(*target.revision)++
 		*target.maxSize = maxSize
 		if int32(len(*target.text)) > maxSize {
 			// MIDP truncates rather than refusing, and answers with the size
@@ -1218,6 +1230,7 @@ func (runtime *Runtime) setTextConstraints(kind screenKind) jvm.NativeMethod {
 			runtime.textMu.Unlock()
 			return jvm.VoidValue(), err
 		}
+		(*target.revision)++
 		*target.constraint = constraint
 		runtime.textMu.Unlock()
 		return jvm.VoidValue(), target.refresh()
@@ -1647,6 +1660,7 @@ func (runtime *Runtime) formAppend(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 		return jvm.VoidValue(), err
 	}
 	form := runtime.screenState(receiver, screenForm)
+	form.textRevision++
 	form.items = append(form.items, item)
 	return jvm.IntValue(int32(len(form.items) - 1)), runtime.refreshCurrentScreen(receiver)
 }
@@ -1682,6 +1696,7 @@ func (runtime *Runtime) formInsert(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 	if err := runtime.claimItem(item, data, receiver); err != nil {
 		return jvm.VoidValue(), err
 	}
+	form.textRevision++
 	form.items = append(form.items, nil)
 	copy(form.items[index+1:], form.items[index:])
 	form.items[index] = item
@@ -1705,6 +1720,7 @@ func (runtime *Runtime) formDelete(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 	if data, itemErr := itemOf(form.items[index]); itemErr == nil {
 		data.owner = nil
 	}
+	form.textRevision++
 	form.items = append(form.items[:index], form.items[index+1:]...)
 	if form.selection >= len(form.items) {
 		form.selection = max(len(form.items)-1, 0)
@@ -1723,6 +1739,7 @@ func (runtime *Runtime) formDeleteAll(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 			data.owner = nil
 		}
 	}
+	form.textRevision++
 	form.items = nil
 	form.selection = 0
 	return jvm.VoidValue(), runtime.refreshCurrentScreen(receiver)
@@ -1752,6 +1769,7 @@ func (runtime *Runtime) formSet(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, er
 	if previous, itemErr := itemOf(form.items[index]); itemErr == nil {
 		previous.owner = nil
 	}
+	form.textRevision++
 	form.items[index] = item
 	return jvm.VoidValue(), runtime.refreshCurrentScreen(receiver)
 }

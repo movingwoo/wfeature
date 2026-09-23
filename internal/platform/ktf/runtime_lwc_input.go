@@ -28,7 +28,7 @@ func (client *Client) FocusTextComponent(component *jvm.Object) {
 		client.textEditor = nil
 		return
 	}
-	client.textEditor = textinput.New(componentText(component), int(componentMaxLength(component)))
+	client.textEditor = textinput.NewUTF16(componentText(component), int(componentMaxLength(component)))
 }
 
 // FocusedTextComponent reports which component has the keypad.

@@ -126,23 +126,33 @@ func (session *Session) cTextInput() *backend.TextInput {
 
 			calls := state.calls
 			state.pending = encoded
+			delivered := false
+			defer func() {
+				state.pending = nil
+				if delivered {
+					state.revision++
+				}
+			}()
 			for len(state.pending) != 0 {
 				before := len(state.pending)
 				err = client.callClet(ctx, "handleCletEvent", handler,
 					[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
+				delivered = delivered || len(state.pending) < before
 				if err != nil || len(state.pending) >= before || state.revision != revision {
 					break
 				}
 			}
 			consumed := len(state.pending) == 0
-			state.pending = nil
 			if err != nil {
 				return err
+			}
+			if state.revision != revision {
+				return backend.ErrTextInputChanged
 			}
 			if consumed {
 				return nil
 			}
-			if state.calls == calls || state.revision != revision {
+			if state.calls == calls {
 				return backend.ErrTextInputChanged
 			}
 			// The widget reached MC_imHandleInput but its completion buffer
