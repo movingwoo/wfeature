@@ -139,10 +139,66 @@ const openFakeSession = async (handlers = {}) => {
   return { session, socket };
 };
 
-test("the page opts into PNG patches on its session connection", async () => {
+test("the page asks for protocol 2 and reads binary messages as bytes", async () => {
   const { session, socket } = await openFakeSession();
-  assert.equal(new URL(socket.url).searchParams.get("frames"), "patch-v1");
+  assert.equal(new URL(socket.url).searchParams.get("protocol"), "2");
+  assert.equal(socket.binaryType, "arraybuffer");
   session.close();
+});
+
+// soundMessage builds a protocol 2 sound message from its operations.
+const soundMessage = (...operations) => {
+  const bytes = Uint8Array.from([0x57, 0x46, 0x41, 0x32, ...operations.flat()]);
+  return bytes.buffer;
+};
+const word = value => [value >>> 24, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+
+test("binary sound plays in order and each sample is carried once", async t => {
+  const batches = [];
+  const { session, socket } = await openFakeSession({ onAudio: events => batches.push(events) });
+  t.after(() => session.close());
+  const pcm = [0x00, 0x40, 0x00, 0xc0]; // 16384, -16384
+  socket.deliverFrame(soundMessage(
+    [0x03, 1, 42],
+    [0x01, 1, 60, 100],
+    [0x04, 1, 7, 90],
+    [0x05, 1, 0x23, 0x28],
+    [0x10, ...word(7), ...word(pcm.length), ...pcm],
+    [0x11, ...word(7), 1, ...word(8000)],
+    [0x10, ...word(8), ...word(3), 0xf0, 0x7e, 0xf7],
+    [0x12, ...word(8)],
+  ));
+  // The next message names the sound it was sent once.
+  socket.deliverFrame(soundMessage([0x11, ...word(7), 1, ...word(8000)], [0x02, 1, 60, 0], [0x06]));
+  const synth = recordingSynth();
+  for (const events of batches) playAudioEvents(synth, events);
+  assert.deepEqual(synth.calls, [
+    ["programChange", 1, 42],
+    ["noteOn", 1, 60, 100],
+    ["controlChange", 1, 7, 90],
+    ["pitchBend", 1, 9000],
+    ["playWave", 1, 8000, 2],
+    ["sysex", [0xf0, 0x7e, 0xf7]],
+    ["playWave", 1, 8000, 2],
+    ["noteOff", 1, 60, 0],
+    ["stopAll"],
+  ]);
+  assert.deepEqual([...batches[0].find(event => event.kind === "playWave").samples], [0.5, -0.5]);
+});
+
+test("a forgotten or never-defined sound is skipped, and a malformed batch is dropped whole", async t => {
+  const batches = [];
+  const { session, socket } = await openFakeSession({ onAudio: events => batches.push(events) });
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  t.after(() => { console.warn = warn; session.close(); });
+  socket.deliverFrame(soundMessage([0x10, ...word(1), ...word(2), 1, 0], [0x13], [0x11, ...word(1), 1, ...word(8000)], [0x11, ...word(9), 1, ...word(8000)], [0x06]));
+  assert.deepEqual(batches, [[{ kind: "allOff" }]]);
+  socket.deliverFrame(soundMessage([0x01, 1, 60, 100], [0x7f]));
+  socket.deliverFrame(soundMessage([0x01, 1]));
+  assert.equal(batches.length, 1);
+  assert.equal(warnings.length, 2);
 });
 
 test("intermediate PNG frames arrive while start is still pending", async t => {
@@ -163,9 +219,9 @@ test("intermediate PNG frames arrive while start is still pending", async t => {
   new DataView(png.buffer).setUint32(16, 1);
   new DataView(png.buffer).setUint32(20, 1);
   png[24] = 1;
-  const first = new Blob([png]);
+  const first = png.slice().buffer;
   png[24] = 2;
-  const second = new Blob([png]);
+  const second = png.slice().buffer;
   socket.deliverFrame(first);
   await new Promise(resolve => setImmediate(resolve));
   socket.deliverFrame(second);

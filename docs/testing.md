@@ -132,11 +132,28 @@ scaling, explicit redraws under queue pressure and lifecycle-message ordering.
 Session tests preserve owned raw snapshots and the synchronous scaled-frame API.
 `BenchmarkFrameEncoding` compares unchanged and changing pictures at original
 scale and hq4x through the actual encoder goroutine; it excludes guest execution.
-Patch tests additionally reconstruct consecutive updates pixel for pixel at
-original scale and hq2x/hq3x/hq4x, verify legacy connections and forced complete
-pictures through the WebSocket handler, and bound browser decoding and recovery.
-`TestFramePatchBandwidth` and `BenchmarkFramePatchBandwidth` compare complete
-frames with patches over an authored moving sprite; this is not real-game traffic.
+Protocol 2 tests reconstruct consecutive updates pixel for pixel the way the page
+composes them — complete, masked, replacing and shifted — check the scale each
+names, the palette, a scrolling field under a fixed bar, a shift with nothing
+left to draw and the refusal to shift over a picture that is not opaque, and
+verify protocol negotiation through the WebSocket handler.
+`TestFramePatchBandwidth` and `BenchmarkFramePatchBandwidth` compare protocols 1
+and 2 over an authored moving sprite and an authored scrolling field; neither is
+real-game traffic. `audio_stream_test.go` covers the binary sound operations,
+definitions carried once, the budget, a shed message and protocol 1's unchanged
+JSON. `outbound_test.go` checks that queued messages leave in one write and that
+sound waits for its tick's picture only while one is being encoded. Static
+serving tests cover gzip, validators and 304 answers for the shell and the game
+list. `internal/wsproto` checks that each message, and each batch, is one
+transport write.
+
+`internal/filter/hqx/javascript_test.go` regenerates `web/hqx-patterns.js` from
+the Go tables and fails when they differ, and holds the digests of an authored
+picture magnified at each scale; `web/hqx.test.mjs` magnifies the same picture
+in JavaScript and must produce the same digests, and checks that redoing only
+the blocks around a change matches magnifying everything. `magnify.test.mjs`,
+`frame-stream.test.mjs` and `session.test.mjs` cover the page's side of the
+protocol with mocked canvases and sockets.
 
 The opt-in browser route uses repository-authored SKT and LGT fixtures:
 
@@ -149,10 +166,12 @@ Use `webkit` for the second engine. `WFEATURE_FRAME_ARCHIVE` may name a local
 archive under `var/games` for an additional six-second original-scale probe.
 The runner uses isolated game and save directories and records results under
 `var/acceptance`. It exercises static presentation, restart, park/resume,
-reconnection, changed input frames, lossless patch composition against a forced
-complete server PNG, and WIPI scale changes. A static picture
-without new PNGs is expected; the runtime must keep ticking. Measured scope and
-results are in [the CPU investigation](cpu-saturation-investigation-2026-09-23.md).
+reconnection, changed input frames, lossless update composition against a forced
+complete server picture, WIPI scale changes, and hq2x of partial updates against
+hq2x of a forced complete picture. A static picture without new PNGs is
+expected; the runtime must keep ticking. Measured scope and results are in
+[the CPU investigation](cpu-saturation-investigation-2026-09-23.md) and the
+[bandwidth record](history/session.md#frame-bandwidth-2026-09-24).
 
 ## Reading old validation
 

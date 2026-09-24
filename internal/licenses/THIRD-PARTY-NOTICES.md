@@ -17,12 +17,14 @@ executable still receives these notices.
 | golang.org/x/sys | Go module, statically linked on the amd64 targets | BSD-3-Clause |
 | NeoDGM (Neo둥근모) | TrueType font, embedded in the binary | SIL OFL 1.1 |
 | Galmuri9 | TrueType font, embedded in the binary | SIL OFL 1.1 |
-| hqx | Decision tables translated into `internal/filter/hqx` | MIT OR Apache-2.0 |
+| hqx | Decision tables translated into `internal/filter/hqx` and `web/hqx-patterns.js` | MIT OR Apache-2.0 |
 
 `internal/filter/hqx/pattern2x.go`, `pattern3x.go` and `pattern4x.go` are a
 mechanical translation of the hqx crate's decision tables — a substantial
 portion of that work rather than an independent reimplementation — so its
-copyright notice below applies to them.
+copyright notice below applies to them. `web/hqx-patterns.js`, which the page
+magnifies with, is generated from those three files and carries the same work
+and the same notice.
 
 The runtime's own class library, the Java fixtures under `internal/*/testdata`,
 the fonts' rasterizer, the SMAF/MIDI code, and the emulator core were authored

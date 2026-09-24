@@ -24,7 +24,7 @@ import (
 // an unexpected extra frame fails by count rather than a timing assumption.
 func encodeFrames(t *testing.T, frames ...pendingFrame) []image.Image {
 	t.Helper()
-	messages := encodeFrameMessages(t, false, frames...)
+	messages := encodeFrameMessages(t, protocolPictures, frames...)
 	var pictures []image.Image
 	for _, message := range messages {
 		picture, err := png.Decode(bytes.NewReader(message.binary))
@@ -36,11 +36,11 @@ func encodeFrames(t *testing.T, frames ...pendingFrame) []image.Image {
 	return pictures
 }
 
-func encodeFrameMessages(t *testing.T, patches bool, frames ...pendingFrame) []outboundMessage {
+func encodeFrameMessages(t *testing.T, protocol int, frames ...pendingFrame) []outboundMessage {
 	t.Helper()
 	runner := &sessionRunner{server: newTestServer(t, Options{}),
-		framePatches: patches,
-		frames:       make(chan pendingFrame, len(frames)), outFrames: make(chan outboundMessage, len(frames))}
+		protocol: protocol,
+		frames:   make(chan pendingFrame, len(frames)), outFrames: make(chan outboundMessage, len(frames))}
 	for _, frame := range frames {
 		runner.frames <- frame
 	}
@@ -54,7 +54,72 @@ func encodeFrameMessages(t *testing.T, patches bool, frames ...pendingFrame) []o
 	return messages
 }
 
-func TestFramePatchesReconstructLosslessly(t *testing.T) {
+// streamHeader is a protocol 2 picture header, read the way the page reads it.
+type streamHeader struct {
+	operation, scale int
+	shift, origin    image.Point
+}
+
+// applyStreamMessage does to canvas what the page does with one protocol 2
+// picture, and answers the resulting picture.
+func applyStreamMessage(t *testing.T, canvas *image.RGBA, payload []byte) (*image.RGBA, streamHeader) {
+	t.Helper()
+	if len(payload) < pictureHeaderSize || !bytes.Equal(payload[:4], pictureMagic) || payload[14] != 0 || payload[15] != 0 {
+		t.Fatalf("not a protocol 2 picture: % x", payload[:min(len(payload), 16)])
+	}
+	header := streamHeader{
+		operation: int(payload[4]),
+		scale:     int(payload[5]),
+		shift:     image.Pt(int(int16(binary.BigEndian.Uint16(payload[6:8]))), int(int16(binary.BigEndian.Uint16(payload[8:10])))),
+		origin:    image.Pt(int(binary.BigEndian.Uint16(payload[10:12])), int(binary.BigEndian.Uint16(payload[12:14]))),
+	}
+	var picture image.Image
+	if len(payload) > pictureHeaderSize {
+		decoded, err := png.Decode(bytes.NewReader(payload[pictureHeaderSize:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		picture = decoded
+	}
+	switch header.operation {
+	case pictureComplete:
+		canvas = image.NewRGBA(picture.Bounds())
+		draw.Draw(canvas, canvas.Bounds(), picture, image.Point{}, draw.Src)
+	case pictureReplace:
+		draw.Draw(canvas, picture.Bounds().Add(header.origin), picture, image.Point{}, draw.Src)
+	case pictureMasked:
+		if header.shift != (image.Point{}) {
+			// The page draws its held picture at the shift over itself.
+			held := image.NewRGBA(canvas.Bounds())
+			draw.Draw(held, held.Bounds(), canvas, image.Point{}, draw.Src)
+			draw.Draw(canvas, held.Bounds().Add(header.shift), held, image.Point{}, draw.Over)
+		}
+		if picture != nil {
+			draw.Draw(canvas, picture.Bounds().Add(header.origin), picture, image.Point{}, draw.Over)
+		}
+	default:
+		t.Fatalf("unknown operation %d", header.operation)
+	}
+	return canvas, header
+}
+
+func samePixels(t *testing.T, got *image.RGBA, want pendingFrame) {
+	t.Helper()
+	if got.Bounds() != image.Rect(0, 0, want.Width, want.Height) {
+		t.Fatalf("reconstructed %v, want %dx%d", got.Bounds(), want.Width, want.Height)
+	}
+	if !bytes.Equal(got.Pix, want.RGBA) {
+		for index := range got.Pix {
+			if got.Pix[index] != want.RGBA[index] {
+				pixel := index / 4
+				t.Fatalf("pixel %d,%d differs: % x, want % x", pixel%want.Width, pixel/want.Width,
+					got.Pix[pixel*4:pixel*4+4], want.RGBA[pixel*4:pixel*4+4])
+			}
+		}
+	}
+}
+
+func TestStreamUpdatesReconstructLosslessly(t *testing.T) {
 	for _, scale := range []int{1, 2, 3, 4} {
 		t.Run(fmt.Sprint(scale), func(t *testing.T) {
 			first := pendingFrame{RGBA: make([]byte, 64*80*4), Width: 64, Height: 80, Scale: scale}
@@ -64,6 +129,7 @@ func TestFramePatchesReconstructLosslessly(t *testing.T) {
 			second := first
 			second.RGBA = bytes.Clone(first.RGBA)
 			copy(second.RGBA[(30*64+20)*4:], []byte{240, 20, 0, 255})
+			copy(second.RGBA[(70*64+60)*4:], []byte{1, 2, 3, 255})
 			third := second
 			third.RGBA = bytes.Clone(second.RGBA)
 			// Erasing to transparency must replace the old pixel, not blend.
@@ -74,82 +140,206 @@ func TestFramePatchesReconstructLosslessly(t *testing.T) {
 			resized := first
 			resized.Width, resized.Height = first.Height, first.Width
 			frames := []pendingFrame{first, second, third, forced, resized}
-			messages := encodeFrameMessages(t, true, frames...)
+			messages := encodeFrameMessages(t, protocolStream, frames...)
 			if len(messages) != len(frames) {
 				t.Fatalf("got %d pictures", len(messages))
 			}
+			wantOperations := []int{pictureComplete, pictureMasked, pictureReplace, pictureComplete, pictureComplete}
 			var canvas *image.RGBA
 			for i, message := range messages {
-				payload := message.binary
-				patch := bytes.HasPrefix(payload, []byte("WFP1"))
-				if patch != (i == 1 || i == 2) {
-					t.Fatalf("picture %d patch=%v", i, patch)
+				var header streamHeader
+				canvas, header = applyStreamMessage(t, canvas, message.binary)
+				if header.operation != wantOperations[i] || header.scale != scale {
+					t.Fatalf("picture %d: operation %d scale %d, want %d and %d", i, header.operation, header.scale, wantOperations[i], scale)
 				}
-				var origin image.Point
-				if patch {
-					origin = image.Pt(int(binary.BigEndian.Uint32(payload[4:8])), int(binary.BigEndian.Uint32(payload[8:12])))
-					payload = payload[12:]
-				}
-				picture, err := png.Decode(bytes.NewReader(payload))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !patch {
-					canvas = image.NewRGBA(picture.Bounds())
-				}
-				draw.Draw(canvas, picture.Bounds().Add(origin), picture, picture.Bounds().Min, draw.Src)
-				want := encodeFrames(t, frames[i])[0]
-				if canvas.Bounds() != want.Bounds() {
-					t.Fatal("wrong reconstructed dimensions")
-				}
-				for y := 0; y < canvas.Bounds().Dy(); y++ {
-					for x := 0; x < canvas.Bounds().Dx(); x++ {
-						r, g, b, a := canvas.At(x, y).RGBA()
-						wr, wg, wb, wa := want.At(x, y).RGBA()
-						if [4]uint32{r, g, b, a} != [4]uint32{wr, wg, wb, wa} {
-							t.Fatalf("picture %d differs at %d,%d", i, x, y)
-						}
-					}
-				}
+				samePixels(t, canvas, frames[i])
 			}
-			legacy := encodeFrameMessages(t, false, second)[0]
-			if len(messages[1].binary)*2 >= len(legacy.binary) {
-				t.Fatalf("patch %d bytes, full %d: want at least 50%% reduction", len(messages[1].binary), len(legacy.binary))
+			if len(messages[1].binary) >= len(messages[0].binary) {
+				t.Fatalf("update %d bytes, complete %d", len(messages[1].binary), len(messages[0].binary))
+			}
+			// The page magnifies, so the update stays small at every scale.
+			if legacy := encodeFrameMessages(t, protocolPictures, second)[0]; scale > 1 && len(messages[1].binary)*4 >= len(legacy.binary) {
+				t.Fatalf("update %d bytes, magnified complete %d: want at least 75%% less", len(messages[1].binary), len(legacy.binary))
 			}
 		})
 	}
 }
 
-func TestSessionNegotiatesFramePatches(t *testing.T) {
-	for _, query := range []string{"", "frames=patch-v1", "frames=unknown"} {
+// scrollingFrames is an authored field that scrolls under a fixed status bar,
+// which is the shape of the scenes that changed almost every pixel a frame.
+func scrollingFrames(count, step int) []pendingFrame {
+	offsets := make([]int, count)
+	for i := range offsets {
+		offsets[i] = i * step
+	}
+	return scrolledField(offsets...)
+}
+
+// scrolledField draws the field at each of the given horizontal offsets.
+func scrolledField(offsets ...int) []pendingFrame {
+	const width, height = 120, 96
+	// Eight-pixel tiles from a sixteen-colour set, with a mark in some of
+	// them, which is what a handset's map looks like.
+	field := func(x, y int) [4]byte {
+		tile := uint32(x/8*31+y/8*17) * 2654435761 >> 28
+		if x%8 == 3 && y%8 == 4 && tile%3 == 0 {
+			tile = 15 - tile
+		}
+		return [4]byte{byte(tile * 16), byte(tile * 7), byte(255 - tile*9), 255}
+	}
+	frames := make([]pendingFrame, len(offsets))
+	for i, offset := range offsets {
+		pixels := make([]byte, width*height*4)
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				pixel := field(x+offset, y)
+				if y < 12 {
+					pixel = [4]byte{0, 0, 80, 255}
+				}
+				copy(pixels[(y*width+x)*4:], pixel[:])
+			}
+		}
+		frames[i] = pendingFrame{RGBA: pixels, Width: width, Height: height, Scale: 1}
+	}
+	return frames
+}
+
+func TestStreamFollowsAScrollingPicture(t *testing.T) {
+	frames := scrollingFrames(4, 2)
+	messages := encodeFrameMessages(t, protocolStream, frames...)
+	var canvas *image.RGBA
+	for i, message := range messages {
+		var header streamHeader
+		canvas, header = applyStreamMessage(t, canvas, message.binary)
+		samePixels(t, canvas, frames[i])
+		if i == 0 {
+			continue
+		}
+		// The field moved two pixels left, so the held picture is drawn two
+		// pixels left and only the strip it uncovers is new.
+		if header.operation != pictureMasked || header.shift != image.Pt(-2, 0) {
+			t.Fatalf("picture %d: operation %d shift %v, want a masked update after (-2,0)", i, header.operation, header.shift)
+		}
+		if len(message.binary)*4 >= len(messages[0].binary) {
+			t.Fatalf("picture %d is %d bytes against %d complete", i, len(message.binary), len(messages[0].binary))
+		}
+	}
+}
+
+func TestStreamSearchesAgainWhenTheScrollChangesDirection(t *testing.T) {
+	// The second scroll repeats the first, which the encoder tries before
+	// searching; the third turns back, which only a search finds.
+	frames := scrolledField(0, 2, 4, 1)
+	messages := encodeFrameMessages(t, protocolStream, frames...)
+	var canvas *image.RGBA
+	for i, message := range messages {
+		var header streamHeader
+		canvas, header = applyStreamMessage(t, canvas, message.binary)
+		samePixels(t, canvas, frames[i])
+		if want := []image.Point{{}, {-2, 0}, {-2, 0}, {3, 0}}[i]; header.shift != want {
+			t.Fatalf("picture %d shifted %v, want %v", i, header.shift, want)
+		}
+	}
+}
+
+func TestStreamScrollWithNothingElseCarriesNoPicture(t *testing.T) {
+	frames := scrollingFrames(1, 0)
+	// A picture that is exactly the last one drawn two pixels up over itself:
+	// the uncovered strip at the bottom keeps what it had.
+	moved := frames[0]
+	moved.RGBA = bytes.Clone(frames[0].RGBA)
+	row := moved.Width * 4
+	copy(moved.RGBA[:(moved.Height-2)*row], frames[0].RGBA[2*row:])
+	messages := encodeFrameMessages(t, protocolStream, frames[0], moved)
+	if len(messages) != 2 || len(messages[1].binary) != pictureHeaderSize {
+		t.Fatalf("got %d messages, the update %d bytes; want a bare header", len(messages), len(messages[len(messages)-1].binary))
+	}
+	canvas, header := applyStreamMessage(t, nil, messages[0].binary)
+	canvas, header = applyStreamMessage(t, canvas, messages[1].binary)
+	if header.shift != image.Pt(0, -2) {
+		t.Fatalf("shift %v, want (0,-2)", header.shift)
+	}
+	samePixels(t, canvas, moved)
+}
+
+func TestStreamDoesNotScrollOverATranslucentPicture(t *testing.T) {
+	frames := scrollingFrames(2, 2)
+	for _, frame := range frames {
+		// One pixel that is not opaque in the held picture would blend when
+		// the page draws the picture over itself.
+		clear(frame.RGBA[len(frame.RGBA)-4:])
+	}
+	messages := encodeFrameMessages(t, protocolStream, frames...)
+	canvas, _ := applyStreamMessage(t, nil, messages[0].binary)
+	canvas, header := applyStreamMessage(t, canvas, messages[1].binary)
+	if header.shift != (image.Point{}) {
+		t.Fatalf("shifted %v over a translucent picture", header.shift)
+	}
+	samePixels(t, canvas, frames[1])
+}
+
+// pngColorType reads the colour type from a PNG's header chunk.
+func pngColorType(t *testing.T, data []byte) byte {
+	t.Helper()
+	if len(data) < 26 || string(data[12:16]) != "IHDR" {
+		t.Fatal("not a PNG")
+	}
+	return data[25]
+}
+
+func TestStreamUsesAPaletteWhereTheColoursFit(t *testing.T) {
+	few := pendingFrame{RGBA: make([]byte, 32*32*4), Width: 32, Height: 32, Scale: 1}
+	many := pendingFrame{RGBA: make([]byte, 32*32*4), Width: 32, Height: 32, Scale: 1}
+	for i := 0; i < 32*32; i++ {
+		copy(few.RGBA[i*4:], []byte{byte(i % 7 * 30), 0, 0, 255})
+		copy(many.RGBA[i*4:], []byte{byte(i), byte(i >> 8), 3, 255})
+	}
+	if got := pngColorType(t, encodeFrameMessages(t, protocolStream, few)[0].binary[pictureHeaderSize:]); got != 3 {
+		t.Fatalf("seven colours were written with colour type %d, want a palette", got)
+	}
+	if got := pngColorType(t, encodeFrameMessages(t, protocolStream, many)[0].binary[pictureHeaderSize:]); got == 3 {
+		t.Fatal("a thousand colours were written with a palette")
+	}
+}
+
+func TestSessionNegotiatesTheStreamProtocol(t *testing.T) {
+	for _, query := range []string{"", "protocol=2", "protocol=3", "frames=patch-v1"} {
 		t.Run(query, func(t *testing.T) {
 			connection, _ := sessionFixture(t, query)
 			_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 			expectMessage(t, connection, serverReady)
 			send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 			expectMessage(t, connection, serverStarted)
-			expectFrame(t, connection) // Every connection starts with a full PNG.
 			readPicture := func() []byte {
 				for {
 					opcode, payload, err := connection.ReadMessage()
 					if err != nil {
 						t.Fatal(err)
 					}
-					if opcode == wsproto.OpBinary {
+					if opcode == wsproto.OpBinary && !bytes.HasPrefix(payload, audioMagic) {
 						return payload
 					}
 				}
+			}
+			stream := query == "protocol=2"
+			first := readPicture()
+			if bytes.HasPrefix(first, pictureMagic) != stream {
+				t.Fatalf("first picture % x for query %q", first[:8], query)
 			}
 			send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: '1'})
 			readPicture()
 			send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: '2'})
 			payload := readPicture()
-			if patch := bytes.HasPrefix(payload, []byte("WFP1")); patch != (query == "frames=patch-v1") {
-				t.Fatalf("patch=%v for query %q", patch, query)
+			if bytes.HasPrefix(payload, pictureMagic) != stream {
+				t.Fatalf("update % x for query %q", payload[:8], query)
 			}
-			// An explicit redraw on the same socket must reset the base too.
-			send(t, connection, clientMessage{Kind: clientScale, Value: 1})
-			expectFrame(t, connection)
+			// An explicit redraw on the same socket resets the base.
+			send(t, connection, clientMessage{Kind: clientScale, Value: 2})
+			payload = readPicture()
+			if stream && (payload[4] != pictureComplete || payload[5] != 1) {
+				// A MIDlet's surface is never magnified, whatever the page asks.
+				t.Fatalf("redraw operation %d scale %d", payload[4], payload[5])
+			}
 		})
 	}
 }
@@ -180,26 +370,32 @@ func bandwidthFrames() []pendingFrame {
 }
 
 func TestFramePatchBandwidth(t *testing.T) {
-	frames := bandwidthFrames()
-	sizes := func(patches bool) int {
+	sizes := func(protocol int, frames []pendingFrame) int {
 		total := 0
-		for _, message := range encodeFrameMessages(t, patches, frames...) {
+		for _, message := range encodeFrameMessages(t, protocol, frames...) {
 			total += len(message.binary)
 		}
 		return total
 	}
-	full, patched := sizes(false), sizes(true)
-	t.Logf("60 authored frames: full=%d bytes, patches=%d bytes, reduction=%.2f%%", full, patched, 100*(1-float64(patched)/float64(full)))
-	if patched*10 >= full {
+	sprite := bandwidthFrames()
+	full, updates := sizes(protocolPictures, sprite), sizes(protocolStream, sprite)
+	t.Logf("60 authored sprite frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%", full, updates, 100*(1-float64(updates)/float64(full)))
+	if updates*10 >= full {
 		t.Fatal("moving sprite should reduce frame payload by at least 90 percent")
+	}
+	scrolling := scrollingFrames(60, 2)
+	full, updates = sizes(protocolPictures, scrolling), sizes(protocolStream, scrolling)
+	t.Logf("60 authored scrolling frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%", full, updates, 100*(1-float64(updates)/float64(full)))
+	if updates*4 >= full {
+		t.Fatal("a scrolling field should reduce frame payload by at least 75 percent")
 	}
 }
 
 func BenchmarkFramePatchBandwidth(b *testing.B) {
 	frames := bandwidthFrames()
-	for _, patches := range []bool{false, true} {
-		b.Run(fmt.Sprintf("patches=%v", patches), func(b *testing.B) {
-			runner := &sessionRunner{framePatches: patches, frames: make(chan pendingFrame, 1), outFrames: make(chan outboundMessage, 1)}
+	for _, protocol := range []int{protocolPictures, protocolStream} {
+		b.Run(fmt.Sprintf("protocol=%d", protocol), func(b *testing.B) {
+			runner := &sessionRunner{protocol: protocol, frames: make(chan pendingFrame, 1), outFrames: make(chan outboundMessage, 1)}
 			done := make(chan int, 1)
 			go func() { runner.writeFrames(context.Background()); close(runner.outFrames) }()
 			go func() {
@@ -218,6 +414,16 @@ func BenchmarkFramePatchBandwidth(b *testing.B) {
 			total := <-done
 			b.ReportMetric(float64(total)/float64(b.N), "wire-B/frame")
 		})
+	}
+}
+
+func TestEncoderRefusesAPictureShorterThanItsSize(t *testing.T) {
+	for _, protocol := range []int{protocolPictures, protocolStream} {
+		short := pendingFrame{RGBA: make([]byte, 4), Width: 2, Height: 2, Scale: 1}
+		whole := pendingFrame{RGBA: bytes.Repeat([]byte{9, 9, 9, 255}, 4), Width: 2, Height: 2, Scale: 1}
+		if messages := encodeFrameMessages(t, protocol, short, whole); len(messages) != 1 {
+			t.Fatalf("protocol %d sent %d pictures, want only the whole one", protocol, len(messages))
+		}
 	}
 }
 

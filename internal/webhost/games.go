@@ -129,7 +129,8 @@ func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
-	writeJSON(writer, http.StatusOK, body)
+	// The list is read every time the picker opens and rarely changes.
+	s.serveRevalidated(writer, request, contentTypes[".json"], body)
 }
 
 // errNotAGame is what every road into the two roots answers with when the path

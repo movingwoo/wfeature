@@ -361,6 +361,12 @@ framing:
   anything is allocated — a ten-byte header may claim four gigabytes — reserved
   bits and malformed fragmentation are rejected rather than ignored, and a
   server refuses the unmasked client frames RFC 6455 forbids.
+- A frame's header and payload reach the transport in one write, and
+  `WriteBatch` sends several messages in one. A socket that does not wait to
+  fill a packet sends each write as its own, and behind a TLS proxy as its own
+  record, so a small message written in two parts paid for two sets of
+  headers. The session writer batches what is queued so a tick's picture and
+  sound share one; see [session transport](session.md#writes-and-statistics).
 - A WebSocket handshake is not subject to CORS, so `Upgrader` checks `Origin`
   against the host the request arrived on by default. Without that, any page
   the user visits could drive a session on their own machine. A deployment

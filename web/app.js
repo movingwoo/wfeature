@@ -18,6 +18,7 @@ import {
   cells as keypadCells,
 } from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
+import { Magnifier, unionRect } from "./magnify.js";
 import { browserToken, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
@@ -533,31 +534,31 @@ const initInput = () => {
   window.addEventListener("blur", releaseInput);
 };
 
-// The receiver has already composed every patch into this borrowed canvas.
-// Display draws may coalesce without dropping updates needed by later patches.
+// The receiver has already composed every update into this borrowed canvas.
+// Display draws may coalesce without dropping updates needed by later ones;
+// what each changed is joined so the magnifier redoes all of it.
+const magnifier = new Magnifier();
 let pendingPicture = null;
+let pendingScale = 1;
+let pendingDirty = null;
 let drawScheduled = false;
-const drawFrame = picture => {
+const drawFrame = (picture, { scale = 1, dirty = null } = {}) => {
+  pendingDirty = pendingPicture ? unionRect(pendingDirty, dirty) : dirty;
   pendingPicture = picture;
+  pendingScale = scale;
   if (drawScheduled) return;
   drawScheduled = true;
   requestAnimationFrame(() => {
     drawScheduled = false;
-    const frame = pendingPicture;
+    const frame = pendingPicture, dirty = pendingDirty;
     pendingPicture = null;
+    pendingDirty = null;
     if (!frame) return;
-    // The magnification filter runs on the server, so the frame's size is the
-    // server's answer and the canvas follows it. Its CSS size is unchanged, so
-    // the picture stays the same size on screen and gains detail.
-    if (frame.width !== canvas.width || frame.height !== canvas.height) {
-      canvas.width = frame.width;
-      canvas.height = frame.height;
-      // Nothing else follows: the space the canvas occupies is the page's to
-      // decide and does not move with the frame. A frame of another shape than
-      // the space is fitted into it by the stylesheet, not stretched.
-    }
-    canvasContext.clearRect(0, 0, canvas.width, canvas.height);
-    canvasContext.drawImage(frame, 0, 0);
+    // The picture arrives at the game's own size with the scale the server
+    // named, and the magnification filter runs here. The canvas follows the
+    // magnified size; its CSS size is unchanged, so the picture stays the same
+    // size on screen and gains detail.
+    magnifier.present(canvasContext, frame, pendingScale, dirty);
   });
 };
 
@@ -567,7 +568,7 @@ const openSession = async handlers => {
   const playing = () => ["playing", "starting"].includes(sessionLink?.state());
   const opening = new GameSession({
     ...handlers,
-    onFrame: picture => { if (playing()) drawFrame(picture); },
+    onFrame: (picture, presentation) => { if (playing()) drawFrame(picture, presentation); },
     onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
     onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
@@ -587,6 +588,8 @@ const sessionStateChanged = state => {
     vibration.stop();
     pageAudio?.stopAll();
     pendingPicture = null;
+    pendingDirty = null;
+    magnifier.reset();
   }
   const returning = document.getElementById("session-return");
   returning?.classList.toggle("hidden", state !== "occupied");
@@ -634,9 +637,12 @@ const recordSessionStats = stats => {
   // server ran out of time once the rate says how many of them there were.
   const speed = stats.speed > 0 ? `, speed ${stats.speed.toFixed(2)}x` : "";
   const shed = stats.shed > 0 ? `, shed ${stats.shed}` : "";
+  // What the connection carried, pictures, sound and text together: the
+  // number a metered link is charged by, less the transport's own headers.
+  const traffic = stats.bytes_per_second !== undefined ? `, net ${(stats.bytes_per_second / 1024).toFixed(1)}KB/s` : "";
   recordEvent(`session ${stats.fps.toFixed(1)}fps, tick ${stats.tick_ms.toFixed(1)}ms` +
     ` x${(stats.tick_rate ?? 0).toFixed(1)}/s${speed}, ` +
-    `frame ${stats.frame_bytes}B, dropped ${stats.skipped}${shed}`);
+    `frame ${stats.frame_bytes}B${traffic}, dropped ${stats.skipped}${shed}`);
 };
 
 // startServerGame runs a game on the server and draws what comes back. The
@@ -704,7 +710,9 @@ const initGameSelect = async () => {
   }
 
   try {
-    const response = await fetch("games.json", { cache: "no-store" });
+    // Always asked for, never trusted from a cache: an unchanged list costs a
+    // revalidation and an added game shows at once.
+    const response = await fetch("games.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`게임 목록을 불러오지 못했습니다 (${response.status})`);
     const games = await response.json();
     select.replaceChildren();
@@ -1175,10 +1183,12 @@ const initSettings = () => {
   // choice is the user's and it is remembered.
   const scale = document.getElementById("frame-scale");
   const applyScale = value => {
-    // The filter runs where the frame is made. A phone receiving magnified
-    // pixels has nothing left to do but draw them. The panel is wired before
-    // the socket is open, so an early change is stored and carried into the
-    // session by the scale that start sends.
+    // The server still decides the scale — a MIDlet's surface is never
+    // magnified — and names it with each complete picture; the filter itself
+    // runs in this page (magnify.js), because sending magnified pictures cost
+    // several times the traffic. The panel is wired before the socket is open,
+    // so an early change is stored and carried into the session by the scale
+    // that start sends.
     session?.setScale(Number(value));
     localStore.setItem(FRAME_SCALE_KEY, String(value));
   };

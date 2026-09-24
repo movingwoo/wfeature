@@ -1,8 +1,11 @@
 package webhost
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -60,10 +63,13 @@ func TestServesTheInstallableShell(t *testing.T) {
 			if got := recorder.Header().Get("Content-Type"); got != test.contentType {
 				t.Errorf("Content-Type = %q, want %q", got, test.contentType)
 			}
-			// The shell changes with every build, so it is never cached; the
-			// service worker is what makes the page load offline.
-			if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+			// The shell changes with every build, so every load asks whether
+			// it did; the service worker is what makes the page load offline.
+			if got := recorder.Header().Get("Cache-Control"); got != "no-cache" {
 				t.Errorf("Cache-Control = %q", got)
+			}
+			if got := recorder.Header().Get("ETag"); !strings.HasPrefix(got, `W/"`) {
+				t.Errorf("ETag = %q", got)
 			}
 			if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 				t.Errorf("X-Content-Type-Options = %q", got)
@@ -72,6 +78,117 @@ func TestServesTheInstallableShell(t *testing.T) {
 				t.Errorf("body does not contain %q", test.contains)
 			}
 		})
+	}
+}
+
+func TestTheShellIsCompressedAndRevalidated(t *testing.T) {
+	server := newTestServer(t, Options{})
+	original, err := os.ReadFile(filepath.Join("..", "..", "web", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	request.Header.Set("Accept-Encoding", "br, gzip;q=0.8")
+	compressed := httptest.NewRecorder()
+	server.ServeHTTP(compressed, request)
+	if compressed.Code != http.StatusOK || compressed.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("status %d, encoding %q", compressed.Code, compressed.Header().Get("Content-Encoding"))
+	}
+	if vary := compressed.Header().Get("Vary"); vary != "Accept-Encoding" {
+		t.Errorf("Vary = %q", vary)
+	}
+	reader, err := gzip.NewReader(compressed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inflated, err := io.ReadAll(reader)
+	if err != nil || !bytes.Equal(inflated, original) {
+		t.Fatalf("the compressed body is not the file (%v)", err)
+	}
+	if compressed.Body.Len() >= len(original)/2 {
+		t.Errorf("compressed %d of %d bytes", compressed.Body.Len(), len(original))
+	}
+
+	// A browser that does not take gzip gets the file as it is.
+	plain := get(t, server, "/app.js")
+	if plain.Header().Get("Content-Encoding") != "" || !bytes.Equal(plain.Body.Bytes(), original) {
+		t.Fatal("an identity request was not answered with the file")
+	}
+
+	// An unchanged file costs a revalidation nothing but headers.
+	for _, encoding := range []string{"gzip", ""} {
+		again := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+		again.Header.Set("Accept-Encoding", encoding)
+		again.Header.Set("If-None-Match", compressed.Header().Get("ETag"))
+		answer := httptest.NewRecorder()
+		server.ServeHTTP(answer, again)
+		if answer.Code != http.StatusNotModified || answer.Body.Len() != 0 || answer.Header().Get("Content-Encoding") != "" {
+			t.Fatalf("revalidation with %q answered %d with %d bytes", encoding, answer.Code, answer.Body.Len())
+		}
+	}
+
+	// Pictures are already compressed and are not compressed again.
+	icon := httptest.NewRequest(http.MethodGet, "/icon-512.png", nil)
+	icon.Header.Set("Accept-Encoding", "gzip")
+	answer := httptest.NewRecorder()
+	server.ServeHTTP(answer, icon)
+	if answer.Header().Get("Content-Encoding") != "" {
+		t.Fatal("a PNG was compressed")
+	}
+}
+
+func TestTheGameListIsCompressedAndRevalidated(t *testing.T) {
+	gameRoot := t.TempDir()
+	for index := range 40 {
+		if err := os.WriteFile(filepath.Join(gameRoot, fmt.Sprintf("게임 %02d.zip", index)), []byte("PK"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := newTestServer(t, Options{GameRoot: gameRoot})
+	request := httptest.NewRequest(http.MethodGet, "/games.json", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, request)
+	if first.Header().Get("Content-Encoding") != "gzip" || first.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("encoding %q, cache %q", first.Header().Get("Content-Encoding"), first.Header().Get("Cache-Control"))
+	}
+	again := httptest.NewRequest(http.MethodGet, "/games.json", nil)
+	again.Header.Set("If-None-Match", first.Header().Get("ETag"))
+	answer := httptest.NewRecorder()
+	server.ServeHTTP(answer, again)
+	if answer.Code != http.StatusNotModified {
+		t.Fatalf("an unchanged list answered %d", answer.Code)
+	}
+	// A game added since is a different list.
+	if err := os.WriteFile(filepath.Join(gameRoot, "새 게임.zip"), []byte("PK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed := httptest.NewRecorder()
+	server.ServeHTTP(changed, again)
+	if changed.Code != http.StatusOK || !strings.Contains(changed.Body.String(), "새 게임") {
+		t.Fatalf("a changed list answered %d", changed.Code)
+	}
+}
+
+func TestAcceptsGzipReadsQualities(t *testing.T) {
+	for header, want := range map[string]bool{
+		"":                         false,
+		"gzip":                     true,
+		"deflate, gzip;q=1.0, br":  true,
+		"GZIP":                     true,
+		"gzip;q=0":                 false,
+		"gzip; q=0.000":            false,
+		"br, identity":             false,
+		"x-gzip, deflate;q=0.5":    false,
+		"gzip;q=0.001, identity;q": true,
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		if header != "" {
+			request.Header.Set("Accept-Encoding", header)
+		}
+		if got := acceptsGzip(request); got != want {
+			t.Errorf("Accept-Encoding %q: %v, want %v", header, got, want)
+		}
 	}
 }
 

@@ -1,8 +1,14 @@
 package webhost
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
 // The rule these tests keep is that nothing on the emulator's goroutine waits
@@ -75,6 +81,129 @@ func TestASendGivesUpOnceTheWriterHasGone(t *testing.T) {
 	close(runner.writerDone)
 	if !finishes(func() { runner.send(serverMessage{Kind: serverError, Message: "boom"}) }) {
 		t.Fatal("a send waited on a writer that had already gone")
+	}
+}
+
+// countingTransport is a socket that records each write the writer makes.
+type countingTransport struct {
+	mutex  sync.Mutex
+	wire   bytes.Buffer
+	writes int
+}
+
+func (c *countingTransport) Write(data []byte) (int, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.writes++
+	return c.wire.Write(data)
+}
+
+func (c *countingTransport) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (c *countingTransport) snapshot() (int, []byte) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.writes, bytes.Clone(c.wire.Bytes())
+}
+
+// writingRunner is a session whose writer writes to a transport the test reads.
+func writingRunner(t *testing.T) (*sessionRunner, *countingTransport, func()) {
+	t.Helper()
+	transport := &countingTransport{}
+	runner := &sessionRunner{
+		server:       newTestServer(t, Options{}),
+		connection:   wsproto.Server(transport),
+		outText:      make(chan outboundMessage, 8),
+		outFrames:    make(chan outboundMessage, 1),
+		frames:       make(chan pendingFrame, 1),
+		frameSettled: make(chan struct{}, 1),
+		writerDone:   make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	start := func() {
+		go func() { defer close(done); runner.writeMessages(ctx, cancel) }()
+	}
+	t.Cleanup(func() { cancel(); <-done })
+	return runner, transport, start
+}
+
+// waitForWrites polls until the writer has made at least count writes.
+func waitForWrites(t *testing.T, transport *countingTransport, count int) (int, []byte) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if writes, wire := transport.snapshot(); writes >= count {
+			return writes, wire
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("the writer made fewer than %d writes", count)
+	return 0, nil
+}
+
+// readWire splits what the writer wrote into its messages.
+func readWire(t *testing.T, wire []byte) []wsproto.Opcode {
+	t.Helper()
+	client := wsproto.Client(bytes.NewBuffer(wire))
+	var opcodes []wsproto.Opcode
+	for {
+		opcode, _, err := client.ReadMessage()
+		if err != nil {
+			return opcodes
+		}
+		opcodes = append(opcodes, opcode)
+	}
+}
+
+func TestQueuedMessagesLeaveInOneWrite(t *testing.T) {
+	runner, transport, start := writingRunner(t)
+	runner.outText <- outboundMessage{text: `{"kind":"started"}`}
+	runner.outText <- outboundMessage{binary: []byte("WFA2\x06"), audio: true}
+	runner.outFrames <- outboundMessage{binary: []byte("picture")}
+	start()
+	writes, wire := waitForWrites(t, transport, 1)
+	time.Sleep(20 * time.Millisecond)
+	if writes, _ = transport.snapshot(); writes != 1 {
+		t.Fatalf("three queued messages took %d writes", writes)
+	}
+	// The text queued ahead of the picture is written ahead of it.
+	if got := readWire(t, wire); len(got) != 3 || got[0] != wsproto.OpText || got[1] != wsproto.OpBinary || got[2] != wsproto.OpBinary {
+		t.Fatalf("messages %v", got)
+	}
+	if written := runner.written.Load(); written != uint64(len(wire)) {
+		t.Fatalf("counted %d bytes written, the wire holds %d", written, len(wire))
+	}
+	if runner.sent.Load() != 1 || runner.frameBytes.Load() != uint64(len("picture")) {
+		t.Fatal("the picture was not counted as the one frame")
+	}
+}
+
+func TestSoundWaitsBrieflyForThePictureOfItsTick(t *testing.T) {
+	runner, transport, start := writingRunner(t)
+	runner.encoding.Store(true)
+	runner.outText <- outboundMessage{binary: []byte("WFA2\x06"), audio: true}
+	start()
+	time.Sleep(2 * time.Millisecond)
+	runner.outFrames <- outboundMessage{binary: []byte("picture")}
+	_, wire := waitForWrites(t, transport, 1)
+	time.Sleep(20 * time.Millisecond)
+	if writes, _ := transport.snapshot(); writes != 1 {
+		t.Fatalf("sound and its picture took %d writes", writes)
+	}
+	if got := readWire(t, wire); len(got) != 2 {
+		t.Fatalf("the write held %d messages, want the sound and the picture", len(got))
+	}
+}
+
+func TestSoundDoesNotWaitWhenNoPictureIsComing(t *testing.T) {
+	runner, transport, start := writingRunner(t)
+	runner.outText <- outboundMessage{binary: []byte("WFA2\x06"), audio: true}
+	started := time.Now()
+	start()
+	waitForWrites(t, transport, 1)
+	if elapsed := time.Since(started); elapsed >= frameLinger {
+		t.Fatalf("sound with no picture on its way waited %v", elapsed)
 	}
 }
 

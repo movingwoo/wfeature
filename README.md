@@ -277,7 +277,7 @@ MIT — [`LICENSE`](LICENSE)
 | `golang.org/x/sys` | Go 모듈, amd64 대상에 정적 링크 | BSD-3-Clause |
 | NeoDGM (Neo둥근모) | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
 | Galmuri9 | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
-| hqx | `internal/filter/hqx`의 결정 테이블 번역본 | MIT OR Apache-2.0 |
+| hqx | `internal/filter/hqx`와 `web/hqx-patterns.js`의 결정 테이블 번역본 | MIT OR Apache-2.0 |
 
 전문은 [`internal/licenses/THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 **모든 릴리스 바이너리가 이 파일을 안고 나갑니다.**  
 `wfeature licenses`로 출력하거나 서버의 `/licenses`로 받을 수 있습니다.  
