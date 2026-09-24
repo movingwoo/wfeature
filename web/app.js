@@ -533,21 +533,18 @@ const initInput = () => {
   window.addEventListener("blur", releaseInput);
 };
 
-// drawFrame paints one picture from the server. Frames can arrive faster than
-// the display refreshes, so the newest one wins and the rest are dropped
-// undrawn: showing a picture the game has already replaced costs a phone the
-// budget it needs for the one after it.
-let pendingBitmap = null;
+// The receiver has already composed every patch into this borrowed canvas.
+// Display draws may coalesce without dropping updates needed by later patches.
+let pendingPicture = null;
 let drawScheduled = false;
-const drawFrame = bitmap => {
-  pendingBitmap?.close();
-  pendingBitmap = bitmap;
+const drawFrame = picture => {
+  pendingPicture = picture;
   if (drawScheduled) return;
   drawScheduled = true;
   requestAnimationFrame(() => {
     drawScheduled = false;
-    const frame = pendingBitmap;
-    pendingBitmap = null;
+    const frame = pendingPicture;
+    pendingPicture = null;
     if (!frame) return;
     // The magnification filter runs on the server, so the frame's size is the
     // server's answer and the canvas follows it. Its CSS size is unchanged, so
@@ -559,8 +556,8 @@ const drawFrame = bitmap => {
       // decide and does not move with the frame. A frame of another shape than
       // the space is fitted into it by the stylesheet, not stretched.
     }
+    canvasContext.clearRect(0, 0, canvas.width, canvas.height);
     canvasContext.drawImage(frame, 0, 0);
-    frame.close();
   });
 };
 
@@ -570,7 +567,7 @@ const openSession = async handlers => {
   const playing = () => ["playing", "starting"].includes(sessionLink?.state());
   const opening = new GameSession({
     ...handlers,
-    onFrame: bitmap => { if (playing()) drawFrame(bitmap); else bitmap.close(); },
+    onFrame: picture => { if (playing()) drawFrame(picture); },
     onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
     onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
@@ -589,8 +586,7 @@ const sessionStateChanged = state => {
     gameRunning = false;
     vibration.stop();
     pageAudio?.stopAll();
-    pendingBitmap?.close();
-    pendingBitmap = null;
+    pendingPicture = null;
   }
   const returning = document.getElementById("session-return");
   returning?.classList.toggle("hidden", state !== "occupied");

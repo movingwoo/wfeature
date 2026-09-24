@@ -112,15 +112,16 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	defer connection.Close()
 
 	runner := &sessionRunner{
-		server:     s,
-		connection: connection,
-		commands:   make(chan clientMessage, commandBuffer),
-		handoffs:   make(chan sessionHandoff),
-		done:       make(chan struct{}),
-		frames:     make(chan pendingFrame, 1),
-		outText:    make(chan outboundMessage, outboundBuffer),
-		outFrames:  make(chan outboundMessage, 1),
-		writerDone: make(chan struct{}),
+		server:       s,
+		connection:   connection,
+		commands:     make(chan clientMessage, commandBuffer),
+		handoffs:     make(chan sessionHandoff),
+		done:         make(chan struct{}),
+		framePatches: request.URL.Query().Get("frames") == "patch-v1",
+		frames:       make(chan pendingFrame, 1),
+		outText:      make(chan outboundMessage, outboundBuffer),
+		outFrames:    make(chan outboundMessage, 1),
+		writerDone:   make(chan struct{}),
 	}
 	runner.run(request.Context())
 }
@@ -146,6 +147,8 @@ type sessionRunner struct {
 	textInputID   uint64
 	commands      chan clientMessage
 	frames        chan pendingFrame
+	// Negotiated per connection; older pages continue receiving full PNGs.
+	framePatches bool
 
 	// outText and outFrames are what the writer goroutine drains. They are
 	// separate because their backlogs mean opposite things. Text is small and
@@ -337,6 +340,7 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 	buffer := &bytes.Buffer{}
 	scaler := &hqx.Scaler{}
 	var previous pendingFrame
+	var previousPicture *image.RGBA
 	for frame := range r.frames {
 		if frame.Scale < 1 {
 			frame.Scale = 1
@@ -361,8 +365,27 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 			Stride: frame.Width * 4,
 			Rect:   image.Rect(0, 0, frame.Width, frame.Height),
 		}
+		region := picture.Bounds()
+		if r.framePatches && !frame.Force && raw.Scale == previous.Scale &&
+			previousPicture != nil && picture.Bounds() == previousPicture.Bounds() {
+			changed := changedFrameBounds(picture, previousPicture)
+			// A large change is cheaper to encode once as a complete picture.
+			// Small changes use the same lossless PNG codec on just that area.
+			if !changed.Empty() && changed.Dx()*changed.Dy() < region.Dx()*region.Dy()/2 {
+				region = changed
+			}
+		}
 		buffer.Reset()
-		if err := encoder.Encode(buffer, picture); err != nil {
+		var encodedPicture image.Image = picture
+		if region != picture.Bounds() {
+			var header [12]byte
+			copy(header[:], "WFP1")
+			binary.BigEndian.PutUint32(header[4:8], uint32(region.Min.X))
+			binary.BigEndian.PutUint32(header[8:12], uint32(region.Min.Y))
+			buffer.Write(header[:])
+			encodedPicture = picture.SubImage(region)
+		}
+		if err := encoder.Encode(buffer, encodedPicture); err != nil {
 			r.server.logger.Warn("frame could not be encoded", "error", err)
 			continue
 		}
@@ -373,6 +396,9 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 		select {
 		case r.outFrames <- outboundMessage{binary: encoded, redraw: frame.Force}:
 			previous = raw
+			if r.framePatches {
+				previousPicture = picture
+			}
 		case <-r.writerDone:
 			return
 		case <-ctx.Done():

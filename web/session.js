@@ -5,9 +5,11 @@
 // at full speed is to stop emulating and start watching.
 //
 // What crosses the socket: JSON text in both directions for everything small,
-// and one binary message per frame carrying a PNG. Frames are decoded with
+// and binary PNG pictures or PNG rectangle updates. Frames are decoded with
 // createImageBitmap, which hands the work to the browser's own decoder off the
 // main thread — the phone's job is now a bitmap blit twenty times a second.
+
+import { FrameReceiver } from "./frame-stream.js";
 
 // sessionURL is the page's own origin with the websocket scheme, so a session
 // reaches the server the page came from without anything to configure. A page
@@ -15,7 +17,7 @@
 // would need.
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/api/session`;
+  return `${scheme}//${location.host}/api/session?frames=patch-v1`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -25,7 +27,7 @@ export const sessionAvailable = () =>
   typeof WebSocket === "function" && typeof createImageBitmap === "function";
 
 export class GameSession {
-  // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onStarted(info), onExited(reason),
+  // handlers: onFrame(canvas), onAudio(events), onVibrate(request), onStarted(info), onExited(reason),
   // onError(message), onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
@@ -35,6 +37,15 @@ export class GameSession {
     this.pending = new Map();
     this.nextId = 1;
     this.closed = false;
+    this.frames = new FrameReceiver(
+      canvas => { if (!this.closed) this.handlers.onFrame?.(canvas); },
+      error => {
+        console.warn("wfeature frame could not be decoded", error);
+        // A missing patch invalidates subsequent pictures. Reconnect through
+        // session-link so the retained game supplies a complete frame again.
+        this.close();
+      },
+    );
     // The server's build profile, known from the moment it says it is ready.
     // The page hides the developer's half of its interface unless a debug
     // build answered, so a release is not a page with parts switched off — it
@@ -65,7 +76,7 @@ export class GameSession {
       socket.addEventListener("message", event => {
         if (this.closed) return;
         if (typeof event.data !== "string") {
-          this.#receiveFrame(event.data);
+          this.frames.receive(event.data);
           return;
         }
         let message;
@@ -88,6 +99,7 @@ export class GameSession {
       });
       socket.addEventListener("close", () => {
         this.closed = true;
+        this.frames.close();
         clearTimeout(timer);
         // Everything still waiting for an answer is never getting one.
         for (const { reject: rejectPending } of this.pending.values()) {
@@ -98,18 +110,6 @@ export class GameSession {
         this.handlers.onClosed?.();
       });
     });
-  }
-
-  async #receiveFrame(blob) {
-    try {
-      // createImageBitmap decodes off the main thread, which is what keeps a
-      // phone's frame budget for drawing rather than decoding.
-      const bitmap = await createImageBitmap(blob);
-      if (this.closed || !this.handlers.onFrame) bitmap.close?.();
-      else this.handlers.onFrame(bitmap);
-    } catch (error) {
-      console.warn("wfeature frame could not be decoded", error);
-    }
   }
 
   #receive(message) {
@@ -250,6 +250,7 @@ export class GameSession {
 
   close() {
     this.closed = true;
+    this.frames.close();
     for (const { reject } of this.pending.values()) {
       reject(new Error("세션 연결이 끊어졌습니다."));
     }

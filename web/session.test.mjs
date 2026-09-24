@@ -126,7 +126,7 @@ const openFakeSession = async (handlers = {}) => {
   // sessionURL reads the page's own origin, which node has no notion of.
   const previousLocation = globalThis.location;
   globalThis.location = { protocol: "http:", host: "localhost:11541" };
-  globalThis.WebSocket = function () { return socket; };
+  globalThis.WebSocket = function (url) { socket.url = url; return socket; };
   globalThis.WebSocket.OPEN = 1;
   globalThis.createImageBitmap = async () => ({});
   const session = new GameSession(handlers);
@@ -139,24 +139,39 @@ const openFakeSession = async (handlers = {}) => {
   return { session, socket };
 };
 
+test("the page opts into PNG patches on its session connection", async () => {
+  const { session, socket } = await openFakeSession();
+  assert.equal(new URL(socket.url).searchParams.get("frames"), "patch-v1");
+  session.close();
+});
+
 test("intermediate PNG frames arrive while start is still pending", async t => {
   const frames = [];
-  const { session, socket } = await openFakeSession({ onFrame: bitmap => frames.push(bitmap) });
+  const { session, socket } = await openFakeSession({ onFrame: canvas => frames.push(canvas.pixel) });
   const previous = globalThis.createImageBitmap;
-  globalThis.createImageBitmap = async blob => ({ blob, close() {} });
-  t.after(() => { globalThis.createImageBitmap = previous; session.close(); });
+  const previousDocument = globalThis.document;
+  const canvas = { width: 0, height: 0, getContext: () => ({ clearRect() {}, drawImage(bitmap) { canvas.pixel = bitmap.pixel; } }) };
+  globalThis.document = { createElement: () => canvas };
+  globalThis.createImageBitmap = async blob => ({ width: 1, height: 1, pixel: new Uint8Array(await blob.arrayBuffer())[24], close() {} });
+  t.after(() => { globalThis.createImageBitmap = previous; globalThis.document = previousDocument; session.close(); });
   const starting = session.start("fixture.zip");
   const request = socket.sent.at(-1);
   let finished = false;
   starting.then(() => { finished = true; });
-  const first = new Blob(["first PNG"], { type: "image/png" });
-  const second = new Blob(["second PNG"], { type: "image/png" });
+  const png = new Uint8Array(25);
+  png.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  new DataView(png.buffer).setUint32(16, 1);
+  new DataView(png.buffer).setUint32(20, 1);
+  png[24] = 1;
+  const first = new Blob([png]);
+  png[24] = 2;
+  const second = new Blob([png]);
   socket.deliverFrame(first);
   await new Promise(resolve => setImmediate(resolve));
   socket.deliverFrame(second);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(finished, false);
-  assert.deepEqual(frames.map(frame => frame.blob), [first, second]);
+  assert.deepEqual(frames, [1, 2]);
   socket.deliver({ kind: "started", id: request.id, started: { platform: "ktf", width: 240, height: 320 } });
   await starting;
 });

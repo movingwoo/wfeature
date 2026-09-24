@@ -1278,3 +1278,60 @@ The `started` description reports `authentication` as `off`, `unsupported`,
 Resume returns the existing runtime and its result. Unsupported retains ordinary
 guest behavior. Applied identifies a selected adapter, not successful gameplay.
 See [implementation and limits](../authentication.md).
+
+<a id="frame-bandwidth-2026-09-24"></a>
+
+## Frame bandwidth — 2026-09-24
+
+The existing encoder already omitted consecutive identical pictures, but any
+changed picture still sent the entire PNG. Compressing 100 existing local startup
+screenshots with default PNG compression instead of BestSpeed reduced their total
+from 2,432,172 to 2,230,227 bytes (8.3%). This read-only sample is not a gameplay
+traffic measurement. It motivated comparing changed regions rather than increasing
+compression effort on every complete picture.
+
+The implemented path keeps emulation and hqx on the server and sends a lossless PNG
+rectangle for small changes. It adds one retained composition canvas on the page
+and one retained scaled frame on the server. No dependencies, guest behavior,
+frame-rate settings, audio messages, or save formats change. The
+[current protocol](../session.md#presentation-and-audio) specifies compatibility,
+ordering, redraw boundaries and recovery.
+
+`TestFramePatchBandwidth` uses 60 authored 240x320 frames: a 16x16 sprite moves
+across a fixed tiled background. It includes the initial complete picture.
+Complete PNG payloads total **226,646 bytes**; negotiated updates total
+**11,732 bytes**, a **94.82% reduction**. Both runs encode the same pixels. The
+12-byte patch header is included; WebSocket/TCP/TLS overhead and JSON/audio traffic
+are excluded.
+
+On an Apple M1, darwin/arm64, three one-second runs of
+`BenchmarkFramePatchBandwidth` gave these medians:
+
+| Encoder path | Time per frame | Payload per frame |
+| --- | ---: | ---: |
+| Complete PNG | 609.4 microseconds | 3,777 bytes |
+| PNG rectangle | 24.2 microseconds | 137.6 bytes |
+
+The benchmark repeats the 60-frame sequence, so its initial complete picture is
+amortized more than in the fixed test. It excludes emulation, hqx (scale is 1),
+socket writes and browser work. Reproduce with:
+
+```sh
+go test ./internal/webhost -run TestFramePatchBandwidth -v
+go test ./internal/webhost -run '^$' -bench '^BenchmarkFramePatchBandwidth$' -benchtime=1s -count=3
+```
+
+Go reconstruction tests cover alpha replacement, edge changes, hqx factors 1–4,
+forced complete frames and dimension changes. Handler tests cover negotiated,
+legacy and unknown-version connections. Node tests cover ordered composition,
+slow decoding, closure, invalid frames and bounded backlogs. The authored-fixture
+browser route passed in Chromium and WebKit, including patch output matching a
+forced complete PNG, restart, park/resume, new connections and WIPI scale changes.
+The ordinary, debug, internal race and vet gates passed.
+
+These results do not promise a 94.82% reduction for a real game. Full-screen
+scrolling or widely separated changes can still require complete pictures, and
+sampled audio traffic is unchanged. Actual gameplay traffic and physical-phone
+CPU, memory and battery effects remain unmeasured in this change. Large-scene
+optimization should follow a measured route rather than reducing image quality
+or moving the emulator onto the phone by default.

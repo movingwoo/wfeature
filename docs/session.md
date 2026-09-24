@@ -8,8 +8,11 @@ measurements, and investigations.
 
 ## Transport
 
-The page opens `/api/session`. Text messages carry JSON commands and results;
-binary messages carry ordinary PNG frames with dimensions in the image itself.
+The page opens `/api/session?frames=patch-v1`. Text messages carry JSON commands
+and results; binary messages carry complete PNG pictures or PNG rectangle updates.
+Without that exact query value, the server sends only complete PNGs. Older pages
+remain compatible, and the current page also accepts complete PNGs from an older
+server that ignores the query.
 
 | Page message | Purpose |
 | --- | --- |
@@ -61,7 +64,31 @@ guest callbacks, timers and drawing still execute. A static screen may therefore
 report zero delivered frames per second while guest ticks continue normally.
 Start, resume and display-setting changes force presentation even when pixels
 match. That request survives a full queue until accepted, and its queued lifecycle
-answer is written before the forced PNG. The page needs no new wire format.
+answer is written before the forced PNG.
+
+For connections requesting `patch-v1`, the encoder compares the final scaled
+pixels with the last picture accepted by the writer queue. If the bounding
+rectangle of changed pixels occupies less than half the screen, it encodes only
+that rectangle. Larger changes, explicit redraws, size/scale changes and the first
+picture use a complete PNG. All encoding remains lossless at the same frame rate
+and presentation scale. Emulator execution and hqx remain on the server.
+
+A rectangle message starts with ASCII `WFP1`, followed by unsigned 32-bit
+big-endian `x` and `y` coordinates, then the PNG at byte 12. PNG dimensions specify
+the rectangle's size; coordinates refer to the scaled picture. A complete PNG
+has no extra header and replaces the entire base. Each patch depends on all prior
+binary messages on that connection. Raw frames can be dropped before encoding;
+encoded updates must remain ordered and cannot be dropped independently.
+
+`web/frame-stream.js` decodes messages serially and replaces their rectangles in
+a retained canvas, including transparent pixels. The display can then coalesce
+draws of that complete canvas without losing patches. Image dimensions are bounded
+at 4096 per axis, matching the maximum handset size at hq4x. At most 32 waiting
+messages and 96 MiB of queued/in-flight encoded data are accepted. Decode failure
+or excessive backlog closes the connection; existing session recovery resumes the
+retained game with a complete picture. See the
+[bandwidth measurements](history/session.md#frame-bandwidth-2026-09-24) for scope
+and limitations.
 
 KTF additionally offers explicit LCD flushes through `backend.FrameSink` and
 `session.Options.FrameUpdates`, including while startup or a long callback holds
@@ -71,8 +98,8 @@ the consumer. Scaling runs on the encoder goroutine. Hosts without a sink keep
 the pull-only path. No timer invents a flush that guest code did not request.
 
 Parking detaches the sink before its queue closes; resume installs the new
-queue before guest execution resumes. Intermediate frames use the same PNG wire
-format. [The CPU investigation](cpu-saturation-investigation-2026-09-23.md)
+queue before guest execution resumes. Intermediate frames use the same negotiated
+picture format. [The CPU investigation](cpu-saturation-investigation-2026-09-23.md)
 records component benchmarks, authored-fixture Chromium/WebKit checks and a
 bounded local KTF browser run. These do not establish all-game performance or
 physical-phone acceptance.

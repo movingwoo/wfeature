@@ -146,9 +146,10 @@ than leaving a gap — and takes the report button out of the settings panel.
 They are the same files either way; the binary serving them is the one thing
 that knows which build this is.
 
-The page draws and nothing else: frames arrive as PNGs on the socket, are
-decoded with `createImageBitmap` — off the main thread — and the newest one is
-drawn on the next animation frame. Keys go up as JSON, sound arrives as MIDI and
+The page receives complete PNGs or PNG rectangle updates on the socket, decodes
+them with `createImageBitmap`, and composes them in order on a retained canvas.
+The newest complete picture is drawn on the next animation frame; game execution
+and hqx remain on the server. Keys go up as JSON, sound arrives as MIDI and
 PCM events and is played by the synthesiser here, and the cheat panel's
 operations are a request and an answer.
 
@@ -181,8 +182,9 @@ built per profile like every other binary here.
   rate, and by the age and total size of the directory; see
   `../docs/architecture.md`, "Debug run logs".
 - `GET /api/session` (WebSocket) — one controlling connection per game. Browser
-  tokens, retention, explicit takeover and recovery are described in
-  `../docs/session.md`, "A game outlives its socket".
+  clients request `?frames=patch-v1` for lossless PNG rectangle updates; clients
+  without that value receive complete PNGs. Tokens, retention, explicit takeover,
+  frame composition and recovery are described in [server sessions](../docs/session.md).
 
 The emulator and the save tree are on the same machine, so nothing is preloaded
 and no save crosses the network. The save API remains for the CLI's layout,

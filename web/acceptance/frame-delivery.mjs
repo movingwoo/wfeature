@@ -43,14 +43,20 @@ try {
   browser = await engine.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   await context.addInitScript(() => {
-    window.frameProbe = { pictures: 0, draws: 0, messages: [], sockets: [] };
+    window.frameProbe = { pictures: 0, patches: 0, bytes: 0, draws: 0, messages: [], sockets: [] };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) {
         super(...args);
         window.frameProbe.sockets.push(this);
         this.addEventListener("message", event => {
-          if (typeof event.data !== "string") window.frameProbe.pictures++;
+          if (typeof event.data !== "string") {
+            window.frameProbe.pictures++;
+            window.frameProbe.bytes += event.data.size;
+            void event.data.slice(0, 4).arrayBuffer().then(buffer => {
+              if (new DataView(buffer).getUint32(0) === 0x57465031) window.frameProbe.patches++;
+            });
+          }
           else {
             try { window.frameProbe.messages.push(JSON.parse(event.data)); } catch {}
           }
@@ -141,6 +147,22 @@ try {
   assert.notEqual((await snapshot()).hash, pressed.hash);
   check("changed input frames still decode and draw");
 
+  before = await snapshot();
+  await page.keyboard.down("1");
+  await nextDraw(before);
+  const patchesBefore = await page.evaluate(() => frameProbe.patches);
+  before = await snapshot();
+  await page.keyboard.down("2");
+  await nextDraw(before);
+  const patched = await snapshot();
+  assert.ok(await page.evaluate(() => frameProbe.patches) > patchesBefore, "small change did not use a PNG patch");
+  await page.evaluate(() => frameProbe.sockets.at(-1).send(JSON.stringify({ kind: "scale", value: 1 })));
+  await nextDraw(patched);
+  assert.equal((await snapshot()).hash, patched.hash, "patch composition differs from a complete server PNG");
+  await page.keyboard.up("1");
+  await page.keyboard.up("2");
+  check("PNG patch composition matches a forced complete picture pixel for pixel");
+
   await stop();
   await start("games/library/wipi.zip");
   for (const scale of [4, 1, 2]) {
@@ -171,6 +193,7 @@ try {
   const protocolErrors = await page.evaluate(() => frameProbe.messages.filter(message => message.kind === "error"));
   assert.deepEqual(protocolErrors, []);
   assert.deepEqual(result.errors, []);
+  result.transport = await page.evaluate(() => ({ pictures: frameProbe.pictures, patches: frameProbe.patches, bytes: frameProbe.bytes }));
   result.passed = true;
 } catch (error) {
   result.failure = error.stack;
