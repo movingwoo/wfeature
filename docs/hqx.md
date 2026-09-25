@@ -41,12 +41,34 @@ every visit. Every pixel is some other pixel's neighbour eight times over,
 so that is nine conversions per pixel reduced to one: 5.6ms to 3.9ms per
 240x320 frame natively, 16.0ms to 13.7ms in wasm.
 
-**The frame is magnified in the engine, not the page.** The alternative would
-have the page hold its own copy of the filter. Magnifying before presentation
-keeps one implementation and hands the canvas pixels it can draw without
-resampling. The framebuffer still enforces its own dimensions — that check is
-what catches a genuine size mismatch — so changing the filter rebuilds the
-surface at the new size rather than relaxing it.
+**The page magnifies its own copy of the tables.** The server used to magnify
+each picture and send the result, which kept one implementation; over recorded
+play it also made a session at hq2x cost 3.4 to 3.8 times the traffic of the
+same session at the original size, and hq3x 6.3 times. A page speaking session
+protocol 2 now receives the guest's own picture and magnifies it in
+`web/hqx.js`, redoing only the blocks an update can reach: a pixel's block and
+the blocks around it. The server still names the scale with each complete
+picture, so a MIDlet surface, which is never magnified, stays unmagnified. The
+first protocol and the CLI's `-scale` still magnify here, in Go.
+
+`web/hqx-patterns.js` is generated from `pattern2x.go`, `pattern3x.go` and
+`pattern4x.go` by `TestJavaScriptPatternsMatchTheGoTables`, which fails when
+the file and the tables differ (`WFEATURE_WRITE_HQX_JS=1` regenerates it).
+Each Go case becomes one small function and the table an array of them: a
+single function holding all 256 cases was optimised by V8 before most cases
+had run and discarded every time a new one did, and was two to three times
+slower. `TestTheSharedFixtureDigest` and `web/hqx.test.mjs` magnify the same
+authored picture — every neighbour pattern, twice — and must produce the same
+three digests, so the two implementations are held to the same pixels. That
+picture's colours all have luma and chroma well away from whole numbers: the
+conversion is floating point, and Go may fuse a multiply-add where JavaScript
+does not, which rounds a value on a boundary differently.
+
+The page reads pixels as signed words: an opaque pixel read unsigned is above
+2^31, which a JavaScript engine stores boxed, and the filter ran nearly twice
+as slow that way. A pixel whose eight neighbours are all its own colour is
+written as a flat block without consulting the tables — every blend of one
+colour with itself is that colour.
 
 ## Cost
 
@@ -55,8 +77,8 @@ pixel differs from every neighbour, so the most expensive cases run and the
 blends never take their equal-colors shortcut. Real frames have large flat
 areas that cost almost nothing.
 
-The wasm column is from when the filter ran in the page; the emulator and its
-filter now run on the server, so the native column is the one in force.
+The wasm column is from when the whole emulator ran in the page. The native
+column is the Go filter, which the first protocol and the CLI use.
 
 | | native | wasm |
 |---|---|---|
@@ -64,9 +86,20 @@ filter now run on the server, so the native column is the one in force.
 | hq3x | 4.0ms | 14.8ms |
 | hq4x | 4.2ms | 15.7ms |
 
-Against the ~50ms these games ask for per frame, and only on frames the guest
-actually flushes. Still, it is the user's choice and not the default: the page
-offers original/hq2x/hq3x/hq4x and remembers it.
+The page's JavaScript filter, measured 2026-09-24 in Node 25 on an Apple M1
+over two recorded 240x320 game frames, magnifying the whole frame:
+
+| | JavaScript, whole frame |
+|---|---|
+| hq2x | 4.4–5.1ms |
+| hq3x | 6.0–7.4ms |
+| hq4x | 11.3–16.0ms |
+
+A phone is slower than that desktop, and a frame that changed a little costs a
+small part of it. Against the ~50ms these games ask for per frame, and only on
+frames the guest actually flushes. Still, it is the user's choice and not the
+default: the page offers original/hq2x/hq3x/hq4x and remembers it. Its cost on
+a physical phone has not been measured.
 
 ### What it stopped allocating
 
@@ -96,7 +129,7 @@ the filter itself. What remains is the output image, which is the size it is.
 
 ## Using it
 
-- Browser: the 🔍 image-quality setting, which the page sends to the session so
-  the filter runs where the frame is made.
+- Browser: the 🔍 image-quality setting, which the page sends to the session;
+  the server names the scale with each complete picture and the page magnifies.
 - CLI: `runktf <game> -frame out.png -scale 3`, which also applies to
   `-framedir`.

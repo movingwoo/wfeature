@@ -4,18 +4,24 @@
 // WebAssembly backend rather than the emulator, so the only way a phone plays
 // at full speed is to stop emulating and start watching.
 //
-// What crosses the socket: JSON text in both directions for everything small,
-// and one binary message per frame carrying a PNG. Frames are decoded with
-// createImageBitmap, which hands the work to the browser's own decoder off the
-// main thread — the phone's job is now a bitmap blit twenty times a second.
+// What crosses the socket, in protocol 2: JSON text in both directions for
+// everything small, and binary messages for pictures and sound. A picture is
+// the game's own size, sent as an update to the one this page holds, and is
+// decoded with createImageBitmap, off the main thread; magnifying it is this
+// page's job (magnify.js). Sound is compact binary with each sample carried
+// once (audio-stream.js). docs/session.md has the whole protocol.
+
+import { AudioStream, isAudioMessage } from "./audio-stream.js";
+import { FrameReceiver } from "./frame-stream.js";
 
 // sessionURL is the page's own origin with the websocket scheme, so a session
 // reaches the server the page came from without anything to configure. A page
 // served over https gets wss, which is what a reverse proxy in front of this
-// would need.
+// would need. A server that does not know protocol 2 answers in protocol 1,
+// which this page also reads.
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/api/session`;
+  return `${scheme}//${location.host}/api/session?protocol=2`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -25,8 +31,8 @@ export const sessionAvailable = () =>
   typeof WebSocket === "function" && typeof createImageBitmap === "function";
 
 export class GameSession {
-  // handlers: onFrame(bitmap), onAudio(events), onVibrate(request), onStarted(info), onExited(reason),
-  // onError(message), onStats(stats), onClosed().
+  // handlers: onFrame(canvas, { scale, dirty }), onAudio(events), onVibrate(request), onStarted(info),
+  // onExited(reason), onError(message), onStats(stats), onClosed().
   constructor(handlers = {}) {
     this.handlers = handlers;
     this.socket = null;
@@ -35,6 +41,18 @@ export class GameSession {
     this.pending = new Map();
     this.nextId = 1;
     this.closed = false;
+    // The sounds this connection's server has defined; a new connection
+    // starts with none, and so does the server's record of them.
+    this.audio = new AudioStream();
+    this.frames = new FrameReceiver(
+      (canvas, presentation) => { if (!this.closed) this.handlers.onFrame?.(canvas, presentation); },
+      error => {
+        console.warn("wfeature frame could not be decoded", error);
+        // A missing patch invalidates subsequent pictures. Reconnect through
+        // session-link so the retained game supplies a complete frame again.
+        this.close();
+      },
+    );
     // The server's build profile, known from the moment it says it is ready.
     // The page hides the developer's half of its interface unless a debug
     // build answered, so a release is not a page with parts switched off — it
@@ -53,8 +71,10 @@ export class GameSession {
         reject(error);
         return;
       }
-      // Frames arrive as blobs so they can go straight to createImageBitmap.
-      socket.binaryType = "blob";
+      // Binary messages are read as bytes: a picture's header and a sound's
+      // operations are parsed here, and reading a blob would make that
+      // asynchronous and let a sound overtake the picture before it.
+      socket.binaryType = "arraybuffer";
       this.socket = socket;
 
       let ready = false;
@@ -65,7 +85,8 @@ export class GameSession {
       socket.addEventListener("message", event => {
         if (this.closed) return;
         if (typeof event.data !== "string") {
-          this.#receiveFrame(event.data);
+          if (isAudioMessage(event.data)) this.#receiveAudio(event.data);
+          else this.frames.receive(event.data);
           return;
         }
         let message;
@@ -88,6 +109,7 @@ export class GameSession {
       });
       socket.addEventListener("close", () => {
         this.closed = true;
+        this.frames.close();
         clearTimeout(timer);
         // Everything still waiting for an answer is never getting one.
         for (const { reject: rejectPending } of this.pending.values()) {
@@ -98,18 +120,6 @@ export class GameSession {
         this.handlers.onClosed?.();
       });
     });
-  }
-
-  async #receiveFrame(blob) {
-    try {
-      // createImageBitmap decodes off the main thread, which is what keeps a
-      // phone's frame budget for drawing rather than decoding.
-      const bitmap = await createImageBitmap(blob);
-      if (this.closed || !this.handlers.onFrame) bitmap.close?.();
-      else this.handlers.onFrame(bitmap);
-    } catch (error) {
-      console.warn("wfeature frame could not be decoded", error);
-    }
   }
 
   #receive(message) {
@@ -159,6 +169,18 @@ export class GameSession {
       default:
         break;
     }
+  }
+
+  #receiveAudio(buffer) {
+    let events;
+    try {
+      events = this.audio.decode(buffer);
+    } catch (error) {
+      // One malformed batch is one lost moment of sound, not a lost session.
+      console.warn("wfeature sound could not be decoded", error);
+      return;
+    }
+    if (events.length) this.handlers.onAudio?.(events);
   }
 
   #send(message) {
@@ -250,6 +272,7 @@ export class GameSession {
 
   close() {
     this.closed = true;
+    this.frames.close();
     for (const { reject } of this.pending.values()) {
       reject(new Error("세션 연결이 끊어졌습니다."));
     }
@@ -302,12 +325,15 @@ export const playAudioEvents = (audio, events) => {
       case "pitchBend":
         audio.pitchBend(event.channel ?? 0, event.value ?? 0);
         break;
+      // The first protocol carries bytes as base64 text; the second has
+      // already decoded them.
       case "sysex":
-        if (event.data) audio.sysex(decodeBytes(event.data));
+        if (event.data) audio.sysex(typeof event.data === "string" ? decodeBytes(event.data) : event.data);
         break;
       case "playWave":
         if (event.samples) {
-          audio.playWave(event.channels ?? 1, event.rate ?? 8000, decodeSamples(event.samples));
+          const samples = typeof event.samples === "string" ? decodeSamples(event.samples) : event.samples;
+          audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples);
         }
         break;
       case "allOff":

@@ -490,3 +490,90 @@ func TestOpcodeNamesAreReadable(t *testing.T) {
 		t.Errorf("an unknown opcode rendered as %q", got)
 	}
 }
+
+// writeCounter records how many writes reach the transport. A frame split
+// across two writes is two packets on a socket that sends immediately.
+type writeCounter struct {
+	bytes.Buffer
+	writes int
+}
+
+func (w *writeCounter) Write(data []byte) (int, error) {
+	w.writes++
+	return w.Buffer.Write(data)
+}
+
+func TestEveryMessageIsOneTransportWrite(t *testing.T) {
+	for _, size := range []int{0, 5, 125, 126, 70000} {
+		wire := &writeCounter{}
+		server := Server(wire)
+		payload := bytes.Repeat([]byte{7}, size)
+		if err := server.WriteBinary(payload); err != nil {
+			t.Fatalf("write %d bytes: %v", size, err)
+		}
+		if wire.writes != 1 {
+			t.Fatalf("a %d-byte message took %d writes, want 1", size, wire.writes)
+		}
+		opcode, got, err := Client(&wire.Buffer).ReadMessage()
+		if err != nil || opcode != OpBinary || !bytes.Equal(got, payload) {
+			t.Fatalf("a %d-byte message read back as %s %d bytes, %v", size, opcode, len(got), err)
+		}
+	}
+}
+
+func TestBatchIsOneWriteAndStillSeparateMessages(t *testing.T) {
+	wire := &writeCounter{}
+	server := Server(wire)
+	large := bytes.Repeat([]byte{3}, 300)
+	if err := server.WriteBatch([]Message{
+		{Opcode: OpText, Payload: []byte(`{"kind":"stats"}`)},
+		{Opcode: OpBinary, Payload: large},
+		{Opcode: OpBinary, Payload: []byte{1, 2}},
+	}); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	if wire.writes != 1 {
+		t.Fatalf("a batch of three took %d writes, want 1", wire.writes)
+	}
+	client := Client(&wire.Buffer)
+	for index, want := range []struct {
+		opcode  Opcode
+		payload []byte
+	}{{OpText, []byte(`{"kind":"stats"}`)}, {OpBinary, large}, {OpBinary, []byte{1, 2}}} {
+		opcode, got, err := client.ReadMessage()
+		if err != nil || opcode != want.opcode || !bytes.Equal(got, want.payload) {
+			t.Fatalf("message %d read back as %s %q, %v", index, opcode, got, err)
+		}
+	}
+}
+
+func TestClientBatchMasksEveryMessage(t *testing.T) {
+	client, server := pair(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.WriteBatch([]Message{{Opcode: OpText, Payload: []byte("one")}, {Opcode: OpText, Payload: []byte("two")}})
+	}()
+	for _, want := range []string{"one", "two"} {
+		got, err := server.ReadText()
+		if err != nil || got != want {
+			t.Fatalf("read %q, %v; want %q", got, err, want)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+}
+
+func TestBatchRefusesControlOpcodesAndWritesNothingWhenEmpty(t *testing.T) {
+	wire := &writeCounter{}
+	server := Server(wire)
+	if err := server.WriteBatch([]Message{{Opcode: OpText, Payload: []byte("a")}, {Opcode: OpPing}}); err == nil {
+		t.Fatal("a batch holding a ping was accepted")
+	}
+	if err := server.WriteBatch(nil); err != nil {
+		t.Fatalf("empty batch: %v", err)
+	}
+	if wire.writes != 0 {
+		t.Fatalf("refused and empty batches wrote %d times", wire.writes)
+	}
+}

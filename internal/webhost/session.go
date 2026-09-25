@@ -3,11 +3,9 @@ package webhost
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"image"
 	"image/png"
 	"net/http"
 	"os"
@@ -19,7 +17,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
-	"github.com/movingwoo/wfeature/internal/filter/hqx"
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
@@ -95,6 +92,9 @@ const (
 type outboundMessage struct {
 	text   string
 	binary []byte
+	// audio marks sound, which may wait a moment for the picture of the same
+	// tick so that both leave in one write; see writeMessages.
+	audio bool
 	// A forced picture must follow the lifecycle messages already queued
 	// for it, so a reconnecting page can accept its only unchanged frame.
 	redraw bool
@@ -112,15 +112,17 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	defer connection.Close()
 
 	runner := &sessionRunner{
-		server:     s,
-		connection: connection,
-		commands:   make(chan clientMessage, commandBuffer),
-		handoffs:   make(chan sessionHandoff),
-		done:       make(chan struct{}),
-		frames:     make(chan pendingFrame, 1),
-		outText:    make(chan outboundMessage, outboundBuffer),
-		outFrames:  make(chan outboundMessage, 1),
-		writerDone: make(chan struct{}),
+		server:       s,
+		connection:   connection,
+		commands:     make(chan clientMessage, commandBuffer),
+		handoffs:     make(chan sessionHandoff),
+		done:         make(chan struct{}),
+		protocol:     negotiatedProtocol(request.URL.Query().Get("protocol")),
+		frames:       make(chan pendingFrame, 1),
+		frameSettled: make(chan struct{}, 1),
+		outText:      make(chan outboundMessage, outboundBuffer),
+		outFrames:    make(chan outboundMessage, 1),
+		writerDone:   make(chan struct{}),
 	}
 	runner.run(request.Context())
 }
@@ -146,6 +148,18 @@ type sessionRunner struct {
 	textInputID   uint64
 	commands      chan clientMessage
 	frames        chan pendingFrame
+	// protocol is what the page asked for when it connected; an older page
+	// keeps receiving complete PNGs and JSON sound. See frame_patch.go.
+	protocol int
+	// encoding is set while the encoder holds a picture, and frameSettled is
+	// poked each time it lets one go. The writer reads both to decide whether
+	// the sound it holds is worth a moment's wait for its picture.
+	encoding     atomic.Bool
+	frameSettled chan struct{}
+	// audioDefinitions is what this connection's page holds of the sounds
+	// sent so far. It belongs to the connection, not the game: a page that
+	// reconnects starts with nothing.
+	audioDefinitions audioDefinitions
 
 	// outText and outFrames are what the writer goroutine drains. They are
 	// separate because their backlogs mean opposite things. Text is small and
@@ -207,11 +221,13 @@ type sessionRunner struct {
 	// stats accumulate between the reports sent to the page. The page cannot
 	// measure any of this itself any more — the emulator is not in it.
 	//
-	// sent, frameBytes and shed are counted by the writer goroutine and read
-	// by the emulator's, so they are atomic; the rest never leave the emulator
-	// loop.
+	// sent, frameBytes, written and shed are counted by the writer goroutine
+	// and read by the emulator's, so they are atomic; the rest never leave the
+	// emulator loop.
 	sent       atomic.Uint64
 	frameBytes atomic.Uint64
+	// written is every byte handed to the socket, framing included.
+	written atomic.Uint64
 	// shed counts droppable messages thrown away because the connection was
 	// behind. It is the difference between a session the host cannot keep up
 	// with and one the link cannot: the first shows in the tick cost and the
@@ -333,51 +349,55 @@ var pngBuffers = &pngBufferPool{}
 // guest speed, and the write itself is off it too — see writeMessages for why
 // that took a goroutine of its own rather than this one.
 func (r *sessionRunner) writeFrames(ctx context.Context) {
-	encoder := png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers}
-	buffer := &bytes.Buffer{}
-	scaler := &hqx.Scaler{}
+	encoder := newPictureEncoder(r.protocol)
 	var previous pendingFrame
+	// settle lets the writer know the picture it may be waiting for is not
+	// coming, or has gone to it already.
+	settle := func() {
+		r.encoding.Store(false)
+		select {
+		case r.frameSettled <- struct{}{}:
+		default:
+		}
+	}
 	for frame := range r.frames {
+		r.encoding.Store(true)
 		if frame.Scale < 1 {
 			frame.Scale = 1
 		}
 		if !frame.Force && frame.Width == previous.Width && frame.Height == previous.Height &&
 			frame.Scale == previous.Scale && bytes.Equal(frame.RGBA, previous.RGBA) {
+			settle()
 			continue
 		}
-		// Each queued frame owns its pixels. Keep the raw picture for the
-		// next comparison; scaling below produces a separate buffer.
-		raw := frame
-		if frame.Scale > 1 {
-			pixels, width, height, err := scaler.ScaleRGBA(frame.RGBA, frame.Width, frame.Height, frame.Scale)
-			if err != nil {
-				r.server.logger.Warn("frame could not be scaled", "error", err)
-			} else {
-				frame.RGBA, frame.Width, frame.Height = pixels, width, height
-			}
+		// Each queued frame owns its pixels, so the raw picture is kept for
+		// the next comparison as it is.
+		encoded, err := encoder.encode(frame)
+		if failure := encoder.scaleFailure; failure != nil {
+			encoder.scaleFailure = nil
+			r.server.logger.Warn("frame could not be scaled", "error", failure)
 		}
-		picture := &image.RGBA{
-			Pix:    frame.RGBA,
-			Stride: frame.Width * 4,
-			Rect:   image.Rect(0, 0, frame.Width, frame.Height),
-		}
-		buffer.Reset()
-		if err := encoder.Encode(buffer, picture); err != nil {
+		if err != nil {
 			r.server.logger.Warn("frame could not be encoded", "error", err)
+			settle()
 			continue
 		}
-		// The encoder's buffer is reused, so the picture travels as its own
-		// bytes. Waiting here for the writer is deliberate: it is what makes
+		if encoded == nil {
+			settle()
+			continue
+		}
+		// Waiting here for the writer is deliberate: it is what makes
 		// pushFrame drop the next one rather than queue it.
-		encoded := append([]byte(nil), buffer.Bytes()...)
 		select {
 		case r.outFrames <- outboundMessage{binary: encoded, redraw: frame.Force}:
-			previous = raw
+			previous = frame
+			encoder.accept()
 		case <-r.writerDone:
 			return
 		case <-ctx.Done():
 			return
 		}
+		settle()
 	}
 }
 
@@ -959,7 +979,7 @@ func (r *sessionRunner) stopGame() {
 	if r.audio != nil {
 		// Whatever was sounding when the game ended has to be released, or the
 		// page holds the last note forever.
-		r.send(serverMessage{Kind: serverAudio, Audio: []audioEvent{{Kind: audioAllOff}}})
+		r.sendAudio([]audioEvent{{Kind: audioAllOff}}, false)
 	}
 }
 
@@ -994,7 +1014,7 @@ func (r *sessionRunner) flushAudio() {
 	if len(events) == 0 {
 		return
 	}
-	r.sendDroppable(serverMessage{Kind: serverAudio, Audio: events})
+	r.sendAudio(events, true)
 }
 
 func (r *sessionRunner) reportStats() {
@@ -1005,10 +1025,11 @@ func (r *sessionRunner) reportStats() {
 	sent := r.sent.Swap(0)
 	frameBytes := r.frameBytes.Swap(0)
 	stats := statsMessage{
-		Fps:      float64(sent) / elapsed.Seconds(),
-		Skipped:  r.skipped,
-		Shed:     r.shed.Swap(0),
-		TickRate: float64(r.ticks) / elapsed.Seconds(),
+		Fps:            float64(sent) / elapsed.Seconds(),
+		Skipped:        r.skipped,
+		Shed:           r.shed.Swap(0),
+		TickRate:       float64(r.ticks) / elapsed.Seconds(),
+		BytesPerSecond: float64(r.written.Swap(0)) / elapsed.Seconds(),
 	}
 	if r.ticks > 0 {
 		stats.TickMillis = float64(r.tickTotal.Microseconds()) / float64(r.ticks) / 1000
@@ -1320,54 +1341,134 @@ func (r *sessionRunner) composeReport(cause string) string {
 //
 // Nothing on the emulator's path may wait for a socket. That is the whole rule
 // this goroutine exists to keep.
+//
+// Everything already queued leaves in one write. A write is a packet, and
+// behind a TLS proxy a record, and each carries headers a small message pays
+// in full — a tick's sound is usually smaller than the headers that carry it.
 func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.CancelFunc) {
 	// Cancelling on the way out ends the session rather than leaving a game
 	// running for a page that can no longer be written to. The read side would
 	// notice eventually; a dead socket does not deserve a core until it does.
 	defer cancel()
 	defer close(r.writerDone)
-	write := func(message outboundMessage) bool {
-		_ = r.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		var err error
-		if message.binary != nil {
-			err = r.connection.WriteBinary(message.binary)
-		} else {
-			err = r.connection.WriteText(message.text)
-		}
-		if err != nil {
-			if !errors.Is(err, wsproto.ErrClosed) {
-				r.server.logger.Debug("session write failed", "error", err)
-			}
-			return false
-		}
-		if message.binary != nil {
-			r.frameBytes.Add(uint64(len(message.binary)))
-			r.sent.Add(1)
-		}
-		return true
-	}
+	var batch []outboundMessage
+	var wire []wsproto.Message
 	for {
-		var message outboundMessage
+		batch = batch[:0]
+		var picture *outboundMessage
 		select {
 		case <-ctx.Done():
 			return
-		case message = <-r.outFrames:
-		case message = <-r.outText:
+		case message := <-r.outFrames:
+			picture = &message
+		case message := <-r.outText:
+			batch = append(batch, message)
 		}
-		if message.redraw {
-			// Start/resume queues its answer before the forced picture. Drain
-			// that existing prefix first; a static game owes no later frame
-			// to recover one the page ignored before receiving the answer.
-			// Snapshot the count so incoming audio cannot starve the picture.
-			for pending := len(r.outText); pending > 0; pending-- {
-				if !write(<-r.outText) {
-					return
-				}
+		// The text queued ahead of a picture goes first. Start and resume
+		// queue their answer before the forced picture, and a static game owes
+		// no later picture to recover one the page ignored before it had the
+		// answer. The count is a snapshot, so sound arriving meanwhile cannot
+		// starve the picture.
+		batch = r.drainText(batch)
+		if picture == nil {
+			select {
+			case message := <-r.outFrames:
+				picture = &message
+			default:
 			}
 		}
-		if !write(message) {
+		if picture == nil && holdsAudio(batch) {
+			// A tick hands its picture to the encoder and its sound to this
+			// queue together, and the sound arrives first. Waiting for the
+			// picture puts both in one write; the wait is bounded, and skipped
+			// when no picture is on its way.
+			select {
+			case <-r.frameSettled:
+			default:
+			}
+			if r.encoding.Load() || len(r.frames) > 0 {
+				timer := time.NewTimer(frameLinger)
+				select {
+				case message := <-r.outFrames:
+					picture = &message
+				case <-r.frameSettled:
+					select {
+					case message := <-r.outFrames:
+						picture = &message
+					default:
+					}
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+				timer.Stop()
+				batch = r.drainText(batch)
+			}
+		}
+		if picture != nil {
+			batch = append(batch, *picture)
+		}
+		wire = wire[:0]
+		written := 0
+		for _, message := range batch {
+			if message.binary != nil {
+				wire = append(wire, wsproto.Message{Opcode: wsproto.OpBinary, Payload: message.binary})
+				written += webSocketFrameSize(len(message.binary))
+			} else {
+				wire = append(wire, wsproto.Message{Opcode: wsproto.OpText, Payload: []byte(message.text)})
+				written += webSocketFrameSize(len(message.text))
+			}
+		}
+		_ = r.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
+		if err := r.connection.WriteBatch(wire); err != nil {
+			if !errors.Is(err, wsproto.ErrClosed) {
+				r.server.logger.Debug("session write failed", "error", err)
+			}
 			return
 		}
+		r.written.Add(uint64(written))
+		if picture != nil {
+			r.frameBytes.Add(uint64(len(picture.binary)))
+			r.sent.Add(1)
+		}
+		clear(batch)
+	}
+}
+
+// frameLinger bounds how long sound waits for the picture of its own tick.
+// Encoding one takes a millisecond or two; a picture later than this is
+// skipped rather than waited for, and sound is not held longer than a frame's
+// worth of time on any title here.
+const frameLinger = 10 * time.Millisecond
+
+// drainText moves what is queued now, and only that, onto batch.
+func (r *sessionRunner) drainText(batch []outboundMessage) []outboundMessage {
+	for pending := len(r.outText); pending > 0; pending-- {
+		batch = append(batch, <-r.outText)
+	}
+	return batch
+}
+
+func holdsAudio(batch []outboundMessage) bool {
+	for _, message := range batch {
+		if message.audio {
+			return true
+		}
+	}
+	return false
+}
+
+// webSocketFrameSize is what a server frame carrying length bytes costs on the
+// connection: the payload and its unmasked header.
+func webSocketFrameSize(length int) int {
+	switch {
+	case length < 126:
+		return length + 2
+	case length <= 0xffff:
+		return length + 4
+	default:
+		return length + 10
 	}
 }
 
@@ -1396,21 +1497,42 @@ func (r *sessionRunner) queue(message serverMessage, droppable bool) {
 		r.server.logger.Warn("session message could not be encoded", "error", err)
 		return
 	}
-	outgoing := outboundMessage{text: string(encoded)}
+	r.enqueue(outboundMessage{text: string(encoded), audio: message.Kind == serverAudio}, droppable)
+}
+
+// enqueue hands a finished message to the writer and reports whether it went.
+func (r *sessionRunner) enqueue(outgoing outboundMessage, droppable bool) bool {
 	if droppable {
 		select {
 		case r.outText <- outgoing:
+			return true
 		default:
 			r.shed.Add(1)
 			r.shedTotal.Add(1)
+			return false
 		}
-		return
 	}
 	select {
 	case r.outText <- outgoing:
+		return true
 	case <-r.writerDone:
 		// The page cannot be told anything more. Saying so once is the
 		// writer's job and it has already done it.
+		return false
+	}
+}
+
+// sendAudio queues one batch of sound in the protocol the page asked for.
+func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) {
+	if r.protocol != protocolStream {
+		message := serverMessage{Kind: serverAudio, Audio: textAudio(events)}
+		r.queue(message, droppable)
+		return
+	}
+	outgoing := outboundMessage{binary: r.audioDefinitions.encode(events), audio: true}
+	if !r.enqueue(outgoing, droppable) {
+		// Whatever the lost message defined never reached the page.
+		r.audioDefinitions.dropped()
 	}
 }
 
@@ -1493,16 +1615,13 @@ func (a *audioCollector) PlayWave(channels uint8, samplingRate uint32, samples [
 	if len(samples) == 0 {
 		return
 	}
+	// The samples are borrowed for the call, so they are copied here; how
+	// they travel is decided when the batch is sent.
 	raw := make([]byte, len(samples)*2)
 	for index, sample := range samples {
 		binary.LittleEndian.PutUint16(raw[index*2:], uint16(sample))
 	}
-	a.append(audioEvent{
-		Kind:     audioPlayWave,
-		Channels: channels,
-		Rate:     samplingRate,
-		Samples:  base64.StdEncoding.EncodeToString(raw),
-	})
+	a.append(audioEvent{Kind: audioPlayWave, Channels: channels, Rate: samplingRate, pcm: raw})
 }
 
 func (a *audioCollector) MIDINoteOn(channel, note, velocity uint8) {
@@ -1529,7 +1648,7 @@ func (a *audioCollector) MIDISysEx(data []byte) {
 	if len(data) == 0 {
 		return
 	}
-	a.append(audioEvent{Kind: audioSysEx, Data: base64.StdEncoding.EncodeToString(data)})
+	a.append(audioEvent{Kind: audioSysEx, raw: bytes.Clone(data)})
 }
 
 // Handoffs run between guest calls, never concurrently with a tick or input.

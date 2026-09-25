@@ -1278,3 +1278,162 @@ The `started` description reports `authentication` as `off`, `unsupported`,
 Resume returns the existing runtime and its result. Unsupported retains ordinary
 guest behavior. Applied identifies a selected adapter, not successful gameplay.
 See [implementation and limits](../authentication.md).
+
+<a id="frame-bandwidth-2026-09-24"></a>
+
+## Frame bandwidth — 2026-09-24
+
+The existing encoder already omitted consecutive identical pictures, but any
+changed picture still sent the entire PNG. Compressing 100 existing local startup
+screenshots with default PNG compression instead of BestSpeed reduced their total
+from 2,432,172 to 2,230,227 bytes (8.3%). This read-only sample is not a gameplay
+traffic measurement. It motivated comparing changed regions rather than increasing
+compression effort on every complete picture.
+
+The first implemented path kept emulation and hqx on the server and sent a
+lossless PNG rectangle, after a `WFP1` header, for small changes. It added one
+retained composition canvas on the page and one retained scaled frame on the
+server. No dependencies, guest behavior, frame-rate settings, audio messages, or
+save formats changed. The [current protocol](../session.md#presentation-and-audio)
+specifies compatibility, ordering, redraw boundaries and recovery.
+
+`TestFramePatchBandwidth` uses 60 authored 240x320 frames: a 16x16 sprite moves
+across a fixed tiled background. It includes the initial complete picture.
+Complete PNG payloads total **226,646 bytes**; negotiated updates total
+**11,732 bytes**, a **94.82% reduction**. Both runs encode the same pixels. The
+12-byte patch header is included; WebSocket/TCP/TLS overhead and JSON/audio traffic
+are excluded.
+
+On an Apple M1, darwin/arm64, three one-second runs of
+`BenchmarkFramePatchBandwidth` gave these medians:
+
+| Encoder path | Time per frame | Payload per frame |
+| --- | ---: | ---: |
+| Complete PNG | 609.4 microseconds | 3,777 bytes |
+| PNG rectangle | 24.2 microseconds | 137.6 bytes |
+
+The benchmark repeats the 60-frame sequence, so its initial complete picture is
+amortized more than in the fixed test. It excludes emulation, hqx (scale is 1),
+socket writes and browser work. Reproduce with:
+
+```sh
+go test ./internal/webhost -run TestFramePatchBandwidth -v
+go test ./internal/webhost -run '^$' -bench '^BenchmarkFramePatchBandwidth$' -benchtime=1s -count=3
+```
+
+Go reconstruction tests cover alpha replacement, edge changes, hqx factors 1–4,
+forced complete frames and dimension changes. Handler tests cover negotiated,
+legacy and unknown-version connections. Node tests cover ordered composition,
+slow decoding, closure, invalid frames and bounded backlogs. The authored-fixture
+browser route passed in Chromium and WebKit, including patch output matching a
+forced complete PNG, restart, park/resume, new connections and WIPI scale changes.
+The ordinary, debug, internal race and vet gates passed.
+
+These results do not promise a 94.82% reduction for a real game. Full-screen
+scrolling or widely separated changes can still require complete pictures, and
+sampled audio traffic is unchanged. Actual gameplay traffic and physical-phone
+CPU, memory and battery effects remain unmeasured in this change. Large-scene
+optimization should follow a measured route rather than reducing image quality
+or moving the emulator onto the phone by default.
+
+### Recorded play, and protocol 2
+
+The rectangle path above was never released; protocol 2 replaced it the same
+day, after the traffic of real play was measured.
+
+**Method.** Five in-game scenes were replayed from local routes — two KTF titles
+and three LGT titles — with the CLI's manual clock and isolated saves. A local
+hook recorded every finished frame with its guest time and every sound batch in
+the JSON the session sent. The frames went through the encoders offline: the
+server skips an identical consecutive picture, so the recorded sequence is what
+it would encode, and rates are per second of guest time. Replaying one KTF route
+on the wall clock gave 26.1 guest seconds against 25.1, and rates within 15%.
+Recorded play is not a route through every scene, SKT titles have no local route
+and were not measured, and sampling misses KTF flushes inside one tick.
+
+Kilobytes per second of pictures at the original size, WebSocket framing
+included. "Rectangle" is the path above, measured with the same frames:
+
+| Scene | Changed pictures/s | Protocol 1 | Rectangle | Protocol 2 |
+| --- | ---: | ---: | ---: | ---: |
+| KTF, full-colour field, scrolling | 8.9 | 344.6 | 334.8 | 207.8 |
+| KTF, side-scrolling field | 49.5 | 358.1 | 329.4 | 98.6 |
+| LGT, field, character and status bar | 7.8 | 244.1 | 108.4 | 11.3 |
+| LGT, field, several moving figures | 12.7 | 513.2 | 393.5 | 37.6 |
+| LGT, almost still screen | 0.6 | 2.9 | 1.3 | 0.6 |
+
+The four busy scenes total 1,460 KB/s in protocol 1, 1,166 with rectangles and
+355 in protocol 2: an hour of one of them was 0.9–1.9 GB, 0.4–1.45 GB and
+42–766 MB respectively. The rectangle is one bounding box that falls back to a
+complete picture past half the screen, so a moving figure and a status bar far
+apart were a complete picture. At hq2x, protocol 1 sent 3.4 to 3.8 times these
+numbers (5,399 KB/s for the four) and hq3x 6.3 times; protocol 2 sends the same
+bytes at every scale.
+
+Of protocol 2's parts, measured separately on the same frames: transparent
+unchanged pixels with a palette cut the LGT scenes to 6–7% of protocol 1 and the
+side-scroller to 34%; the shift took a further 18–26% off the scenes that
+scroll (the full-colour field moves one pixel a frame on 112 of 232 frames, the
+side-scroller two pixels on about a thousand of 2,895) and 3% off the others.
+The side-scroller moves a band of its screen, a few percent of the pixels: a
+search gated at an eighth of the picture changed let 59 of its frames scroll,
+and a thirty-second 1,046. Trying the last shift first took its encoding from
+1.5 to 0.9 ms a frame. Encoding cost 0.5–1.2 ms a frame on an Apple M1, and
+4.9 ms on the full-colour field, whose changes exceed a palette and whose every
+other frame is searched.
+
+Sound, in the same units: the JSON of protocol 1 against binary with each
+sample carried once.
+
+| Scene | Protocol 1 | Protocol 2 |
+| --- | ---: | ---: |
+| KTF, side-scrolling field | 3.80 | 1.10 |
+| LGT, field, character and status bar | 6.40 | 0.43 |
+| LGT, field, several moving figures | 2.13 | 0.21 |
+| LGT, almost still screen | 0.29 | 0.17 |
+
+One LGT title played four distinct sampled effects 99 times, 2.4 KB/s as
+base64; its SysEx messages repeat the same way. Note events were 40–53 bytes of
+JSON each and are three or four bytes now. The first KTF scene recorded no sound.
+
+A tick's sound used to leave a millisecond or two ahead of its picture as a
+separate write, and every WebSocket frame was written as two: its header, then
+its payload. At 9–14 sound messages a second a write each, that was on the order
+of 1 KB/s of TCP and TLS headers per busy scene, before the pictures' own.
+
+**Measured and not used.**
+
+- *Lossy JPEG.* A complete JPEG at quality 75 was larger than protocol 2 in four
+  of the five scenes (190 KB/s against 38 on the moving figures) and smaller
+  only on the full-colour field, while giving up losslessness.
+- *WebP lossless* of whole pictures, encoded with `cwebp` at two effort levels,
+  was measured on the full-colour field only, where it came to 58–69% of
+  protocol 1. It would need an encoder outside the standard library, and
+  masking alone reaches 5–34% on the other scenes.
+- *XOR against the last picture, then deflate.* It was larger than protocol 2
+  in every scene — 230 KB/s against 208 on the full-colour field, its best
+  case — and needs a decoder written in the page; a PNG uses the browser's.
+- *Tiles.* Changed 8 or 16-pixel tiles packed into one PNG came to 16–23% of
+  protocol 1 on the two LGT fields, above masking.
+- *A frame-rate cap.* Only the side-scroller exceeds 15 pictures a second.
+  Capping it at 15 cut three quarters of its traffic in the rectangle path and
+  would cost it the same share of its smoothness; it was not measured with
+  protocol 2 and was left as a possible setting rather than a default.
+
+**Authored fixtures.** The commands above now compare protocols 1 and 2; the
+rectangle numbers are from the path protocol 2 replaced. The moving sprite comes
+to 11,360 bytes against 226,646 (94.99% less) and an authored scrolling field
+under a fixed bar to 6,397 against 59,598 (89.27% less). Three one-second
+benchmark runs on the M1: protocol 1 at 616 microseconds and 3,778 bytes a
+frame, protocol 2 at 205 microseconds and 138 bytes. Protocol 2 compares every
+pixel as a word rather than skipping equal rows as the rectangle did, which is
+why it is slower per frame than the rectangle's 24 microseconds.
+
+**Browser.** The frame-delivery route passed in Chromium and WebKit, including
+an authored picture composed through masked, shifted and replacing updates and
+compared with the expected pixels, and hq2x redone around partial changes
+compared with hq2x of the whole picture. A local KTF archive ran six seconds at
+60 pictures a second, 214 KB/s on its animated opening, and a local LGT archive
+at 1.7 KB/s on its title. The page's JavaScript hqx costs 4.4–16 ms for a whole
+240x320 frame on the M1, depending on the scale; see [hqx](../hqx.md). Phone CPU,
+battery and actual monthly traffic remain unmeasured.

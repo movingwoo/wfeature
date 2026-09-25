@@ -146,11 +146,16 @@ than leaving a gap — and takes the report button out of the settings panel.
 They are the same files either way; the binary serving them is the one thing
 that knows which build this is.
 
-The page draws and nothing else: frames arrive as PNGs on the socket, are
-decoded with `createImageBitmap` — off the main thread — and the newest one is
-drawn on the next animation frame. Keys go up as JSON, sound arrives as MIDI and
-PCM events and is played by the synthesiser here, and the cheat panel's
-operations are a request and an answer.
+The page receives pictures at the game's own size on the socket — complete
+ones, and updates that draw only what changed, sometimes after moving the held
+picture for a scrolling field — decodes them with `createImageBitmap`, and
+composes them in order on a retained canvas (`frame-stream.js`). The newest
+picture is drawn on the next animation frame, magnified here with hqx at the
+scale the server names (`magnify.js`, `hqx.js`, and `hqx-patterns.js`, which is
+generated from the Go tables). Game execution remains on the server. Keys go up
+as JSON; sound arrives as compact binary MIDI and PCM events, each sample
+carried once (`audio-stream.js`), and is played by the synthesiser here; the
+cheat panel's operations are a request and an answer.
 
 ## Server
 
@@ -166,7 +171,9 @@ Which profile is served is the binary that is running, not a flag: the server is
 built per profile like every other binary here.
 
 - `GET /games.json` — `[{ group, name, path }]` built from `-games`
-  (`var/games` by default), listing the `.zip` and `.jar` files it holds.
+  (`var/games` by default), listing the `.zip` and `.jar` files it holds. Like
+  the page's own files it carries a validator and is revalidated rather than
+  re-sent, and it is gzip-compressed where the browser accepts that.
 - `GET /games/<group>/<archive>` — the archive itself, revalidated with an
   `ETag` rather than re-sent, since these are tens of megabytes.
 - `GET /api/saves/<owner>` — `{ saves: { "<key>": "<base64>" } }` read from
@@ -181,8 +188,11 @@ built per profile like every other binary here.
   rate, and by the age and total size of the directory; see
   `../docs/architecture.md`, "Debug run logs".
 - `GET /api/session` (WebSocket) — one controlling connection per game. Browser
-  tokens, retention, explicit takeover and recovery are described in
-  `../docs/session.md`, "A game outlives its socket".
+  clients request `?protocol=2` for lossless picture updates at the game's own
+  size and binary sound; clients without that value receive complete, magnified
+  PNGs and JSON sound. Tokens, retention, explicit takeover, the wire formats,
+  frame composition and recovery are described in
+  [server sessions](../docs/session.md).
 
 The emulator and the save tree are on the same machine, so nothing is preloaded
 and no save crosses the network. The save API remains for the CLI's layout,

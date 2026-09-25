@@ -147,6 +147,9 @@ type Conn struct {
 	MaxMessageSize int
 
 	writeMutex sync.Mutex
+	// writeBuffer is where a frame is assembled so that it reaches the
+	// transport in one write. Guarded by writeMutex.
+	writeBuffer []byte
 
 	stateMutex sync.Mutex
 	// sentClose records that a close frame has gone out, so answering a
@@ -516,61 +519,120 @@ func truncateUTF8(text string, limit int) string {
 	return text[:cut]
 }
 
-func (c *Conn) write(opcode Opcode, payload []byte, final bool) error {
-	c.stateMutex.Lock()
-	closed := c.closed
-	c.stateMutex.Unlock()
-	if closed {
-		return ErrClosed
-	}
+// Message is one data message for WriteBatch.
+type Message struct {
+	Opcode  Opcode
+	Payload []byte
+}
 
-	var header [14]byte
-	size := 2
-	header[0] = byte(opcode)
-	if final {
-		header[0] |= 0x80
-	}
-	switch length := len(payload); {
-	case length < 126:
-		header[1] = byte(length)
-	case length <= 0xffff:
-		header[1] = 126
-		binary.BigEndian.PutUint16(header[2:4], uint16(length))
-		size = 4
-	default:
-		header[1] = 127
-		binary.BigEndian.PutUint64(header[2:10], uint64(length))
-		size = 10
-	}
-
-	var mask [4]byte
-	if c.client {
-		if _, err := rand.Read(mask[:]); err != nil {
-			return fmt.Errorf("wsproto: read mask key: %w", err)
+// WriteBatch sends several data messages with a single write to the
+// transport, in order. Each is still its own WebSocket message.
+//
+// A write is a packet on a socket that sends immediately, and behind a TLS
+// proxy it is a record too, each with a header of its own that a small
+// message pays in full. A session produces its pictures and its sound in the
+// same tick, and a phone on a metered link pays for every one of those headers.
+func (c *Conn) WriteBatch(messages []Message) error {
+	for _, message := range messages {
+		if message.Opcode.control() {
+			return fmt.Errorf("wsproto: WriteBatch called with the control opcode %s", message.Opcode)
 		}
-		header[1] |= 0x80
-		copy(header[size:size+4], mask[:])
-		size += 4
 	}
-
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-	if _, err := c.transport.Write(header[:size]); err != nil {
-		return err
-	}
-	if len(payload) == 0 {
+	if len(messages) == 0 {
 		return nil
 	}
-	if !c.client {
-		_, err := c.transport.Write(payload)
+	if c.isClosed() {
+		return ErrClosed
+	}
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+	buffer := c.writeBuffer[:0]
+	for _, message := range messages {
+		var err error
+		if buffer, err = c.appendFrame(buffer, message.Opcode, message.Payload, true); err != nil {
+			return err
+		}
+	}
+	return c.flush(buffer)
+}
+
+func (c *Conn) write(opcode Opcode, payload []byte, final bool) error {
+	if c.isClosed() {
+		return ErrClosed
+	}
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+	buffer, err := c.appendFrame(c.writeBuffer[:0], opcode, payload, final)
+	if err != nil {
 		return err
 	}
-	// A client must not mask in place: the payload belongs to the caller.
-	masked := make([]byte, len(payload))
-	copy(masked, payload)
-	applyMask(masked, mask)
-	_, err := c.transport.Write(masked)
+	return c.flush(buffer)
+}
+
+func (c *Conn) isClosed() bool {
+	c.stateMutex.Lock()
+	defer c.stateMutex.Unlock()
+	return c.closed
+}
+
+// maxRetainedWriteBuffer is the most assembly space a connection keeps
+// between writes. A complete picture can be large, and holding the largest
+// message a session ever sent for the rest of its life is not worth what it
+// saves on the small updates that make up the steady state.
+const maxRetainedWriteBuffer = 1 << 20
+
+// flush hands one assembled buffer to the transport. The frame header and its
+// payload leave together: written separately, the header is a packet of its
+// own on a socket that does not wait to fill one.
+func (c *Conn) flush(buffer []byte) error {
+	_, err := c.transport.Write(buffer)
+	if cap(buffer) <= maxRetainedWriteBuffer {
+		c.writeBuffer = buffer[:0]
+	} else {
+		c.writeBuffer = nil
+	}
 	return err
+}
+
+// appendFrame appends one frame, header and payload, to buffer.
+func (c *Conn) appendFrame(buffer []byte, opcode Opcode, payload []byte, final bool) ([]byte, error) {
+	first := byte(opcode)
+	if final {
+		first |= 0x80
+	}
+	var lengthHeader [9]byte
+	size := 1
+	switch length := len(payload); {
+	case length < 126:
+		lengthHeader[0] = byte(length)
+	case length <= 0xffff:
+		lengthHeader[0] = 126
+		binary.BigEndian.PutUint16(lengthHeader[1:3], uint16(length))
+		size = 3
+	default:
+		lengthHeader[0] = 127
+		binary.BigEndian.PutUint64(lengthHeader[1:9], uint64(length))
+		size = 9
+	}
+	if !c.client {
+		buffer = append(buffer, first)
+		buffer = append(buffer, lengthHeader[:size]...)
+		return append(buffer, payload...), nil
+	}
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		return buffer, fmt.Errorf("wsproto: read mask key: %w", err)
+	}
+	lengthHeader[0] |= 0x80
+	buffer = append(buffer, first)
+	buffer = append(buffer, lengthHeader[:size]...)
+	buffer = append(buffer, mask[:]...)
+	// The payload belongs to the caller, so it is masked where it was copied
+	// rather than in place.
+	start := len(buffer)
+	buffer = append(buffer, payload...)
+	applyMask(buffer[start:], mask)
+	return buffer, nil
 }
 
 func (c *Conn) markClosed() {

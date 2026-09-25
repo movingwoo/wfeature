@@ -23,7 +23,7 @@ import (
 // paints, and opens a session on it. The whole point of this file is that the
 // path a phone uses can be driven end to end from Go: a real handshake, a real
 // game, real frames, and no browser anywhere.
-func sessionFixture(t *testing.T) (*wsproto.Conn, string) {
+func sessionFixture(t *testing.T, query ...string) (*wsproto.Conn, string) {
 	t.Helper()
 	archive, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "canvas-skt.zip"))
 	if err != nil {
@@ -46,7 +46,7 @@ func sessionFixture(t *testing.T) (*wsproto.Conn, string) {
 	httpServer := httptest.NewServer(server)
 	t.Cleanup(httpServer.Close)
 
-	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session?"+strings.Join(query, "&"), nil)
 	if err != nil {
 		t.Fatalf("dial the session: %v", err)
 	}

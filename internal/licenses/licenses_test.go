@@ -37,6 +37,7 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 		{"the fonts' licence", "SIL OPEN FONT LICENSE Version 1.1"},
 		{"the fonts' reserved name clause", "Reserved Font Name"},
 		{"hqx's copyright", "Christopher Serr"},
+		{"the page's copy of hqx's tables", "web/hqx-patterns.js"},
 		// The Go modules carry one licence text between them, so what proves
 		// a component is still named is its own heading. x/sys is here
 		// because x/image's rasteriser reaches it on the amd64 targets: it
@@ -48,6 +49,27 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 	} {
 		if !strings.Contains(ThirdParty, required.text) {
 			t.Errorf("the notices do not carry %s (looked for %q)", required.component, required.text)
+		}
+	}
+}
+
+// A file carrying translated work carries its copyright line too. The page's
+// copy of the hqx tables is generated, and a generator that lost the header
+// would publish the tables without it.
+func TestFilesCarryingHqxKeepItsCopyrightLine(t *testing.T) {
+	const line = "Copyright (c) 2017 Christopher Serr. Licensed under MIT OR Apache-2.0."
+	for _, file := range []string{
+		"internal/filter/hqx/pattern2x.go",
+		"internal/filter/hqx/pattern3x.go",
+		"internal/filter/hqx/pattern4x.go",
+		"web/hqx-patterns.js",
+	} {
+		content, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), line) {
+			t.Errorf("%s does not carry hqx's copyright line", file)
 		}
 	}
 }

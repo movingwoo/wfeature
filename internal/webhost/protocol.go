@@ -112,10 +112,10 @@ const (
 	clientStop    = "stop"
 )
 
-// serverMessage is anything the server sends in a text frame. A frame image
-// travels as a binary frame instead, with no envelope at all — it is the one
-// message that is sent twenty times a second, and a PNG already says how wide
-// it is.
+// serverMessage is anything the server sends in a text frame. A picture
+// travels as a binary frame instead — a bare PNG in the first protocol, a
+// sixteen-byte header and a PNG in the second — and so does the second
+// protocol's sound; see frame_patch.go and audio_stream.go.
 type serverMessage struct {
 	Kind string `json:"kind"`
 
@@ -305,6 +305,10 @@ type statsMessage struct {
 	// connection was behind rather than the server. Frames dropped for the
 	// same reason are counted by Skipped.
 	Shed uint64 `json:"shed"`
+	// BytesPerSecond is everything written to the socket over the window —
+	// pictures, sound and text, with their WebSocket framing — which is what
+	// a metered link pays for, less the transport's own headers.
+	BytesPerSecond float64 `json:"bytes_per_second"`
 }
 
 // audioEvent is one call the guest made on the audio sink. The names match the
@@ -330,6 +334,12 @@ type audioEvent struct {
 
 	// Data carries a SysEx message, base64-encoded for the same reason.
 	Data string `json:"data,omitempty"`
+
+	// pcm and raw are the sample and SysEx bytes the collector copied from
+	// the guest. Each protocol encodes them its own way when the batch is
+	// sent: base64 into the fields above, or once each in binary.
+	pcm []byte
+	raw []byte
 }
 
 // Audio event kinds.

@@ -127,6 +127,9 @@ type Server struct {
 	// requestShutdown is Options.RequestShutdown; nil means the route is not
 	// served at all.
 	requestShutdown func()
+	// compressed holds the gzip form of the files the page loads; see
+	// revalidate.go.
+	compressed compressedBodies
 
 	// parked holds games whose page went away, waiting under the token that
 	// page was given; see resume.go. They live on the Server because they have
@@ -303,13 +306,7 @@ func (s *Server) serveLicenses(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	securityHeaders(writer.Header())
-	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	writer.WriteHeader(http.StatusOK)
-	if request.Method == http.MethodHead {
-		return
-	}
-	fmt.Fprint(writer, licenses.Project, "\n\n", licenses.ThirdParty)
+	s.serveRevalidated(writer, request, "text/plain; charset=utf-8", []byte(licenses.Project+"\n\n"+licenses.ThirdParty))
 }
 
 // securityHeaders are set on every response. The client is same-origin by
@@ -379,15 +376,7 @@ func (s *Server) serveClient(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusNotFound, "Not Found")
 		return
 	}
-	securityHeaders(writer.Header())
-	// The shell is small and changes with every build, so it is never cached;
+	// The shell changes with every build, so every load asks whether it did;
 	// the service worker is what makes the page load offline.
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.Header().Set("Content-Type", contentType(name))
-	writer.Header().Set("Content-Length", strconv.Itoa(len(content)))
-	writer.WriteHeader(http.StatusOK)
-	if request.Method == http.MethodHead {
-		return
-	}
-	_, _ = writer.Write(content)
+	s.serveRevalidated(writer, request, contentType(name), content)
 }
