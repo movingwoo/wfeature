@@ -143,6 +143,29 @@ test("the page asks for protocol 2 and reads binary messages as bytes", async ()
   const { session, socket } = await openFakeSession();
   assert.equal(new URL(socket.url).searchParams.get("protocol"), "2");
   assert.equal(socket.binaryType, "arraybuffer");
+  // Node decodes no WebP, so this page takes PNG.
+  assert.equal(new URL(socket.url).searchParams.get("pictures"), null);
+  session.close();
+});
+
+test("a page whose browser decodes lossless WebP asks for its pictures that way", async t => {
+  const socket = fakeSocket();
+  const saved = { WebSocket: globalThis.WebSocket, createImageBitmap: globalThis.createImageBitmap, location: globalThis.location };
+  t.after(() => Object.assign(globalThis, saved));
+  globalThis.location = { protocol: "https:", host: "example.test" };
+  globalThis.WebSocket = function (url) { socket.url = url; return socket; };
+  globalThis.createImageBitmap = async () => ({ width: 2, height: 1, close() {} });
+  // A fresh copy of the module, so that it probes this browser.
+  const { GameSession: FreshSession } = await import("./session.js?webp");
+  const session = new FreshSession();
+  const opening = session.open();
+  while (!socket.url) await new Promise(resolve => setImmediate(resolve));
+  socket.deliver({ kind: "ready" });
+  await opening;
+  const url = new URL(socket.url);
+  assert.equal(url.protocol, "wss:");
+  assert.equal(url.searchParams.get("protocol"), "2");
+  assert.equal(url.searchParams.get("pictures"), "webp");
   session.close();
 });
 

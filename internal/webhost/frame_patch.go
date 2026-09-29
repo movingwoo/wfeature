@@ -9,6 +9,7 @@ import (
 	"image/png"
 
 	"github.com/movingwoo/wfeature/internal/filter/hqx"
+	"github.com/movingwoo/wfeature/internal/vp8l"
 )
 
 // The session protocols a page can speak. A page asks for the newer one with
@@ -34,6 +35,13 @@ func negotiatedProtocol(query string) int {
 	return protocolPictures
 }
 
+// negotiatedWebP reads whether a page asked for its protocol 2 pictures as
+// lossless WebP, which it does with `pictures=webp` once it has seen its
+// browser decode one. Anything else gets PNG, which every browser decodes.
+func negotiatedWebP(protocol int, query string) bool {
+	return protocol == protocolStream && query == "webp"
+}
+
 // A protocol 2 picture message starts with this header, big-endian throughout:
 //
 //	0  "WFP2"
@@ -44,9 +52,9 @@ func negotiatedProtocol(query string) int {
 //	10 x of the rectangle
 //	12 y of the rectangle
 //	14 reserved, zero
-//	16 PNG
+//	16 PNG, or lossless WebP where the page asked for it
 //
-// A masked update whose shift already produced every pixel carries no PNG.
+// A masked update whose shift already produced every pixel carries no picture.
 const pictureHeaderSize = 16
 
 var pictureMagic = []byte("WFP2")
@@ -88,6 +96,12 @@ type pictureEncoder struct {
 	// compression costs little and is paid on few bytes.
 	stream png.Encoder
 	buffer bytes.Buffer
+	// webp writes the second protocol's pictures as lossless WebP instead of
+	// PNG, which takes a fifth to a half fewer bytes; argb holds a rectangle
+	// in the order that encoder reads.
+	webp     bool
+	lossless vp8l.Encoder
+	argb     []uint32
 
 	// base is the picture the page holds once the last message is accepted,
 	// packed one pixel per word in RGBA byte order. next is the picture being
@@ -106,9 +120,10 @@ type pictureEncoder struct {
 	paletteIndex         []uint8
 }
 
-func newPictureEncoder(protocol int) *pictureEncoder {
+func newPictureEncoder(protocol int, webp bool) *pictureEncoder {
 	return &pictureEncoder{
 		protocol: protocol,
+		webp:     webp,
 		legacy:   png.Encoder{CompressionLevel: png.BestSpeed, BufferPool: pngBuffers},
 		stream:   png.Encoder{CompressionLevel: png.DefaultCompression, BufferPool: pngBuffers},
 		palette:  make(map[uint32]uint8, 256),
@@ -221,12 +236,17 @@ func (e *pictureEncoder) encodeStream(frame pendingFrame) ([]byte, error) {
 	return bytes.Clone(e.buffer.Bytes()), nil
 }
 
-// encodeRectangle appends one rectangle of pixels as a PNG. With a prediction,
-// a pixel equal to it is written transparent: the page keeps what it has
-// there, and a run of identical transparent pixels is what compresses best.
-// Where the rectangle has at most 256 distinct values it is written with a
-// palette, one byte a pixel before compression instead of four.
+// encodeRectangle appends one rectangle of pixels as a PNG, or as lossless
+// WebP where the page asked for it. With a prediction, a pixel equal to it is
+// written transparent: the page keeps what it has there, and a run of
+// identical transparent pixels is what compresses best. Where the rectangle
+// has at most 256 distinct values a PNG is written with a palette, one byte a
+// pixel before compression instead of four; the WebP encoder makes that
+// choice itself.
 func (e *pictureEncoder) encodeRectangle(pixels []uint32, width int, bounds image.Rectangle, prediction []uint32) error {
+	if e.webp {
+		return e.encodeWebP(pixels, width, bounds, prediction)
+	}
 	rectangleWidth, rectangleHeight := bounds.Dx(), bounds.Dy()
 	count := rectangleWidth * rectangleHeight
 	clear(e.palette)
@@ -281,6 +301,28 @@ func (e *pictureEncoder) encodeRectangle(pixels []uint32, width int, bounds imag
 		}
 	}
 	return e.stream.Encode(&e.buffer, picture)
+}
+
+// encodeWebP appends one rectangle as lossless WebP. The encoder reads a
+// pixel as 0xAARRGGBB, so red and blue trade places on the way in.
+func (e *pictureEncoder) encodeWebP(pixels []uint32, width int, bounds image.Rectangle, prediction []uint32) error {
+	e.argb = e.argb[:0]
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		row := y * width
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			value := pixels[row+x]
+			if prediction != nil && value == prediction[row+x] {
+				value = 0
+			}
+			e.argb = append(e.argb, value&0xff00ff00|value&0xff<<16|value>>16&0xff)
+		}
+	}
+	encoded, err := e.lossless.Encode(e.buffer.AvailableBuffer(), e.argb, bounds.Dx(), bounds.Dy())
+	if err != nil {
+		return err
+	}
+	e.buffer.Write(encoded)
+	return nil
 }
 
 // packPixels reads RGBA bytes as one word a pixel. Equality is all anything

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FrameReceiver } from "./frame-stream.js";
+import { FrameReceiver, decodesLosslessWebP } from "./frame-stream.js";
 
 // The mock PNG is the signature, a header naming the width and a height of
 // one, and then the pixels themselves; the mock decoder reads them back. Real
@@ -15,9 +15,22 @@ const png = pixels => {
   return bytes;
 };
 
+// The mock lossless WebP is the RIFF container's header, the VP8L signature
+// and fourteen bits each of width and height less one, then the pixels.
+const webp = (pixels, { fourcc = "VP8L", height = 1 } = {}) => {
+  const bytes = new Uint8Array(25 + pixels.length);
+  bytes.set([..."RIFF"].map(c => c.charCodeAt(0)));
+  bytes.set([..."WEBP"].map(c => c.charCodeAt(0)), 8);
+  bytes.set([...fourcc].map(c => c.charCodeAt(0)), 12);
+  bytes[20] = 0x2f;
+  new DataView(bytes.buffer).setUint32(21, (pixels.length - 1) | (height - 1) << 14, true);
+  bytes.set(pixels, 25);
+  return bytes;
+};
+
 // message builds a protocol 2 picture message.
-const message = ({ operation = 0, scale = 1, dx = 0, x = 0, pixels = null, reserved = 0 }) => {
-  const body = pixels ? png(pixels) : new Uint8Array(0);
+const message = ({ operation = 0, scale = 1, dx = 0, x = 0, pixels = null, reserved = 0, format = png }) => {
+  const body = pixels ? format(pixels) : new Uint8Array(0);
   const bytes = new Uint8Array(16 + body.length);
   bytes.set([0x57, 0x46, 0x50, 0x32, operation, scale]);
   const view = new DataView(bytes.buffer);
@@ -59,9 +72,12 @@ const harness = t => {
   };
   globalThis.document = { createElement: newCanvas };
   globalThis.createImageBitmap = async blob => {
-    assert.equal(blob.type, "image/png");
     const data = new Uint8Array(await blob.arrayBuffer());
-    const bitmap = { width: data.length - 24, height: 1, pixels: [...data.slice(24)], closed: false,
+    // The type the receiver names is the one the bytes are.
+    const isWebP = data[0] === 0x52;
+    assert.equal(blob.type, isWebP ? "image/webp" : "image/png");
+    const start = isWebP ? 25 : 24;
+    const bitmap = { width: data.length - start, height: 1, pixels: [...data.slice(start)], closed: false,
       close() { this.closed = true; } };
     decoded.push(bitmap);
     return bitmap;
@@ -87,6 +103,48 @@ test("complete, masked and replacing updates compose in order", async t => {
     { left: 1, top: 0, right: 3, bottom: 1 }, { left: 2, top: 0, right: 4, bottom: 1 }]);
   assert.deepEqual(failures, []);
   assert.ok(decoded.every(bitmap => bitmap.closed));
+});
+
+test("lossless WebP pictures compose like PNG ones, mixed in any order", async t => {
+  const { receiver, decoded, frames, failures } = harness(t);
+  receiver.receive(message({ operation: 0, pixels: [1, 2, 3, 4], format: webp }));
+  receiver.receive(message({ operation: 2, x: 1, pixels: [8, 0], format: webp }));
+  receiver.receive(replace([0, 9], 2));
+  await settle();
+  assert.deepEqual(failures, []);
+  assert.deepEqual(frames.map(frame => frame.pixels), [[1, 2, 3, 4], [1, 8, 3, 4], [1, 8, 0, 9]]);
+  assert.ok(decoded.every(bitmap => bitmap.closed));
+});
+
+test("a WebP that is not lossless or is too large is refused before decoding", async t => {
+  for (const [index, body] of [webp([1], { fourcc: "VP8 " }), webp([1], { height: 4097 })].entries()) {
+    await t.test(String(index), async child => {
+      const { receiver, decoded, failures } = harness(child);
+      receiver.receive(message({ operation: 0, pixels: [1], format: () => body }));
+      await settle();
+      assert.equal(decoded.length, 0);
+      assert.equal(failures.length, 1);
+    });
+  }
+});
+
+test("the page asks for WebP only when its browser decoded the probe", async t => {
+  const prior = globalThis.createImageBitmap;
+  t.after(() => { globalThis.createImageBitmap = prior; });
+  const bitmap = (width, height) => ({ width, height, close() {} });
+  globalThis.createImageBitmap = async blob => {
+    assert.equal(blob.type, "image/webp");
+    return bitmap(2, 1);
+  };
+  assert.equal(await decodesLosslessWebP(), true);
+  globalThis.createImageBitmap = async () => bitmap(1, 1);
+  assert.equal(await decodesLosslessWebP(), false);
+  globalThis.createImageBitmap = async () => { throw new Error("unsupported"); };
+  assert.equal(await decodesLosslessWebP(), false);
+  globalThis.createImageBitmap = () => new Promise(() => {});
+  assert.equal(await decodesLosslessWebP(5), false);
+  globalThis.createImageBitmap = undefined;
+  assert.equal(await decodesLosslessWebP(), false);
 });
 
 test("a bare PNG from an older server is a complete picture it already magnified", async t => {

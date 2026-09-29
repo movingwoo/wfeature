@@ -155,6 +155,25 @@ the blocks around a change matches magnifying everything. `magnify.test.mjs`,
 `frame-stream.test.mjs` and `session.test.mjs` cover the page's side of the
 protocol with mocked canvases and sockets.
 
+`internal/vp8l` round-trips its pictures through the WebP decoder in
+`golang.org/x/image`: colour counts either side of each colour-table size,
+widths either side of the neighbourhood codes, authored pixel art with
+transparent bands, gradients, and every path the defaults avoid (the predictor
+on every picture, no colour cache). A fully transparent pixel may come back
+with another colour, which is the one difference allowed. `FuzzEncode` does the
+same for random small pictures, and the prefix, distance and Huffman helpers
+are checked against the decoder's arithmetic. An Encoder keeps tables
+between pictures, so one reused encoder, and copies of it used in turn, must
+write exactly what a fresh one writes, including when its position base wraps;
+the parse and the colour-cache trial, both written for speed, are checked
+against plain versions of themselves, the parse by `FuzzReferences` as well. A browser decodes with its
+own decoder rather than the Go one, so the encoder was also checked by hand
+against `dwebp`, the WebP project's decoder, on the authored
+pictures and on all 13,268 rectangles of recorded play; see
+[the record](history/session.md#frame-bandwidth-webp-2026-09-25). The session
+tests in `internal/webhost` compose every protocol 2 case from WebP as well as
+PNG.
+
 The opt-in browser route uses repository-authored SKT and LGT fixtures:
 
 ```sh
@@ -168,8 +187,10 @@ The runner uses isolated game and save directories and records results under
 `var/acceptance`. It exercises static presentation, restart, park/resume,
 reconnection, changed input frames, lossless update composition against a forced
 complete server picture, WIPI scale changes, and hq2x of partial updates against
-hq2x of a forced complete picture. A static picture without new PNGs is
-expected; the runtime must keep ticking. Measured scope and results are in
+hq2x of a forced complete picture. A static picture without new pictures is
+expected; the runtime must keep ticking. Both engines decode lossless WebP, so
+the route also checks that the page asked for WebP pictures and drew them, and
+every composition check above ran on WebP. Measured scope and results are in
 [the CPU investigation](cpu-saturation-investigation-2026-09-23.md) and the
 [bandwidth record](history/session.md#frame-bandwidth-2026-09-24).
 

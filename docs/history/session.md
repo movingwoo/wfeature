@@ -1409,7 +1409,9 @@ of 1 KB/s of TCP and TLS headers per busy scene, before the pictures' own.
 - *WebP lossless* of whole pictures, encoded with `cwebp` at two effort levels,
   was measured on the full-colour field only, where it came to 58–69% of
   protocol 1. It would need an encoder outside the standard library, and
-  masking alone reaches 5–34% on the other scenes.
+  masking alone reaches 5–34% on the other scenes. Protocol 2's rectangles
+  have since gone to WebP through an encoder of our own; see
+  [below](#frame-bandwidth-webp-2026-09-25).
 - *XOR against the last picture, then deflate.* It was larger than protocol 2
   in every scene — 230 KB/s against 208 on the full-colour field, its best
   case — and needs a decoder written in the page; a PNG uses the browser's.
@@ -1437,3 +1439,105 @@ compared with hq2x of the whole picture. A local KTF archive ran six seconds at
 at 1.7 KB/s on its title. The page's JavaScript hqx costs 4.4–16 ms for a whole
 240x320 frame on the M1, depending on the scale; see [hqx](../hqx.md). Phone CPU,
 battery and actual monthly traffic remain unmeasured.
+
+<a id="frame-bandwidth-webp-2026-09-25"></a>
+
+### Lossless WebP pictures — 2026-09-25
+
+Protocol 2's rectangles are PNG. Lossless WebP of the same rectangles, from an
+encoder written for them in `internal/vp8l`, is what a page gets now when it
+asks for it; see [the protocol](../session.md#protocol-2-pictures).
+
+**Why an encoder of our own.** The standard library has none. Published pure-Go
+encoders, run on the rectangles of the recordings above, came to 75–176% of the
+PNGs — most were larger on the palette scenes, because they made little of a
+colour table — or decoded to different pixels. A machine translation of the
+WebP project's own encoder to Go reached its sizes, but at up to 236 ms a
+picture, from 2.7 MB of translated code under the WebP project's licence. The format is
+specified in RFC 9649, and `golang.org/x/image` already carries a decoder to
+test against.
+
+**Method.** The five scenes above were recorded again with the same routes and
+a hook that kept every changed frame with its guest time, and the frames went
+through the session's own encoder, once with PNG and once with WebP. Four scenes
+reproduced the earlier recordings to the message. The full-colour field was
+recorded on the wall clock again and came out with fewer changed pictures a
+second, 178 in 46.2 guest seconds against 232 in 26.1, so its PNG rate is lower
+than above; the ratios are what compare. Times are one Apple M1 core. Rates are
+the messages, header included, without WebSocket framing.
+
+| Scene | PNG, KB/s | WebP, KB/s | Encoding, ms a picture | Share of a core |
+| --- | ---: | ---: | --- | --- |
+| KTF, full-colour field, scrolling | 74.2 | 38.2 (−49%) | 4.4 → 3.6 | 1.7% → 1.4% |
+| KTF, side-scrolling field | 98.3 | 80.3 (−18%) | 0.9 → 1.4 | 4.4% → 7.0% |
+| LGT, field, character and status bar | 11.3 | 9.2 (−19%) | 0.5 → 0.75 | 0.4% → 0.6% |
+| LGT, field, several moving figures | 37.5 | 28.6 (−24%) | 1.2 → 1.6 | 1.5% → 2.0% |
+| LGT, almost still screen | 0.6 | 0.5 | 0.5 → 0.7 | under 0.1% |
+
+The four busy scenes come to 156 KB/s against 221. The slowest WebP picture
+took 8.8 ms, on the moving figures; the side-scroller's 99th percentile is
+3.2 ms against PNG's 2.3. Encoding includes the comparison with the held
+picture and the scroll search, which both formats share.
+
+The first working encoder took twice these times on the palette scenes: the
+side-scroller at 2.2 ms a picture, 10.7% of a core. Its bytes were right but
+much of its time did not depend on the picture: every image, including the
+colour table's own few pixels, cleared two hash tables of 32,768 entries,
+tried eleven colour-cache sizes over separate histograms and priced 2,328
+symbols with a logarithm each. Five changes, each checked to leave every
+recorded rectangle's bytes unchanged, brought it down to 0.45–0.59 of that
+time: hash chains stamped with a running position base instead of cleared;
+a parse that skips candidates no copy could beat and a run of one colour
+without hashing each of its positions; the colour caches tried together,
+since a pixel a small cache holds every larger one holds too; prices
+computed only where counts change; and the colour table and prefix codes
+built without repeated planning. The tables an encoder keeps between
+pictures are shared with any copy of it, so the matcher counts the images
+parsed with them and makes its own when a copy has used them since.
+
+Against the WebP project's `cwebp -lossless -m 4` on the same rectangles (the
+first 1,500 messages of each scene): 38.2 against 40.6 KB/s on the full-colour
+field, and 21.4 against 20.5, 9.6 against 9.2 and 80.3 against 76.2 on the other
+three, where `cwebp` stays 4–5% smaller.
+
+**What decided the design**, each measured on these rectangles:
+
+- *No predictor for game pictures.* With the predictor transform the
+  full-colour field came to 68% of PNG, without it to 51%, and keeping the
+  smaller of the two for every rectangle of three scenes never chose it: the
+  games' flat areas and repeated tiles
+  are copies from the left and from above, which prediction residuals break
+  up. It is still tried on a picture over six bits a pixel.
+- *A transparent pixel's colour is free.* The page never shows it: the browser
+  premultiplies it away, and a masked update's transparent pixel keeps what is
+  under it. The encoder makes it one colour for the colour table and sets it to
+  its prediction when predicting, as the WebP project's encoder does unless
+  told to keep exact colours. That took the full-colour field from 78% to 71%
+  of PNG while the predictor was still in use.
+- *Copies are priced in bits.* The longest match at each position took far
+  copies of two to four pixels that cost more than writing the pixels: in one
+  240x320 palette rectangle, 10,117 of 14,935 copies were beyond the
+  neighbourhood codes. Choosing the copy that saves the most bits over its
+  literals, and none when none saves any, took 4–5% off every scene. Pricing
+  from the rectangle's channel histograms alone, rather than from a first
+  greedy parse, lands within 1% and takes a quarter to a third less time.
+- *Two hash chains.* Chains over runs of four to six pixels found repeated
+  tiles a screen back and took 1–3% off the palette scenes, but made the
+  full-colour field 5% larger without the chain over pairs; both are kept.
+
+**Measured and not used.** Spatially variant prefix codes, the format's entropy
+image, came to 4–6% less in an idealised clustering that ignored its own cost,
+and the clustering itself was the most expensive thing tried. Writing the
+masked pixels as the held picture's colours instead of transparent, keeping the
+smaller of the two, saved 0.4–4% for twice the time. Two parses priced by the
+first came to 1% less than one for about a third more time.
+
+**Verification.** Round trips through `golang.org/x/image` cover the colour
+table sizes, the neighbourhood codes, transparent bands and every path the
+defaults avoid, and `FuzzEncode` ran a million pictures. `dwebp` decoded 404
+authored pictures through each path and all 13,268 rectangles of the recordings
+to the same pixels, transparent colours aside. The frame-delivery route passed
+in Chromium and WebKit with the page asking for WebP, on the authored fixtures
+and on a local KTF and a local LGT archive. What a phone spends decoding WebP
+against PNG, and what a small server spends encoding, remain unmeasured; the
+encoder takes up to about one and a half times PNG's on the scenes that are mostly copies.

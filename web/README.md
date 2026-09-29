@@ -189,8 +189,9 @@ built per profile like every other binary here.
   `../docs/architecture.md`, "Debug run logs".
 - `GET /api/session` (WebSocket) — one controlling connection per game. Browser
   clients request `?protocol=2` for lossless picture updates at the game's own
-  size and binary sound; clients without that value receive complete, magnified
-  PNGs and JSON sound. Tokens, retention, explicit takeover, the wire formats,
+  size and binary sound, and add `pictures=webp` when their browser decodes
+  lossless WebP, which then replaces the updates' PNGs; clients without the
+  protocol value receive complete, magnified PNGs and JSON sound. Tokens, retention, explicit takeover, the wire formats,
   frame composition and recovery are described in
   [server sessions](../docs/session.md).
 

@@ -9,7 +9,8 @@ redefining its boundaries as Go packages.
    - `cmd/cli` drives a game from a terminal, and `cmd/server` serves the
      client and hosts the emulation sessions a phone plays through.
      `internal/webhost` holds the server's routes so they can be tested
-     without a process.
+     without a process, and `internal/vp8l` writes the lossless WebP
+     pictures it sends a page that asks for them.
    - Owns browser canvas/audio/save APIs and native CLI input and output.
    - Supplies the framebuffer dimensions and receives complete RGBA8888 frames
      through the `internal/backend` presentation boundary.

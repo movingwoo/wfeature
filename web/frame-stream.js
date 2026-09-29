@@ -1,7 +1,7 @@
 // Pictures from the server, composed in wire order on a retained canvas.
 //
-// A protocol 2 message is a sixteen-byte header and usually a PNG; see
-// docs/session.md. It is a complete picture, a rectangle that replaces what is
+// A protocol 2 message is a sixteen-byte header and usually a picture: a PNG,
+// or a lossless WebP where the page asked for them; see docs/session.md. It is a complete picture, a rectangle that replaces what is
 // under it, or a rectangle drawn over the held picture, where a transparent
 // pixel keeps the one that was there — optionally after the held picture has
 // been drawn shifted over itself, which is how a scrolling field arrives as
@@ -17,6 +17,54 @@ const maxQueuedFrames = 32;
 
 const pictureMagic = 0x57465032; // "WFP2"
 const COMPLETE = 0, REPLACE = 1, MASKED = 2;
+
+// Two pixels, translucent red and transparent, as lossless WebP, written by
+// internal/vp8l: what decodesLosslessWebP asks the browser to read.
+const webpProbe = "UklGRhwAAABXRUJQVlA4TBAAAAAvAQAAEA8Q8x8DGIyM6H8A";
+
+// decodesLosslessWebP resolves whether this browser decodes lossless WebP
+// with transparency, which the page needs before asking the server for its
+// pictures that way. Every browser that can hold a session should; one that
+// cannot gets PNG, so the answer is false on any doubt.
+export const decodesLosslessWebP = async (timeoutMillis = 2000) => {
+  if (typeof createImageBitmap !== "function" || typeof Blob !== "function" || typeof atob !== "function") return false;
+  let timer;
+  try {
+    const bytes = Uint8Array.from(atob(webpProbe), character => character.charCodeAt(0));
+    const decoding = createImageBitmap(new Blob([bytes], { type: "image/webp" }));
+    const late = new Promise(resolve => { timer = setTimeout(() => resolve(null), timeoutMillis); });
+    const bitmap = await Promise.race([decoding, late]);
+    if (!bitmap) {
+      decoding.then(late => late?.close?.(), () => {});
+      return false;
+    }
+    const decoded = bitmap.width === 2 && bitmap.height === 1;
+    bitmap.close?.();
+    return decoded;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// pictureSize reads the dimensions of the picture at offset, a PNG or a
+// lossless WebP, and its type; it answers null for anything else.
+const pictureSize = (bytes, view, offset) => {
+  if (bytes.length >= offset + 24 && view.getUint32(offset) === 0x89504e47 &&
+      view.getUint32(offset + 4) === 0x0d0a1a0a) {
+    return { width: view.getUint32(offset + 16), height: view.getUint32(offset + 20), type: "image/png" };
+  }
+  // "RIFF", its size, "WEBP", "VP8L", the stream's size, the 0x2f signature,
+  // and fourteen bits each of width and height less one.
+  if (bytes.length >= offset + 25 && view.getUint32(offset) === 0x52494646 &&
+      view.getUint32(offset + 8) === 0x57454250 && view.getUint32(offset + 12) === 0x5650384c &&
+      bytes[offset + 20] === 0x2f) {
+    const size = view.getUint32(offset + 21, true);
+    return { width: (size & 0x3fff) + 1, height: ((size >>> 14) & 0x3fff) + 1, type: "image/webp" };
+  }
+  return null;
+};
 
 export class FrameReceiver {
   constructor(onFrame, onError) {
@@ -76,14 +124,13 @@ export class FrameReceiver {
         throw new Error("invalid frame header");
       }
     }
-    // A masked update whose shift already produced every pixel has no PNG.
+    // A masked update whose shift already produced every pixel has no picture.
     const drawn = bytes.length > offset;
-    let width = 0, height = 0;
+    let width = 0, height = 0, type = "image/png";
     if (drawn) {
-      if (bytes.length < offset + 24 || view.getUint32(offset) !== 0x89504e47 ||
-          view.getUint32(offset + 4) !== 0x0d0a1a0a) throw new Error("invalid frame header");
-      width = view.getUint32(offset + 16);
-      height = view.getUint32(offset + 20);
+      const size = pictureSize(bytes, view, offset);
+      if (!size) throw new Error("invalid frame header");
+      ({ width, height, type } = size);
       if (!width || !height || width > maxDimension || height > maxDimension) {
         throw new Error("invalid frame dimensions");
       }
@@ -97,7 +144,7 @@ export class FrameReceiver {
         throw new Error("invalid frame dimensions");
       }
     }
-    const bitmap = drawn ? await createImageBitmap(new Blob([bytes.subarray(offset)], { type: "image/png" })) : null;
+    const bitmap = drawn ? await createImageBitmap(new Blob([bytes.subarray(offset)], { type })) : null;
     try {
       if (this.closed) return;
       if (bitmap && (bitmap.width !== width || bitmap.height !== height)) {
