@@ -253,26 +253,26 @@ title can ask for it and a keypad has no other way to reach it. One LGT title's
 party screen asks for it by its label on the handset — "press the EZ key for the
 submenu" — which is why the name has `ez` as an alias.
 
-`soft1` is the one of the three the browser can send: the keypad's `Menu`
-button is that key, and so is `M` on the keyboard. It is the key a handset's
-own screen labelled 메뉴 and the one a title of this era puts its in-game menu
-on, which is what earned it the button. `soft2` and `soft3` stay this command's
-to send — `key soft2|ez`. That is a gap rather than a decision that nothing
-needs them: one LGT title asks for the EZ key by name, as the paragraph above
-says. The keypad has only so many places a thumb looks, and the menu key is the
-one every kind of title here reaches for.
+`soft1` and `soft2` are the two of the three the browser can send: the
+keypad's `메뉴` button is `soft1`, and so is `M` on the keyboard; its `우상단`
+button is `soft2`, and so is `,`. They are the two keys at the top corners of a
+handset's keypad, and the titles name them that way — a help screen says
+좌측상단키 or 메뉴키 for the first and 우측상단키 for the second, and hangs a menu,
+a minimap, a world map or a pause on them. `soft3` stays this command's to send
+— `key soft3`, or `key ez`.
 
-The page sends `-6` for it, and that number needs no translating anywhere:
-`MH_KEY_SOFT1` and the MIDP soft key a MIDlet of this era compares against are
-both `-6`, so the WIPI platforms and the MIDP one take the same code. The page
-sent a positive `6` when it briefly carried all three soft keys under their own
-names; that value still translates, because a shell served from a phone's cache
-is a page from an older build. `web/keypad.test.mjs` holds the page's end of
-this and `internal/session`'s key translation test holds the server's.
+The page sends `-6` and `-7` for them, and neither number needs translating
+anywhere: `MH_KEY_SOFT1` and `MH_KEY_SOFT2` are the same `-6` and `-7` as the
+MIDP soft keys a MIDlet of this era compares against, so the WIPI platforms and
+the MIDP one take the same codes. The page sent a positive `6` and `7` when it
+briefly carried all three soft keys under their own names; those values still
+translate, because a shell served from a phone's cache is a page from an older
+build. `web/keypad.test.mjs` holds the page's end of this and
+`internal/session`'s key translation test holds the server's.
 
 `call` is the handset's send key. It is worth knowing about because a keypad has
 no other way to reach it and a game that answers it usually answers with a quick
-save — the reason the browser keypad carries a `Call` button of its own.
+save — the reason the browser keypad carries a `통화` button of its own.
 
 ### Routes
 

@@ -48,14 +48,17 @@ for itself. This runtime chooses:
 - A `Canvas` gets the soft keys and the menu-free part of this too, but no
   command labels are drawn over it: a `Canvas` owns its pixels.
 
-The browser reaches `KeyCodeSoft1` through the keypad's `Menu` button, which
-sends -6 — the same number `MH_KEY_SOFT1` carries on the WIPI platforms, so one
-button serves every vendor here (`cli.md`, "Key names"). Two consequences are
-worth knowing before reading a run: on this platform the key never reaches a
-`Canvas`'s `keyPressed`, because it is taken here to run a command, so a
-`Canvas` MIDlet with no commands answers the button with nothing at all; and
-what it does answer with is this runtime's choice rather than the title's,
-since the handset it was written for made the same choice for it.
+The browser reaches `KeyCodeSoft1` and `KeyCodeSoft2` through the keypad's
+`메뉴` and `우상단` buttons, which send -6 and -7 — the numbers `MH_KEY_SOFT1`
+and `MH_KEY_SOFT2` carry on the WIPI platforms, so each button serves every
+vendor here (`cli.md`, "Key names"). Two things are worth knowing before
+reading a run. A Displayable with commands is handed the command and never the
+key, and which command is this runtime's choice rather than the title's, since
+the handset it was written for made the same choice for it. And a `Canvas` with
+no commands is where the two keys part: the first reaches `keyPressed` as 129,
+this vendor's own menu-key code, because a local title switches on that value
+to open its in-game menu; the second reaches nothing, because no title here has
+shown what this vendor numbered it, and passing -7 on would be a guess.
 
 ## Navigating a Screen
 

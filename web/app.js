@@ -14,8 +14,10 @@ import {
   isShape as isKeypadShape,
   assignable as keypadAssignable,
   keyFace as keypadKeyFace,
+  keyName as keypadKeyName,
   regionLabel as keypadRegionLabel,
   cells as keypadCells,
+  SETTINGS,
 } from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { Magnifier, unionRect } from "./magnify.js";
@@ -83,11 +85,16 @@ const keyCodes = new Map([
   // save, and no other button on the keypad reaches it.
   ["CALL", 10],
   // The handset's left soft key, which its own screen labelled 메뉴 and which
-  // a title of this era puts its in-game menu on. It is the one code here that
-  // needs no translating anywhere: WIPI's MH_KEY_SOFT1 and the MIDP value a
-  // MIDlet of this era compares against are the same -6, so the server hands
-  // it to a WIPI game and to a MIDlet unchanged.
+  // a title of this era puts its in-game menu on. It needs no translating
+  // anywhere: WIPI's MH_KEY_SOFT1 and the MIDP value a MIDlet of this era
+  // compares against are the same -6, so the server hands it to a WIPI game
+  // and to a MIDlet unchanged.
   ["MENU", -6],
+  // The right soft key, and -7 for the same reason -6 is the left one:
+  // MH_KEY_SOFT2 and the MIDP value are one number. A title's help names it by
+  // where it sat — 우측상단키 — and hangs a minimap, a world map or a pause on
+  // it with no other key for them.
+  ["SOFT2", -7],
   ["UP", 141],
   ["DOWN", 146],
   ["LEFT", 142],
@@ -270,6 +277,12 @@ const sendKey = (eventType, name) => {
   session?.sendKey(eventType, code);
 };
 
+// The cells that hold one of this page's own controls rather than a phone key.
+// Neither is held or slid across, and neither sends the game anything: the
+// rapid-fire switch cycles on its click and the settings key opens the panel
+// on its own, in initSettings.
+const localControl = name => name === RAPID_FIRE || name === SETTINGS;
+
 const drawRapidFire = () => {
   for (const button of document.querySelectorAll(`button[data-key="${RAPID_FIRE}"]`)) {
     button.textContent = `연사 ${rapidFire.mode()}`;
@@ -323,8 +336,8 @@ const initInput = () => {
     target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
   // The pad is what a finger slides across: one grid of cells, the row of
-  // * 0 # among them. The band above it is not part of it — Opts and whatever
-  // the band's three cells hold are aimed at one at a time, because a slide
+  // * 0 # among them. The band above it is not part of it — whatever the band's
+  // cells hold is aimed at one key at a time, because a slide
   // that woke one of them on its way past would be a surprise and CLR in the
   // middle of a game is an expensive one, so they are pressed the way every
   // button here was before sliding: held until the finger lifts, wherever it
@@ -335,7 +348,7 @@ const initInput = () => {
   // it, because that row was already inside the region a slide runs through.
   const padKey = element => {
     const button = element?.closest?.("button[data-key]");
-    return button?.closest(".keypad-pad") && button.dataset.key !== RAPID_FIRE ? button.dataset.key : null;
+    return button?.closest(".keypad-pad") && !localControl(button.dataset.key) ? button.dataset.key : null;
   };
 
   // Where a slide may begin. A finger that goes down on the screen or in the
@@ -410,7 +423,9 @@ const initInput = () => {
     const button = target?.closest("button[data-key]");
     if (button) {
       event.preventDefault();
-      if (button.dataset.key === RAPID_FIRE) return;
+      // The two local controls act on their click, below and in
+      // initSettings, and send the game nothing.
+      if (localControl(button.dataset.key)) return;
       // Capture keeps the moves and the release coming once the finger leaves
       // the button it started on. A finger that started beside the keys needs
       // nothing of the sort: its events already belong to no button, and the
@@ -837,10 +852,10 @@ const applyKeypadKeys = table => {
     }
     button.dataset.key = name;
     button.textContent = keypadKeyFace(name);
-    // The face is what fits on the button and the label is what the key is
+    // The face is what fits on the button and the name is what the key is
     // called; where they differ the second is the accessible name, and where
     // they agree an aria-label would only repeat the text.
-    const spoken = name === RAPID_FIRE ? "연사" : keyLabel(name);
+    const spoken = keypadKeyName(name);
     if (spoken === button.textContent) button.removeAttribute("aria-label");
     else button.setAttribute("aria-label", spoken);
     button.classList.remove("empty");
@@ -932,9 +947,13 @@ const initKeypad = () => {
   };
 
   const showHint = () => {
-    hint.textContent = picked
-      ? `${whereIs(picked)} — 넣을 키를 고르세요.`
-      : "키패드에서 칸을 눌러 원하는 키로 변경합니다.";
+    // The cell holding the settings key keeps it, so nothing in the list acts
+    // on that cell, and the hint says how the key moves instead.
+    const keeps = picked !== "" && layout.keyAt(picked) === SETTINGS;
+    for (const button of keyList.querySelectorAll("button")) button.disabled = keeps;
+    if (!picked) hint.textContent = "키패드에서 칸을 눌러 원하는 키로 변경합니다.";
+    else if (keeps) hint.textContent = `${whereIs(picked)} — 설정 키는 지울 수 없습니다. 다른 칸을 골라 설정을 넣으면 그 칸으로 옮겨집니다.`;
+    else hint.textContent = `${whereIs(picked)} — 넣을 키를 고르세요.`;
   };
 
   // The sliders, from the list in keypad-size.js so the panel and the numbers
@@ -953,19 +972,21 @@ const initKeypad = () => {
     showSize.set(metric.name, show);
   }
 
-  // The key list is built once and shown per cell: twenty buttons and a clear,
+  // The key list is built once and shown per cell: a button a key and a clear,
   // and which cell they act on is `picked` rather than anything about the list.
   for (const name of keypadAssignable) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = keypadKeyFace(name);
-    const spoken = name === RAPID_FIRE ? "연사" : keyLabel(name);
+    const spoken = keypadKeyName(name);
     if (spoken !== button.textContent) button.setAttribute("aria-label", spoken);
+    if (name === SETTINGS) button.classList.add("keypad-arrange-settings");
     button.addEventListener("click", () => {
       if (!picked) return;
       layout.set(picked, name);
       draw();
       showPicked();
+      showHint();
     });
     keyList.append(button);
   }
@@ -978,6 +999,7 @@ const initKeypad = () => {
     layout.set(picked, "");
     draw();
     showPicked();
+    showHint();
   });
   keyList.append(empty);
 
@@ -1145,10 +1167,12 @@ const initModalBackdrop = () => {
 };
 
 const initSettings = () => {
-  const toggle = document.getElementById("settings-toggle");
   const panel = document.getElementById("settings-panel");
+  // The key that opens the panel is a keypad cell, so it is found by its key
+  // wherever the person put it rather than by an id.
+  const isSettingsKey = target =>
+    target instanceof Element && target.closest(`button[data-key="${SETTINGS}"]`) !== null;
 
-  toggle?.addEventListener("click", () => panel?.classList.toggle("visible"));
   document.getElementById("settings-close")?.addEventListener("click", () =>
     panel?.classList.remove("visible"));
 
@@ -1158,11 +1182,14 @@ const initSettings = () => {
   // an error that landed on top of the panel and taking the panel with it,
   // which is why the status popup is not "away".
   document.addEventListener("click", event => {
+    if (isSettingsKey(event.target)) {
+      // While the pad is being edited, a press on the key picked its cell.
+      if (!keypadArranging) panel?.classList.toggle("visible");
+      return;
+    }
     if (dockedPanels.matches) return;
     if (statusMessage.contains(event.target)) return;
-    if (!toggle?.contains(event.target) && !panel?.contains(event.target)) {
-      panel?.classList.remove("visible");
-    }
+    if (!panel?.contains(event.target)) panel?.classList.remove("visible");
   });
 
   // The rail has room to hold the settings open, so it starts open there and

@@ -95,9 +95,6 @@ test("the panels are where the stylesheet and the script expect them", () => {
   under("settings-panel", "aside.rail");
   under("keypad-arrange", "div.canvas-wrapper");
   under("canvas", "div.canvas-wrapper");
-  // Opts is the band's first column rather than a corner positioned over the
-  // container's padding, which is what makes the band a row of cells at all.
-  under("settings-toggle", "div.keypad-band");
   // The keypad screen holds all three of its halves, which is the whole of the
   // reason it is one screen.
   for (const id of ["keypad-shape-panel", "keypad-size-list", "keypad-arrange-keys", "keypad-arrange-reset"]) {

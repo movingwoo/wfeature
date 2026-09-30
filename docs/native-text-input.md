@@ -1,7 +1,7 @@
 # Native text input
 
 The browser composes text using the phone or PC keyboard and IME. The user
-selects an input field in the game, opens **Opts → 🔤 문자 입력**, and presses
+selects an input field in the game, opens **설정 → 🔤 문자 입력**, and presses
 **입력** to submit the completed string. Intermediate IME composition is local
 to the browser. The emulator does not implement a separate handset Hangul
 layout; the existing game keypad remains available for game controls.

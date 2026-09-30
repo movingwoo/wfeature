@@ -39,6 +39,15 @@ import { RAPID_FIRE } from "./rapid-fire.js";
 //   - **A cell may be empty, and most are.** Sixteen of the twenty-eight are
 //     empty in the shipped shape, which is what makes it that shape.
 //
+// And one key is the exception to both: **the settings key is in exactly one
+// cell, always.** It opens the panel this editor lives in, so a pad without it
+// would be a pad nothing could undo — which is also why the empty shape keeps
+// it. Putting it in a cell moves it there, and the cell holding it can be
+// neither emptied nor given another key: to use that cell, the key goes
+// somewhere else first. It used to be a button of its own in the band's first
+// column rather than a cell, and a column nobody could use is what that cost;
+// as a cell it can go wherever a person wants the room.
+//
 // And one rule is worth stating because a person editing cannot see it: **a
 // finger sliding across keys only presses the pad's.** `app.js` decides that by
 // which element a button sits in — inside the pad a drag presses what it
@@ -61,23 +70,19 @@ const KEYPAD_KEYS_KEY = "wfeature:keypadKeys";
 export const PAD_COLUMNS = 7;
 export const PAD_ROWS = 4;
 
-// The band above is the same seven columns, and Opts is the first of them. It
-// was three buttons placed by hand — one at the left edge, two either side of
-// the centre, one at the right — which is why there were three: absolute
-// positions have to be written one at a time. As a row of the pad's own columns
-// there are seven, six of them a person's to fill.
+// The band above is the same seven columns. It was three buttons placed by
+// hand — one at the left edge, two either side of the centre, one at the
+// right — which is why there were three: absolute positions have to be written
+// one at a time. As a row of the pad's own columns there are seven, and every
+// one of them is a cell.
 //
 // Seven and not more, and the narrowest phone is what decides it: at a 320px
 // viewport the band is 288 pixels of content box, so seven columns are 37.7
 // each and eight are 32.5. Thirty-six is the smallest key the pad itself will
-// draw — `--keypad-key-min` — and "Opts" needs about thirty of those pixels for
-// its label, so eight is under both. Seven also lines the band up with the pad,
-// which no other count does.
+// draw — `--keypad-key-min` — and "설정" needs about thirty-two of those pixels
+// for its label, so eight is under both. Seven also lines the band up with the
+// pad, which no other count does.
 export const BAND_COLUMNS = 7;
-
-// The column Opts holds. It is not a cell and cannot become one: it is the only
-// way back into the panel that would undo an empty keypad.
-export const BAND_FIXED_COLUMN = 1;
 
 // The column the two former pads occupied, which is what the size setting's
 // left/right share still weighs. The middle column belongs to neither.
@@ -88,22 +93,16 @@ export const RIGHT_COLUMNS = [5, 6, 7];
 // the page: the band above and then the grid, row by row. `region` is the drag
 // rule above; the grid places a cell by where its button is in the markup, so
 // nothing here says which row or column a cell is in beyond naming it.
-//
-// The band has three cells and not four. The fourth button up there is Opts,
-// and it is not a cell: it is the only way back into this editor, so a person
-// cannot put a phone key on it and lose the panel that would undo that.
 export const cells = [
   ...bandCells(),
   ...padCells(),
 ];
 
-// The band's cells, left to right, skipping the column Opts holds. Like the
-// pad's they carry no row or column of their own: the markup emits Opts and
-// then these, and the grid places them in that order.
+// The band's cells, left to right. Like the pad's they carry no row or column
+// of their own: the markup emits them in this order and the grid places them.
 function bandCells() {
   const cells = [];
   for (let column = 1; column <= BAND_COLUMNS; column++) {
-    if (column === BAND_FIXED_COLUMN) continue;
     cells.push({ id: `band-c${column}`, region: "band", row: 0, column });
   }
   return cells;
@@ -138,6 +137,14 @@ export const regionLabel = {
 // same thing on a pad.
 export const EMPTY = "";
 
+// The key that opens the settings panel. It is not a phone key — it sends the
+// game nothing and has no keyboard binding — and it is the one key a table
+// holds exactly once; see the rule at the top of this file.
+export const SETTINGS = "SETTINGS";
+
+// Where it goes when a table has no place for it yet: the band's first column,
+// which is where it sat when it was a button of its own.
+const SETTINGS_HOME = "band-c1";
 
 // The band and the pad are cells either way, so one table serves both: a shape
 // names every cell it fills and leaves the rest at EMPTY.
@@ -147,9 +154,14 @@ const fill = assignment => {
 };
 
 // Type1–Type3 share the top band. The local rapid-fire switch sits between
-// Menu and Call; Type4 stays empty. Saved cell edits still replace the whole
-// table, so the new default does not overwrite a user's arrangement.
-const band = { "band-c3": "MENU", "band-c4": RAPID_FIRE, "band-c5": "CALL", "band-c7": "CLR" };
+// 메뉴 and 통화, and the right soft key, 우상단, takes the column between 통화
+// and 취소: the one empty cell on that side, so nothing that was already up
+// there moved for it. Type4 stays empty. Saved cell edits still replace the
+// whole table, so a new default does not overwrite a user's arrangement.
+const band = {
+  [SETTINGS_HOME]: SETTINGS,
+  "band-c3": "MENU", "band-c4": RAPID_FIRE, "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
+};
 // The last row's three, centred in it: the row is seven cells wide and these
 // are the middle three, which is where they sat when the row was a band of its
 // own that centred whatever was in it.
@@ -238,10 +250,10 @@ export const shipped = {
 // size settings hang off it: everything here is stored per shape, and "no keys
 // at all" has to be one of them to be stored at all.
 //
-// It empties the band as well. Nothing is unreachable that way — Opts is not a
-// cell and never can be, so the panel that undoes this is always on screen —
-// and a shape that kept three keys nobody asked for would not be the empty one.
-shipped.type4 = fill({});
+// It empties the band as well, all but the settings key: that one cannot leave
+// a pad, so the panel that undoes this is always on screen, and a shape that
+// kept any other key nobody asked for would not be the empty one.
+shipped.type4 = fill({ [SETTINGS_HOME]: SETTINGS });
 
 export const shapes = ["type1", "type2", "type3", "type4"];
 
@@ -251,34 +263,66 @@ export const shapes = ["type1", "type2", "type3", "type4"];
 // `draw` reads to know what to put back when a pad stops being edited. A second
 // list of the same four names would be a second place for them to be wrong.
 
-// Cells offer the handset keys plus a local rapid-fire switch. The switch
-// is not a handset key and cannot be assigned a keyboard binding.
-export const assignable = [...keyOrder, RAPID_FIRE];
+// Cells offer the handset keys plus two local controls, the rapid-fire switch
+// and the settings key. Neither is a handset key, and neither can be assigned
+// a keyboard binding.
+export const assignable = [...keyOrder, RAPID_FIRE, SETTINGS];
 const knownKey = new Set(assignable);
 
-// What a key is called *on a pad button*, where it differs from what it is
-// called in a settings row. Three do. A 48-pixel key cannot carry 통화 or 확인
-// beside a 5 without one of them being a different size of text, and these are
-// the faces the pad has always printed; the Korean stays as the button's
-// accessible name, which is `keyLabel`. Everything else — the digits, the
-// arrows, CLR — reads the same either way and falls through.
-const faces = { [RAPID_FIRE]: "연사", CALL: "Call", MENU: "Menu", OK: "OK" };
+// What a key is called. The phone keys are named in keybindings.js, where the
+// keyboard panel lists them; the two local controls have no row there and are
+// named here.
+const localNames = { [RAPID_FIRE]: "연사", [SETTINGS]: "설정" };
 
-export const keyFace = name => faces[name] ?? keyLabel(name);
+export const keyName = name => localNames[name] ?? keyLabel(name);
+
+// What a key is called *on a pad button*, where it differs from its name. One
+// does: the centre key prints OK and is called 확인, and both are right — a
+// help screen says "OK키" for it more often than "확인키", and means the same
+// key. Every other key reads the same either way. The send and menu keys were
+// printed as Call and Menu once, on the reading that a 48-pixel key could not
+// carry 통화 beside a 5; they are printed the way the panel names them now,
+// by request. The rapid-fire switch prints its mode beside its name, which
+// app.js does.
+const faces = { OK: "OK" };
+
+export const keyFace = name => faces[name] ?? keyName(name);
 
 // clampCells folds whatever was stored into the table this build declares:
 // every cell this build has, holding a key this build knows, and EMPTY for
 // anything else. A cell or a key the page no longer has is dropped by never
 // being asked for, which is what keeps an entry left behind by an older build
-// from coming back when a later one reuses the name.
+// from coming back when a later one reuses the name. And the table comes back
+// holding the settings key exactly once, whatever was stored — an edit saved
+// before the key was a cell has none, and gets it where it used to sit.
 export const clampCells = stored => {
   const record = stored !== null && typeof stored === "object" ? stored : {};
-  return Object.fromEntries(
+  return withSettings(Object.fromEntries(
     cellIds.map(id => {
       const asked = record[id];
       return [id, typeof asked === "string" && knownKey.has(asked) ? asked : EMPTY];
     }),
-  );
+  ));
+};
+
+// withSettings holds a table to the settings key's rule. A second copy is
+// emptied, the first in the editor's order staying. A table with none gets it
+// at home, or in the first empty cell when home is taken, or at home over
+// whatever is there when no cell is empty: a pad without the key is the one
+// pad nothing can undo, so the key outranks any other.
+const withSettings = table => {
+  const holding = cellIds.filter(id => table[id] === SETTINGS);
+  if (holding.length === 1) return table;
+  const next = { ...table };
+  if (holding.length > 1) {
+    for (const id of holding.slice(1)) next[id] = EMPTY;
+    return next;
+  }
+  const home = next[SETTINGS_HOME] === EMPTY
+    ? SETTINGS_HOME
+    : cellIds.find(id => next[id] === EMPTY) ?? SETTINGS_HOME;
+  next[home] = SETTINGS;
+  return next;
 };
 
 export const isShape = name => Object.hasOwn(shipped, name);
@@ -300,12 +344,22 @@ const shapeFor = (table, chosen) =>
   cellIds.every(id => shipped[chosen]?.[id] === table[id]) ? chosen : shapeMatching(table);
 
 // assign puts a key in a cell, and clear empties one. Neither takes the key
-// away from anywhere else — see the rule at the top of this file.
-export const assign = (table, id, name) =>
-  knownCell.has(id) && knownKey.has(name) ? { ...table, [id]: name } : table;
+// away from anywhere else — see the rule at the top of this file — except the
+// settings key, which moves: putting it in one cell takes it out of the one it
+// was in. And the cell holding it keeps it, so neither can empty that cell or
+// put another key there; both answer the table unchanged.
+export const assign = (table, id, name) => {
+  if (!knownCell.has(id) || !knownKey.has(name) || table[id] === SETTINGS) return table;
+  if (name !== SETTINGS) return { ...table, [id]: name };
+  const next = Object.fromEntries(
+    Object.entries(table).map(([cell, key]) => [cell, key === SETTINGS ? EMPTY : key]),
+  );
+  next[id] = SETTINGS;
+  return next;
+};
 
 export const clear = (table, id) =>
-  knownCell.has(id) ? { ...table, [id]: EMPTY } : table;
+  knownCell.has(id) && table[id] !== SETTINGS ? { ...table, [id]: EMPTY } : table;
 
 // createKeypadLayout answers the object app.js drives, over whatever storage it
 // is given. The storage is a parameter so a test can hand it a map; the default
