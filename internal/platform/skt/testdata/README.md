@@ -1,5 +1,19 @@
 # SKT fixtures
 
+`src/RestartingMIDlet.java` and `restarting.jar` reproduce repeated startup
+replacing a Canvas and creating another worker. Compile with Java 8 target
+settings against the generated library signatures, then package only
+`RestartingMIDlet.class` and `RestartingMIDlet$Scene.class` with `RESTARTING.MF`.
+The Go tests enable the selected resume behavior directly; the authored class
+set is not a production compatibility entry.
+
+`src/SerialInputMIDlet.java` and `serial-input.jar` exercise an animation loop
+whose paint consumes keys and whose serial callback clears them. Compile with
+Java 8 target settings against the generated library signatures, then package
+only `SerialInputMIDlet.class` and `SerialInputMIDlet$Loop.class` with
+`SERIAL_INPUT.MF`. The same fixture checks synchronous repaint and recovery
+after a serial callback throws.
+
 `src/TextInputMIDlet.java` and `text-input.jar` are a packaged Host keyboard
 and IME fixture. It starts on an empty 16-character TextBox; its `Next`
 command switches to a second four-character TextBox so a session test can

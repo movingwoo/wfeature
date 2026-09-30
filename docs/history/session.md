@@ -1078,7 +1078,7 @@ else's in-memory game.
 A parked game does not tick, and it now knows why. Parking calls
 `session.Session.Pause` on the way out and `Resume` on the way back, and each
 platform answers with the lifecycle its titles were written against: a Clet's
-`pauseClet`/`resumeClet`, a MIDlet's `pauseApp`/`resumeApp`, and the WIPI
+`pauseClet`/`resumeClet`, a MIDlet's `pauseApp`/`startApp`, and the WIPI
 Java Jlet's. **Two of the three had the platform half implemented and nothing
 that called it** — the calls sat there with a comment saying they were the
 lifecycle a Host uses when the page is hidden, waiting for a Host that had not

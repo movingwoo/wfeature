@@ -18,6 +18,12 @@ threads run independently of Host ticks. Their first uncaught asynchronous
 error is retained and returned at the next `RunPending` boundary. Terminal
 transitions close JVM waits and release audio waits.
 
+Two recognized class sets recreate their Canvas and workers on every
+`startApp`, despite leaving the previous workers alive on pause. Their resume
+correction retains a successful initial start; ordinary MIDP reactivation and
+deferred initial starts still invoke the callback. See the
+[retained-session investigation](skt-resume-2026-09-30.md).
+
 Thread state belongs to the Thread object. Only active threads and the main
 thread remain roots; completion and failed starts preserve restart prohibition
 without retaining inactive roots. Untimed `Thread.join()` supports multiple
@@ -53,6 +59,16 @@ An exact Java-class fingerprint can enable the recorded inclusive `setClip`
 exception; a legacy profile string alone cannot. The selected correction does
 not change WIPI Graphics, `clipRect`, fills, or image dimensions. See
 [compatibility registry](platform-compatibility.md).
+
+Repaints requested from a serial Runnable wait for the next Host pass and run
+before the next Runnable. This lets paint consume input arriving between
+animation updates. MIDP Canvas callbacks receive handset code `190` for the
+Host's Call key (`10`); WIPI Cards receive `-10`. See the
+[input and tile investigation](skt-qa-2026-09-29.md) for reproduction and tests.
+The Call mapping was also exercised in two additional games; the
+[cross-archive audit](skt-qa-2026-09-29.md#cross-archive-call-verification)
+records the evidence and its limits. It is an observed handset mapping, not a
+universal MIDP Call constant.
 
 The runtime has Canvas pointer handlers, but the shared SKT session does not
 offer browser pointer input. Host keyboard/IME entry supports known active
