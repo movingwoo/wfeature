@@ -12,16 +12,24 @@
 // once (audio-stream.js). docs/session.md has the whole protocol.
 
 import { AudioStream, isAudioMessage } from "./audio-stream.js";
-import { FrameReceiver } from "./frame-stream.js";
+import { FrameReceiver, decodesLosslessWebP } from "./frame-stream.js";
+
+// Whether this browser decodes lossless WebP, found once before the first
+// session is opened: a page that can asks for its pictures that way, which
+// takes a fifth to a half fewer bytes than PNG.
+let losslessWebP;
+const probingWebP = decodesLosslessWebP().then(decodes => { losslessWebP = decodes; });
 
 // sessionURL is the page's own origin with the websocket scheme, so a session
 // reaches the server the page came from without anything to configure. A page
 // served over https gets wss, which is what a reverse proxy in front of this
 // would need. A server that does not know protocol 2 answers in protocol 1,
-// which this page also reads.
+// which this page also reads, and a server that does not know WebP pictures
+// sends PNG, which it reads as well.
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/api/session?protocol=2`;
+  const pictures = losslessWebP ? "&pictures=webp" : "";
+  return `${scheme}//${location.host}/api/session?protocol=2${pictures}`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -63,6 +71,12 @@ export class GameSession {
   // open connects and resolves once the server says it is ready to take a
   // game. It rejects if the socket fails before that.
   open(timeoutMillis = 10000) {
+    if (losslessWebP === undefined) {
+      return probingWebP.then(() => {
+        if (this.closed) throw new Error("세션 연결이 끊어졌습니다.");
+        return this.open(timeoutMillis);
+      });
+    }
     return new Promise((resolve, reject) => {
       let socket;
       try {

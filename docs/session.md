@@ -17,6 +17,13 @@ complete PNGs magnified on the server, and sound as JSON. Older pages remain
 compatible, and the current page also reads protocol 1 from an older server
 that ignores the query.
 
+A protocol 2 page whose browser decodes lossless WebP adds `pictures=webp`, and
+its pictures come as lossless WebP instead of PNG. The page finds out once, by
+decoding a two-pixel picture with transparency before its first connection;
+every browser that can hold a session should, and one that cannot, or that
+answers late, keeps PNG. A server that does not know the value sends PNG, which
+the page reads as well.
+
 | Page message | Purpose |
 | --- | --- |
 | `start` | Start an archive with supported session options. |
@@ -59,11 +66,11 @@ bounded one-frame queue, and so does protocol 1's server-side hqx; a discarded
 picture therefore costs no encoding work on the emulator goroutine. The
 synchronous `Session.Frame` API still returns already-scaled pixels for other
 Hosts; MIDP surfaces remain at their native size and are never magnified. The
-page decodes PNGs and draws them — in protocol 2 it also magnifies them — and
+page decodes pictures and draws them — in protocol 2 it also magnifies them — and
 does not execute guest instructions. Speed and scaling are distinct settings.
 
 The encoder compares consecutive raw pictures, dimensions and scale before
-scaling or encoding. An unchanged picture needs no new PNG or network message;
+scaling or encoding. An unchanged picture needs no new picture or network message;
 guest callbacks, timers and drawing still execute. A static screen may therefore
 report zero delivered frames per second while guest ticks continue normally.
 Start, resume and display-setting changes force presentation even when pixels
@@ -106,7 +113,7 @@ with a sixteen-byte big-endian header:
 | 10 | 2 | Rectangle `x` |
 | 12 | 2 | Rectangle `y` |
 | 14 | 2 | Reserved, zero |
-| 16 | — | PNG; its dimensions are the rectangle's |
+| 16 | — | PNG, or lossless WebP where the page asked for it; its dimensions are the rectangle's |
 
 - **Complete** replaces the held picture and its size. The first picture, an
   explicit redraw, and a change of size or scale are complete.
@@ -125,9 +132,24 @@ with a sixteen-byte big-endian header:
   page first draws its held picture at that offset over itself, and the strip
   it uncovers keeps what it had. Scrolling fields change almost every pixel a
   frame and move by one or two. A shift that already produced every pixel
-  carries no PNG.
+  carries no picture.
 - A rectangle with at most 256 distinct values, the transparent one included,
   is written with a palette. PNGs use zlib's default level.
+- **WebP.** `internal/vp8l` writes the rectangle as lossless WebP, written for
+  these pictures from RFC 9649 rather than taken from a library. A rectangle
+  with at most 256 colours goes through a colour table, packing up to eight
+  pixels into one where the colours are few; any other has green subtracted
+  from red and blue. Both are then backward references — copies from the left,
+  from the rows above through the format's short neighbourhood codes, and from
+  anywhere earlier through hash chains over runs of two and of six pixels —
+  chosen for the bits they save, and a colour cache sized by estimate. The
+  predictor transform is tried only for a picture still above six bits a pixel,
+  such as a photograph: the games' flat areas and repeated tiles copy far
+  better than they predict. A transparent pixel's colour is chosen to cost
+  least, because nothing on the page can show it. On recorded play this is a
+  fifth to a half fewer bytes than the PNGs, for 0.8 to 1.6 times their
+  encoding time; see
+  [the record](history/session.md#frame-bandwidth-webp-2026-09-25).
 
 Each update depends on all prior binary messages on that connection. Raw frames
 can be dropped before encoding; encoded updates must remain ordered and cannot

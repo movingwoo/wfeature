@@ -124,6 +124,7 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		outFrames:    make(chan outboundMessage, 1),
 		writerDone:   make(chan struct{}),
 	}
+	runner.webp = negotiatedWebP(runner.protocol, request.URL.Query().Get("pictures"))
 	runner.run(request.Context())
 }
 
@@ -151,6 +152,8 @@ type sessionRunner struct {
 	// protocol is what the page asked for when it connected; an older page
 	// keeps receiving complete PNGs and JSON sound. See frame_patch.go.
 	protocol int
+	// webp is whether the page asked for its pictures as lossless WebP.
+	webp bool
 	// encoding is set while the encoder holds a picture, and frameSettled is
 	// poked each time it lets one go. The writer reads both to decide whether
 	// the sound it holds is worth a moment's wait for its picture.
@@ -349,7 +352,7 @@ var pngBuffers = &pngBufferPool{}
 // guest speed, and the write itself is off it too — see writeMessages for why
 // that took a goroutine of its own rather than this one.
 func (r *sessionRunner) writeFrames(ctx context.Context) {
-	encoder := newPictureEncoder(r.protocol)
+	encoder := newPictureEncoder(r.protocol, r.webp)
 	var previous pendingFrame
 	// settle lets the writer know the picture it may be waiting for is not
 	// coming, or has gone to it already.

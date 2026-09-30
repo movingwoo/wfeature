@@ -43,7 +43,7 @@ try {
   browser = await engine.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   await context.addInitScript(() => {
-    window.frameProbe = { pictures: 0, patches: 0, shifts: 0, sounds: 0, bytes: 0, draws: 0, messages: [], sockets: [] };
+    window.frameProbe = { pictures: 0, patches: 0, shifts: 0, webp: 0, sounds: 0, bytes: 0, draws: 0, messages: [], sockets: [] };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) {
@@ -59,6 +59,10 @@ try {
               return;
             }
             window.frameProbe.pictures++;
+            // "RIFF" after the header: a lossless WebP picture.
+            if (view.getUint32(0) === 0x57465032 && event.data.byteLength > 20 && view.getUint32(16) === 0x52494646) {
+              window.frameProbe.webp++;
+            }
             if (view.getUint32(0) === 0x57465032 && view.getUint8(4) !== 0) {
               window.frameProbe.patches++;
               if (view.getInt16(6) || view.getInt16(8)) window.frameProbe.shifts++;
@@ -172,6 +176,13 @@ try {
   await page.keyboard.up("1");
   await page.keyboard.up("2");
   check("update composition matches a forced complete picture pixel for pixel");
+  // Every engine this runs decodes lossless WebP, so the page asks for it and
+  // everything above was composed from WebP pictures.
+  const negotiated = await page.evaluate(() => ({
+    url: frameProbe.sockets.at(-1).url, webp: frameProbe.webp, pictures: frameProbe.pictures }));
+  assert.equal(new URL(negotiated.url).searchParams.get("pictures"), "webp", negotiated.url);
+  assert.ok(negotiated.webp > 0, `no WebP among ${negotiated.pictures} pictures`);
+  check("the page asked for lossless WebP pictures and drew them");
 
   await stop();
   await start("games/library/wipi.zip");

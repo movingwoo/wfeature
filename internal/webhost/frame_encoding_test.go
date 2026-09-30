@@ -12,12 +12,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/filter/hqx"
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/wsproto"
+	"golang.org/x/image/webp"
 )
 
 // encodeFrames uses the real encoder queue and drains it through shutdown, so
@@ -38,9 +40,16 @@ func encodeFrames(t *testing.T, frames ...pendingFrame) []image.Image {
 
 func encodeFrameMessages(t *testing.T, protocol int, frames ...pendingFrame) []outboundMessage {
 	t.Helper()
+	return encodeFrameMessagesAs(t, protocol, false, frames...)
+}
+
+// encodeFrameMessagesAs is encodeFrameMessages for a page that asked, or did
+// not ask, for its pictures as WebP.
+func encodeFrameMessagesAs(t *testing.T, protocol int, webp bool, frames ...pendingFrame) []outboundMessage {
+	t.Helper()
 	runner := &sessionRunner{server: newTestServer(t, Options{}),
-		protocol: protocol,
-		frames:   make(chan pendingFrame, len(frames)), outFrames: make(chan outboundMessage, len(frames))}
+		protocol: protocol, webp: webp,
+		frames: make(chan pendingFrame, len(frames)), outFrames: make(chan outboundMessage, len(frames))}
 	for _, frame := range frames {
 		runner.frames <- frame
 	}
@@ -75,7 +84,11 @@ func applyStreamMessage(t *testing.T, canvas *image.RGBA, payload []byte) (*imag
 	}
 	var picture image.Image
 	if len(payload) > pictureHeaderSize {
-		decoded, err := png.Decode(bytes.NewReader(payload[pictureHeaderSize:]))
+		decode := png.Decode
+		if bytes.HasPrefix(payload[pictureHeaderSize:], []byte("RIFF")) {
+			decode = webp.Decode
+		}
+		decoded, err := decode(bytes.NewReader(payload[pictureHeaderSize:]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,6 +116,25 @@ func applyStreamMessage(t *testing.T, canvas *image.RGBA, payload []byte) (*imag
 	return canvas, header
 }
 
+// forEachPictureFormat runs a test for a page that takes PNG and for one that
+// asked for WebP, which must reconstruct the same pictures.
+func forEachPictureFormat(t *testing.T, test func(t *testing.T, webp bool)) {
+	for _, webp := range []bool{false, true} {
+		name := "png"
+		if webp {
+			name = "webp"
+		}
+		t.Run(name, func(t *testing.T) {
+			test(t, webp)
+			for _, message := range encodeFrameMessagesAs(t, protocolStream, webp, scrollingFrames(1, 0)...) {
+				if got := bytes.HasPrefix(message.binary[pictureHeaderSize:], []byte("RIFF")); got != webp {
+					t.Fatalf("the picture is WebP: %v, for a page that asked for WebP: %v", got, webp)
+				}
+			}
+		})
+	}
+}
+
 func samePixels(t *testing.T, got *image.RGBA, want pendingFrame) {
 	t.Helper()
 	if got.Bounds() != image.Rect(0, 0, want.Width, want.Height) {
@@ -119,50 +151,102 @@ func samePixels(t *testing.T, got *image.RGBA, want pendingFrame) {
 	}
 }
 
-func TestStreamUpdatesReconstructLosslessly(t *testing.T) {
-	for _, scale := range []int{1, 2, 3, 4} {
-		t.Run(fmt.Sprint(scale), func(t *testing.T) {
-			first := pendingFrame{RGBA: make([]byte, 64*80*4), Width: 64, Height: 80, Scale: scale}
-			for i := 0; i < len(first.RGBA); i += 4 {
-				first.RGBA[i], first.RGBA[i+1], first.RGBA[i+3] = byte(i/4), byte(i/256), 255
-			}
-			second := first
-			second.RGBA = bytes.Clone(first.RGBA)
-			copy(second.RGBA[(30*64+20)*4:], []byte{240, 20, 0, 255})
-			copy(second.RGBA[(70*64+60)*4:], []byte{1, 2, 3, 255})
-			third := second
-			third.RGBA = bytes.Clone(second.RGBA)
-			// Erasing to transparency must replace the old pixel, not blend.
-			clear(third.RGBA[(30*64+20)*4 : (30*64+20)*4+4])
-			copy(third.RGBA[:4], []byte{0, 240, 0, 255})
-			forced := third
-			forced.Force = true
-			resized := first
-			resized.Width, resized.Height = first.Height, first.Width
-			frames := []pendingFrame{first, second, third, forced, resized}
-			messages := encodeFrameMessages(t, protocolStream, frames...)
-			if len(messages) != len(frames) {
-				t.Fatalf("got %d pictures", len(messages))
-			}
-			wantOperations := []int{pictureComplete, pictureMasked, pictureReplace, pictureComplete, pictureComplete}
-			var canvas *image.RGBA
-			for i, message := range messages {
-				var header streamHeader
-				canvas, header = applyStreamMessage(t, canvas, message.binary)
-				if header.operation != wantOperations[i] || header.scale != scale {
-					t.Fatalf("picture %d: operation %d scale %d, want %d and %d", i, header.operation, header.scale, wantOperations[i], scale)
+func TestStreamWebPMatchesPNGForTranslucentFrames(t *testing.T) {
+	for _, indexed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("indexed=%v", indexed), func(t *testing.T) {
+			first := pendingFrame{RGBA: make([]byte, 32*16*4), Width: 32, Height: 16, Scale: 1}
+			palette := [][4]byte{{128, 0, 0, 128}, {0, 32, 0, 64}, {64, 32, 16, 128},
+				{0, 0, 0, 0}, {1, 0, 1, 1}, {128, 128, 0, 254}, {10, 20, 30, 255}}
+			for index := 0; index < len(first.RGBA)/4; index++ {
+				pixel := [4]byte{byte(index % 129), byte(index / 129), 32, 128}
+				if indexed {
+					pixel = palette[index%len(palette)]
 				}
-				samePixels(t, canvas, frames[i])
+				copy(first.RGBA[index*4:], pixel[:])
 			}
-			if len(messages[1].binary) >= len(messages[0].binary) {
-				t.Fatalf("update %d bytes, complete %d", len(messages[1].binary), len(messages[0].binary))
+			// Two separated changes keep the rectangle large enough to exercise
+			// both the paletted and full-colour PNG paths, with a nonzero origin.
+			left, right := (32+1)*4, (14*32+30)*4
+			replaced := first
+			replaced.RGBA = bytes.Clone(first.RGBA)
+			copy(replaced.RGBA[left:], []byte{32, 16, 8, 64})
+			copy(replaced.RGBA[right:], []byte{1, 0, 1, 1})
+			masked := replaced
+			masked.RGBA = bytes.Clone(replaced.RGBA)
+			copy(masked.RGBA[left:], []byte{255, 0, 0, 255})
+			copy(masked.RGBA[right:], []byte{0, 255, 0, 255})
+			forced := masked
+			forced.Force = true
+			frames := []pendingFrame{first, replaced, masked, forced}
+			pngMessages := encodeFrameMessagesAs(t, protocolStream, false, frames...)
+			webpMessages := encodeFrameMessagesAs(t, protocolStream, true, frames...)
+			if len(pngMessages) != len(frames) || len(webpMessages) != len(frames) {
+				t.Fatalf("got %d PNG and %d WebP messages, want %d each", len(pngMessages), len(webpMessages), len(frames))
 			}
-			// The page magnifies, so the update stays small at every scale.
-			if legacy := encodeFrameMessages(t, protocolPictures, second)[0]; scale > 1 && len(messages[1].binary)*4 >= len(legacy.binary) {
-				t.Fatalf("update %d bytes, magnified complete %d: want at least 75%% less", len(messages[1].binary), len(legacy.binary))
+			operations := []int{pictureComplete, pictureReplace, pictureMasked, pictureComplete}
+			var pngCanvas, webpCanvas *image.RGBA
+			for index, frame := range frames {
+				var pngHeader, webpHeader streamHeader
+				pngCanvas, pngHeader = applyStreamMessage(t, pngCanvas, pngMessages[index].binary)
+				webpCanvas, webpHeader = applyStreamMessage(t, webpCanvas, webpMessages[index].binary)
+				if pngHeader != webpHeader || webpHeader.operation != operations[index] {
+					t.Fatalf("frame %d: PNG header %+v, WebP header %+v; want operation %d", index, pngHeader, webpHeader, operations[index])
+				}
+				// Match PNG's rounding when premultiplied RGBA becomes straight
+				// alpha for encoding and premultiplied again when drawn.
+				frame.RGBA = pngCanvas.Pix
+				samePixels(t, webpCanvas, frame)
 			}
 		})
 	}
+}
+
+func TestStreamUpdatesReconstructLosslessly(t *testing.T) {
+	forEachPictureFormat(t, func(t *testing.T, webp bool) {
+		for _, scale := range []int{1, 2, 3, 4} {
+			t.Run(fmt.Sprint(scale), func(t *testing.T) {
+				first := pendingFrame{RGBA: make([]byte, 64*80*4), Width: 64, Height: 80, Scale: scale}
+				for i := 0; i < len(first.RGBA); i += 4 {
+					first.RGBA[i], first.RGBA[i+1], first.RGBA[i+3] = byte(i/4), byte(i/256), 255
+				}
+				second := first
+				second.RGBA = bytes.Clone(first.RGBA)
+				copy(second.RGBA[(30*64+20)*4:], []byte{240, 20, 0, 255})
+				copy(second.RGBA[(70*64+60)*4:], []byte{1, 2, 3, 255})
+				third := second
+				third.RGBA = bytes.Clone(second.RGBA)
+				// Erasing to transparency must replace the old pixel, not blend.
+				clear(third.RGBA[(30*64+20)*4 : (30*64+20)*4+4])
+				copy(third.RGBA[:4], []byte{0, 240, 0, 255})
+				forced := third
+				forced.Force = true
+				resized := first
+				resized.Width, resized.Height = first.Height, first.Width
+				frames := []pendingFrame{first, second, third, forced, resized}
+				messages := encodeFrameMessagesAs(t, protocolStream, webp, frames...)
+				if len(messages) != len(frames) {
+					t.Fatalf("got %d pictures", len(messages))
+				}
+				wantOperations := []int{pictureComplete, pictureMasked, pictureReplace, pictureComplete, pictureComplete}
+				var canvas *image.RGBA
+				for i, message := range messages {
+					var header streamHeader
+					canvas, header = applyStreamMessage(t, canvas, message.binary)
+					if header.operation != wantOperations[i] || header.scale != scale {
+						t.Fatalf("picture %d: operation %d scale %d, want %d and %d", i, header.operation, header.scale, wantOperations[i], scale)
+					}
+					samePixels(t, canvas, frames[i])
+				}
+				if len(messages[1].binary) >= len(messages[0].binary) {
+					t.Fatalf("update %d bytes, complete %d", len(messages[1].binary), len(messages[0].binary))
+				}
+				// The page magnifies, so the update stays small at every scale.
+				if legacy := encodeFrameMessages(t, protocolPictures, second)[0]; scale > 1 && len(messages[1].binary)*4 >= len(legacy.binary) {
+					t.Fatalf("update %d bytes, magnified complete %d: want at least 75%% less", len(messages[1].binary), len(legacy.binary))
+				}
+			})
+		}
+	})
 }
 
 // scrollingFrames is an authored field that scrolls under a fixed status bar,
@@ -205,77 +289,92 @@ func scrolledField(offsets ...int) []pendingFrame {
 }
 
 func TestStreamFollowsAScrollingPicture(t *testing.T) {
-	frames := scrollingFrames(4, 2)
-	messages := encodeFrameMessages(t, protocolStream, frames...)
-	var canvas *image.RGBA
-	for i, message := range messages {
-		var header streamHeader
-		canvas, header = applyStreamMessage(t, canvas, message.binary)
-		samePixels(t, canvas, frames[i])
-		if i == 0 {
-			continue
+	forEachPictureFormat(t, func(t *testing.T, webp bool) {
+		frames := scrollingFrames(4, 2)
+		messages := encodeFrameMessagesAs(t, protocolStream, webp, frames...)
+		var canvas *image.RGBA
+		for i, message := range messages {
+			var header streamHeader
+			canvas, header = applyStreamMessage(t, canvas, message.binary)
+			samePixels(t, canvas, frames[i])
+			if i == 0 {
+				continue
+			}
+			// The field moved two pixels left, so the held picture is drawn two
+			// pixels left and only the strip it uncovers is new.
+			if header.operation != pictureMasked || header.shift != image.Pt(-2, 0) {
+				t.Fatalf("picture %d: operation %d shift %v, want a masked update after (-2,0)", i, header.operation, header.shift)
+			}
+			// WebP copies the field's repeated tiles from the rows above, so
+			// its complete picture is already small and the strip is less of
+			// a saving against it.
+			share := 4
+			if webp {
+				share = 2
+			}
+			if len(message.binary)*share >= len(messages[0].binary) {
+				t.Fatalf("picture %d is %d bytes against %d complete", i, len(message.binary), len(messages[0].binary))
+			}
 		}
-		// The field moved two pixels left, so the held picture is drawn two
-		// pixels left and only the strip it uncovers is new.
-		if header.operation != pictureMasked || header.shift != image.Pt(-2, 0) {
-			t.Fatalf("picture %d: operation %d shift %v, want a masked update after (-2,0)", i, header.operation, header.shift)
-		}
-		if len(message.binary)*4 >= len(messages[0].binary) {
-			t.Fatalf("picture %d is %d bytes against %d complete", i, len(message.binary), len(messages[0].binary))
-		}
-	}
+	})
 }
 
 func TestStreamSearchesAgainWhenTheScrollChangesDirection(t *testing.T) {
-	// The second scroll repeats the first, which the encoder tries before
-	// searching; the third turns back, which only a search finds.
-	frames := scrolledField(0, 2, 4, 1)
-	messages := encodeFrameMessages(t, protocolStream, frames...)
-	var canvas *image.RGBA
-	for i, message := range messages {
-		var header streamHeader
-		canvas, header = applyStreamMessage(t, canvas, message.binary)
-		samePixels(t, canvas, frames[i])
-		if want := []image.Point{{}, {-2, 0}, {-2, 0}, {3, 0}}[i]; header.shift != want {
-			t.Fatalf("picture %d shifted %v, want %v", i, header.shift, want)
+	forEachPictureFormat(t, func(t *testing.T, webp bool) {
+		// The second scroll repeats the first, which the encoder tries before
+		// searching; the third turns back, which only a search finds.
+		frames := scrolledField(0, 2, 4, 1)
+		messages := encodeFrameMessagesAs(t, protocolStream, webp, frames...)
+		var canvas *image.RGBA
+		for i, message := range messages {
+			var header streamHeader
+			canvas, header = applyStreamMessage(t, canvas, message.binary)
+			samePixels(t, canvas, frames[i])
+			if want := []image.Point{{}, {-2, 0}, {-2, 0}, {3, 0}}[i]; header.shift != want {
+				t.Fatalf("picture %d shifted %v, want %v", i, header.shift, want)
+			}
 		}
-	}
+	})
 }
 
 func TestStreamScrollWithNothingElseCarriesNoPicture(t *testing.T) {
-	frames := scrollingFrames(1, 0)
-	// A picture that is exactly the last one drawn two pixels up over itself:
-	// the uncovered strip at the bottom keeps what it had.
-	moved := frames[0]
-	moved.RGBA = bytes.Clone(frames[0].RGBA)
-	row := moved.Width * 4
-	copy(moved.RGBA[:(moved.Height-2)*row], frames[0].RGBA[2*row:])
-	messages := encodeFrameMessages(t, protocolStream, frames[0], moved)
-	if len(messages) != 2 || len(messages[1].binary) != pictureHeaderSize {
-		t.Fatalf("got %d messages, the update %d bytes; want a bare header", len(messages), len(messages[len(messages)-1].binary))
-	}
-	canvas, header := applyStreamMessage(t, nil, messages[0].binary)
-	canvas, header = applyStreamMessage(t, canvas, messages[1].binary)
-	if header.shift != image.Pt(0, -2) {
-		t.Fatalf("shift %v, want (0,-2)", header.shift)
-	}
-	samePixels(t, canvas, moved)
+	forEachPictureFormat(t, func(t *testing.T, webp bool) {
+		frames := scrollingFrames(1, 0)
+		// A picture that is exactly the last one drawn two pixels up over itself:
+		// the uncovered strip at the bottom keeps what it had.
+		moved := frames[0]
+		moved.RGBA = bytes.Clone(frames[0].RGBA)
+		row := moved.Width * 4
+		copy(moved.RGBA[:(moved.Height-2)*row], frames[0].RGBA[2*row:])
+		messages := encodeFrameMessagesAs(t, protocolStream, webp, frames[0], moved)
+		if len(messages) != 2 || len(messages[1].binary) != pictureHeaderSize {
+			t.Fatalf("got %d messages, the update %d bytes; want a bare header", len(messages), len(messages[len(messages)-1].binary))
+		}
+		canvas, header := applyStreamMessage(t, nil, messages[0].binary)
+		canvas, header = applyStreamMessage(t, canvas, messages[1].binary)
+		if header.shift != image.Pt(0, -2) {
+			t.Fatalf("shift %v, want (0,-2)", header.shift)
+		}
+		samePixels(t, canvas, moved)
+	})
 }
 
 func TestStreamDoesNotScrollOverATranslucentPicture(t *testing.T) {
-	frames := scrollingFrames(2, 2)
-	for _, frame := range frames {
-		// One pixel that is not opaque in the held picture would blend when
-		// the page draws the picture over itself.
-		clear(frame.RGBA[len(frame.RGBA)-4:])
-	}
-	messages := encodeFrameMessages(t, protocolStream, frames...)
-	canvas, _ := applyStreamMessage(t, nil, messages[0].binary)
-	canvas, header := applyStreamMessage(t, canvas, messages[1].binary)
-	if header.shift != (image.Point{}) {
-		t.Fatalf("shifted %v over a translucent picture", header.shift)
-	}
-	samePixels(t, canvas, frames[1])
+	forEachPictureFormat(t, func(t *testing.T, webp bool) {
+		frames := scrollingFrames(2, 2)
+		for _, frame := range frames {
+			// One pixel that is not opaque in the held picture would blend when
+			// the page draws the picture over itself.
+			clear(frame.RGBA[len(frame.RGBA)-4:])
+		}
+		messages := encodeFrameMessagesAs(t, protocolStream, webp, frames...)
+		canvas, _ := applyStreamMessage(t, nil, messages[0].binary)
+		canvas, header := applyStreamMessage(t, canvas, messages[1].binary)
+		if header.shift != (image.Point{}) {
+			t.Fatalf("shifted %v over a translucent picture", header.shift)
+		}
+		samePixels(t, canvas, frames[1])
+	})
 }
 
 // pngColorType reads the colour type from a PNG's header chunk.
@@ -303,7 +402,7 @@ func TestStreamUsesAPaletteWhereTheColoursFit(t *testing.T) {
 }
 
 func TestSessionNegotiatesTheStreamProtocol(t *testing.T) {
-	for _, query := range []string{"", "protocol=2", "protocol=3", "frames=patch-v1"} {
+	for _, query := range []string{"", "protocol=2", "protocol=3", "frames=patch-v1", "protocol=2&pictures=webp", "pictures=webp", "protocol=2&pictures=gif"} {
 		t.Run(query, func(t *testing.T) {
 			connection, _ := sessionFixture(t, query)
 			_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -321,10 +420,15 @@ func TestSessionNegotiatesTheStreamProtocol(t *testing.T) {
 					}
 				}
 			}
-			stream := query == "protocol=2"
+			stream := strings.HasPrefix(query, "protocol=2")
+			// Only a protocol 2 page that asked for WebP gets it.
+			webp := query == "protocol=2&pictures=webp"
 			first := readPicture()
 			if bytes.HasPrefix(first, pictureMagic) != stream {
 				t.Fatalf("first picture % x for query %q", first[:8], query)
+			}
+			if stream && bytes.HasPrefix(first[pictureHeaderSize:], []byte("RIFF")) != webp {
+				t.Fatalf("first picture payload % x for query %q", first[pictureHeaderSize:pictureHeaderSize+8], query)
 			}
 			send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: '1'})
 			readPicture()
@@ -377,17 +481,30 @@ func TestFramePatchBandwidth(t *testing.T) {
 		}
 		return total
 	}
+	webpSizes := func(frames []pendingFrame) int {
+		total := 0
+		for _, message := range encodeFrameMessagesAs(t, protocolStream, true, frames...) {
+			total += len(message.binary)
+		}
+		return total
+	}
 	sprite := bandwidthFrames()
-	full, updates := sizes(protocolPictures, sprite), sizes(protocolStream, sprite)
-	t.Logf("60 authored sprite frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%", full, updates, 100*(1-float64(updates)/float64(full)))
+	full, updates, lossless := sizes(protocolPictures, sprite), sizes(protocolStream, sprite), webpSizes(sprite)
+	t.Logf("60 authored sprite frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%, as WebP %d bytes", full, updates, 100*(1-float64(updates)/float64(full)), lossless)
 	if updates*10 >= full {
 		t.Fatal("moving sprite should reduce frame payload by at least 90 percent")
 	}
+	if lossless >= updates {
+		t.Fatal("WebP updates should be smaller than PNG ones")
+	}
 	scrolling := scrollingFrames(60, 2)
-	full, updates = sizes(protocolPictures, scrolling), sizes(protocolStream, scrolling)
-	t.Logf("60 authored scrolling frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%", full, updates, 100*(1-float64(updates)/float64(full)))
+	full, updates, lossless = sizes(protocolPictures, scrolling), sizes(protocolStream, scrolling), webpSizes(scrolling)
+	t.Logf("60 authored scrolling frames: complete=%d bytes, updates=%d bytes, reduction=%.2f%%, as WebP %d bytes", full, updates, 100*(1-float64(updates)/float64(full)), lossless)
 	if updates*4 >= full {
 		t.Fatal("a scrolling field should reduce frame payload by at least 75 percent")
+	}
+	if lossless >= updates {
+		t.Fatal("WebP updates should be smaller than PNG ones")
 	}
 }
 
