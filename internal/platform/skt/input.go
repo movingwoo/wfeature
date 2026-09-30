@@ -32,9 +32,8 @@ const (
 	KeyCodeFire  int32 = 148
 	// A Canvas without MIDP commands reads the handset's menu key directly.
 	KeyCodeMenu int32 = 129
-	// The handset's send key, which a game reads like any other: it is the one
-	// a title reaches for when it wants a key the keypad does not otherwise
-	// have, typically a quick save.
+	// Host code for the send key. MIDP Canvas callbacks receive the handset
+	// value 190; WIPI Cards receive -10 and script sessions translate separately.
 	KeyCodeCall int32 = 10
 	// The handset's CLR key. A title of this era draws "BACK:CLR" in the corner
 	// of every screen it can be backed out of, and one local title's settings
@@ -145,6 +144,9 @@ func (runtime *Runtime) deliverCurrentCanvasKey(eventType KeyEventType, callback
 	// one, and its soft keys are keys like any other — see wipiKeyOfDevice.
 	if runtime.jlet {
 		return runtime.deliverCardKey(current, callback, wipiKeyOfDevice(keyCode))
+	}
+	if keyCode == KeyCodeCall {
+		keyCode = 190
 	}
 	// MIDP commands own the soft keys. Without commands, the first soft key
 	// reaches the handset menu handler, including repeat and release events.

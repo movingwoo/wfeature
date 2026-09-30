@@ -249,7 +249,10 @@ func (runtime *Runtime) queueCanvasPaint(canvas *jvm.Object, rect paintRect) err
 	// The paint stays *pending* rather than being dropped, which is what
 	// serviceRepaints needs: a title that asks for its pending paint to happen
 	// now still gets it, from the call it made.
-	if runtime.painting {
+	// A serial animation update also ends this repaint cycle. Leave its
+	// requested paint pending so input arriving before the next Host pass
+	// is consumed by paint before the following update runs.
+	if runtime.painting || runtime.runningSerial {
 		runtime.paintDeferred = true
 		runtime.displayMu.Unlock()
 		return nil
@@ -265,9 +268,9 @@ func (runtime *Runtime) queueCanvasPaint(canvas *jvm.Object, rect paintRect) err
 	return nil
 }
 
-// postDeferredPaint hands the Host pass a repaint that arrived while a paint
-// was running. It is called at the top of RunPending, so the frame the title
-// asked for during its own paint is the next one.
+// postDeferredPaint hands the Host pass a repaint requested during paint or a
+// serial callback. RunPending posts it before the next serial callback, so
+// paint can consume input delivered between the two Host passes.
 func (runtime *Runtime) postDeferredPaint() error {
 	runtime.displayMu.Lock()
 	defer runtime.displayMu.Unlock()

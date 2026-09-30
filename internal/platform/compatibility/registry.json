@@ -2,6 +2,31 @@
   "version": 1,
   "entries": [
     {
+      "id": "skt-resume-001",
+      "platform": "skt",
+      "match": {
+        "kind": "java_class_set",
+        "sha256": "3be2da69a3a6d9f33a33c3c510684a7f29b469309f5f1366a51598e5276cc516"
+      },
+      "fixes": [
+        "skt.resume_without_start"
+      ],
+      "evidence": "docs/skt-resume-2026-09-30.md"
+    },
+    {
+      "id": "skt-inclusive-clip-002",
+      "platform": "skt",
+      "match": {
+        "kind": "java_class_set",
+        "sha256": "e3a656d9d672fb5db522ab5a3752208cd333c43cf68c09368e4ed2bb56c315df"
+      },
+      "fixes": [
+        "skt.inclusive_set_clip",
+        "skt.resume_without_start"
+      ],
+      "evidence": "docs/skt-qa-2026-09-29.md"
+    },
+    {
       "id": "skt-inclusive-clip-001",
       "platform": "skt",
       "match": {

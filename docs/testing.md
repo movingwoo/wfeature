@@ -107,10 +107,13 @@ WebKit records additionally cover selected retention/takeover, reconnect,
 restart, native-text, and save-confirmation routes. Automated composition events
 are not evidence of a physical phone keyboard or desktop IME behaving correctly.
 
-The earlier WebKit Blob failure did not recur in bounded instrumented routes;
+The earlier WebKit Blob failure did not recur in the September 12 instrumented routes;
 its cause remains unresolved. Preserve lifecycle phase, browser version, Blob
 properties, origin/navigation, and server frame evidence on recurrence. See
 [WebKit observations](history/testing.md#webkit-webkit-frame-decoding-investigation).
+It recurred during the September 30 SKT retained-session reload route; see the
+[resume investigation](skt-resume-2026-09-30.md#validation) for the retained-state
+evidence and the browser acceptance limit.
 
 The [PWA release acceptance route](pwa-acceptance.md) defines an opt-in two-version
 Chromium/WebKit check and separate physical-device steps.

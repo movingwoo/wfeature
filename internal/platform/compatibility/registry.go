@@ -25,6 +25,9 @@ const SKTInclusiveSetClip = "skt.inclusive_set_clip"
 // SKTTutorialNameCache clears a stale name cache at a tutorial transition.
 const SKTTutorialNameCache = "skt.tutorial_name_cache"
 
+// SKTResumeWithoutStart preserves a live game whose start callback recreates it.
+const SKTResumeWithoutStart = "skt.resume_without_start"
+
 // LGTVisibleFramebufferOrigin removes a recognized native display-strip offset.
 const LGTVisibleFramebufferOrigin = "lgt.visible_framebuffer_origin"
 
@@ -124,7 +127,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		}
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
-			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
+			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
 				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)

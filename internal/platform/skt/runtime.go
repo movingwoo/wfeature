@@ -55,6 +55,10 @@ type Runtime struct {
 	state      LifecycleState
 	lastError  error
 	asyncError error
+	// Selected only for original revisions whose startApp replaces a live
+	// Canvas and leaves its previous workers running on every resume.
+	resumeWithoutStart bool
+	startCompleted     bool
 
 	// pad makes a keyboard's overlapping holds look like a thumb on a handset
 	// pad. It is guarded because a Host may send keys from a different
@@ -80,6 +84,9 @@ type Runtime struct {
 	// comes off per Host pass rather than all of them at once: see
 	// callSeriallyRunnable.
 	pendingSerial []*jvm.Object
+	// Repaints requested by a serial callback belong to the next repaint
+	// cycle, before the next serial callback can clear frame input.
+	runningSerial bool
 
 	framebuffer  backend.Framebuffer
 	frameWidth   int
@@ -371,23 +378,24 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 		return nil, err
 	}
 	*runtime = Runtime{
-		authentication:   authentication,
-		subscriberNumber: wipic.SubscriberNumber(),
-		pace:             pace,
-		paceStart:        pace.Now(),
-		Archive:          archive,
-		VM:               machine,
-		events:           backend.NewEventLoop(backend.EventLoopOptions{}),
-		logger:           options.JVM.Logger,
-		state:            StateCreated,
-		framebuffer:      options.Framebuffer,
-		frameWidth:       frameWidth,
-		frameHeight:      frameHeight,
-		legacyClip:       archive.legacyClipEndpoints(),
-		frameRGBA:        make([]byte, frameLength),
-		fullScreen:       make(map[*jvm.Object]bool),
-		fonts:            make(map[fontKey]*jvm.Object),
-		saveStore:        options.SaveStore,
+		authentication:     authentication,
+		subscriberNumber:   wipic.SubscriberNumber(),
+		pace:               pace,
+		paceStart:          pace.Now(),
+		Archive:            archive,
+		VM:                 machine,
+		events:             backend.NewEventLoop(backend.EventLoopOptions{}),
+		logger:             options.JVM.Logger,
+		state:              StateCreated,
+		framebuffer:        options.Framebuffer,
+		frameWidth:         frameWidth,
+		frameHeight:        frameHeight,
+		legacyClip:         archive.legacyClipEndpoints(),
+		resumeWithoutStart: archive.resumeWithoutRestart(),
+		frameRGBA:          make([]byte, frameLength),
+		fullScreen:         make(map[*jvm.Object]bool),
+		fonts:              make(map[fontKey]*jvm.Object),
+		saveStore:          options.SaveStore,
 	}
 	for index := 3; index < len(runtime.frameRGBA); index += 4 {
 		runtime.frameRGBA[index] = 0xff
@@ -587,6 +595,17 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 	if !requirePaused && state != StateCreated {
 		return runtime.invalidState("start", state)
 	}
+	// Standard MIDP resumes through startApp. These recognized revisions
+	// unconditionally create another Canvas and worker there, while pauseApp
+	// leaves the old ones alive. Preserve the successful first start instead.
+	// A deferred initial start must still be retried through the real callback.
+	if requirePaused && runtime.startCompleted && runtime.resumeWithoutStart && !runtime.jlet {
+		if runtime.logger != nil {
+			runtime.logger.Debug("preserving MIDlet instance on resume")
+		}
+		runtime.transition("resume", StateActive)
+		return nil
+	}
 	action := "resume"
 	if state == StateCreated {
 		action = "start"
@@ -614,6 +633,7 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 		}
 		return runtime.fail(action, err)
 	}
+	runtime.startCompleted = true
 	runtime.transition(action, StateActive)
 	return nil
 }
@@ -962,6 +982,14 @@ func (runtime *Runtime) postNextSerialRunnable() error {
 	runtime.displayMu.Unlock()
 
 	err := runtime.events.Post("Display.callSerially", func() error {
+		runtime.displayMu.Lock()
+		runtime.runningSerial = true
+		runtime.displayMu.Unlock()
+		defer func() {
+			runtime.displayMu.Lock()
+			runtime.runningSerial = false
+			runtime.displayMu.Unlock()
+		}()
 		_, err := runtime.VM.InvokeVirtual(runnable, "run", "()V")
 		return runtime.absorbUncaughtCallback("serial Runnable "+runnable.ClassName, err)
 	})

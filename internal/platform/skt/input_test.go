@@ -6,6 +6,26 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
+func TestMIDPCanvasReceivesHandsetCallKey(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, testRuntimeOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	for _, event := range []KeyEventType{KeyPressed, KeyRepeated, KeyReleased} {
+		if err := runtime.SendKey(event, KeyCodeCall); err != nil {
+			t.Fatal(err)
+		}
+		if got := invokeFixtureInt(t, runtime, "CanvasMIDlet", "lastKeyCode"); got != 190 {
+			t.Fatalf("%s delivered %d, want handset call code 190", event, got)
+		}
+	}
+}
+
 func TestCanvasWithoutCommandsReceivesHandsetMenuKey(t *testing.T) {
 	archive, err := Open(canvasJAR)
 	if err != nil {
