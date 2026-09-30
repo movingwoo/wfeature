@@ -151,6 +151,56 @@ func samePixels(t *testing.T, got *image.RGBA, want pendingFrame) {
 	}
 }
 
+func TestStreamWebPMatchesPNGForTranslucentFrames(t *testing.T) {
+	for _, indexed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("indexed=%v", indexed), func(t *testing.T) {
+			first := pendingFrame{RGBA: make([]byte, 32*16*4), Width: 32, Height: 16, Scale: 1}
+			palette := [][4]byte{{128, 0, 0, 128}, {0, 32, 0, 64}, {64, 32, 16, 128},
+				{0, 0, 0, 0}, {1, 0, 1, 1}, {128, 128, 0, 254}, {10, 20, 30, 255}}
+			for index := 0; index < len(first.RGBA)/4; index++ {
+				pixel := [4]byte{byte(index % 129), byte(index / 129), 32, 128}
+				if indexed {
+					pixel = palette[index%len(palette)]
+				}
+				copy(first.RGBA[index*4:], pixel[:])
+			}
+			// Two separated changes keep the rectangle large enough to exercise
+			// both the paletted and full-colour PNG paths, with a nonzero origin.
+			left, right := (32+1)*4, (14*32+30)*4
+			replaced := first
+			replaced.RGBA = bytes.Clone(first.RGBA)
+			copy(replaced.RGBA[left:], []byte{32, 16, 8, 64})
+			copy(replaced.RGBA[right:], []byte{1, 0, 1, 1})
+			masked := replaced
+			masked.RGBA = bytes.Clone(replaced.RGBA)
+			copy(masked.RGBA[left:], []byte{255, 0, 0, 255})
+			copy(masked.RGBA[right:], []byte{0, 255, 0, 255})
+			forced := masked
+			forced.Force = true
+			frames := []pendingFrame{first, replaced, masked, forced}
+			pngMessages := encodeFrameMessagesAs(t, protocolStream, false, frames...)
+			webpMessages := encodeFrameMessagesAs(t, protocolStream, true, frames...)
+			if len(pngMessages) != len(frames) || len(webpMessages) != len(frames) {
+				t.Fatalf("got %d PNG and %d WebP messages, want %d each", len(pngMessages), len(webpMessages), len(frames))
+			}
+			operations := []int{pictureComplete, pictureReplace, pictureMasked, pictureComplete}
+			var pngCanvas, webpCanvas *image.RGBA
+			for index, frame := range frames {
+				var pngHeader, webpHeader streamHeader
+				pngCanvas, pngHeader = applyStreamMessage(t, pngCanvas, pngMessages[index].binary)
+				webpCanvas, webpHeader = applyStreamMessage(t, webpCanvas, webpMessages[index].binary)
+				if pngHeader != webpHeader || webpHeader.operation != operations[index] {
+					t.Fatalf("frame %d: PNG header %+v, WebP header %+v; want operation %d", index, pngHeader, webpHeader, operations[index])
+				}
+				// Match PNG's rounding when premultiplied RGBA becomes straight
+				// alpha for encoding and premultiplied again when drawn.
+				frame.RGBA = pngCanvas.Pix
+				samePixels(t, webpCanvas, frame)
+			}
+		})
+	}
+}
+
 func TestStreamUpdatesReconstructLosslessly(t *testing.T) {
 	forEachPictureFormat(t, func(t *testing.T, webp bool) {
 		for _, scale := range []int{1, 2, 3, 4} {

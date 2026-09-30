@@ -172,7 +172,10 @@ against `dwebp`, the WebP project's decoder, on the authored
 pictures and on all 13,268 rectangles of recorded play; see
 [the record](history/session.md#frame-bandwidth-webp-2026-09-25). The session
 tests in `internal/webhost` compose every protocol 2 case from WebP as well as
-PNG.
+PNG. Translucent-frame regressions compare both formats after composition,
+including complete pictures, replacing and masked updates, explicit redraws,
+and both paletted and full-colour pictures. WebP must use PNG's conversion from
+premultiplied RGBA to straight alpha, including its rounding.
 
 The opt-in browser route uses repository-authored SKT and LGT fixtures:
 

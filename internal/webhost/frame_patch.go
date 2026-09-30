@@ -303,8 +303,8 @@ func (e *pictureEncoder) encodeRectangle(pixels []uint32, width int, bounds imag
 	return e.stream.Encode(&e.buffer, picture)
 }
 
-// encodeWebP appends one rectangle as lossless WebP. The encoder reads a
-// pixel as 0xAARRGGBB, so red and blue trade places on the way in.
+// encodeWebP appends one rectangle as lossless WebP. The encoder reads
+// straight-alpha 0xAARRGGBB, so premultiplied RGBA is converted as PNG converts it.
 func (e *pictureEncoder) encodeWebP(pixels []uint32, width int, bounds image.Rectangle, prediction []uint32) error {
 	e.argb = e.argb[:0]
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
@@ -314,7 +314,12 @@ func (e *pictureEncoder) encodeWebP(pixels []uint32, width int, bounds image.Rec
 			if prediction != nil && value == prediction[row+x] {
 				value = 0
 			}
-			e.argb = append(e.argb, value&0xff00ff00|value&0xff<<16|value>>16&0xff)
+			red, green, blue, alpha := uint8(value), uint8(value>>8), uint8(value>>16), uint8(value>>24)
+			if alpha != 0 && alpha != 255 {
+				pixel := color.NRGBAModel.Convert(color.RGBA{R: red, G: green, B: blue, A: alpha}).(color.NRGBA)
+				red, green, blue = pixel.R, pixel.G, pixel.B
+			}
+			e.argb = append(e.argb, uint32(alpha)<<24|uint32(red)<<16|uint32(green)<<8|uint32(blue))
 		}
 	}
 	encoded, err := e.lossless.Encode(e.buffer.AvailableBuffer(), e.argb, bounds.Dx(), bounds.Dy())
