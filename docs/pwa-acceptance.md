@@ -1,6 +1,6 @@
 # PWA release acceptance
 
-This is the bounded acceptance path for the 0.5.0 release. The browser PWA
+This is the bounded acceptance path for the 0.5.1 release. The browser PWA
 remains the primary distribution target. A release candidate must distinguish
 browser automation, physical-device observations, and untested routes. An
 installed shell does not run the emulator offline: the server owns execution
@@ -54,12 +54,12 @@ and its ignored data out of that snapshot. For example, from the repository root
 
 ```sh
 mkdir -p build/pwa-acceptance/baseline-source
-git archive v0.4.2 | tar -x -C build/pwa-acceptance/baseline-source
+git archive v0.5.0 | tar -x -C build/pwa-acceptance/baseline-source
 (cd build/pwa-acceptance/baseline-source && \
-  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.4.2' \
+  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.5.0' \
   -o ../baseline-server ./cmd/server)
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags='-s -w -X main.version=0.5.0-pre-acceptance' \
+  -ldflags='-s -w -X main.version=0.5.1' \
   -o build/pwa-acceptance/candidate-server ./cmd/server
 ```
 
@@ -253,3 +253,55 @@ The ordinary suite (including 227 Node tests), debug suite, internal race suite,
 vet and both server-profile builds pass. The keypad checks also pass after the
 runner correction. This is browser automation; physical-device, audible-output,
 native-app upgrade and per-platform real-game coverage remains as described above.
+
+## 0.5.1 release candidate (2026-10-01)
+
+The candidate uses runtime revision `deaba53a28c699436859d730de20cc8cc0c56330`,
+with release metadata and acceptance-runner changes in the working tree. The
+darwin/arm64 server is extracted from the local `make dist VERSION=0.5.1`
+archive, built with Go 1.27.1 and `CGO_ENABLED=0`. Its SHA-256 is
+`8b9cce01097707555244cfc19668199e5ac5d2549470313f5d0886ed24018359`.
+The baseline is the published `v0.5.0` darwin/arm64 server, whose SHA-256 is
+`6489cf0759cc1a15477a86cb3ec0207871992b8af32fcb05665dadb057f956c7`.
+
+Both upgrade routes pass all ten assertions with no page errors:
+
+| Engine | Version | Seconds | Local evidence under `var/acceptance/` |
+| --- | --- | --- | --- |
+| Chromium | 153.0.8010.12 | 12.649 | `pwa-chromium-1790820803031/result.json` |
+| WebKit | 26.6 | 5.341 | `pwa-webkit-1790820804190/result.json` |
+
+The routes replace `wfeature-shell-v30` with `wfeature-shell-v32`, preserve
+library, upload and save bytes and keypad settings, restore guest progress
+through a fresh runtime and a `.wfs` backup, and cover text, touch, audio-context
+resumption, retained-session reload and cached-shell loading.
+
+The first PWA and frame-delivery attempts timed out on `#settings-toggle`:
+settings now occupies a keypad cell. The PWA runner accepts both versions'
+controls; the frame-delivery and rapid-fire runners use the current control.
+Only acceptance scripts changed. Failed records remain under
+`pwa-{chromium,webkit}-1790820687390` and
+`frame-delivery-{chromium,webkit}-1790820740262`.
+
+After that correction, both frame-delivery routes pass all eleven assertions,
+including lossless WebP decoding, pixel-exact update composition, explicit
+redraws, reconnection and partial hq2x updates. Evidence is in
+`frame-delivery-chromium-1790820815928/result.json` and
+`frame-delivery-webkit-1790820809777/result.json`. Both rapid-fire routes pass
+all nine checks. All six successful browser runs report no page errors.
+
+`make test` (including 271 Node tests), `make test-debug`,
+`go test -race ./internal/...` and `go vet ./...` pass. The debug server builds
+and reports its profile. All five desktop archives, the APK and the IPA build
+locally with version `0.5.1`; the combined set passes `make dist-check` with
+`DISTCHECK_FLAGS=-phones`. Local phone build numbers are `488`; CI derives
+the final build numbers from the tagged commit. Artifacts, checksums, command
+logs and the source diff are under ignored `build/release-0.5.1/`.
+The existing [CI run for the runtime revision](https://github.com/movingwoo/wfeature/actions/runs/36804040435)
+also passed its Ubuntu, Windows and macOS smoke checks.
+
+These runs use authored fixtures. They do not close the
+[WebKit Blob error observed during a real SKT reload](skt-resume-2026-09-30.md#validation).
+Physical installation, audible output, native-app upgrades, real-game saved
+progression, phone heat/data use and WebP encoding cost on the intended free
+server remain outside this release check.

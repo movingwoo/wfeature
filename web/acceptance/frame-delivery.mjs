@@ -96,7 +96,7 @@ try {
   const nextDraw = before => page.waitForFunction(value => frameProbe.draws > value, before.draws);
   const settings = async () => {
     if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) {
-      await page.locator("#settings-toggle").click();
+      await page.locator('button[data-key="SETTINGS"]').click();
     }
   };
   const start = async value => {
