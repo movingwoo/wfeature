@@ -55,7 +55,7 @@ try {
   await page.goto(origin);
   await page.locator("#game-start").click();
   await page.waitForFunction(() => !document.querySelector("#restart").classList.contains("hidden"));
-  if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator("#settings-toggle").click();
+  if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator('button[data-key="SETTINGS"]').click();
   await page.locator("#keypad-arrange-open").click();
   await page.locator('[data-cell="pad-r1c1"]').click();
   await page.locator("#keypad-arrange-keys").getByRole("button", { name: "연사", exact: true }).click();

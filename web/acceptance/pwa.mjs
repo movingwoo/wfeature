@@ -85,7 +85,8 @@ const openBrowser = async () => {
 const ready = () => page.waitForFunction(() => !document.querySelector("#game-start").disabled);
 const playing = () => page.waitForFunction(() => !document.querySelector("#restart").classList.contains("hidden"));
 const settings = async () => {
-  if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator("#settings-toggle").click();
+  // The baseline has a fixed button; current clients put settings in the keypad.
+  if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator('#settings-toggle, button[data-key="SETTINGS"]').click();
 };
 const closeSettings = async () => {
   if (await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator("#settings-close").click();
@@ -233,7 +234,7 @@ try {
   await page.locator("#text-input-cancel").click(); await closeSettings(); await stopGame();
   await stopServer();
   await page.reload();
-  await page.locator("#settings-toggle").waitFor();
+  await page.locator('#settings-toggle, button[data-key="SETTINGS"]').waitFor();
   assert.equal(await page.locator("#text-input-toggle").isVisible(), false);
   await startServer(candidate, "candidate-restarted");
   await page.reload(); await ready();
