@@ -22,7 +22,7 @@
      instead of sitting empty under them. */
   --stage-vertical: 0px;
 
-  /* The keypad in three bands: the row of Opts/Menu/Call/CLR, the two pads
+  /* The keypad in three bands: the row of 설정/메뉴/통화/우상단/취소, the two pads
      under it, and the row of * 0 #. What the screen above does not use is
      given to the space between those bands first, and only when there is none
      of that left to give does a key itself get shorter.
@@ -319,6 +319,22 @@ body {
   background: #3a3f44;
 }
 
+/* The settings key in the list wears the colour it wears on the pad. */
+.keypad-arrange-keys button.keypad-arrange-settings {
+  background: #6b2328;
+}
+
+.keypad-arrange-keys button.keypad-arrange-settings:hover {
+  background: #7a2a30;
+}
+
+/* Nothing in the list acts on the cell holding the settings key; app.js
+   disables the list while that cell is picked, and this says so. */
+.keypad-arrange-keys button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* While the editor is open the pad is the editor: a press picks the cell rather
    than sending its key, which app.js enforces, and the cells a shape left empty
    are shown because that is where a key would go. */
@@ -427,10 +443,9 @@ body {
   opacity: 0.65;
 }
 
-/* Opts keeps the band's first column for the whole run and wears the same face
-   the rest of the keypad does: it is one of the keypad's buttons rather than an
-   icon floating over the page. It is placed by the band's grid, like every cell
-   beside it, which is why nothing here positions it. */
+/* The settings key (설정) is a keypad cell like the rest, so nothing here
+   positions it: the grid places it wherever the person put it. What sets it
+   apart is its colour — see the rule by its key below. */
 
 .canvas-wrapper {
   position: relative;
@@ -619,6 +634,20 @@ body {
   color: #fff;
 }
 
+/* The settings key is the one key a pad cannot lose, and it is marked so: a
+   dark red says it is not a phone key and not one to clear, wherever a person
+   put it. Its hover is its own for the same reason the colour is — the rule
+   above would otherwise turn it grey under a mouse. */
+.button-container button[data-key="SETTINGS"] {
+  background: #6b2328;
+  border-color: #8e3a40;
+  color: #fbe9ea;
+}
+
+.button-container button[data-key="SETTINGS"]:hover:not(.pressed) {
+  background: #7a2a30;
+}
+
 /* The top row is one band and its height is a setting, so the four buttons in
    it take their height from the band rather than from their own padding. The
    numbers are the ones the padding already produced at the shipped 32px band —
@@ -629,7 +658,6 @@ body {
    They are named through the container so that the padding below beats the one
    every keypad button gets: that rule is a class and a type, and would
    otherwise be the more specific of the two. */
-.button-container .settings-toggle,
 .button-container .keypad-band-cell {
   display: inline-flex;
   align-items: center;
@@ -638,8 +666,8 @@ body {
   height: calc(var(--keypad-band) - 4px);
   /* Two pixels rather than ten: the width is the column's now, and the padding
      is what is left over for the label rather than what sets it. At the
-     narrowest phone the band's columns are 37.7 pixels and "Opts" wants about
-     thirty of them, which is the whole of the margin there is. */
+     narrowest phone the band's columns are 37.7 pixels and "설정" wants about
+     thirty-two of them, which is the whole of the margin there is. */
   padding: 0 2px;
   /* A label too long for its column is clipped rather than allowed to widen the
      cell, which on a grid would push every column after it out of line. */
@@ -667,9 +695,9 @@ body {
 /* The band: seven equal columns, at the height that is a setting.
 
    **Equal, and deliberately not the split's.** The left/right share is about
-   which thumb gets the bigger keys, and the keys up here have no hand: 메뉴,
-   통화 and CLR are aimed at one at a time from wherever the thumb happens to
-   be. Tilting them would buy nothing and cost the row its even spacing. The
+   which thumb gets the bigger keys, and the keys up here have no hand: 메뉴, 통화,
+   우상단 and 취소 are aimed at one at a time from wherever the thumb happens to be.
+   Tilting them would buy nothing and cost the row its even spacing. The
    consequence is that the band's columns stop lining up with the pad's once the
    setting leaves 0.5, and that is the accepted price rather than an oversight —
    it was made to follow the split once and taken back out.
@@ -1380,8 +1408,11 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 #text-input-status[data-state="error"] { color: #ff8f8f; }
 #text-input-dialog button:disabled { opacity: 0.45; cursor: default; }
 
-/* The local switch carries both its purpose and current mode on a small cell. */
-.button-container button[data-key="RAPID_FIRE"] {
+/* The local switch carries both its purpose and current mode on a small cell,
+   and 우상단 is the one key name of three syllables: at the band's own size it
+   is wider than a column on a phone, and the cell clips rather than widens. */
+.button-container button[data-key="RAPID_FIRE"],
+.button-container button[data-key="SOFT2"] {
   font-size: 11px;
   line-height: 1.1;
   white-space: normal;

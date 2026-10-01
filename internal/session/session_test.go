@@ -473,11 +473,24 @@ func TestKeyCodesTranslateOnlyWhereTheyMust(t *testing.T) {
 	if midpKeyMenu != skt.KeyCodeSoft1 {
 		t.Errorf("the page's menu key is %d, but a MIDlet's soft key is %d", midpKeyMenu, skt.KeyCodeSoft1)
 	}
+	// The right soft key is the same arrangement one number along:
+	// `MH_KEY_SOFT2` and the MIDP right soft key are both -7, so the page's
+	// 우상단 button reaches every platform untranslated too.
+	if got := ktfKeyCode(midpKeySoft2); got != ktf.KeyRightSoft {
+		t.Errorf("the right soft key became %d, want %d", got, ktf.KeyRightSoft)
+	}
+	if midpKeySoft2 != skt.KeyCodeSoft2 {
+		t.Errorf("the page's right soft key is %d, but a MIDlet's is %d", midpKeySoft2, skt.KeyCodeSoft2)
+	}
 }
 
-// midpKeyMenu is the code `web/app.js` sends for the keypad's Menu button.
-// `web/keypad.test.mjs` holds the page's end of this.
-const midpKeyMenu int32 = -6
+// midpKeyMenu and midpKeySoft2 are the codes `web/app.js` sends for the
+// keypad's 메뉴 and 우상단 buttons. `web/keypad.test.mjs` holds the page's end
+// of this.
+const (
+	midpKeyMenu  int32 = -6
+	midpKeySoft2 int32 = -7
+)
 
 func TestClosingTwiceIsSafe(t *testing.T) {
 	// A game that exits closes the session from inside Tick, and the Host

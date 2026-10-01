@@ -1,12 +1,13 @@
 # Offline authentication compatibility
 
 Authentication compatibility applies automatically to recognized local game
-archives in both the PWA and CLI. The Opts panel has no authentication control
-or notice. Old stored preferences and the obsolete incoming `authentication`
-field do not affect new sessions. `runktf`, `runskt` and `runlgt` use the same
-platform defaults. `-no-auth` and `Options.DisableAuthentication` retain an
-explicit diagnostic comparison path. The old `-auth` flag remains accepted by
-the CLI for existing scripts. A resumed session retains its original runtime.
+archives in both the PWA and CLI. The settings panel (설정) has no authentication
+control or notice. Old stored preferences and the obsolete incoming
+`authentication` field do not affect new sessions. `runktf`, `runskt` and
+`runlgt` use the same platform defaults. `-no-auth` and
+`Options.DisableAuthentication` retain an explicit diagnostic comparison path.
+The old `-auth` flag remains accepted by the CLI for existing scripts. A resumed
+session retains its original runtime.
 This is separate from the server access key and never contacts a license server.
 
 ## Implemented mechanisms

@@ -18,7 +18,7 @@ export const keyOrder = [
   "4", "5", "6",
   "7", "8", "9",
   "*", "0", "#",
-  "CLR", "CALL", "MENU",
+  "CLR", "CALL", "MENU", "SOFT2",
   "UP", "LEFT", "RIGHT", "DOWN", "OK",
 ];
 
@@ -40,6 +40,8 @@ export const defaultBindings = {
   CLR: "Backspace",
   CALL: "Backslash",
   MENU: "KeyM",
+  // The key right of M, as the right soft key sat right of the left one.
+  SOFT2: "Comma",
   UP: "ArrowUp",
   LEFT: "ArrowLeft",
   RIGHT: "ArrowRight",
@@ -49,10 +51,17 @@ export const defaultBindings = {
 
 // What each phone key is called on screen. The direction pad is drawn with
 // arrows on the keypad itself, so it is named with arrows here too.
+//
+// The right soft key is named for where it sat, because that is the only name
+// the titles give it: their help screens say 우측상단키 and never what the key
+// had printed on it, which differed between handsets. The one word it might
+// have borrowed is taken — a help screen's 확인키 is the centre key ("5번 및
+// 확인키"), which is why that is the name OK keeps.
 const keyNames = {
-  CLR: "CLR",
+  CLR: "취소",
   CALL: "통화",
   MENU: "메뉴",
+  SOFT2: "우상단",
   UP: "↑",
   DOWN: "↓",
   LEFT: "←",

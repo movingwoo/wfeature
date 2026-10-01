@@ -22,8 +22,8 @@ const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
 const style = readFileSync(new URL("./style.css", import.meta.url), "utf8");
 
 // Every key any shape puts on the pad, plus every key the editor may put there:
-// a cell may hold any of the twenty, so the code table has to answer for all of
-// them and not only for the ones a shape happens to use.
+// a cell may hold any of them, so the code table has to answer for all of them
+// and not only for the ones a shape happens to use.
 const buttonKeys = [
   ...new Set([...shapes.flatMap(name => Object.values(shipped[name])), ...assignable]),
 ].filter(name => name !== "");
@@ -43,9 +43,12 @@ const keyboardKeys = keyOrder;
 const shippedHas = name => Object.values(shipped[shapes[0]]).includes(name);
 
 test("every keypad button sends a key the page knows a code for", () => {
-  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE")) {
+  // Bar the two local controls, which send the game nothing: the rapid-fire
+  // switch and the settings key.
+  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE" && name !== "SETTINGS")) {
     assert.ok(tableKeys.has(name), `the button ${name} has no code`);
   }
+  assert.ok(!tableKeys.has("SETTINGS"), "the settings key sends the game a code");
 });
 
 test("every keyboard shortcut names a key the page knows a code for", () => {
@@ -75,17 +78,32 @@ test("the menu key is the handset's left soft key, on the keypad and the keyboar
   assert.ok(keyboardKeys.includes("MENU"), "the menu key has no keyboard shortcut");
 });
 
-test("the other two soft keys stay the command line's to send", () => {
-  // `wfeature key soft2|ez`. Only the menu key earned a place on the keypad:
-  // a title asks for it by name on its own screen, and these two are asked for
-  // rarely enough that the page would be spending a button on nothing.
-  for (const name of ["SOFT1", "SOFT2", "EZ"]) {
-    assert.ok(!tableKeys.has(name), `the soft key ${name} is back in the code table`);
-    assert.ok(!buttonKeys.includes(name), `the soft key ${name} is back on the keypad`);
-    assert.ok(!assignable.includes(name), `the soft key ${name} is back in the editor's list`);
-    assert.ok(!keyboardKeys.includes(name), `the soft key ${name} is back on the keyboard`);
+test("the right soft key is on the keypad and the keyboard, and carries MH_KEY_SOFT2", () => {
+  // -7 for the reason -6 is the menu key: MH_KEY_SOFT2 and the MIDP value for
+  // the right soft key are one number, so the server hands it on untranslated,
+  // and `internal/session`'s key translation test holds that end. Titles name
+  // it by where it sat — 우측상단키 — and hang a minimap, a world map, a pause
+  // or a shop on it with no other key for any of them.
+  assert.equal(tableKeys.get("SOFT2"), -7);
+  assert.ok(shippedHas("SOFT2"), "the keypad this page ships has no right soft key");
+  assert.ok(keyboardKeys.includes("SOFT2"), "the right soft key has no keyboard shortcut");
+});
+
+test("the third soft key stays the command line's to send", () => {
+  // `wfeature key soft3|ez`. The left soft key is on the page as MENU and the
+  // right one as SOFT2; the third was not asked for, and a name for the left
+  // one beside MENU would be one key under two names.
+  for (const name of ["SOFT1", "SOFT3", "EZ"]) {
+    assert.ok(!tableKeys.has(name), `the soft key ${name} is in the code table`);
+    assert.ok(!buttonKeys.includes(name), `the soft key ${name} is on the keypad`);
+    assert.ok(!assignable.includes(name), `the soft key ${name} is in the editor's list`);
+    assert.ok(!keyboardKeys.includes(name), `the soft key ${name} is on the keyboard`);
   }
-  for (const code of [7, 9, -7, -8]) {
+  // The positive numbers are what the page sent when it briefly carried all
+  // three soft keys under their own names. The server still translates them
+  // for a shell served from a phone's cache, and a page sending one now would
+  // reach a MIDlet as nothing at all.
+  for (const code of [6, 7, 9, -8]) {
     assert.ok(
       ![...tableKeys.values()].includes(code),
       `the page sends ${code}, which is a soft key it has no button for`,
@@ -97,7 +115,8 @@ test("the empty shape is offered, and it is empty", () => {
   // It is a shape rather than a button that clears the pad, because that is what
   // survives a reload and what the size settings hang off: everything is stored
   // per shape, and "no keys at all" has to be one of them to be stored at all.
-  assert.deepEqual(Object.values(shipped.type4).filter(key => key !== ""), []);
+  // All but one: the settings key cannot leave a pad, the empty one included.
+  assert.deepEqual(Object.values(shipped.type4).filter(key => key !== ""), ["SETTINGS"]);
   assert.ok(shapes.includes("type4"));
   assert.ok(page.includes('value="type4"'), "the shape list does not offer the empty one");
   // And it is last, so `shapeMatching` answers a named shape before the empty one
@@ -189,16 +208,16 @@ test("the cells a finger can slide across are the pad's, and the band is not", (
 
   const cellsIn = source => [...source.matchAll(/data-cell="([^"]+)"/g)].map(match => match[1]);
   // The band, which is a grid of its own for exactly this reason: its cells are
-  // aimed at one at a time. Opts is among them in the markup and is not a cell.
+  // aimed at one at a time. Every button in it is a cell — the settings key
+  // is one now rather than a button of its own, and wherever it is put, it is
+  // found by its key rather than by an id.
   assert.deepEqual(
     cellsIn(container.slice(0, padStart)),
     cellIds.filter(id => id.startsWith("band-")),
   );
-  assert.match(
-    container.slice(0, padStart),
-    /class="keypad-band">\s*<button id="settings-toggle"/,
-    "Opts is not the band's first column",
-  );
+  assert.ok(!page.includes('id="settings-toggle"'), "the settings key is a fixed button again");
+  assert.match(app, /closest\(`button\[data-key="\$\{SETTINGS\}"\]`\)/,
+    "the settings panel does not open from the settings key's cell");
   // Everything else, and the pad is where a slide runs. The order is the grid's
   // too: the cells are placed by where they sit in the markup, so this is also
   // what says row 1 is drawn before row 2.

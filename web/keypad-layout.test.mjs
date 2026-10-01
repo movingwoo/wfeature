@@ -4,12 +4,12 @@ import { test } from "node:test";
 import { keyLabel, keyOrder } from "./keybindings.js";
 import {
   BAND_COLUMNS,
-  BAND_FIXED_COLUMN,
   EMPTY,
   LEFT_COLUMNS,
   PAD_COLUMNS,
   PAD_ROWS,
   RIGHT_COLUMNS,
+  SETTINGS,
   assignable,
   assign,
   clampCells,
@@ -17,6 +17,7 @@ import {
   createKeypadLayout,
   isShape,
   keyFace,
+  keyName,
   shapes,
   shipped,
   regionLabel,
@@ -57,17 +58,21 @@ const KEYS_KEY = "wfeature:keypadKeys";
 //
 // **The band is the one place a key really did move**, and by request: it was
 // three buttons at hand-written offsets and it is the pad's seven columns now,
-// six of them cells. The three keys are in the columns nearest the offsets they
-// had — the pair around the middle and CLR at the right-hand end — which is the
-// row as it read, not the pixels it read at. Those pixels could not be kept:
-// a column's width depends on the screen and an offset does not.
+// every one of them a cell. The three keys are in the columns nearest the
+// offsets they had — the pair around the middle and CLR at the right-hand end —
+// which is the row as it read, not the pixels it read at. Those pixels could
+// not be kept: a column's width depends on the screen and an offset does not.
+// The settings key is in the first column, where it sat as a button of its own
+// before it was a cell.
 const asDrawn = {
   // Type4 is not one of the three: it is the empty pad, added with the editor
   // because "no keys at all" has to be a shape to be stored as one. It is here
-  // so the loop below covers it, and it is empty.
-  type4: {},
+  // so the loop below covers it, and it is empty but for the one key a pad
+  // cannot lose.
+  type4: { "band-c1": "SETTINGS" },
   type2: {
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
+    "band-c1": "SETTINGS",
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
     "pad-r1c2": "2",
     "pad-r2c1": "4", "pad-r2c3": "6",
     "pad-r3c2": "8",
@@ -77,7 +82,8 @@ const asDrawn = {
     "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
   },
   type1: {
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
+    "band-c1": "SETTINGS",
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
     "pad-r1c2": "UP",
     "pad-r2c1": "LEFT", "pad-r2c2": "OK", "pad-r2c3": "RIGHT",
     "pad-r3c2": "DOWN",
@@ -87,7 +93,8 @@ const asDrawn = {
     "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
   },
   type3: {
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c7": "CLR",
+    "band-c1": "SETTINGS",
+    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
     "pad-r1c1": "1", "pad-r1c2": "2", "pad-r1c3": "3",
     "pad-r2c1": "4", "pad-r2c3": "6",
     "pad-r3c2": "8",
@@ -97,7 +104,8 @@ const asDrawn = {
   },
 };
 
-// The current defaults add the requested rapid-fire switch between Menu and Call.
+// The current defaults add the requested rapid-fire switch between 메뉴 and 통화,
+// and the right soft key, 우상단, in the one empty column between 통화 and 취소.
 test("each shape preserves its handset keys and includes the default local controls", () => {
   for (const name of shapes) {
     for (const id of cellIds) {
@@ -145,24 +153,21 @@ test("the pad is a grid, and every cell in it has a place", () => {
 });
 
 test("the cells are a fixed set, each in a region the editor can name", () => {
-  assert.equal(cells.length, 34);
+  assert.equal(cells.length, 35);
   assert.equal(new Set(cellIds).size, cellIds.length, "a cell is declared twice");
   for (const cell of cells) {
     assert.ok(regionLabel[cell.region], `the region ${cell.region} has no label`);
   }
   // Two regions and not four, because the pad is one grid. The band is seven
-  // columns less the one Opts holds, and the pad is seven by four. The regions
-  // are the drag rule, so a third one would be a third answer to "does a slide
-  // press this".
+  // columns, all of them cells since the settings key became one, and the pad
+  // is seven by four. The regions are the drag rule, so a third one would be a
+  // third answer to "does a slide press this".
   const count = region => cells.filter(cell => cell.region === region).length;
-  assert.deepEqual([count("band"), count("pad")], [BAND_COLUMNS - 1, PAD_COLUMNS * PAD_ROWS]);
-  assert.deepEqual([count("band"), count("pad")], [6, 28]);
+  assert.deepEqual([count("band"), count("pad")], [BAND_COLUMNS, PAD_COLUMNS * PAD_ROWS]);
+  assert.deepEqual([count("band"), count("pad")], [7, 28]);
   assert.deepEqual(Object.keys(regionLabel).sort(), ["band", "pad"]);
-  // Opts's column is not among them, at either end of the band.
-  assert.ok(!cellIds.includes(`band-c${BAND_FIXED_COLUMN}`), "a phone key can take Opts's column");
   for (const cell of cells.filter(entry => entry.region === "band")) {
     assert.equal(cell.id, `band-c${cell.column}`, "a band cell's name and its column disagree");
-    assert.notEqual(cell.column, BAND_FIXED_COLUMN);
   }
 });
 
@@ -174,23 +179,34 @@ test("a shape names only keys the editor can also choose", () => {
     }
     assert.deepEqual(Object.keys(shipped[name]).sort(), [...cellIds].sort());
   }
-  assert.deepEqual(assignable.filter(name => name !== "RAPID_FIRE"), keyOrder, "the editor's list has drifted from the keyboard panel's");
+  assert.deepEqual(
+    assignable.filter(name => name !== "RAPID_FIRE" && name !== SETTINGS),
+    keyOrder,
+    "the editor's list has drifted from the keyboard panel's",
+  );
 });
 
-test("a pad face is the key's name where one fits, and the name is what is spoken", () => {
-  // Three keys are printed shorter than they are called, because a 48-pixel key
-  // cannot carry 통화 beside a 5 without one of them being a different size of
-  // text. Everything else has to read the same either way, or the editor's list
-  // and the pad would name the same key two ways.
+test("a pad face is the key's name, and the name is what is spoken", () => {
+  // One key is printed other than it is called: the centre key prints OK and is
+  // called 확인, which are the two words a help screen uses for it. Everything
+  // else has to read the same either way, or the editor's list and the pad
+  // would name the same key two ways.
   const shortened = keyOrder.filter(name => keyFace(name) !== keyLabel(name));
-  assert.deepEqual(shortened, ["CALL", "MENU", "OK"]);
+  assert.deepEqual(shortened, ["OK"]);
   for (const name of assignable) assert.ok(keyFace(name), `${name} has no face`);
+  // The band's keys wear Korean names, by request. They were Call, Menu and CLR
+  // once, and the right soft key is named for where it sat, which is the only
+  // name a title's help screen gives it.
+  assert.deepEqual(
+    ["MENU", "CALL", "SOFT2", "CLR"].map(keyFace),
+    ["메뉴", "통화", "우상단", "취소"],
+  );
 });
 
 test("a stored table keeps only cells and keys this build has", () => {
   const folded = clampCells({
     "pad-r2c6": "7",
-    "pad-r1c2": "SOFT2",
+    "pad-r1c2": "SOFT3",
     "cell-that-went-away": "5",
     "band-c4": 5,
   });
@@ -202,10 +218,79 @@ test("a stored table keeps only cells and keys this build has", () => {
   assert.equal(folded["pad-r1c2"], EMPTY);
   assert.equal(folded["band-c4"], EMPTY);
   assert.ok(!Object.hasOwn(folded, "cell-that-went-away"));
-  // And nonsense of the wrong kind entirely is the empty pad, not a crash.
+  // And nonsense of the wrong kind entirely is the empty pad, not a crash —
+  // which still has the settings key, because every table does.
   for (const nonsense of [null, undefined, 7, "type1", []]) {
-    assert.deepEqual(Object.values(clampCells(nonsense)), cellIds.map(() => EMPTY));
+    assert.deepEqual(clampCells(nonsense), shipped.type4);
   }
+});
+
+test("every shape holds the settings key exactly once, and in the band's first column", () => {
+  for (const name of shapes) {
+    const holding = cellIds.filter(id => shipped[name][id] === SETTINGS);
+    assert.deepEqual(holding, ["band-c1"], `${name} holds the settings key at ${holding}`);
+  }
+  // It is a local control like the rapid-fire switch: offered to a cell, named
+  // and printed in Korean, and not a phone key the keyboard panel lists.
+  assert.ok(assignable.includes(SETTINGS));
+  assert.ok(!keyOrder.includes(SETTINGS));
+  assert.equal(keyName(SETTINGS), "설정");
+  assert.equal(keyFace(SETTINGS), "설정");
+});
+
+test("the settings key moves rather than copies, and its cell keeps it", () => {
+  const table = shipped.type1;
+  // Put somewhere else, it leaves where it was: there is one, always.
+  const moved = assign(table, "pad-r4c1", SETTINGS);
+  assert.equal(moved["pad-r4c1"], SETTINGS);
+  assert.equal(moved["band-c1"], EMPTY, "the settings key was copied rather than moved");
+  assert.deepEqual(cellIds.filter(id => moved[id] === SETTINGS), ["pad-r4c1"]);
+  // Onto a cell with a key in it, it takes the cell like any key does.
+  const over = assign(table, "pad-r2c6", SETTINGS);
+  assert.equal(over["pad-r2c6"], SETTINGS);
+  assert.equal(over["band-c1"], EMPTY);
+  // The cell holding it can be neither emptied nor given another key: both
+  // answer the table unchanged, which is how the editor knows to refuse.
+  assert.equal(clear(table, "band-c1"), table);
+  assert.equal(assign(table, "band-c1", "5"), table);
+  assert.equal(assign(table, "band-c1", SETTINGS), table);
+  // And the cell it left is an ordinary cell again.
+  assert.equal(assign(moved, "band-c1", "5")["band-c1"], "5");
+});
+
+test("a stored table comes back holding the settings key exactly once", () => {
+  // A table saved before the key was a cell has none, and gets it where it
+  // used to sit, which no stored table could have used.
+  const before = clampCells({ ...shipped.type2, "band-c1": undefined });
+  assert.equal(before["band-c1"], SETTINGS);
+  // Two copies — a hand edit could make them — keep the first in the editor's
+  // order.
+  const twice = clampCells({ "band-c5": SETTINGS, "pad-r1c1": SETTINGS });
+  assert.deepEqual(cellIds.filter(id => twice[id] === SETTINGS), ["band-c5"]);
+  // With its home taken, it goes to the first empty cell; with no cell empty,
+  // it goes home anyway, because a pad without it cannot be undone.
+  const homeTaken = clampCells({ "band-c1": "5" });
+  assert.equal(homeTaken["band-c1"], "5");
+  assert.equal(homeTaken["band-c2"], SETTINGS);
+  const full = clampCells(Object.fromEntries(cellIds.map(id => [id, "5"])));
+  assert.equal(full["band-c1"], SETTINGS);
+  assert.deepEqual(cellIds.filter(id => full[id] === SETTINGS), ["band-c1"]);
+});
+
+test("the editor cannot take the settings key off a pad, and moving it is an edit", () => {
+  const layout = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
+  layout.useShape("type1");
+  layout.set("band-c1", EMPTY);
+  layout.set("band-c1", "5");
+  assert.equal(layout.keyAt("band-c1"), SETTINGS);
+  assert.equal(layout.edited(), false, "a refused change was stored as an edit");
+  layout.set("pad-r4c7", SETTINGS);
+  assert.equal(layout.keyAt("pad-r4c7"), SETTINGS);
+  assert.equal(layout.keyAt("band-c1"), EMPTY);
+  assert.equal(layout.edited(), true);
+  // Emptying every cell leaves it where it was put.
+  for (const id of cellIds) layout.set(id, EMPTY);
+  assert.deepEqual(cellIds.filter(id => layout.keyAt(id) !== EMPTY), ["pad-r4c7"]);
 });
 
 test("a key may sit in two cells, and a cell may be emptied", () => {
@@ -221,7 +306,7 @@ test("a key may sit in two cells, and a cell may be emptied", () => {
   assert.equal(table["pad-r1c6"], "5");
   // Neither touches a cell or a key the build does not have.
   assert.equal(assign(table, "no-such-cell", "5"), table);
-  assert.equal(assign(table, "pad-r1c6", "SOFT2"), table);
+  assert.equal(assign(table, "pad-r1c6", "SOFT3"), table);
   assert.equal(clear(table, "no-such-cell"), table);
 });
 

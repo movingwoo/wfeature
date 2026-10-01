@@ -191,18 +191,19 @@
                three buttons at hand-written offsets — one at each edge and two
                either side of the centre — which is why there were three of them:
                an absolute position has to be written one at a time. As a row of
-               columns there are seven, six of them a person's to fill.
+               columns there are seven, and every one is a person's to fill.
 
-               Opts is the first and is not a cell. It cannot become one: it is
-               the only way back into the panel that would undo an empty keypad,
-               so no phone key may take it.
+               The settings key (설정) is in the first by default. It is a key a
+               cell holds like any other, but exactly one cell always holds it —
+               it is the only way back into the panel that would undo an empty
+               keypad — so it moves rather than copies, and cannot be removed.
 
                This row is a grid of its own rather than the pad's first row, and
                the reason is the drag rule below: a finger crossing the pad
                presses what it crosses, and up here it aims at one key at a time.
                CLR in the middle of a game is an expensive thing to brush past. -->
           <div class="keypad-band">
-            <button id="settings-toggle" class="settings-toggle" aria-label="설정">Opts</button>
+            <button class="keypad-cell keypad-band-cell" data-cell="band-c1"></button>
             <button class="keypad-cell keypad-band-cell" data-cell="band-c2"></button>
             <button class="keypad-cell keypad-band-cell" data-cell="band-c3"></button>
             <button class="keypad-cell keypad-band-cell" data-cell="band-c4"></button>

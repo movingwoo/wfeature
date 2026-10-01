@@ -38,27 +38,39 @@ the token, so the restart button still starts a game over.
   bytes, so a title in the wrong folder still runs.
 - **Screen** — a 240x320 Host framebuffer presented on the canvas, scaled to the
   viewport with a 3:4 wrapper.
-- **Keypad** — `CLR`, `Call`, `Menu`, a direction pad and the twelve phone keys.
-  Which of the four keypads is drawn is a setting rather than a button here:
-  Type1 drives the direction pad with `2/4/6/8`, Type2 with the arrow keys plus
-  `OK`, and Type3 is Type1 with `1` and `3` moved off the number pad into the
-  direction pad's top row, which is where a game that walks diagonally wants
-  them. Type4 starts empty. Every type supports cell assignment and keeps its
-  own edits. `Call` is the handset's send key: a game that answers it usually
-  answers with a quick save, and no other button reaches it.
-  `Menu` is the handset's left soft key, the one its own screen labelled 메뉴
+- **Keypad** — `설정`, `메뉴`, `통화`, `우상단` and `취소` (CLR) above a
+  direction pad and the twelve phone keys; the buttons are labelled in Korean,
+  the way the key settings list them. Which of the four keypads is drawn is a setting
+  rather than a button here: Type1 drives the direction pad with the arrow keys
+  plus `OK`, Type2 with `2/4/6/8`, and Type3 is Type2 with `1` and `3` moved
+  off the number pad into the direction pad's top row, which is where a game
+  that walks diagonally wants them. Type4 starts empty. Every type supports
+  cell assignment and keeps its own edits. `통화` is the handset's send key: a
+  game that answers it usually answers with a quick save, and no other button
+  reaches it.
+  `메뉴` is the handset's left soft key, the one its own screen labelled 메뉴
   and the one a title of this era puts its in-game menu on. It sends -6, which
-  is what `MH_KEY_SOFT1` and a MIDlet's soft key are both numbered, so it is
-  the one key the page sends that no platform has to translate. The other two
-  soft keys are still not here by button or shortcut — one LGT title hangs the
-  choice that leaves its party screen off `EZ` — and stay reachable only from
-  the CLI's `key soft2|ez`.
+  is what `MH_KEY_SOFT1` and a MIDlet's soft key are both numbered, so no
+  platform has to translate it. `우상단` is the right soft key and sends -7,
+  `MH_KEY_SOFT2`, for the same reason. It is named for where it sat because
+  that is the only name the titles give it: their help screens say 우측상단키
+  and never what was printed on the key. It is not 확인 either, because a help
+  screen's 확인키 is the centre key ("5번 및 확인키"), the one the pad prints
+  as `OK`. Measured on four titles across KTF and LGT, the function a help
+  screen puts on 우측상단키 — a minimap, a world map — answers -7 and the one
+  on 좌측상단키 or 메뉴키 answers -6; about twenty-eight local titles name the
+  right key in plain text, and more keep their help text compressed. The third
+  soft key (`EZ`) is on no button and no shortcut, and stays reachable only
+  from the CLI's `key soft3` (alias `ez`).
   The keyboard mirrors the keypad by default: `1 2 3 / Q W E / A S D`
-  for `1`-`9`, `Z X C` for `* 0 #`, `Backspace` for `CLR`, `\` for `Call`,
-  `M` for `Menu`, arrows and `Space` for the direction pad. Any of those can be
-  moved from the settings panel; `keybindings.js` holds the table and the one
-  rule it has, and a binding a user changed is remembered.
-  Cell assignment and sizing share the keypad editor, opened from `Opts` and
+  for `1`-`9`, `Z X C` for `* 0 #`, `Backspace` for `취소`, `\` for `통화`,
+  `M` for `메뉴`, `,` for `우상단`, arrows and `Space` for the direction pad.
+  Any of those can be moved from the settings panel; `keybindings.js` holds
+  the table and the one rule it has, and a binding a user changed is
+  remembered. A key this build adds takes its default only where the user has
+  not already spent that keyboard key, and a keypad a user edited is not
+  given the new button — it is in the editor's list.
+  Cell assignment and sizing share the keypad editor, opened from `설정` and
   drawn over the game screen rather than in the settings panel: that panel is a
   centred modal on a phone and covers the very keypad the sliders move. Four
   numbers, which are the keypad's four bands — the size of a key, how the middle
@@ -95,7 +107,7 @@ the token, so the restart button still starts a game over.
   These are the lines a saved report carries, so what is on screen during a run
   and what is read back afterwards cannot disagree. Wide windows and debug
   builds only.
-- **Settings (`Opts`)** — MIDI and effect volume, the magnification filter, the
+- **Settings (`설정`)** — MIDI and effect volume, the magnification filter, the
   speed multiplier, the keypad layout, the keypad size, the key settings, the
   cheat panel toggle, the debug report button, and a restart that reloads the
   page. The keypad size is a button rather than rows of sliders: it opens a
@@ -107,9 +119,14 @@ the token, so the restart button still starts a game over.
   It is remembered, which the button never was. The key settings appear only
   where a key has actually been pressed — a list of keyboard keys is nothing a
   phone can use, and only a keypress proves there is a keyboard to use them
-  with. `Opts` is one of the keypad's own buttons,
-  opposite `CLR`, and it is there from the first paint: it does not start over
-  the canvas and move when a game is chosen. The report is written by the server, which is
+  with. `설정` is a key in one of the keypad's cells — the band's first column
+  unless a person moved it — drawn in dark red, and it is there from the first
+  paint: it does not start over the canvas and move when a game is chosen. It is
+  the one key a pad holds exactly once: the editor moves it rather than copying
+  it, and the cell holding it can be neither emptied nor given another key,
+  because it is the only way back into the panel that would undo an empty
+  keypad — which is why Type4 keeps it. A table stored before it was a cell
+  gets it back in its old place. The report is written by the server, which is
   the side with the numbers, and the page's own log is saved beside it — a
   dropped socket or a draw failure shows up in no other place.
 - **Cheat panel** — a progressive memory search over the running game: type and
@@ -227,6 +244,6 @@ PWA checklist are in [PWA acceptance](../docs/pwa-acceptance.md).
   memory; the MIDP runtime searches a synthetic address space over its object
   graph, where the region labels are class names and the write watch is not
   offered.
-- The keypad carries one soft key, `Menu`, which is the handset's left one
-  (`-6`). The right and third (`EZ`) soft keys are on no button and no
-  shortcut, and stay reachable only from the CLI's `key soft2|ez`.
+- The keypad carries two soft keys, `메뉴` for the handset's left one (`-6`)
+  and `우상단` for its right one (`-7`). The third (`EZ`) is on no button and
+  no shortcut, and stays reachable only from the CLI's `key soft3`.
