@@ -83,6 +83,7 @@ func (r *sessionRunner) admitStart(message clientMessage, directory, label strin
 		}
 	}
 	r.admitted = true
+	r.admittedAs = label
 	return true
 }
 
