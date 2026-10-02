@@ -30,6 +30,7 @@ titles, which want opposite things from it — [`network.md`](network.md).
 
 ```
 wfeature inspect <game.jar>                     read the archive, print its summary as JSON
+wfeature run <archive> [flags]                 use the shared Host session and checkpoints
 wfeature runskt  <game.jar|game.zip> [flags]    run an SKT title
 wfeature runlgt  <game.zip> [flags]             run an LGT title
 wfeature runktf  <game.zip> [flags]             run a KTF title
@@ -134,6 +135,66 @@ title's frame loop is a thread that sleeps, so scaling the sleep without the
 clock leaves it stepping less each time it wakes, and scaling the clock without
 the sleep leaves it stepping further at the same rate. Both, and it runs
 faster.
+
+## run: shared sessions and checkpoints
+
+```sh
+wfeature run var/games/ktf/game.zip -ticks 300 -quicksave
+wfeature run var/games/ktf/game.zip -quickload -ticks 100 -frame build/restored.png
+wfeature run var/games/ktf/game.zip -serve
+```
+
+`run` calls the same `internal/session` API as the server. Its checkpoint
+support covers supported KTF Java, older module and native package states. Unsupported
+runtime state is refused explicitly. The specialized `runktf`, `runlgt` and
+`runskt` commands retain their profiling, routes and platform diagnostics.
+
+| Flag | Behavior |
+| --- | --- |
+| `-ticks N` | Run up to N ticks, default 64; accepts 0 through 1,000,000. |
+| `-save dir` | Platform save root; defaults to `var/savedata/<profile>/<platform>`. The archive's owner directory is appended. |
+| `-quicksave` | Store one checkpoint after the final tick. |
+| `-quickload` | Restore the existing checkpoint before any tick, without rerunning guest startup. Missing or invalid slots fail startup. |
+| `-serve` | Read one JSON command per line; use `step` and `quicksave` commands instead of `-ticks` and `-quicksave`. Can combine with `-quickload`. |
+| `-frame path` | Write the final screen to a PNG. |
+| `-play` | Pace KTF using wall time. The default uses a manual clock and advances to scheduled deadlines. |
+| `-speed N` | Guest speed, 0.1 through 16; default 1. This flag does not imply `-play` for this command. |
+| `-screen WxH` | Handset dimensions for a newly started session. Restoration uses saved runtime settings. |
+
+A non-serve run prints JSON with the platform, ticks, exit state, restored/saved
+flags and a screen digest. A failed checkpoint reports its reason and returns a
+nonzero status. In serve mode a refused load returns an error response while the
+current session remains available:
+
+```json
+{"cmd":"step","ticks":100}
+{"cmd":"quicksave"}
+{"cmd":"step","ticks":50}
+{"cmd":"quickload"}
+{"cmd":"screen"}
+{"cmd":"quit"}
+```
+
+`run -serve` supports stepping, keys, touch, park/resume, screen/pixel inspection,
+PNG output and checkpoints. Its driver has no audio sink, route runner or runtime
+diagnostic callback. A paused slot stays paused: `step` reports a stall, and
+`{"cmd":"park","ms":0}` resumes it through the ordinary lifecycle. Held input
+in a checkpoint is restored exactly; scripts
+must issue releases when needed. The browser separately releases restored input
+while resetting its physical controls. The serve response's `total_ticks` counts
+Host steps since the command started and is not a restored guest counter.
+
+The slot is tied to the full archive digest. Loading also restores ordinary game
+saves from that checkpoint. Slots live in the reserved sibling
+`.wfeature-quicksave/owners/<owner>/` directory, outside `.wfs` exports, and
+survive save-directory replacement. Use the same explicit `-save` root to share
+a slot between build profiles; the default roots include the profile name.
+Restore format and runtime data are the same in both profiles.
+
+The command holds the same filesystem session claim as the server for its
+lifetime. `runktf`, KTF save imports and provisioning also take this claim.
+Another cooperating writer is refused while that owner is live. Save listing
+and export remain available and wait for complete directory transactions.
 
 ## runktf
 

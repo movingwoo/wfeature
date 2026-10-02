@@ -59,6 +59,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	switch args[0] {
+	case "run":
+		if len(args) < 2 {
+			printUsage(stderr)
+			return 2
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		return runShared(ctx, args[1], args[2:], os.Stdin, stdout, stderr)
 	case "inspect":
 		if len(args) != 2 {
 			printUsage(stderr)
@@ -1049,6 +1057,12 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// The session still closes normally afterwards.
 	ctx, stopInterrupts := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stopInterrupts()
+	_, releaseSaves, err := claimArchiveSaves(data, saveRoot)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer releaseSaves()
 	// The vendor shipped two generations of package and this subcommand takes
 	// both, because a person with a game in their hand should not have to know
 	// which one it is. What the earlier one cannot do it refuses by name: it
@@ -2211,6 +2225,7 @@ func importSaves(source string, extra []string, stdout, stderr io.Writer) int {
 
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage:")
+	fmt.Fprintln(output, "  wfeature run <game.zip|game.jar> [-save dir] [-ticks N] [-serve] [-quickload] [-quicksave] [-frame out.png] [-play] [-speed N] [-screen WxH]")
 	fmt.Fprintln(output, "  wfeature inspect <game.jar>")
 	fmt.Fprintln(output, "  wfeature runskt <game.jar|game.zip> [-no-auth] [-ticks N] [-frame out.png] [-framedir dir] [-key tick:name] [-hold N] [-route script] [-save dir] [-diag report.json] [-trace]")
 	fmt.Fprintln(output, "                            [-screen WxH] [-cheat] [-patch table.json] [-serve]")
@@ -2908,6 +2923,12 @@ func provision(path string, extra []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "dry run: nothing written")
 		return 0
 	}
+	release, err := backend.ClaimSaveDirectory(filepath.Join(saveRoot, owner))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer release()
 	if err := store.StoreSave(certificate.SaveKey, certificate.Data); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // Importing an external emulator's save data
@@ -316,15 +318,22 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 		report.skip("%s: %s is a name this platform keeps its own record under", source, key)
 		return nil
 	}
-	report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
 	if options.DryRun {
+		report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
 		return nil
 	}
-	store := NewDirectorySaveStore(filepath.Join(options.SaveRoot, owner))
+	directory := filepath.Join(options.SaveRoot, owner)
+	release, err := backend.ClaimSaveDirectory(directory)
+	if err != nil {
+		return fmt.Errorf("claim %s: %w", owner, err)
+	}
+	defer release()
+	store := NewDirectorySaveStore(directory)
 	if err := store.StoreSave(key, data); err != nil {
 		return fmt.Errorf("write %s/%s: %w", owner, key, err)
 	}
 	clearImportedRemoval(store, key)
+	report.Imported = append(report.Imported, ImportedSave{Source: source, Owner: owner, Key: key, Bytes: len(data)})
 	return nil
 }
 

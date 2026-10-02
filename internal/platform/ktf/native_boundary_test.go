@@ -106,7 +106,7 @@ func TestNativeArgumentContainerSurvivesNestedNativeCall(t *testing.T) {
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		value, _, err := runtime.runAOTMethod(runtime.currentContext, runtime.currentThread, inner, typeInfo, []uint32{99})
+		value, _, err := runtime.runAOTMethod(runtime.currentContext, runtime.currentThread, "", inner, typeInfo, []uint32{99})
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
@@ -130,7 +130,7 @@ func TestNativeArgumentContainerSurvivesNestedNativeCall(t *testing.T) {
 	}
 	outer := jvm.AOTMethodMetadata{Name: "outer", Descriptor: "(I)I", AccessFlags: 0x109, NativeBody: outerBody}
 	runtime.currentThread, runtime.currentContext = client.thread, t.Context()
-	value, _, err := runtime.runAOTMethod(t.Context(), client.thread, outer, typeInfo, []uint32{55})
+	value, _, err := runtime.runAOTMethod(t.Context(), client.thread, "", outer, typeInfo, []uint32{55})
 	if err != nil {
 		t.Fatal(err)
 	}

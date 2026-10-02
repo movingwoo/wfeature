@@ -138,3 +138,46 @@ test("an older percussion source ending preserves its retriggered voice", () => 
   sources[2].onended();
   assert.equal(audio.voices.size, 0);
 });
+
+test("timeline reset stops PCM, percussion and released notes and resets channel state", () => {
+  const audio = new PageAudio();
+  const sources = [];
+  const parameter = () => ({ value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {} });
+  const createSource = () => {
+    const source = { stops: [], frequency: parameter(), connect() {}, disconnect() { this.disconnected = true; }, start() {}, stop(at) { this.stops.push(at); } };
+    sources.push(source);
+    return source;
+  };
+  audio.context = {
+    currentTime: 0, state: "running",
+    createGain: () => ({ gain: parameter(), connect() {} }),
+    createBufferSource: createSource,
+    createOscillator: createSource,
+    createBiquadFilter: () => ({ frequency: parameter(), connect() {} }),
+    createBuffer: (channels, frames) => ({ numberOfChannels: channels, getChannelData: () => new Float32Array(frames) }),
+  };
+  audio._noise = {};
+  audio.midiGain = { gain: parameter() };
+  audio.waveGain = { gain: parameter() };
+  audio.setMIDIVolume(0.3);
+  audio.programChange(0, 30);
+  audio.controlChange(0, 7, 20);
+  audio.pitchBend(0, 10000);
+  audio.noteOn(0, 60, 90);
+  audio.noteOff(0, 60);
+  audio.noteOn(9, 29, 100);
+  audio.playWave(1, 8000, new Float32Array(800));
+  assert.equal(audio.sources.size, 3);
+  assert.equal(audio.voices.size, 1, "the melodic release tail is already outside the voice map");
+  audio.stopAll();
+  assert.equal(audio.sources.size, 0);
+  assert.equal(audio.voices.size, 0);
+  for (const source of sources) {
+    assert.equal(source.stops.at(-1), undefined, "the old source must stop immediately");
+    assert.equal(source.disconnected, true);
+    source.onended();
+  }
+  assert.deepEqual(audio.channels[0], { program: 0, volume: 100, expression: 127, pan: 64, bend: 8192 });
+  assert.equal(audio.midiVolume, 0.3, "the person's output volume survives timeline replacement");
+  audio.stopAll();
+});

@@ -222,6 +222,10 @@ type Driver struct {
 	// DefaultHold is the subcommand's `-hold`, used when a `key` command does
 	// not name one.
 	DefaultHold int
+	// QuickSave and QuickLoad operate on the archive's persistent checkpoint
+	// slot, between commands on this same goroutine. Nil means unsupported.
+	QuickSave func(context.Context) error
+	QuickLoad func(context.Context) error
 }
 
 // session is the mutable half: what the run has spent and how it ended.
@@ -311,8 +315,22 @@ func (state *session) run(ctx context.Context, request Request) Response {
 		return state.write(request, state.driver.Shot, "frame", "-frame")
 	case "route":
 		return state.route(ctx, request)
+	case "quicksave":
+		return state.checkpoint(ctx, state.driver.QuickSave)
+	case "quickload":
+		return state.checkpoint(ctx, state.driver.QuickLoad)
 	}
-	return failure("unknown command %q; the commands are step, key, touch, park, screen, pixel, diag, shot, route and quit", request.Cmd)
+	return failure("unknown command %q; the commands are step, key, touch, park, screen, pixel, diag, shot, route, quicksave, quickload and quit", request.Cmd)
+}
+
+func (state *session) checkpoint(ctx context.Context, run func(context.Context) error) Response {
+	if run == nil {
+		return failure("this driver does not support execution checkpoints")
+	}
+	if err := run(ctx); err != nil {
+		return failure("checkpoint: %v", err)
+	}
+	return Response{OK: true, Digest: formatDigest(state.driver.Digest())}
 }
 
 func failure(format string, arguments ...any) Response {

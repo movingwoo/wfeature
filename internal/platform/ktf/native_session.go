@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -28,9 +29,12 @@ import (
 //     information file: its name for a label and its application number for
 //     the directory its saves belong in.
 type NativeSession struct {
-	Archive  *NativeArchive
-	Client   *NativeClient
-	platform *NativePlatform
+	run             sync.Mutex
+	archiveIdentity [32]byte
+	options         NativeSessionOptions
+	Archive         *NativeArchive
+	Client          *NativeClient
+	platform        *NativePlatform
 	// clock is the title's own clock, which a speed setting moves faster or
 	// slower than the Host's; source is the Host's, which is what a probe
 	// jumps and what a deadline has to be expressed on to be waited for.
@@ -130,6 +134,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 		return nil, err
 	}
 	session := &NativeSession{
+		archiveIdentity: backend.SaveIdentity(data), options: options,
 		Archive:  archive,
 		Client:   client,
 		platform: platform,
@@ -161,6 +166,11 @@ func (session *NativeSession) Platform() *NativePlatform {
 // left of that interval rather than a number this platform chose. A Host that
 // honours it runs the game at the speed it was written for.
 func (session *NativeSession) TickFor(ctx context.Context, budget time.Duration) (bool, time.Duration, error) {
+	if session == nil {
+		return false, 0, fmt.Errorf("KTF native session is not started")
+	}
+	session.run.Lock()
+	defer session.run.Unlock()
 	if session == nil || session.platform == nil {
 		return false, 0, fmt.Errorf("KTF native session is not started")
 	}
@@ -233,6 +243,11 @@ func (session *NativeSession) Flushes() uint32 {
 // SendKey delivers one key event, in the WIPI codes every Host here already
 // speaks. See nativeKeyCode for what they become.
 func (session *NativeSession) SendKey(ctx context.Context, eventType, key int32) error {
+	if session == nil {
+		return fmt.Errorf("KTF native session is not started")
+	}
+	session.run.Lock()
+	defer session.run.Unlock()
 	if session == nil || session.platform == nil {
 		return fmt.Errorf("KTF native session is not started")
 	}
@@ -278,6 +293,11 @@ func nativeKeyEvent(eventType int32) (pressed, deliver, ok bool) {
 // range the descriptor package's games take, because it is the same question a
 // Host is asking; what differs is only which clock underneath it moves.
 func (session *NativeSession) SetSpeed(multiplier float64) {
+	if session == nil {
+		return
+	}
+	session.run.Lock()
+	defer session.run.Unlock()
 	if session == nil || session.platform == nil {
 		return
 	}
@@ -320,6 +340,8 @@ func (session *NativeSession) SkipToNextDeadline() bool {
 	if session == nil {
 		return false
 	}
+	session.run.Lock()
+	defer session.run.Unlock()
 	manual, ok := session.source.(*ManualClock)
 	if !ok {
 		return false
@@ -355,6 +377,8 @@ func (session *NativeSession) Close() {
 	if session == nil {
 		return
 	}
+	session.run.Lock()
+	defer session.run.Unlock()
 	if session.platform != nil {
 		session.platform.FlushSaves()
 	}

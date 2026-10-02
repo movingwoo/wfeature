@@ -70,6 +70,13 @@ the token, so the restart button still starts a game over.
   remembered. A key this build adds takes its default only where the user has
   not already spent that keyboard key, and a keypad a user edited is not
   given the new button — it is in the editor's list.
+  Quick save and quick load are local actions in that same cell editor. Neither
+  has a default position in any type. Assigned buttons act immediately during a
+  supported KTF session, with brief inline feedback instead of a popup. They send
+  no handset key, never activate during a slide or while editing, and are disabled
+  during another checkpoint operation. An absent slot disables quick load during
+  play while leaving its cell editable. The game picker has no restore button;
+  after a server restart, start the game and use the assigned quick-load key.
   Cell assignment and sizing share the keypad editor, opened from `설정` and
   drawn over the game screen rather than in the settings panel: that panel is a
   centred modal on a phone and covers the very keypad the sliders move. Four
@@ -92,7 +99,7 @@ the token, so the restart button still starts a game over.
   no browser menu: the long-press offer to translate or search the word under
   the finger is refused everywhere outside the panels, where selecting text is
   the point.
-- **Status** — everything the page has to say to the reader: a session that
+- **Status** — session and settings messages: a session that
   would not open, a game that exited, an error the server sent, a report that
   was written. It is a popup over the screen with a `확인` to dismiss it, and it
   is fixed rather than part of the column, because it used to be a line between
@@ -102,6 +109,8 @@ the token, so the restart button still starts a game over.
   a panel is open. Dismissing it leaves whatever was open behind it open.
   Nothing hides on a timer; the empty string is what clears it, which is how
   every caller already cleared the old line.
+  Checkpoint feedback uses a separate status line over the bottom of the game
+  screen. It expires automatically and neither dims the page nor captures input.
 - **Run log** — the page's own log as it is written: session events, key
   presses, the server's frame statistics and anything the page logged or threw.
   These are the lines a saved report carries, so what is on screen during a run

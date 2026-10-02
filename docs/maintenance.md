@@ -44,11 +44,14 @@ Detailed historical counts, benchmark names, and rejected approaches remain in
 
 ## Paused work and provenance
 
-Quick save/load remains paused after the experimental implementation was rolled
-back. In-memory retention and `.wfs` save exports are not emulator snapshots.
-The continuation and restoration research is historical; resuming it requires
-an explicit user request. SGS development also remains paused; existing SGS
-specifications and acceptance records are preserved.
+KTF quick save/load resumed at the user's request and now runs through the shared
+session, CLI and browser hosts. [Architecture](architecture.md) defines its state
+and ownership contracts; [testing](testing.md) records supported variants,
+restart/gameplay evidence and remaining device limitations. Unknown runtime
+states are refused, and real native package validation still needs a matching
+`.mif`/`.mod` archive. Other platforms remain outside this implementation's scope.
+Earlier snapshot attempts remain in the history. SGS development remains paused;
+existing SGS specifications and acceptance records are preserved.
 
 Do not import assets, fixtures, or notices with unclear provenance. The recorded
 SMAF test provenance question needs evidence before changing attribution.

@@ -1,5 +1,25 @@
 # JVM fixtures
 
+`NativeCheckpointProbe.java` verifies that a native-only execution record refuses
+an active bytecode caller and leaves that caller able to finish. Compile it with:
+
+```sh
+javac -source 1.8 -target 1.8 -nowarn -g:none internal/jvm/testdata/NativeCheckpointProbe.java
+```
+
+The same class is included in the authored SKT `native-checkpoint.jar` fixture.
+
+`HeapCheckpointProbe.java` includes Calendar calls used to verify restored timezone
+history. It creates shared and cyclic array references, mutates
+a StringBuffer, and advances counters after heap restoration. Its initialized
+static marker detects an accidental rerun of class initialization. Rebuild with:
+
+```sh
+javac -source 1.8 -target 1.8 -nowarn -g:none internal/jvm/testdata/HeapCheckpointProbe.java
+```
+
+It is also packaged in `native-checkpoint.jar`; all classes are authored here.
+
 `Arithmetic.java`, `Constructed.java`, and their Java 8 class-format outputs are
 test fixtures newly authored for `wfeature`.
 

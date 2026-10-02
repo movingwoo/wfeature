@@ -25,6 +25,7 @@ import { browserToken, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
+import { initCheckpoints, isCheckpointKey } from "./checkpoint.js";
 import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
@@ -262,6 +263,7 @@ let resetCheatPanel = () => {};
 
 let sessionLink = null;
 let releaseInput = () => {};
+let checkpointControls;
 const textInputDialog = createTextInputDialog({ document, getSession: () => session, releaseInput: () => releaseInput() });
 document.getElementById("text-input-toggle")?.addEventListener("click", () => textInputDialog.open());
 
@@ -278,10 +280,8 @@ const sendKey = (eventType, name) => {
 };
 
 // The cells that hold one of this page's own controls rather than a phone key.
-// Neither is held or slid across, and neither sends the game anything: the
-// rapid-fire switch cycles on its click and the settings key opens the panel
-// on its own, in initSettings.
-const localControl = name => name === RAPID_FIRE || name === SETTINGS;
+// They act on clicks, never on a held key or a slide, and send no handset key.
+const localControl = name => name === RAPID_FIRE || name === SETTINGS || isCheckpointKey(name);
 
 const drawRapidFire = () => {
   for (const button of document.querySelectorAll(`button[data-key="${RAPID_FIRE}"]`)) {
@@ -422,10 +422,10 @@ const initInput = () => {
     }
     const button = target?.closest("button[data-key]");
     if (button) {
-      event.preventDefault();
-      // The two local controls act on their click, below and in
-      // initSettings, and send the game nothing.
+      // Local controls need the native click. Canceling their pointerdown also
+      // suppresses the touch-generated click in WebKit.
       if (localControl(button.dataset.key)) return;
+      event.preventDefault();
       // Capture keeps the moves and the release coming once the finger leaves
       // the button it started on. A finger that started beside the keys needs
       // nothing of the sort: its events already belong to no button, and the
@@ -502,8 +502,8 @@ const initInput = () => {
     // arrives. What the keyboard sends is a different panel's setting and is
     // not what this editor moves, so nothing here is a way to change it.
     if (keypadArranging) return;
-    // Let a focused switch use the button's native Space/Enter activation.
-    if (event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`) &&
+    // Local controls use native Space/Enter activation without a handset press.
+    if (localControl(event.target?.closest?.("button[data-key]")?.dataset.key) &&
         (event.code === "Space" || event.code === "Enter")) return;
     // A key arriving at all is the proof that there is a keyboard, which is
     // what puts the key settings in the panel.
@@ -586,6 +586,15 @@ const openSession = async handlers => {
     onFrame: (picture, presentation) => { if (playing()) drawFrame(picture, presentation); },
     onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
+    onReset: () => {
+      releaseInput();
+      textInputDialog.close();
+      pendingPicture = null;
+      pendingDirty = null;
+      magnifier.reset();
+      canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+      resetCheatPanel();
+    },
     onError: message => { recordEvent(`session error: ${message}`); setStatus(message); },
     onStats: stats => recordSessionStats(stats),
   });
@@ -594,6 +603,7 @@ const openSession = async handlers => {
 };
 
 const sessionStateChanged = state => {
+  checkpointControls?.refresh();
   recordEvent(`session state: ${state}`);
   if (state !== "playing") textInputDialog.close();
   document.getElementById("text-input-toggle")?.classList.toggle("hidden", state !== "playing");
@@ -678,7 +688,9 @@ const sessionStarted = info => {
   currentGameLabel = info.name ?? "";
   currentGamePath = info.game || lastGame() || "";
   if (info.game) rememberGame(info.game);
-  applySpeed(storedSpeed(info.game || lastGame()));
+  if (info.restored) rememberSpeed(currentGamePath, info.speed);
+  else applySpeed(storedSpeed(info.game || lastGame()));
+  checkpointControls?.started(info);
   pageAudio?.activate();
   hideGameSelect();
   canWatchWrites = info.can_watch === true;
@@ -760,6 +772,7 @@ const initGameSelect = async () => {
     startButton.disabled = sessionLink?.state() !== "ready";
     startButton.textContent = "실행";
     syncRemoveButton(document);
+    checkpointControls?.refresh();
     if (startButton.dataset.started) return;
     startButton.dataset.started = "yes";
     startButton.addEventListener("click", async () => {
@@ -839,6 +852,7 @@ const applyKeypadKeys = table => {
   releaseInput();
   for (const button of document.querySelectorAll("button[data-cell]")) {
     const name = table[button.dataset.cell] ?? "";
+    button.disabled = false;
     if (!name) {
       // No key, so no data-key: `padKey` and the pointer handler both look for
       // that attribute, and an empty cell has to be a button that sends
@@ -862,6 +876,7 @@ const applyKeypadKeys = table => {
   }
   relistKeypadButtons();
   drawRapidFire();
+  checkpointControls?.refresh();
 };
 
 // initKeypad is the whole of it: the shape, its size, and its cells, on one
@@ -1043,6 +1058,7 @@ const initKeypad = () => {
   const visible = on => {
     if (on) releaseInput();
     keypadArranging = on;
+    checkpointControls?.refresh();
     container.classList.toggle("arranging", on);
     panel.classList.toggle("visible", on);
     if (!on) {
@@ -1764,6 +1780,11 @@ const main = async () => {
   initInput();
   initKeypad();
   initRestart();
+  checkpointControls = initCheckpoints({ document, session: () => session,
+    state: () => sessionLink?.state(), editing: () => keypadArranging,
+    onLoaded: sessionStarted,
+    onError: error => { recordEvent(`checkpoint failed: ${error.message ?? error}`); console.error(error); },
+  });
   initModalBackdrop();
   pageAudio = new PageAudio({ report: recordEvent });
   initSettings();

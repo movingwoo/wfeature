@@ -35,11 +35,10 @@ import (
 // reach it — and refusing an export would refuse the page against its own
 // running game, which is the sequence the two second grace was added to
 // prevent, with no grace that could help here because the game is deliberately
-// still running. What an unarbitrated export can catch is a set of files that
-// spans one commit: every individual file is whole, because StoreSave replaces
-// by rename, so the worst case is one entry from before a commit beside one
-// from after. That is a save the player can export again a moment later, and it
-// is a smaller loss than not being able to back up the game they are playing.
+// still running. The backend now holds a directory transaction lock across
+// recovery and the complete export walk, so it cannot split a StoreSaves batch
+// or checkpoint replacement. Separate guest StoreSave calls remain separate
+// transactions; an export can still land between those calls.
 //
 // An import writes, so it takes the claim the save API takes —
 // `holdSaveDirectory`, for the length of the write. A restore landing under a

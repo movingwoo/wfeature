@@ -763,6 +763,18 @@ body {
   visibility: hidden;
 }
 
+.button-container button[data-key="QUICK_SAVE"],
+.button-container button[data-key="QUICK_LOAD"] {
+  font-size: 0.7em;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.button-container button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* A key takes its column less the inset measured at a 50% split, so the visible
    gaps stay the same when either side grows, even past the default width cap.
    The height is the row's, which the grid has already made the right one.
@@ -788,6 +800,25 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+
+/* Checkpoint feedback takes no layout space and never intercepts game input. */
+.checkpoint-status {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 8px;
+  background: rgba(24, 28, 32, 0.9);
+  color: #e8e6e3;
+  font-size: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.checkpoint-status.error {
+  color: #ff9b9b;
+}
 
 /* The status line used to sit in the column between the screen and the keypad,
    which meant a message arriving pushed the keypad down — under the fold on a

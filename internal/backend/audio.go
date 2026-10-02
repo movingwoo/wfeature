@@ -42,7 +42,7 @@ type AudioHandle uint32
 // the guest clock requires a new timeline; backward timestamps are not a seek.
 type Audio struct {
 	mutex  sync.Mutex
-	sink   AudioSink
+	sink   *audioOutput
 	sounds map[AudioHandle]*sound
 	next   AudioHandle
 	// maxSounds bounds what a game can retain by loading and never closing.
@@ -82,7 +82,13 @@ const defaultMaxSounds = 256
 // NewAudio returns an Audio writing to sink. A nil sink is allowed and makes
 // every sound silent, which is what a Host without an audio device wants.
 func NewAudio(sink AudioSink) *Audio {
-	return &Audio{sink: sink, sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, volume: maxAudioVolume}
+	return NewAudioWithClock(sink, nil)
+}
+
+// NewAudioWithClock uses an unscaled Host clock for the samples sent to the
+// output device. MIDI scheduling still uses the guest clock passed to Advance.
+func NewAudioWithClock(sink AudioSink, now func() time.Time) *Audio {
+	return &Audio{sink: newAudioOutput(sink, now), sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, volume: maxAudioVolume}
 }
 
 // SetSink swaps the Host output a timeline plays through, keeping everything
@@ -96,7 +102,7 @@ func (audio *Audio) SetSink(sink AudioSink) {
 	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	audio.sink = sink
+	audio.sink.sink = sink
 }
 
 // maxAudioVolume is the loudest a WIPI or MIDP volume goes; zero is silent.

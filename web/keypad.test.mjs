@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { keyOrder } from "./keybindings.js";
+import { isCheckpointKey } from "./checkpoint.js";
 import { assignable, shapes, shipped, cellIds } from "./keypad-layout.js";
 
 // The keypad is a layout table on one side and a code table on the other, and
@@ -43,9 +44,8 @@ const keyboardKeys = keyOrder;
 const shippedHas = name => Object.values(shipped[shapes[0]]).includes(name);
 
 test("every keypad button sends a key the page knows a code for", () => {
-  // Bar the two local controls, which send the game nothing: the rapid-fire
-  // switch and the settings key.
-  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE" && name !== "SETTINGS")) {
+  // Local controls send no handset code.
+  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE" && name !== "SETTINGS" && !isCheckpointKey(name))) {
     assert.ok(tableKeys.has(name), `the button ${name} has no code`);
   }
   assert.ok(!tableKeys.has("SETTINGS"), "the settings key sends the game a code");

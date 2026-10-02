@@ -11,6 +11,30 @@ file.
 
 ## Implemented
 
+The internal `NativeExecutionState` component preserves execution identity and
+spent bytecode budget while a platform supplies the remaining AOT work. It
+includes the core library's forwarding `Thread.run` bodies. Active bytecode
+frames, initializers, JVM-owned threads, and unknown native remainders are
+refused. This component does not provide session save/load;
+see [execution state](architecture.md#where-a-stopped-game-keeps-its-state).
+
+`HeapState` is a separate, bounded object graph component. It retains aliases,
+cycles, exact primitive bits, statics, completed class initialization, AOT metadata
+and binding strength, identity counters, and cooperative Thread flags with fresh
+notification channels. Platform roots must be supplied explicitly. Native payloads
+and arrays outside the core library require platform codecs. Held monitors,
+active or failed initializers, independently scheduled threads, overlapping list
+views, and unbounded recurring Calendar timezone rules are currently refused.
+Restoration builds detached objects and validates references before VM adoption.
+Calendar records retain the instant, location name, and finite timezone transition
+history (at most 1,024 transitions). They walk both ends with
+[Go ZoneBounds](https://pkg.go.dev/time#Time.ZoneBounds) and construct a location
+using [TZif v2](https://www.rfc-editor.org/rfc/rfc9636.html) through Go's public API.
+The generated internal TZif has an empty recurrence footer: Go extends its final
+explicit zone indefinitely. It is not an exported timezone file. No host timezone
+files are needed when restoring, and no timezone assets are bundled. A recurring
+rule is refused instead of being replaced with a finite approximation.
+
 - class-file versions 45–70 and modified UTF-8 constant pools
 - JAR-backed lazy class loading and class-name validation
 - field/method descriptors and category 1/2 local and operand stacks

@@ -32,6 +32,7 @@ the page reads as well.
 | `key` / `pointer` | Deliver supported input in guest coordinates. |
 | `speed` / `scale` | Change execution rate or presentation scaling. |
 | `text` | Open, commit, or cancel a supported native text edit. |
+| `quickSave` / `quickLoad` | Save or restore the current KTF archive's persistent checkpoint. |
 | `cheat` / `report` | Operate diagnostics or write a session report. |
 | `ping` | Check connection liveness independently of guest execution. |
 
@@ -55,8 +56,46 @@ budget or a limit on every socket and archive-inspection request.
 Parking releases held input, detaches presentation, and drives the platform's
 pause boundary. Resuming reattaches presentation and drives resume. These
 callbacks do not establish that all guest threads and clocks freeze. Stopping
-the server ends retained games: there is no serialized emulator-state restore.
-Quick save/load work remains paused. Guest-written saves survive normally.
+the server ends retained games. Ordinary saves and explicit KTF checkpoint slots
+survive; a later page can choose to restore the slot instead of starting over.
+
+## KTF checkpoints
+
+The shared session supports KTF Java/AOT, older descriptor modules and native
+packages. The `started` description reports `can_checkpoint`, `has_checkpoint`,
+`restored` and `speed`. A `start` request with `quick_load: true` constructs from
+the archive's slot without running guest startup. The ordinary `resume` command
+still means reconnecting to a retained in-memory session.
+
+The page offers quick save/load as optional keypad assignments, with no default
+placement. Clicking an assigned key sends its request immediately and displays
+brief inline feedback without a confirmation or result popup. All copies are
+disabled while a request is pending; editing a cell never sends a request.
+The picker offers ordinary startup only. To restore after a server restart,
+start the game and press its assigned quick-load key. Explicit startup restoration
+remains available to protocol and CLI callers.
+
+`quickSave` captures between complete rounds and writes one slot per exact archive.
+`quickLoad` validates a detached runtime and replaces both execution state and
+ordinary saves. Invalid archives, slots and unsupported runtime states report an
+error while preserving the running session and its saves. Slots are outside
+ordinary `.wfs` exports. See [checkpoint state and ownership](architecture.md).
+
+A successful load sends `restored` with a new connection `epoch` and a `started`
+description before new output. Mutating input, text, cheat, speed, scale and
+checkpoint requests carry that epoch; omitted means zero. Requests from a prior
+epoch are refused. Both output queues and the frame encoder discard work from
+the prior epoch, and the page closes its old decoder and clears sound, vibration,
+input, text and cheat state before the fresh complete frame. Binary messages keep
+their existing format; the ordered reset and queue ownership establish the boundary.
+The Host releases saved physical input and resumes a paused slot through the
+normal lifecycle. A CLI caller retains saved input and pause until it changes them.
+
+Loaded notes resume with their saved channel settings and PCM tails with their
+remaining samples. Oscillator phase, release tails and physical output latency
+are not serialized; resumed notes restart their envelopes. This is not a claim of
+sample-exact audio continuity. Runtime state compatibility requires the same
+archive and a compatible checkpoint schema; debug and release share the schema.
 
 ## Presentation and audio
 
@@ -197,10 +236,18 @@ for recorded play, alternatives measured and rejected, and limitations.
 
 ## Save integrity
 
-In-game saves use the common backend store. The web Host coordinates active
-save ownership and import/export within its process. A separate CLI process
-is outside that claim registry. `.wfs` export/import contains guest saves,
-not a CPU/JVM/session snapshot. See [RMS](rms.md) and [running](running.md).
+In-game saves use the common backend store. The web Host holds a filesystem
+claim for active and parked sessions and for imports. The CLI's shared `run`
+command, `runktf`, KTF save imports and provisioning take the same claim, so a
+second cooperating process cannot write through another live session. Other
+legacy platform commands do not yet take this lifetime claim.
+
+Directory operations also take a shorter filesystem lock: a complete read,
+write, batch, checkpoint replacement or recovery finishes before another begins.
+Listing and export remain available while a session owns its saves, and wait
+for an active transaction. Separate guest writes are still separate operations.
+`.wfs` export/import contains guest saves, not a CPU/JVM/session snapshot. See
+[RMS](rms.md) and [running](running.md).
 
 `SaveReader` and `ReadSave` distinguish absence from I/O failure when the store
 supports them. `DirectorySaveStore` does. Legacy `LoadSave` remains compatible

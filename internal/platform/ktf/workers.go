@@ -70,6 +70,9 @@ type workerEvent struct {
 }
 
 type guestWorker struct {
+	// started distinguishes the initial grant from an unsupported parked Go
+	// invocation. It changes once, before the first event handoff.
+	started    bool
 	javaThread *jvm.Object
 	armThread  *armcore.Thread
 	stackBase  uint32
@@ -99,6 +102,11 @@ type guestWorker struct {
 	// writes it and only while it holds the grant, and the grant and events
 	// channels order that write against the Host's read in ServiceThreads.
 	wakeAt time.Time
+	// javaWait retains the receiver before a wait reads mutable guest arguments.
+	// The scope lives only while the original native invocation is suspended.
+	javaWait     *javaWaitScope
+	aotEntry     *workerAOTEntry
+	continuation *workerAOTCheckpoint
 }
 
 // newGuestWorker maps (or reuses) a private guest stack, derives the worker's
@@ -172,6 +180,7 @@ func (worker *guestWorker) run(client *Client) {
 	if _, ok := <-worker.grant; !ok {
 		return
 	}
+	worker.started = true
 	// The run is wrapped rather than deferred over the whole function because
 	// what follows it has to happen either way: a panicking guest thread is
 	// still a thread that ended, and a title waiting on isAlive would hang for
@@ -184,7 +193,12 @@ func (worker *guestWorker) run(client *Client) {
 				err = backend.GuestPanic(client.logger, "KTF guest thread", recovered)
 			}
 		}()
-		_, err = client.vm.InvokeVirtual(worker.javaThread, "run", "()V")
+		if saved := worker.continuation; saved != nil {
+			worker.continuation = nil
+			err = client.runtime.resumeWorkerContinuation(client.runtime.currentContext, worker, *saved)
+		} else {
+			_, err = client.vm.InvokeVirtual(worker.javaThread, "run", "()V")
+		}
 	}()
 	// The worker is this platform's answer to Thread.start, so it is also the
 	// only place that knows the run is over. A title whose loading screen

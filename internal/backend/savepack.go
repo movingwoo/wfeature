@@ -300,8 +300,16 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 	if root == "" {
 		return nil, errors.New("backend: the save tree has no root")
 	}
+	unlock, err := lockSaveTree(root)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := NewDirectorySaveStore(root).recoverSaveReplacement(); err != nil {
+		return nil, err
+	}
 	entries := []SaveEntry{}
-	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			// The root not being there is the first run, and it is the only
 			// missing path that is not a problem: anything below the root was
@@ -398,14 +406,22 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	if root == "" {
 		return 0, 0, errors.New("backend: the save tree has no root")
 	}
+	unlock, err := lockSaveTree(root)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer unlock()
 	keep := make(map[string]bool, len(entries))
 	store := NewDirectorySaveStore(root)
+	if err := store.recoverSaveReplacement(); err != nil {
+		return 0, 0, err
+	}
 	for _, entry := range entries {
 		key, err := NormalizeSaveKey(entry.Key)
 		if err != nil {
 			return written, 0, err
 		}
-		if err := store.StoreSave(key, entry.Data); err != nil {
+		if err := store.storeSave(key, entry.Data); err != nil {
 			return written, 0, err
 		}
 		keep[key] = true

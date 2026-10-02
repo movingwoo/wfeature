@@ -152,6 +152,7 @@ type Options struct {
 	// FrameUpdates optionally receives owned intermediate frames during long
 	// callbacks. The Host must drain it independently of session execution.
 	FrameUpdates chan<- backend.FrameUpdate
+	FrameEpoch   uint64
 	Logger       *slog.Logger
 
 	// Speed scales the pace of the platforms that own a clock. Zero and 1 both
@@ -167,6 +168,9 @@ type Options struct {
 	// TraceLimit is how many recent boundary events the diagnostics keep in
 	// order. Hosts pass a limit in debug builds and zero in release.
 	TraceLimit int
+	// Clock optionally supplies KTF guest and Host input time for deterministic
+	// CLI probes. Other platforms retain their own clock contracts.
+	Clock interface{ Now() time.Time }
 }
 
 func (o Options) width() int {
@@ -194,9 +198,10 @@ func (o Options) scale() int {
 // SendKey and Frame are not safe to call concurrently — which is what every
 // Host does anyway, because guest code is not re-entrant.
 type Session struct {
-	platform detect.Platform
-	summary  Summary
-	options  Options
+	platform        detect.Platform
+	summary         Summary
+	options         Options
+	archiveIdentity [32]byte
 
 	ktf       *ktf.Session
 	ktfNative *ktf.NativeSession
@@ -221,6 +226,10 @@ type Session struct {
 	// zero value, which passes every key through, is the whole of it here. The
 	// MIDP runtime has a pad of its own and answers for itself.
 	held keypad.Pad
+	// KTF checkpoints retain all Host holds for reconciliation after adoption,
+	// including action keys that are not the pad's last repeating key.
+	heldKeys    []int32
+	pointerHeld checkpointPointerState
 	// paused is whether the Host has told the guest that nobody is watching.
 	// It is kept here rather than asked of the platform because the three
 	// platforms answer it three different ways — one has a lifecycle state,
@@ -297,19 +306,15 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 	}
 	// The repeat clock takes the speed the same way SetSpeed gives it to it: a
 	// session started at a multiplier is a guest already running at that pace.
-	session := &Session{platform: platform, summary: summary, options: options, speed: options.Speed}
+	session := &Session{platform: platform, summary: summary, options: options, speed: options.Speed, archiveIdentity: backend.SaveIdentity(archive)}
+	if options.Clock != nil {
+		session.now = options.Clock.Now
+	}
 
 	switch platform {
 	case detect.KTF:
 		if ktf.IsNativeArchive(archive) {
-			started, err := ktf.StartNativeSession(ctx, archive, ktf.NativeSessionOptions{
-				SaveStore: options.SaveStore,
-				AudioSink: options.AudioSink,
-				Logger:    options.Logger,
-				Speed:     options.Speed,
-				Width:     options.width(),
-				Height:    options.height(),
-			})
+			started, err := ktf.StartNativeSession(ctx, archive, ktfNativeOptions(options))
 			if err != nil {
 				return nil, startEndedOrFailed(err)
 			}
@@ -317,17 +322,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			session.startedAt = time.Now()
 			return session, nil
 		}
-		started, err := ktf.StartSession(ctx, archive, ktf.SessionOptions{
-			DisableAuthentication: options.DisableAuthentication,
-			AudioSink:             options.AudioSink,
-			FrameSink:             backend.FrameSink{Output: options.FrameUpdates, Scale: options.Scale},
-			SaveStore:             options.SaveStore,
-			Speed:                 options.Speed,
-			TraceLimit:            options.TraceLimit,
-			Logger:                options.Logger,
-			Width:                 options.width(),
-			Height:                options.height(),
-		})
+		started, err := ktf.StartSession(ctx, archive, ktfOptions(options))
 		if err != nil {
 			return nil, startEndedOrFailed(err)
 		}
@@ -412,6 +407,18 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 	}
 	session.startedAt = time.Now()
 	return session, nil
+}
+
+// SkipToNextDeadline moves a KTF manual clock to pending work. A wall clock or
+// a platform without a manual clock returns false and requires ordinary pacing.
+func (s *Session) SkipToNextDeadline() bool {
+	if s.ktf != nil {
+		return s.ktf.SkipToNextDeadline()
+	}
+	if s.ktfNative != nil {
+		return s.ktfNative.SkipToNextDeadline()
+	}
+	return false
 }
 
 // Platform reports which platform answered for the archive.
@@ -685,17 +692,31 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 		if !ok {
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
 		// The repeat clock names the key the guest was given, which is this
 		// one: the WIPI Java path delivers what the Host reports.
 		key := ktfKeyCode(code)
 		s.held.Key(action == KeyPress, key)
-		return s.endedOrFailed(s.ktf.SendKey(ctx, eventType, key))
+		if err := s.endedOrFailed(s.ktf.SendKey(ctx, eventType, key)); err != nil {
+			return err
+		}
+		s.noteKeyHold(action, code)
+		return nil
 	case s.ktfNative != nil:
 		eventType, ok := ktfKeyEventType(action)
 		if !ok {
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
-		return s.endedOrFailed(s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code)))
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
+		if err := s.endedOrFailed(s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code))); err != nil {
+			return err
+		}
+		s.noteKeyHold(action, code)
+		return nil
 	case s.lgt != nil:
 		// A Clet compares against the same key values a KTF game does, so the
 		// translation is shared.
@@ -746,7 +767,14 @@ func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) er
 	}
 	switch {
 	case s.ktf != nil:
-		return s.endedOrFailed(s.ktf.SendPointer(ctx, eventType, x, y))
+		if err := s.endedOrFailed(s.ktf.SendPointer(ctx, eventType, x, y)); err != nil {
+			return err
+		}
+		s.pointerHeld = checkpointPointerState{Down: true, X: x, Y: y}
+		if action == PointerRelease {
+			s.pointerHeld = checkpointPointerState{}
+		}
+		return nil
 	case s.ktfNative != nil, s.lgt != nil, s.runtime != nil, s.script != nil:
 		return ErrNoPointer
 	}
@@ -1008,6 +1036,7 @@ func (s *Session) FrameUpdate() (frame backend.FrameUpdate, ok bool) {
 
 func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
 	frame.Scale = s.options.scale()
+	frame.Epoch = s.options.FrameEpoch
 	switch {
 	case s.ktf != nil:
 		frame.RGBA, frame.Width, frame.Height, _ = s.ktf.Frame()
@@ -1170,8 +1199,14 @@ func (s *Session) SetScale(scale int) {
 func (s *Session) SetFrameUpdates(output chan<- backend.FrameUpdate) {
 	s.options.FrameUpdates = output
 	if s.ktf != nil {
-		s.ktf.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale()})
+		s.ktf.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
 	}
+}
+
+// SetOutputEpoch invalidates previously queued Host pictures after replacement.
+func (s *Session) SetOutputEpoch(epoch uint64) {
+	s.options.FrameEpoch = epoch
+	s.SetFrameUpdates(s.options.FrameUpdates)
 }
 
 // Scale reports the magnification in effect.
@@ -1307,6 +1342,7 @@ func (s *Session) Close() {
 	s.paused = false
 	s.repeat.Forget()
 	s.held.Forget()
+	s.heldKeys, s.pointerHeld = nil, checkpointPointerState{}
 	// The captured surface goes with it, so a closed session answers the same
 	// way on every platform: there is no frame, because there is no game. A
 	// Host that wants the last picture on screen already has it — it was sent

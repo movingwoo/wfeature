@@ -1,4 +1,5 @@
 import { RAPID_FIRE } from "./rapid-fire.js";
+import { QUICK_SAVE, QUICK_LOAD } from "./checkpoint.js";
 // Which phone key sits in which cell of the keypad.
 //
 // The pad this page draws had three shapes, and they were three blocks of
@@ -263,16 +264,15 @@ export const shapes = ["type1", "type2", "type3", "type4"];
 // `draw` reads to know what to put back when a pad stops being edited. A second
 // list of the same four names would be a second place for them to be wrong.
 
-// Cells offer the handset keys plus two local controls, the rapid-fire switch
-// and the settings key. Neither is a handset key, and neither can be assigned
-// a keyboard binding.
-export const assignable = [...keyOrder, RAPID_FIRE, SETTINGS];
+// Local controls have no handset code or keyboard binding. Checkpoint actions
+// are offered only by the editor; no shipped layout places them.
+export const assignable = [...keyOrder, RAPID_FIRE, QUICK_SAVE, QUICK_LOAD, SETTINGS];
 const knownKey = new Set(assignable);
 
 // What a key is called. The phone keys are named in keybindings.js, where the
-// keyboard panel lists them; the two local controls have no row there and are
+// keyboard panel lists them; the local controls have no row there and are
 // named here.
-const localNames = { [RAPID_FIRE]: "연사", [SETTINGS]: "설정" };
+const localNames = { [RAPID_FIRE]: "연사", [QUICK_SAVE]: "퀵세이브", [QUICK_LOAD]: "퀵로드", [SETTINGS]: "설정" };
 
 export const keyName = name => localNames[name] ?? keyLabel(name);
 

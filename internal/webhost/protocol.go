@@ -22,10 +22,13 @@ import (
 // clientMessage is anything the page sends. Only Kind is always present; the
 // rest is read according to it.
 type clientMessage struct {
-	Kind string `json:"kind"`
+	Kind  string `json:"kind"`
+	Epoch uint64 `json:"epoch,omitempty"`
 
 	// Game is the archive path from games.json, for kind "start".
 	Game string `json:"game,omitempty"`
+	// QuickLoad starts from the persistent checkpoint instead of guest startup.
+	QuickLoad bool `json:"quick_load,omitempty"`
 	// LegacyAuthentication is accepted from older pages and ignored. New starts
 	// always select recognized compatibility; the browser has no policy switch.
 	LegacyAuthentication bool `json:"authentication,omitempty"`
@@ -98,18 +101,20 @@ type clientMessage struct {
 
 // Message kinds the page may send.
 const (
-	clientStart   = "start"
-	clientResume  = "resume"
-	clientPark    = "park"
-	clientPing    = "ping"
-	clientKey     = "key"
-	clientPointer = "pointer"
-	clientText    = "text"
-	clientSpeed   = "speed"
-	clientScale   = "scale"
-	clientCheat   = "cheat"
-	clientReport  = "report"
-	clientStop    = "stop"
+	clientStart     = "start"
+	clientResume    = "resume"
+	clientPark      = "park"
+	clientPing      = "ping"
+	clientKey       = "key"
+	clientPointer   = "pointer"
+	clientText      = "text"
+	clientSpeed     = "speed"
+	clientScale     = "scale"
+	clientCheat     = "cheat"
+	clientReport    = "report"
+	clientStop      = "stop"
+	clientQuickSave = "quickSave"
+	clientQuickLoad = "quickLoad"
 )
 
 // serverMessage is anything the server sends in a text frame. A picture
@@ -117,7 +122,8 @@ const (
 // sixteen-byte header and a PNG in the second — and so does the second
 // protocol's sound; see frame_patch.go and audio_stream.go.
 type serverMessage struct {
-	Kind string `json:"kind"`
+	Kind  string `json:"kind"`
+	Epoch uint64 `json:"epoch,omitempty"`
 
 	// ID echoes the request this answers, when it answers one.
 	ID uint64 `json:"id,omitempty"`
@@ -228,6 +234,7 @@ const (
 	serverResumed  = "resumed"
 	serverDetached = "detached"
 	serverVibrate  = "vibrate"
+	serverRestored = "restored"
 )
 
 // vibrateMessage is one request of the handset's motor.
@@ -272,7 +279,13 @@ type startedMessage struct {
 	// it is a property of the platform rather than of the game, and the page
 	// asks before it starts sending: a canvas that forwards every thumb to a
 	// game that cannot take one is a stream of messages nothing reads.
-	CanTouch bool `json:"can_touch"`
+	CanTouch      bool `json:"can_touch"`
+	CanCheckpoint bool `json:"can_checkpoint"`
+	HasCheckpoint bool `json:"has_checkpoint"`
+	// Restored tells the page to keep the saved speed instead of overwriting
+	// it with a preference for new starts.
+	Restored bool    `json:"restored,omitempty"`
+	Speed    float64 `json:"speed,omitempty"`
 }
 
 // statsMessage is how the page knows whether the server is keeping up. It is

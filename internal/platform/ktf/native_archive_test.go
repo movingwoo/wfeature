@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/gameroot"
 )
 
 // buildNativeInfo assembles a module information file the way a real one is
@@ -361,20 +362,12 @@ func localNativePackages(t *testing.T) []string {
 	if !ok {
 		t.Fatal("locate KTF test source")
 	}
-	directory := filepath.Join(filepath.Dir(source), "..", "..", "..", "var", "games", "ktf")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Skipf("read local KTF game directory: %v", err)
-	}
+	directory := filepath.Join(filepath.Dir(source), "..", "..", "..", "var", "games")
 	found := []string{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".zip") {
-			continue
-		}
-		path := filepath.Join(directory, entry.Name())
+	for _, path := range gameroot.Paths(directory, ".zip") {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
+			t.Fatal("read local native candidate archive")
 		}
 		files, err := readOuterZIP(data)
 		if err != nil {

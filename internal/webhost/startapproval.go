@@ -77,13 +77,12 @@ func (r *sessionRunner) admitStart(message clientMessage, directory, label strin
 		s.dropLocked(victimToken, victim, "confirmed fresh start")
 	}
 	r.startApproval = nil
-	r.admitted = true
 	if directory != "" {
-		if s.claims == nil {
-			s.claims = make(map[string]*saveClaim)
+		if ok, reason := s.takeSaveClaimLocked(directory, label); !ok {
+			return fail("세이브를 사용할 수 없습니다. 다른 실행 중인 게임이나 도구를 종료한 뒤 다시 시도하세요. " + reason)
 		}
-		s.claims[directory] = &saveClaim{label: label}
 	}
+	r.admitted = true
 	return true
 }
 

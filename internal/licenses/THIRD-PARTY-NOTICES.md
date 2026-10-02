@@ -14,7 +14,7 @@ executable still receives these notices.
 |---|---|---|
 | golang.org/x/text | Go module, statically linked | BSD-3-Clause |
 | golang.org/x/image | Go module, statically linked | BSD-3-Clause |
-| golang.org/x/sys | Go module, statically linked on the amd64 targets | BSD-3-Clause |
+| golang.org/x/sys | Go module, statically linked on amd64 and Windows targets | BSD-3-Clause |
 | NeoDGM (Neo둥근모) | TrueType font, embedded in the binary | SIL OFL 1.1 |
 | Galmuri9 | TrueType font, embedded in the binary | SIL OFL 1.1 |
 | hqx | Decision tables translated into `internal/filter/hqx` and `web/hqx-patterns.js` | MIT OR Apache-2.0 |

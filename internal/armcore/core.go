@@ -125,6 +125,7 @@ type Thread struct {
 	stepBudget  uint64
 	limitHook   func(context.Context) error
 	calls       []*Thread
+	checkpoint  callCheckpoint
 	// entryStack is the stack pointer this thread's run started from. A
 	// derived call inherits the guest stack rather than getting one of its
 	// own, so this is the only way to tell a frame that belongs to the run
@@ -357,11 +358,10 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 		return RunSummary{}, fmt.Errorf("ARM thread is nil")
 	}
 
-	local, err := thread.begin()
+	local, executed, window, err := thread.begin(end)
 	if err != nil {
 		return RunSummary{}, err
 	}
-	var executed uint64
 	// Why a run failed travels back with it rather than being kept on the
 	// thread: the caller is the only one who ever asked.
 	fail := func(cause error) (RunSummary, error) {
@@ -375,7 +375,6 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 	}
 	// window counts the steps of the current budget window; executed keeps
 	// the run total across hook-granted windows for the summary.
-	var window uint64
 	for {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -386,10 +385,11 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 			}
 			// Save the running context so the parked thread is observable,
 			// then ask the hook for a fresh budget window. The hook may block.
-			thread.saveRunning(local)
+			thread.parkLimit(local, window, executed)
 			if err := thread.limitHook(ctx); err != nil {
 				return fail(err)
 			}
+			thread.clearCallStop()
 			window = 0
 		}
 		count := uint64(core.quantum)
@@ -445,7 +445,7 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 			thread.saveRunning(local)
 			runtime.Gosched()
 		case StopSupervisorCall:
-			thread.suspend(local)
+			thread.suspendCall(local, window, executed, result.SupervisorCall)
 			if handler == nil {
 				return fail(fmt.Errorf("%w %#x at %#x", ErrUnhandledSupervisorCall, result.SupervisorCall.Immediate, result.SupervisorCall.Address))
 			}
@@ -463,14 +463,15 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 	}
 }
 
-func (thread *Thread) begin() (Context, error) {
+func (thread *Thread) begin(end uint32) (Context, uint64, uint64, error) {
 	thread.mu.Lock()
 	defer thread.mu.Unlock()
 	if thread.state != ThreadReady {
-		return Context{}, fmt.Errorf("run thread while it is %s: %w", thread.state, ErrThreadState)
+		return Context{}, 0, 0, fmt.Errorf("run thread while it is %s: %w", thread.state, ErrThreadState)
 	}
 	thread.state = ThreadRunning
-	return thread.context, nil
+	thread.checkpoint.end, thread.checkpoint.stop = end, 0
+	return thread.context, thread.checkpoint.steps, thread.checkpoint.window, nil
 }
 
 // contextForCall snapshots the parent's context and derives a thread for one
@@ -512,6 +513,7 @@ func (thread *Thread) resume() (Context, error) {
 		return Context{}, fmt.Errorf("resume thread while it is %s: %w", thread.state, ErrThreadState)
 	}
 	thread.state = ThreadRunning
+	thread.checkpoint.stop = 0
 	return thread.context, nil
 }
 
@@ -519,6 +521,7 @@ func (thread *Thread) halt(context Context) {
 	thread.mu.Lock()
 	thread.context = context
 	thread.state = ThreadHalted
+	thread.checkpoint.stop = 0
 	thread.mu.Unlock()
 }
 
@@ -526,5 +529,6 @@ func (thread *Thread) fault(context Context) {
 	thread.mu.Lock()
 	thread.context = context
 	thread.state = ThreadFaulted
+	thread.checkpoint.stop = 0
 	thread.mu.Unlock()
 }

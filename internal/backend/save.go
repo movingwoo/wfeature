@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"unicode/utf8"
 )
@@ -46,7 +45,6 @@ func ReadSave(store SaveStore, name string) ([]byte, bool, error) {
 // layout so both address the same entries.
 type DirectorySaveStore struct {
 	root string
-	mu   sync.RWMutex
 }
 
 // NewDirectorySaveStore roots a directory-backed save store. The directory
@@ -110,8 +108,14 @@ func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	if store == nil {
 		return nil, false, fmt.Errorf("save store has no root")
 	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
+	unlock, err := lockSaveTree(store.root)
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
+	if err := store.recoverSaveReplacement(); err != nil {
+		return nil, false, err
+	}
 	return store.readSave(name)
 }
 
@@ -149,8 +153,14 @@ func (store *DirectorySaveStore) StoreSave(name string, data []byte) error {
 	if store == nil {
 		return fmt.Errorf("save store has no root")
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
+	unlock, err := lockSaveTree(store.root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := store.recoverSaveReplacement(); err != nil {
+		return err
+	}
 	return store.storeSave(name, data)
 }
 
