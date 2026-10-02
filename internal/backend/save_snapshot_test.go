@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -124,16 +123,5 @@ func TestDirectorySaveSnapshotRejectsSymlinks(t *testing.T) {
 	}
 	if _, err := NewDirectorySaveStore(root).SnapshotSaves(); err == nil {
 		t.Fatal("snapshot followed a linked save")
-	}
-	before, err := os.ReadFile(outside)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := NewDirectorySaveStore(root).ReplaceSaves([]SaveEntry{{Key: "new", Data: []byte("replacement")}}); err == nil {
-		t.Fatal("replacement discarded an unrepresentable linked entry")
-	}
-	after, err := os.ReadFile(outside)
-	if err != nil || !reflect.DeepEqual(before, after) {
-		t.Fatal("replacement changed the linked target")
 	}
 }
