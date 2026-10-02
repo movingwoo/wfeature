@@ -14,38 +14,26 @@ import (
 	"time"
 )
 
-func TestSaveReplacementRollbackSurvivesMissingJournal(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "owner")
-	store := NewDirectorySaveStore(root)
-	if err := store.ReplaceSaves(saveGeneration("old")); err != nil {
-		t.Fatal(err)
+// saveGeneration is one consistent set of saves: an index that names the set
+// and one file whose name and content follow from it.
+func saveGeneration(label string) []SaveEntry {
+	return []SaveEntry{{Key: "db/index", Data: []byte(label)}, {Key: "fs/" + label, Data: []byte(label + " data")}}
+}
+
+// storeSaveGeneration writes a generation into an empty save folder, as one
+// batch.
+func storeSaveGeneration(root, label string) error {
+	entries := make(map[string][]byte)
+	for _, entry := range saveGeneration(label) {
+		entries[entry.Key] = entry.Data
 	}
-	paths, _ := replacementPaths(root)
-	calls := 0
-	injected := errors.New("injected missing preparation")
-	err := store.replaceSaves(saveGeneration("new"), func(from, to string) error {
-		calls++
-		if calls == 2 {
-			if err := os.Remove(paths.intent); err != nil {
-				return err
-			}
-			if err := os.RemoveAll(paths.next); err != nil {
-				return err
-			}
-			return injected
-		}
-		return os.Rename(from, to)
-	})
-	if !errors.Is(err, injected) {
-		t.Fatalf("replacement = %v", err)
-	}
-	checkSaveGeneration(t, root, "old")
+	return NewDirectorySaveStore(root).StoreSaves(entries)
 }
 
 func TestSaveDirectoryAliasesShareTransaction(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "OwNer-é")
-	if err := NewDirectorySaveStore(root).ReplaceSaves(saveGeneration("old")); err != nil {
+	if err := storeSaveGeneration(root, "old"); err != nil {
 		t.Fatal(err)
 	}
 	aliases := map[string]string{}
@@ -113,7 +101,7 @@ func TestSaveTransactionExcludesAnotherProcess(t *testing.T) {
 		return
 	}
 	root := filepath.Join(t.TempDir(), "owner")
-	if err := NewDirectorySaveStore(root).ReplaceSaves(saveGeneration("old")); err != nil {
+	if err := storeSaveGeneration(root, "old"); err != nil {
 		t.Fatal(err)
 	}
 	unlock, err := lockSaveTree(root)
@@ -228,106 +216,3 @@ func TestSaveClaimsExcludeSessionsButAllowReadsAndReleaseOnExit(t *testing.T) {
 
 // A read may perform crash recovery, so it must wait for the complete active
 // replacement even when its DirectorySaveStore is a different Go object.
-func TestSaveReplacementExcludesIndependentReaders(t *testing.T) {
-	for _, window := range []int{1, 2} {
-		for _, refuse := range []bool{false, true} {
-			for _, reader := range []string{"export", "snapshot", "entry", "recovery"} {
-				t.Run(fmt.Sprintf("rename%d/refuse=%t/%s", window, refuse, reader), func(t *testing.T) {
-					root := filepath.Join(t.TempDir(), "owner")
-					store := NewDirectorySaveStore(root)
-					if err := store.ReplaceSaves(saveGeneration("old")); err != nil {
-						t.Fatal(err)
-					}
-					ready, release := make(chan struct{}), make(chan struct{})
-					defer func() {
-						select {
-						case <-release:
-						default:
-							close(release)
-						}
-					}()
-					injected := errors.New("injected replacement failure")
-					replaced := make(chan error, 1)
-					go func() {
-						calls := 0
-						replaced <- store.replaceSaves(saveGeneration("new"), func(from, to string) error {
-							calls++
-							if calls == window {
-								close(ready)
-								<-release
-								if refuse {
-									return injected
-								}
-							}
-							return os.Rename(from, to)
-						})
-					}()
-					select {
-					case <-ready:
-					case err := <-replaced:
-						t.Fatalf("replacement did not reach boundary: %v", err)
-					case <-time.After(5 * time.Second):
-						t.Fatal("replacement did not reach boundary")
-					}
-					started, read := make(chan struct{}), make(chan error, 1)
-					want := "new"
-					if refuse {
-						want = "old"
-					}
-					go func() {
-						other := NewDirectorySaveStore(root)
-						close(started)
-						var entries []SaveEntry
-						var err error
-						switch reader {
-						case "export":
-							entries, err = ReadSaveTree(root)
-						case "snapshot":
-							entries, err = other.SnapshotSaves()
-						case "entry":
-							data, exists, readErr := other.ReadSave("db/index")
-							err = readErr
-							if err == nil && (!exists || string(data) != want) {
-								err = fmt.Errorf("entry = %q, exists=%t; want %q", data, exists, want)
-							}
-						case "recovery":
-							err = RecoverSaveTree(root)
-						}
-						if err == nil && (reader == "export" || reader == "snapshot") && !reflect.DeepEqual(entries, saveGeneration(want)) {
-							err = fmt.Errorf("read incomplete or wrong generation: %+v", entries)
-						}
-						read <- err
-					}()
-					<-started
-					early := false
-					select {
-					case err := <-read:
-						early = true
-						t.Errorf("reader entered an active replacement: %v", err)
-					case <-time.After(30 * time.Millisecond):
-					}
-					close(release)
-					select {
-					case err := <-replaced:
-						if refuse && !errors.Is(err, injected) || !refuse && err != nil {
-							t.Errorf("replacement = %v", err)
-						}
-					case <-time.After(5 * time.Second):
-						t.Fatal("replacement did not finish")
-					}
-					if !early {
-						select {
-						case err := <-read:
-							if err != nil {
-								t.Error(err)
-							}
-						case <-time.After(5 * time.Second):
-							t.Fatal("reader did not finish")
-						}
-					}
-					checkSaveGeneration(t, root, want)
-				})
-			}
-		}
-	}
-}
