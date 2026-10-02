@@ -99,6 +99,16 @@ func (store *authenticationCertificate100Store) activate(client *Client) bool {
 	store.originalFlag = header[27]
 	store.originalCertificate = bytes.Clone(data[100:200])
 	store.certificate = certificate
+	store.bind(client)
+	store.active = true
+	return true
+}
+
+// bind attaches the one thing about an active store that is not data: where
+// the guest keeps its own copy of the header. A checkpoint restores the rest
+// from its record and calls this for the client it was restored into. The
+// caller holds the store's lock.
+func (store *authenticationCertificate100Store) bind(client *Client) {
 	store.publishHeader = func(header []byte) bool {
 		current := make([]byte, 48)
 		if err := client.core.Memory().Read(store.contract.state, current); err != nil {
@@ -111,8 +121,6 @@ func (store *authenticationCertificate100Store) activate(client *Client) bool {
 		}
 		return client.core.Memory().Write(store.contract.state+27, []byte{1}) == nil
 	}
-	store.active = true
-	return true
 }
 
 func (store *authenticationCertificate100Store) LoadSave(name string) ([]byte, bool) {

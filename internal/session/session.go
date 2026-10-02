@@ -329,15 +329,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		started.TimeHostPhases(options.TraceLimit > 0)
 		session.ktf = started
 	case detect.LGT:
-		started, err := lgt.StartSession(ctx, archive, lgt.SessionOptions{
-			DisableAuthentication: options.DisableAuthentication,
-			Logger:                options.Logger,
-			AudioSink:             options.AudioSink,
-			SaveStore:             options.SaveStore,
-			Width:                 options.width(),
-			Height:                options.height(),
-			Speed:                 options.Speed,
-		})
+		started, err := lgt.StartSession(ctx, archive, lgtOptions(options))
 		if err != nil {
 			return nil, startEndedOrFailed(err)
 		}
@@ -420,6 +412,14 @@ func (s *Session) SkipToNextDeadline() bool {
 	}
 	return false
 }
+
+// VirtualClock reports whether the guest's clock moves only when a tick moves
+// it. LGT's does: a tick stands for a span of guest time whether or not the
+// Host waits that long before the next one, so a Host that is not showing the
+// game to anybody can run the ticks back to back and get the run a paced Host
+// would have had. The wait a tick reports is then pacing, not something the
+// guest is owed.
+func (s *Session) VirtualClock() bool { return s != nil && s.lgt != nil }
 
 // Platform reports which platform answered for the archive.
 func (s *Session) Platform() string { return string(s.platform) }
@@ -727,7 +727,11 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 		if !deliver {
 			return nil
 		}
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
 		s.lgt.SendKey(pressed, uint32(ktfKeyCode(code)))
+		s.noteKeyHold(action, code)
 		return nil
 	case s.runtime != nil:
 		// The MIDP runtime takes the page's codes unchanged: they are the MIDP

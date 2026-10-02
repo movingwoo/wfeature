@@ -72,7 +72,8 @@ the token, so the restart button still starts a game over.
   given the new button — it is in the editor's list.
   Quick save and quick load are local actions in that same cell editor. Neither
   has a default position in any type. Assigned buttons act immediately during a
-  supported KTF session, with brief inline feedback instead of a popup. They send
+  session the server reports as `can_checkpoint` — KTF and LGT titles today —
+  with brief inline feedback instead of a popup. They send
   no handset key, never activate during a slide or while editing, and are disabled
   during another checkpoint operation. An absent slot disables quick load during
   play while leaving its cell editable. The game picker has no restore button;
