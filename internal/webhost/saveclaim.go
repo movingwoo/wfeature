@@ -1,6 +1,10 @@
 package webhost
 
-import "github.com/movingwoo/wfeature/internal/backend"
+import (
+	"errors"
+
+	"github.com/movingwoo/wfeature/internal/backend"
+)
 
 // One game, one save directory, one session.
 //
@@ -32,7 +36,10 @@ import "github.com/movingwoo/wfeature/internal/backend"
 // too, because nobody asked for it. A save import is a person asking, so it
 // takes a parked holder over the way a start does — see holdSaveDirectory.
 // The claim also holds a backend file lock, excluding other server processes
-// and CLI tools that claim the same directory.
+// and CLI tools that claim the same directory. A save location that cannot
+// hold that lock — a folder that cannot be written, a file system without
+// locks — is claimed in this process alone, which is what the claim was before
+// the lock existed; the server says so in its log, once per directory.
 
 // saveClaim is one held save directory.
 type saveClaim struct {
@@ -46,17 +53,34 @@ type saveClaim struct {
 }
 
 // The caller holds parkedMu and has already released any approved predecessor.
-func (s *Server) takeSaveClaimLocked(directory, label string) (bool, string) {
+// The error is the backend's own, so a caller can tell a directory somebody
+// holds from one that could not be prepared.
+func (s *Server) takeSaveClaimLocked(directory, label string) error {
 	release, err := backend.ClaimSaveDirectory(directory)
 	if err != nil {
 		s.logger.Warn("save directory claim refused", "directory", directory, "error", err)
-		return false, err.Error()
+		return err
 	}
+	// The store has no logger, so a claim is where the server reports a
+	// directory that only this process is kept out of.
+	backend.WarnSaveLockFallback(s.logger, directory)
 	if s.claims == nil {
 		s.claims = make(map[string]*saveClaim)
 	}
 	s.claims[directory] = &saveClaim{label: label, release: release}
-	return true, ""
+	return nil
+}
+
+// saveClaimRefusal words a refused claim for the person starting a game. Only
+// contention has a remedy in another window, so only contention is told to
+// close one: a save folder that could not be prepared would otherwise send
+// somebody looking for a game that is not running. Both end with the backend's
+// own sentence, which is what names the cause.
+func saveClaimRefusal(err error) string {
+	if errors.Is(err, backend.ErrSaveDirectoryBusy) {
+		return "세이브를 사용할 수 없습니다. 다른 실행 중인 게임이나 도구를 종료한 뒤 다시 시도하세요. " + err.Error()
+	}
+	return "세이브 폴더를 준비하지 못했습니다. 다른 게임이 사용 중인 것이 아니라 폴더 자체의 문제입니다. " + err.Error()
 }
 
 // claimSaveDirectory takes the claim on a save directory for a game that is
@@ -75,7 +99,10 @@ func (s *Server) claimSaveDirectory(directory, label string) (bool, string) {
 		// The holder is parked, so it is closed here and the directory taken.
 		s.takeParkedHolderLocked(directory, "another page started the same game")
 	}
-	return s.takeSaveClaimLocked(directory, label)
+	if err := s.takeSaveClaimLocked(directory, label); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
 // takeParkedHolderLocked closes the parked game holding a directory and leaves
@@ -124,7 +151,10 @@ func (s *Server) holdSaveDirectory(directory, label string, takeParked bool) (bo
 		}
 		s.takeParkedHolderLocked(directory, "a save was restored into this game")
 	}
-	return s.takeSaveClaimLocked(directory, label)
+	if err := s.takeSaveClaimLocked(directory, label); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
 // releaseSaveDirectory gives up a claim when its game is closed.

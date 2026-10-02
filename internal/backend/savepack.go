@@ -309,7 +309,7 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 		return nil, err
 	}
 	entries := []SaveEntry{}
-	err = filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+	err = walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			// The root not being there is the first run, and it is the only
 			// missing path that is not a problem: anything below the root was
@@ -353,6 +353,36 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 	}
 	sort.Slice(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
 	return entries, nil
+}
+
+// walkSaveTree is filepath.WalkDir for an owner directory that may be a link.
+// WalkDir does not descend through a link at its root — it reports the link
+// and stops — so a linked owner directory would export as a game that never
+// saved, and an import would leave every stale entry beside the restored ones.
+// The root is read through the link here. Below it nothing is followed, the
+// same as before, so a link inside the tree still cannot put a file from
+// outside it into a backup. The visitor never sees the root as an entry: only
+// what is under it, or the error that kept it from being read.
+func walkSaveTree(root string, visit fs.WalkDirFunc) error {
+	children, err := os.ReadDir(root)
+	if err != nil {
+		if err = visit(root, nil, err); err == fs.SkipDir || err == fs.SkipAll {
+			return nil
+		}
+		return err
+	}
+	stopped := false
+	for _, child := range children {
+		err := filepath.WalkDir(filepath.Join(root, child.Name()), func(name string, entry fs.DirEntry, err error) error {
+			err = visit(name, entry, err)
+			stopped = stopped || err == fs.SkipAll
+			return err
+		})
+		if err != nil || stopped {
+			return err
+		}
+	}
+	return nil
 }
 
 // saveTemporaryName reports whether a file name is one DirectorySaveStore left
@@ -441,7 +471,7 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 func pruneSaveTree(root string, keep map[string]bool) (int, error) {
 	removed := 0
 	var directories []string
-	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+	err := walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			if name == root && errors.Is(err, fs.ErrNotExist) {
 				return fs.SkipAll

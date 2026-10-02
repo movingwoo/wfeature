@@ -78,8 +78,8 @@ func (r *sessionRunner) admitStart(message clientMessage, directory, label strin
 	}
 	r.startApproval = nil
 	if directory != "" {
-		if ok, reason := s.takeSaveClaimLocked(directory, label); !ok {
-			return fail("세이브를 사용할 수 없습니다. 다른 실행 중인 게임이나 도구를 종료한 뒤 다시 시도하세요. " + reason)
+		if err := s.takeSaveClaimLocked(directory, label); err != nil {
+			return fail(saveClaimRefusal(err))
 		}
 	}
 	r.admitted = true

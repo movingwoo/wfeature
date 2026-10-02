@@ -498,6 +498,14 @@ var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
 ```
 
+A per-game save folder may be a symbolic link to a directory kept elsewhere;
+saves are read and written through it, and quick save is refused for such a
+folder. On a save location that cannot be written, a game still starts and
+reads its saves, and the game's own save fails as a write. On a filesystem
+without file locks games run normally. In both cases the log says once per
+folder that it has no file lock, which means a second server or CLI process is
+not kept out of it.
+
 The picker lists the `.zip` and `.jar` files one level under `var/games/` and
 the ones sitting in it directly, which the page groups as `기타`. The directory
 name is a label and nothing else — the platform comes from the archive's bytes

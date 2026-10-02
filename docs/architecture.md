@@ -506,7 +506,26 @@ a kernel file lock outside the swapped tree, across store objects and processes.
 The reserved owner directory keeps the live owner filename so case and Unicode
 aliases share locking and recovery wherever the filesystem aliases those names.
 A separate nonblocking Host claim excludes competing sessions and imports while
-allowing read-only backup. It is retained while a session is parked. File data is synced before the intent;
+allowing read-only backup. It is retained while a session is parked.
+
+Both the transaction lock and the claim are taken twice: in a registry of this
+process, keyed by the owner root, and as a kernel lock on a file in the reserved
+sibling directory. A location that cannot hold the kernel lock, because the
+reserved directory or the lock file cannot be created there or because the
+filesystem has no locks, keeps the registry alone. That is at least the
+exclusion the releases before the lock had, which was one mutex per store
+object, but another process is no longer kept out, and each Host says so once
+per directory in its log. A lock that somebody holds is contention and never
+falls back, and a reserved path that is a link or not a directory is still
+refused.
+
+A per-game owner directory may itself be a symbolic link. Ordinary reads,
+writes, batches, listing, export, import and the claim go through it, as they
+did before the lock existed. Whole-generation replacement, its recovery,
+generation snapshots and checkpoint slots still refuse a linked root, because
+they rename or stage beside the directory itself.
+
+File data is synced before the intent;
 directory syncing retains the existing store's advisory OS/filesystem guarantees.
 This is not a claim of verified power-loss durability on every target.
 
