@@ -506,6 +506,17 @@ establishes tag-2 word results in the environment; other tags and wide
 environment returns remain unconfirmed. The earlier runtime-boundary change
 itself did not include new real-game, physical-device, or browser acceptance.
 
+An LGT module states what each of its classes extends, and can state a chain
+that comes back to itself. `java_class_chain_test.go` plants such records in
+guest memory — a class over itself, two over each other, and a class registered
+under the root of the platform's hierarchy above a platform class — and
+requires preparation to fail with the class named, the type check to return,
+and every chain left behind to end. The layout's check by name has a table of
+shapes it accepts and refuses, each then walked. Before the 2026-10-02 fix the
+first two prepared without error and the type check did not return. One more
+test requires the specification's hierarchy table to end, which several walks
+rely on and nothing else checks.
+
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.
 Its bridge declaration is compile-time only; the test installs the ARM body.

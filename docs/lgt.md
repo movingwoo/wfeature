@@ -49,6 +49,17 @@ String indexing, lengths, substrings, char arrays, and StringBuffer mutations
 use UTF-16 units. Isolated surrogates survive through an internal WTF-8
 representation. Guest stream mark/reset operations reach supported overrides.
 
+A module states what each of its classes extends, and a class may not be above
+itself. A record that names itself as its superclass, or is named by a
+superclass further up, fails to prepare with the class named in the error, and
+the layout refuses the same shape by name. A module can also register one of
+its own classes under a name the platform's hierarchy uses; a platform class
+that would then be linked beneath itself the first time a type check passes
+through it is left without that link instead. Every walk up a chain — a type
+check, an interface call, the search for the slot an override shares — ends at
+a class with no superclass, so a closed chain used to be a tick that never
+returned.
+
 The API scanner uses actual dispatch resolution, including inherited baked
 slots. A method name alone does not count as an implemented body. Startup
 imports are a lower bound: later lazy imports and virtual calls can reach
