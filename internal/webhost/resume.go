@@ -86,20 +86,76 @@ func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSessi
 	}
 	s.attached[token] = owner
 	owner.admitted = true
+	owner.admittedAs = parked.label
 	if claim := s.claims[parked.saveDirectory]; claim != nil {
 		claim.parked = false
 	}
 	return parked, true
 }
 
-// CloseParkedSessions releases retained games and rejects any late parking
-// from connections that close after shutdown has begun.
-func (s *Server) CloseParkedSessions() {
+// CloseSessions ends every game the server holds, and is what stopping the
+// server has to call. The HTTP server's own shutdown neither closes nor waits
+// for a hijacked connection, and a session socket is one: a game left running
+// behind it ends with the process, and so does whatever its title had written
+// and not yet handed to the save store — a file it opened and did not close,
+// keys kept in memory until a frame ends.
+//
+// From here on nothing starts and nothing parks. A parked game is closed
+// where it waits, because no goroutine is inside it. A game with a page
+// attached is not closed from here: guest code is not re-entrant and its
+// runner may be in the middle of a tick, so the runner is asked, finishes the
+// round it is in and closes the game on its own goroutine, the way it closes
+// one its page stopped. A socket with no game behind it is left alone.
+//
+// ctx bounds the wait for those runners. One that has not let go of its game
+// by then is named in the log and left behind, so that a guest call which
+// never returns cannot keep the process from ending.
+func (s *Server) CloseSessions(ctx context.Context) {
+	type holder struct {
+		runner *sessionRunner
+		label  string
+	}
 	s.parkedMu.Lock()
-	defer s.parkedMu.Unlock()
 	s.sessionsClosed = true
 	for token, parked := range s.parked {
 		s.dropLocked(token, parked, "server stopping")
+	}
+	// Only an admitted runner has a game or is starting one, and the flag
+	// above admits no more: a start that has reserved its token and nothing
+	// else is refused by it, and nothing is left parked to resume.
+	var holders []holder
+	for _, runner := range s.attached {
+		// A runner only has the two channels once serveSession has made it;
+		// one without them has no loop to ask and nothing to wait for. A stop
+		// is the last place to find that out by closing a nil channel: the
+		// panic would leave every other game unclosed.
+		if !runner.admitted || runner.stop == nil || runner.released == nil {
+			continue
+		}
+		// This is the only place the channel is closed, and it is under the
+		// mutex, so a second stop finds it closed already.
+		select {
+		case <-runner.stop:
+		default:
+			close(runner.stop)
+		}
+		holders = append(holders, holder{runner: runner, label: runner.admittedAs})
+	}
+	s.parkedMu.Unlock()
+
+	for _, held := range holders {
+		select {
+		case <-held.runner.released:
+			continue
+		case <-ctx.Done():
+		}
+		// The deadline has passed. A runner that let go in the same moment is
+		// not late, so it is asked once more before it is reported.
+		select {
+		case <-held.runner.released:
+		default:
+			s.logger.Warn("session did not close before the shutdown deadline", "game", held.label)
+		}
 	}
 }
 
