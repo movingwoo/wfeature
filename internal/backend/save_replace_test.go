@@ -64,6 +64,88 @@ func TestSaveReplacementKeepsPreviousGenerationAndDeletesLaterKeys(t *testing.T)
 	checkSaveGeneration(t, paths.previous, "latest")
 }
 
+func TestSaveReplacementChecksDestinationFilenames(t *testing.T) {
+	for _, names := range []struct {
+		label, first, second string
+	}{
+		{"case", "slot", "SLOT"},
+		{"unicode", "\u00e9", "e\u0301"},
+	} {
+		t.Run(names.label, func(t *testing.T) {
+			parent := t.TempDir()
+			probe := filepath.Join(parent, "probe")
+			if err := os.Mkdir(probe, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(probe, names.first), []byte("probe"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			first, err := os.Stat(filepath.Join(probe, names.first))
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := os.Stat(filepath.Join(probe, names.second))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			aliases := err == nil && os.SameFile(first, second)
+			t.Logf("destination aliases %s filenames: %t", names.label, aliases)
+
+			root := filepath.Join(parent, "owner")
+			store := NewDirectorySaveStore(root)
+			for _, label := range []string{"backup", "current"} {
+				if err := store.ReplaceSaves(saveGeneration(label)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths, err := replacementPaths(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := []SaveEntry{
+				{Key: "db/" + names.first, Data: []byte("first")},
+				{Key: "db/" + names.second, Data: []byte("second")},
+			}
+			err = store.ReplaceSaves(entries)
+			if aliases {
+				if err == nil {
+					t.Fatal("replacement accepted filenames that alias on the destination")
+				}
+				checkSaveGeneration(t, root, "current")
+				checkSaveGeneration(t, paths.previous, "backup")
+			} else {
+				if err != nil {
+					t.Fatalf("replacement refused distinct destination filenames: %v", err)
+				}
+				got, err := store.SnapshotSaves()
+				if err != nil || len(got) != len(entries) {
+					t.Fatalf("replacement did not preserve both entries: %+v, %v", got, err)
+				}
+				for _, entry := range entries {
+					data, present, err := store.ReadSave(entry.Key)
+					if err != nil || !present || !bytes.Equal(data, entry.Data) {
+						t.Fatalf("replacement changed a distinct entry: %q, %t, %v", data, present, err)
+					}
+				}
+				checkSaveGeneration(t, paths.previous, "current")
+			}
+			if _, err := os.Lstat(paths.intent); !os.IsNotExist(err) {
+				t.Fatalf("replacement left a recovery intent: %v", err)
+			}
+			if aliases {
+				if err := store.ReplaceSaves(saveGeneration("retry")); err != nil {
+					t.Fatalf("valid replacement after refusal: %v", err)
+				}
+				checkSaveGeneration(t, root, "retry")
+				checkSaveGeneration(t, paths.previous, "current")
+				if _, err := os.Lstat(paths.intent); !os.IsNotExist(err) {
+					t.Fatalf("retry left a recovery intent: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestSaveReplacementRollsBackRenameFailures(t *testing.T) {
 	for failure := 1; failure <= 2; failure++ {
 		t.Run(strconv.Itoa(failure), func(t *testing.T) {

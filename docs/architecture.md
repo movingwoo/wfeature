@@ -488,8 +488,12 @@ and restoration share archive/Host attachment code. Per-run authentication save
 adapters retain their mutable certificate/deletion records and subscriber recovery
 inputs; constructing them does not read or write their supplied base store.
 A backend save-generation component now provides bounded snapshots and an
-isolated memory store. Directory replacement stages the full set and uses a
-recovery intent before moving the original directory and installing the new one.
+isolated memory store. Directory replacement stages the full set and reads it
+back to verify the exact keys and bytes before touching the live or previous
+generation. Filesystem aliases, such as case or Unicode normalization, must not
+silently merge distinct snapshot entries. An incompatible snapshot is refused
+before creating a recovery intent. A verified stage uses that intent before
+moving the original directory and installing the new one.
 The displaced saves remain under the owner's parent in
 `.wfeature-quicksave/owners/<owner>/previous`. One previous
 generation is retained. An interrupted prepared or half-swapped operation rolls
@@ -568,6 +572,9 @@ envelope. It retains ARM memory, root registers, allocator ownership, built-in
 interfaces, application identity, screen/image pixels, open file positions,
 shared file/resource buffers, parsed resource indexes, unflushed writes,
 listeners, queued events/resumes, frame/timer deadlines and logical audio.
+Native playback creates one-shot clips at nonnegative guest times. Restoration
+rejects repeat flags and negative playback origins before replacing saves, so a
+modified checkpoint cannot force the next tick to replay old audio cycles.
 Cached image bytes and decoded pixels remain distinct from guest bytes that
 changed after decoding. Restoration installs fresh built-in bindings without
 running the package's entry, factory or startup event. Custom Host bindings and

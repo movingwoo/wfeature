@@ -1,12 +1,14 @@
 package backend
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 const saveReplaceMagic = "WFRSTR01"
@@ -211,6 +213,17 @@ func (store *DirectorySaveStore) replaceSaves(entries []SaveEntry, rename func(s
 		if err := staged.storeSave(entry.Key, entry.Data); err != nil {
 			return err
 		}
+	}
+	// Distinct checkpoint keys can name the same file on this filesystem.
+	// Verify the staged generation before touching either live saves or backup.
+	actual, err := readSnapshotSaves(paths.next)
+	if err != nil {
+		return err
+	}
+	if !slices.EqualFunc(actual, ordered, func(a, b SaveEntry) bool {
+		return a.Key == b.Key && bytes.Equal(a.Data, b.Data)
+	}) {
+		return fmt.Errorf("save snapshot names or contents changed on the destination filesystem")
 	}
 	if err := filepath.WalkDir(paths.next, func(path string, entry fs.DirEntry, err error) error {
 		if err == nil && entry.IsDir() {

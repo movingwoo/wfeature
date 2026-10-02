@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/testfixture"
@@ -100,6 +102,99 @@ func TestCheckpointNativeRestoresInputPauseAndContinuation(t *testing.T) {
 			}
 			if saved, _ := store.LoadSave("progress"); string(saved) != "saved" {
 				t.Fatal("shared native load retained later saves")
+			}
+		})
+	}
+}
+
+func TestCheckpointNativeRejectsMalformedAudioBeforeReplacingSaves(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		startedAt time.Duration
+		repeat    bool
+		playing   bool
+	}{
+		{"unbounded repeat", -time.Duration(1 << 62), true, true},
+		{"repeat at zero", 0, true, true},
+		{"negative one-shot origin", -time.Nanosecond, false, true},
+		{"stopped repeat", 0, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+			if err := store.StoreSave("progress", []byte("saved")); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Start(t.Context(), archive, Options{SaveStore: store, Clock: ktf.NewManualClock(time.Unix(1, 0))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			data, err := s.CaptureCheckpoint(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkpoint, err := backend.DecodeCheckpoint(data, backend.SaveIdentity(archive))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record map[string]json.RawMessage
+			if err := json.Unmarshal(checkpoint.Runtime, &record); err != nil {
+				t.Fatal(err)
+			}
+			var audio backend.AudioState
+			if err := backend.DecodeCheckpointRecord(record["Audio"], &audio); err != nil {
+				t.Fatal(err)
+			}
+			audio.Next = 1
+			audio.Sounds = []backend.AudioSoundState{{Handle: 1,
+				Events: []smaf.Event{{Type: smaf.EventEnd, Time: 1}}, Length: time.Millisecond,
+				StartedAt: test.startedAt, Repeat: test.repeat, Playing: test.playing}}
+			record["Audio"], err = backend.EncodeCheckpointRecord(audio)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record["Clip"], record["Sounding"] = json.RawMessage("1"), json.RawMessage("true")
+			checkpoint.Runtime, err = json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Recompute the envelope checksum so only semantic validation can refuse it.
+			bad, err := backend.EncodeCheckpoint(checkpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.StoreSave("progress", []byte("current")); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SendKey(t.Context(), KeyPress, '5'); err != nil {
+				t.Fatal(err)
+			}
+			previous, client := s.ktfNative, s.ktfNative.Client
+			steps := client.Steps()
+			if err := s.LoadCheckpoint(t.Context(), archive, bad); err == nil {
+				t.Fatal("malformed native audio was adopted")
+			}
+			if s.ktfNative != previous || s.ktfNative.Client != client || client.Steps() != steps || !s.Running() || s.Failed() != nil || !reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) {
+				t.Fatal("refused native audio changed the live session")
+			}
+			if current, found, err := store.ReadSave("progress"); err != nil || !found || string(current) != "current" {
+				t.Fatalf("refused native audio changed durable saves: %q, %t, %v", current, found, err)
+			}
+			if !s.SkipToNextDeadline() {
+				t.Fatal("refused native audio removed the current frame schedule")
+			}
+			if _, err := s.Tick(t.Context(), 0); err != nil {
+				t.Fatalf("current session could not continue after refusal: %v", err)
+			}
+			if err := s.LoadCheckpoint(t.Context(), archive, data); err != nil {
+				t.Fatalf("valid checkpoint could not be loaded after refusal: %v", err)
+			}
+			if restored, found, err := store.ReadSave("progress"); err != nil || !found || string(restored) != "saved" {
+				t.Fatalf("valid retry did not restore saves: %q, %t, %v", restored, found, err)
 			}
 		})
 	}

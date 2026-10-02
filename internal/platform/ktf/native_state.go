@@ -440,6 +440,14 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return invalid()
 		}
 	}
+	// Native playback only starts one-shot clips at nonnegative guest times.
+	// Refuse impossible playback state before adoption can replace saves or
+	// leave the next tick replaying an excessive number of repeat cycles.
+	for _, sound := range saved.Audio.Sounds {
+		if sound.Repeat || sound.StartedAt < 0 {
+			return fmt.Errorf("KTF native checkpoint has unsupported audio playback state")
+		}
+	}
 	if saved.Clip != 0 && !slices.ContainsFunc(saved.Audio.Sounds, func(sound backend.AudioSoundState) bool { return sound.Handle == saved.Clip }) {
 		return invalid()
 	}
