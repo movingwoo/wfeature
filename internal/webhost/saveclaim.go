@@ -1,5 +1,7 @@
 package webhost
 
+import "github.com/movingwoo/wfeature/internal/backend"
+
 // One game, one save directory, one session.
 //
 // A save lives in a directory named by the archive, not by the page that
@@ -28,9 +30,9 @@ package webhost
 // whole file back over it, and a game starting while a write is in flight
 // is refused until the write finishes. It is refused by a parked holder
 // too, because nobody asked for it. A save import is a person asking, so it
-// takes a parked holder over the way a start does — see holdSaveDirectory. The native CLI is the one road
-// left unarbitrated — it is another process and this claim is in memory; see
-// "What is not solved" in `docs/session.md`.
+// takes a parked holder over the way a start does — see holdSaveDirectory.
+// The claim also holds a backend file lock, excluding other server processes
+// and CLI tools that claim the same directory.
 
 // saveClaim is one held save directory.
 type saveClaim struct {
@@ -39,7 +41,22 @@ type saveClaim struct {
 	label string
 	// parked reports that the holder is waiting for its page rather than
 	// playing, which is what makes it takeable.
-	parked bool
+	parked  bool
+	release func()
+}
+
+// The caller holds parkedMu and has already released any approved predecessor.
+func (s *Server) takeSaveClaimLocked(directory, label string) (bool, string) {
+	release, err := backend.ClaimSaveDirectory(directory)
+	if err != nil {
+		s.logger.Warn("save directory claim refused", "directory", directory, "error", err)
+		return false, err.Error()
+	}
+	if s.claims == nil {
+		s.claims = make(map[string]*saveClaim)
+	}
+	s.claims[directory] = &saveClaim{label: label, release: release}
+	return true, ""
 }
 
 // claimSaveDirectory takes the claim on a save directory for a game that is
@@ -58,11 +75,7 @@ func (s *Server) claimSaveDirectory(directory, label string) (bool, string) {
 		// The holder is parked, so it is closed here and the directory taken.
 		s.takeParkedHolderLocked(directory, "another page started the same game")
 	}
-	if s.claims == nil {
-		s.claims = make(map[string]*saveClaim)
-	}
-	s.claims[directory] = &saveClaim{label: label}
-	return true, ""
+	return s.takeSaveClaimLocked(directory, label)
 }
 
 // takeParkedHolderLocked closes the parked game holding a directory and leaves
@@ -79,7 +92,7 @@ func (s *Server) takeParkedHolderLocked(directory, reason string) {
 			return
 		}
 	}
-	delete(s.claims, directory)
+	s.releaseSaveDirectoryLocked(directory)
 }
 
 // holdSaveDirectory takes the claim for something that is not a game, and
@@ -111,11 +124,7 @@ func (s *Server) holdSaveDirectory(directory, label string, takeParked bool) (bo
 		}
 		s.takeParkedHolderLocked(directory, "a save was restored into this game")
 	}
-	if s.claims == nil {
-		s.claims = make(map[string]*saveClaim)
-	}
-	s.claims[directory] = &saveClaim{label: label}
-	return true, ""
+	return s.takeSaveClaimLocked(directory, label)
 }
 
 // releaseSaveDirectory gives up a claim when its game is closed.
@@ -133,6 +142,9 @@ func (s *Server) releaseSaveDirectory(directory string) {
 func (s *Server) releaseSaveDirectoryLocked(directory string) {
 	if directory == "" {
 		return
+	}
+	if held := s.claims[directory]; held != nil && held.release != nil {
+		held.release()
 	}
 	delete(s.claims, directory)
 }

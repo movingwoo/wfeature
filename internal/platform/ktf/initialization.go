@@ -390,6 +390,7 @@ type initializationRuntime struct {
 	// client thread's own paint then trips a limit none of them reached. Each
 	// ARM thread carries its own depth, which is what the limit is about.
 	aotCallDepth       map[*armcore.Thread]uint32
+	nativeReturnScopes map[*armcore.Thread]*nativeReturnScope
 	resultBindingDepth uint32
 	currentThread      *armcore.Thread
 	pixelOps           *pixelOpCache
@@ -720,7 +721,7 @@ func (runtime *initializationRuntime) invokeAOTFromJVM(className, name, descript
 		}
 		raw = append(raw, words...)
 	}
-	result, _, err := runtime.runAOTMethod(ctx, thread, method, methodType, raw)
+	result, _, err := runtime.runAOTMethod(ctx, thread, className, method, methodType, raw)
 	if err != nil {
 		if errors.Is(err, armcore.ErrThreadState) {
 			runtime.countDiagnostic(fmt.Sprintf("jvm->aot state error: current=%p state=%s root=%p root-state=%s", thread, thread.State(), runtime.client.thread, runtime.client.thread.State()))
@@ -1081,6 +1082,10 @@ func (runtime *initializationRuntime) callAOTJump(ctx context.Context, thread *a
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF AOT Java jump %#x: %w", id, err)
 	}
+	return runtime.completeAOTJump(thread, summary)
+}
+
+func (runtime *initializationRuntime) completeAOTJump(thread *armcore.Thread, summary armcore.RunSummary) (uint32, error) {
 	// A `long` or a `double` comes back in both result registers, and the call
 	// ran on a context of its own, so r1 has to be carried over as well as r0
 	// — a branch-and-link would have left the caller looking at what the
@@ -1140,6 +1145,10 @@ func (runtime *initializationRuntime) callAOTNative(ctx context.Context, thread 
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF AOT native call %s: %w", runtime.describeNativeCall(address), err)
 	}
+	return runtime.completeAOTNative(address, dataAddress, returnScope, summary)
+}
+
+func (runtime *initializationRuntime) completeAOTNative(address, dataAddress uint32, returnScope *nativeReturnScope, summary armcore.RunSummary) (uint32, error) {
 	// The container is eight bytes because an answer can be sixty-four bits
 	// wide, and only then is the second word the high half: a title that
 	// stamped System.currentTimeMillis into a string read a ten-digit number

@@ -3,6 +3,7 @@ package webhost
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +14,8 @@ func seedRetained(t *testing.T, server *Server, count int) []context.Context {
 	t.Helper()
 	contexts := make([]context.Context, count)
 	for i := range contexts {
-		token, directory := fmt.Sprintf("%032x", i+1), fmt.Sprintf("save-%d", i)
+		token, directory := fmt.Sprintf("%032x", i+1), filepath.Join(t.TempDir(), fmt.Sprintf("save-%d", i))
+		t.Cleanup(func() { server.releaseSaveDirectory(directory) })
 		ctx, cancel := context.WithCancel(context.Background())
 		contexts[i] = ctx
 		server.claimSaveDirectory(directory, "fixture")
@@ -127,7 +129,9 @@ func TestConcurrentStartsCannotOverbookTheLastPlace(t *testing.T) {
 	for i, runner := range runners {
 		go func(i int, runner *sessionRunner) {
 			<-start
-			results <- runner.admitStart(clientMessage{Game: "fixture"}, fmt.Sprintf("save-%d", i), "fixture")
+			directory := filepath.Join(t.TempDir(), fmt.Sprintf("save-%d", i))
+			t.Cleanup(func() { server.releaseSaveDirectory(directory) })
+			results <- runner.admitStart(clientMessage{Game: "fixture"}, directory, "fixture")
 		}(i, runner)
 	}
 	close(start)

@@ -49,10 +49,18 @@ export class GameSession {
     this.pending = new Map();
     this.nextId = 1;
     this.closed = false;
+    this.epoch = 0;
+    this.resetting = false;
     // The sounds this connection's server has defined; a new connection
     // starts with none, and so does the server's record of them.
     this.audio = new AudioStream();
-    this.frames = new FrameReceiver(
+    this.frames = this.#frameReceiver();
+    // The server's profile controls the developer panels.
+    this.profile = "";
+  }
+
+  #frameReceiver() {
+    return new FrameReceiver(
       (canvas, presentation) => { if (!this.closed) this.handlers.onFrame?.(canvas, presentation); },
       error => {
         console.warn("wfeature frame could not be decoded", error);
@@ -61,11 +69,6 @@ export class GameSession {
         this.close();
       },
     );
-    // The server's build profile, known from the moment it says it is ready.
-    // The page hides the developer's half of its interface unless a debug
-    // build answered, so a release is not a page with parts switched off — it
-    // never builds them.
-    this.profile = "";
   }
 
   // open connects and resolves once the server says it is ready to take a
@@ -137,6 +140,31 @@ export class GameSession {
   }
 
   #receive(message) {
+    if (["audio", "vibrate", "stats"].includes(message.kind) && (message.epoch ?? 0) !== this.epoch) return;
+    if (message.kind === "restored") {
+      if (!Number.isSafeInteger(message.epoch) || message.epoch <= this.epoch) return;
+      this.epoch = message.epoch;
+      this.frames.close();
+      this.frames = this.#frameReceiver();
+      this.audio = new AudioStream();
+      for (const [id, pending] of this.pending) {
+        if (id !== message.id && ["cheat", "text", "quickSave", "quickLoad"].includes(pending.kind)) {
+          this.pending.delete(id);
+          pending.reject(new Error("퀵세이브를 불러와 이전 요청을 취소했습니다."));
+        }
+      }
+      this.resetting = true;
+      try {
+        this.handlers.onAudio?.([{ kind: "allOff" }]);
+        this.handlers.onVibrate?.({ level: 0, ms: 0 });
+        this.handlers.onReset?.(message.started);
+      } finally {
+        this.resetting = false;
+      }
+    } else if (message.kind === "started") {
+      // Epochs belong to the connection; a reconnected page starts at zero.
+      this.epoch = message.epoch ?? 0;
+    }
     // An answer to something that was asked goes to whoever asked it, and
     // nowhere else: a cheat command's reply is not a session-wide event.
     if (message.id && this.pending.has(message.id)) {
@@ -157,6 +185,7 @@ export class GameSession {
         this.handlers.onDetached?.();
         break;
       case "started":
+      case "restored":
         this.handlers.onStarted?.(message.started);
         break;
       case "exited":
@@ -199,7 +228,8 @@ export class GameSession {
 
   #send(message) {
     if (!this.socket || this.closed || this.socket.readyState !== 1) return false;
-    this.socket.send(JSON.stringify(message));
+    if (this.resetting && ["key", "pointer"].includes(message.kind)) return false;
+    this.socket.send(JSON.stringify(this.epoch ? { ...message, epoch: this.epoch } : message));
     return true;
   }
 
@@ -215,7 +245,7 @@ export class GameSession {
         clearTimeout(timer);
         handler(value);
       };
-      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject), kind: message.kind });
       if (!this.#send({ ...message, id })) {
         this.pending.delete(id);
         reject(new Error("세션이 연결되어 있지 않습니다."));
@@ -232,10 +262,11 @@ export class GameSession {
   // start loads a game on the server. A KTF title's start takes tens of
   // seconds inside the guest, so the wait is long by nature rather than by
   // fault, and the answer only arrives when the game is up.
-  start(gamePath, scale = 1, screen = null, token = "", confirmation = "") {
+  start(gamePath, scale = 1, screen = null, token = "", confirmation = "", quickLoad = false) {
     const message = { kind: "start", game: gamePath, value: scale };
     if (token) message.token = token;
     if (confirmation) message.confirmation = confirmation;
+    if (quickLoad) message.quick_load = true;
     // The screen travels only when it is not the server's own default, so a
     // page that never opened the setting sends what it always sent.
     if (screen && (screen.width !== 240 || screen.height !== 320)) {
@@ -257,6 +288,8 @@ export class GameSession {
   ping() { return this.ask({ kind: "ping" }, 10000); }
   park() { return this.ask({ kind: "park" }); }
   stop() { return this.ask({ kind: "stop" }); }
+  quickSave() { return this.ask({ kind: "quickSave" }, 300000); }
+  quickLoad() { return this.ask({ kind: "quickLoad" }, 300000); }
 
   sendKey(action, code) {
     this.#send({ kind: "key", action, code });

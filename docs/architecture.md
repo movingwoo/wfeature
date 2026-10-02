@@ -384,10 +384,211 @@ A parked session retains live objects and suspended Go call stacks in server
 memory. It survives a disconnected browser, but not server shutdown. Guest
 save files and `.wfs` exports do not capture that execution state.
 
-Quick save/load remains paused after its experimental implementation was rolled
-back. A correct restorer would need guest memory, JVM objects, nested ARM/Java
-continuations, clocks, callbacks, handles, and coherent save state. Earlier
-measurements and rejected approaches are preserved in the
+KTF quick save/load joins the shared session, CLI, server and browser controls.
+The [validation record](testing.md) describes authored and local-archive coverage.
+The ARM core can record parked derived calls and resume them in a fresh core;
+the platform supplies each pending supervisor operation's remainder. The KTF
+component handles Java jumps, native return cleanup, and the existing sleep/wait
+adapters. Older module invocation records preserve both return registers and
+drop the helper's two spilled arguments only after a successful child return.
+Their direct waits complete without repeating the sleep. Exceptions retain the
+module's distinct handler layout and unwind boundary. Unknown remainders are refused. Capture
+requires the caller to park the entire logical thread first.
+
+Separate ARM state records preserve sparse memory, mapping permissions, and
+logical threads' private words. Their detached constructor checks sizes, ranges,
+and the host's execution policy before adoption. ARM translation caches and Host
+callbacks are rebuilt.
+
+The JVM execution component preserves the AOT worker's owner and spent bytecode
+budget, including the core library's forwarding `Thread.run` remainder. It
+refuses active bytecode frames, class initializers, JVM-owned goroutines, and
+unknown native remainders. Workers resume through the ordinary completion path.
+
+The separate JVM heap component captures explicit roots, object sharing, core
+native payloads, statics, AOT metadata/bindings, and cooperative Thread records.
+KTF can restore its allocator and array views over saved ARM memory without
+copying elements through their ordinary adapters. Unknown payloads and held
+monitors are refused. `Memory.ValidateRange` checks an adapter's mapped range and
+permissions without reading, allocating, or changing its bytes.
+
+KTF Graphics records retain their drawing state and target memory view. Image
+records preserve bounds and both premultiplied RGBA and unassociated NRGBA colors,
+including RGB hidden by zero alpha. Images and guest framebuffers retain shared
+mutable transparency masks. Java database handles share their original store and
+catalog binding; a handle retained across deletion and reopening keeps its old
+store separately. Deleted and allocated empty records remain distinct. File and
+stream payloads retain shared bytes and cursors. These heap records join the
+service tables through the client construction path below.
+
+The heap component also preserves platform object roots, queued callbacks, key
+ownership, events, and pending timer deadlines. Weak image and clip owners remain
+weak after restoration; an owner already collected by Go requires ordinary
+resource cleanup before capture. Separate audio records retain playback and output
+state. Text editor records preserve the caret, character mode, UTF-16 limit,
+and pending multi-tap cycle. Their relative key time and timer deadlines rebase
+to the destination clock. Hosts must serialize input with capture and adoption.
+The storage component also records C file and record-database catalogs, shared
+open handles, cursors, handle counters, packaged-byte accounting, and deletion
+and directory caches. An unread cache stays distinct from a loaded empty cache.
+These in-memory tables do not replace the durable save files beneath them.
+
+Local relay records retain the service phase, identity/slot/label, incomplete
+outgoing frame, unread response bytes, individual close flags, and shared stream
+objects. A temporary heap root carries a socket retained only by the runtime;
+it receives no guest identity or ARM allocation, and adoption retains its native
+payload only. Stream class and native ownership are checked before heap adoption.
+This covers relay state; parked reads still require a supported call remainder.
+
+Control records retain the guest clock's original epoch and exact relative
+anchor, painting/event ownership, C input mode/controller/revision and queued
+character, pending network failure callbacks, and C media clips with their
+eviction order. Keeping the unscaled clock offset preserves fractional time
+through a change of Host epoch. An active Host input guard, paint callback or
+result-binding operation prevents capture until its remainder has completed.
+C media records retain encoded bytes and handles; active playback uses the
+Host output restoration below. A separate backend audio record preserves loaded event
+sequences, playback cursors and repeat origins, device volume, active-note
+ownership and used channels. Its bounded constructor emits no past events and
+copies PCM/SysEx buffers. The session must validate the saved guest clock against
+this timeline before advancing it; the record does not represent synthesizer
+voices or physical output queues.
+The backend vibrator has a separate validated state record. It preserves timed,
+expired and indefinite requests against the motor's Host clock, without issuing
+a new request or applying guest speed. Session adoption must reset the Host's
+output epoch so a restored, older request counter is observed.
+
+Runtime metadata records preserve native dispatch IDs, code and class arena
+cursors, class links/aliases and initialization flags, collector allocations and
+release state, WIPI C allocation ownership, user memory pools, interface/context
+addresses, and pixel-operation results. Keeping the pixel cache avoids repeating
+guest calls and charging their instructions again after restoration. Released
+address sets and their eviction order are separate: reuse can leave duplicate
+entries in the order. Decoding validates bounds, mapped permissions, duplicate
+records and allocation overlap before adopting any metadata. Debug arena checks
+restart from the restored bytes; historical diagnostic counters are Host state.
+
+The client record joins these components with every worker in queue order,
+including workers waiting for their first grant, private stacks and TLS, Timer
+ownership, painted cards, and the LIFO stack free list. It retains the client
+thread, pacing averages and deadlines, speed, executable descriptor, and the
+last displayed LCD independently of unflushed back-buffer pixels. Heap, editor,
+and scheduler offsets share one capture instant. Logical audio and vibration
+records accompany the guest clock; audio catch-up is bounded before execution.
+All worker records are validated before any restored goroutine is started.
+An invalid detached client is discarded without touching the source session.
+
+The client record remains separate from external saves and Host output.
+Authored tests replace the source process
+and check nested returns, exceptions, wait deadlines, multiple parked workers,
+initial grants, stack reuse, and recapture before and after a restored grant.
+The destination registers native implementations on a fresh VM without preparing
+guest interface tables or recreating the fixture's ARM code and objects. Startup
+and restoration share archive/Host attachment code. Per-run authentication save
+adapters retain their mutable certificate/deletion records and subscriber recovery
+inputs; constructing them does not read or write their supplied base store.
+A backend save-generation component now provides bounded snapshots and an
+isolated memory store. Directory replacement stages the full set and reads it
+back to verify the exact keys and bytes before touching the live or previous
+generation. Filesystem aliases, such as case or Unicode normalization, must not
+silently merge distinct snapshot entries. An incompatible snapshot is refused
+before creating a recovery intent. A verified stage uses that intent before
+moving the original directory and installing the new one.
+The displaced saves remain under the owner's parent in
+`.wfeature-quicksave/owners/<owner>/previous`. One previous
+generation is retained. An interrupted prepared or half-swapped operation rolls
+back on the next ordinary read/write or save-tree export; a completed swap keeps
+the new set. Complete reads, writes, recovery and replacements serialize through
+a kernel file lock outside the swapped tree, across store objects and processes.
+The reserved owner directory keeps the live owner filename so case and Unicode
+aliases share locking and recovery wherever the filesystem aliases those names.
+A separate nonblocking Host claim excludes competing sessions and imports while
+allowing read-only backup. It is retained while a session is parked. File data is synced before the intent;
+directory syncing retains the existing store's advisory OS/filesystem guarantees.
+This is not a claim of verified power-loss durability on every target.
+
+The internal KTF session API now joins client and authentication records with
+the complete external save generation. Its envelope carries the full archive's
+SHA-256, an execution-variant number and a version shared by debug and release.
+A SHA-256 covers the header and all sections. The envelope bounds session data
+to 64 KiB, runtime data to 128 MiB and external saves to 64 MiB. Before typed
+JSON allocation, a schema-aware pass bounds depth, value count and estimated
+allocation, and rejects missing, duplicate, unknown or wrongly typed fields.
+Byte payloads retain raw bytes; save keys use the existing binary save pack.
+
+Detached preparation reconstructs against an isolated memory store and silent
+outputs. Commit replaces the save generation, redirects the displaced client's
+saves to its own memory copy, detaches its outputs, and aborts its workers without
+calling destroyApp. Failed replacement leaves the original session usable.
+Rollback tracks completed moves and restores the original live directory even
+if its recovery intent disappears.
+The final adoption rebases guest clocks, timers, worker/pacing deadlines, every
+editor and vibration, so time spent parsing or staging files is not guest time.
+This API requires the caller to serialize whole rounds, input, lifecycle, cheats,
+clock changes and external save operations. A busy low-level client is refused
+immediately; capture does not run pauseApp or queue a delayed request. Active
+cheat freezes and patches currently refuse capture.
+
+The shared `internal/session` API now captures, loads into an existing session,
+or restores from archive/checkpoint bytes after process restart. It retains
+pause state, key-repeat phase and its clock anchor, the pad, all held Host keys
+(bounded to 64), and a held pointer. Restoring preserves input ownership;
+`ReleaseHeldInput` is a separate Host action after output/input epochs reset.
+It can execute guest callbacks, whereas capture and detached preparation do not.
+Shared settings and input records must validate before the durable commit.
+These operations use the same single-owner discipline as Tick and SendKey.
+The shared record and platform clock are captured before heap copies or file I/O.
+
+Directory stores offer one Host checkpoint slot per exact archive at
+`.wfeature-quicksave/owners/<owner>/<archive SHA-256>.wfq`, beside the
+guest owner directory. Reads are bounded and confined to the reserved directory;
+links and nonregular files are refused. Writes validate the envelope and use the
+ordinary synced temporary-file replacement. Slots survive save-generation swaps
+and stay outside ordinary save exports. Future incompatible state/ABI changes
+must bump the relevant checkpoint version; debug and release use the same schema.
+
+Portable audio output now retains the page synthesizer's bounded voice set,
+note-on channel settings and emitted volume, current channels and remaining PCM
+samples. PCM position uses an unscaled Host clock; detached staging time is
+excluded. Reconstructed notes restart their envelopes. Physical oscillator phase,
+release tails and network/device latency are not saved. Host reset stops all
+old sources before replay and clears audio definitions and frame decoder state.
+
+The worktree contains server and page checkpoint controls. Commands run between
+whole rounds; successful load advances a connection epoch, discards old queued
+frames/sound and input commands, resets compression, releases held input and
+reconstructs output. Protocol callers can explicitly restore a disk slot at
+startup. The page exposes save/load as optional keypad assignments with immediate,
+nonmodal feedback; its picker starts games normally. The CLI's
+`run` command uses the same session API for live commands and startup restoration;
+both hosts pass subprocess restoration in both debug/release directions for
+Java and native packages. A visible browser resumes a saved paused session
+through the ordinary lifecycle; the CLI preserves pause until its `park`
+command resumes it. Chromium checks cover live restoration and disk restoration
+after server restart, including two local gameplay routes.
+
+Native packages use a separate versioned record under the same checkpoint
+envelope. It retains ARM memory, root registers, allocator ownership, built-in
+interfaces, application identity, screen/image pixels, open file positions,
+shared file/resource buffers, parsed resource indexes, unflushed writes,
+listeners, queued events/resumes, frame/timer deadlines and logical audio.
+Native playback creates one-shot clips at nonnegative guest times. Restoration
+rejects repeat flags and negative playback origins before replacing saves, so a
+modified checkpoint cannot force the next tick to replay old audio cycles.
+Cached image bytes and decoded pixels remain distinct from guest bytes that
+changed after decoding. Restoration installs fresh built-in bindings without
+running the package's entry, factory or startup event. Custom Host bindings and
+active tracing refuse capture. Native adoption replaces ordinary saves before
+publishing and detaches the old runtime without flushing its pending writes.
+Elapsed time and deadlines rebase at adoption, excluding detached staging time.
+
+A concurrent recovery defect discovered on 2026-10-01 interrupted implementation:
+an independent reader could delete an active replacement's staging and intent,
+leaving the original generation only in its backup. Shared filesystem locking
+and explicit active rollback now cover that interleaving. The
+[regression evidence](testing.md#checkpoint-adoption-blocker) includes independent
+readers, aliases, refused replacement, process exclusion and crash recovery.
+Earlier measurements and rejected approaches are preserved in the
 [snapshot investigation](history/maintenance.md#snapshot-feasibility).
 
 ## Documentation

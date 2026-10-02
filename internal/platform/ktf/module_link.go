@@ -746,6 +746,13 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF module method %s%s: %w", method.Name, method.Descriptor, err)
 	}
+	return completeModuleMethod(thread, stackPointer, summary)
+}
+
+func completeModuleMethod(thread *armcore.Thread, stackPointer uint32, summary armcore.RunSummary) (uint32, error) {
+	if stackPointer > ^uint32(0)-moduleJumpSpill*4 {
+		return 0, fmt.Errorf("KTF module call spill overflows the stack address")
+	}
 	// The helper's spilled pair belongs to the helper, and the jump returns
 	// straight to its caller, so it is dropped here rather than by anyone
 	// else — and only once the call has returned. Dropping it first would

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -22,11 +21,12 @@ var ErrGuestExited = errors.New("KTF guest requested exit")
 // composes the load, initialization, and startApp sequence every Host shares,
 // then exposes the cooperative service loop as single ticks.
 type Session struct {
-	Archive      *Archive
-	Client       *Client
-	options      SessionOptions
-	cheat        *cheat.Session
-	cheatConsole *cheat.Console
+	Archive         *Archive
+	Client          *Client
+	options         SessionOptions
+	cheat           *cheat.Session
+	cheatConsole    *cheat.Console
+	archiveIdentity [32]byte
 }
 
 // Vibration reports what the guest has asked the handset's motor to do. The
@@ -252,39 +252,15 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if err != nil {
 		return nil, err
 	}
-	maxSteps := options.MaxSteps
-	if maxSteps == 0 {
-		maxSteps = sessionDefaultMaxSteps
-	}
-	client, err := LoadClient(archive.JAR.Client, armcore.CoreOptions{MaxSteps: maxSteps})
+	client, err := newSessionClient(archive, options)
 	if err != nil {
 		return nil, err
 	}
-	// Before the clock, the screen or a single guest instruction: a watch on an
-	// address a title writes once during initialization has to be armed before
-	// that initialization, or it reports no writer at all.
-	if options.Debug != nil {
-		options.Debug(client.core)
-	}
-	// The clock has to be in place before anything guest-visible runs: the
-	// runtime anchors the guest's timeline to it when initialization builds
-	// the runtime.
-	client.clock = options.Clock
-	if client.clock == nil {
-		client.clock = wallClock{}
-	}
-	client.SetSpeed(options.Speed)
-	// The screen has to be named before any guest code runs: the framebuffer
-	// is built on the game's first request for it and never resized.
-	client.SetScreen(options.Width, options.Height)
-	client.SetDiagnostics(options.TraceLimit, options.Logger)
-	client.audio = backend.NewAudio(options.AudioSink)
-	client.frameSink = options.FrameSink
 	client.log("KTF session loading",
 		"aid", archive.Descriptor.AID,
 		"main_class", archive.Descriptor.MainClass,
 		"client", archive.JAR.Client.Name,
-		"max_steps", maxSteps)
+		"max_steps", client.core.MaxSteps())
 	if startupHook != nil {
 		// Startup guest runs park every slice so a Host event loop stays
 		// responsive during the long DRM/initialization phase; the hook and
@@ -295,18 +271,6 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 			client.thread.SetStepBudget(0)
 			client.thread.SetLimitHook(nil)
 		}()
-	}
-	client.threadSliceSteps = options.ThreadSliceSteps
-	client.serviceSteps = options.ServiceSteps
-	client.serviceWait = options.ServiceWait
-	client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
-	client.AttachAppProperties(archive.Descriptor.Properties)
-	client.AttachResources(archive.JAR.Entries)
-	client.AttachFilesystem(archive.GuestFiles())
-	if options.SaveStore != nil {
-		client.AttachSaveStore(options.SaveStore)
-	} else if options.SaveRoot != "" {
-		client.AttachSaveStore(NewDirectorySaveStore(filepath.Join(options.SaveRoot, SaveOwner(archive.Descriptor))))
 	}
 	if !options.DisableAuthentication {
 		client.authentication = backend.AuthenticationUnsupported
@@ -378,7 +342,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		return failed(fmt.Errorf("start KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
 	client.log("KTF startApp returned", "class", archive.Descriptor.MainClass)
-	return &Session{Archive: archive, Client: client, options: options}, nil
+	return &Session{Archive: archive, Client: client, options: options, archiveIdentity: backend.SaveIdentity(data)}, nil
 }
 
 // newStringArrayObject allocates the empty [Ljava/lang/String; guest array

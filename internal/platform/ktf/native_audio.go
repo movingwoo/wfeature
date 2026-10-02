@@ -67,7 +67,7 @@ func (platform *NativePlatform) installSound() {
 // sink is silent, which is what a Host without an audio device wants: the
 // title still runs its playback calls and still gets the answers it expects.
 func (platform *NativePlatform) AttachAudio(sink backend.AudioSink) {
-	platform.audio = backend.NewAudio(sink)
+	platform.audio = backend.NewAudioWithClock(sink, platform.source.Now)
 }
 
 // setClip loads the SMAF file the title points at.

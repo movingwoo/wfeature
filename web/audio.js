@@ -16,6 +16,7 @@
 
 const MAX_VOICES = 24;
 const DRUM_CHANNEL = 9;
+const channelDefaults = () => ({ program: 0, volume: 100, expression: 127, pan: 64, bend: 8192 });
 
 // General MIDI program families, reduced to the oscillator that carries each
 // one best. The program number's top three bits pick the family.
@@ -52,16 +53,12 @@ export class PageAudio {
     this.waveGain = null;
     // One entry per MIDI channel: its program, volume, expression, pan, and
     // pitch bend, which is the state a note needs at the moment it starts.
-    this.channels = Array.from({ length: 16 }, () => ({
-      program: 0,
-      volume: 100,
-      expression: 127,
-      pan: 64,
-      bend: 8192,
-    }));
+    this.channels = Array.from({ length: 16 }, channelDefaults);
     // voices are the notes currently sounding, keyed "channel:note" so a
     // note off finds the voice it belongs to.
     this.voices = new Map();
+    // Includes PCM, percussion and melodic release tails after noteOff.
+    this.sources = new Set();
     this.masterVolume = 0.7;
     this.midiVolume = 0.5;
     this.waveVolume = 0.5;
@@ -211,9 +208,11 @@ export class PageAudio {
       const voice = { source, gain, drum: true };
       this.voices.set(key, voice);
       source.onended = () => {
+        this.sources.delete(source);
         // A retrigger can replace this key before the older source ends.
         if (this.voices.get(key) === voice) this.voices.delete(key);
       };
+      this.sources.add(source);
       return;
     }
 
@@ -227,6 +226,8 @@ export class PageAudio {
     gain.gain.exponentialRampToValueAtTime(peak, now + 0.01);
     gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * 0.7), now + 0.12);
     source.start(now);
+    this.sources.add(source);
+    source.onended = () => this.sources.delete(source);
     this.voices.set(key, { source, gain, drum: false });
   }
 
@@ -328,11 +329,19 @@ export class PageAudio {
     gain.gain.value = 0.8;
     source.connect(gain);
     gain.connect(this.waveGain);
+    this.sources.add(source);
+    source.onended = () => this.sources.delete(source);
     source.start();
   }
 
-  // stopAll silences everything, which the page does when a game ends.
+  // End or replace a timeline, including PCM and already released notes.
   stopAll() {
-    for (const key of [...this.voices.keys()]) this.stopVoice(key, 0.02);
+    this.voices.clear();
+    for (const source of this.sources) {
+      try { source.stop(); } catch { /* The source may already have ended. */ }
+      source.disconnect?.();
+    }
+    this.sources.clear();
+    this.channels = Array.from({ length: 16 }, channelDefaults);
   }
 }

@@ -111,6 +111,8 @@ func (s *Server) listSaves(writer http.ResponseWriter, ownerRoot string) {
 	entries, err := backend.ReadSaveTree(ownerRoot)
 	if err != nil {
 		s.logger.Warn("save directory unreadable", "path", ownerRoot, "error", err)
+		writeError(writer, http.StatusInternalServerError, "세이브를 읽지 못했습니다.")
+		return
 	}
 	for _, entry := range entries {
 		saves[entry.Key] = base64.StdEncoding.EncodeToString(entry.Data)

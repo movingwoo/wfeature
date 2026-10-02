@@ -489,3 +489,88 @@ test("rapid fire sends ordinary press and release packets through GameSession", 
     kind: "key", action: i % 2 === 0 ? "press" : "release", code: 148,
   })));
 });
+
+test("quick load resets pending picture decoding, audio definitions and input before its acknowledgement", async t => {
+  const frames = [], audio = [], vibration = [];
+  let resets = 0;
+  const { session, socket } = await openFakeSession({
+    onFrame: canvas => frames.push(canvas.pixel),
+    onAudio: events => audio.push(events),
+    onVibrate: value => vibration.push(value),
+    onReset: () => { resets++; session.sendKey("release", 49); session.sendPointer("release", 1, 2); },
+  });
+  const previousBitmap = globalThis.createImageBitmap, previousDocument = globalThis.document;
+  let finishOld, closedOld = false;
+  globalThis.document = { createElement: () => {
+    const canvas = { width: 0, height: 0, getContext: () => ({ clearRect() {}, drawImage(bitmap) { canvas.pixel = bitmap.pixel; } }) };
+    return canvas;
+  } };
+  globalThis.createImageBitmap = async blob => {
+    const pixel = new Uint8Array(await blob.arrayBuffer())[24];
+    if (pixel === 1) return new Promise(resolve => { finishOld = () => resolve({ width: 1, height: 1, pixel, close() { closedOld = true; } }); });
+    return { width: 1, height: 1, pixel, close() {} };
+  };
+  t.after(() => { globalThis.createImageBitmap = previousBitmap; globalThis.document = previousDocument; session.close(); });
+  const png = pixel => {
+    const bytes = new Uint8Array(25);
+    bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+    new DataView(bytes.buffer).setUint32(16, 1);
+    new DataView(bytes.buffer).setUint32(20, 1);
+    bytes[24] = pixel;
+    return bytes.buffer;
+  };
+  socket.deliverFrame(png(1));
+  await new Promise(resolve => setImmediate(resolve));
+  socket.deliverFrame(soundMessage([0x10, ...word(1), ...word(2), 1, 0]));
+  assert.equal(session.audio.definitions.size, 1);
+  const oldCheat = assert.rejects(session.cheat("read 0x100900"), /이전 요청/);
+  const loading = session.quickLoad();
+  const request = socket.sent.at(-1);
+  const sentBefore = socket.sent.length;
+  socket.deliver({ kind: "restored", id: request.id, epoch: 8, started: { restored: true, speed: 1.25 } });
+  assert.equal((await loading).started.speed, 1.25);
+  await oldCheat;
+  assert.equal(resets, 1);
+  assert.equal(socket.sent.length, sentBefore, "old held-input releases must not enter the new timeline");
+  assert.equal(session.audio.definitions.size, 0);
+  assert.deepEqual(audio, [[{ kind: "allOff" }]]);
+  assert.deepEqual(vibration, [{ level: 0, ms: 0 }]);
+  socket.deliverFrame(png(2));
+  await new Promise(resolve => setImmediate(resolve));
+  finishOld();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(frames, [2], "an old asynchronous decode must not replace the new picture");
+  assert.equal(closedOld, true);
+  socket.deliver({ kind: "audio", epoch: 0, audio: [{ kind: "noteOn" }] });
+  assert.equal(audio.length, 1);
+  session.sendKey("press", 50);
+  assert.equal(socket.sent.at(-1).epoch, 8);
+});
+
+test("a refused quick load keeps the existing decoder, input epoch and audio definitions", async t => {
+  const { session, socket } = await openFakeSession({ onReset: () => assert.fail("a failed load reset the page") });
+  t.after(() => session.close());
+  const frames = session.frames, audio = session.audio;
+  const loading = session.quickLoad();
+  const request = socket.sent.at(-1);
+  socket.deliver({ kind: "error", id: request.id, message: "checkpoint checksum differs" });
+  await assert.rejects(loading, /checksum/);
+  assert.equal(session.frames, frames);
+  assert.equal(session.audio, audio);
+  assert.equal(session.epoch, 0);
+  const saving = session.quickSave();
+  socket.deliver({ kind: "result", id: socket.sent.at(-1).id });
+  await saving;
+});
+
+test("restoring after server restart is an explicit start option", async t => {
+  const { session, socket } = await openFakeSession();
+  t.after(() => session.close());
+  const loading = session.start("games/ktf/fixture.zip", 2, null, "token", "", true);
+  const request = socket.sent.at(-1);
+  assert.equal(request.quick_load, true);
+  assert.equal(request.kind, "start");
+  assert.equal(request.token, "token");
+  socket.deliver({ kind: "restored", epoch: 1, id: request.id, started: { restored: true, can_checkpoint: true } });
+  assert.equal((await loading).started.restored, true);
+});

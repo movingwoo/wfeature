@@ -462,6 +462,21 @@ func (vm *VM) AOTAddress(object *Object) (uint32, bool) {
 	return address, true
 }
 
+// AOTObjectAddress reads an object's binding without re-pinning it. State
+// capture uses it to preserve the collector's current ownership decision.
+func (vm *VM) AOTObjectAddress(object *Object) (uint32, bool) {
+	if vm == nil || object == nil {
+		return 0, false
+	}
+	address := object.aotAddress.Load()
+	if address == 0 {
+		return 0, false
+	}
+	vm.aotMu.RLock()
+	defer vm.aotMu.RUnlock()
+	return address, vm.aotObjects[address].object() == object
+}
+
 // AOTObjectPinned reports whether a binding currently holds its object
 // strongly. The platform's own record of what it has released goes stale
 // whenever an address is handed back to the guest, and this is how it notices.

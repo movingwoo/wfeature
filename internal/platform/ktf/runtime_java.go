@@ -3396,6 +3396,18 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 	if err != nil {
 		return 0, fmt.Errorf("read KTF runtime Java arguments for %s.%s%s: %w", method.class, method.name, method.descriptor, err)
 	}
+	if worker := runtime.client.activeWorker; worker != nil && isCheckpointWait(method) {
+		pending := &javaWaitScope{thread: thread, method: method}
+		if method.accessFlags&8 == 0 {
+			pending.receiver, err = arguments[0].Reference()
+			if err != nil {
+				return 0, err
+			}
+		}
+		previous := worker.javaWait
+		worker.javaWait = pending
+		defer func() { worker.javaWait = previous }()
+	}
 	// Only the guest has run since the last crossing, so a published field that
 	// no longer matches its Go value was written by the guest. See field_sync.go.
 	if backend.DebugBuild() {
@@ -3448,10 +3460,14 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 		}
 		return 0, err
 	}
+	return runtime.completeRuntimeJavaResult(thread, method, methodType.Return, result)
+}
+
+func (runtime *initializationRuntime) completeRuntimeJavaResult(thread *armcore.Thread, method runtimeJavaMethod, resultType jvm.Type, result jvm.Value) (uint32, error) {
 	if err := runtime.bindRuntimeJavaResult(result); err != nil {
 		return 0, err
 	}
-	words, err := aotValueWords(result, methodType.Return, runtime.client.vm)
+	words, err := aotValueWords(result, resultType, runtime.client.vm)
 	if err != nil {
 		return 0, fmt.Errorf("encode KTF runtime Java result for %s.%s%s: %w", method.class, method.name, method.descriptor, err)
 	}

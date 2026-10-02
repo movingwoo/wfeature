@@ -1,5 +1,16 @@
 # SKT fixtures
 
+`src/NativeCheckpointMIDlet.java` and `native-checkpoint.jar` check that refusing
+an incomplete JVM execution record leaves MIDlet resume and its bytecode caller
+working. A second test restores the MIDlet's heap into a fresh VM without
+constructing the MIDlet or calling `startApp` again. The JAR includes this MIDlet
+and the authored `NativeCheckpointProbe.class` and `HeapCheckpointProbe.class`
+from `internal/jvm/testdata/`. Compile the MIDlet against the generated MIDP
+signatures and those probes, using Java 8 target settings.
+The heap fixture also resumes Calendar operations with a fixed test timezone.
+Package only those three classes with `NativeCheckpointMIDlet` as `MIDlet-1`;
+the compiler stubs are not runtime dependencies and are not bundled.
+
 `src/RestartingMIDlet.java` and `restarting.jar` reproduce repeated startup
 replacing a Canvas and creating another worker. Compile with Java 8 target
 settings against the generated library signatures, then package only

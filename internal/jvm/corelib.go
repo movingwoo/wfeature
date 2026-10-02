@@ -382,6 +382,11 @@ func threadRun(call *Invocation, arguments []Value) (Value, error) {
 	if err != nil || target == nil {
 		return VoidValue(), err
 	}
+	// The only work owed after the target returns is to forward its error
+	// and return void. Keep this known native remainder distinct from other
+	// native callers, whose Go locals cannot be reconstructed from a count.
+	call.state.threadRuns++
+	defer func() { call.state.threadRuns-- }()
 	_, err = call.InvokeVirtual(target, "run", "()V")
 	return VoidValue(), err
 }

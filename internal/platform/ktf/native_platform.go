@@ -271,6 +271,8 @@ func (platform *NativePlatform) Install() error {
 	}
 	platform.installed = true
 	client := platform.client
+	client.servingBuiltins = true
+	defer func() { client.servingBuiltins = false }()
 	client.Serve(NativePlatformTable, nativeSlotAllocate, platform.allocate)
 	client.Serve(NativePlatformTable, nativeSlotFree, platform.free)
 	client.Serve(NativePlatformTable, nativeSlotReallocate, platform.reallocate)

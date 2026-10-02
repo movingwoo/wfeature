@@ -97,7 +97,9 @@ type outboundMessage struct {
 	audio bool
 	// A forced picture must follow the lifecycle messages already queued
 	// for it, so a reconnecting page can accept its only unchanged frame.
-	redraw bool
+	redraw   bool
+	epoch    uint64
+	timeline bool
 }
 
 // serveSession upgrades the connection and runs one game on it.
@@ -158,6 +160,7 @@ type sessionRunner struct {
 	// poked each time it lets one go. The writer reads both to decide whether
 	// the sound it holds is worth a moment's wait for its picture.
 	encoding     atomic.Bool
+	outputEpoch  atomic.Uint64
 	frameSettled chan struct{}
 	// audioDefinitions is what this connection's page holds of the sounds
 	// sent so far. It belongs to the connection, not the game: a page that
@@ -353,6 +356,7 @@ var pngBuffers = &pngBufferPool{}
 // that took a goroutine of its own rather than this one.
 func (r *sessionRunner) writeFrames(ctx context.Context) {
 	encoder := newPictureEncoder(r.protocol, r.webp)
+	epoch := r.outputEpoch.Load()
 	var previous pendingFrame
 	// settle lets the writer know the picture it may be waiting for is not
 	// coming, or has gone to it already.
@@ -365,6 +369,15 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 	}
 	for frame := range r.frames {
 		r.encoding.Store(true)
+		if frame.Epoch != r.outputEpoch.Load() {
+			settle()
+			continue
+		}
+		if frame.Epoch != epoch {
+			epoch = frame.Epoch
+			encoder = newPictureEncoder(r.protocol, r.webp)
+			previous = pendingFrame{}
+		}
 		if frame.Scale < 1 {
 			frame.Scale = 1
 		}
@@ -392,7 +405,7 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 		// Waiting here for the writer is deliberate: it is what makes
 		// pushFrame drop the next one rather than queue it.
 		select {
-		case r.outFrames <- outboundMessage{binary: encoded, redraw: frame.Force}:
+		case r.outFrames <- outboundMessage{binary: encoded, redraw: frame.Force, epoch: frame.Epoch, timeline: true}:
 			previous = frame
 			encoder.accept()
 		case <-r.writerDone:
@@ -540,11 +553,21 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 }
 
 func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
+	if timelineCommand(message.Kind) && message.Epoch != r.outputEpoch.Load() {
+		if message.ID != 0 {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "request belongs to a previous timeline"})
+		}
+		return
+	}
 	switch message.Kind {
 	case clientStart:
 		r.startGame(ctx, message)
 	case clientResume:
 		r.resumeGame(ctx, message)
+	case clientQuickSave:
+		r.quickSave(ctx, message)
+	case clientQuickLoad:
+		r.quickLoad(ctx, message)
 	case clientPark:
 		if r.game != nil {
 			r.park()
@@ -732,10 +755,11 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		}
 		screenWidth, screenHeight = message.Width, message.Height
 	}
-	started, err := session.Start(r.gameCtx, archive, session.Options{
+	options := session.Options{
 		SaveStore:    r.server.saveStoreIn(directory),
 		AudioSink:    r.audio,
 		FrameUpdates: r.frames,
+		FrameEpoch:   r.outputEpoch.Load(),
 		Logger:       r.server.logger,
 		Scale:        scale,
 		Width:        screenWidth,
@@ -743,7 +767,17 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		// A debug build is the one that collects a report, and the ordered
 		// trace is what it collects.
 		TraceLimit: r.server.traceLimit,
-	})
+	}
+	var started *session.Session
+	if message.QuickLoad {
+		var checkpoint []byte
+		checkpoint, err = loadCheckpointSlot(directory, backend.SaveIdentity(archive))
+		if err == nil {
+			started, err = session.RestoreCheckpoint(r.gameCtx, archive, checkpoint, options)
+		}
+	} else {
+		started, err = session.Start(r.gameCtx, archive, options)
+	}
 	if err != nil {
 		r.gameCancel()
 		r.gameCancel = nil
@@ -799,6 +833,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		Token:          r.token,
 		CanWatch:       started.Cheat() != nil && started.Cheat().CanWatch(),
 		CanTouch:       started.HasPointer(),
+		CanCheckpoint:  started.CanCheckpoint() && directory != "",
+		HasCheckpoint:  checkpointExists(directory, started.ArchiveIdentity()),
+		Restored:       message.QuickLoad,
+		Speed:          started.Speed(),
+	}
+	if message.QuickLoad {
+		r.finishCheckpointLoad(message)
+		return
 	}
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
@@ -921,6 +963,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 
 	r.game = parked.game
 	r.game.SetFrameUpdates(r.frames)
+	r.game.SetOutputEpoch(r.outputEpoch.Load())
 	r.saveDirectory = parked.saveDirectory
 	r.gameCtx = parked.context
 	r.gameCancel = parked.cancel
@@ -1001,6 +1044,7 @@ func (r *sessionRunner) pushFrame() {
 	// Scaling and duplicate detection belong to the encoder. A full queue
 	// must not make the emulator magnify a picture that will be discarded.
 	frame.Force = r.forceFrame
+	frame.Epoch = r.outputEpoch.Load()
 	select {
 	case r.frames <- frame:
 		r.forceFrame = false
@@ -1414,7 +1458,11 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 		}
 		wire = wire[:0]
 		written := 0
+		epoch := r.outputEpoch.Load()
 		for _, message := range batch {
+			if message.timeline && message.epoch != epoch {
+				continue
+			}
 			if message.binary != nil {
 				wire = append(wire, wsproto.Message{Opcode: wsproto.OpBinary, Payload: message.binary})
 				written += webSocketFrameSize(len(message.binary))
@@ -1422,6 +1470,10 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 				wire = append(wire, wsproto.Message{Opcode: wsproto.OpText, Payload: []byte(message.text)})
 				written += webSocketFrameSize(len(message.text))
 			}
+		}
+		if len(wire) == 0 {
+			clear(batch)
+			continue
 		}
 		_ = r.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
 		if err := r.connection.WriteBatch(wire); err != nil {
@@ -1431,7 +1483,7 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 			return
 		}
 		r.written.Add(uint64(written))
-		if picture != nil {
+		if picture != nil && (!picture.timeline || picture.epoch == epoch) {
 			r.frameBytes.Add(uint64(len(picture.binary)))
 			r.sent.Add(1)
 		}
@@ -1495,12 +1547,14 @@ func (r *sessionRunner) sendDroppable(message serverMessage) {
 }
 
 func (r *sessionRunner) queue(message serverMessage, droppable bool) {
+	message.Epoch = r.outputEpoch.Load()
 	encoded, err := encodeMessage(message)
 	if err != nil {
 		r.server.logger.Warn("session message could not be encoded", "error", err)
 		return
 	}
-	r.enqueue(outboundMessage{text: string(encoded), audio: message.Kind == serverAudio}, droppable)
+	r.enqueue(outboundMessage{text: string(encoded), audio: message.Kind == serverAudio,
+		epoch: message.Epoch, timeline: message.Kind == serverAudio || message.Kind == serverVibrate || message.Kind == serverStats}, droppable)
 }
 
 // enqueue hands a finished message to the writer and reports whether it went.
@@ -1532,7 +1586,7 @@ func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) {
 		r.queue(message, droppable)
 		return
 	}
-	outgoing := outboundMessage{binary: r.audioDefinitions.encode(events), audio: true}
+	outgoing := outboundMessage{binary: r.audioDefinitions.encode(events), audio: true, epoch: r.outputEpoch.Load(), timeline: true}
 	if !r.enqueue(outgoing, droppable) {
 		// Whatever the lost message defined never reached the page.
 		r.audioDefinitions.dropped()

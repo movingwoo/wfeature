@@ -317,7 +317,7 @@ func (client *Client) invokeAOTMethodLocked(ctx context.Context, method jvm.AOTM
 	if client.runtime == nil {
 		return summary, fmt.Errorf("KTF client initialization has not completed")
 	}
-	result, runs, err := client.runtime.runAOTMethod(ctx, client.thread, method, methodType, rawArguments)
+	result, runs, err := client.runtime.runAOTMethod(ctx, client.thread, "", method, methodType, rawArguments)
 	summary.Runs = runs
 	if err != nil {
 		return summary, err
@@ -329,7 +329,7 @@ func (client *Client) invokeAOTMethodLocked(ctx context.Context, method jvm.AOTM
 // runAOTMethod executes one AOT method body on the supplied guest thread,
 // entering the normal or native-container form, re-entering restore stubs for
 // caught exceptions, and restoring the handler head after an uncaught one.
-func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *armcore.Thread, method jvm.AOTMethodMetadata, methodType jvm.MethodDescriptor, rawArguments []uint32) (jvm.Value, []armcore.RunSummary, error) {
+func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *armcore.Thread, className string, method jvm.AOTMethodMetadata, methodType jvm.MethodDescriptor, rawArguments []uint32) (jvm.Value, []armcore.RunSummary, error) {
 	var runs []armcore.RunSummary
 	if err := runtime.enterAOTCall(); err != nil {
 		return jvm.VoidValue(), runs, err
@@ -340,6 +340,12 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 	entryHandler, err := runtime.client.core.ThreadLocalWord(thread, headAddress)
 	if err != nil {
 		return jvm.VoidValue(), runs, fmt.Errorf("read KTF AOT entry exception handler: %w", err)
+	}
+	if worker := runtime.client.activeWorker; worker != nil && worker.armThread == thread {
+		previous := worker.aotEntry
+		invocation, _ := ctx.Value(jvmInvocationKey{}).(*jvm.Invocation)
+		worker.aotEntry = &workerAOTEntry{class: className, method: method, entryHandler: entryHandler, invocation: invocation}
+		defer func() { worker.aotEntry = previous }()
 	}
 	body := method.Body
 	arguments := append([]uint32{0}, rawArguments...)
@@ -358,8 +364,13 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 		return jvm.VoidValue(), runs, fmt.Errorf("KTF AOT method body is null")
 	}
 
+	run, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
+	return runtime.completeAOTMethod(ctx, thread, methodType, entryHandler, run, callErr)
+}
+
+func (runtime *initializationRuntime) completeAOTMethod(ctx context.Context, thread *armcore.Thread, methodType jvm.MethodDescriptor, entryHandler uint32, run armcore.RunSummary, callErr error) (jvm.Value, []armcore.RunSummary, error) {
+	var runs []armcore.RunSummary
 	for {
-		run, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
 		runs = append(runs, run)
 		if callErr == nil {
 			result, resultErr := aotResultValue(methodType.Return, run.Context.Registers[0], run.Context.Registers[1], runtime.client.vm)
@@ -367,13 +378,12 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 		}
 		var unwind *aotExceptionUnwind
 		if errors.As(callErr, &unwind) && runtime.ownsUnwind(thread, unwind) {
-			body = unwind.nextPC
-			arguments = []uint32{unwind.contextBase, unwind.target}
+			run, callErr = runtime.client.core.Call(ctx, thread, unwind.nextPC, ReturnAddress, []uint32{unwind.contextBase, unwind.target}, runtime.handleSupervisorCall)
 			continue
 		}
 		var uncaught *UncaughtAOTException
 		if errors.As(callErr, &uncaught) {
-			if restoreErr := runtime.client.core.SetThreadLocalWord(thread, headAddress, entryHandler); restoreErr != nil {
+			if restoreErr := runtime.client.core.SetThreadLocalWord(thread, runtime.exceptionHead(), entryHandler); restoreErr != nil {
 				return jvm.VoidValue(), runs, fmt.Errorf("restore KTF AOT entry exception handler after %w: %v", callErr, restoreErr)
 			}
 		}

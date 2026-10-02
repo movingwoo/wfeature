@@ -34,8 +34,14 @@ func (store *DirectorySaveStore) StoreSaves(entries map[string][]byte) error {
 	if store == nil || store.root == "" {
 		return fmt.Errorf("save store has no root")
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
+	unlock, err := lockSaveTree(store.root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := store.recoverSaveReplacement(); err != nil {
+		return err
+	}
 	return store.storeSaves(entries, os.Rename)
 }
 
@@ -70,7 +76,7 @@ func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename fu
 			_ = os.RemoveAll(directory)
 		}
 	}()
-	staged := NewDirectorySaveStore(directory)
+	staged := &DirectorySaveStore{root: directory}
 	targets := make([]string, len(keys))
 	existed := make([]bool, len(keys))
 	for i, name := range keys {
@@ -87,11 +93,11 @@ func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename fu
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
 		}
-		if err := staged.StoreSave(fmt.Sprintf("new-%d", i), entries[name]); err != nil {
+		if err := staged.storeSave(fmt.Sprintf("new-%d", i), entries[name]); err != nil {
 			return err
 		}
 		if present {
-			if err := staged.StoreSave(fmt.Sprintf("old-%d", i), old); err != nil {
+			if err := staged.storeSave(fmt.Sprintf("old-%d", i), old); err != nil {
 				return err
 			}
 		}

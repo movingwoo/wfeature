@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { keyLabel, keyOrder } from "./keybindings.js";
+import { QUICK_SAVE, QUICK_LOAD, isCheckpointKey } from "./checkpoint.js";
 import {
   BAND_COLUMNS,
   EMPTY,
@@ -180,7 +181,7 @@ test("a shape names only keys the editor can also choose", () => {
     assert.deepEqual(Object.keys(shipped[name]).sort(), [...cellIds].sort());
   }
   assert.deepEqual(
-    assignable.filter(name => name !== "RAPID_FIRE" && name !== SETTINGS),
+    assignable.filter(name => name !== "RAPID_FIRE" && name !== SETTINGS && !isCheckpointKey(name)),
     keyOrder,
     "the editor's list has drifted from the keyboard panel's",
   );
@@ -504,4 +505,30 @@ test("a cell nothing knows about is not a cell", () => {
   assert.deepEqual(layout.set("no-such-cell", "5"), before);
   assert.equal(layout.edited(), false);
   assert.equal(layout.keyAt("no-such-cell"), EMPTY);
+});
+
+test("checkpoint keys have no default placement and retain per-shape edits", () => {
+  const storage = fakeStorage();
+  const layout = createKeypadLayout(storage);
+  for (const name of [QUICK_SAVE, QUICK_LOAD]) {
+    assert.ok(assignable.includes(name));
+    assert.ok(!keyOrder.includes(name), "a checkpoint is not a handset key");
+    for (const shape of shapes) assert.ok(!Object.values(shipped[shape]).includes(name));
+  }
+  for (const shape of shapes) {
+    layout.useShape(shape);
+    assert.ok(!Object.values(layout.keys()).some(isCheckpointKey));
+    layout.set("band-c2", QUICK_SAVE);
+    layout.set("pad-r1c4", QUICK_LOAD);
+    layout.set("pad-r4c1", QUICK_SAVE);
+    const reloaded = createKeypadLayout(storage);
+    assert.equal(reloaded.shape(), shape);
+    assert.equal(reloaded.keyAt("band-c2"), QUICK_SAVE);
+    assert.equal(reloaded.keyAt("pad-r1c4"), QUICK_LOAD);
+    assert.equal(reloaded.keyAt("pad-r4c1"), QUICK_SAVE);
+    reloaded.set("pad-r1c4", EMPTY);
+    assert.equal(createKeypadLayout(storage).keyAt("pad-r1c4"), EMPTY);
+    reloaded.reset();
+    assert.ok(!Object.values(reloaded.keys()).some(isCheckpointKey));
+  }
 });

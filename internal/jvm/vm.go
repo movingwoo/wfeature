@@ -231,6 +231,8 @@ type VM struct {
 type execution struct {
 	steps        uint64
 	frames       int
+	nativeDepth  int
+	threadRuns   int
 	id           uint64
 	initializing map[string]bool
 	thread       *Object
@@ -540,20 +542,8 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 	vm.mu.RLock()
 	entry := vm.natives[key]
 	vm.mu.RUnlock()
-	contextNative, native := entry.context, entry.plain
-	if contextNative != nil {
-		result, err := contextNative(vm, state, arguments)
-		if err != nil {
-			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
-		}
-		methodType, _ := ParseMethodDescriptor(descriptor)
-		if err := validateValue(result, methodType.Return); err != nil {
-			return VoidValue(), fmt.Errorf("native %s.%s%s returned invalid value: %w", className, name, descriptor, err)
-		}
-		return result, nil
-	}
-	if native != nil {
-		result, err := native(vm, arguments)
+	if entry.context != nil || entry.plain != nil {
+		result, err := vm.callNative(state, entry, arguments)
 		if err != nil {
 			return VoidValue(), fmt.Errorf("native %s.%s%s: %w", className, name, descriptor, err)
 		}
@@ -653,13 +643,7 @@ func (vm *VM) invokeInstanceReceived(
 		if synchronizedNative {
 			receiver.monitor.enter(state.id)
 		}
-		var result Value
-		var err error
-		if contextNative != nil {
-			result, err = contextNative(vm, state, combined)
-		} else {
-			result, err = native(vm, combined)
-		}
+		result, err := vm.callNative(state, nativeEntry{context: contextNative, plain: native}, combined)
 		if synchronizedNative {
 			if exitErr := receiver.monitor.exit(state.id); err == nil && exitErr != nil {
 				err = exitErr

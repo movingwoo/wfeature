@@ -142,18 +142,18 @@ export const createSessionLink = ({
       discard();
       change(blocked ? "occupied" : "offline");
     },
-    start: (path, scale, screen) => {
+    start: (path, scale, screen, quickLoad = false) => {
       if (task || !socket || state !== "ready") return Promise.reject(new Error("서버 연결을 기다려 주세요."));
       return run(async () => {
         change("starting");
         try {
           const current = socket;
-          let response = await current.start(path, scale, screen, token, "");
+          let response = await current.start(path, scale, screen, token, "", quickLoad);
           while (response.confirmation) {
             const accepted = await confirmStart(response.message);
             if (socket !== current || current.closed) throw new Error("세션 연결이 끊어졌습니다.");
             if (!accepted) { change("ready"); return; }
-            response = await current.start(path, scale, screen, token, response.confirmation);
+            response = await current.start(path, scale, screen, token, response.confirmation, quickLoad);
           }
           answer(response);
         }

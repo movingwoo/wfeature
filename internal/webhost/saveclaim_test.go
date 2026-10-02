@@ -7,7 +7,47 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
+
+func TestSaveClaimsExcludeOtherServerInstances(t *testing.T) {
+	root, _ := checkpointServerFiles(t)
+	first, second := checkpointServer(t, root), checkpointServer(t, root)
+	directory := first.saveDirectory("ktf", "P0001")
+	if ok, reason := first.claimSaveDirectory(directory, "fixture"); !ok {
+		t.Fatal(reason)
+	}
+	defer first.releaseSaveDirectory(directory)
+	if ok, _ := second.holdSaveDirectory(directory, "import", false); ok {
+		second.releaseSaveDirectory(directory)
+		t.Fatal("another server wrote under a running session")
+	}
+	r := &sessionRunner{server: second, frames: make(chan pendingFrame, 1), outText: make(chan outboundMessage, 64)}
+	r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip"})
+	if r.game != nil || r.admitted {
+		r.stopGame()
+		t.Fatal("another server started under a running session")
+	}
+	if replies := readCheckpointReplies(t, r); len(replies) != 1 || replies[0].Kind != serverError {
+		t.Fatalf("busy start did not report its refusal: %+v", replies)
+	}
+	// Read-only backup remains available while a game owns the saves.
+	if _, err := backend.ReadSaveTree(directory); err != nil {
+		t.Fatal(err)
+	}
+	first.releaseSaveDirectory(directory)
+	r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip"})
+	if r.game == nil {
+		t.Fatalf("released claim did not permit start: %+v", readCheckpointReplies(t, r))
+	}
+	r.stopGame()
+	release, err := backend.ClaimSaveDirectory(directory)
+	if err != nil {
+		t.Fatal("stopping a game left its file claim held")
+	}
+	release()
+}
 
 // Two pages, one game, one save directory. The second start is refused rather
 // than run: both sessions would write the same files, and the loser of that

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -141,10 +142,12 @@ type NativeSlotHandler func(thread *armcore.Thread) (uint32, error)
 
 // NativeClient runs a module from the earlier KTF package.
 type NativeClient struct {
-	core    *armcore.Core
-	thread  *armcore.Thread
-	archive *NativeArchive
-	mapped  uint32
+	run                             sync.Mutex
+	servingBuiltins, customBindings bool
+	core                            *armcore.Core
+	thread                          *armcore.Thread
+	archive                         *NativeArchive
+	mapped                          uint32
 	// calls is the ordered log a probe reads, bounded by
 	// maxNativeRecordedCalls; slotCounts is what a run actually has to keep,
 	// and it is bounded by the number of slots rather than by the length of
@@ -163,6 +166,7 @@ type NativeClient struct {
 
 	traceLimit int
 	traceLog   []uint32
+	tracing    bool
 }
 
 // nativeSurfaceTable is one trapped table of function pointers.
@@ -301,6 +305,9 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 // for the objects a served slot hands back. Every instance of one kind shares
 // its table, so a handler tells them apart by the object it is called on.
 func (client *NativeClient) AddSurface(name NativeSurface) (uint32, error) {
+	if !client.servingBuiltins {
+		client.customBindings = true
+	}
 	return client.addSurface(name)
 }
 
@@ -368,6 +375,9 @@ func nativeMappedSize(archive *NativeArchive) (uint32, error) {
 // call list into the platform: name it, answer it, and run again to see what
 // the module asks for next.
 func (client *NativeClient) Serve(surface NativeSurface, offset uint32, handler NativeSlotHandler) {
+	if !client.servingBuiltins {
+		client.customBindings = true
+	}
 	client.served[nativeSlotKey{surface: surface, slot: offset / 4}] = handler
 }
 
@@ -388,6 +398,8 @@ type nativeSlotKey struct {
 // what the first one points at is not yet known, so it is given writable
 // scratch rather than nothing.
 func (client *NativeClient) Start(ctx context.Context) error {
+	client.run.Lock()
+	defer client.run.Unlock()
 	arguments := []uint32{nativeEntryObject, nativeScratchBase + 0x100, nativeEntryOut}
 	_, err := client.core.Call(ctx, client.thread, ImageBase, ReturnAddress, arguments, client.handleSupervisorCall)
 	return err
@@ -401,6 +413,7 @@ func (client *NativeClient) Start(ctx context.Context) error {
 // returns success without asking the platform for anything has gone somewhere,
 // and the trace is what says where.
 func (client *NativeClient) Trace(limit int) {
+	client.tracing = true
 	client.traceLimit = limit
 	client.traceLog = client.traceLog[:0]
 	client.core.AttachDebugger(func(_ context.Context, core *armcore.Core, thread *armcore.Thread, _ armcore.DebugStop) error {
@@ -416,6 +429,7 @@ func (client *NativeClient) Trace(limit int) {
 
 // StopTrace detaches the debugger and returns what was recorded.
 func (client *NativeClient) StopTrace() []uint32 {
+	client.tracing = false
 	client.core.AttachDebugger(nil)
 	return client.traceLog
 }
@@ -424,6 +438,8 @@ func (client *NativeClient) StopTrace() []uint32 {
 // thread, with the trap tables still in force, so what it asks for is recorded
 // the same way the entry's calls were.
 func (client *NativeClient) CallExport(ctx context.Context, address uint32, arguments []uint32) (uint32, error) {
+	client.run.Lock()
+	defer client.run.Unlock()
 	// The result comes off the summary rather than the thread. Call derives a
 	// temporary context and restores the parent by leaving it untouched, so
 	// reading r0 from the thread afterwards reports whatever the parent held —
