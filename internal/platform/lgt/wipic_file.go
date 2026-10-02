@@ -46,6 +46,25 @@ type openFile struct {
 	cursor   int
 	writable bool
 	dirty    bool
+	// truncated says the open itself asked for an empty file: the title opened
+	// the path to rewrite it, and everything in data was written through this
+	// handle. That is what a quick load needs to know about it: it gives such
+	// a handle at most what it had written, so that the file the title is
+	// rewriting is never followed by the tail of a newer one.
+	//
+	// A handle whose open made a path that was not there is not one of these.
+	// The title asked for the file and found none; had there been one it
+	// would have kept it. After a load such a handle is given the file as it
+	// is, like any other, because a title that keeps its save open for a
+	// whole session is in exactly that position on its first run, and cutting
+	// its buffer to what it held at the quick save would drop what it saved
+	// afterwards the next time the handle is stored.
+	truncated bool
+	// synced is the file's epoch when data was last level with the store: at
+	// the open, and at each store of this handle. A dirty handle whose file
+	// has moved on since holds older bytes than the store for everything it
+	// did not write itself.
+	synced uint64
 }
 
 // handleResource services MC_knlGetResourceID and MC_knlGetResource. A
@@ -437,8 +456,36 @@ func (client *Client) openFile(name string, flag uint32) int32 {
 	if client.files == nil {
 		client.files = make(map[uint32]*openFile)
 	}
-	client.files[handle] = &openFile{name: name, data: data, cursor: cursor, writable: writable}
+	client.files[handle] = &openFile{name: name, data: data, cursor: cursor, writable: writable,
+		truncated: flag == fileOpenWriteTruncate, synced: client.fileEpoch(name)}
 	return int32(handle)
+}
+
+// fileEpoch is how often a path's save has changed under this session.
+func (client *Client) fileEpoch(name string) uint64 {
+	return client.fileEpochs[fileEpochKey(name)]
+}
+
+func (client *Client) bumpFileEpoch(name string) {
+	if client.fileEpochs == nil {
+		client.fileEpochs = make(map[string]uint64)
+	}
+	client.fileEpochs[fileEpochKey(name)]++
+}
+
+// fileEpochKey is what the epoch of a path's save is kept under: the save's
+// own key, so that every spelling a title has for one file ("save.dat",
+// "./save.dat", "//save.dat") shares one epoch, as it shares one save. Case is
+// folded as the removal list folds it: two spellings that differ only in case
+// are one file wherever the Host's filesystem folds case, and counting them as
+// one where it does not only makes a quick step more careful than it needs to
+// be.
+func fileEpochKey(name string) string {
+	key, err := fileSaveKey(name)
+	if err != nil {
+		return canonicalFileName(name)
+	}
+	return strings.ToLower(key)
 }
 
 // The MC_fsOpen flags, in the specification's own order: read, write (which
@@ -570,20 +617,34 @@ func (client *Client) flushOpenFiles() {
 // writeFile persists a guest file. A failure is a diagnostic, not a guest
 // error: the in-memory copy stays authoritative for the session.
 func (client *Client) writeFile(name string, data []byte) {
+	_ = client.storeFile(name, data)
+}
+
+// storeFile is writeFile with the store's answer: nil when the store took the
+// file, and when there was nothing to give it to — no store, a session whose
+// writes are held back by a failed read, a path that is not a save key. It is
+// what a quick save and a quick load call, because neither may go on past a
+// write the store refused; the two path lists report through their own bits.
+func (client *Client) storeFile(name string, data []byte) error {
 	// Writing a path brings it back, whether or not the store round trip below
 	// succeeds: the session's own view has the file from here on.
 	client.markFileRemoved(name, false)
 	client.markFileCreated(name)
 	if client.saveStore == nil || client.saveReadError != nil {
-		return
+		return nil
 	}
 	key, err := fileSaveKey(name)
 	if err != nil {
-		return
+		return nil
 	}
-	if err := client.saveStore.StoreSave(key, data); err != nil && client.logger != nil {
-		client.logger.Debug("LGT save store failed", "name", name, "error", err)
+	if err := client.saveStore.StoreSave(key, data); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT save store failed", "name", name, "error", err)
+		}
+		return err
 	}
+	client.bumpFileEpoch(name)
+	return nil
 }
 
 // removeFile deletes a guest path. The stored bytes stay where they are —
@@ -591,6 +652,7 @@ func (client *Client) writeFile(name string, data []byte) {
 // them unreachable until something writes the path again.
 func (client *Client) removeFile(name string) {
 	client.markFileRemoved(name, true)
+	client.bumpFileEpoch(name)
 }
 
 // createdFiles is the set of paths a title has written, read from the store
@@ -631,14 +693,27 @@ func (client *Client) markFileCreated(name string) {
 	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
+	if err := client.storeFileList(fileCreatedKey); err != nil && client.logger != nil {
+		client.logger.Debug("LGT created list store failed", "name", name, "error", err)
+	}
+}
+
+// storeFileList writes one of the two path lists as this session holds it,
+// and keeps whether the store took it: a list the store refused is one memory
+// is ahead of, until a later write of it goes through.
+func (client *Client) storeFileList(key string) error {
+	set, unsaved := client.created, &client.createdUnsaved
+	if key == fileRemovedKey {
+		set, unsaved = client.removed, &client.removedUnsaved
+	}
 	names := make([]string, 0, len(set))
 	for entry := range set {
 		names = append(names, entry)
 	}
 	sort.Strings(names)
-	if err := client.saveStore.StoreSave(fileCreatedKey, []byte(strings.Join(names, "\n"))); err != nil && client.logger != nil {
-		client.logger.Debug("LGT created list store failed", "name", name, "error", err)
-	}
+	err := client.saveStore.StoreSave(key, []byte(strings.Join(names, "\n")))
+	*unsaved = err != nil
+	return err
 }
 
 // listDirectory answers the immediate children of one directory: the entries
@@ -736,12 +811,7 @@ func (client *Client) markFileRemoved(name string, removed bool) {
 	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
-	names := make([]string, 0, len(set))
-	for entry := range set {
-		names = append(names, entry)
-	}
-	sort.Strings(names)
-	if err := client.saveStore.StoreSave(fileRemovedKey, []byte(strings.Join(names, "\n"))); err != nil && client.logger != nil {
+	if err := client.storeFileList(fileRemovedKey); err != nil && client.logger != nil {
 		client.logger.Debug("LGT removal list store failed", "name", name, "error", err)
 	}
 }

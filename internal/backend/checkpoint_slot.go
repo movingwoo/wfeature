@@ -10,9 +10,15 @@ import (
 )
 
 // Checkpoint slots are Host files beside the owner directory, never SaveStore
-// keys. One archive has one slot. Neither a guest save export nor replacing a
-// save generation includes or removes it. Hosts retain their directory claim
-// while capturing and writing a slot or while loading and adopting one.
+// keys. One archive has one slot, and a guest save export does not include it.
+// Hosts retain their directory claim while capturing and writing a slot or
+// while loading and adopting one.
+//
+// The file name carries the envelope version. A slot written in an earlier
+// format keeps its earlier name and is never written, renamed or removed here:
+// it is reported as present, refused when it is loaded, and left for its owner.
+// A new quick save is written beside it under the current name, so no build
+// overwrites another format's slot.
 func (store *DirectorySaveStore) checkpointDirectory(create bool) (string, bool, error) {
 	paths, err := replacementPaths(store.root)
 	if err != nil {
@@ -40,7 +46,10 @@ func (store *DirectorySaveStore) checkpointDirectory(create bool) (string, bool,
 	return paths.directory, true, nil
 }
 
-func checkpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.wfq", identity) }
+func checkpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.v2.wfq", identity) }
+
+// legacyCheckpointSlotName is the name envelope version 1 was stored under.
+func legacyCheckpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.wfq", identity) }
 
 func checkpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
 	info, err := directory.Lstat(checkpointSlotName(identity))
@@ -56,57 +65,98 @@ func checkpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
 	return true, nil
 }
 
-// HasCheckpoint checks slot presence and file bounds without reading a large
-// checkpoint. Load and detached restoration still validate the actual bytes.
-func (store *DirectorySaveStore) HasCheckpoint(identity [32]byte) (bool, error) {
+// legacyCheckpointSlotInfo reports a regular file under the earlier name. Its
+// size is not judged and its bytes are not read: an earlier format had its own
+// limits, and nothing here will decode it.
+func legacyCheckpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
+	info, err := directory.Lstat(legacyCheckpointSlotName(identity))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
+}
+
+// openCheckpointDirectory takes the tree lock, settles an interrupted
+// replacement and opens the reserved directory if it exists. The caller closes
+// the root and releases the lock through the returned function.
+func (store *DirectorySaveStore) openCheckpointDirectory() (*os.Root, func(), error) {
 	if store == nil {
-		return false, fmt.Errorf("checkpoint store has no root")
+		return nil, nil, fmt.Errorf("checkpoint store has no root")
 	}
 	unlock, err := lockSaveTree(store.root)
 	if err != nil {
-		return false, err
+		return nil, nil, err
 	}
-	defer unlock()
 	if err := store.recoverSaveReplacement(); err != nil {
-		return false, err
+		unlock()
+		return nil, nil, err
 	}
 	path, exists, err := store.checkpointDirectory(false)
 	if err != nil || !exists {
-		return false, err
+		unlock()
+		return nil, nil, err
 	}
 	directory, err := os.OpenRoot(path)
 	if err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	return directory, func() {
+		_ = directory.Close()
+		unlock()
+	}, nil
+}
+
+// HasCheckpoint checks slot presence and file bounds without reading a large
+// checkpoint. Load and detached restoration still validate the actual bytes.
+// A slot in an earlier format counts as present, so that a Host offers the
+// load and the person who asks for it is told why it is refused.
+func (store *DirectorySaveStore) HasCheckpoint(identity [32]byte) (bool, error) {
+	directory, done, err := store.openCheckpointDirectory()
+	if err != nil || directory == nil {
 		return false, err
 	}
-	defer directory.Close()
-	return checkpointSlotInfo(directory, identity)
+	defer done()
+	if exists, err := checkpointSlotInfo(directory, identity); err != nil || exists {
+		return exists, err
+	}
+	return legacyCheckpointSlotInfo(directory, identity)
+}
+
+// LegacyCheckpoint reports whether a slot in an earlier format is still beside
+// the saves. It is only asked whether the file exists.
+func (store *DirectorySaveStore) LegacyCheckpoint(identity [32]byte) (bool, error) {
+	directory, done, err := store.openCheckpointDirectory()
+	if err != nil || directory == nil {
+		return false, err
+	}
+	defer done()
+	return legacyCheckpointSlotInfo(directory, identity)
 }
 
 // LoadCheckpoint bounds the read even if a file grows after Stat. The shared
 // session checks identity, integrity and all state records before adoption.
+// With only an earlier-format slot it answers found with ErrCheckpointLegacy
+// and reads nothing: the file is left exactly as it is.
 func (store *DirectorySaveStore) LoadCheckpoint(identity [32]byte) ([]byte, bool, error) {
-	if store == nil {
-		return nil, false, fmt.Errorf("checkpoint store has no root")
+	directory, done, err := store.openCheckpointDirectory()
+	if err != nil || directory == nil {
+		return nil, false, err
 	}
-	unlock, err := lockSaveTree(store.root)
+	defer done()
+	exists, err := checkpointSlotInfo(directory, identity)
 	if err != nil {
 		return nil, false, err
 	}
-	defer unlock()
-	if err := store.recoverSaveReplacement(); err != nil {
-		return nil, false, err
-	}
-	path, exists, err := store.checkpointDirectory(false)
-	if err != nil || !exists {
-		return nil, false, err
-	}
-	directory, err := os.OpenRoot(path)
-	if err != nil {
-		return nil, false, err
-	}
-	defer directory.Close()
-	if exists, err := checkpointSlotInfo(directory, identity); err != nil || !exists {
-		return nil, false, err
+	if !exists {
+		legacy, err := legacyCheckpointSlotInfo(directory, identity)
+		if err != nil || !legacy {
+			return nil, false, err
+		}
+		return nil, true, fmt.Errorf("%w: %s was left in place", ErrCheckpointLegacy, legacyCheckpointSlotName(identity))
 	}
 	file, err := directory.Open(checkpointSlotName(identity))
 	if err != nil {
@@ -124,7 +174,8 @@ func (store *DirectorySaveStore) LoadCheckpoint(identity [32]byte) ([]byte, bool
 }
 
 // StoreCheckpoint checks the envelope before replacing the previous slot using
-// the ordinary synced temporary-file write. It never writes guest save keys.
+// the ordinary synced temporary-file write. It never writes guest save keys,
+// and it never touches a slot stored under an earlier format's name.
 func (store *DirectorySaveStore) StoreCheckpoint(identity [32]byte, data []byte) error {
 	if store == nil {
 		return fmt.Errorf("checkpoint store has no root")

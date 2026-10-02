@@ -32,7 +32,7 @@ the page reads as well.
 | `key` / `pointer` | Deliver supported input in guest coordinates. |
 | `speed` / `scale` | Change execution rate or presentation scaling. |
 | `text` | Open, commit, or cancel a supported native text edit. |
-| `quickSave` / `quickLoad` | Save or restore the current KTF or LGT archive's persistent checkpoint. |
+| `quickSave` / `quickLoad` | Save the running KTF or LGT game's execution state to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
 | `cheat` / `report` | Operate diagnostics or write a session report. |
 | `ping` | Check connection liveness independently of guest execution. |
 
@@ -57,7 +57,7 @@ Parking releases held input, detaches presentation, and drives the platform's
 pause boundary. Resuming reattaches presentation and drives resume. These
 callbacks do not establish that all guest threads and clocks freeze. Stopping
 the server ends retained games. Ordinary saves and explicit checkpoint slots
-survive; a later page can choose to restore the slot instead of starting over.
+survive; a later page can go back to the slot's moment after starting the game.
 
 <a id="ktf-checkpoints"></a>
 
@@ -78,11 +78,42 @@ The picker offers ordinary startup only. To restore after a server restart,
 start the game and press its assigned quick-load key. Explicit startup restoration
 remains available to protocol and CLI callers.
 
-`quickSave` captures between complete rounds and writes one slot per exact archive.
-`quickLoad` validates a detached runtime and replaces both execution state and
-ordinary saves. Invalid archives, slots and unsupported runtime states report an
-error while preserving the running session and its saves. Slots are outside
-ordinary `.wfs` exports. See [checkpoint state and ownership](architecture.md).
+A checkpoint is execution state only, and the game's own saves come first:
+neither command replaces, reverts or removes an ordinary save. See
+[Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
+
+`quickSave` runs between complete rounds. It first stores any write the game
+has issued and the host still holds (an open file's buffer on LGT, a written
+name not yet stored in a native KTF package), then captures, then writes one
+slot per exact archive. The slot holds no save.
+
+`quickLoad` reads the archive and the slot, validates the record into a
+detached runtime that has no access to the saves, fills what that runtime has
+open from the saves as they are with reads only, stores the running game's
+issued writes as `quickSave` does, and then replaces the running game. The
+restored game reads the saves on disk and writes on top of them. With nothing
+pending a load writes nothing.
+
+Either command is refused, with the running game left running and no save
+reverted or removed, when the archive or the slot is invalid, the runtime is in
+a state a record cannot describe, the store refuses the game's pending writes,
+or a save the load needs cannot be read. Three refusals reach the page as a
+sentence in its own language, with the cause in the server log: a slot written
+in an earlier format (which is left in place), pending writes that could not be
+stored, and saves that could not be read. "Could not be stored" covers a store
+that refused the write and, on LGT, a buffer the host declined to store because
+its file had changed behind it; "could not be read" covers a read that failed
+and saves larger than a load reads. Every other refusal is passed through as
+the error's own text.
+
+A `start` with `quick_load: true` reads and checks the slot before the game the
+connection is running is stopped, so a start that is certain to be refused — no
+slot, an earlier format, a damaged slot, another archive's — leaves that game
+running. `has_checkpoint` is true for an earlier-format slot as well, so that
+the load is offered and its refusal can say why.
+
+Slots are outside ordinary `.wfs` exports, and a `.wfs` import is unchanged: it
+writes the saves it carries over the ones on disk.
 
 A successful load sends `restored` with a new connection `epoch` and a `started`
 description before new output. Mutating input, text, cheat, speed, scale and
@@ -252,7 +283,7 @@ second cooperating process cannot write through another live session. Other
 legacy platform commands do not yet take this lifetime claim.
 
 Directory operations also take a shorter filesystem lock: a complete read,
-write, batch, checkpoint replacement or recovery finishes before another begins.
+write, batch, slot write or recovery finishes before another begins.
 Listing and export remain available while a session owns its saves, and wait
 for an active transaction. Separate guest writes are still separate operations.
 `.wfs` export/import contains guest saves, not a CPU/JVM/session snapshot. See

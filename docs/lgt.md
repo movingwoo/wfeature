@@ -129,10 +129,38 @@ A session can be recorded between two ticks and restored later, in the same
 session or in a new process, through the shared session, the CLI and the page's
 keypad. Both execution variants are covered: a Clet, and an AOT Java title with
 its guest threads parked. Recording runs no guest code and does not pause the
-title; restoring runs neither its entry, its initializer nor `startClet`, and
-replaces the ordinary saves with the ones the checkpoint was taken beside.
+title; restoring runs neither its entry, its initializer nor `startClet`.
 [Checkpoint state and ownership](architecture.md#lgt-checkpoints) describes the
 record, and [testing](testing.md#lgt-checkpoints) what was run against it.
+
+A checkpoint is execution state only. A load leaves the title's saves as they
+are, the restored title reads and writes them there, and the rule and its
+accepted limits are in
+[Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
+Three things about this platform's storage shape how it gets there:
+
+- A write waits in the buffer of its open file until the title closes the
+  file. Recording and restoring both store such a buffer first, with the file
+  left open at its cursor, and are refused when the store refuses it. They are
+  also refused, naming the file, when that file has been stored or removed
+  through another handle since the buffer was filled, under any spelling of
+  its name: storing it would put the older part of the buffer over newer
+  content. The refusal lasts until the title closes that handle, which stores
+  the buffer as the title's own act. Two `DataBase` objects of one database
+  that both hold a write the store refused are refused the same way. Bytes
+  written into a stream and not flushed are not a write to the file yet and
+  stay in the stream.
+- An open file, a stream opened on a file and an open `DataBase` are recorded
+  by name, cursor and record size, and filled from the store when a load
+  commits. A handle opened with the truncating flag takes at most what it had
+  written; a handle whose open made a file that was not there takes the whole
+  file, like any other. A `DataBase` object filled that way stores its
+  container at close only if it changed after the load; one that a load did
+  not fill closes as it always has, by storing its container.
+- `File.write(int)` past the end of the buffer fills the gap with zeros, as the
+  array write already did. A restored cursor can stand past the end of a file
+  that is shorter now, which is how the single-byte write came to be reached
+  there.
 
 A guest thread is restored from wherever a title parks one: inside
 `Thread.sleep` or `Thread.yield`, inside `Object.wait`, behind a lock another

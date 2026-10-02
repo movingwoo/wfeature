@@ -36,6 +36,12 @@ type javaStream struct {
 	// Byte-array streams retain their mark independently of the read limit.
 	Markable bool
 	Mark     int
+	// File says the bytes are a window on a file, from Offset to its end, as
+	// File.openInputStream took them. A checkpoint records where the window
+	// starts and none of what is in it: a load takes the window again from
+	// the file as the store has it.
+	File   bool
+	Offset int
 }
 
 const (

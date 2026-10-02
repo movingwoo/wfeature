@@ -272,17 +272,22 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		object.SetFieldValue("snapshotImage", jvm.ReferenceValue(picture))
 	}
 	if options.Storage {
-		store := &runtimeDataBaseStore{name: "fixture", records: [][]byte{[]byte("saved"), nil, {}}}
+		// The tables are planted and the session runs over a store holding the
+		// same content, which is the state a running session is always in:
+		// every host copy equals the store. A checkpoint carries the names
+		// only, and a restore reads the content back from its own store.
+		client.AttachSaveStore(continuationStorageSaves(t))
+		store := &runtimeDataBaseStore{name: "fixture", records: [][]byte{[]byte("saved"), nil, []byte("third")}}
 		runtime.databases = map[string]*runtimeDataBaseStore{"fixture": store}
 		object.SetFieldValue("snapshotDatabase", jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/db/DataBase", Native: store}))
 		file := &runtimeGuestFile{name: "fixture.bin", data: []byte("cursor"), position: 2}
 		object.SetFieldValue("snapshotFile", jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/io/File", Native: file}))
 		object.SetFieldValue("snapshotStream", jvm.ReferenceValue(&jvm.Object{ClassName: runtimeFileInputStreamClass, Native: file}))
-		cFile := &runtimeCFile{name: "fixture-c", data: []byte("stream"), packaged: 6}
+		cFile := &runtimeCFile{name: "fixture-c", data: []byte("stream")}
 		runtime.cFiles = map[string]*runtimeCFile{"fixture-c": cFile}
 		runtime.cFileHandles = map[uint32]*runtimeCFileHandle{0x1003: {store: cFile, position: 2}}
 		runtime.nextCDatabaseHandle = 5
-		rdb := &runtimeRecordDatabase{name: "fixture-r", records: [][]byte{nil, {}, []byte("record")}, recordSize: 19}
+		rdb := &runtimeRecordDatabase{name: "fixture-r", records: [][]byte{nil, []byte("middle"), []byte("record")}, recordSize: 19}
 		runtime.recordDatabases = map[string]*runtimeRecordDatabase{"fixture-r": rdb}
 		runtime.recordDatabaseHandles = map[uint32]*runtimeRecordDatabaseHandle{0x2002: {store: rdb}}
 		runtime.nextRecordDatabaseHandle = 8
@@ -338,6 +343,20 @@ func defineContinuationFixtureClasses(t *testing.T, client *Client, options cont
 	}
 }
 
+// continuationStorageSaves is what the Storage option's tables hold, as a save
+// store holds it. Each fixture gets a store of its own with this content: the
+// same disk, seen by another process.
+func continuationStorageSaves(t *testing.T) SaveStore {
+	t.Helper()
+	return testSaveStore(t, map[string][]byte{
+		"jdb/fixture":       encodeSaveRecords([][]byte{[]byte("saved"), nil, []byte("third")}),
+		"fs/fixture.bin":    []byte("cursor"),
+		"db/fixture-c":      []byte("stream"),
+		"rdb/fixture-r":     encodeSaveRecords([][]byte{nil, []byte("middle"), []byte("record")}),
+		guestFileRemovedKey: joinRemovalList([]string{"deleted"}),
+	})
+}
+
 func newContinuationRestoreFixture(t *testing.T, epoch int64, options continuationFixtureOptions) continuationFixture {
 	t.Helper()
 	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: syntheticInitializableClient()}, armcore.CoreOptions{})
@@ -348,6 +367,9 @@ func newContinuationRestoreFixture(t *testing.T, epoch int64, options continuati
 	client.clock = clock
 	client.module = options.Module
 	client.SetSpeed(1)
+	if options.Storage {
+		client.AttachSaveStore(continuationStorageSaves(t))
+	}
 	runtime, err := newInitializationRuntime(client)
 	if err != nil {
 		t.Fatal(err)
@@ -517,6 +539,7 @@ func (fixture *continuationFixture) restore(t *testing.T, saved continuationFixt
 	if err != nil {
 		t.Fatal(err)
 	}
+	bindTestStorage(t, fixture.runtime)
 	if len(roots) != 1 || roots[0] == nil {
 		t.Fatal("restored worker root is missing")
 	}
@@ -622,7 +645,7 @@ func (fixture continuationFixture) checkStorage(t *testing.T) {
 		t.Fatal("restored storage roots are missing")
 	}
 	store, ok := database.Native.(*runtimeDataBaseStore)
-	if !ok || fixture.runtime.databases["fixture"] != store || len(store.records) != 3 || string(store.records[0]) != "saved" || store.records[1] != nil || store.records[2] == nil {
+	if !ok || fixture.runtime.databases["fixture"] != store || len(store.records) != 3 || string(store.records[0]) != "saved" || store.records[1] != nil || string(store.records[2]) != "third" {
 		t.Fatal("restored database records or handle sharing differ")
 	}
 	state, ok := file.Native.(*runtimeGuestFile)
@@ -633,10 +656,10 @@ func (fixture continuationFixture) checkStorage(t *testing.T) {
 	openFile := fixture.runtime.cFileHandles[0x1003]
 	rdb := fixture.runtime.recordDatabases["fixture-r"]
 	openRecord := fixture.runtime.recordDatabaseHandles[0x2002]
-	if cFile == nil || openFile == nil || openFile.store != cFile || string(cFile.data) != "stream" || openFile.position != 2 || cFile.packaged != 6 || fixture.runtime.nextCDatabaseHandle != 5 {
+	if cFile == nil || openFile == nil || openFile.store != cFile || string(cFile.data) != "stream" || openFile.position != 2 || cFile.packaged != 0 || fixture.runtime.nextCDatabaseHandle != 5 {
 		t.Fatal("restored C file table differs")
 	}
-	if rdb == nil || openRecord == nil || openRecord.store != rdb || rdb.recordSize != 19 || len(rdb.records) != 3 || rdb.records[0] != nil || rdb.records[1] == nil || string(rdb.records[2]) != "record" || fixture.runtime.nextRecordDatabaseHandle != 8 || !fixture.runtime.removedFiles["deleted"] {
+	if rdb == nil || openRecord == nil || openRecord.store != rdb || rdb.recordSize != 19 || len(rdb.records) != 3 || rdb.records[0] != nil || string(rdb.records[1]) != "middle" || string(rdb.records[2]) != "record" || fixture.runtime.nextRecordDatabaseHandle != 8 || !fixture.runtime.removedFiles["deleted"] {
 		t.Fatal("restored C record table or removal cache differs")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 )
@@ -22,8 +23,21 @@ import (
 // **The part that is derived is derived again, and only the part that moved is
 // kept.** Which exchange a module is a client of is read from the module's own
 // code, the same way it was when the session started, and a record that claims
-// an adapter this module does not match is refused. Restoring one reads no
-// save and writes none: the store underneath it is the caller's.
+// an adapter this module does not match is refused.
+//
+// What an adapter read from the store is derived again as well, from the store
+// the restored session runs over: the word the options adapter hides, the two
+// path lists the 58-byte adapter answers from its own copy, and the flag and
+// certificate the 100-byte adapter writes back into every store of its file.
+// Kept in a record, those would be older bytes that an adapter puts back over
+// newer ones. What a record keeps is what was never in a file: the certificate
+// an adapter issued for the run, and whether the title removed or made it.
+//
+// The 100-byte adapter's flag and certificate are also in the record, as the
+// one fallback: they are used when the file they came from is gone or no
+// longer has a header this adapter reads, because the adapter cannot store
+// that file at all without them, and zeros in their place would be a
+// certificate the title never had.
 
 const (
 	adapterStoreNone           = ""
@@ -35,8 +49,6 @@ const (
 	// one keeps is a save file's worth of bytes.
 	maxAdapterBytes = 1 << 20
 )
-
-type adapterFileState struct{ Key, Data []byte }
 
 type callbackState struct {
 	Address, Param uint32
@@ -59,36 +71,37 @@ type networkState struct {
 	Sockets  []socketState
 }
 
+// adapterStateVersion is the layout of adapterState. Version 1 carried the
+// adapters' copies of what they had read from the store.
+const adapterStateVersion = 2
+
 // adapterState is the save adapter a session runs under, if it has one, and
 // the local service, if it has one. A session has at most one of each.
 type adapterState struct {
 	Version uint32
 	Store   string
 
-	// The cached-authentication adapter: the word it hides, and the options
-	// file it holds when there is no store to hold it.
-	Original []byte
-	Volatile []byte
+	// The private certificate of the 58-byte adapter, and of the 100-byte
+	// adapter once it is active.
+	Certificate []byte
+	// The 58-byte adapter answers the two path lists from its own copies, in
+	// which the certificate is listed or not as the title left it.
+	CertificateRemoved, CertificateCreated bool
 
-	// The 58-byte certificate adapter: the private certificate, and the two
-	// path lists as the title sees them.
-	Certificate                  []byte
-	RemovedLedger, CreatedLedger []byte
-	RemovedMember, CreatedMember bool
-
-	// The embedded 100-byte certificate adapter.
+	// The embedded 100-byte certificate adapter. The flag and the certificate
+	// it found in its file are the fallback described above.
 	Active              bool
 	OriginalFlag        uint8
 	OriginalCertificate []byte
-	Files               []adapterFileState
 
 	Network *networkState
 }
 
 // captureAdapters records the adapter above the Host's store and answers the
-// store underneath it, which is the one whose files a checkpoint snapshots.
+// store underneath it. It reads the adapter's own memory and makes no store
+// call.
 func (client *Client) captureAdapters() (adapterState, backend.SaveStore, error) {
-	saved := adapterState{Version: 1}
+	saved := adapterState{Version: adapterStateVersion}
 	base := client.saveStore
 	switch store := client.saveStore.(type) {
 	case *authenticationOptionStore:
@@ -97,26 +110,20 @@ func (client *Client) captureAdapters() (adapterState, backend.SaveStore, error)
 			store.mu.Unlock()
 			return adapterState{}, nil, fmt.Errorf("LGT checkpoint cannot capture after a failed save read: %w", store.readError)
 		}
-		saved.Store, saved.Original = adapterStoreOptions, bytes.Clone(store.original[:])
-		if store.volatile != nil {
-			saved.Volatile = append([]byte{}, store.volatile...)
-		}
+		saved.Store = adapterStoreOptions
 		base = store.base
 		store.mu.Unlock()
 	case *authenticationCertificate58Store:
 		store.mu.Lock()
 		saved.Store, saved.Certificate = adapterStoreCertificate58, bytes.Clone(store.certificate)
-		saved.RemovedLedger, saved.CreatedLedger = append([]byte{}, store.ledgers[fileRemovedKey]...), append([]byte{}, store.ledgers[fileCreatedKey]...)
-		saved.RemovedMember, saved.CreatedMember = store.originalMembership[fileRemovedKey], store.originalMembership[fileCreatedKey]
+		saved.CertificateRemoved = certificate58Listed(store.ledgers[fileRemovedKey])
+		saved.CertificateCreated = certificate58Listed(store.ledgers[fileCreatedKey])
 		base = store.base
 		store.mu.Unlock()
 	case *authenticationCertificate100Store:
 		store.mu.Lock()
 		saved.Store, saved.Active, saved.OriginalFlag = adapterStoreCertificate100, store.active, store.originalFlag
 		saved.OriginalCertificate, saved.Certificate = bytes.Clone(store.originalCertificate), bytes.Clone(store.certificate)
-		for _, key := range slices.Sorted(maps.Keys(store.volatile)) {
-			saved.Files = append(saved.Files, adapterFileState{[]byte(key), append([]byte{}, store.volatile[key]...)})
-		}
 		base = store.base
 		store.mu.Unlock()
 	}
@@ -143,41 +150,30 @@ func (client *Client) captureAdapters() (adapterState, backend.SaveStore, error)
 
 func (saved adapterState) validate() error {
 	invalid := func(what string) error { return fmt.Errorf("LGT checkpoint authentication adapter has %s", what) }
-	if saved.Version != 1 {
+	if saved.Version != adapterStateVersion {
 		return invalid("an unsupported version")
 	}
-	size := len(saved.Original) + len(saved.Volatile) + len(saved.Certificate) + len(saved.RemovedLedger) +
-		len(saved.CreatedLedger) + len(saved.OriginalCertificate)
-	for _, file := range saved.Files {
-		size += len(file.Key) + len(file.Data)
-	}
-	if size > maxAdapterBytes || len(saved.Files) > 64 {
+	if len(saved.Certificate)+len(saved.OriginalCertificate) > maxAdapterBytes {
 		return invalid("more data than an adapter holds")
 	}
-	options := len(saved.Original) != 0 || saved.Volatile != nil
-	certificate58 := saved.RemovedLedger != nil || saved.CreatedLedger != nil || saved.RemovedMember || saved.CreatedMember
-	certificate100 := saved.Active || saved.OriginalFlag != 0 || saved.OriginalCertificate != nil || len(saved.Files) != 0
+	certificate58 := saved.CertificateRemoved || saved.CertificateCreated
+	certificate100 := saved.Active || saved.OriginalFlag != 0 || saved.OriginalCertificate != nil
 	switch saved.Store {
-	case adapterStoreNone:
-		if options || certificate58 || certificate100 || saved.Certificate != nil {
+	case adapterStoreNone, adapterStoreOptions:
+		if certificate58 || certificate100 || saved.Certificate != nil {
 			return invalid("fields with no adapter to hold them")
 		}
-	case adapterStoreOptions:
-		if len(saved.Original) != 4 || certificate58 || certificate100 || saved.Certificate != nil {
-			return invalid("fields another adapter holds")
-		}
 	case adapterStoreCertificate58:
-		if options || certificate100 || saved.RemovedLedger == nil || saved.CreatedLedger == nil {
+		// The certificate is whatever the title last stored under the name,
+		// and a title can leave it at any length: empty when its open made
+		// the file, short while a write is half done.
+		if certificate100 {
 			return invalid("fields another adapter holds")
 		}
 	case adapterStoreCertificate100:
-		if options || certificate58 || saved.Active && (len(saved.Certificate) != 100 || len(saved.OriginalCertificate) != 100) {
+		if certificate58 || saved.Active && (len(saved.Certificate) != 100 || len(saved.OriginalCertificate) != 100) ||
+			!saved.Active && (saved.Certificate != nil || saved.OriginalCertificate != nil || saved.OriginalFlag != 0) {
 			return invalid("fields another adapter holds")
-		}
-		for index, file := range saved.Files {
-			if index > 0 && bytes.Compare(saved.Files[index-1].Key, file.Key) >= 0 {
-				return invalid("files out of order")
-			}
 		}
 	default:
 		return invalid("an unknown kind")
@@ -198,58 +194,30 @@ func (saved adapterState) validate() error {
 	return nil
 }
 
-// restoreAdapters rebuilds the adapter over a store the caller supplies, and
-// the local service beside it. It is given a client whose memory is already
-// restored, because the one thing an adapter holds that is not data is where
-// in that memory the guest keeps its own copy.
-func (client *Client) restoreAdapters(archive *Archive, saved adapterState, base backend.SaveStore) error {
+// checkAdapters is the part of restoring an adapter that needs no store: the
+// record is checked, the module is matched against the exchange the record
+// names, and the local service is rebuilt. It is given a client whose memory
+// is already restored. The adapter itself is built when the load commits, by
+// attachAdapters, over the store the session will run on.
+func (client *Client) checkAdapters(archive *Archive, saved adapterState) error {
 	if err := saved.validate(); err != nil {
 		return err
 	}
 	mismatch := fmt.Errorf("LGT checkpoint authentication adapter does not match this module")
-	client.saveStore, client.notificationNetwork = base, nil
+	client.notificationNetwork = nil
 	switch saved.Store {
 	case adapterStoreOptions:
 		if !authenticationOptions(client.module) {
 			return mismatch
 		}
-		store := &authenticationOptionStore{base: base, archive: archive}
-		copy(store.original[:], saved.Original)
-		if saved.Volatile != nil {
-			store.volatile = append([]byte{}, saved.Volatile...)
-		}
-		client.saveStore = store
 	case adapterStoreCertificate58:
 		if !authenticationCertificate58(client.module) {
 			return mismatch
 		}
-		client.saveStore = &authenticationCertificate58Store{
-			base: base, certificate: bytes.Clone(saved.Certificate),
-			ledgers: map[string][]byte{
-				fileRemovedKey: append([]byte{}, saved.RemovedLedger...),
-				fileCreatedKey: append([]byte{}, saved.CreatedLedger...),
-			},
-			originalMembership: map[string]bool{fileRemovedKey: saved.RemovedMember, fileCreatedKey: saved.CreatedMember},
-		}
 	case adapterStoreCertificate100:
-		contract := authenticationCertificate100(client.module)
-		if contract == nil {
+		if authenticationCertificate100(client.module) == nil {
 			return mismatch
 		}
-		if len(saved.Files) != 0 && base != nil {
-			return fmt.Errorf("LGT checkpoint was taken without a save store and cannot be loaded into one")
-		}
-		store := newAuthenticationCertificate100Store(base, contract)
-		for _, file := range saved.Files {
-			store.volatile[string(file.Key)] = append([]byte{}, file.Data...)
-		}
-		store.originalFlag = saved.OriginalFlag
-		store.originalCertificate, store.certificate = bytes.Clone(saved.OriginalCertificate), bytes.Clone(saved.Certificate)
-		if saved.Active {
-			store.bind(client)
-			store.active = true
-		}
-		client.saveStore = store
 	}
 	if saved.Network == nil {
 		// A dial the local service accepted is answered by that service when it
@@ -286,9 +254,70 @@ func (client *Client) restoreAdapters(archive *Archive, saved adapterState, base
 	return nil
 }
 
-// rebaseAdapters moves a restored adapter from the isolated store a load is
-// prepared against onto the store it will run over. It is the one step of
-// adoption that touches the adapter, and it only changes what is underneath.
+// attachAdapters builds the recorded adapter over a store and makes it the
+// client's store. What the adapter read from a store at the start of a session
+// it reads here, from this one, and nothing is written. An error is a read
+// that failed.
+func (client *Client) attachAdapters(archive *Archive, saved adapterState, base backend.SaveStore) error {
+	switch saved.Store {
+	case adapterStoreOptions:
+		store := newAuthenticationOptionStore(base, archive)
+		if store.readError != nil {
+			return store.readError
+		}
+		client.saveStore = store
+	case adapterStoreCertificate58:
+		store := &authenticationCertificate58Store{
+			base: base, certificate: bytes.Clone(saved.Certificate),
+			ledgers: make(map[string][]byte), originalMembership: make(map[string]bool),
+		}
+		for key, listed := range map[string]bool{fileRemovedKey: saved.CertificateRemoved, fileCreatedKey: saved.CertificateCreated} {
+			original, _, err := backend.ReadSave(base, key)
+			if err != nil {
+				return err
+			}
+			store.originalMembership[key] = certificate58Listed(original)
+			store.ledgers[key] = certificate58Ledger(original, listed)
+		}
+		client.saveStore = store
+	case adapterStoreCertificate100:
+		store := newAuthenticationCertificate100Store(base, authenticationCertificate100(client.module))
+		if saved.Active {
+			store.originalFlag, store.originalCertificate = saved.OriginalFlag, bytes.Clone(saved.OriginalCertificate)
+			data, present, err := backend.ReadSave(base, store.key)
+			if err != nil {
+				return err
+			}
+			// The file as it is now says what the adapter has to keep in it.
+			// The record's copy stands in only where the file cannot say.
+			if header, valid := store.header(data); present && valid {
+				store.originalFlag, store.originalCertificate = header[27], bytes.Clone(data[100:200])
+			}
+			store.certificate = bytes.Clone(saved.Certificate)
+			store.bind(client)
+			store.active = true
+		}
+		client.saveStore = store
+	default:
+		client.saveStore = base
+	}
+	return nil
+}
+
+// certificate58Listed reports whether a path list names the 58-byte adapter's
+// certificate.
+func certificate58Listed(list []byte) bool {
+	for _, name := range strings.Split(string(list), "\n") {
+		if strings.TrimSpace(name) == authenticationCertificate58Name {
+			return true
+		}
+	}
+	return false
+}
+
+// rebaseAdapters moves an adapter onto another store. It reads and writes
+// nothing and cannot fail, which is why a load uses it for its last step: the
+// restored adapter moves from the reader it was built over onto the store.
 func (client *Client) rebaseAdapters(base backend.SaveStore) {
 	switch store := client.saveStore.(type) {
 	case *authenticationOptionStore:

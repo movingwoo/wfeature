@@ -12,10 +12,15 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
+// clientStateVersion is the layout of clientState. Version 1 carried the
+// content of the storage tables in its heap record.
+const clientStateVersion = 2
+
 // clientState joins the execution, heap, platform and logical device records.
-// Immutable archive resources, external saves and Host output are owned by the
-// enclosing session checkpoint. A caller must serialize whole service rounds,
-// input and clock changes as well as holding client.run during capture.
+// Immutable archive resources and Host output are owned by the enclosing
+// session checkpoint, and saves by the save store: the record names what the
+// title has open and holds none of it. A caller must serialize whole service
+// rounds, input and clock changes as well as holding client.run during capture.
 type clientState struct {
 	Version                                 uint32
 	ImageHash                               [32]byte
@@ -64,7 +69,7 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 	}
 	// Every guest-clock offset, including editor cycles and worker waits, uses
 	// this instant. Copying a large heap must not shorten the saved waits.
-	saved := clientState{Version: 1, ImageHash: sha256.Sum256(client.image.Data), ImageName: []byte(client.image.Name), ImageBSS: client.image.BSSSize,
+	saved := clientState{Version: clientStateVersion, ImageHash: sha256.Sum256(client.image.Data), ImageName: []byte(client.image.Name), ImageBSS: client.image.BSSSize,
 		WorkerStackCount: client.workerStackCount, FreeWorkerStacks: slices.Clone(client.freeWorkerStacks),
 		Initialized: client.initializationStarted, Prepared: client.prepared != nil, InitParameters: slices.Clone(client.initParameters),
 		Argument: client.argument, Executable: client.executable, Subscriber: client.subscriberNumber, Authentication: client.authentication,
@@ -113,7 +118,7 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 }
 
 func (client *Client) validateClientState(saved clientState) error {
-	if saved.Version != 1 || !bytes.Equal(saved.ImageName, []byte(client.image.Name)) || saved.ImageBSS != client.image.BSSSize || saved.ImageHash != sha256.Sum256(client.image.Data) {
+	if saved.Version != clientStateVersion || !bytes.Equal(saved.ImageName, []byte(client.image.Name)) || saved.ImageBSS != client.image.BSSSize || saved.ImageHash != sha256.Sum256(client.image.Data) {
 		return fmt.Errorf("KTF client checkpoint belongs to another image or version")
 	}
 	if len(saved.Workers) > maxGuestWorkers || saved.WorkerStackCount < 0 || saved.WorkerStackCount > maxGuestWorkers || len(saved.FreeWorkerStacks) > maxGuestWorkers || len(saved.InitParameters) != 0 && len(saved.InitParameters) != 5 || !saved.Prepared && len(saved.InitParameters) != 0 {
@@ -206,8 +211,21 @@ func validateClientAudio(saved clientState) error {
 // restoreClientState is for a fresh, detached LoadClient with registered native
 // implementations. The caller discards it on any error. No guest startup,
 // callback, output or save write runs, and no worker starts before validation.
+//
+// It is the whole restore in one call: the storage the record names is filled
+// at once from whatever store the client has attached, and from nothing when
+// it has none. A session load uses restoreClientStateForActivation and fills
+// it when the load commits.
 func (client *Client) restoreClientState(saved clientState, limits armcore.CoreOptions, sink backend.AudioSink) error {
-	return client.restoreClientStateForActivation(saved, limits, sink, nil)
+	if err := client.restoreClientStateForActivation(saved, limits, sink, nil); err != nil {
+		return err
+	}
+	if err := client.bindRestoredStorage(saveAdapterState{Version: saveAdapterVersion}, client.saveStore); err != nil {
+		client.StopThreads()
+		return err
+	}
+	client.runtime.restoredStorage = nil
+	return nil
 }
 
 func (client *Client) restoreClientStateForActivation(saved clientState, limits armcore.CoreOptions, sink backend.AudioSink, activation *clientActivation) error {

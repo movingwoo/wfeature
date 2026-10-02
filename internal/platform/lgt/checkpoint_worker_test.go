@@ -30,8 +30,11 @@ type javaThreadFixture struct {
 	archive []byte
 	session *Session
 	client  *Client
-	next    uint32
-	stubs   map[string]uint32
+	// store is what the session saves into, which a restore copies: a slot
+	// carries no save.
+	store backend.SaveStore
+	next  uint32
+	stubs map[string]uint32
 }
 
 func newJavaThreadFixture(t *testing.T, store backend.SaveStore) *javaThreadFixture {
@@ -56,7 +59,7 @@ func newJavaThreadFixture(t *testing.T, store backend.SaveStore) *javaThreadFixt
 	if _, err := client.preparePlatformJavaClass("java/lang/Object"); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &javaThreadFixture{t: t, archive: archive, session: session, client: client, next: javaFixtureCode, stubs: map[string]uint32{}}
+	fixture := &javaThreadFixture{t: t, archive: archive, session: session, client: client, store: store, next: javaFixtureCode, stubs: map[string]uint32{}}
 	for name, slot := range map[string][2]uint32{
 		"sleep":      {svcCategoryJava, javaStaticMethodSlot(0)},
 		"yield":      {svcCategoryJava, javaStaticMethodSlot(1)},
@@ -186,12 +189,16 @@ func (fixture *javaThreadFixture) words(session *Session) [8]uint32 {
 }
 
 // restore takes the session through a checkpoint's bytes into a second one
-// with saves of its own.
+// with saves of its own: a copy of what the fixture's store holds now, which
+// is the same disk seen by another process.
 func (fixture *javaThreadFixture) restore(checkpoint backend.Checkpoint) *Session {
 	fixture.t.Helper()
 	store, _ := backend.NewMemorySaveStore(nil)
+	if memory, ok := fixture.store.(*backend.MemorySaveStore); ok {
+		store = boundarySaves(fixture.t, memory)
+	}
 	prepared := prepareFixtureCheckpoint(fixture.t, fixture.archive, checkpoint, store)
-	restored, err := prepared.Commit(context.Background(), nil)
+	restored, err := prepared.Commit(context.Background(), nil, store)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -609,7 +616,7 @@ func TestCheckpointLoadEndsTheDisplacedThreads(t *testing.T) {
 	displaced := append([]*javaWorker(nil), fixture.client.javaRun.workers...)
 
 	prepared := prepareFixtureCheckpoint(t, fixture.archive, checkpoint, store)
-	restored, err := prepared.Commit(context.Background(), fixture.session)
+	restored, err := prepared.Commit(context.Background(), fixture.session, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,8 +735,23 @@ func TestCheckpointRefusesAThreadRecordThatDoesNotAddUp(t *testing.T) {
 		{name: "a stream of a resource the archive has not", mutate: func(java *javaState) {
 			java.Streams = append(java.Streams, javaStreamState{Object: 0x7ffffff0, Archive: 1, Key: []byte("absent")})
 		}},
-		{name: "a database with a record it does not list", mutate: func(java *javaState) {
-			java.Databases = append(java.Databases, javaDatabaseState{Object: 0x7ffffff0, Records: [][]byte{{1}}})
+		{name: "a database whose name is a path", mutate: func(java *javaState) {
+			java.Databases = append(java.Databases, javaDatabaseState{Object: 0x7ffffff0, Name: []byte("../outside")})
+		}},
+		{name: "a database with no name", mutate: func(java *javaState) {
+			java.Databases = append(java.Databases, javaDatabaseState{Object: 0x7ffffff0})
+		}},
+		{name: "a file stream that brings bytes of its own", mutate: func(java *javaState) {
+			java.Streams = append(java.Streams, javaStreamState{Object: 0x7ffffff0, File: true, Data: []byte{1}})
+		}},
+		{name: "a file stream on a resource", mutate: func(java *javaState) {
+			java.Streams = append(java.Streams, javaStreamState{Object: 0x7ffffff0, File: true, Archive: 1, Key: []byte("absent")})
+		}},
+		{name: "a stream offset with no file", mutate: func(java *javaState) {
+			java.Streams = append(java.Streams, javaStreamState{Object: 0x7ffffff0, Offset: 4})
+		}},
+		{name: "a file stream that starts before its file", mutate: func(java *javaState) {
+			java.Streams = append(java.Streams, javaStreamState{Object: 0x7ffffff0, File: true, Offset: -1})
 		}},
 		{name: "an object table torn in the middle", mutate: func(java *javaState) { java.Objects = java.Objects[:len(java.Objects)-5] }},
 		{name: "more threads than stacks", mutate: func(java *javaState) { java.ThreadStacks = 1 }},

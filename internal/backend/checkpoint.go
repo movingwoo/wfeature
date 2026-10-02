@@ -5,18 +5,18 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"fmt"
 )
 
 const (
 	checkpointMagic        = "WFSTATE\x00"
-	checkpointVersion      = 1
+	checkpointVersion      = 2
 	checkpointHeaderSize   = 88
 	checkpointSessionLimit = 64 << 10
 	checkpointRuntimeLimit = 128 << 20
 	// CheckpointLimit bounds an entire execution checkpoint before a Host reads
-	// or accepts an uploaded file. Ordinary save backups have their own format.
-	CheckpointLimit = checkpointHeaderSize + checkpointSessionLimit + checkpointRuntimeLimit + savePackHeaderSize + savePackLimit
+	// or accepts an uploaded file. A checkpoint carries no ordinary save, and
+	// save backups have their own format.
+	CheckpointLimit = checkpointHeaderSize + checkpointSessionLimit + checkpointRuntimeLimit
 
 	CheckpointKTFJava   uint16 = 1
 	CheckpointKTFModule uint16 = 2
@@ -36,26 +36,29 @@ var (
 	ErrCheckpointIdentity = errors.New("backend: this checkpoint belongs to a different archive")
 )
 
-// Checkpoint joins a shared session record, a platform execution record and a
-// complete writable save generation. State codecs validate their own schemas;
-// this envelope validates lengths, archive identity and transfer integrity.
-// A checksum is not authentication. Every inner record remains untrusted.
+// Checkpoint joins a shared session record and a platform execution record.
+// It carries no ordinary save: a load restores execution state and leaves the
+// game's saves where they are, so a slot holds nothing a load could put back.
+// State codecs validate their own schemas; this envelope validates lengths,
+// archive identity and transfer integrity. A checksum is not authentication.
+// Every inner record remains untrusted.
 type Checkpoint struct {
 	Identity [32]byte
 	Variant  uint16
 	Session  []byte
 	Runtime  []byte
-	Saves    []SaveEntry
 }
 
 func checkpointVariantSupported(variant uint16) bool {
 	return variant >= CheckpointKTFJava && variant <= CheckpointLGTJava
 }
 
-// EncodeCheckpoint writes a profile-independent, little-endian version 1
-// envelope: magic(8), version(2), variant(2), archive SHA-256(32), three section
-// lengths(4 each), SHA-256(32), then session/runtime/save-pack sections. The
-// digest covers the first 56 header bytes and all section bytes.
+// EncodeCheckpoint writes a profile-independent, little-endian version 2
+// envelope: magic(8), version(2), variant(2), archive SHA-256(32), two section
+// lengths(4 each), a reserved word that is zero(4), SHA-256(32), then the
+// session and runtime sections. The digest covers the first 56 header bytes
+// and both sections. The reserved word is where version 1 kept the length of
+// an embedded save generation.
 func EncodeCheckpoint(saved Checkpoint) ([]byte, error) {
 	if !checkpointVariantSupported(saved.Variant) {
 		return nil, ErrCheckpointVersion
@@ -63,25 +66,15 @@ func EncodeCheckpoint(saved Checkpoint) ([]byte, error) {
 	if len(saved.Session) > checkpointSessionLimit || len(saved.Runtime) > checkpointRuntimeLimit {
 		return nil, ErrCheckpointDamaged
 	}
-	entries, err := validateSnapshotSaves(saved.Saves)
-	if err != nil {
-		return nil, err
-	}
-	pack, err := EncodeSavePack(SavePack{Identity: saved.Identity, Entries: entries})
-	if err != nil {
-		return nil, err
-	}
-	data := make([]byte, checkpointHeaderSize, checkpointHeaderSize+len(saved.Session)+len(saved.Runtime)+len(pack))
+	data := make([]byte, checkpointHeaderSize, checkpointHeaderSize+len(saved.Session)+len(saved.Runtime))
 	copy(data, checkpointMagic)
 	binary.LittleEndian.PutUint16(data[8:10], checkpointVersion)
 	binary.LittleEndian.PutUint16(data[10:12], saved.Variant)
 	copy(data[12:44], saved.Identity[:])
 	binary.LittleEndian.PutUint32(data[44:48], uint32(len(saved.Session)))
 	binary.LittleEndian.PutUint32(data[48:52], uint32(len(saved.Runtime)))
-	binary.LittleEndian.PutUint32(data[52:56], uint32(len(pack)))
 	data = append(data, saved.Session...)
 	data = append(data, saved.Runtime...)
-	data = append(data, pack...)
 	copy(data[56:88], checkpointDigest(data))
 	return data, nil
 }
@@ -94,66 +87,35 @@ func checkpointDigest(data []byte) []byte {
 }
 
 // DecodeCheckpoint checks the expected archive before allocating section
-// copies. Returned sections and save files do not alias the input buffer.
+// copies. Returned sections do not alias the input buffer.
+//
+// The version is read before the size is bounded, so an envelope of an earlier
+// format answers ErrCheckpointVersion whatever its size: an earlier format
+// could be larger than this one's limit, and "damaged" would be the wrong
+// thing to tell its owner.
 func DecodeCheckpoint(data []byte, identity [32]byte) (Checkpoint, error) {
 	if len(data) < 8 || string(data[:8]) != checkpointMagic {
 		return Checkpoint{}, ErrNotCheckpoint
 	}
-	if len(data) < checkpointHeaderSize || len(data) > CheckpointLimit {
+	if len(data) < checkpointHeaderSize {
 		return Checkpoint{}, ErrCheckpointDamaged
 	}
 	variant := binary.LittleEndian.Uint16(data[10:12])
 	if binary.LittleEndian.Uint16(data[8:10]) != checkpointVersion || !checkpointVariantSupported(variant) {
 		return Checkpoint{}, ErrCheckpointVersion
 	}
+	if len(data) > CheckpointLimit {
+		return Checkpoint{}, ErrCheckpointDamaged
+	}
 	sessionSize := uint64(binary.LittleEndian.Uint32(data[44:48]))
 	runtimeSize := uint64(binary.LittleEndian.Uint32(data[48:52]))
-	saveSize := uint64(binary.LittleEndian.Uint32(data[52:56]))
-	if sessionSize > checkpointSessionLimit || runtimeSize > checkpointRuntimeLimit || saveSize > savePackHeaderSize+savePackLimit || sessionSize+runtimeSize+saveSize != uint64(len(data)-checkpointHeaderSize) || !bytes.Equal(data[56:88], checkpointDigest(data)) {
+	if binary.LittleEndian.Uint32(data[52:56]) != 0 || sessionSize > checkpointSessionLimit || runtimeSize > checkpointRuntimeLimit ||
+		sessionSize+runtimeSize != uint64(len(data)-checkpointHeaderSize) || !bytes.Equal(data[56:88], checkpointDigest(data)) {
 		return Checkpoint{}, ErrCheckpointDamaged
 	}
 	if !bytes.Equal(data[12:44], identity[:]) {
 		return Checkpoint{}, ErrCheckpointIdentity
 	}
 	runtimeStart := checkpointHeaderSize + int(sessionSize)
-	saveStart := runtimeStart + int(runtimeSize)
-	packData := data[saveStart:]
-	// The ordinary save-pack decoder validates keys and checksums. Bound its
-	// entry cardinality before it allocates records, including empty files.
-	if err := checkpointSaveCount(packData); err != nil {
-		return Checkpoint{}, err
-	}
-	pack, err := DecodeSavePack(packData)
-	if err != nil || pack.Identity != identity {
-		return Checkpoint{}, ErrCheckpointDamaged
-	}
-	entries, err := validateSnapshotSaves(pack.Entries)
-	if err != nil {
-		return Checkpoint{}, fmt.Errorf("%w: %v", ErrCheckpointDamaged, err)
-	}
-	return Checkpoint{Identity: identity, Variant: variant, Session: bytes.Clone(data[checkpointHeaderSize:runtimeStart]), Runtime: bytes.Clone(data[runtimeStart:saveStart]), Saves: entries}, nil
-}
-
-func checkpointSaveCount(data []byte) error {
-	if len(data) < savePackHeaderSize {
-		return ErrCheckpointDamaged
-	}
-	for offset, count := savePackHeaderSize, 0; offset < len(data); count++ {
-		if count >= maxSnapshotSaveEntries || len(data)-offset < 2 {
-			return ErrCheckpointDamaged
-		}
-		keySize := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
-		offset += 2
-		if keySize > len(data)-offset || len(data)-offset-keySize < 4 {
-			return ErrCheckpointDamaged
-		}
-		offset += keySize
-		fileSize := uint64(binary.LittleEndian.Uint32(data[offset : offset+4]))
-		offset += 4
-		if fileSize > uint64(len(data)-offset) {
-			return ErrCheckpointDamaged
-		}
-		offset += int(fileSize)
-	}
-	return nil
+	return Checkpoint{Identity: identity, Variant: variant, Session: bytes.Clone(data[checkpointHeaderSize:runtimeStart]), Runtime: bytes.Clone(data[runtimeStart:])}, nil
 }

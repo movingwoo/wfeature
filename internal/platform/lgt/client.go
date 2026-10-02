@@ -215,6 +215,22 @@ type Client struct {
 	// about keys it is asked for and cannot be enumerated, so a directory
 	// listing has nothing to find its own saves with. See fileCreatedKey.
 	created map[string]bool
+	// removedUnsaved and createdUnsaved say that the list of that name was
+	// changed here and the store did not take it: memory is ahead of the
+	// store. The next write of the list that the store takes clears the bit,
+	// and a quick save or a quick load asks the store again before it goes
+	// on. See storeIssuedWrites.
+	removedUnsaved, createdUnsaved bool
+	// fileEpochs counts, for each path, how often its save has changed under
+	// the session: a write the store took, or a removal. An open file
+	// remembers the count its buffer was last level with, which is how a
+	// quick step tells a buffer that is the file plus the title's writes from
+	// one that is behind its file. See openFile.synced.
+	fileEpochs map[string]uint64
+	// restoredStorage is what a checkpoint brought back about open storage
+	// that a store has not filled yet. It is nil in a running session. See
+	// checkpoint_storage.go.
+	restoredStorage *restoredStorage
 
 	traceLive string
 	traceOut  io.Writer

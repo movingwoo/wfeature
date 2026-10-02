@@ -307,11 +307,24 @@ type initializationRuntime struct {
 	recordDatabases          map[string]*runtimeRecordDatabase
 	recordDatabaseHandles    map[uint32]*runtimeRecordDatabaseHandle
 	nextRecordDatabaseHandle uint32
-	displayCards             []*jvm.Object
-	dockedCard               *jvm.Object
-	pendingTimers            []wipicTimer
-	cameraBoundsStore        uint32
-	menuTextCompatibility    bool
+	// The three detached tables hold the stores a quick load found nothing
+	// for: the name was open when the checkpoint was taken and is not in the
+	// store now. Such a store is empty and out of its catalog, so a question
+	// about the name is answered from the store, and it is kept here by name
+	// so that the name still has one host store: the next open, rename or
+	// write of it takes this one. They are empty in a session that has not
+	// been loaded into. See storage_rebind.go.
+	detachedDatabases       map[string]*runtimeDataBaseStore
+	detachedCFiles          map[string]*runtimeCFile
+	detachedRecordDatabases map[string]*runtimeRecordDatabase
+	// restoredStorage is what a checkpoint brought back and a store has not
+	// filled yet. It is nil in a running session.
+	restoredStorage       *restoredStorage
+	displayCards          []*jvm.Object
+	dockedCard            *jvm.Object
+	pendingTimers         []wipicTimer
+	cameraBoundsStore     uint32
+	menuTextCompatibility bool
 	// pendingNetCallbacks are the MC_netConnect failures owed to callers that
 	// registered one; see wipic_net.go.
 	relayOnline         bool

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"time"
 )
@@ -136,6 +137,11 @@ type javaStreamState struct {
 	Source   *javaStreamSource
 	Markable bool
 	Mark     int
+	// File says the stream is a window on a file, starting Offset bytes into
+	// it. Such a stream brings no bytes: a load takes its window from the
+	// file as the store has it.
+	File   bool
+	Offset int
 }
 
 type javaThreadState struct {
@@ -200,12 +206,12 @@ type javaDateState struct {
 	Millis int64
 }
 
+// javaDatabaseState is one DataBase object: which database it is, and whether
+// the title has closed it. Its records are the container's, in the store.
 type javaDatabaseState struct {
 	Object     uint32
 	Name       []byte
 	RecordSize uint32
-	Records    [][]byte
-	Deleted    []bool
 	Modified   int64
 	Closed     bool
 }
@@ -673,13 +679,22 @@ func (client *Client) captureJavaState(budget *stateBudget) (*javaState, error) 
 		if stream == nil {
 			return nil, fmt.Errorf("LGT checkpoint has a missing stream")
 		}
-		record := javaStreamState{Object: object, Name: []byte(stream.Name), Read: stream.Read, Closed: stream.Closed, Markable: stream.Markable, Mark: stream.Mark}
+		record := javaStreamState{Object: object, Name: []byte(stream.Name), Read: stream.Read, Closed: stream.Closed, Markable: stream.Markable, Mark: stream.Mark,
+			File: stream.File, Offset: stream.Offset}
 		if stream.Source != nil {
 			if stream.Source.Pulling {
 				return nil, ErrCheckpointBusy
 			}
 			source := *stream.Source
 			record.Source = &source
+		}
+		if stream.File {
+			// The window is charged and not recorded: a load takes it again.
+			if err := budget.charge(len(stream.Data)); err != nil {
+				return nil, err
+			}
+			saved.Streams = append(saved.Streams, record)
+			continue
 		}
 		if len(stream.Data) != 0 {
 			if reference, found := packaged[&stream.Data[0]]; found && reference.length == len(stream.Data) {
@@ -802,21 +817,20 @@ func (client *Client) captureJavaState(budget *stateBudget) (*javaState, error) 
 		if database == nil || len(database.deleted) != len(database.records) {
 			return nil, fmt.Errorf("LGT checkpoint has a malformed database")
 		}
-		record := javaDatabaseState{
-			Object: object, Name: []byte(database.name), RecordSize: database.recordSize,
-			Deleted: slices.Clone(database.deleted), Modified: database.modified, Closed: database.closed,
+		if database.unsaved {
+			return nil, fmt.Errorf("LGT checkpoint has a database with a write the store has not been given")
 		}
+		// The records are charged and not recorded: a load reads the
+		// container back, on the same budget.
 		for _, data := range database.records {
 			if err := budget.charge(len(data)); err != nil {
 				return nil, err
 			}
-			if data == nil {
-				record.Records = append(record.Records, nil)
-				continue
-			}
-			record.Records = append(record.Records, append([]byte{}, data...))
 		}
-		saved.Databases = append(saved.Databases, record)
+		saved.Databases = append(saved.Databases, javaDatabaseState{
+			Object: object, Name: []byte(database.name), RecordSize: database.recordSize,
+			Modified: database.modified, Closed: database.closed,
+		})
 	}
 	for _, object := range slices.Sorted(maps.Keys(runtime.graphics)) {
 		state := runtime.graphics[object]
@@ -928,7 +942,9 @@ func (saved *javaState) validate() error {
 	for index, stream := range saved.Streams {
 		if index > 0 && saved.Streams[index-1].Object >= stream.Object || stream.Archive > 3 ||
 			(stream.Archive != 0) != (stream.Key != nil) || stream.Archive != 0 && stream.Data != nil ||
-			stream.Read < 0 || stream.Mark < 0 || stream.Source != nil && stream.Source.Pulling {
+			stream.Read < 0 || stream.Mark < 0 || stream.Source != nil && stream.Source.Pulling ||
+			stream.File && (stream.Archive != 0 || stream.Data != nil || stream.Source != nil) ||
+			stream.Offset < 0 || stream.Offset > math.MaxInt32 || !stream.File && stream.Offset != 0 {
 			return invalid("an invalid stream")
 		}
 		// The cursors are checked against the bytes once those are in hand: a
@@ -1022,8 +1038,9 @@ func (saved *javaState) validate() error {
 		}
 	}
 	for index, database := range saved.Databases {
-		if index > 0 && saved.Databases[index-1].Object >= database.Object || len(database.Records) != len(database.Deleted) ||
-			len(database.Records) > maxStatePacked || len(database.Name) > maxDatabaseName*4 {
+		// The name is what a load reads the store with, so it has to be one
+		// openDataBase would have taken.
+		if index > 0 && saved.Databases[index-1].Object >= database.Object || validDatabaseName(string(database.Name)) != nil {
 			return invalid("an invalid database")
 		}
 	}
@@ -1193,7 +1210,16 @@ func (client *Client) restoreJavaState(saved *javaState) error {
 	}
 	tables := client.archive.resourceTables()
 	for _, record := range saved.Streams {
-		stream := &javaStream{Name: string(record.Name), Read: record.Read, Closed: record.Closed, Markable: record.Markable, Mark: record.Mark}
+		stream := &javaStream{Name: string(record.Name), Read: record.Read, Closed: record.Closed, Markable: record.Markable, Mark: record.Mark,
+			File: record.File, Offset: record.Offset}
+		if record.File {
+			// The window is taken when the load commits, and the cursors are
+			// held to it then: here the stream has no bytes to be past.
+			client.restoredStorage.cursors[record.Object] = [2]int{record.Read, record.Mark}
+			stream.Read, stream.Mark = 0, 0
+			runtime.streams[record.Object] = stream
+			continue
+		}
 		if record.Archive != 0 {
 			data, found := tables[record.Archive-1][string(record.Key)]
 			if !found {
@@ -1265,18 +1291,11 @@ func (client *Client) restoreJavaState(saved *javaState) error {
 		runtime.dates[record.Object] = record.Millis
 	}
 	for _, record := range saved.Databases {
-		database := &javaDatabase{
-			name: string(record.Name), recordSize: record.RecordSize, deleted: slices.Clone(record.Deleted),
-			modified: record.Modified, closed: record.Closed,
+		// The records are read when the load commits.
+		runtime.databases[record.Object] = &javaDatabase{
+			name: string(record.Name), recordSize: record.RecordSize, modified: record.Modified, closed: record.Closed,
 		}
-		for _, data := range record.Records {
-			if data == nil {
-				database.records = append(database.records, nil)
-				continue
-			}
-			database.records = append(database.records, append([]byte{}, data...))
-		}
-		runtime.databases[record.Object] = database
+		client.restoredStorage.recordSizes[record.Object] = record.RecordSize
 	}
 	for _, record := range saved.Graphics {
 		runtime.graphics[record.Object] = &javaGraphics{

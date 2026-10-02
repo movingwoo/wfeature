@@ -38,8 +38,8 @@ func lgtCheckpointTicks(t *testing.T, s *Session, count int) {
 
 // The LGT Clet goes through the same shared path the KTF runtimes do: what the
 // Host holds beside the guest — the pause, the held keys, the speed — is
-// restored with it, the saves go back to the checkpoint's, and the session
-// then does what the uninterrupted one did.
+// restored with it, the saves stay as they are, and the session then does what
+// the uninterrupted one did.
 func TestCheckpointLGTRestoresInputPauseAndContinuation(t *testing.T) {
 	archive, err := testfixture.LGTCheckpointArchive()
 	if err != nil {
@@ -100,8 +100,8 @@ func TestCheckpointLGTRestoresInputPauseAndContinuation(t *testing.T) {
 				lgtCheckpointWord(t, s, testfixture.LGTCheckpointFrameCounter) != counted {
 				t.Fatal("the restored guest replayed its startup or is not at the checkpoint")
 			}
-			if saved, _ := store.LoadSave("fs/progress"); string(saved) != "saved" {
-				t.Fatalf("the load kept later saves: %q", saved)
+			if saved, _ := store.LoadSave("fs/progress"); string(saved) != "later" {
+				t.Fatalf("the load changed the save written after the checkpoint: %q", saved)
 			}
 			if paused {
 				if _, err := s.Tick(t.Context(), 0); !errors.Is(err, ErrPaused) {
@@ -252,8 +252,8 @@ func TestCheckpointLGTRefusalPreservesTheLiveSession(t *testing.T) {
 	if err := s.LoadCheckpoint(t.Context(), archive, data); err != nil {
 		t.Fatalf("the valid checkpoint could not be loaded after the refusals: %v", err)
 	}
-	if restored, found, err := store.ReadSave("fs/progress"); err != nil || !found || string(restored) != "saved" {
-		t.Fatalf("the valid load did not restore the saves: %q, %t, %v", restored, found, err)
+	if kept, found, err := store.ReadSave("fs/progress"); err != nil || !found || string(kept) != "current" {
+		t.Fatalf("the valid load changed the saves: %q, %t, %v", kept, found, err)
 	}
 	if len(s.HeldKeys()) != 0 {
 		t.Fatal("the valid load kept a hold made after the checkpoint")
@@ -262,7 +262,7 @@ func TestCheckpointLGTRefusalPreservesTheLiveSession(t *testing.T) {
 
 // A checkpoint written to a slot is restored by a process that never ran the
 // title: the startup is not replayed, the hold the Host had is still owned,
-// and the saves written after the checkpoint are gone.
+// and the save written after the checkpoint is still there.
 func TestCheckpointLGTSubprocess(t *testing.T) {
 	archive, err := testfixture.LGTCheckpointArchive()
 	if err != nil {
@@ -290,8 +290,8 @@ func TestCheckpointLGTSubprocess(t *testing.T) {
 			!reflect.DeepEqual(restored.HeldKeys(), []int32{49}) {
 			t.Fatal("the restarted process replayed startup, lost the frame count or lost input")
 		}
-		if data, _ := store.LoadSave("fs/progress"); string(data) != "saved before process exit" {
-			t.Fatal("the restarted process kept later ordinary saves")
+		if data, _ := store.LoadSave("fs/progress"); string(data) != "written after the checkpoint" {
+			t.Fatalf("the restarted process changed the save written after the checkpoint: %q", data)
 		}
 		if err := restored.ReleaseHeldInput(t.Context()); err != nil {
 			t.Fatal(err)

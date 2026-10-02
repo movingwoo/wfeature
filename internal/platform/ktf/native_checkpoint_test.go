@@ -7,6 +7,7 @@ import (
 	"errors"
 	"image/color"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,12 +61,15 @@ func TestNativeCheckpointFixtureUsesOrdinaryStartupFramesAndInput(t *testing.T) 
 	}
 }
 
-func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.T) {
+// A checkpoint brings back the devices and the objects the title holds, and
+// none of what its files held: an open file is read again from the store the
+// restored session runs over, and the tables that shadow the store start empty.
+func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	archive, err := testfixture.KTFNativeCheckpointArchive()
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, _ := backend.NewMemorySaveStore(nil)
+	store := newNativeSaveFixtureStore(t)
 	clock := NewManualClock(time.Unix(1, 0))
 	sink := &countingSink{}
 	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store, AudioSink: sink, Width: 32, Height: 48})
@@ -74,13 +78,13 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 	}
 	defer source.Close()
 	p := source.platform
-	put := func(data []byte) uint32 {
+	put := func(session *NativeSession, data []byte) uint32 {
 		t.Helper()
-		address, err := source.Client.Allocate(uint32(len(data)))
+		address, err := session.Client.Allocate(uint32(len(data)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := source.Client.core.Memory().Write(address, data); err != nil {
+		if err := session.Client.core.Memory().Write(address, data); err != nil {
 			t.Fatal(err)
 		}
 		return address
@@ -88,26 +92,26 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 	data := buildResourceFile([]nativeResourceGroup{{Kind: 6, First: 1}}, [][]byte{[]byte("abc")})
 	p.keep("state.dat", data)
 	file := nativeCall(t, p.openFile, 0, nativeString(t, p, "state.dat"), 2)
-	// The first write makes written and the open file share the same buffer.
-	nativeCall(t, p.writeFile, file, put(data[:1]), 1)
+	nativeCall(t, p.writeFile, file, put(source, data[:1]), 1)
 	resource, ok, err := p.resourceFile("state.dat")
 	if err != nil || !ok {
 		t.Fatalf("resource = %t, %v", ok, err)
 	}
 	p.resourceFile("missing.dat")
-	// Cached parsed tables must remain valid even if their source header changes.
+	// A running session keeps the tables it parsed even when the file they
+	// came from changes under them.
 	nativeCall(t, p.seekFile, file, nativeSeekStart, 0)
-	nativeCall(t, p.writeFile, file, put([]byte{0xff}), 1)
+	nativeCall(t, p.writeFile, file, put(source, []byte{0xff}), 1)
 	if _, err := parseNativeResourceFile(p.files[file].data); err == nil {
 		t.Fatal("header was not changed")
 	}
 	bitmap := buildBitmap(1, 1, []color.RGBA{{A: 255}, {R: 11, A: 255}, {R: 22, A: 255}}, []byte{1, 0, 0, 0})
-	object := nativeCall(t, p.createObject, nativeClassImage, put(bitmap))
+	object := nativeCall(t, p.createObject, nativeClassImage, put(source, bitmap))
 	pixel := binary.LittleEndian.Uint32(bitmap[bitmapPixelOffsetField:])
 	if err := source.Client.core.Memory().Write(p.images[object].data+pixel, []byte{2}); err != nil {
 		t.Fatal(err)
 	}
-	nativeCall(t, p.setClip, 0, 0, put(oneNoteSMAF()))
+	nativeCall(t, p.setClip, 0, 0, put(source, oneNoteSMAF()))
 	nativeCall(t, p.playClip)
 	clock.Advance(30 * time.Millisecond)
 	p.audio.Advance(p.guestElapsed())
@@ -126,16 +130,27 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The capture gave the store the write that was waiting for a boundary,
+	// so the record has none to carry.
+	stored, found := store.LoadSave(nativeSaveKey("state.dat"))
+	if !found || !bytes.Equal(stored, p.files[file].data) || len(p.unsaved) != 0 || len(p.refused) != 0 {
+		t.Fatalf("the capture left a write waiting: stored=%t unsaved=%d refused=%d", found, len(p.unsaved), len(p.refused))
+	}
+	// A load installs no save, so the second session's store is a copy of the
+	// first's as the capture left it: the same disk, seen by another process.
 	freshClock := NewManualClock(time.Unix(500, 0))
-	freshStore, _ := backend.NewMemorySaveStore(nil)
+	freshStore := newNativeSaveFixtureStore(t, store.snapshot(t)...)
 	freshSink := &countingSink{}
 	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: freshClock, SaveStore: freshStore, AudioSink: freshSink})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		t.Fatalf("checking the load made %d save store calls, the first being %s", calls, first)
+	}
 	freshClock.Advance(time.Hour)
-	restored, err := prepared.Commit(t.Context(), nil)
+	restored, err := prepared.Commit(t.Context(), nil, freshStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,23 +175,21 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 	if err := p.refresh(p.images[object]); err != nil {
 		t.Fatal(err)
 	}
-	if cached, exists := r.resources["missing.dat"]; !exists || cached != nil {
-		t.Fatal("negative resource cache disappeared")
-	}
-	if r.fileFailure != p.fileFailure || r.colours[17] != 0x11223300 || !r.unsaved["state.dat"] || r.files[file].position != 1 {
+	if r.fileFailure != p.fileFailure || r.colours[17] != 0x11223300 {
 		t.Fatal("file or display service state changed")
 	}
-	item, ok := r.resources["state.dat"].item(6, 1)
-	if !ok || string(item) != "abc" {
-		t.Fatal("cached resource tables were reparsed or lost")
+	// Nothing of the files came with the record. The object is the one the
+	// title held, at its cursor, over a copy of its own of what the store has.
+	if len(r.written) != 0 || len(r.unsaved) != 0 || len(r.refused) != 0 || len(r.resources) != 0 {
+		t.Fatalf("the load brought back file tables: written=%d unsaved=%d refused=%d resources=%d", len(r.written), len(r.unsaved), len(r.refused), len(r.resources))
 	}
-	// Mutating the open file must still reach both views, but not the source.
-	index := resource.index[0]
-	r.files[file].data[index] = 'z'
-	if r.written["state.dat"][index] != 'z' || item[0] != 'z' || resource.data[index] != 'a' {
-		t.Fatal("buffer sharing or detached ownership changed")
+	handle := r.files[file]
+	if handle == nil || handle.position != 1 || !handle.writable || handle.truncated || !bytes.Equal(handle.data, stored) || &handle.data[0] == &p.files[file].data[0] {
+		t.Fatalf("the open file was not read again from the store: %+v", handle)
 	}
-	p.files[file].data[index] = 'z'
+	if freshStore.attempts != 0 {
+		t.Fatalf("the load wrote to the store %d times", freshStore.attempts)
+	}
 	for _, pair := range []struct {
 		session *NativeSession
 		clock   *ManualClock
@@ -190,6 +203,9 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 			t.Fatalf("pending resume, timer and sound callbacks = %d, %v", count, err)
 		}
 	}
+	if freshStore.attempts != 0 {
+		t.Fatalf("the first frame after the load wrote to the store %d times", freshStore.attempts)
+	}
 	a, err := source.CaptureCheckpoint(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -201,8 +217,24 @@ func TestNativeCheckpointPreservesSharedBuffersCachedViewsAndDevices(t *testing.
 	if !bytes.Equal(a.Runtime, b.Runtime) {
 		t.Fatal("complete native state differs after identical continuation")
 	}
-	if !bytes.Equal(a.Saves[0].Data, b.Saves[0].Data) {
-		t.Fatal("buffered save flush differs after restoration")
+	// A write through the restored object is the restored title's own: it
+	// lands in the file as the store has it and waits for a boundary like any
+	// other.
+	nativeCall(t, r.writeFile, file, put(restored, []byte{'Z'}), 1)
+	if !r.unsaved["state.dat"] || &r.written["state.dat"][0] != &handle.data[0] || handle.data[1] != 'Z' || !bytes.Equal(handle.data[2:], stored[2:]) {
+		t.Fatal("a write after the load did not go into the file as the store has it")
+	}
+	// A resource request after the load parses the file as it is now, where
+	// the session that was running still answers from what it parsed before
+	// the header changed.
+	if _, ok, err := r.resourceFile("state.dat"); err != nil || ok {
+		t.Fatalf("the restored session answered a resource from a file that is not one any more: %t, %v", ok, err)
+	}
+	if cached, ok, err := p.resourceFile("state.dat"); err != nil || !ok || cached != resource {
+		t.Fatalf("the running session lost the tables it had parsed: %t, %v", ok, err)
+	}
+	if item, ok := resource.item(6, 1); !ok || len(item) != 3 {
+		t.Fatal("the running session's parsed tables no longer answer")
 	}
 }
 
@@ -217,6 +249,10 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
+	// One open file, so the record has a file entry for the cases to damage.
+	if nativeCall(t, source.platform.openFile, 0, nativeString(t, source.platform, "Slot.dat"), 2) == 0 {
+		t.Fatal("the fixture could not open a file")
+	}
 	saved, err := source.CaptureCheckpoint(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +262,7 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		mutate func(*nativeState)
 	}{
 		{"version", func(s *nativeState) { s.Version++ }},
+		{"earlier version", func(s *nativeState) { s.Version = 1 }},
 		{"mapping", func(s *nativeState) { s.Core.Memory.Mappings[0].Permission = armcore.PermissionReadWriteExecute }},
 		{"budget", func(s *nativeState) { s.Core.MaxSteps++ }},
 		{"allocator overlap", func(s *nativeState) { s.Blocks = append(s.Blocks, s.Blocks[0]) }},
@@ -235,7 +272,22 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"screen overflow", func(s *nativeState) { s.Screen.Width = math.MaxInt }},
 		{"deadline overflow", func(s *nativeState) { s.Frame.Remaining = math.MinInt64 }},
 		{"callback", func(s *nativeState) { s.Frame.Function = 0xdeadbeef }},
-		{"buffer reference", func(s *nativeState) { s.Written = []nativeWrittenState{{Key: []byte("save"), Buffer: 1}} }},
+		{"file key of another name", func(s *nativeState) { s.Files[0].Key = []byte("other.dat") }},
+		{"file key in the name's own case", func(s *nativeState) { s.Files[0].Key = []byte("Slot.dat") }},
+		{"file key the store refuses", func(s *nativeState) { s.Files[0].Name, s.Files[0].Key = []byte(".."), []byte("..") }},
+		{"file key the store reduces", func(s *nativeState) { s.Files[0].Name, s.Files[0].Key = []byte("."), []byte(".") }},
+		{"file name past the name limit", func(s *nativeState) {
+			name := bytes.Repeat([]byte{'a'}, nativeMaxFileName)
+			s.Files[0].Name, s.Files[0].Key = name, name
+		}},
+		{"file cursor before the start", func(s *nativeState) { s.Files[0].Position = -1 }},
+		{"file cursor past the bound", func(s *nativeState) { s.Files[0].Position = nativeStateStorageLimit + 1 }},
+		{"file length without an emptying open", func(s *nativeState) { s.Files[0].Truncated, s.Files[0].Length = false, 1 }},
+		{"file length below zero", func(s *nativeState) { s.Files[0].Truncated, s.Files[0].Length = true, -1 }},
+		{"file length past the bound", func(s *nativeState) { s.Files[0].Truncated, s.Files[0].Length = true, nativeStateStorageLimit+1 }},
+		{"file object twice", func(s *nativeState) { s.Files = append(s.Files, s.Files[0]) }},
+		{"file object unaligned", func(s *nativeState) { s.Files[0].Object |= 1 }},
+		{"file object outside memory", func(s *nativeState) { s.Files[0].Object = 0xdeadbee0 }},
 		{"audio handle", func(s *nativeState) { s.Clip = 42 }},
 		{"speed", func(s *nativeState) { s.Speed = 100 }},
 	} {
@@ -257,6 +309,11 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 			if err == nil {
 				t.Fatal("malformed native state was accepted")
 			}
+			// A record of another version is told apart from a damaged one:
+			// it is whole, and this build does not read it.
+			if strings.Contains(test.name, "version") != errors.Is(err, backend.ErrCheckpointVersion) {
+				t.Fatalf("refused with %v", err)
+			}
 			if data, _ := store.LoadSave("progress"); string(data) != "original" {
 				t.Fatal("refused preparation changed saves")
 			}
@@ -273,15 +330,20 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 	if _, err := source.CaptureCheckpoint(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled capture = %v", err)
 	}
-	refused := &refusingCheckpointStore{store}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{SaveStore: refused})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		t.Fatalf("validation made %d save store calls, the first being %s", calls, first)
+	}
 	old := source.Client
-	if _, err := prepared.Commit(t.Context(), source); err == nil || source.Client != old {
-		t.Fatal("refused adoption changed the live runtime")
+	if _, err := prepared.Commit(t.Context(), source, nil); err == nil || source.Client != old {
+		t.Fatal("a load without a save store changed the live runtime")
+	}
+	if _, err := prepared.Commit(canceled, source, store); !errors.Is(err, context.Canceled) || source.Client != old {
+		t.Fatalf("a canceled load = %v, or it changed the live runtime", err)
 	}
 	if data, _ := store.LoadSave("progress"); string(data) != "original" {
 		t.Fatal("refused adoption changed saves")
@@ -340,17 +402,20 @@ func TestNativeSessionCheckpointContinuesWithoutStartup(t *testing.T) {
 	}
 	defer prepared.Discard()
 	freshClock.Advance(time.Hour)
-	restored, err := prepared.Commit(t.Context(), source)
+	restored, err := prepared.Commit(t.Context(), source, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer restored.Close()
 	source.Close()
-	if value, _ := store.LoadSave("progress"); string(value) != "saved" {
-		t.Fatal("ordinary saves did not restore")
+	// The load brought the module back and left the saves alone.
+	if value, _ := store.LoadSave("progress"); string(value) != "later" {
+		t.Fatalf("the save written after the checkpoint reads %q after the load", value)
 	}
-	if _, exists := store.LoadSave(nativeSaveKey("pending")); exists {
-		t.Fatal("discarded runtime flushed over restored saves")
+	// What the displaced runtime had written and not yet stored is a write its
+	// title issued, so the load stored it before it took the runtime away.
+	if value, found := store.LoadSave(nativeSaveKey("pending")); !found || string(value) != "discarded" {
+		t.Fatalf("the displaced runtime's pending write was not stored: %q, %t", value, found)
 	}
 	advance(restored, 5)
 	actual, actualWidth, actualHeight, actualFlushes := restored.Frame()

@@ -114,9 +114,9 @@ func TestCheckpointRestoresACletBetweenTicks(t *testing.T) {
 		t.Fatalf("variant = %d, want the Clet one", checkpoint.Variant)
 	}
 
-	other, _ := backend.NewMemorySaveStore(nil)
+	other := boundarySaves(t, store)
 	prepared := prepareFixtureCheckpoint(t, archive, checkpoint, other)
-	restored, err := prepared.Commit(ctx, nil)
+	restored, err := prepared.Commit(ctx, nil, other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +165,9 @@ func TestCheckpointRecordSurvivesARoundTrip(t *testing.T) {
 	tickSession(t, source, 3)
 	first := roundTripCheckpoint(t, archive, source)
 
-	other, _ := backend.NewMemorySaveStore(nil)
+	other := boundarySaves(t, store)
 	prepared := prepareFixtureCheckpoint(t, archive, first, other)
-	restored, err := prepared.Commit(ctx, nil)
+	restored, err := prepared.Commit(ctx, nil, other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,8 +183,12 @@ func TestCheckpointRecordSurvivesARoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("a restored session writes a different record:\n%s", describeStateDifference(before, after))
 	}
-	if !reflect.DeepEqual(first.Saves, second.Saves) {
-		t.Fatal("a restored session snapshots different saves")
+	// Neither the load nor the second capture stored anything the first
+	// session had not stored.
+	sourceSaves, _ := store.SnapshotSaves()
+	restoredSaves, _ := other.SnapshotSaves()
+	if difference := describeSaveDifference(sourceSaves, restoredSaves); difference != "" {
+		t.Fatalf("the restored session's saves differ: %s", difference)
 	}
 
 	// And the tables behave, not only compare: each of these continues from
@@ -300,10 +304,10 @@ func describeStateDifference(before, after sessionCheckpointState) string {
 	return strings.Join(parts, ", ")
 }
 
-// A load into a running session replaces it. The saves go back to what they
-// were when the checkpoint was taken, the session that was running is cut off
-// from them, and closing what is left of it writes nothing.
-func TestCheckpointLoadReplacesALiveSessionAndItsSaves(t *testing.T) {
+// A load into a running session replaces it and leaves the saves alone: what
+// was saved after the checkpoint is still there. The session that was running
+// is cut off from the store, and closing what is left of it writes nothing.
+func TestCheckpointLoadReplacesALiveSessionAndLeavesItsSaves(t *testing.T) {
 	archive := fixtureArchive(t)
 	ctx := context.Background()
 	store, _ := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "fs/progress", Data: []byte("saved")}})
@@ -312,22 +316,18 @@ func TestCheckpointLoadReplacesALiveSessionAndItsSaves(t *testing.T) {
 	checkpoint := roundTripCheckpoint(t, archive, source)
 	counted := guestWord(t, source, checkpointCounter)
 
-	// The session carries on: it writes a save, and leaves a file open with a
-	// write nothing has flushed.
+	// The session carries on and writes a save.
 	tickSession(t, source, 5)
 	if err := store.StoreSave("fs/progress", []byte("later")); err != nil {
 		t.Fatal(err)
 	}
-	name, err := source.client.allocateBytes([]byte("unflushed.dat\x00"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle := callSlot(t, source.client, slotFsOpen, name, fileOpenReadWrite)
-	callSlot(t, source.client, slotFsWrite, handle, name, 4)
 	displaced := source.client
 
 	prepared := prepareFixtureCheckpoint(t, archive, checkpoint, store)
-	restored, err := prepared.Commit(ctx, source)
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		t.Fatalf("validation made %d save store calls, the first being %s", calls, first)
+	}
+	restored, err := prepared.Commit(ctx, source, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,11 +336,8 @@ func TestCheckpointLoadReplacesALiveSessionAndItsSaves(t *testing.T) {
 	if guestWord(t, restored, checkpointCounter) != counted {
 		t.Fatal("the restored session is not at the checkpoint")
 	}
-	if saved, _ := store.LoadSave("fs/progress"); string(saved) != "saved" {
-		t.Fatalf("the save is %q, want the one the checkpoint was taken beside", saved)
-	}
-	if _, present := store.LoadSave("fs/unflushed.dat"); present {
-		t.Fatal("a file the displaced session created survived the load")
+	if saved, _ := store.LoadSave("fs/progress"); string(saved) != "later" {
+		t.Fatalf("the save written after the checkpoint reads %q after the load", saved)
 	}
 	// The displaced session is gone as far as its owner can tell, and what is
 	// left of its client cannot reach the store.
@@ -350,9 +347,17 @@ func TestCheckpointLoadReplacesALiveSessionAndItsSaves(t *testing.T) {
 	if err := source.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	before, _ := store.SnapshotSaves()
+	name, err := displaced.allocateBytes([]byte("after.dat\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := callSlot(t, displaced, slotFsOpen, name, fileOpenReadWrite)
+	callSlot(t, displaced, slotFsWrite, handle, name, 4)
 	displaced.flushOpenFiles()
-	if _, present := store.LoadSave("fs/unflushed.dat"); present {
-		t.Fatal("the displaced session's teardown wrote into the restored saves")
+	after, _ := store.SnapshotSaves()
+	if difference := describeSaveDifference(before, after); difference != "" {
+		t.Fatalf("the displaced session wrote into the saves after the load: %s", difference)
 	}
 	tickSession(t, restored, 3)
 	if guestWord(t, restored, checkpointCounter) <= counted {
@@ -434,7 +439,7 @@ func TestCheckpointRefusalLeavesTheSessionRunning(t *testing.T) {
 			saved.Client.Java = &javaState{Workers: []javaWorkerState{{}}}
 		}},
 		{name: "an adapter this module does not match", mutate: func(saved *sessionCheckpointState) {
-			saved.Adapters.Store, saved.Adapters.Original = adapterStoreOptions, []byte{0, 0, 0, 0}
+			saved.Adapters.Store = adapterStoreOptions
 		}},
 		{name: "a local service this module does not match", mutate: func(saved *sessionCheckpointState) {
 			saved.Adapters.Network = &networkState{}
@@ -493,8 +498,8 @@ func TestCheckpointRefusalLeavesTheSessionRunning(t *testing.T) {
 			}
 		})
 	}
-	// Another archive, another variant and a destination that cannot be
-	// replaced are refused before the record is read at all.
+	// Another archive and another variant are refused before the record is
+	// read at all.
 	if _, err := PrepareSessionCheckpoint(append([]byte{0}, archive...), checkpoint, SessionOptions{SaveStore: store}); !errors.Is(err, backend.ErrCheckpointIdentity) {
 		t.Fatalf("another archive: %v", err)
 	}
@@ -507,11 +512,24 @@ func TestCheckpointRefusalLeavesTheSessionRunning(t *testing.T) {
 	if _, err := PrepareSessionCheckpoint(archive, wrong, SessionOptions{SaveStore: store}); !errors.Is(err, backend.ErrCheckpointVersion) {
 		t.Fatalf("a Clet record under the Java variant: %v", err)
 	}
-	if _, err := PrepareSessionCheckpoint(archive, checkpoint, SessionOptions{SaveStore: newMemorySaveStore()}); err == nil {
-		t.Fatal("a store that cannot be replaced whole was accepted")
+	// A load reads no save while it is checked, so it is checked the same
+	// with any store or none. Where the saves are is said when it commits, and
+	// a commit with nowhere to find them is refused.
+	unbound, err := PrepareSessionCheckpoint(archive, checkpoint, SessionOptions{})
+	if err != nil {
+		t.Fatalf("a load was checked against a store: %v", err)
 	}
-	if _, err := PrepareSessionCheckpoint(archive, checkpoint, SessionOptions{}); err == nil {
-		t.Fatal("a checkpoint with saves was accepted with nowhere to put them")
+	if _, err := unbound.Commit(ctx, source, nil); err == nil {
+		t.Fatal("a load was committed with no save store")
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := unbound.Commit(cancelled, source, store); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled load: %v", err)
+	}
+	unbound.Discard()
+	if saved, _ := store.LoadSave("fs/progress"); string(saved) != "current" {
+		t.Fatal("a refused load changed the saves")
 	}
 	// The session the refusals were aimed at is still running, and the record
 	// they were made from still loads.
@@ -521,7 +539,7 @@ func TestCheckpointRefusalLeavesTheSessionRunning(t *testing.T) {
 		t.Fatal("the session stopped running")
 	}
 	prepared := prepareFixtureCheckpoint(t, archive, checkpoint, store)
-	restored, err := prepared.Commit(ctx, source)
+	restored, err := prepared.Commit(ctx, source, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,15 +583,24 @@ func TestCheckpointIsRefusedAwayFromABoundary(t *testing.T) {
 	if _, err := session.CaptureCheckpoint(ctx); err != nil {
 		t.Fatalf("the boundary after the refusals: %v", err)
 	}
-	// A store that can only be asked for one key at a time cannot be
-	// snapshotted, so there is nothing to put beside the memory image.
+	// A capture copies no save, so a store that can only be asked for one key
+	// at a time is enough. A session with no store at all has nowhere a load
+	// could find its saves, and is refused.
 	partial, err := StartSession(ctx, archive, SessionOptions{SaveStore: newMemorySaveStore(), Width: 16, Height: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer partial.Close(ctx)
-	if _, err := partial.CaptureCheckpoint(ctx); err == nil {
-		t.Fatal("a store that cannot be snapshotted was captured")
+	if _, err := partial.CaptureCheckpoint(ctx); err != nil {
+		t.Fatalf("a store that answers one key at a time was refused: %v", err)
+	}
+	bare, err := StartSession(ctx, archive, SessionOptions{Width: 16, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bare.Close(ctx)
+	if _, err := bare.CaptureCheckpoint(ctx); err == nil || errors.Is(err, ErrCheckpointBusy) {
+		t.Fatalf("a session with no save store: %v", err)
 	}
 	// A title that has ended has nothing to continue.
 	client.exited = true
@@ -768,16 +795,21 @@ func TestArenaStateRestoresTheNextAllocation(t *testing.T) {
 }
 
 // Every field the runtime holds is one a checkpoint either records, rebuilds
-// from something it records, or leaves to the Host on purpose. A field that is
-// added to one of these structures without a line here fails this test, which
-// is the only thing that makes "the checkpoint covers the runtime" a claim
-// that stays true: a table nobody copied restores as empty and nothing else
-// notices.
+// from something it records, reads again from the save store, or leaves to the
+// Host on purpose. A field that is added to one of these structures without a
+// line here fails this test, which is the only thing that makes "the
+// checkpoint covers the runtime" a claim that stays true: a table nobody
+// copied restores as empty and nothing else notices.
 func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 	const (
 		recorded = "recorded"
 		// rebuilt: derived again from the archive, the module or another record.
 		rebuilt = "rebuilt"
+		// store: a copy of what a save holds. It is never recorded: committing
+		// a load reads it again from the store the session runs over. A field
+		// that is a host copy of a save and is marked anything else is how a
+		// load comes to put an older save over a newer one.
+		store = "store"
 		// host: the Host's own — a logger, a device, a store, a diagnostic knob.
 		host = "host"
 		// boundary: a value that is fixed wherever a checkpoint can be taken,
@@ -799,8 +831,17 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"netConnects": recorded, "netGeneration": recorded, "clock": recorded, "events": recorded,
 			"uncaughtCallbacks": diagnostic, "uncaughtFirst": diagnostic,
 			"audio": recorded, "clips": recorded, "volume": recorded, "sourceVolume": recorded, "sourceMuted": recorded,
-			"vibrator": recorded, "files": recorded, "removed": recorded, "created": recorded,
-			"traceLive": host, "traceOut": host, "tmStorage": recorded, "cRandom": recorded, "strtokScan": recorded,
+			"vibrator": recorded, "files": recorded, "removed": store, "created": store,
+			// The two lists are stored before a checkpoint is taken, and one
+			// the store will not take refuses it.
+			"removedUnsaved": boundary, "createdUnsaved": boundary,
+			// Every restored buffer is level with the store, so the counts
+			// start again from nothing.
+			"fileEpochs": rebuilt,
+			// What a load has still to fill exists only between its restore
+			// and its commit.
+			"restoredStorage": boundary,
+			"traceLive":       host, "traceOut": host, "tmStorage": recorded, "cRandom": recorded, "strtokScan": recorded,
 			"inputMode": recorded, "inputModeTableAddress": recorded, "cTextInput": recorded,
 			"javaApplication": recorded, "javaClasses": diagnostic, "javaLink": recorded, "javaRun": recorded,
 			"javaTry": boundary, "javaTryBuffers": recorded, "javaCallDepth": boundary,
@@ -834,18 +875,25 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"StaticWords": recorded, "Measured": recorded, "initialized": recorded, "dataBlock": recorded,
 		},
 		"javaTryFrame": {"Buffer": recorded, "Depth": recorded, "Saved": recorded, "Armed": recorded},
+		// Data is the title's own bytes or a resource's for most streams, and
+		// for a stream opened on a file it is a window on that file, which is
+		// the store's: File and Offset say which and where.
 		"javaStream": {
-			"Name": recorded, "Data": recorded, "Read": recorded, "Closed": recorded, "Source": recorded,
-			"Markable": recorded, "Mark": recorded,
+			"Name": recorded, "Data": store, "Read": recorded, "Closed": recorded, "Source": recorded,
+			"Markable": recorded, "Mark": recorded, "File": recorded, "Offset": recorded,
 		},
 		"javaWidget": {
 			"text": recorded, "maxLength": recorded, "revision": recorded, "kind": recorded, "mode": recorded,
 			"listener": recorded, "inputHandler": recorded, "children": recorded, "parent": recorded,
 			"shown": recorded, "visibilityRevision": recorded, "focused": recorded,
 		},
+		// A database travels as its name. A store the store refused is
+		// retried before a checkpoint is taken, and the rest of its
+		// bookkeeping starts again with the records a load reads.
 		"javaDatabase": {
-			"name": recorded, "recordSize": recorded, "records": recorded, "deleted": recorded,
-			"modified": recorded, "closed": recorded,
+			"name": recorded, "recordSize": recorded, "records": store, "deleted": store,
+			"modified": recorded, "closed": recorded, "unsaved": boundary, "synced": rebuilt,
+			"rebuilt": rebuilt, "changed": rebuilt,
 		},
 		"javaGraphics": {
 			"surface": recorded, "color": recorded, "translateX": recorded, "translateY": recorded,
@@ -865,8 +913,12 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"screen": recorded, "opaque": recorded, "colorKeyed": recorded, "transparentKey": recorded,
 			"drawnHere": recorded,
 		},
-		"timer":    {"structure": recorded, "callback": recorded, "param": recorded, "dueAt": recorded, "armed": recorded},
-		"openFile": {"name": recorded, "data": recorded, "cursor": recorded, "writable": recorded, "dirty": recorded},
+		"timer": {"structure": recorded, "callback": recorded, "param": recorded, "dueAt": recorded, "armed": recorded},
+		// A buffer with unstored writes is stored before a checkpoint is taken.
+		"openFile": {
+			"name": recorded, "data": store, "cursor": recorded, "writable": recorded, "dirty": boundary,
+			"truncated": recorded, "synced": rebuilt,
+		},
 		"mediaClip": {
 			"callback": recorded, "status": recorded, "pending": recorded, "mediaType": recorded, "data": recorded,
 			"volume": recorded, "handle": recorded, "loaded": recorded, "javaPaused": recorded,
@@ -891,16 +943,24 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"connected": recorded, "failed": recorded, "stage": recorded, "request": recorded, "response": recorded,
 			"pendingResponse": recorded, "connect": recorded, "read": recorded, "write": recorded,
 		},
+		// What an adapter read from its store it reads again. The volatile
+		// copies exist only in a session with no store, which is not captured.
 		"authenticationOptionStore": {
-			"mu": rebuilt, "base": host, "archive": rebuilt, "original": recorded, "volatile": recorded,
+			"mu": rebuilt, "base": host, "archive": rebuilt, "original": store, "volatile": boundary,
 			"readError": boundary,
 		},
+		// The lists are the store's with the certificate listed or not as the
+		// title left it, and those two answers are what is recorded.
 		"authenticationCertificate58Store": {
-			"mu": rebuilt, "base": host, "certificate": recorded, "ledgers": recorded, "originalMembership": recorded,
+			"mu": rebuilt, "base": host, "certificate": recorded, "ledgers": store, "originalMembership": store,
 		},
+		// The flag and the certificate the adapter found in its file are the
+		// one copy of save content a record carries: they are read from the
+		// file again, and the record's are used only when the file is gone or
+		// has no header the adapter reads. See checkpoint_adapters.go.
 		"authenticationCertificate100Store": {
-			"mu": rebuilt, "base": host, "volatile": recorded, "contract": rebuilt, "key": rebuilt, "active": recorded,
-			"publishHeader": rebuilt, "originalFlag": recorded, "originalCertificate": recorded, "certificate": recorded,
+			"mu": rebuilt, "base": host, "volatile": boundary, "contract": rebuilt, "key": rebuilt, "active": recorded,
+			"publishHeader": rebuilt, "originalFlag": store, "originalCertificate": store, "certificate": recorded,
 		},
 		"Session": {
 			"authentication": recorded, "client": recorded, "archive": rebuilt, "tick": recorded, "speed": recorded,

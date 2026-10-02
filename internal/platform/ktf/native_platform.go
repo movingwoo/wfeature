@@ -73,14 +73,25 @@ type NativePlatform struct {
 	frame *nativeSchedule
 	// opens records every open the module asked for.
 	opens []NativeFileOpen
-	// written holds what the title has written this session, by lower-cased
-	// base name. It shadows the package's own copy of the same file.
+	// written holds what the title has written this session, by the key
+	// nativeFileKey gives its name. It shadows the store's and the package's
+	// copy of the same file, and a quick load starts it empty: what the
+	// restored title reads by name is the file as it is now.
 	written map[string][]byte
 	// unsaved names the entries of written the store has not been given yet.
 	// See NativePlatform.keep.
 	unsaved map[string]bool
+	// refused names the entries of written the store was given at an ordinary
+	// boundary and would not take. That boundary does not ask again, and the
+	// write is not forgotten either: see NativePlatform.storePending. An entry
+	// of written is in the store unless it is named here or in unsaved.
+	refused map[string]bool
 	// saves is where those writes go to outlive the session.
 	saves SaveStore
+	// packaged is the package's files by the key their base name gives, built
+	// the first time a name is not in the package as it was written. See
+	// NativePlatform.packagedFile.
+	packaged map[string]string
 	// audio owns what the title plays, and clip is the one it has loaded.
 	audio    *backend.Audio
 	clip     backend.AudioHandle

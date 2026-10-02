@@ -54,13 +54,28 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 	return client, nil
 }
 
-// The caller supplies an isolated save store and owns the admission barrier.
-// Archive identity, the durable save transaction and live adoption are separate.
+// restoreSessionClient is the whole restore in one call, for a caller that
+// owns the store in its options and adopts nothing over a running session: the
+// client comes back bound to that store, under its adapters. A session load
+// goes through restoreSessionClientForActivation and binds when it commits.
 func restoreSessionClient(archive *Archive, saved clientState, adapters saveAdapterState, options SessionOptions) (*Client, error) {
-	return restoreSessionClientForActivation(archive, saved, adapters, options, nil)
+	client, err := restoreSessionClientForActivation(archive, saved, options, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.bindRestoredStorage(adapters, client.saveStore); err != nil {
+		client.StopThreads()
+		return nil, err
+	}
+	client.runtime.restoredStorage = nil
+	return client, nil
 }
 
-func restoreSessionClientForActivation(archive *Archive, saved clientState, adapters saveAdapterState, options SessionOptions, activation *clientActivation) (*Client, error) {
+// restoreSessionClientForActivation rebuilds a client from its record without
+// running any of it and without reading a save: its storage objects hold names
+// and no content, and its authentication adapters are not built, until
+// Client.bindRestoredStorage connects it to a store.
+func restoreSessionClientForActivation(archive *Archive, saved clientState, options SessionOptions, activation *clientActivation) (*Client, error) {
 	// A restored core replaces the initially mapped one. Install diagnostics on
 	// that final core once, after every record has passed validation.
 	debug := options.Debug
@@ -69,11 +84,6 @@ func restoreSessionClientForActivation(archive *Archive, saved clientState, adap
 	if err != nil {
 		return nil, err
 	}
-	store, err := restoreSaveAdapters(adapters, client.saveStore)
-	if err != nil {
-		return nil, err
-	}
-	client.saveStore = store
 	client.runtime, err = newInitializationRuntime(client)
 	if err != nil {
 		return nil, err

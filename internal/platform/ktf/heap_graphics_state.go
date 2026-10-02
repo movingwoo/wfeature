@@ -30,18 +30,28 @@ type opacityState struct {
 }
 type framebufferOpacityState struct{ Handle, Opacity uint32 }
 
+// heapFilePayloadKind names the File payload. Version 1 carried the file's
+// bytes; this one carries its name and cursor, and a load reads the bytes.
+const heapFilePayloadKind = "ktf-file-v2"
+
 // An image and its guest framebuffer can share a mutable transparency mask.
 // Keep that ownership outside individual image payloads so a later draw changes
 // both views exactly as it does before capture.
 type heapNativeContext struct {
-	runtime         *initializationRuntime
-	opacityIDs      map[*imageOpacity]uint32
-	opacities       []opacityState
-	opacityBytes    uint64
-	restored        []*imageOpacity
-	databaseIDs     map[*runtimeDataBaseStore]uint32
-	databases       []heapDatabaseState
-	restoredDBs     []*runtimeDataBaseStore
+	runtime      *initializationRuntime
+	opacityIDs   map[*imageOpacity]uint32
+	opacities    []opacityState
+	opacityBytes uint64
+	restored     []*imageOpacity
+	databaseIDs  map[*runtimeDataBaseStore]uint32
+	databases    []heapDatabaseState
+	restoredDBs  []*runtimeDataBaseStore
+	// distinctDBs are the restored stores once each, heldDBs says which
+	// records the catalog or an object holds, and restoredFiles are the File
+	// objects in the heap: what a store fills when the checkpoint is bound.
+	distinctDBs     []*runtimeDataBaseStore
+	heldDBs         []bool
+	restoredFiles   []restoredGuestFile
 	storageBytes    uint64
 	now             time.Time
 	editorIDs       map[*textinput.State]uint32
@@ -67,7 +77,7 @@ func (runtime *initializationRuntime) captureHeapStateAt(roots []*jvm.Object, no
 	if err != nil {
 		return runtimeHeapState{}, err
 	}
-	saved.Storage, err = runtime.captureStorageState()
+	saved.Storage, err = runtime.captureStorageState(context.chargeStorage)
 	if err != nil {
 		return runtimeHeapState{}, err
 	}
@@ -180,11 +190,15 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 	if err != nil {
 		return nil, err
 	}
+	if context.unheldDatabase() {
+		return nil, fmt.Errorf("KTF heap database is held by nothing")
+	}
 	runtime.framebufferOpacity = framebuffers
 	runtime.databases = databases
 	runtime.adoptPlatformRoots(saved.Roots, roots, context)
 	control.adopt(runtime, context.now)
 	storage.adopt(runtime)
+	runtime.restoredStorage.databases, runtime.restoredStorage.files = context.distinctDBs, context.restoredFiles
 	// A view of roots would also retain the hidden platform roots in its
 	// backing array, turning weak clip/image owners into strong references.
 	return append([]*jvm.Object(nil), roots[:saved.Roots.CallerCount]...), nil
@@ -232,8 +246,8 @@ func (context *heapNativeContext) captureNative(native any) (jvm.HeapExternalPay
 		binary.LittleEndian.PutUint32(data, id)
 		return jvm.HeapExternalPayload{Kind: "ktf-database-v1", Data: data}, err
 	case *runtimeGuestFile:
-		data, err := captureHeapFile(value)
-		return jvm.HeapExternalPayload{Kind: "ktf-file-v1", Data: data}, err
+		data, err := context.captureHeapFile(value)
+		return jvm.HeapExternalPayload{Kind: heapFilePayloadKind, Data: data}, err
 	case *runtimeGraphicsState:
 		words := []uint32{value.target.width, value.target.height, value.target.bpl, value.target.bpp, value.target.buffer, value.target.pixels,
 			uint32(value.color), value.rgb, uint32(value.clipX), uint32(value.clipY), uint32(value.clipWidth), uint32(value.clipHeight),
@@ -282,9 +296,10 @@ func (context *heapNativeContext) restoreNative(payload jvm.HeapExternalPayload)
 		if id == 0 || uint64(id) >= uint64(len(context.restoredDBs)) {
 			return nil, fmt.Errorf("KTF database handle is invalid")
 		}
+		context.heldDBs[id] = true
 		return context.restoredDBs[id], nil
-	case "ktf-file-v1":
-		return restoreHeapFile(payload.Data)
+	case heapFilePayloadKind:
+		return context.restoreHeapFile(payload.Data)
 	case "ktf-graphics-v1":
 		return context.restoreGraphics(payload.Data)
 	case "ktf-image-v1":

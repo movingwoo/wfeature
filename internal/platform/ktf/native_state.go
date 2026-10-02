@@ -6,9 +6,7 @@ import (
 	"image"
 	"maps"
 	"math"
-	"path"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -16,6 +14,15 @@ import (
 )
 
 const nativeStateRecordLimit = 1 << 16
+
+// nativeStateVersion is the layout of nativeState. Version 1 carried the bytes
+// of every open and written file; a record of that version is refused.
+const nativeStateVersion = 2
+
+// nativeStateStorageLimit bounds what the open files of a checkpoint may hold
+// between them, where it is taken and where it is loaded, and how far into a
+// file a recorded cursor may point.
+const nativeStateStorageLimit = 128 << 20
 
 type nativeState struct {
 	Version                 uint32
@@ -31,12 +38,11 @@ type nativeState struct {
 	Screen                  nativePixelsState
 	Presents, Draws, Missed int
 	Images                  []nativeImageState
-	// Buffers preserve sharing between open files, written files and parsed
-	// resource data. Their parsed indexes and decoded images are separate state.
-	Buffers      [][]byte
+	// Files are the objects the title has open and nothing of what is in
+	// them: a load reads each file as the store has it then. What the title
+	// wrote this session, what was waiting for the store and the parsed
+	// resource files are not state a checkpoint carries at all.
 	Files        []nativeFileState
-	Written      []nativeWrittenState
-	Resources    []nativeResourceState
 	FileFailure  uint32
 	Listeners    []NativeListener
 	TimedDue     heapDeadline
@@ -67,61 +73,20 @@ type nativeImageState struct {
 type nativeFileState struct {
 	Object    uint32
 	Name, Key []byte
-	Buffer    uint32
 	Position  int64
 	Writable  bool
-}
-type nativeWrittenState struct {
-	Key     []byte
-	Buffer  uint32
-	Unsaved bool
-}
-type nativeResourceState struct {
-	Name    []byte
-	Present bool
-	Buffer  uint32
-	Groups  []nativeResourceGroup
-	Index   []uint32
+	// Truncated says the object's open asked for an empty file, and Length is
+	// how many bytes it held when the checkpoint was taken. A load gives such
+	// an object at most that much of the file as it is then; see
+	// NativePlatform.reopenFiles. Length is zero for any other object.
+	Truncated bool
+	Length    int64
 }
 type nativeFrameState struct {
 	Interval, Remaining time.Duration
 	Function, Context   uint32
 }
 type nativeColourState struct{ Item, Colour uint32 }
-
-type nativeBufferCapture struct {
-	buffers [][]byte
-	ids     map[*byte]uint32
-	sizes   map[*byte]int
-	bytes   uint64
-}
-
-func (capture *nativeBufferCapture) add(data []byte) (uint32, error) {
-	if data == nil {
-		return 0, nil
-	}
-	if len(data) > 0 {
-		if id := capture.ids[&data[0]]; id != 0 {
-			if capture.sizes[&data[0]] != len(data) {
-				return 0, fmt.Errorf("KTF native checkpoint contains unsupported partial buffer sharing")
-			}
-			return id, nil
-		}
-	}
-	if len(capture.buffers) >= nativeStateRecordLimit || uint64(len(data)) > (128<<20)-capture.bytes {
-		return 0, fmt.Errorf("KTF native checkpoint buffers exceed limits")
-	}
-	capture.bytes += uint64(len(data))
-	capture.buffers = append(capture.buffers, bytes.Clone(data))
-	id := uint32(len(capture.buffers))
-	if len(data) > 0 {
-		if capture.ids == nil {
-			capture.ids, capture.sizes = map[*byte]uint32{}, map[*byte]int{}
-		}
-		capture.ids[&data[0]], capture.sizes[&data[0]] = id, len(data)
-	}
-	return id, nil
-}
 
 func captureNativePixels(frame *image.RGBA) (nativePixelsState, error) {
 	if frame == nil || frame.Rect.Min != (image.Point{}) || frame.Stride != frame.Rect.Dx()*4 {
@@ -142,12 +107,34 @@ func (saved nativePixelsState) restore() *image.RGBA {
 	return &image.RGBA{Pix: bytes.Clone(saved.Pixels), Stride: saved.Width * 4, Rect: image.Rect(0, 0, saved.Width, saved.Height)}
 }
 
-func (session *NativeSession) captureNativeState(now time.Time) (nativeState, error) {
+// checkpointRefusal names what about a session a checkpoint cannot hold. It
+// reads the session and nothing else, so a quick save asks it before it gives
+// the store anything.
+func (session *NativeSession) checkpointRefusal() error {
 	client, platform := session.Client, session.platform
 	if client.customBindings || client.tracing || !platform.installed || platform.audio == nil {
-		return nativeState{}, fmt.Errorf("KTF native checkpoint requires built-in bindings and idle devices")
+		return fmt.Errorf("KTF native checkpoint requires built-in bindings and idle devices")
 	}
-	saved := nativeState{Version: 1, Application: platform.application, FileTable: platform.fileTable, Speed: platform.Speed(),
+	if platform.screen == nil {
+		return fmt.Errorf("KTF native checkpoint has no screen")
+	}
+	if held := platform.openFileBytes(); held > nativeStateStorageLimit {
+		return fmt.Errorf("KTF native checkpoint: the open files hold %d bytes, more than the %d a checkpoint restores", held, nativeStateStorageLimit)
+	}
+	return nil
+}
+
+func (session *NativeSession) captureNativeState(now time.Time) (nativeState, error) {
+	client, platform := session.Client, session.platform
+	if err := session.checkpointRefusal(); err != nil {
+		return nativeState{}, err
+	}
+	// A record holds no file bytes, so a write the store has not been given
+	// would be in no place at all once this session is gone.
+	if len(platform.unsaved) != 0 || len(platform.refused) != 0 {
+		return nativeState{}, fmt.Errorf("KTF native checkpoint has save writes the store has not been given")
+	}
+	saved := nativeState{Version: nativeStateVersion, Application: platform.application, FileTable: platform.fileTable, Speed: platform.Speed(),
 		Elapsed: now.Sub(platform.started), SessionElapsed: now.Sub(session.started), FileFailure: platform.fileFailure,
 		Listeners: slices.Clone(platform.listeners), TimedDue: captureHeapDeadline(platform.timedDue, now), TimedRunning: platform.timedRunning,
 		Posted: slices.Clone(platform.posted), Resumes: slices.Clone(platform.resumes), Clip: platform.clip, Sounding: platform.sounding}
@@ -173,9 +160,6 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 	for _, id := range slices.Sorted(maps.Keys(client.interfaces)) {
 		saved.Interfaces = append(saved.Interfaces, nativeInterfaceState{id, client.interfaces[id]})
 	}
-	if platform.screen == nil {
-		return nativeState{}, fmt.Errorf("KTF native checkpoint has no screen")
-	}
 	saved.Screen, err = captureNativePixels(platform.screen.frame)
 	if err != nil {
 		return nativeState{}, err
@@ -192,43 +176,18 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 		}
 		saved.Images = append(saved.Images, nativeImageState{object, current.data, current.length, bytes.Clone(current.bytes), frame})
 	}
-	var pool nativeBufferCapture
 	for _, object := range slices.Sorted(maps.Keys(platform.files)) {
 		file := platform.files[object]
 		if file == nil {
 			return nativeState{}, fmt.Errorf("KTF native checkpoint has a missing open file")
 		}
-		buffer, err := pool.add(file.data)
-		if err != nil {
-			return nativeState{}, err
+		record := nativeFileState{Object: object, Name: []byte(file.name), Key: []byte(file.key),
+			Position: file.position, Writable: file.writable, Truncated: file.truncated}
+		if file.truncated {
+			record.Length = int64(len(file.data))
 		}
-		saved.Files = append(saved.Files, nativeFileState{object, []byte(file.name), []byte(file.key), buffer, file.position, file.writable})
+		saved.Files = append(saved.Files, record)
 	}
-	for _, key := range slices.Sorted(maps.Keys(platform.written)) {
-		buffer, err := pool.add(platform.written[key])
-		if err != nil {
-			return nativeState{}, err
-		}
-		saved.Written = append(saved.Written, nativeWrittenState{[]byte(key), buffer, platform.unsaved[key]})
-	}
-	for key := range platform.unsaved {
-		if _, ok := platform.written[key]; !ok {
-			return nativeState{}, fmt.Errorf("KTF native checkpoint has an unsaved file without data")
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(platform.resources)) {
-		file := platform.resources[name]
-		record := nativeResourceState{Name: []byte(name), Present: file != nil}
-		if file != nil {
-			record.Buffer, err = pool.add(file.data)
-			if err != nil {
-				return nativeState{}, err
-			}
-			record.Groups, record.Index = slices.Clone(file.groups), slices.Clone(file.index)
-		}
-		saved.Resources = append(saved.Resources, record)
-	}
-	saved.Buffers = pool.buffers
 	if platform.frame != nil {
 		frame := platform.frame
 		saved.Frame = &nativeFrameState{frame.interval, frame.due.Sub(now), frame.function, frame.context}
@@ -250,12 +209,12 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 // pointers are read only through the bounded ARM memory implementation.
 func (saved nativeState) validate(memory *armcore.Memory) error {
 	invalid := func() error { return fmt.Errorf("KTF native checkpoint has invalid state references or limits") }
-	if saved.Version != 1 || math.IsNaN(saved.Speed) || math.IsInf(saved.Speed, 0) || saved.Speed < backend.SpeedFloor || saved.Speed > backend.SpeedCeiling ||
+	if saved.Version != nativeStateVersion || math.IsNaN(saved.Speed) || math.IsInf(saved.Speed, 0) || saved.Speed < backend.SpeedFloor || saved.Speed > backend.SpeedCeiling ||
 		saved.Elapsed < 0 || saved.SessionElapsed < 0 || saved.SessionElapsed > saved.Elapsed || saved.Presents < 0 || saved.Draws < 0 || saved.Missed < 0 ||
 		!saved.TimedDue.Set && saved.TimedDue.Remaining != 0 || saved.TimedDue.Remaining == math.MinInt64 || saved.Thread.StepBudget != 0 || len(saved.Core.Memory.ThreadLocal) != 0 || len(saved.Thread.ThreadLocal) != 0 {
 		return invalid()
 	}
-	for _, length := range []int{len(saved.Blocks), len(saved.Buffers), len(saved.Images), len(saved.Files), len(saved.Written), len(saved.Resources), len(saved.Listeners), len(saved.Colours)} {
+	for _, length := range []int{len(saved.Blocks), len(saved.Images), len(saved.Files), len(saved.Listeners), len(saved.Colours)} {
 		if length > nativeStateRecordLimit {
 			return invalid()
 		}
@@ -340,63 +299,20 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return err
 		}
 	}
-	var total uint64
-	for _, buffer := range saved.Buffers {
-		total += uint64(len(buffer))
-		if total > 128<<20 || buffer == nil {
+	// A file is an object the title was handed and a name it was opened by.
+	// The name is what a load reads the store with, so it has to be one a
+	// title could have opened: a key its name gives and the store accepts.
+	for i, file := range saved.Files {
+		key := nativeSaveKey(string(file.Key))
+		if normalized, err := backend.NormalizeSaveKey(key); err != nil || normalized != key {
 			return invalid()
 		}
-	}
-	buffer := func(id uint32) ([]byte, error) {
-		if uint64(id) > uint64(len(saved.Buffers)) {
-			return nil, invalid()
-		}
-		if id == 0 {
-			return nil, nil
-		}
-		return saved.Buffers[id-1], nil
-	}
-	for i, file := range saved.Files {
-		data, err := buffer(file.Buffer)
-		if err != nil {
-			return err
-		}
-		if i > 0 && saved.Files[i-1].Object >= file.Object || len(file.Name) > 4096 || len(file.Key) > 4096 || string(file.Key) != strings.ToLower(path.Base(string(file.Name))) || file.Position < 0 || file.Position > int64(len(data)) {
+		if i > 0 && saved.Files[i-1].Object >= file.Object || len(file.Name) >= nativeMaxFileName || string(file.Key) != nativeFileKey(string(file.Name)) ||
+			file.Position < 0 || file.Position > nativeStateStorageLimit || file.Length < 0 || file.Length > nativeStateStorageLimit || !file.Truncated && file.Length != 0 {
 			return invalid()
 		}
 		if err := checkObject(file.Object); err != nil {
 			return err
-		}
-	}
-	for i, file := range saved.Written {
-		if i > 0 && bytes.Compare(saved.Written[i-1].Key, file.Key) >= 0 || len(file.Key) > 4096 || string(file.Key) != strings.ToLower(path.Base(string(file.Key))) {
-			return invalid()
-		}
-		if _, err := buffer(file.Buffer); err != nil {
-			return err
-		}
-	}
-	for i, file := range saved.Resources {
-		data, err := buffer(file.Buffer)
-		if err != nil {
-			return err
-		}
-		if i > 0 && bytes.Compare(saved.Resources[i-1].Name, file.Name) >= 0 || len(file.Name) > 4096 {
-			return invalid()
-		}
-		if !file.Present {
-			if file.Buffer != 0 || len(file.Groups) != 0 || len(file.Index) != 0 {
-				return invalid()
-			}
-			continue
-		}
-		if len(file.Groups) == 0 || len(file.Groups) > nativeResourceMaxGroups || len(file.Index) < 2 || len(file.Index) > nativeResourceMaxItems+1 {
-			return invalid()
-		}
-		for index, offset := range file.Index {
-			if uint64(offset) > uint64(len(data)) || index > 0 && file.Index[index-1] > offset {
-				return invalid()
-			}
 		}
 	}
 	function := func(address uint32) error {
@@ -441,8 +357,9 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 		}
 	}
 	// Native playback only starts one-shot clips at nonnegative guest times.
-	// Refuse impossible playback state before adoption can replace saves or
-	// leave the next tick replaying an excessive number of repeat cycles.
+	// Refuse impossible playback state before adoption can displace the
+	// running session or leave the next tick replaying an excessive number of
+	// repeat cycles.
 	for _, sound := range saved.Audio.Sounds {
 		if sound.Repeat || sound.StartedAt < 0 {
 			return fmt.Errorf("KTF native checkpoint has unsupported audio playback state")
@@ -519,28 +436,13 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	for _, record := range saved.Images {
 		platform.images[record.Object] = &nativeImage{data: record.Data, length: record.Length, bytes: bytes.Clone(record.Bytes), frame: record.Frame.restore()}
 	}
-	// Clone each distinct backing buffer once, then reconnect all its views.
-	pool := make([][]byte, len(saved.Buffers)+1)
-	for i, buffer := range saved.Buffers {
-		pool[i+1] = bytes.Clone(buffer)
-	}
+	// An open file comes back without its bytes: Commit reads them from the
+	// store the session will run over. The table of what the title wrote, the
+	// marks for the store and the parsed resource files start empty, as they
+	// do in a session that has just started.
 	for _, record := range saved.Files {
-		platform.files[record.Object] = &nativeOpenFile{name: string(record.Name), key: string(record.Key), data: pool[record.Buffer], position: record.Position, writable: record.Writable}
-	}
-	platform.unsaved = map[string]bool{}
-	for _, record := range saved.Written {
-		platform.written[string(record.Key)] = pool[record.Buffer]
-		if record.Unsaved {
-			platform.unsaved[string(record.Key)] = true
-		}
-	}
-	platform.resources = map[string]*nativeResourceFile{}
-	for _, record := range saved.Resources {
-		var file *nativeResourceFile
-		if record.Present {
-			file = &nativeResourceFile{data: pool[record.Buffer], groups: slices.Clone(record.Groups), index: slices.Clone(record.Index)}
-		}
-		platform.resources[string(record.Name)] = file
+		platform.files[record.Object] = &nativeOpenFile{name: string(record.Name), key: string(record.Key),
+			position: record.Position, writable: record.Writable, truncated: record.Truncated}
 	}
 	platform.fileFailure = saved.FileFailure
 	platform.listeners, platform.posted, platform.resumes = slices.Clone(saved.Listeners), slices.Clone(saved.Posted), slices.Clone(saved.Resumes)
