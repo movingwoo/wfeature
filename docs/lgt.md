@@ -112,6 +112,31 @@ services. Both observed socket-creation slots (`0x7d0` and `0x25a`) preserve tha
 policy. [Authentication](authentication.md) and [network](network.md) describe
 the selected adapters and unsupported service-dependent paths.
 
+## Quick save and quick load
+
+A session can be recorded between two ticks and restored later, in the same
+session or in a new process, through the shared session, the CLI and the page's
+keypad. Both execution variants are covered: a Clet, and an AOT Java title with
+its guest threads parked. Recording runs no guest code and does not pause the
+title; restoring runs neither its entry, its initializer nor `startClet`, and
+replaces the ordinary saves with the ones the checkpoint was taken beside.
+[Checkpoint state and ownership](architecture.md#lgt-checkpoints) describes the
+record, and [testing](testing.md#lgt-checkpoints) what was run against it.
+
+A guest thread is restored from wherever a title parks one: inside
+`Thread.sleep` or `Thread.yield`, inside `Object.wait`, behind a lock another
+thread holds, at the end of its instruction budget, inside a static initializer
+it set off, and before its first slice. A thread parked beneath any other
+platform call refuses the checkpoint, naming the call, and the session carries
+on. An active cheat freeze or patch refuses it too.
+
+Two things this platform does changed with the feature and are worth knowing
+when comparing against an older build. Timers that come due in the same tick
+fire in the order they came due, then in the order of their structures, where
+they used to fire in whatever order a map was walked. And a file opened for
+writing holds its own copy of a packaged file's bytes; writing through one used
+to change what the archive answered for that file for the rest of the session.
+
 ## Validation and unresolved evidence
 
 [Testing](testing.md) covers authored fixtures and local probes. [CLI commands](cli.md)

@@ -416,6 +416,15 @@ func (client *Client) openFile(name string, flag uint32) int32 {
 		// so, before any of its own screens.
 		client.writeFile(name, nil)
 	}
+	if writable {
+		// A file opened for writing is written in place, and what a read
+		// answers for a packaged file is the archive's own bytes. Writing
+		// through those would change what the archive says that file holds
+		// for the rest of the session — for every later reader of the
+		// resource, and for a checkpoint, which reopens the archive and finds
+		// what was shipped. The handle gets a copy of its own.
+		data = append([]byte(nil), data...)
+	}
 	cursor := 0
 	switch {
 	case flag == fileOpenWriteTruncate:

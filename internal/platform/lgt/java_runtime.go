@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -86,7 +85,7 @@ type javaRuntime struct {
 	// title.
 	singletons map[string]uint32
 	// random is the generator behind each java/util/Random the title built.
-	random map[uint32]*rand.Rand
+	random map[uint32]*guestRandom
 	// streams are the resource streams a title has opened, and images the
 	// surfaces its Image objects stand for. See java_stream.go.
 	streams map[uint32]*javaStream
@@ -191,7 +190,7 @@ func newJavaRuntime() *javaRuntime {
 		strings:     map[uint32]string{},
 		named:       map[string]bool{},
 		singletons:  map[string]uint32{},
-		random:      map[uint32]*rand.Rand{},
+		random:      map[uint32]*guestRandom{},
 		streams:     map[uint32]*javaStream{},
 		images:      map[uint32]uint32{},
 		files:       map[uint32]uint32{},
