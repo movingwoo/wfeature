@@ -53,22 +53,39 @@ type certificateSaveStore struct {
 func newCertificateSaveStore(base SaveStore, certificate []byte) *certificateSaveStore {
 	store := &certificateSaveStore{base: base, certificate: bytes.Clone(certificate)}
 	if base != nil {
-		data, _, err := backend.ReadSave(base, databaseRemovedKey)
-		if err != nil {
+		if err := store.loadRemovalView(false); err != nil {
 			store.readError = err
-			return store
 		}
-		var names []string
-		for _, name := range splitRemovalList(data) {
-			if name == certificateName {
-				store.originalRemoved = true
-			} else {
-				names = append(names, name)
-			}
-		}
-		store.removed = joinRemovalList(names)
 	}
 	return store
+}
+
+// loadRemovalView reads the removal list of the store underneath and builds
+// this run's view of it: the list without the certificate's name, which is
+// this run's own to remove or not, and whether the list underneath names it,
+// which is what a later write of the list has to leave as it was.
+//
+// removedInRun says the title removed the certificate in this run. A run that
+// starts has not; one that a checkpoint brought back may have.
+func (store *certificateSaveStore) loadRemovalView(removedInRun bool) error {
+	data, _, err := backend.ReadSave(store.base, databaseRemovedKey)
+	if err != nil {
+		return err
+	}
+	var names []string
+	original := false
+	for _, name := range splitRemovalList(data) {
+		if name == certificateName {
+			original = true
+		} else {
+			names = append(names, name)
+		}
+	}
+	if removedInRun {
+		names = append(names, certificateName)
+	}
+	store.removed, store.originalRemoved = joinRemovalList(names), original
+	return nil
 }
 
 func (store *certificateSaveStore) LoadSave(name string) ([]byte, bool) {

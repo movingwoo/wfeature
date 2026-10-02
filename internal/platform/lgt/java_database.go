@@ -61,6 +61,19 @@ type javaDatabase struct {
 	// has to be able to tell a database it already wrote from an object that
 	// was never a database at all. See javaCloseDataBase.
 	closed bool
+	// unsaved says the last store of this database was refused: the records
+	// here are ahead of the container. The next store the store takes clears
+	// it, and a quick save or a quick load asks again before it goes on.
+	unsaved bool
+	// synced is the container's epoch when these records were last level with
+	// it: at the open, and at each store the store took. See openFile.synced.
+	synced uint64
+	// rebuilt says a quick load read these records from the store, and
+	// changed that the title has written to the database since. A close of a
+	// rebuilt database that has not changed stores nothing: what it holds is
+	// what the store holds, and writing it back would only bring a container
+	// the title deleted since into being again.
+	rebuilt, changed bool
 }
 
 // javaDatabaseMethods is this class's whole surface. It joins the platform
@@ -118,7 +131,7 @@ func javaOpenDataBase(
 		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
 			fmt.Sprintf(": %q does not exist", name))
 	}
-	database := &javaDatabase{name: name, recordSize: recordSize}
+	database := &javaDatabase{name: name, recordSize: recordSize, synced: client.fileEpoch(databaseFileName(name))}
 	if exists {
 		if err := database.decode(stored); err != nil {
 			return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
@@ -177,7 +190,11 @@ func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 // stored — which is what the specification promises of a record already saved.
 func (client *Client) storeDatabase(database *javaDatabase) {
 	database.modified = client.clock.unixMillis()
-	client.writeFile(databaseFileName(database.name), database.encode())
+	database.changed = true
+	database.unsaved = client.storeFile(databaseFileName(database.name), database.encode()) != nil
+	if !database.unsaved {
+		database.synced = client.fileEpoch(databaseFileName(database.name))
+	}
 }
 
 // encode lays the container out: the magic and version, the record size, the
@@ -263,7 +280,9 @@ func javaCloseDataBase(
 	if database.closed {
 		return 0, nil
 	}
-	client.storeDatabase(database)
+	if !database.rebuilt || database.changed {
+		client.storeDatabase(database)
+	}
 	database.closed = true
 	return 0, nil
 }

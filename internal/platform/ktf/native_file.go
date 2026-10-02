@@ -1,9 +1,12 @@
 package ktf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -127,11 +130,17 @@ func (platform *NativePlatform) FileOpens() []NativeFileOpen { return platform.o
 // nativeOpenFile is one file the module has open.
 type nativeOpenFile struct {
 	name string
-	// key is the lower-cased base name the session's own copy is kept under.
+	// key is what nativeFileKey makes of the name: what the session's own copy
+	// and the store's are kept under.
 	key      string
 	data     []byte
 	position int64
 	writable bool
+	// truncated says the open itself asked for an empty file. Everything in
+	// data was written through this object, which is what a quick load needs
+	// to know about it: see NativePlatform.reopenFiles. An object whose open
+	// made a file that was not there is not one of these.
+	truncated bool
 }
 
 // The open modes, which the WIPI specification names and the module's own
@@ -191,25 +200,40 @@ func nativeSaveKey(name string) string {
 	return "fs/" + name
 }
 
-// contents finds a file the package carries. Names are matched on the base
-// name and without regard to case: the module names its files the way they
-// were written into the archive, and the archive's entry names are the
+// nativeFileKey is what a file is kept under, in the session's own table and
+// in the save store: its base name without regard to case, whichever separator
+// the module wrote. Every table takes its key from here, so one name is one
+// file wherever it is looked up.
+func nativeFileKey(name string) string {
+	return strings.ToLower(path.Base(strings.ReplaceAll(name, "\\", "/")))
+}
+
+// contents finds a file by the name the module gave. Names are matched on the
+// base name and without regard to case: the module names its files the way
+// they were written into the archive, and the archive's entry names are the
 // title's directory rather than a bare name.
 func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	if platform.archive == nil {
 		return nil, false, nil
 	}
-	wanted := strings.ToLower(path.Base(strings.ReplaceAll(name, "\\", "/")))
 	// What the title has written this session comes first: a save it wrote and
 	// then reopened has to read back what it wrote. Behind that is what it
 	// wrote in an earlier session, and only then what the package shipped — a
 	// save has to win over the archive's copy of the same name, or a title
 	// would start every session from its shipped settings.
-	if data, ok := platform.written[wanted]; ok {
+	if data, ok := platform.written[nativeFileKey(name)]; ok {
 		return data, true, nil
 	}
-	if platform.saves != nil {
-		data, ok, err := backend.ReadSave(platform.saves, nativeSaveKey(wanted))
+	return platform.stored(platform.saves, name)
+}
+
+// stored finds a file where it lives outside this session's own table: in a
+// save store, and behind that in the package. It is the lookup a first open
+// makes, and a quick load re-opens its files through it for that reason, over
+// a store that bounds what is read.
+func (platform *NativePlatform) stored(store SaveStore, name string) ([]byte, bool, error) {
+	if store != nil {
+		data, ok, err := backend.ReadSave(store, nativeSaveKey(nativeFileKey(name)))
 		if err != nil {
 			return nil, false, err
 		}
@@ -217,15 +241,35 @@ func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 			return data, true, nil
 		}
 	}
-	if data, ok := platform.archive.Files[name]; ok {
-		return data, true, nil
+	data, ok := platform.packagedFile(name)
+	return data, ok, nil
+}
+
+// packagedFile finds a file the package carries: under the name as the module
+// wrote it, and failing that under its key. Two entries of a package can share
+// a key, and then the one whose entry name sorts first is the file, every
+// time: a file that is opened again has to be the file that was open.
+func (platform *NativePlatform) packagedFile(name string) ([]byte, bool) {
+	if platform.archive == nil {
+		return nil, false
 	}
-	for entry, data := range platform.archive.Files {
-		if strings.ToLower(path.Base(entry)) == wanted {
-			return data, true, nil
+	if data, ok := platform.archive.Files[name]; ok {
+		return data, true
+	}
+	if platform.packaged == nil {
+		platform.packaged = make(map[string]string, len(platform.archive.Files))
+		for entry := range platform.archive.Files {
+			key := strings.ToLower(path.Base(entry))
+			if first, taken := platform.packaged[key]; !taken || entry < first {
+				platform.packaged[key] = entry
+			}
 		}
 	}
-	return nil, false, nil
+	entry, ok := platform.packaged[nativeFileKey(name)]
+	if !ok {
+		return nil, false
+	}
+	return platform.archive.Files[entry], true
 }
 
 // readName reads a name argument out of guest memory.
@@ -267,12 +311,13 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		return 0, err
 	}
 	platform.opens = append(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
+	key, truncated := nativeFileKey(name), false
 	if ok && int32(mode) == nativeModeWriteTruncate {
 		// The file is there and the mode says to empty it. Emptying it here
 		// rather than on the first write is what the mode means: a title that
 		// opens this way and then writes nothing has still emptied the file.
-		platform.keep(strings.ToLower(path.Base(name)), []byte{})
-		data = nil
+		platform.keep(key, []byte{})
+		data, truncated = nil, true
 	}
 	if !ok {
 		if !writable {
@@ -284,8 +329,10 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		// Opening for writing creates the file. A title whose save has never
 		// been written has no other way to make one, and the module treats a
 		// refused create as the end of the run rather than as an empty save.
-		platform.create(strings.ToLower(path.Base(name)))
-		data = platform.written[strings.ToLower(path.Base(name))]
+		platform.create(key)
+		// Only the mode that empties a file makes an emptied object. An open
+		// that made the file because there was none asked for the file.
+		data, truncated = platform.written[key], int32(mode) == nativeModeWriteTruncate
 	}
 	object, err := platform.client.Allocate(4)
 	if err != nil {
@@ -297,10 +344,11 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		return 0, fmt.Errorf("write KTF native file object for %q: %w", name, err)
 	}
 	platform.files[object] = &nativeOpenFile{
-		name:     name,
-		key:      strings.ToLower(path.Base(name)),
-		data:     append([]byte(nil), data...),
-		writable: writable,
+		name:      name,
+		key:       key,
+		data:      append([]byte(nil), data...),
+		writable:  writable,
+		truncated: truncated,
 	}
 	return object, nil
 }
@@ -390,7 +438,7 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 		return 0, err
 	}
 	if !ok {
-		platform.create(strings.ToLower(path.Base(name)))
+		platform.create(nativeFileKey(name))
 	}
 	return platform.fileResult(true), nil
 }
@@ -412,6 +460,9 @@ func (platform *NativePlatform) create(key string) { platform.keep(key, []byte{}
 // title that keeps one open.
 func (platform *NativePlatform) keep(key string, data []byte) {
 	platform.written[key] = data
+	// What the store would not take for this name is superseded: these are the
+	// bytes to store now.
+	delete(platform.refused, key)
 	if platform.saves == nil {
 		return
 	}
@@ -422,8 +473,10 @@ func (platform *NativePlatform) keep(key string, data []byte) {
 }
 
 // FlushSaves writes what the title has changed out to the store. It is called
-// where a write burst ends rather than inside one, and again when the session
-// closes, so nothing a title wrote is left only in memory.
+// where a write burst ends rather than inside one, so nothing a title wrote is
+// left only in memory. It asks the store once for each file and does not ask
+// again at the next boundary: a store that refuses would otherwise be given
+// the whole file again at every frame.
 func (platform *NativePlatform) FlushSaves() {
 	if platform.saves == nil || len(platform.unsaved) == 0 {
 		return
@@ -432,10 +485,175 @@ func (platform *NativePlatform) FlushSaves() {
 		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
 			// A store that refuses is not the title's problem: it wrote what
 			// it wrote, and the session still reads it back. The Host's log is
-			// where a failing store belongs.
+			// where a failing store belongs. The name is kept, because a quick
+			// save, a quick load and the end of the session each ask once more.
 			platform.storeFailures++
+			if platform.refused == nil {
+				platform.refused = map[string]bool{}
+			}
+			platform.refused[key] = true
 		}
 		delete(platform.unsaved, key)
+	}
+}
+
+// pendingSaves names every file the title has written and the store does not
+// hold: what is marked for the next boundary and what a boundary was refused.
+func (platform *NativePlatform) pendingSaves() []string {
+	pending := make([]string, 0, len(platform.unsaved)+len(platform.refused))
+	for key := range platform.unsaved {
+		pending = append(pending, key)
+	}
+	for key := range platform.refused {
+		if !platform.unsaved[key] {
+			pending = append(pending, key)
+		}
+	}
+	slices.Sort(pending)
+	return pending
+}
+
+// storePending is the checked form of FlushSaves, for the two steps that must
+// not go on past a write the store did not take: a quick save, whose slot
+// carries no save, and a quick load, which displaces the session that issued
+// the write. It gives the store every pending file once, in key order, and
+// reports how many the store took.
+//
+// A file the store refuses stays where it was found, marked or refused, so the
+// ordinary boundaries still make the attempt they would have made: a quick
+// step that was refused changes nothing about what a later frame, close or
+// session end does.
+func (platform *NativePlatform) storePending() (int, error) {
+	if platform.saves == nil {
+		return 0, nil
+	}
+	var (
+		stored  int
+		failed  []string
+		failure error
+	)
+	for _, key := range platform.pendingSaves() {
+		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
+			platform.storeFailures++
+			if failure == nil {
+				failure = err
+			}
+			failed = append(failed, key)
+			continue
+		}
+		delete(platform.unsaved, key)
+		delete(platform.refused, key)
+		stored++
+	}
+	if len(failed) != 0 {
+		return stored, fmt.Errorf("%w: the save store refused %s: %v", backend.ErrCheckpointSaveWrite, describeNativeFiles(failed), failure)
+	}
+	return stored, nil
+}
+
+// describeNativeFiles names a few files for a refusal and counts the rest.
+func describeNativeFiles(keys []string) string {
+	const named = 3
+	parts := make([]string, 0, named)
+	for _, key := range keys[:min(named, len(keys))] {
+		parts = append(parts, strconv.Quote(key))
+	}
+	text := strings.Join(parts, ", ")
+	if rest := len(keys) - named; rest > 0 {
+		text += fmt.Sprintf(" and %d more", rest)
+	}
+	return text
+}
+
+// closeSaves is the last boundary a session has. What is marked goes to the
+// store as at any other, and so does what an earlier boundary was refused,
+// because nothing will ask after this.
+func (platform *NativePlatform) closeSaves() {
+	if platform.saves == nil {
+		return
+	}
+	for _, key := range platform.pendingSaves() {
+		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
+			platform.storeFailures++
+		}
+	}
+	clear(platform.unsaved)
+	clear(platform.refused)
+}
+
+// openFileBytes is how much the open files hold between them. A quick save is
+// refused over the same total a quick load is, so that a slot is never written
+// that no load would accept.
+func (platform *NativePlatform) openFileBytes() uint64 {
+	var total uint64
+	for _, file := range platform.files {
+		total += uint64(len(file.data))
+	}
+	return total
+}
+
+// reopenFiles reads what every file a restored title has open holds now, and
+// changes nothing: the buffers it answers are adopted once the load can no
+// longer be refused. A quick load brings back the title and not its saves, so
+// an open file is the file as the store has it, found the way a first open
+// finds it.
+//
+// The cursor is not part of this: it stays where the record has it, even past
+// the end of a file that is shorter now. A read there answers nothing and a
+// write fills the gap with zeros, as they do for any cursor.
+//
+// An object whose open asked for an empty file takes at most the bytes it had
+// written, from the front of the file as it is now. All of what such an object
+// holds is its own, and the title goes on rewriting from there: handing it a
+// longer file would leave the tail of that file behind what the title writes,
+// which is the one thing an emptying open exists to prevent. Every other
+// object, one whose open made the file among them, is given the whole file.
+//
+// The names come from a slot, which is untrusted. So every read goes through
+// one backend.RebuildReader: a key is read once however many names and objects
+// resolve to it, and what is read counts against limit. What the objects keep
+// counts against limit as well, each in a copy of its own.
+func (platform *NativePlatform) reopenFiles(store SaveStore, records []nativeFileState, limit int64) (map[uint32][]byte, error) {
+	var (
+		reader  *backend.RebuildReader
+		through SaveStore
+	)
+	if store != nil {
+		reader = backend.NewRebuildReader(store, limit)
+		through = reader
+	}
+	buffers := make(map[uint32][]byte, len(records))
+	for _, record := range records {
+		name := string(record.Name)
+		var data []byte
+		// An emptied object that had written nothing needs nothing of the file.
+		if !record.Truncated || record.Length > 0 {
+			var err error
+			if data, _, err = platform.stored(through, name); err != nil {
+				return nil, fmt.Errorf("%w: %s: %v", backend.ErrCheckpointSaveRead, strconv.Quote(name), err)
+			}
+		}
+		if record.Truncated && int64(len(data)) > record.Length {
+			data = data[:record.Length]
+		}
+		if int64(len(data)) > limit {
+			return nil, fmt.Errorf("%w: the open files hold more than a checkpoint restores", backend.ErrCheckpointSaveRead)
+		}
+		limit -= int64(len(data))
+		buffers[record.Object] = bytes.Clone(data)
+	}
+	if err := reader.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", backend.ErrCheckpointSaveRead, err)
+	}
+	return buffers, nil
+}
+
+// adoptReopened gives each open file the bytes reopenFiles read for it.
+func (platform *NativePlatform) adoptReopened(buffers map[uint32][]byte) {
+	for object, data := range buffers {
+		if file := platform.files[object]; file != nil {
+			file.data = data
+		}
 	}
 }
 

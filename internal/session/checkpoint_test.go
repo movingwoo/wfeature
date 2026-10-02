@@ -100,14 +100,16 @@ func TestCheckpointNativeRestoresInputPauseAndContinuation(t *testing.T) {
 			if !bytes.Equal(actual, expected) || w != width || h != height || f != flushes || s.ktfNative.Client.Steps() != steps {
 				t.Fatal("shared native continuation changed")
 			}
-			if saved, _ := store.LoadSave("progress"); string(saved) != "saved" {
-				t.Fatal("shared native load retained later saves")
+			if saved, _ := store.LoadSave("progress"); string(saved) != "later" {
+				t.Fatalf("shared native load changed the save written after the checkpoint: %q", saved)
 			}
 		})
 	}
 }
 
-func TestCheckpointNativeRejectsMalformedAudioBeforeReplacingSaves(t *testing.T) {
+// A refused load changes nothing, and neither does the load that is accepted
+// after it: a load never replaces a save.
+func TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves(t *testing.T) {
 	archive, err := testfixture.KTFNativeCheckpointArchive()
 	if err != nil {
 		t.Fatal(err)
@@ -193,8 +195,8 @@ func TestCheckpointNativeRejectsMalformedAudioBeforeReplacingSaves(t *testing.T)
 			if err := s.LoadCheckpoint(t.Context(), archive, data); err != nil {
 				t.Fatalf("valid checkpoint could not be loaded after refusal: %v", err)
 			}
-			if restored, found, err := store.ReadSave("progress"); err != nil || !found || string(restored) != "saved" {
-				t.Fatalf("valid retry did not restore saves: %q, %t, %v", restored, found, err)
+			if kept, found, err := store.ReadSave("progress"); err != nil || !found || string(kept) != "current" {
+				t.Fatalf("the accepted load changed durable saves: %q, %t, %v", kept, found, err)
 			}
 		})
 	}
@@ -227,7 +229,9 @@ func checkpointStartupCount(t *testing.T, s *Session) uint32 {
 	return binary.LittleEndian.Uint32(data[:])
 }
 
-func TestCheckpointRestoresSharedInputClockAndDurableGeneration(t *testing.T) {
+// A load brings back the guest, the input it owned and the shared clock. The
+// save written after the checkpoint is still what the store holds.
+func TestCheckpointRestoresSharedInputAndClockAndLeavesSaves(t *testing.T) {
 	s, archive, store := startCheckpointFixture(t)
 	now := time.Unix(1700000000, 0)
 	s.now = func() time.Time { return now }
@@ -263,8 +267,8 @@ func TestCheckpointRestoresSharedInputClockAndDurableGeneration(t *testing.T) {
 	if checkpointStartupCount(t, s) != 1 || !s.Running() || s.Scale() != 2 {
 		t.Fatal("load replayed startup, kept old memory or lost presentation settings")
 	}
-	if data, _ := store.LoadSave("progress"); string(data) != "checkpoint" {
-		t.Fatal("load kept the later save generation")
+	if data, _ := store.LoadSave("progress"); string(data) != "later" {
+		t.Fatalf("load changed the save written after the checkpoint: %q", data)
 	}
 	if got, err := s.repeat.CaptureState(); err != nil || got != wantRepeat || s.guestSinceLastTick() != 5*time.Millisecond {
 		t.Fatalf("shared repeat phase or clock changed: %+v, %v", got, err)
@@ -341,7 +345,7 @@ func TestCheckpointRejectsWrongArchiveCancellationAndUnsupportedPlatform(t *test
 	}
 }
 
-func TestCheckpointMalformedSharedStateCannotCommitSaves(t *testing.T) {
+func TestCheckpointMalformedSharedStateLeavesSessionAndSaves(t *testing.T) {
 	s, archive, store := startCheckpointFixture(t)
 	data, err := s.CaptureCheckpoint(t.Context())
 	if err != nil {
@@ -434,8 +438,8 @@ func TestCheckpointSubprocess(t *testing.T) {
 		if checkpointStartupCount(t, restored) != 1 || !reflect.DeepEqual(restored.HeldKeys(), []int32{49}) {
 			t.Fatal("restarted process replayed startup or lost input")
 		}
-		if data, _ := store.LoadSave("progress"); string(data) != "saved before process exit" {
-			t.Fatal("restarted process kept later ordinary saves")
+		if data, _ := store.LoadSave("progress"); string(data) != "written after the checkpoint" {
+			t.Fatalf("the restarted process changed the save written after the checkpoint: %q", data)
 		}
 		if err := restored.ReleaseHeldInput(t.Context()); err != nil {
 			t.Fatal(err)

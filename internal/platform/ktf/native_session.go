@@ -372,7 +372,8 @@ func (session *NativeSession) SaveOwner() string {
 
 // Close releases the session. There are no guest threads here — the title runs
 // only inside the frame it asked for — so this only writes out what the title
-// has not had a boundary to save at yet, and drops the platform.
+// has not had a boundary to save at yet, asks the store once more for what an
+// earlier boundary was refused, and drops the platform.
 func (session *NativeSession) Close() {
 	if session == nil {
 		return
@@ -380,7 +381,7 @@ func (session *NativeSession) Close() {
 	session.run.Lock()
 	defer session.run.Unlock()
 	if session.platform != nil {
-		session.platform.FlushSaves()
+		session.platform.closeSaves()
 	}
 	session.platform = nil
 }

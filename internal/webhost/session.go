@@ -673,6 +673,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid browser token"})
 		return
 	}
+	// A start from the quick save that is certain to be refused is refused
+	// here, while the game this page is running is still running.
+	if message.QuickLoad {
+		if err := r.server.quickLoadRefusal(message.Game); err != nil {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.checkpointRefusal(checkpointStarting, message.Game, err)})
+			return
+		}
+	}
 	r.stopGame()
 	token := message.Token
 	if token == "" {
@@ -787,10 +795,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		// is no game to hand back either way, so the answer is still the one
 		// that settles the request the page is waiting on — what changes is
 		// that the page is told this was an ending. See session.ErrExited.
+		text := err.Error()
+		if message.QuickLoad {
+			text = r.checkpointRefusal(checkpointStarting, label, err)
+		}
 		r.send(serverMessage{
 			Kind:    serverError,
 			ID:      message.ID,
-			Message: err.Error(),
+			Message: text,
 			Exited:  errors.Is(err, session.ErrExited),
 		})
 		return
@@ -819,6 +831,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	r.server.logger.Info("session started",
 		"game", label, "platform", summary.Platform, "owner", summary.SaveOwner,
 		"screen", fmt.Sprintf("%dx%d", startedWidth, startedHeight))
+	r.reportEarlierLeftovers(directory, started.ArchiveIdentity(), label)
 	r.started = startedMessage{
 		Authentication: started.Authentication(),
 		Game:           message.Game,

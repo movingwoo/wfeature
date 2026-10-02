@@ -47,7 +47,7 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Bytes separate all mutable source state, including the underlying saves.
+	// Bytes separate all mutable source state.
 	encoded, err := backend.EncodeCheckpoint(saved)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,14 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restoredStore, err := backend.NewMemorySaveStore(nil)
+	// A slot carries no save. The restored client gets a copy of what the
+	// source's store held at the boundary: the same disk, seen by another
+	// process.
+	boundary, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredStore, err := backend.NewMemorySaveStore(boundary)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +73,7 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
-	restored, err := prepared.Commit(t.Context(), nil)
+	restored, err := prepared.Commit(t.Context(), nil, restoredStore)
 	if err != nil {
 		t.Fatal(err)
 	}

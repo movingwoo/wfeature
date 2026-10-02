@@ -167,8 +167,10 @@ func TestCheckpointCommandsPreserveFailedLoadAndRejectStaleInput(t *testing.T) {
 	if err := r.game.KTF().Client.Core().Memory().Read(testfixture.KTFCheckpointStartupCounter, word[:]); err != nil || binary.LittleEndian.Uint32(word[:]) != 1 {
 		t.Fatal("load replayed startup or lost guest memory")
 	}
-	if data, found := store.LoadSave("progress"); !found || string(data) != "saved" {
-		t.Fatal("load did not replace durable saves")
+	// The load brought the guest back and left the save written after the
+	// quick save as it was.
+	if data, found := store.LoadSave("progress"); !found || string(data) != "later" {
+		t.Fatalf("load changed the save written after the quick save: %q, found %v", data, found)
 	}
 	r.handle(t.Context(), clientMessage{Kind: clientKey, Action: session.KeyPress, Code: 50})
 	if len(r.game.HeldKeys()) != 0 {
@@ -289,8 +291,8 @@ func testCheckpointServerSubprocess(t *testing.T, testName, platform string, cou
 			t.Fatalf("new server reran startup or lost the checkpoint: %s", read)
 		}
 		store := backend.NewDirectorySaveStore(server.saveDirectory(platform, restored.Started.SaveOwner))
-		if data, found := store.LoadSave("progress"); !found || string(data) != "saved by source server" {
-			t.Fatalf("new server save generation = %q, found %v", data, found)
+		if data, found := store.LoadSave("progress"); !found || string(data) != "written after source stopped" {
+			t.Fatalf("the new server's load changed the save written after the quick save: %q, found %v", data, found)
 		}
 		send(t, connection, clientMessage{Kind: clientStop, ID: 2, Epoch: 1})
 		expectMessage(t, connection, serverResult)
@@ -334,7 +336,7 @@ func testCheckpointServerSubprocess(t *testing.T, testName, platform string, cou
 	if err != nil || !found {
 		t.Fatalf("checkpoint slot missing: %v", err)
 	}
-	slots, err := filepath.Glob(filepath.Join(root, "saves", platform, ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.wfq", identity)))
+	slots, err := filepath.Glob(filepath.Join(root, "saves", platform, ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.v2.wfq", identity)))
 	if err != nil || len(slots) != 1 {
 		t.Fatalf("slot paths = %v, %v", slots, err)
 	}

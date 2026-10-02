@@ -347,6 +347,17 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		runtime.cFiles = make(map[string]*runtimeCFile)
 	}
 	runtime.cFiles[newName] = store
+	// A store a quick load left without a file under the new name is that
+	// name's store no longer: the handles that kept it follow the file that
+	// has the name now, so the name still has one host store.
+	if detached := runtime.detachedCFiles[newName]; detached != nil {
+		for _, open := range runtime.cFileHandles {
+			if open.store == detached {
+				open.store = store
+			}
+		}
+		delete(runtime.detachedCFiles, newName)
+	}
 
 	runtime.countDiagnostic(fmt.Sprintf("fs rename %s -> %s", oldName, newName))
 	return 0, nil
@@ -442,6 +453,22 @@ func (runtime *initializationRuntime) markDirectoryCreated(name string) error {
 	return runtime.saveChanges(nil, directoryListKey, runtime.createdDirectories(), map[string]bool{name: true})
 }
 
+// bindDetachedCFile puts a store a quick load left without a file back under
+// its name once a write through it has been stored: the file exists again, and
+// this store is the one that holds it. For any other store it does nothing.
+func (runtime *initializationRuntime) bindDetachedCFile(store *runtimeCFile) {
+	if runtime.detachedCFiles[store.name] != store {
+		return
+	}
+	delete(runtime.detachedCFiles, store.name)
+	if runtime.cFiles == nil {
+		runtime.cFiles = make(map[string]*runtimeCFile)
+	}
+	if runtime.cFiles[store.name] == nil {
+		runtime.cFiles[store.name] = store
+	}
+}
+
 func (runtime *initializationRuntime) databaseSeed(name string) ([]byte, bool) {
 	if runtime.removedDatabases()[name] {
 		return nil, false
@@ -509,6 +536,14 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		}
 	}
 	store.data = staged.data
+	// A store a quick load left without a file is the store of this name, so
+	// the open takes it rather than keeping a second one: the handles that
+	// kept it and this one share what is written from here.
+	if detached := runtime.detachedCFiles[name]; !exists && detached != nil {
+		detached.data, detached.packaged = store.data, store.packaged
+		store = detached
+		delete(runtime.detachedCFiles, name)
+	}
 	runtime.cFiles[name] = store
 	// Opening a deleted name brings it back: the store is live again from
 	// here, and a removal list that still held it would hide the writes the
@@ -570,6 +605,7 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 			return 0, err
 		}
 		state.store.data, state.position = staged, end
+		runtime.bindDetachedCFile(state.store)
 		return length, nil
 	}
 	remaining := len(state.store.data) - state.position

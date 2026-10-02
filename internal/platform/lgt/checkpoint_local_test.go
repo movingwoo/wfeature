@@ -69,6 +69,22 @@ func roundTripCheckpoint(t testing.TB, archive []byte, session *Session) backend
 	return decoded
 }
 
+// boundarySaves copies what a store holds now into a store of its own. A slot
+// carries no save, so a test that restores into a second session gives it this
+// copy: the same disk, seen by another process.
+func boundarySaves(t testing.TB, store *backend.MemorySaveStore) *backend.MemorySaveStore {
+	t.Helper()
+	entries, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatalf("snapshot the saves: %v", err)
+	}
+	copied, err := backend.NewMemorySaveStore(entries)
+	if err != nil {
+		t.Fatalf("copy the saves: %v", err)
+	}
+	return copied
+}
+
 // TestLocalLGTCheckpointsContinueIdentically is the acceptance probe for quick
 // save and load over real archives: run a title, take a checkpoint, restore it
 // into a second session with saves of its own, then tick both and compare what
@@ -232,13 +248,16 @@ func compareLocalCheckpoint(t *testing.T, file string, warm, rounds int, sweep b
 		t.Errorf("decode: %v", err)
 		return kind, size, "FAILED: decode: " + firstLine(err)
 	}
-	restoredStore, _ := backend.NewMemorySaveStore(nil)
+	restoredStore := boundarySaves(t, sourceStore)
 	prepared, err := PrepareSessionCheckpoint(data, decoded, SessionOptions{SaveStore: restoredStore})
 	if err != nil {
 		t.Errorf("prepare: %v", err)
 		return kind, size, "FAILED: prepare: " + firstLine(err)
 	}
-	restored, err := prepared.Commit(ctx, nil)
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		t.Errorf("validation made %d save store calls, the first being %s", calls, first)
+	}
+	restored, err := prepared.Commit(ctx, nil, restoredStore)
 	if err != nil {
 		prepared.Discard()
 		t.Errorf("commit: %v", err)

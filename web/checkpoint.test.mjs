@@ -60,9 +60,29 @@ test("keypad actions run immediately and report inline without a modal", async (
   assert.equal(ui.note.hidden, true);
   const loading = ui.load.click();
   assert.deepEqual(ui.calls, ["save", "load"]);
+  assert.equal(ui.note.textContent, "퀵로드 중…");
   await loading;
   assert.deepEqual(ui.loaded, [{ restored: true }]);
-  assert.match(ui.note.textContent, /불러왔습니다/);
+  // A load brings the game back and leaves its saves alone, and says both.
+  assert.equal(ui.note.textContent, "퀵세이브 시점으로 돌아갔습니다. 세이브는 되돌리지 않았습니다.");
+  assert.doesNotMatch(ui.note.textContent, /불러왔습니다/);
+  assert.deepEqual([...ui.timers.values()].map(timer => timer.ms), [3000]);
+});
+
+test("a refused load shows the server's reason and keeps the slot offered", async () => {
+  const ui = setup();
+  ui.state("playing");
+  ui.controls.started({ can_checkpoint: true, has_checkpoint: true });
+  const reason = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요.";
+  ui.socket.quickLoad = async () => { throw new Error(reason); };
+  await ui.load.click();
+  assert.equal(ui.note.textContent, `퀵로드 실패: ${reason}`);
+  assert.ok(ui.classes.has("error"));
+  assert.equal(ui.loaded.length, 0);
+  // The slot is still there and still refused, so the key stays as it was:
+  // pressing it again says why again.
+  assert.equal(ui.load.disabled, false);
+  assert.equal(ui.save.disabled, false);
 });
 
 test("pending operations block every copy, including cells assigned after wiring", async () => {

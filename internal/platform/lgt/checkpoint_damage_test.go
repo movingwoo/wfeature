@@ -233,7 +233,7 @@ func TestCheckpointSurvivesADamagedRecord(t *testing.T) {
 						return
 					}
 					accepted++
-					restored, err := prepared.Commit(context.Background(), nil)
+					restored, err := prepared.Commit(context.Background(), nil, store)
 					if err != nil {
 						prepared.Discard()
 						return
@@ -279,7 +279,7 @@ func TestCheckpointRestoresJavaThreadsInAnotherProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		restored, err := prepared.Commit(context.Background(), nil)
+		restored, err := prepared.Commit(context.Background(), nil, store)
 		if err != nil {
 			t.Fatal(err)
 		}

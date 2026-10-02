@@ -23,10 +23,15 @@ func checkpointFixtureSession(t *testing.T, fixture continuationFixture, store b
 		options:         SessionOptions{MaxSteps: fixture.client.core.MaxSteps(), SaveStore: store, Clock: fixture.clock}}
 }
 
-func TestSessionCheckpointReplacesWholeGenerationAndIsolatesDiscardedWrites(t *testing.T) {
+// A load restores execution state and leaves the saves alone: what was saved
+// after the checkpoint is still there, byte for byte, and nothing is staged or
+// set aside beside the save directory. A write the displaced runtime issues
+// while it unwinds goes to a store of its own.
+func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.T) {
 	fixture := newContinuationFixture(t, 1700000000, continuationFixtureOptions{Runnable: true})
 	fixture.start(t)
-	store := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	owner := filepath.Join(t.TempDir(), "owner")
+	store := backend.NewDirectorySaveStore(owner)
 	if err := store.StoreSave("progress", []byte("saved")); err != nil {
 		t.Fatal(err)
 	}
@@ -75,12 +80,16 @@ func TestSessionCheckpointReplacesWholeGenerationAndIsolatesDiscardedWrites(t *t
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
-	if data, _ := store.LoadSave("progress"); string(data) != "later" {
-		t.Fatal("detached construction wrote live saves")
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		t.Fatalf("validation made %d save store calls, the first being %s", calls, first)
+	}
+	before, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
 	}
 	clock.Advance(10 * time.Second)
 	old := source.Client
-	restored, err := prepared.Commit(t.Context(), source)
+	restored, err := prepared.Commit(t.Context(), source, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +100,18 @@ func TestSessionCheckpointReplacesWholeGenerationAndIsolatesDiscardedWrites(t *t
 	if data, _ := old.saveStore.LoadSave("late-discard"); string(data) != "must stay isolated" {
 		t.Fatal("discarded worker did not finish its deferred save")
 	}
-	entries, err := store.SnapshotSaves()
-	if err != nil || !reflect.DeepEqual(entries, checkpoint.Saves) {
-		t.Fatalf("restored durable generation differs: %+v, %v", entries, err)
+	after, err := store.SnapshotSaves()
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("the load changed the saves: %+v, %v; want them as they were: %+v", after, err, before)
+	}
+	if data, _ := store.LoadSave("progress"); string(data) != "later" {
+		t.Fatalf("the save written after the checkpoint reads %q after the load", data)
+	}
+	for _, name := range []string{"previous", "next", "intent"} {
+		leftover := filepath.Join(filepath.Dir(owner), ".wfeature-quicksave", "owners", "owner", name)
+		if _, err := os.Lstat(leftover); !os.IsNotExist(err) {
+			t.Fatalf("the load left %s beside the saves: %v", name, err)
+		}
 	}
 	certificate, _ := restored.Client.saveStore.LoadSave(certificateSaveKey)
 	if string(certificate) != "saved certificate" {
@@ -112,20 +130,16 @@ func TestSessionCheckpointReplacesWholeGenerationAndIsolatesDiscardedWrites(t *t
 	}
 }
 
-type refusingCheckpointStore struct{ *backend.MemorySaveStore }
-
-func (*refusingCheckpointStore) ReplaceSaves([]backend.SaveEntry) error {
-	return errors.New("injected generation replacement failure")
-}
-
+// A load that is refused changes nothing: the running session keeps running
+// and its saves are what they were. Nothing durable happens in a load any
+// more, so the refusals left are the ones about the request itself.
 func TestSessionCheckpointRefusalKeepsOriginalRunning(t *testing.T) {
 	fixture := newContinuationFixture(t, 1700000000, continuationFixtureOptions{})
 	fixture.start(t)
-	memory, err := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "progress", Data: []byte("current")}})
+	store, err := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "progress", Data: []byte("current")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &refusingCheckpointStore{memory}
 	source := checkpointFixtureSession(t, fixture, store)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -142,25 +156,57 @@ func TestSessionCheckpointRefusalKeepsOriginalRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved.Saves = []backend.SaveEntry{{Key: "progress", Data: []byte("checkpoint")}}
-	prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, saved, source.options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer prepared.Discard()
 	original := source.Client
-	if _, err := prepared.Commit(t.Context(), source); err == nil {
-		t.Fatal("replacement failure was ignored")
-	}
-	if source.Client != original || original.workersStopped {
-		t.Fatal("refused load changed the original session")
-	}
-	if data, _ := store.LoadSave("progress"); string(data) != "current" {
-		t.Fatal("refused load changed live saves")
+	for _, refusal := range []struct {
+		name   string
+		commit func(*PreparedSession) error
+	}{
+		{"no save store", func(prepared *PreparedSession) error {
+			_, err := prepared.Commit(t.Context(), source, nil)
+			return err
+		}},
+		{"canceled", func(prepared *PreparedSession) error {
+			_, err := prepared.Commit(canceled, source, store)
+			return err
+		}},
+		{"busy", func(prepared *PreparedSession) error {
+			source.Client.run.Lock()
+			defer source.Client.run.Unlock()
+			_, err := prepared.Commit(t.Context(), source, store)
+			return err
+		}},
+	} {
+		prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, saved, source.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := refusal.commit(prepared); err == nil {
+			t.Fatalf("%s: the load was accepted", refusal.name)
+		}
+		prepared.Discard()
+		if source.Client != original || original.workersStopped {
+			t.Fatalf("%s: the refused load changed the original session", refusal.name)
+		}
+		if data, _ := store.LoadSave("progress"); string(data) != "current" {
+			t.Fatalf("%s: the refused load changed live saves", refusal.name)
+		}
 	}
 	fixture.clock.Advance(30 * time.Millisecond)
 	if ran, err := source.Client.ServiceThreads(t.Context(), 1); err != nil || ran != 1 {
 		t.Fatalf("original stopped after refused load: %d, %v", ran, err)
+	}
+}
+
+// A session with no save store cannot be captured: its slot would carry no
+// save and a load would have nowhere to find one.
+func TestSessionCheckpointRequiresASaveStore(t *testing.T) {
+	fixture := newContinuationFixture(t, 1700000000, continuationFixtureOptions{})
+	fixture.start(t)
+	source := &Session{Archive: &Archive{JAR: &JAR{Client: fixture.client.image}}, Client: fixture.client,
+		archiveIdentity: backend.SaveIdentity([]byte("authored checkpoint fixture")),
+		options:         SessionOptions{MaxSteps: fixture.client.core.MaxSteps(), Clock: fixture.clock}}
+	if _, err := source.CaptureCheckpoint(t.Context()); err == nil {
+		t.Fatal("a session without a save store was captured")
 	}
 }
 
@@ -180,7 +226,8 @@ func TestSessionCheckpointSubprocess(t *testing.T) {
 			t.Fatal(err)
 		}
 		fresh := newContinuationRestoreFixture(t, 1900000000, continuationFixtureOptions{Runnable: true})
-		store, err := backend.NewMemorySaveStore(nil)
+		// The saves of the process that loads are its own: the slot carries none.
+		store, err := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "progress", Data: []byte("written after the checkpoint")}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +237,7 @@ func TestSessionCheckpointSubprocess(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer prepared.Discard()
-		restored, err := prepared.Commit(t.Context(), nil)
+		restored, err := prepared.Commit(t.Context(), nil, store)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -205,8 +252,8 @@ func TestSessionCheckpointSubprocess(t *testing.T) {
 		if binary.LittleEndian.Uint32(data) != 1 || binary.LittleEndian.Uint32(data[4:]) != 42 || binary.LittleEndian.Uint32(data[12:]) != 2 || len(restored.Client.workers) != 0 {
 			t.Fatalf("fresh process continuation differs: %x", data)
 		}
-		if content, _ := store.LoadSave("progress"); string(content) != "saved in another process" {
-			t.Fatal("fresh process did not restore the save generation")
+		if content, _ := store.LoadSave("progress"); string(content) != "written after the checkpoint" {
+			t.Fatalf("the fresh process's save reads %q after the load", content)
 		}
 		return
 	}

@@ -165,11 +165,6 @@ var descriptorInventoryLayout = storageinventory.Layout{
 	},
 }
 
-// descriptorFilePayloadKind is the name the heap capture files a File state
-// under. It is spelled here as well as where the capture writes it, and the
-// authored test is what fails if the two stop agreeing.
-const descriptorFilePayloadKind = "ktf-file-v1"
-
 // descriptorJavaDatabaseNow is what DataBase.openDataBase would find for a
 // name the catalog did not hold: the save unless the name is on this table's
 // removal list, and otherwise the packaged copy unless either list hides it.
@@ -403,19 +398,35 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 			walked = append(walked, worker.javaThread, worker.timerOwner, worker.paintedCard)
 		}
 	}
-	saved, err := state.captureHeapState(walked)
+	// A checkpoint record holds no file bytes, so the objects themselves are
+	// what is looked at: the heap capture is run for its walk, and told to
+	// name every File state and record list it meets.
+	var files []*runtimeGuestFile
+	var stores []*runtimeDataBaseStore
+	context := &heapNativeContext{runtime: state, opacityIDs: make(map[*imageOpacity]uint32), now: client.now()}
+	codec := state.heapCodec()
+	codec.CaptureNative = func(native any) (jvm.HeapExternalPayload, error) {
+		switch value := native.(type) {
+		case *runtimeGuestFile:
+			files = append(files, value)
+		case *runtimeDataBaseStore:
+			stores = append(stores, value)
+		}
+		return context.captureNative(native)
+	}
+	_, reachable, err := state.capturePlatformRoots(walked, context)
+	if err == nil {
+		_, err = client.vm.CaptureHeapState(reachable, codec)
+	}
 	if err != nil {
 		mark(descriptorHeapRefused, storageinventory.Reason(err))
 	} else {
-		for _, payload := range saved.JVM.Payloads {
-			if payload.ExternalKind != descriptorFilePayloadKind {
+		seenFiles := make(map[*runtimeGuestFile]bool, len(files))
+		for _, file := range files {
+			if seenFiles[file] {
 				continue
 			}
-			file, err := restoreHeapFile(payload.Data)
-			if err != nil {
-				mark(descriptorHeapRefused, storageinventory.Reason(err))
-				continue
-			}
+			seenFiles[file] = true
 			counts[descriptorFilePayloads]++
 			stored, _ := view.guestFile(file.name)
 			if refused("fs/"+strings.TrimPrefix(file.name, "/"), nil) {
@@ -428,24 +439,20 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 				mark(descriptorEmptyOverContent, file.name)
 			}
 		}
-		// The capture numbers every record list it meets, the catalog's first.
-		// What is left is a list only an object reaches.
-		cataloged := make(map[uint32]bool, len(saved.DatabaseBindings))
-		for _, binding := range saved.DatabaseBindings {
-			cataloged[binding.Database] = true
-		}
-		for index, database := range saved.Databases {
-			if cataloged[uint32(index+1)] {
+		// What the catalog does not bind is a list only an object reaches.
+		seenStores := make(map[*runtimeDataBaseStore]bool, len(stores))
+		for _, store := range stores {
+			if seenStores[store] || state.databases[store.name] == store {
 				continue
 			}
-			name := string(database.Name)
+			seenStores[store] = true
 			counts[descriptorObjectOnlyDatabases]++
-			records, _, err := descriptorJavaDatabaseNow(view, name)
-			if refused("jdb/"+name, err) {
+			records, _, err := descriptorJavaDatabaseNow(view, store.name)
+			if refused("jdb/"+store.name, err) {
 				continue
 			}
-			if !sameRecords(database.Records, records) {
-				mark(descriptorStaleObjectOnlyDatabases, name)
+			if !sameRecords(store.records, records) {
+				mark(descriptorStaleObjectOnlyDatabases, store.name)
 			}
 		}
 	}

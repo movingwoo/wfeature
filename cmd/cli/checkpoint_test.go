@@ -204,8 +204,10 @@ func testCheckpointCLIProcess(t *testing.T, testName string, counterAddress uint
 	if output, err := process.CombinedOutput(); err != nil {
 		t.Fatalf("CLI process: %v: %s", err, output)
 	}
-	if progress, _ := store.LoadSave("progress"); string(progress) != "checkpoint progress" {
-		t.Fatal("CLI restart did not replace ordinary save progress")
+	// The restart brought the guest back and left the save written after the
+	// checkpoint as it was.
+	if progress, _ := store.LoadSave("progress"); string(progress) != "later progress" {
+		t.Fatalf("CLI restart with -quickload changed the ordinary save: %q", progress)
 	}
 	data, _, err = store.LoadCheckpoint(identity)
 	if err != nil {
