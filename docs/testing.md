@@ -464,6 +464,80 @@ reads recover each case and see one complete generation; concurrent snapshots
 through the same store likewise see one generation. These tests exercise process
 interruption on the executing host, not a physical power loss.
 
+### Storage fixtures and the boundary inventory
+
+The three checkpoint fixtures make no storage call, so a Host test could only
+imitate a game's save with a store write of its own. Authored storage fixtures
+now exist for every checkpoint variant. Each starts through the ordinary loader
+and acts once per key press on one save of two four-byte parts: write both,
+patch the first in place, read both back, delete, hold the save open after
+writing the first part, open it with truncation without writing, and finish
+through what was kept.
+
+| Fixture | Variant | Surface | Where a held write waits |
+| --- | --- | --- | --- |
+| `KTFSaveArchive` | KTF Java/AOT | Java `File` | nowhere: stored at the call; the `File` keeps a private copy and its cursor |
+| `KTFModuleSaveArchive` | KTF older module | Java `File` | the same |
+| `KTFNativeSaveArchive` | KTF native, with a frame callback | file interface | in the written table until the frame ends |
+| `KTFNativeSaveArchiveWithoutFrame` | KTF native, no frame callback | file interface | in the written table until a file or the session is closed |
+| `LGTSaveArchive` | LGT Clet | WIPI-C files | in the handle buffer until the handle is closed |
+| `LGTJavaSaveArchive` | LGT AOT Java | `File`, a stream on a `File`, or `DataBase`, chosen by a guest word | in the handle buffer; in the stream until a flush; nowhere for `DataBase` |
+
+The native interface has no delete, and a record store has no truncating open;
+those actions are absent where the surface has none. Each fixture has tests of
+its own actions against a store, and is captured and restored once to show
+that it is a valid checkpoint subject on the present tree.
+
+Four backend pieces were added for the change that follows and are called by
+nothing yet: the sentinels `ErrCheckpointSaveWrite`, `ErrCheckpointSaveRead` and
+`ErrCheckpointLegacy`; `NewDetachedSaveStore`, which answers every read as
+absent, refuses writes and counts calls; `ReadSaveLimit`, which checks a
+directory entry's size before reading it; and `DisplacedGeneration`, which
+reports a `previous` directory without reading it. The journal's recovery is
+also tested from literal on-disk states, without the writer that produces them.
+
+Opt-in probes count what the platform holds for a title's storage at tick
+boundaries, in in-memory stores:
+
+```sh
+WFEATURE_LGT_STORAGE_INVENTORY=1 go test -run TestLocalLGTStorageInventory -v ./internal/platform/lgt
+WFEATURE_KTF_STORAGE_INVENTORY=1 go test -run 'TestLocalKTFStorageInventory|TestKTFNativeStorageInventory' -v ./internal/platform/ktf
+```
+
+`WFEATURE_STORAGE_INVENTORY_OUT` names a directory outside the repository for
+one record per archive. On 2026-10-03 the local libraries gave the following,
+with no input sent, so these are boot and notice screens rather than play.
+
+LGT, 200 ticks of warm-up and 150 boundaries each, 130 files: 105 Clets and 23
+AOT Java titles ran; two files are not LGT games; two Java archives are one
+title packaged twice and exit at round 13.
+
+| At a boundary | Archives |
+| --- | --- |
+| an open file handle | 3 Clets, at every boundary |
+| a writable handle | 2 |
+| a dirty handle, a write only the buffer holds | 1 Clet, at every boundary |
+| a handle whose buffer differs from the store | the same 1; none that is clean |
+| an open `DataBase`, a file stream, a sink with bytes | 0 |
+| two handles on one key, a pending truncation, a stale path list | 0 |
+
+KTF descriptor runtime, 300 rounds of warm-up and 100 boundaries each, 38 files
+in the local KTF directory: 36 ran, all of the Java/AOT variant.
+
+| At a boundary | Archives |
+| --- | --- |
+| C file catalog entries | 17, up to 13 entries |
+| live Java `File` payloads | 9, up to 29 |
+| Java database catalog entries | 3 |
+| a record database catalog entry | 1 |
+| an open C file handle | 2, one of them at every boundary |
+| files this session wrote | 2 |
+| a `File` payload whose buffer differs from the store | 1, at every boundary |
+| a stale catalog entry or ledger, a pending truncation | 0 |
+
+The authored native package held nothing open or pending. No real native
+package is in the local library.
+
 ## Local acceptance
 
 ```sh
