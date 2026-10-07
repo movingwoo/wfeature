@@ -137,13 +137,23 @@ func Start(options Options) (*Server, error) {
 
 // Close stops the server and finishes what it was writing. A save being
 // committed is the reason this drains rather than dropping the connections.
+//
+// The games are closed beside the HTTP shutdown rather than after it, for the
+// reason the desktop server gives: the shutdown does not reach a session
+// socket, and the app's own page is attached to one for as long as a game is
+// on the screen. See drain in cmd/server.
 func (s *Server) Close() error {
 	if s == nil || s.httpServer == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	games := make(chan struct{})
+	go func() {
+		defer close(games)
+		s.host.CloseSessions(ctx)
+	}()
 	err := s.httpServer.Shutdown(ctx)
-	s.host.CloseParkedSessions()
+	<-games
 	return err
 }

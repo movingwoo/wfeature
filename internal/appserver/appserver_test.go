@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
 // The embedded server is the whole of what a phone app runs, so what this
@@ -136,5 +139,76 @@ func TestEmbeddedServerReportsItsReleaseVersion(t *testing.T) {
 				t.Fatalf("status = %d, version = %q, want %q", response.StatusCode, status.Version, want)
 			}
 		})
+	}
+}
+
+// The app's own page is attached to a session socket for as long as a game is
+// on the screen, and the HTTP shutdown does not reach that socket. Closing the
+// embedded server therefore has to close the game itself, or an app that is
+// being put away takes with it whatever the title had written and not yet
+// handed to the save store.
+func TestCloseEndsAnAttachedSession(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "games", "skt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "canvas-skt.zip"))
+	if err != nil {
+		t.Fatalf("read the canvas fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "games", "skt", "canvas.zip"), archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, err := Start(Options{Root: root})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(server.URL(), "http://")+"/api/session", nil)
+	if err != nil {
+		t.Fatalf("dial the session: %v", err)
+	}
+	defer connection.Close()
+	if err := connection.WriteText(`{"kind":"start","game":"games/skt/canvas.zip"}`); err != nil {
+		t.Fatalf("start the game: %v", err)
+	}
+	started := make(chan struct{})
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		running := false
+		for {
+			opcode, payload, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			if running || opcode != wsproto.OpText {
+				continue
+			}
+			var message struct {
+				Kind string `json:"kind"`
+			}
+			if json.Unmarshal(payload, &message) == nil && message.Kind == "started" {
+				running = true
+				close(started)
+			}
+		}
+	}()
+	select {
+	case <-started:
+	case <-ended:
+		t.Fatal("the socket closed before the game started")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the game did not start")
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server closed and left the attached session's socket open")
 	}
 }

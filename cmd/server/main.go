@@ -487,12 +487,24 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 func drain(httpServer *http.Server, handler *webhost.Server, logger *slog.Logger) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// Shutdown neither closes nor waits for a hijacked connection, and a
+	// session socket is one. A game whose page is still attached therefore has
+	// to be closed by the handler, or it ends with the process and takes with
+	// it whatever its title had written and not yet handed to the save store.
+	// A game waiting for a page to come back is closed by the same call: it
+	// has no window left to wait in.
+	//
+	// The two run side by side so that each has the whole deadline. Taken in
+	// turn, a request that stalled — an archive a phone stopped uploading —
+	// would spend the time the games needed to close.
+	games := make(chan struct{})
+	go func() {
+		defer close(games)
+		handler.CloseSessions(shutdown)
+	}()
 	if err := httpServer.Shutdown(shutdown); err != nil {
 		logger.Error("shutdown was not clean", "error", err)
 	}
-	// A game waiting for a page to come back has no window left to wait in;
-	// its guest goroutines would otherwise outlive this process's reason to
-	// exist.
-	handler.CloseParkedSessions()
+	<-games
 	return nil
 }

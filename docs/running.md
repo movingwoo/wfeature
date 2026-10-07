@@ -214,9 +214,11 @@ nothing else: **the server is asked what it is** rather than looked up in a
 process list, so a stranger holding the port is reported and left alone, and
 `go run`'s executable-in-the-build-cache is recognised like any other.
 
-A stop asks the server to stop itself, which drains the same way Ctrl-C does
-and finishes a save in flight. Only a server that will not answer is signalled,
-and only one that ignores the signal is forced.
+A stop asks the server to stop itself, which drains the same way Ctrl-C does:
+it finishes a save in flight and closes every game, including one whose page is
+still connected, so that what a title had written reaches the save folder
+before the process ends. Only a server that will not answer is signalled, and
+only one that ignores the signal is forced; a forced stop closes nothing.
 
 ### /api/status
 
@@ -238,7 +240,7 @@ build.
 ### /api/shutdown
 
 `POST /api/shutdown` stops the server the way closing its window does: it stops
-accepting, finishes what is in flight, and exits. **Only a caller on this
+accepting, finishes what is in flight, closes the games it holds, and exits. **Only a caller on this
 machine may use it** — the server binds every interface so a phone can play, and
 a stop anyone on that network could send is a way to end somebody's game from
 the next room. A request from anywhere else is refused with 403.
@@ -495,6 +497,14 @@ var/games/<platform>/          game archives
 var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
 ```
+
+A per-game save folder may be a symbolic link to a directory kept elsewhere;
+saves are read and written through it, and quick save is refused for such a
+folder. On a save location that cannot be written, a game still starts and
+reads its saves, and the game's own save fails as a write. On a filesystem
+without file locks games run normally. In both cases the log says once per
+folder that it has no file lock, which means a second server or CLI process is
+not kept out of it.
 
 The picker lists the `.zip` and `.jar` files one level under `var/games/` and
 the ones sitting in it directly, which the page groups as `기타`. The directory

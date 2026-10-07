@@ -382,7 +382,10 @@ framing:
 
 A parked session retains live objects and suspended Go call stacks in server
 memory. It survives a disconnected browser, but not server shutdown. Guest
-save files and `.wfs` exports do not capture that execution state.
+save files and `.wfs` exports do not capture that execution state. A server
+that stops closes parked and attached sessions alike before it exits, so the
+writes a title had issued reach its save files; see
+[retention and control](session.md#retention-and-control).
 
 KTF and LGT quick save/load join the shared session, CLI, server and browser
 controls. The envelope, the slot and the Host commands are one implementation;
@@ -508,6 +511,23 @@ read-only backup, and is retained while a session is parked. File data is
 synced before it is renamed into place; directory syncing retains the existing
 store's advisory OS/filesystem guarantees. This is not a claim of verified
 power-loss durability on every target.
+
+Both the transaction lock and the claim are taken twice: in a registry of this
+process, keyed by the owner root, and as a kernel lock on a file in the reserved
+sibling directory. A location that cannot hold the kernel lock, because the
+reserved directory or the lock file cannot be created there or because the
+filesystem has no locks, keeps the registry alone. That is at least the
+exclusion the releases before the lock had, which was one mutex per store
+object, but another process is no longer kept out, and each Host says so once
+per directory in its log. A lock that somebody holds is contention and never
+falls back, and a reserved path that is a link or not a directory is still
+refused.
+
+A per-game owner directory may itself be a symbolic link. Ordinary reads,
+writes, batches, listing, export, import and the claim go through it, as they
+did before the lock existed. Checkpoint slots still refuse a linked root, and
+so does settling a replacement an earlier build left half done, because that
+renames the directory itself.
 
 An earlier build's quick load replaced the whole save folder: it staged the
 full set, verified it, recorded an intent, moved the live directory to

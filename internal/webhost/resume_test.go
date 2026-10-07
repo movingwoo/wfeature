@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"context"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -36,7 +37,11 @@ func resumeFixture(t *testing.T) (*Server, string) {
 	httpServer := httptest.NewServer(server)
 	t.Cleanup(func() {
 		httpServer.Close()
-		server.CloseParkedSessions()
+		// A test that left a game attached must not hang here if its runner
+		// never lets go, so the wait has an end.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		server.CloseSessions(ctx)
 	})
 	return server, "ws://" + strings.TrimPrefix(httpServer.URL, "http://") + "/api/session"
 }
@@ -166,9 +171,9 @@ func TestParkedSessionIsClosedWhenTheServerStops(t *testing.T) {
 	_ = connection.Close()
 	waitForParked(t, server, 1)
 
-	server.CloseParkedSessions()
+	server.CloseSessions(context.Background())
 	if server.parkedCount() != 0 {
-		t.Fatalf("%d sessions parked after the window elapsed, want 0", server.parkedCount())
+		t.Fatalf("%d sessions parked after the server stopped, want 0", server.parkedCount())
 	}
 	// The token is spent: a page that comes back late is told there is nothing
 	// rather than handed a closed game.
@@ -288,6 +293,11 @@ func TestParkingTellsTheGameAndResumingTellsItAgain(t *testing.T) {
 	}
 }
 
+// A stop asks an attached runner to close its game, and the runner answers
+// between rounds. A page can ask to be parked in the moment before it does,
+// and that request must not leave a game behind for a process that is ending.
+// The stop is begun here without the request to the runner, which is that
+// moment held still.
 func TestAConnectionClosingAfterShutdownCannotRetainAGame(t *testing.T) {
 	server, url := resumeFixture(t)
 	connection := dialSession(t, url)
@@ -295,7 +305,9 @@ func TestAConnectionClosingAfterShutdownCannotRetainAGame(t *testing.T) {
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 	started := expectMessage(t, connection, serverStarted)
 	expectFrame(t, connection)
-	server.CloseParkedSessions()
+	server.parkedMu.Lock()
+	server.sessionsClosed = true
+	server.parkedMu.Unlock()
 	send(t, connection, clientMessage{Kind: clientPark, ID: 7})
 	expectMessage(t, connection, serverResult)
 	if server.parkedCount() != 0 || server.claimCount() != 0 || server.attachedSession(started.Started.Token) != nil {

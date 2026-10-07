@@ -39,7 +39,8 @@ import (
 // recovery and the complete export walk, so it cannot split a StoreSaves batch
 // or the recovery of a replacement an earlier build left. Separate guest
 // StoreSave calls remain separate transactions; an export can still land
-// between those calls.
+// between those calls. Where the save location cannot hold a file lock, that
+// transaction excludes this process's own writers and no other's.
 //
 // An import writes, so it takes the claim the save API takes —
 // `holdSaveDirectory`, for the length of the write. A restore landing under a
@@ -113,6 +114,9 @@ func (s *Server) exportSavePack(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	entries, err := backend.ReadSaveTree(directory)
+	// An export takes no claim, so a directory that cannot hold the file lock
+	// may be seen here first; see takeSaveClaimLocked.
+	backend.WarnSaveLockFallback(s.logger, directory)
 	if err != nil {
 		s.logger.Error("could not read a save tree for export", "directory", directory, "error", err)
 		writeError(writer, http.StatusInternalServerError, "세이브를 읽지 못했습니다.")

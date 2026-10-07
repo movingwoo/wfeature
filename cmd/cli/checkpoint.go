@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -70,7 +71,7 @@ func runShared(ctx context.Context, path string, args []string, in io.Reader, ou
 	if *root == "" {
 		*root = platformSaveRoot(summary.Platform)
 	}
-	directory, release, err := claimArchiveSaves(archive, *root)
+	directory, release, err := claimArchiveSaves(archive, *root, options.Logger)
 	if err != nil {
 		fmt.Fprintln(diagnostic, err)
 		return 1
@@ -171,7 +172,7 @@ func runShared(ctx context.Context, path string, args []string, in io.Reader, ou
 	return 0
 }
 
-func claimArchiveSaves(archive []byte, root string) (string, func(), error) {
+func claimArchiveSaves(archive []byte, root string, logger *slog.Logger) (string, func(), error) {
 	summary, err := session.Inspect(archive)
 	if err != nil {
 		return "", nil, err
@@ -185,6 +186,12 @@ func claimArchiveSaves(archive []byte, root string) (string, func(), error) {
 	}
 	directory := filepath.Join(root, owner)
 	release, err := backend.ClaimSaveDirectory(directory)
+	if err == nil {
+		// The claim reaches another process only where the save location can
+		// hold a file lock. The store does not print, so this start is where
+		// the command says that it cannot.
+		backend.WarnSaveLockFallback(logger, directory)
+	}
 	return directory, release, err
 }
 

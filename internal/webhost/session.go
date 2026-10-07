@@ -119,6 +119,8 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		commands:     make(chan clientMessage, commandBuffer),
 		handoffs:     make(chan sessionHandoff),
 		done:         make(chan struct{}),
+		stop:         make(chan struct{}),
+		released:     make(chan struct{}),
 		protocol:     negotiatedProtocol(request.URL.Query().Get("protocol")),
 		frames:       make(chan pendingFrame, 1),
 		frameSettled: make(chan struct{}, 1),
@@ -138,11 +140,23 @@ type pendingFrame = backend.FrameUpdate
 type sessionRunner struct {
 	startApproval *startApproval
 	admitted      bool // Protected by Server.parkedMu.
-	server        *Server
-	connection    *wsproto.Conn
+	// admittedAs is the label of the game this runner was admitted with. The
+	// runner's own copy is label; this one is the server's, for naming a
+	// runner it reports on from outside the runner's goroutine. Protected by
+	// Server.parkedMu.
+	admittedAs string
+	server     *Server
+	connection *wsproto.Conn
 
-	handoffs      chan sessionHandoff
-	done          chan struct{}
+	handoffs chan sessionHandoff
+	done     chan struct{}
+	// stop is closed by a stopping server when this runner has a game, and
+	// released is closed by the runner once it holds none and will take no
+	// other. The first is how the server asks for a game to be closed without
+	// touching it and the second is what it waits for before the process
+	// ends; see Server.CloseSessions.
+	stop          chan struct{}
+	released      chan struct{}
 	connectionCtx context.Context
 	heldKeys      map[int32]struct{}
 	heldPointer   *clientMessage
@@ -281,11 +295,19 @@ func (r *sessionRunner) run(parent context.Context) {
 	if r.game != nil {
 		r.park()
 	}
+	// This runner holds no game now and its loop will take no other, which is
+	// what a stopping server waits for before the process ends; see
+	// Server.CloseSessions. It is said before the socket is touched, so a page
+	// that has stopped reading cannot hold the server's exit up.
+	close(r.released)
 	close(r.frames)
-	// The loop only returns once the socket is already gone, so nothing is
-	// still owed to the page: cancelling here releases the encoder and the
-	// writer from whatever they were waiting on rather than discarding a
-	// message someone is still reading.
+	// The loop returns once the socket is already gone, or once a stopping
+	// server has had it close its game. Neither leaves anyone to finish
+	// writing to: the first has no reader, and for the second the socket
+	// closing is itself the message, which a page reads as the server going
+	// away. So cancelling here releases the encoder and the writer from
+	// whatever they were waiting on rather than discarding a message someone
+	// is still reading.
 	cancel()
 	_ = r.connection.Close()
 	waiting.Wait()
@@ -422,6 +444,13 @@ func (r *sessionRunner) writeFrames(ctx context.Context) {
 func (r *sessionRunner) loop(ctx context.Context) {
 	r.statsSince = time.Now()
 	for {
+		// A stopping server is looked for before a socket that has gone. Both
+		// can be true at once, and the game is closed here rather than handed
+		// to a server that would only refuse to park it.
+		if r.stopRequested() {
+			r.stopForServer()
+			return
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -430,6 +459,7 @@ func (r *sessionRunner) loop(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-r.stop:
 			case handoff := <-r.handoffs:
 				r.handoff(handoff)
 			case message, ok := <-r.commands:
@@ -523,6 +553,8 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-r.stop:
+			return
 		case handoff := <-r.handoffs:
 			r.handoff(handoff)
 		case message, ok := <-r.commands:
@@ -542,6 +574,7 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+	case <-r.stop:
 	case <-timer.C:
 	case handoff := <-r.handoffs:
 		r.handoff(handoff)
@@ -1020,6 +1053,21 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 }
 
 func (r *sessionRunner) stopGame() {
+	r.closeGame()
+	if r.audio != nil {
+		// Whatever was sounding when the game ended has to be released, or the
+		// page holds the last note forever.
+		r.sendAudio([]audioEvent{{Kind: audioAllOff}}, false)
+	}
+}
+
+// closeGame is everything a stop does to the game and nothing it says to the
+// page. Closing the session is what writes out anything the title had not yet
+// handed to the save store, and the claim on its saves is given back only
+// after that. It waits on nothing but the game, which is what a stopping
+// server needs of it: the message stopGame adds has to find room in a queue a
+// page that has stopped reading no longer empties.
+func (r *sessionRunner) closeGame() {
 	r.clearTextInput()
 	r.server.releaseSession(r.token, r)
 	clear(r.heldKeys)
@@ -1035,11 +1083,35 @@ func (r *sessionRunner) stopGame() {
 	// The token named this game; a page that reconnects after stopping one is
 	// starting something new rather than resuming.
 	r.token = ""
-	if r.audio != nil {
-		// Whatever was sounding when the game ended has to be released, or the
-		// page holds the last note forever.
-		r.sendAudio([]audioEvent{{Kind: audioAllOff}}, false)
+}
+
+// stopRequested reports whether a stopping server has asked this runner to
+// close its game.
+func (r *sessionRunner) stopRequested() bool {
+	select {
+	case <-r.stop:
+		return true
+	default:
+		return false
 	}
+}
+
+// stopForServer closes the running game because the server is stopping. It is
+// the close a page's own stop makes, made where that one is: in the loop,
+// between rounds, on the goroutine that owns the session. Guest code is not
+// re-entrant, so the goroutine that asked — the one draining the server —
+// must not be the one that closes; a tick that was in flight when it asked has
+// returned by the time this runs.
+//
+// The page is told nothing here. Its socket closes next, which it already
+// reads as the server going away, and when the server is back its token names
+// no game.
+func (r *sessionRunner) stopForServer() {
+	if r.game == nil {
+		return
+	}
+	r.closeGame()
+	r.server.logger.Info("session closed", "game", r.label, "reason", "server stopping")
 }
 
 // pushFrame hands the current picture to the encoder, or drops it when the

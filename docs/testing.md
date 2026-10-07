@@ -229,6 +229,12 @@ The final ordinary/debug gates, `go test -race ./internal/...`, `go vet ./...`
 and 278 Node tests passed on 2026-10-01. `CGO_ENABLED=0 make dist` produced all
 five configured targets in an isolated output directory. File locks have runtime
 evidence on macOS; those builds establish Windows/Linux compilation only.
+The fallback for a location that cannot hold a lock (2026-10-03) has authored
+tests for a linked owner directory, an injected failure of each fallback class
+at both steps (making the reserved directory, locking the file), a read-only
+root, contention that must not fall back, and a tampered reserved path. They
+ran on macOS; `go vet` with `GOOS=windows` and `GOOS=linux` establishes that the
+platform error lists compile, not that those systems answer with them.
 Six alternating baseline/current measurements at one Go CPU, 2,000 rounds each,
 gave median instruction costs of 33.27/33.27 ns (`cc2c96d671cd`), 41.60/41.69 ns
 (`aa3fcba4598b`, +0.22%) and 419.50/426.94 ns (`1d5831e42a8a`, +1.77%). Instruction
