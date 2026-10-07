@@ -817,9 +817,10 @@ func TestCheckpointLoadIsRefusedWhenASaveCannotBeRead(t *testing.T) {
 	}
 }
 
-// On a directory store a file can have become a directory behind a slot. The
-// load is refused for the read and the tree is what it was.
-func TestCheckpointLoadRefusesADirectoryWhereAFileWas(t *testing.T) {
+// On a directory store a file can have become a directory behind a slot. A
+// key that is a directory has no entry, so the load takes it as a save that is
+// not there: the handle is empty, and the load writes nothing.
+func TestCheckpointLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	archive := fixtureArchive(t)
 	root := filepath.Join(t.TempDir(), "owner")
 	store := backend.NewDirectorySaveStore(root)
@@ -841,11 +842,15 @@ func TestCheckpointLoadRefusesADirectoryWhereAFileWas(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(file, "below"), []byte("kept"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := commitFixture(t, archive, checkpoint, source, store); !errors.Is(err, backend.ErrCheckpointSaveRead) {
+	restored, err := commitFixture(t, archive, checkpoint, source, store)
+	if err != nil {
 		t.Fatalf("a load over a directory where the save was = %v", err)
 	}
-	if data, err := os.ReadFile(filepath.Join(file, "below")); err != nil || string(data) != "kept" || source.client == nil {
-		t.Fatalf("the refused load changed the tree or displaced the session: %q, %v", data, err)
+	if open := restored.client.files[handle]; open == nil || len(open.data) != 0 {
+		t.Fatalf("the handle over the directory = %+v, want it open and empty", open)
+	}
+	if data, err := os.ReadFile(filepath.Join(file, "below")); err != nil || string(data) != "kept" {
+		t.Fatalf("the load changed the tree: %q, %v", data, err)
 	}
 }
 

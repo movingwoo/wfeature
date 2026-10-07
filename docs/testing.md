@@ -573,7 +573,8 @@ commands: the save folder is byte-identical across a quick load and across a
 start from the slot; the three refusals a person can act on read as the page's
 sentences while the cause, naming the file, is in the log
 (`TestQuickStepRefusalsAreWordedForThePage`, where a directory put in place of
-the save file makes the real store fail to write and to read); an
+the save file makes the real store fail to write, and a save file without read
+permission makes it fail to read); an
 earlier-format slot is offered, refused with its sentence and never touched,
 and a new slot is written beside it; an earlier build's `previous` directory is
 reported in the log and left byte-identical; a start from the slot that is
@@ -833,6 +834,20 @@ shapes it accepts and refuses, each then walked. Before the 2026-10-02 fix the
 first two prepared without error and the type check did not return. One more
 test requires the specification's hierarchy table to end, which several walks
 rely on and nothing else checks.
+
+A save key whose path is a directory reads as no entry (2026-10-07).
+`TestSaveReadOfADirectoryReportsMissing` asks it of the directory and memory
+stores, through the ordinary and the bounded read, before and after a save
+below it, and requires a write to it to fail without touching that save. The
+KTF `FileSystem.exists` and LGT `MC_fsIsExist` tests ask about a folder over
+three and two runs of one save directory; all three fail on the tree before
+the fix. Two local KTF titles that keep their saves in a folder ended their
+second `runktf` with `read save fs/<folder>: ... is a directory` before the
+fix and run to the end after it. The tests that used a directory as their
+unreadable entry now use a file without permissions or an injected failure.
+Two quick load tests that refused a load over a directory where the save file
+had been now require the load to take it as a save that is not there: the
+object over it is empty and the tree is unchanged.
 
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.

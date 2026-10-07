@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -241,6 +242,11 @@ func saveTree(t *testing.T, root string) map[string]string {
 			return nil
 		}
 		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrPermission) {
+			// A file a test made unreadable is compared by its presence.
+			files[filepath.ToSlash(relative)] = "unreadable"
+			return nil
+		}
 		files[filepath.ToSlash(relative)] = string(data)
 		return err
 	})
@@ -276,9 +282,34 @@ func wantSaveTree(t *testing.T, root string, before map[string]string, when stri
 // saves is the root every platform's save folders are under.
 func (host *saveHost) saves() string { return filepath.Join(host.root, "saves") }
 
+// unreadableSave takes every permission off the title's save file, which makes
+// the store fail to read it, the way a damaged disk does. The function it
+// answers gives them back. A system that ignores the bits, or an administrator
+// who is not held to them, cannot make the case, and the test is skipped.
+func (host *saveHost) unreadableSave() func() {
+	host.t.Helper()
+	if runtime.GOOS == "windows" {
+		host.t.Skip("this system does not refuse a read for the permission bits")
+	}
+	if err := os.Chmod(host.file, 0); err != nil {
+		host.t.Fatal(err)
+	}
+	if file, err := os.Open(host.file); err == nil {
+		file.Close()
+		_ = os.Chmod(host.file, 0o644)
+		host.t.Skip("this system reads a file without read permission")
+	}
+	return func() {
+		host.t.Helper()
+		if err := os.Chmod(host.file, 0o644); err != nil {
+			host.t.Fatal(err)
+		}
+	}
+}
+
 // blockSave puts a directory where the title's save file is, which makes the
-// store fail to read that save and fail to write it, the way a damaged disk
-// does. The function it answers puts the file back.
+// store fail to write that save, the way a damaged disk does; a read finds no
+// save there. The function it answers puts the file back.
 func (host *saveHost) blockSave() func() {
 	host.t.Helper()
 	data, err := os.ReadFile(host.file)
@@ -415,7 +446,7 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 			host.mustQuickSave()
 			host.act(0x33330003, title.finish)
 			host.wantStored(title.parts(0x22220002, 0x33330003), "the finished save")
-			restore := host.blockSave()
+			restore := host.unreadableSave()
 			before, running := saveTree(t, host.saves()), host.r.game
 			refused(t, host, host.quickLoad(), loadRead, before, running)
 

@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -102,8 +101,8 @@ func TestReadSaveLimitAnswersLikeAnOrdinaryRead(t *testing.T) {
 		{"a missing key", "db/missing", absent},
 		{"a key in a directory that is not there", "nowhere/slot", absent},
 		{"a key below a saved file", "db/slot/child", absent},
-		{"a directory at the key path", "fs/nested", refused},
-		{"a directory holding entries at the key path", "db", refused},
+		{"a directory at the key path", "fs/nested", absent},
+		{"a directory holding entries at the key path", "db", absent},
 		{"a key that climbs out of the root", "../outside", refused},
 		{"an empty key", "", refused},
 		{"a key of nothing but dots", "./.", refused},
@@ -135,7 +134,7 @@ func TestReadSaveLimitAnswersLikeAnOrdinaryRead(t *testing.T) {
 				t.Fatalf("a refused read returned %q", bounded)
 			}
 			// None of these is a save that is too large, and a spent budget
-			// must not turn one into that: a directory has a size of its own.
+			// must not turn one into that.
 			for _, limit := range []int64{0, 1 << 20} {
 				if _, _, err := ReadSaveLimit(store, test.key, limit); err == nil || errors.Is(err, errSaveLimit) {
 					t.Fatalf("with limit %d the refusal is %v", limit, err)
@@ -144,8 +143,10 @@ func TestReadSaveLimitAnswersLikeAnOrdinaryRead(t *testing.T) {
 		})
 	}
 
-	if _, _, err := ReadSaveLimit(store, "fs/nested", 1<<20); !errors.Is(err, syscall.EISDIR) {
-		t.Fatalf("a directory at the key path = %v, want the error for reading a directory", err)
+	// A directory has a size of its own, and a spent budget must not refuse it
+	// as a save that is too large.
+	if data, found, err := ReadSaveLimit(store, "fs/nested", 0); data != nil || found || err != nil {
+		t.Fatalf("a directory at the key path on a spent budget = %q, %t, %v", data, found, err)
 	}
 	// A title that has never saved has no directory at all, which is absence
 	// and not an error.
@@ -300,10 +301,8 @@ func TestReadSaveLimitReadsOtherStoresAndThenChecks(t *testing.T) {
 		})
 	}
 	// The store's own refusals pass through as they are.
-	for _, key := range []string{"../outside", "fs"} {
-		if data, found, err := ReadSaveLimit(memory, key, limit); err == nil || errors.Is(err, errSaveLimit) || data != nil || found {
-			t.Fatalf("the memory store's refusal of %q = %q, %t, %v", key, data, found, err)
-		}
+	if data, found, err := ReadSaveLimit(memory, "../outside", limit); err == nil || errors.Is(err, errSaveLimit) || data != nil || found {
+		t.Fatalf("the memory store's refusal = %q, %t, %v", data, found, err)
 	}
 	if data, found, err := ReadSaveLimit(nil, "fs/exact", limit); data != nil || found || err != nil {
 		t.Fatalf("a read with no store = %q, %t, %v", data, found, err)

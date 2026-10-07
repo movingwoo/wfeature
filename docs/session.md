@@ -308,7 +308,13 @@ saves or the folder itself could not be prepared. See
 [the lock and its fallback](architecture.md).
 
 `SaveReader` and `ReadSave` distinguish absence from I/O failure when the store
-supports them. `DirectorySaveStore` does. Legacy `LoadSave` remains compatible
+supports them. `DirectorySaveStore` does. Three answers mean "no entry": nothing
+at the key's path, a path that runs below a saved file, and a path that is a
+directory. The last is made by keys below it (`fs/saves/slot` is a file in a
+directory `saves`), nothing can be stored under such a key, and the read
+answers what it answered before those keys were written and what the memory
+store answers. A title that keeps its saves in a folder and asks whether the
+folder exists used to end every run after the first with a read error there. Legacy `LoadSave` remains compatible
 but cannot recover errors that a legacy Host already hides. Record decoding
 rejects truncation and trailing bytes. Active KTF/LGT native boundaries retain
 read failures and refuse later writes; SKT RMS/XFile report guest exceptions.

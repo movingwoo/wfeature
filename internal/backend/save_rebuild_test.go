@@ -76,14 +76,16 @@ func TestRebuildReaderRefusesAndRemembersAWrite(t *testing.T) {
 func TestRebuildReaderKeepsTheFirstFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "owner")
 	store := NewDirectorySaveStore(root)
-	if err := store.StoreSave("fs/save/below", []byte("x")); err != nil {
+	if err := store.StoreSave("fs/save", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
+	if !unreadableSave(t, filepath.Join(root, "fs", "save")) {
+		t.Skip("this system reads a file without read permission")
+	}
 	reader := NewRebuildReader(store, 1<<20)
-	// A directory at a key is a failed read, not an absent entry.
 	_, _, first := reader.ReadSave("fs/save")
 	if first == nil {
-		t.Fatal("a directory at a key read as an entry or as absent")
+		t.Fatal("a file that cannot be read read as an entry or as absent")
 	}
 	if _, _, err := reader.ReadSave("../outside"); err == nil {
 		t.Fatal("a key outside the store was read")

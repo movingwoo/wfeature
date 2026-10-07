@@ -665,12 +665,11 @@ func TestNativeSaveFixtureReportsAReadThatFallsShort(t *testing.T) {
 // fails with the store's own error, and the status word still holds what READ
 // cleared it to, so a test has to look at the error and not at the word.
 func TestNativeSaveFixtureStoreFailureIsTheKeysError(t *testing.T) {
-	// A key below the save's own name makes the save's name a directory, which
-	// a store reports as a failed read rather than as an absent entry.
-	store := newNativeSaveFixtureStore(t, backend.SaveEntry{Key: testfixture.KTFNativeSaveStoreKey + "/below", Data: []byte{1}})
+	store := newNativeSaveFixtureStore(t)
+	store.unreadable = testfixture.KTFNativeSaveStoreKey
 	fixture := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchiveWithoutFrame, store)
 	err := fixture.session.SendKey(t.Context(), KeyPressed, testfixture.KTFNativeSaveKeyRead)
-	if err == nil || !strings.Contains(err.Error(), "directory") {
+	if err == nil || !strings.Contains(err.Error(), "cannot read the entry") {
 		t.Fatalf("READ over an unreadable store = %v, want the store's error", err)
 	}
 	if fixture.word(testfixture.KTFNativeSaveStatus) != testfixture.KTFNativeSaveStatusMissing || len(fixture.session.platform.files) != 0 {
