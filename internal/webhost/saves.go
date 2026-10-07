@@ -109,6 +109,9 @@ func (s *Server) listSaves(writer http.ResponseWriter, ownerRoot string) {
 	// find. ReadSaveTree skips the temporary shape specifically instead; see
 	// backend/savepack.go.
 	entries, err := backend.ReadSaveTree(ownerRoot)
+	// A listing takes no claim, so a directory that cannot hold the file lock
+	// may be seen here first; see takeSaveClaimLocked.
+	backend.WarnSaveLockFallback(s.logger, ownerRoot)
 	if err != nil {
 		s.logger.Warn("save directory unreadable", "path", ownerRoot, "error", err)
 		writeError(writer, http.StatusInternalServerError, "세이브를 읽지 못했습니다.")

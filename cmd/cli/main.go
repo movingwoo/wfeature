@@ -1057,7 +1057,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// The session still closes normally afterwards.
 	ctx, stopInterrupts := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stopInterrupts()
-	_, releaseSaves, err := claimArchiveSaves(data, saveRoot)
+	_, releaseSaves, err := claimArchiveSaves(data, saveRoot, logger)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -2211,6 +2211,14 @@ func importSaves(source string, extra []string, stdout, stderr io.Writer) int {
 	for _, skipped := range report.Skipped {
 		fmt.Fprintf(stdout, "skipped %s\n", skipped)
 	}
+	// Each owner was claimed inside the importer, which has no logger. A save
+	// location that cannot hold the file lock is reported here, once an owner.
+	if !dryRun {
+		logger := backend.NewLogger(stderr)
+		for _, entry := range report.Imported {
+			backend.WarnSaveLockFallback(logger, filepath.Join(saveRoot, entry.Owner))
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "import saves: %v\n", err)
 		return 1
@@ -2929,6 +2937,7 @@ func provision(path string, extra []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer release()
+	backend.WarnSaveLockFallback(backend.NewLogger(stderr), filepath.Join(saveRoot, owner))
 	if err := store.StoreSave(certificate.SaveKey, certificate.Data); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

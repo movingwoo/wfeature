@@ -272,6 +272,13 @@ for an active transaction. Separate guest writes are still separate operations.
 `.wfs` export/import contains guest saves, not a CPU/JVM/session snapshot. See
 [RMS](rms.md) and [running](running.md).
 
+Where the save location cannot hold a file lock (a folder that cannot be
+written, a filesystem without locks), the claim and the transaction lock
+exclude callers in this process only, and the Host logs that once per
+directory. A start that the claim refuses says whether another game holds the
+saves or the folder itself could not be prepared. See
+[the lock and its fallback](architecture.md).
+
 `SaveReader` and `ReadSave` distinguish absence from I/O failure when the store
 supports them. `DirectorySaveStore` does. Legacy `LoadSave` remains compatible
 but cannot recover errors that a legacy Host already hides. Record decoding
