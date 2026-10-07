@@ -121,14 +121,18 @@ func TestLinkedSaveDirectoryServesEveryRoadAndASession(t *testing.T) {
 		server.releaseSaveDirectory(directory)
 		t.Fatal("the session did not hold its claim on a linked directory")
 	}
-	// A quick save takes the whole generation, which the store does not do
-	// through a link. It is refused, and the ordinary saves stay as they were.
+	// A quick save holds no save and its slot is a file beside the link, so it
+	// works here as anywhere, and the saves the link leads to stay as they were.
 	r.quickSave(t.Context(), clientMessage{Kind: clientQuickSave, ID: 2})
-	if replies := readCheckpointReplies(t, r); !r.started.CanCheckpoint || len(replies) != 1 || replies[0].Kind != serverError || r.started.HasCheckpoint {
+	if replies := readCheckpointReplies(t, r); !r.started.CanCheckpoint || len(replies) != 1 || replies[0].Kind != serverResult || !r.started.HasCheckpoint {
 		t.Fatalf("quick save on a linked directory = %+v", replies)
 	}
 	if inTarget("fs/restored") != "restored" {
-		t.Fatal("a refused quick save changed the saves in the link target")
+		t.Fatal("the quick save changed the saves in the link target")
+	}
+	slots, err := filepath.Glob(filepath.Join(target, "*.wfq"))
+	if err != nil || len(slots) != 0 {
+		t.Fatalf("the quick save is in the link target: %q, %v", slots, err)
 	}
 	r.stopGame()
 	if server.claimCount() != 0 {

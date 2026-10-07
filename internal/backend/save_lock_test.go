@@ -188,7 +188,7 @@ func TestLinkedOwnerDirectoryWorksThroughTheLink(t *testing.T) {
 
 // Settling a replacement an earlier build left renames the owner directory,
 // which a link does not survive, so it refuses a linked root, and so do
-// generation snapshots and checkpoint slots.
+// generation snapshots.
 func TestReplacementRecoveryStillRefusesALinkedRoot(t *testing.T) {
 	root, target := linkedOwner(t)
 	store := NewDirectorySaveStore(root)
@@ -215,9 +215,6 @@ func TestReplacementRecoveryStillRefusesALinkedRoot(t *testing.T) {
 	}
 	if _, err := store.SnapshotSaves(); err == nil {
 		t.Fatal("a generation snapshot followed a linked root")
-	}
-	if _, err := store.HasCheckpoint(SaveIdentity([]byte("authored slot archive"))); err == nil {
-		t.Fatal("a checkpoint slot was offered for a linked root")
 	}
 
 	// A record that says the old generation was moved aside, over a root that

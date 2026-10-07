@@ -183,3 +183,57 @@ func TestCheckpointSlotRefusesLinksDirectoriesAndOversize(t *testing.T) {
 		})
 	}
 }
+
+// A per-game folder that is a link to saves kept elsewhere has a slot like any
+// other. The slot is a file in the reserved directory beside the link, named
+// after it, and never in the folder the link leads to; storing and loading it
+// leaves the link and the saves it leads to as they are.
+func TestCheckpointSlotBesideALinkedOwner(t *testing.T) {
+	root, target := linkedOwner(t)
+	store := NewDirectorySaveStore(root)
+	if err := store.StoreSave("fs/progress", []byte("ordinary save")); err != nil {
+		t.Fatal(err)
+	}
+	identity := SaveIdentity([]byte("authored slot archive"))
+	data, err := EncodeCheckpoint(Checkpoint{Identity: identity, Variant: CheckpointKTFJava, Runtime: []byte("{}")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreCheckpoint(identity, data); err != nil {
+		t.Fatalf("a quick save on a linked folder = %v", err)
+	}
+	fresh := NewDirectorySaveStore(root)
+	if exists, err := fresh.HasCheckpoint(identity); err != nil || !exists {
+		t.Fatalf("the slot is not offered: %t, %v", exists, err)
+	}
+	if got, exists, err := fresh.LoadCheckpoint(identity); err != nil || !exists || !bytes.Equal(got, data) {
+		t.Fatalf("the slot = %d bytes, %t, %v", len(got), exists, err)
+	}
+
+	paths, err := replacementPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(paths.directory, checkpointSlotName(identity))); err != nil {
+		t.Fatalf("the slot is not beside the link: %v", err)
+	}
+	if destination, err := os.Readlink(root); err != nil || destination != target {
+		t.Fatalf("the link changed: %q, %v", destination, err)
+	}
+	var inTarget []string
+	if err := filepath.WalkDir(target, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() {
+			relative, _ := filepath.Rel(target, path)
+			inTarget = append(inTarget, filepath.ToSlash(relative))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inTarget) != 1 || inTarget[0] != "fs/progress" {
+		t.Fatalf("the folder the link leads to holds %q, want the save alone", inTarget)
+	}
+	if data, exists, err := fresh.ReadSave("fs/progress"); err != nil || !exists || string(data) != "ordinary save" {
+		t.Fatalf("the save = %q, %t, %v", data, exists, err)
+	}
+}

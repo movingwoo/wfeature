@@ -380,6 +380,54 @@ func TestQuickLoadLeavesTheGamesSavesInTheirFolder(t *testing.T) {
 	}
 }
 
+// A per-game save folder may be a link to saves kept elsewhere. Quick save
+// and quick load work there as anywhere: the slot is beside the link and not
+// in the folder it leads to, the link stays a link, and the saves a game made
+// after the quick save are still there after the load.
+func TestQuickSaveAndLoadOnALinkedSaveFolder(t *testing.T) {
+	for _, title := range saveHostTitles {
+		t.Run(title.name, func(t *testing.T) {
+			host := newSaveHost(t, title)
+			target := filepath.Join(t.TempDir(), "kept elsewhere")
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(host.directory), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, host.directory); err != nil {
+				t.Skipf("this platform cannot make the link the case needs: %v", err)
+			}
+			host.mustStart()
+			host.act(0x11110001, title.save)
+			host.mustQuickSave()
+			if _, err := os.Lstat(host.slot(false)); err != nil {
+				t.Fatalf("the quick save is not beside the link: %v", err)
+			}
+			host.act(0x22220002, title.save)
+			host.wantStored(title.parts(0x22220002, 0x22220002), "the save made after the quick save")
+
+			before := saveTree(t, target)
+			if reply := host.quickLoad(); reply.Kind != serverRestored || reply.Started == nil || !reply.Started.Restored {
+				t.Fatalf("quick load: %+v", reply)
+			}
+			wantSaveTree(t, target, before, "the quick load", nil)
+			host.act(0xdeadbeef, title.read)
+			if a := host.word(title.seenA); a != 0x22220002 {
+				t.Fatalf("after the load the game read %#x, want the save made after the quick save", a)
+			}
+			if destination, err := os.Readlink(host.directory); err != nil || destination != target {
+				t.Fatalf("the save folder is no longer the link it was: %q, %v", destination, err)
+			}
+			for path := range saveTree(t, target) {
+				if strings.Contains(path, ".wfq") || strings.Contains(path, ".wfeature-quicksave") {
+					t.Fatalf("the folder the link leads to holds %s", path)
+				}
+			}
+		})
+	}
+}
+
 // The refusals a person can act on reach the page as a sentence in the page's
 // language, and the cause — which names the file and what the store answered —
 // goes to the log. In every case the game that was running is still running,
