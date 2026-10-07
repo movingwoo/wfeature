@@ -44,7 +44,9 @@ import (
 var ErrCheckpointBusy = errors.New("LGT checkpoint requires an idle session boundary")
 
 const (
-	clientStateVersion = 1
+	// clientStateVersion is the layout of clientState. Version 1 carried the
+	// bytes of every open file, database and file stream, and both path lists.
+	clientStateVersion = 2
 	// maxStateRecords bounds a table whose entries are structures, and
 	// maxStatePacked one that is packed into bytes. Both are far above what a
 	// title reaches — the heaviest local one tracks a few thousand objects —
@@ -129,18 +131,21 @@ type levelState struct {
 	Level  int32
 }
 
+// fileState is one open file: which handle it is, of which path, at which
+// cursor. What the file holds is not here. A checkpoint is taken with every
+// buffer stored, so the bytes are in the store, and a load reads them from it.
 type fileState struct {
-	Handle          uint32
-	Name, Data      []byte
-	Cursor          int
-	Writable, Dirty bool
+	Handle   uint32
+	Name     []byte
+	Cursor   int
+	Writable bool
+	// Truncated says the handle's open asked for an empty file, and Length is
+	// how many bytes it held when the checkpoint was taken. A load gives such
+	// a handle at most that much of the file as it is then; see
+	// openFile.truncated. Length is zero for any other handle.
+	Truncated bool
+	Length    int
 }
-
-// nameSetState is one of the two path lists a title's file calls keep. A nil
-// pointer is a list that has not been read from the store yet, which is not
-// the same as one that was read and found empty: the first is read on its next
-// use and the second is not.
-type nameSetState struct{ Names [][]byte }
 
 type textInputState struct {
 	Active          bool
@@ -192,9 +197,9 @@ type clientState struct {
 	SourceMuted  []uint32
 	Vibration    backend.VibrationState
 
-	Files   []fileState
-	Removed *nameSetState
-	Created *nameSetState
+	// Files are the open handles. The two path lists a title's file calls
+	// keep are not in a record at all: a load reads both from the store.
+	Files []fileState
 
 	TimeStorage, StrtokScan uint32
 	Random                  *guestRandomState
@@ -475,43 +480,6 @@ func (client *Client) restoreSurface(saved surfaceState, screen bool) (*framebuf
 	return buffer, nil
 }
 
-func captureNameSet(set map[string]bool, budget *stateBudget) (*nameSetState, error) {
-	if set == nil {
-		return nil, nil
-	}
-	if len(set) > maxStateRecords {
-		return nil, fmt.Errorf("LGT checkpoint path list exceeds %d names", maxStateRecords)
-	}
-	saved := &nameSetState{Names: make([][]byte, 0, len(set))}
-	for _, name := range slices.Sorted(maps.Keys(set)) {
-		if !set[name] {
-			continue
-		}
-		if err := budget.charge(len(name)); err != nil {
-			return nil, err
-		}
-		saved.Names = append(saved.Names, []byte(name))
-	}
-	return saved, nil
-}
-
-func restoreNameSet(saved *nameSetState) (map[string]bool, error) {
-	if saved == nil {
-		return nil, nil
-	}
-	if len(saved.Names) > maxStateRecords {
-		return nil, fmt.Errorf("LGT checkpoint path list exceeds %d names", maxStateRecords)
-	}
-	set := make(map[string]bool, len(saved.Names))
-	for index, name := range saved.Names {
-		if index > 0 && bytes.Compare(saved.Names[index-1], name) >= 0 {
-			return nil, fmt.Errorf("LGT checkpoint path list is not in order")
-		}
-		set[string(name)] = true
-	}
-	return set, nil
-}
-
 // captureClientState copies every table the client holds. The caller has
 // already established the boundary; this takes the client's own lock for the
 // fields a Host goroutine may read beside it.
@@ -639,16 +607,22 @@ func (client *Client) captureClientState() (clientState, error) {
 		if file == nil {
 			return clientState{}, fmt.Errorf("LGT checkpoint has a missing open file")
 		}
+		// A record holds no file bytes, so a write the store has not been
+		// given would be in no place at all once this session is gone. The
+		// session capture stores them before it reaches here.
+		if file.dirty {
+			return clientState{}, fmt.Errorf("LGT checkpoint has an open file with writes the store has not been given")
+		}
+		// What the handle holds is charged although it is not recorded: a
+		// load reads it back, on the same budget.
 		if err := budget.charge(len(file.data) + len(file.name)); err != nil {
 			return clientState{}, err
 		}
-		saved.Files = append(saved.Files, fileState{handle, []byte(file.name), bytes.Clone(file.data), file.cursor, file.writable, file.dirty})
-	}
-	if saved.Removed, err = captureNameSet(client.removed, budget); err != nil {
-		return clientState{}, err
-	}
-	if saved.Created, err = captureNameSet(client.created, budget); err != nil {
-		return clientState{}, err
+		record := fileState{Handle: handle, Name: []byte(file.name), Cursor: file.cursor, Writable: file.writable, Truncated: file.truncated}
+		if file.truncated {
+			record.Length = len(file.data)
+		}
+		saved.Files = append(saved.Files, record)
 	}
 	saved.TextInput = textInputState{client.cTextInput.active, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
 	names := slices.Sorted(maps.Keys(client.resourceIDs))
@@ -830,7 +804,8 @@ func (saved clientState) validate() error {
 	}
 	for index, file := range saved.Files {
 		if index > 0 && saved.Files[index-1].Handle >= file.Handle || file.Handle == 0 || file.Handle >= saved.NextHandle ||
-			file.Cursor < 0 || file.Cursor > math.MaxInt32 || len(file.Name) > 4096 || file.Dirty && !file.Writable {
+			file.Cursor < 0 || file.Cursor > math.MaxInt32 || len(file.Name) > 4096 || file.Truncated && !file.Writable ||
+			file.Length < 0 || file.Length > maxStateBytes || !file.Truncated && file.Length != 0 {
 			return invalid("an invalid open file")
 		}
 	}
@@ -1088,16 +1063,18 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 	if err := client.vibrator.RestoreState(saved.Vibration); err != nil {
 		return nil, err
 	}
+	// The handles come back without their bytes, and the two path lists
+	// unread: committing the load fills both from the store the session will
+	// run over. See checkpoint_storage.go.
+	client.restoredStorage = &restoredStorage{lengths: make(map[uint32]int), recordSizes: make(map[uint32]uint32), cursors: make(map[uint32][2]int)}
 	client.files = make(map[uint32]*openFile, len(saved.Files))
 	for _, file := range saved.Files {
-		client.files[file.Handle] = &openFile{string(file.Name), bytes.Clone(file.Data), file.Cursor, file.Writable, file.Dirty}
+		client.files[file.Handle] = &openFile{name: string(file.Name), cursor: file.Cursor, writable: file.Writable, truncated: file.Truncated}
+		if file.Truncated {
+			client.restoredStorage.lengths[file.Handle] = file.Length
+		}
 	}
-	if client.removed, err = restoreNameSet(saved.Removed); err != nil {
-		return nil, err
-	}
-	if client.created, err = restoreNameSet(saved.Created); err != nil {
-		return nil, err
-	}
+	client.removed, client.created = nil, nil
 	client.tmStorage, client.strtokScan = saved.TimeStorage, saved.StrtokScan
 	if saved.Random != nil {
 		if client.cRandom, err = restoreGuestRandom(*saved.Random); err != nil {

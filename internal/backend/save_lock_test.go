@@ -186,10 +186,10 @@ func TestLinkedOwnerDirectoryWorksThroughTheLink(t *testing.T) {
 	}
 }
 
-// Replacing a whole generation renames the owner directory, which a link does
-// not survive, so it refuses one before staging anything — and so does the
-// recovery of a replacement, which would rename through the link the same way.
-func TestGenerationReplacementStillRefusesALinkedRoot(t *testing.T) {
+// Settling a replacement an earlier build left renames the owner directory,
+// which a link does not survive, so it refuses a linked root, and so do
+// generation snapshots and checkpoint slots.
+func TestReplacementRecoveryStillRefusesALinkedRoot(t *testing.T) {
 	root, target := linkedOwner(t)
 	store := NewDirectorySaveStore(root)
 	for _, entry := range saveGeneration("old") {
@@ -209,19 +209,10 @@ func TestGenerationReplacementStillRefusesALinkedRoot(t *testing.T) {
 			}
 		}
 	}
-	if err := store.ReplaceSaves(saveGeneration("new")); err == nil {
-		t.Fatal("replacement accepted a linked root")
-	}
 	paths, err := replacementPaths(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, staged := range []string{paths.next, paths.previous, paths.intent} {
-		if _, err := os.Lstat(staged); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("refused replacement left %s: %v", staged, err)
-		}
-	}
-	intact("a refused replacement")
 	if _, err := store.SnapshotSaves(); err == nil {
 		t.Fatal("a generation snapshot followed a linked root")
 	}

@@ -16,8 +16,9 @@ import (
 // made by calling the code that used to write it, so these tests go on
 // describing those leftovers after that code is gone.
 //
-// The states are read off the replacement writer, DirectorySaveStore.replaceSaves,
-// and the lock it runs under. Line numbers are those of the tree this file was
+// The states are read off the replacement writer an earlier build had,
+// DirectorySaveStore.replaceSaves, and the lock it ran under. That writer has
+// since been removed; the line numbers are those of the tree this file was
 // added to:
 //
 //	save_replace.go:36-38   the reserved sibling of an owner directory,

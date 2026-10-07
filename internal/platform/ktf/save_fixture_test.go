@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 
@@ -39,13 +40,48 @@ func saveFixtureVariants() []saveFixtureVariant {
 	}
 }
 
+// saveStoreProbe is the store a fixture's session runs over. It counts what
+// reaches it, and a test can make the read of one key fail, the way a damaged
+// disk does.
+type saveStoreProbe struct {
+	*backend.MemorySaveStore
+	reads, writes int
+	unreadable    string
+}
+
+func (probe *saveStoreProbe) LoadSave(name string) ([]byte, bool) {
+	data, present, _ := probe.ReadSave(name)
+	return data, present
+}
+
+func (probe *saveStoreProbe) ReadSave(name string) ([]byte, bool, error) {
+	probe.reads++
+	if probe.unreadable != "" && name == probe.unreadable {
+		return nil, false, errors.New("the fixture store cannot read the entry")
+	}
+	return probe.MemorySaveStore.ReadSave(name)
+}
+
+func (probe *saveStoreProbe) StoreSave(name string, data []byte) error {
+	probe.writes++
+	return probe.MemorySaveStore.StoreSave(name, data)
+}
+
+func (probe *saveStoreProbe) StoreSaves(entries map[string][]byte) error {
+	probe.writes++
+	return probe.MemorySaveStore.StoreSaves(entries)
+}
+
 // saveFixture is a started storage fixture beside the store it saves into.
+// store is what the saves are kept in, and probe what the session reaches it
+// through.
 type saveFixture struct {
 	t       *testing.T
 	variant saveFixtureVariant
 	archive []byte
 	options SessionOptions
 	store   *backend.MemorySaveStore
+	probe   *saveStoreProbe
 	session *Session
 }
 
@@ -59,7 +95,8 @@ func startSaveFixture(t *testing.T, variant saveFixtureVariant) *saveFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &saveFixture{t: t, variant: variant, archive: archive, store: store, options: SessionOptions{SaveStore: store}}
+	probe := &saveStoreProbe{MemorySaveStore: store}
+	fixture := &saveFixture{t: t, variant: variant, archive: archive, store: store, probe: probe, options: SessionOptions{SaveStore: probe}}
 	// The ordinary loader: the same StartSession a Host calls for any archive.
 	fixture.session, err = StartSession(t.Context(), archive, fixture.options)
 	if err != nil {
@@ -95,6 +132,74 @@ func (fixture *saveFixture) press(action int32, progress uint32) {
 
 func (fixture *saveFixture) stored() ([]byte, bool) {
 	return fixture.store.LoadSave(testfixture.KTFSaveStoreKey)
+}
+
+// snapshot is everything the store holds, for a test that compares the store
+// across a step that must not change it.
+func (fixture *saveFixture) snapshot() []backend.SaveEntry {
+	fixture.t.Helper()
+	entries, err := fixture.store.SnapshotSaves()
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return entries
+}
+
+// quickSave takes a checkpoint of the fixture's session and carries it through
+// its bytes, the way a slot does. Taking one reaches the store with nothing.
+func (fixture *saveFixture) quickSave() backend.Checkpoint {
+	fixture.t.Helper()
+	reads, writes := fixture.probe.reads, fixture.probe.writes
+	checkpoint, err := fixture.session.CaptureCheckpoint(fixture.t.Context())
+	if err != nil {
+		fixture.t.Fatalf("quick save: %v", err)
+	}
+	if fixture.probe.reads != reads || fixture.probe.writes != writes {
+		fixture.t.Fatalf("the quick save made %d store reads and %d store writes", fixture.probe.reads-reads, fixture.probe.writes-writes)
+	}
+	encoded, err := backend.EncodeCheckpoint(checkpoint)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	decoded, err := backend.DecodeCheckpoint(encoded, backend.SaveIdentity(fixture.archive))
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return decoded
+}
+
+// tryQuickLoad loads a checkpoint over the fixture's running session, on the
+// store that session runs over. After a refusal the fixture's session is the
+// one that was running; after a load it is the restored one.
+func (fixture *saveFixture) tryQuickLoad(checkpoint backend.Checkpoint) error {
+	fixture.t.Helper()
+	reads := fixture.probe.reads
+	prepared, err := PrepareSessionCheckpoint(fixture.archive, checkpoint, fixture.options)
+	if err != nil {
+		return err
+	}
+	defer prepared.Discard()
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 || fixture.probe.reads != reads {
+		fixture.t.Fatalf("checking the load made %d placeholder calls (%s) and %d store reads", calls, first, fixture.probe.reads-reads)
+	}
+	writes := fixture.probe.writes
+	restored, err := prepared.Commit(fixture.t.Context(), fixture.session, fixture.probe)
+	if fixture.probe.writes != writes {
+		fixture.t.Fatalf("the load wrote to the store %d times", fixture.probe.writes-writes)
+	}
+	if err != nil {
+		return err
+	}
+	fixture.session = restored
+	return nil
+}
+
+// quickLoad is tryQuickLoad for a load that has to be accepted.
+func (fixture *saveFixture) quickLoad(checkpoint backend.Checkpoint) {
+	fixture.t.Helper()
+	if err := fixture.tryQuickLoad(checkpoint); err != nil {
+		fixture.t.Fatalf("quick load: %v", err)
+	}
 }
 
 func (fixture *saveFixture) expectStored(when string, want []byte) {
@@ -262,7 +367,7 @@ func TestKTFSaveFixtureIsACheckpointSubject(t *testing.T) {
 			if err != nil {
 				t.Fatalf("prepare: %v", err)
 			}
-			restored, err := prepared.Commit(t.Context(), fixture.session)
+			restored, err := prepared.Commit(t.Context(), fixture.session, fixture.options.SaveStore)
 			if err != nil {
 				prepared.Discard()
 				t.Fatalf("commit: %v", err)

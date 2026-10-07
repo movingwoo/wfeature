@@ -15,15 +15,19 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
-func TestCheckpointSaveHTTPReadsStayConsistent(t *testing.T) {
+// A read over HTTP never lands inside a batch: the listing and the export hold
+// the directory's transaction lock for the whole walk, so each sees the two
+// keys of one batch or of the next, never one of each. A leftover of an earlier
+// build that cannot be settled is an error, not an empty save tree.
+func TestSaveHTTPReadsNeverSplitABatch(t *testing.T) {
 	root, archive := checkpointServerFiles(t)
 	server := checkpointServer(t, root)
 	directory := server.saveDirectory("ktf", "P0001")
 	store := backend.NewDirectorySaveStore(directory)
-	generation := func(label string) []backend.SaveEntry {
-		return []backend.SaveEntry{{Key: "index", Data: []byte(label)}, {Key: "progress/" + label, Data: []byte("payload " + label)}}
+	batch := func(label string) map[string][]byte {
+		return map[string][]byte{"index": []byte(label), "progress/current": []byte("payload " + label)}
 	}
-	if err := store.ReplaceSaves(generation("initial")); err != nil {
+	if err := store.StoreSaves(batch("initial")); err != nil {
 		t.Fatal(err)
 	}
 	if ok, reason := server.claimSaveDirectory(directory, "fixture"); !ok {
@@ -73,8 +77,8 @@ func TestCheckpointSaveHTTPReadsStayConsistent(t *testing.T) {
 					}
 				}
 				label := values["index"]
-				if len(values) != 2 || label == "" || values["progress/"+label] != "payload "+label {
-					done <- fmt.Errorf("HTTP read mixed save generations: %+v", values)
+				if len(values) != 2 || label == "" || values["progress/current"] != "payload "+label {
+					done <- fmt.Errorf("HTTP read split a batch: %+v", values)
 					return
 				}
 			}
@@ -82,7 +86,7 @@ func TestCheckpointSaveHTTPReadsStayConsistent(t *testing.T) {
 		}()
 	}
 	for round := 0; round < 16; round++ {
-		if err := store.ReplaceSaves(generation(fmt.Sprintf("round%d", round))); err != nil {
+		if err := store.StoreSaves(batch(fmt.Sprintf("round%d", round))); err != nil {
 			t.Error(err)
 			break
 		}

@@ -78,6 +78,13 @@ the token, so the restart button still starts a game over.
   during another checkpoint operation. An absent slot disables quick load during
   play while leaving its cell editable. The game picker has no restore button;
   after a server restart, start the game and use the assigned quick-load key.
+  A load brings the game back and leaves its saves as they are, and the status
+  line says both: that the game went back to the quick-save moment and that
+  saves were not reverted. It does not say the saves are unchanged, because a
+  load first stores what the running game had written and not yet stored. A
+  refusal shows the server's reason after `퀵로드 실패:` or `퀵세이브 실패:`; the
+  server words the three a person can act on in Korean, and a slot from an
+  earlier build keeps quick load enabled so that pressing it says why.
   Cell assignment and sizing share the keypad editor, opened from `설정` and
   drawn over the game screen rather than in the settings panel: that panel is a
   centred modal on a phone and covers the very keypad the sliders move. Four

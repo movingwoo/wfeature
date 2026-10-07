@@ -26,6 +26,11 @@ func (runtime *initializationRuntime) saveChanges(entries map[string][]byte, led
 	if runtime.saveReadError != nil {
 		return runtime.saveReadError
 	}
+	// A runtime a checkpoint brought back holds names and no content until a
+	// store has filled it, and writing from it would store that emptiness.
+	if runtime.restoredStorage != nil {
+		return fmt.Errorf("KTF storage was restored from a checkpoint and is not bound to a save store")
+	}
 	staged := maps.Clone(current)
 	if staged == nil {
 		staged = make(map[string]bool)

@@ -15,6 +15,18 @@ type runtimeGuestFile struct {
 	name     string
 	data     []byte
 	position int
+	// truncated says the open itself asked for an empty file: mode 3, which
+	// opens a name to rewrite it. Everything in data was written through this
+	// object, which is what a quick load needs to know about it: it gives such
+	// an object at most what it had written, so that the file the title is
+	// rewriting is never followed by the tail of a newer one.
+	//
+	// An object whose open found nothing under the name is not one of these.
+	// The title asked for the file; had there been one it would have kept it.
+	// A load gives such an object the file as it is, like any other, so that
+	// what was saved through it after the quick save is not cut off by the
+	// restored title's next write.
+	truncated bool
 }
 
 const maxGuestFileBytes = 4 << 20
@@ -285,6 +297,7 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if exists && mode != 3 {
 		state.data = append([]byte(nil), data...)
 	}
+	state.truncated = mode == 3
 	receiver.Native = state
 	return jvm.VoidValue(), nil
 }

@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -30,14 +31,42 @@ var nativeSaveFixtureForms = []struct {
 }
 
 // nativeSaveFixtureStore is a memory store that counts the writes it is given.
+// A test can make it refuse them, the way a full disk does, or fail the read
+// of one key, the way a damaged one does.
 type nativeSaveFixtureStore struct {
 	*backend.MemorySaveStore
-	writes int
+	// writes counts the writes the store took, and attempts every write it was
+	// given, taken or not.
+	writes, attempts int
+	refuse           bool
+	unreadable       string
 }
 
 func (store *nativeSaveFixtureStore) StoreSave(name string, data []byte) error {
+	store.attempts++
+	if store.refuse {
+		return errors.New("the fixture store refuses the write")
+	}
 	store.writes++
 	return store.MemorySaveStore.StoreSave(name, data)
+}
+
+func (store *nativeSaveFixtureStore) ReadSave(name string) ([]byte, bool, error) {
+	if store.unreadable != "" && name == store.unreadable {
+		return nil, false, errors.New("the fixture store cannot read the entry")
+	}
+	return store.MemorySaveStore.ReadSave(name)
+}
+
+// snapshot is everything the store holds, for a test that compares the store
+// across a step that must not change it.
+func (store *nativeSaveFixtureStore) snapshot(t *testing.T) []backend.SaveEntry {
+	t.Helper()
+	entries, err := store.MemorySaveStore.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
 }
 
 func newNativeSaveFixtureStore(t *testing.T, entries ...backend.SaveEntry) *nativeSaveFixtureStore {
@@ -133,13 +162,93 @@ func (fixture *nativeSaveFixture) wantStored(when string, want []byte) {
 }
 
 // wantPending fails unless the platform is keeping exactly want for the save
-// without having stored it, and nil is nothing kept back.
+// without having stored it, and nil is nothing kept back. A write waits either
+// marked for the next boundary or refused by an earlier one; wantRefused tells
+// the two apart.
 func (fixture *nativeSaveFixture) wantPending(when string, want []byte) {
 	fixture.t.Helper()
 	platform := fixture.session.platform
-	marked := platform.unsaved[testfixture.KTFNativeSaveName]
+	marked := platform.unsaved[testfixture.KTFNativeSaveName] || platform.refused[testfixture.KTFNativeSaveName]
 	if marked != (want != nil) || marked && !bytes.Equal(platform.written[testfixture.KTFNativeSaveName], want) {
 		fixture.t.Fatalf("%s: the platform holds %x back (marked %t), want %x", when, platform.written[testfixture.KTFNativeSaveName], marked, want)
+	}
+}
+
+// wantRefused fails unless the save is waiting because a boundary gave it to
+// the store and the store would not take it.
+func (fixture *nativeSaveFixture) wantRefused(when string, want bool) {
+	fixture.t.Helper()
+	platform := fixture.session.platform
+	if platform.refused[testfixture.KTFNativeSaveName] != want || want && platform.unsaved[testfixture.KTFNativeSaveName] {
+		fixture.t.Fatalf("%s: refused=%t and unsaved=%t, want refused=%t", when,
+			platform.refused[testfixture.KTFNativeSaveName], platform.unsaved[testfixture.KTFNativeSaveName], want)
+	}
+}
+
+// quickSave takes a checkpoint of the fixture's session and carries it through
+// its bytes, the way a slot does.
+func (fixture *nativeSaveFixture) quickSave() backend.Checkpoint {
+	fixture.t.Helper()
+	checkpoint, err := fixture.session.CaptureCheckpoint(fixture.t.Context())
+	if err != nil {
+		fixture.t.Fatalf("quick save: %v", err)
+	}
+	encoded, err := backend.EncodeCheckpoint(checkpoint)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	decoded, err := backend.DecodeCheckpoint(encoded, backend.SaveIdentity(fixture.archive))
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return decoded
+}
+
+// tryQuickLoad loads a checkpoint over the fixture's running session, on the
+// store that session runs over. It answers the fixture of the restored
+// session, or the refusal, and after a refusal the running session is still
+// the fixture's own.
+func (fixture *nativeSaveFixture) tryQuickLoad(checkpoint backend.Checkpoint) (*nativeSaveFixture, error) {
+	fixture.t.Helper()
+	clock := NewManualClock(time.Unix(500, 0))
+	prepared, err := PrepareNativeSessionCheckpoint(fixture.archive, checkpoint, NativeSessionOptions{Clock: clock, SaveStore: fixture.store})
+	if err != nil {
+		return nil, err
+	}
+	defer prepared.Discard()
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 {
+		fixture.t.Fatalf("checking the load made %d save store calls, the first being %s", calls, first)
+	}
+	session, err := prepared.Commit(fixture.t.Context(), fixture.session, fixture.store)
+	if err != nil {
+		return nil, err
+	}
+	fixture.t.Cleanup(session.Close)
+	return &nativeSaveFixture{t: fixture.t, archive: fixture.archive, session: session, store: fixture.store, clock: clock}, nil
+}
+
+// quickLoad is tryQuickLoad for a load that has to be accepted.
+func (fixture *nativeSaveFixture) quickLoad(checkpoint backend.Checkpoint) *nativeSaveFixture {
+	fixture.t.Helper()
+	restored, err := fixture.tryQuickLoad(checkpoint)
+	if err != nil {
+		fixture.t.Fatalf("quick load: %v", err)
+	}
+	return restored
+}
+
+// boundary runs what the form has for an ordinary boundary that is not a file
+// close: the next frame where one is registered, and a tick that finds nothing
+// to run where none is.
+func (fixture *nativeSaveFixture) boundary(frame bool) {
+	fixture.t.Helper()
+	if frame {
+		fixture.frame()
+		return
+	}
+	fixture.clock.Advance(time.Second)
+	if ran, err := fixture.session.Tick(fixture.t.Context()); err != nil || ran {
+		fixture.t.Fatalf("tick with no frame callback = %t, %v", ran, err)
 	}
 }
 
@@ -617,7 +726,7 @@ func TestNativeSaveFixtureIsACheckpointSubject(t *testing.T) {
 					t.Fatalf("the fixture's checkpoint cannot be prepared: %v", err)
 				}
 				defer prepared.Discard()
-				session, err := prepared.Commit(t.Context(), source.session)
+				session, err := prepared.Commit(t.Context(), source.session, source.store)
 				if err != nil {
 					t.Fatalf("the fixture's checkpoint cannot be adopted: %v", err)
 				}

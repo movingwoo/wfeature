@@ -171,42 +171,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	}
 	store, exists := runtime.recordDatabases[name]
 	if !exists {
-		// A database this title deleted is gone rather than empty: the list
-		// hides both the emptied save and the archive's packaged copy until
-		// something creates the name again.
-		deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-		saved, hasSaved := runtime.loadSave("rdb/" + name)
-		if runtime.saveReadError != nil {
-			return 0, runtime.saveReadError
+		records, source, err := runtime.resolveRecordDatabase(name, recordSize)
+		if err != nil {
+			return 0, err
 		}
-		var records [][]byte
-		hasPackaged := false
-		// A save wins, empty or not — see the Java table for why an empty one
-		// is not treated as absent.
-		if !hasSaved && !runtime.databaseDeleted(name) {
-			records, hasPackaged = runtime.packagedRecordDatabase(name, recordSize)
-		}
-		if deleted {
-			hasSaved = false
-		}
-		if !hasPackaged && !hasSaved && int32(create) == 0 {
+		if source == storageAbsent && int32(create) == 0 {
 			return wipicErrorNotFound, nil
 		}
-
-		store = &runtimeRecordDatabase{name: name, recordSize: recordSize}
-		switch {
-		case hasSaved:
-			// A save wins over the packaged copy: the packaged records are the
-			// initial content, and a game that has written since owns them.
-			decoded, err := decodeSaveRecords(saved)
-			if err != nil {
-				return 0, fmt.Errorf("corrupt record database %s: %w", name, err)
-			} else {
-				store.records = decoded
-			}
-		case hasPackaged:
-			store.records = records
-		}
+		store = &runtimeRecordDatabase{name: name, recordSize: recordSize, records: records}
 		if runtime.recordDatabases == nil {
 			runtime.recordDatabases = make(map[string]*runtimeRecordDatabase)
 		}
@@ -216,10 +188,18 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 		// answering M_E_NOENT. The Java table next door has always done this;
 		// this one did not, and after a delete it left a name the removal
 		// list and the save disagreed about.
-		if !hasSaved && !hasPackaged {
+		if source == storageAbsent {
 			if err := runtime.persistRecordDatabase(store); err != nil {
 				return 0, err
 			}
+		}
+		// A store a quick load left without a database is the store of this
+		// name, so the open takes it rather than keeping a second one: the
+		// handles that kept it and this one share what is written from here.
+		if detached := runtime.detachedRecordDatabases[name]; detached != nil {
+			detached.records, detached.recordSize = store.records, store.recordSize
+			store = detached
+			delete(runtime.detachedRecordDatabases, name)
 		}
 	}
 	runtime.recordDatabases[name] = store
@@ -233,6 +213,59 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	handle := recordDatabaseHandleBit | runtime.nextRecordDatabaseHandle
 	runtime.recordDatabaseHandles[handle] = &runtimeRecordDatabaseHandle{store: store}
 	return handle, nil
+}
+
+// resolveRecordDatabase finds a record database by name where it lives
+// outside this session's own catalog: the save, then the copy the archive
+// ships. It is the lookup a first open makes, and a quick load rebuilds its
+// databases through it, so the two cannot answer differently.
+//
+// A database this title deleted is gone rather than empty: the list hides both
+// the emptied save and the archive's packaged copy until something creates the
+// name again. A save wins over the packaged copy, empty or not — the packaged
+// records are the initial content, and a game that has written since owns
+// them; see the Java table for why an empty save is not treated as absent.
+func (runtime *initializationRuntime) resolveRecordDatabase(name string, recordSize uint32) ([][]byte, storageSource, error) {
+	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
+	saved, hasSaved := runtime.loadSave("rdb/" + name)
+	if runtime.saveReadError != nil {
+		return nil, storageAbsent, runtime.saveReadError
+	}
+	var records [][]byte
+	hasPackaged := false
+	if !hasSaved && !runtime.databaseDeleted(name) {
+		records, hasPackaged = runtime.packagedRecordDatabase(name, recordSize)
+	}
+	if deleted {
+		hasSaved = false
+	}
+	switch {
+	case hasSaved:
+		decoded, err := decodeSaveRecords(saved)
+		if err != nil {
+			return nil, storageAbsent, fmt.Errorf("corrupt record database %s: %w", name, err)
+		}
+		return decoded, storageSaved, nil
+	case hasPackaged:
+		return records, storagePackaged, nil
+	}
+	return nil, storageAbsent, nil
+}
+
+// bindDetachedRecordDatabase puts a store a quick load left without a database
+// back under its name once a write through it has been stored. For any other
+// store it does nothing.
+func (runtime *initializationRuntime) bindDetachedRecordDatabase(store *runtimeRecordDatabase) {
+	if runtime.detachedRecordDatabases[store.name] != store {
+		return
+	}
+	delete(runtime.detachedRecordDatabases, store.name)
+	if runtime.recordDatabases == nil {
+		runtime.recordDatabases = make(map[string]*runtimeRecordDatabase)
+	}
+	if runtime.recordDatabases[store.name] == nil {
+		runtime.recordDatabases[store.name] = store
+	}
 }
 
 func (runtime *initializationRuntime) recordDatabaseHandle(thread *armcore.Thread) (*runtimeRecordDatabaseHandle, bool) {
@@ -328,6 +361,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseInsert(thread *armcore.
 		return 0, err
 	}
 	state.store.records = staged.records
+	runtime.bindDetachedRecordDatabase(state.store)
 	return uint32(len(state.store.records)), nil
 }
 
@@ -399,6 +433,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseUpdate(thread *armcore.
 		return 0, err
 	}
 	state.store.records = staged.records
+	runtime.bindDetachedRecordDatabase(state.store)
 	return 0, nil
 }
 
@@ -423,6 +458,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDeleteRecord(thread *ar
 		return 0, err
 	}
 	state.store.records = staged.records
+	runtime.bindDetachedRecordDatabase(state.store)
 	return 0, nil
 }
 

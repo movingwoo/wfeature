@@ -25,11 +25,14 @@ import (
 // when it is paused — which is the state being recorded. A load is the same:
 // the title is not started, initialised or resumed, it is simply there again.
 //
-// **A load replaces the ordinary saves as well as the memory.** The two were
-// one moment when the checkpoint was taken, and a title restored beside saves
-// from a later moment reads a save file that describes a game it has not
-// played yet. The save set is replaced first and whole; only once that has
-// happened is the restored session published, and from there nothing can fail.
+// **A load leaves the ordinary saves alone.** A checkpoint is the game's
+// execution state and nothing else: the slot carries no save, and a load never
+// replaces, reverts or removes one. The title's own saves come first, so what
+// it saved after the checkpoint is still there after a load, and the restored
+// title reads and writes the saves as they are now. checkpoint_storage.go has
+// what that takes on this platform: the writes a title has issued are stored
+// before either step, and what a restored title has open is read again from
+// the store when a load commits.
 
 // sessionCheckpointState is the runtime section of an LGT checkpoint.
 type sessionCheckpointState struct {
@@ -44,7 +47,9 @@ type sessionCheckpointState struct {
 	Adapters              adapterState
 }
 
-const sessionCheckpointVersion = 1
+// sessionCheckpointVersion is the layout of sessionCheckpointState and of the
+// records inside it. Version 1 carried the content of every open file.
+const sessionCheckpointVersion = 2
 
 func checkpointMaxSteps(options SessionOptions) uint64 {
 	if options.MaxSteps == 0 {
@@ -114,6 +119,25 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err := client.checkpointIdle(); err != nil {
 		return backend.Checkpoint{}, err
 	}
+	// A slot carries no save, so a load has to find the saves in a store. A
+	// session that has none could be captured and never loaded.
+	if _, base, err := client.captureAdapters(); err != nil {
+		return backend.Checkpoint{}, err
+	} else if base == nil {
+		return backend.Checkpoint{}, fmt.Errorf("LGT checkpoint requires a save store")
+	}
+	// Everything that can be refused without asking the store is refused
+	// first, so a quick save that is not going to happen stores nothing.
+	if held := client.storageBytes(); held > maxStateBytes {
+		return backend.Checkpoint{}, fmt.Errorf("LGT checkpoint: the open files and databases hold %d bytes, more than the %d a checkpoint restores", held, maxStateBytes)
+	}
+	// The title's own writes come before the checkpoint: the store is given
+	// what it has not been given, and a store that will not take it refuses
+	// the quick save. It runs before the memory image is copied, because an
+	// authentication adapter can write into guest memory when it stores.
+	if _, err := client.storeIssuedWrites(); err != nil {
+		return backend.Checkpoint{}, fmt.Errorf("LGT checkpoint: %w", err)
+	}
 	var shared []byte
 	if captureSession != nil {
 		var err error
@@ -133,15 +157,11 @@ func (session *Session) CaptureCheckpointWithSession(
 	if saved.Client, err = client.captureClientState(); err != nil {
 		return backend.Checkpoint{}, err
 	}
-	adapters, base, err := client.captureAdapters()
+	adapters, _, err := client.captureAdapters()
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
 	saved.Adapters = adapters
-	entries, err := snapshotCheckpointSaves(base)
-	if err != nil {
-		return backend.Checkpoint{}, err
-	}
 	record, err := backend.EncodeCheckpointRecord(saved)
 	if err != nil {
 		return backend.Checkpoint{}, err
@@ -151,31 +171,31 @@ func (session *Session) CaptureCheckpointWithSession(
 	}
 	return backend.Checkpoint{
 		Identity: session.archiveIdentity, Variant: checkpointVariant(client),
-		Session: shared, Runtime: record, Saves: entries,
+		Session: shared, Runtime: record,
 	}, nil
 }
 
-func snapshotCheckpointSaves(store backend.SaveStore) ([]backend.SaveEntry, error) {
-	if store == nil {
-		return nil, nil
-	}
-	complete, ok := store.(backend.SaveSnapshotStore)
-	if !ok {
-		return nil, fmt.Errorf("LGT checkpoint requires a complete save snapshot store")
-	}
-	return complete.SnapshotSaves()
+// PreparedSession is a restored session that has not been published. It was
+// built on a placeholder store that answers nothing and it has no audio
+// device, so discarding it leaves no trace. What the title has open in it is
+// there by name and holds nothing yet. The caller must Discard it when
+// abandoning a load; a Discard after a successful Commit does nothing.
+type PreparedSession struct {
+	session     *Session
+	archive     *Archive
+	adapters    adapterState
+	placeholder *backend.DetachedSaveStore
+	vibration   backend.VibrationState
 }
 
-// PreparedSession is a restored session that has not been published. Its
-// saves are an isolated copy and it has no audio device, so discarding it
-// leaves no trace. The caller must Discard it when abandoning a load; a
-// Discard after a successful Commit does nothing.
-type PreparedSession struct {
-	session   *Session
-	store     backend.SaveSnapshotStore
-	base      backend.SaveStore
-	saves     []backend.SaveEntry
-	vibration backend.VibrationState
+// PreparationStoreCalls reports how many save store calls validation made
+// against its placeholder, and the first of them. Validation is meant to make
+// none: the saves are read when the load commits, from the live store.
+func (prepared *PreparedSession) PreparationStoreCalls() (int, string) {
+	if prepared == nil || prepared.placeholder == nil {
+		return 0, ""
+	}
+	return prepared.placeholder.Calls(), prepared.placeholder.FirstCall()
 }
 
 // Speed is the pace the checkpoint was taken at, which the Host checks against
@@ -188,8 +208,9 @@ func (prepared *PreparedSession) Speed() float64 {
 }
 
 // PrepareSessionCheckpoint rebuilds a session from a checkpoint without
-// running any of it. Everything the record claims is checked here, before the
-// saves it would replace are touched.
+// running any of it. Everything the record claims is checked here, and no save
+// is read: options.SaveStore and options.SaveRoot are ignored, and the live
+// store reaches the restored runtime only as an argument of Commit.
 func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, options SessionOptions) (*PreparedSession, error) {
 	identity := backend.SaveIdentity(archive)
 	if checkpoint.Identity != identity {
@@ -202,11 +223,14 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
 		return nil, err
 	}
-	if saved.Version != sessionCheckpointVersion || saved.DisableAuthentication != options.DisableAuthentication ||
+	if saved.Version != sessionCheckpointVersion {
+		return nil, fmt.Errorf("LGT checkpoint session record is version %d and this build reads %d: %w", saved.Version, sessionCheckpointVersion, backend.ErrCheckpointVersion)
+	}
+	if saved.DisableAuthentication != options.DisableAuthentication ||
 		saved.Tick != checkpointTick(options) || saved.MaxSteps != checkpointMaxSteps(options) ||
 		!validAuthentication(saved.Authentication) ||
 		saved.DisableAuthentication != (backend.AuthenticationStatus(saved.Authentication) == backend.AuthenticationOff) {
-		return nil, fmt.Errorf("LGT checkpoint session version or policy is incompatible")
+		return nil, fmt.Errorf("LGT checkpoint was taken under another tick, instruction budget or authentication setting: %w", backend.ErrCheckpointVersion)
 	}
 	if math.IsNaN(saved.Speed) || math.IsInf(saved.Speed, 0) || saved.Speed < backend.SpeedFloor || saved.Speed > backend.SpeedCeiling {
 		return nil, fmt.Errorf("LGT checkpoint has an invalid speed")
@@ -225,29 +249,9 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if err != nil {
 		return nil, err
 	}
-	isolated, err := backend.NewMemorySaveStore(checkpoint.Saves)
-	if err != nil {
-		return nil, err
-	}
-	base := options.SaveStore
-	if base == nil && options.SaveRoot != "" {
-		base = backend.NewDirectorySaveStore(options.SaveRoot)
-	}
-	prepared := &PreparedSession{base: base, vibration: saved.Client.Vibration}
-	if base != nil {
-		var ok bool
-		if prepared.store, ok = base.(backend.SaveSnapshotStore); !ok {
-			return nil, fmt.Errorf("LGT checkpoint requires a replaceable save snapshot store")
-		}
-	} else if len(checkpoint.Saves) != 0 {
-		return nil, fmt.Errorf("LGT checkpoint has saves but the destination has no save store")
-	}
-	// Own the generation independently of the caller's buffers.
-	if prepared.saves, err = isolated.SnapshotSaves(); err != nil {
-		return nil, err
-	}
+	prepared := &PreparedSession{archive: opened, adapters: saved.Adapters, placeholder: backend.NewDetachedSaveStore(), vibration: saved.Client.Vibration}
 	client, err := restoreClientState(opened, saved.Client, Options{
-		Logger: options.Logger, SaveStore: isolated, MaxSteps: checkpointMaxSteps(options),
+		Logger: options.Logger, SaveStore: prepared.placeholder, MaxSteps: checkpointMaxSteps(options),
 		TraceSVC: options.TraceSVC, TraceLive: options.TraceLive, TraceOut: options.TraceOut,
 	})
 	if err != nil {
@@ -256,7 +260,7 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != checkpointVariant(client) {
 		return nil, backend.ErrCheckpointVersion
 	}
-	if err := client.restoreAdapters(opened, saved.Adapters, isolated); err != nil {
+	if err := client.checkAdapters(opened, saved.Adapters); err != nil {
 		return nil, err
 	}
 	if err := client.startRestoredJavaWorkers(); err != nil {
@@ -282,21 +286,37 @@ func (prepared *PreparedSession) Discard() {
 	*prepared = PreparedSession{}
 }
 
-// Commit replaces the ordinary saves and publishes the restored session.
+// Commit publishes the restored session over the live save store and replaces
+// no save.
 //
 // previous is the live session being replaced, or nil for a load into a fresh
-// process. A failure before the saves are replaced leaves previous running
-// with its saves untouched. After that point nothing can fail: the displaced
-// session is cut off from the store and the audio device and its guest threads
-// are ended — **without closing it**, because closing flushes its open files
-// and calls its destroyClet, and both would write the old session's state over
-// the saves that were just restored.
-func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session) (*Session, error) {
+// process. A failure leaves previous running, and never reverts or removes a
+// save.
+//
+// The order is what keeps the title's own writes first:
+//
+//  1. What can be refused without the store is refused.
+//  2. The restored session is bound to the store: its adapter is built over it
+//     and everything it has open is read from it. Nothing is written. A save
+//     that cannot be read refuses the load here, with the store untouched.
+//  3. The displaced session's unstored writes are given to the store. They are
+//     writes its title issued, and the session that would have stored them at
+//     its close is about to go. A store that refuses refuses the load.
+//  4. If that stored anything the restored session is bound again, so what it
+//     has open is what the displaced one wrote.
+//  5. The displaced session is cut off from the store and the audio device
+//     and its guest threads are ended, **without closing it**, because closing
+//     calls its destroyClet and a load runs no guest code of either session.
+//     Nothing in this step can fail.
+func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, live backend.SaveStore) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if prepared == nil || prepared.session == nil {
 		return nil, fmt.Errorf("LGT checkpoint replacement is not prepared")
+	}
+	if live == nil {
+		return nil, fmt.Errorf("LGT checkpoint load requires a save store")
 	}
 	if previous != nil {
 		if previous.client == nil || previous.archiveIdentity != prepared.session.archiveIdentity {
@@ -306,11 +326,33 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session) 
 			return nil, err
 		}
 	}
-	if prepared.store != nil {
-		if err := prepared.store.ReplaceSaves(prepared.saves); err != nil {
-			return nil, err
+	client := prepared.session.client
+	if err := client.bindRestoredStorage(prepared.archive, prepared.adapters, live); err != nil {
+		return nil, fmt.Errorf("LGT checkpoint load: %w", err)
+	}
+	// From here the restored client reads the store. On any refusal it goes
+	// back to answering nothing: it is not adopted, and what is discarded must
+	// not hold the saves.
+	detach := func() { client.saveStore = prepared.placeholder }
+	if previous != nil {
+		stored, err := previous.client.storeIssuedWrites()
+		if err != nil {
+			detach()
+			return nil, fmt.Errorf("LGT checkpoint load: %w", err)
+		}
+		if stored != 0 {
+			if err := client.bindRestoredStorage(prepared.archive, prepared.adapters, live); err != nil {
+				detach()
+				return nil, fmt.Errorf("LGT checkpoint load: %w", err)
+			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		detach()
+		return nil, err
+	}
+	// Nothing after this point can fail.
+	client.restoredStorage = nil
 	if previous != nil {
 		old := previous.client
 		old.saveStore = nil
@@ -319,8 +361,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session) 
 		previous.client, previous.cheat, previous.cheatConsole = nil, nil, nil
 	}
 	session := prepared.session
-	client := session.client
-	client.rebaseAdapters(prepared.base)
+	session.options.SaveStore, session.options.SaveRoot = live, ""
 	// The motor's deadline is measured on the Host's clock, so it is set again
 	// here: the time a load spent being checked is not time the motor ran.
 	_ = client.vibrator.RestoreState(prepared.vibration)
