@@ -32,50 +32,65 @@ func checkpointServerFiles(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	path := filepath.Join(root, "games", "ktf", "checkpoint.zip")
+	writeCheckpointGame(t, root, "ktf", archive)
+	return root, archive
+}
+
+func writeCheckpointGame(t *testing.T, root, platform string, archive []byte) {
+	t.Helper()
+	path := filepath.Join(root, "games", platform, "checkpoint.zip")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, archive, 0600); err != nil {
 		t.Fatal(err)
 	}
-	return root, archive
 }
 
 func TestCheckpointBrowserHostResumesAPausedSlot(t *testing.T) {
-	for _, startup := range []bool{false, true} {
-		t.Run(fmt.Sprintf("startup_%t", startup), func(t *testing.T) {
-			root, _ := checkpointServerFiles(t)
-			r := &sessionRunner{server: checkpointServer(t, root), frames: make(chan pendingFrame, 1), outText: make(chan outboundMessage, 64)}
-			r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip", ID: 1})
-			if r.game == nil {
-				t.Fatal("fixture did not start")
-			}
-			t.Cleanup(r.stopGame)
-			if err := r.game.Pause(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			r.quickSave(t.Context(), clientMessage{Kind: clientQuickSave, ID: 2})
-			if !r.started.HasCheckpoint {
-				t.Fatal("paused slot was not saved")
-			}
-			readCheckpointReplies(t, r)
-			if startup {
-				r.stopGame()
-				r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip", QuickLoad: true, ID: 3})
-			} else {
-				if err := r.game.Resume(t.Context()); err != nil {
+	for _, platform := range []string{"ktf", "lgt"} {
+		for _, startup := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s_startup_%t", platform, startup), func(t *testing.T) {
+				root, _ := checkpointServerFiles(t)
+				game := "games/" + platform + "/checkpoint.zip"
+				if platform == "lgt" {
+					archive, err := testfixture.LGTCheckpointArchive()
+					if err != nil {
+						t.Fatal(err)
+					}
+					writeCheckpointGame(t, root, platform, archive)
+				}
+				r := &sessionRunner{server: checkpointServer(t, root), frames: make(chan pendingFrame, 1), outText: make(chan outboundMessage, 64)}
+				r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: game, ID: 1})
+				if r.game == nil || !r.started.CanCheckpoint {
+					t.Fatalf("fixture did not start: %+v", readCheckpointReplies(t, r))
+				}
+				t.Cleanup(r.stopGame)
+				if err := r.game.Pause(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				r.quickLoad(t.Context(), clientMessage{Kind: clientQuickLoad, ID: 3})
-			}
-			if r.game == nil || !r.game.Running() || r.game.Paused() {
-				t.Fatal("visible browser adopted a paused game")
-			}
-			if _, err := r.game.Tick(t.Context(), 0); err != nil {
-				t.Fatal(err)
-			}
-		})
+				r.quickSave(t.Context(), clientMessage{Kind: clientQuickSave, ID: 2})
+				if !r.started.HasCheckpoint {
+					t.Fatalf("paused slot was not saved: %+v", readCheckpointReplies(t, r))
+				}
+				readCheckpointReplies(t, r)
+				if startup {
+					r.stopGame()
+					r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: game, QuickLoad: true, ID: 3})
+				} else {
+					if err := r.game.Resume(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					r.quickLoad(t.Context(), clientMessage{Kind: clientQuickLoad, ID: 3})
+				}
+				if r.game == nil || !r.game.Running() || r.game.Paused() {
+					t.Fatalf("visible browser adopted a paused game: %+v", readCheckpointReplies(t, r))
+				}
+				if _, err := r.game.Tick(t.Context(), 0); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
@@ -245,20 +260,26 @@ func checkpointConsole(t *testing.T, connection *wsproto.Conn, epoch uint64, com
 	return reply.Message
 }
 
-func TestCheckpointServerSubprocess(t *testing.T)       { testCheckpointServerSubprocess(t, false) }
-func TestCheckpointNativeServerSubprocess(t *testing.T) { testCheckpointServerSubprocess(t, true) }
+func TestCheckpointServerSubprocess(t *testing.T) {
+	testCheckpointServerSubprocess(t, "TestCheckpointServerSubprocess", "ktf", testfixture.KTFCheckpointStartupCounter, testfixture.KTFCheckpointArchive)
+}
 
-func testCheckpointServerSubprocess(t *testing.T, native bool) {
-	counter := uint32(testfixture.KTFCheckpointStartupCounter)
-	testName := "TestCheckpointServerSubprocess"
-	if native {
-		counter = testfixture.KTFNativeCheckpointStartupCounter
-		testName = "TestCheckpointNativeServerSubprocess"
-	}
+func TestCheckpointNativeServerSubprocess(t *testing.T) {
+	testCheckpointServerSubprocess(t, "TestCheckpointNativeServerSubprocess", "ktf", testfixture.KTFNativeCheckpointStartupCounter, testfixture.KTFNativeCheckpointArchive)
+}
+
+// The LGT Clet takes the same commands over the same socket: a live load, a
+// refused one, and a load in a server process that never ran the title.
+func TestCheckpointLGTServerSubprocess(t *testing.T) {
+	testCheckpointServerSubprocess(t, "TestCheckpointLGTServerSubprocess", "lgt", testfixture.LGTCheckpointStartupCounter, testfixture.LGTCheckpointArchive)
+}
+
+func testCheckpointServerSubprocess(t *testing.T, testName, platform string, counter uint32, build func() ([]byte, error)) {
+	game := "games/" + platform + "/checkpoint.zip"
 	if root := os.Getenv("WFEATURE_WEB_CHECKPOINT_FIXTURE"); root != "" {
 		server := checkpointServer(t, root)
 		connection, _ := dialCheckpointServer(t, server)
-		send(t, connection, clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip", QuickLoad: true, ID: 1})
+		send(t, connection, clientMessage{Kind: clientStart, Game: game, QuickLoad: true, ID: 1})
 		restored := expectMessage(t, connection, serverRestored)
 		if restored.Epoch != 1 || restored.Started == nil || !restored.Started.Restored || !restored.Started.HasCheckpoint {
 			t.Fatalf("fresh server did not restore: %+v", restored)
@@ -267,7 +288,7 @@ func testCheckpointServerSubprocess(t *testing.T, native bool) {
 		if !strings.Contains(read, "= 5") {
 			t.Fatalf("new server reran startup or lost the checkpoint: %s", read)
 		}
-		store := backend.NewDirectorySaveStore(server.saveDirectory("ktf", restored.Started.SaveOwner))
+		store := backend.NewDirectorySaveStore(server.saveDirectory(platform, restored.Started.SaveOwner))
 		if data, found := store.LoadSave("progress"); !found || string(data) != "saved by source server" {
 			t.Fatalf("new server save generation = %q, found %v", data, found)
 		}
@@ -275,28 +296,23 @@ func testCheckpointServerSubprocess(t *testing.T, native bool) {
 		expectMessage(t, connection, serverResult)
 		return
 	}
-	root, archive := checkpointServerFiles(t)
-	if native {
-		var err error
-		archive, err = testfixture.KTFNativeCheckpointArchive()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "games", "ktf", "checkpoint.zip"), archive, 0600); err != nil {
-			t.Fatal(err)
-		}
+	archive, err := build()
+	if err != nil {
+		t.Fatal(err)
 	}
+	root := t.TempDir()
+	writeCheckpointGame(t, root, platform, archive)
 	server := checkpointServer(t, root)
 	summary, err := session.Inspect(archive)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := backend.NewDirectorySaveStore(server.saveDirectory("ktf", summary.SaveOwner))
+	store := backend.NewDirectorySaveStore(server.saveDirectory(platform, summary.SaveOwner))
 	if err := store.StoreSave("progress", []byte("saved by source server")); err != nil {
 		t.Fatal(err)
 	}
 	connection, closeSource := dialCheckpointServer(t, server)
-	send(t, connection, clientMessage{Kind: clientStart, Game: "games/ktf/checkpoint.zip", ID: 1})
+	send(t, connection, clientMessage{Kind: clientStart, Game: game, ID: 1})
 	expectMessage(t, connection, serverStarted)
 	checkpointConsole(t, connection, 0, fmt.Sprintf("set 0x%x 5 u32", counter))
 	send(t, connection, clientMessage{Kind: clientQuickSave, ID: 2})
@@ -318,7 +334,7 @@ func testCheckpointServerSubprocess(t *testing.T, native bool) {
 	if err != nil || !found {
 		t.Fatalf("checkpoint slot missing: %v", err)
 	}
-	slots, err := filepath.Glob(filepath.Join(root, "saves", "ktf", ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.wfq", identity)))
+	slots, err := filepath.Glob(filepath.Join(root, "saves", platform, ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.wfq", identity)))
 	if err != nil || len(slots) != 1 {
 		t.Fatalf("slot paths = %v, %v", slots, err)
 	}

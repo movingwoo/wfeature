@@ -387,7 +387,11 @@ that stops closes parked and attached sessions alike before it exits, so the
 writes a title had issued reach its save files; see
 [retention and control](session.md#retention-and-control).
 
-KTF quick save/load joins the shared session, CLI, server and browser controls.
+KTF and LGT quick save/load join the shared session, CLI, server and browser
+controls. The envelope, the save transaction, the slot and the Host commands are
+one implementation; what differs per platform is the runtime record inside the
+envelope and how a parked guest thread is described. The KTF records are below,
+and [the LGT ones](#lgt-checkpoints) follow them.
 The [validation record](testing.md) describes authored and local-archive coverage.
 The ARM core can record parked derived calls and resume them in a fresh core;
 the platform supplies each pending supervisor operation's remainder. The KTF
@@ -593,6 +597,162 @@ and explicit active rollback now cover that interleaving. The
 readers, aliases, refused replacement, process exclusion and crash recovery.
 Earlier measurements and rejected approaches are preserved in the
 [snapshot investigation](history/maintenance.md#snapshot-feasibility).
+
+<a id="lgt-checkpoints"></a>
+
+### LGT checkpoints
+
+LGT has two execution variants under the same envelope: a Clet, which the
+platform calls and which returns, and an AOT Java title, whose guest threads are
+goroutines parked inside platform calls. Both are recorded between two ticks,
+which is the one place where nothing of the guest's is in flight on the Host's
+own goroutine. Capture runs no guest code and does not call `pauseClet`; a load
+runs neither the module's entry, its initializer nor `startClet`.
+
+**The guest clock needs no rebasing.** It is virtual: elapsed guest time plus
+the work since an instruction baseline, and the instruction count travels with
+the ARM state. Timer deadlines, thread wake-ups and sound origins are all
+readings of that clock, so they are stored as they are. The only Host-clock
+anchors are the pacing deadline, which a restored session takes again at its
+first tick, the vibrator's deadline, and the remaining PCM and percussion tails
+of the audio output; the last two are re-anchored when a load is committed, so
+time spent validating a record is not time the motor or a sample ran.
+
+The record holds the ARM memory image and the platform thread, and then every
+table the client keeps on the Go side:
+
+- the three allocators — platform data, surfaces and the title's heap — as a
+  cursor, the spans taken back and every outstanding block. A restored
+  allocator is accepted only if the blocks and the spans cover exactly what
+  the cursor has handed out, so it hands out the same address next;
+- the platform stubs and their cursor, the Clet entry points, the handle
+  counter, resource identities and the list of resolved imports;
+- every surface, with its transparency mask. A surface's pixels are stored
+  only when the runtime's copy differs from guest memory at the same address:
+  a Clet's surfaces are already in the memory image, and keeping them twice
+  doubled the largest part of a record. The frame last presented is stored
+  separately from the display surface, because a title draws its next frame
+  into the surface before it presents it;
+- timers, pending dial results, queued events, the input mode and a pending
+  Host text commit;
+- the answers each pixel operation has already given. Without them a restored
+  title would be asked again, and the instructions charged again — which moves
+  the guest clock and makes a restored session a different session;
+- open files with their bytes, cursor and unflushed writes, and the two path
+  lists a title's file calls keep. A list that has not been read from the store
+  yet stays distinct from one that was read and found empty;
+- media clips, levels and mutes, the logical audio timeline and the vibrator;
+- the C library's generator, and each `java/util/Random`. The sequence a seed
+  names is the standard library's, whose generator cannot be asked for its
+  state. It is an additive lagged sequence — each value is the sum of the
+  values 607 and 273 places back — so its whole state is its last 607 values.
+  The runtime takes the first 607 from the library, which is the only part a
+  seed decides, and produces every later one itself; the record is those 607
+  numbers and a position, and a restore is exact however long the title has
+  been drawing.
+
+An AOT Java title adds the tables behind its objects, which are guest memory
+themselves: the class table with the link surface and layout the module was
+answered with, string text (as bytes — a title may hold half a surrogate pair),
+open streams, images and the decode cache, vectors, calendars, sinks, record
+stores, widgets, Graphics state, monitors, and the collector's object table and
+schedule. A resource stream names the archive entry it reads rather than
+repeating it: a title that never closes its streams holds every resource it has
+read.
+
+**A parked guest thread is recorded as what it still owes.** The ARM core
+supplies the registers of every call the thread is inside. For each call that
+is stopped at a platform call, the record names the remainder of that call:
+
+| remainder | where the thread is parked | what is left |
+| --- | --- | --- |
+| result | `Thread.sleep`, `Thread.yield` | the answer |
+| wait | `Object.wait`, with or without a deadline | take the lock again at the depth it was given up from, then the answer |
+| monitor | a contended monitor enter | take the lock, then the answer |
+| initializer | a class initializer the platform entered for the thread | finish the nested call, then the answer |
+| function | the C library's run-function call | finish the nested call, then the answer |
+
+A thread whose slice ended on its instruction budget has no platform call above
+its innermost frame and resumes at that instruction with a fresh budget. A
+thread that has not been granted its first slice is recorded with no calls and
+enters `run` from the top. Its open try regions, lock count and renewal count
+travel with it. The remainder is derived from the same dispatch tables the call
+was served from, at capture and again at restore, so a record cannot claim one
+its platform call does not have.
+
+**Anything else is refused by name.** A thread parked beneath a platform call
+whose remainder lives in Go locals — a class declaration thunk, a stream read
+through the title's own `InputStream`, a paint entered from the thread — is a
+capture that fails with the call it was inside, and the session carries on.
+Over the local library every thread at every tick boundary was in one of the
+rows above; see [testing](testing.md#lgt-checkpoints).
+
+A restored call releases no collector pins. The pin list is emptied at the end
+of every round, capture refuses a boundary where it is not, and none of the
+calls above builds an object before it parks.
+
+Authentication adapters travel as their moved state only. Which exchange a
+module is a client of is read from the module's code again, the same way it was
+at session start, and a record claiming an adapter the module does not match is
+refused. Restoring one reads no save and writes none.
+
+Restoration loads the archive afresh, requires the record's memory map to be
+the one that load produces plus the guest thread stacks the record declares,
+and then builds every table before a single goroutine is started. It is
+prepared against an isolated memory copy of the checkpoint's saves with no
+audio device. Commit replaces the durable save generation and only then
+displaces the running session: its store and audio sink are detached and its
+guest threads are ended one at a time. **It is not closed**, because closing
+flushes its open files and calls `destroyClet`, and both would write the old
+session over the saves that were just restored.
+
+A record is checked against the platform it is restored into, not only against
+itself, wherever the runtime would otherwise act on a number the record states.
+A panic in a restored session is contained like any other guest fault; these
+checks are for what a panic boundary does not cover — a loop that does not end,
+or an allocation the Host is asked for.
+
+- The guest clock is two numbers, and the first tick adds one to the other: the
+  elapsed time, and the work the instructions retired since the baseline stand
+  for. Both are bounded, the work to an hour, and the audio timeline is checked
+  against their sum. A repeating sound is caught up cycle by cycle with no
+  budget, so a record that put its instruction count years past its baseline
+  would otherwise spend the first tick replaying it.
+- A surface's pixels must be one block of the surface allocator, large enough
+  for its size. The display is the one surface a record may carry outside that
+  allocator, so each side of it is held to 1,024, which is the largest either
+  Host starts a session at.
+- An allocator states no more blocks than its region has room for and no more
+  spans taken back than lie between them.
+- Every object the collector tracks, and the block its fields live in, must be
+  blocks the data allocator has outstanding, each named once: a collection
+  reads every block whole, so this is what bounds one.
+- A superclass chain must end, whether it is followed through the links the
+  classes record or through the name a platform class's superclass is looked up
+  under the first time a type check passes through it. The layout's chains,
+  which are walked by name, are held to the same rule.
+- A laid-out class may not state a size no class has, because a platform class
+  first reached after a load is allocated from what its layout says.
+- A thread that has ended holds no lock, and a thread parked for a lock is not
+  the one holding it. Neither can happen in a session, and either leaves a lock
+  nobody will release.
+- A pending dial that a local service accepted is answered by that service when
+  it comes due, so a record that has one must have the service.
+
+Three behaviors of the running platform changed with this work, each because a
+session and its checkpoint have to take the same path. Timers that come due in
+one tick fire in the order they came due rather than in map order. A file
+opened for writing gets its own copy of a packaged file's bytes instead of
+writing through the archive's. And guest threads are ended one at a time and
+waited for, at a close as well as at a load: waking them together had them
+unwinding through one client's bookkeeping at once.
+
+Limits: active cheat freezes and patches refuse capture, as on KTF. Diagnostic
+counters — uncaught-callback counts, collection time, the platform-call trace —
+restart at a load. A pending calendar field assignment is restored in the
+Host's zone, which is the only zone the runtime sets. The subscriber identity a
+title was started with is restored with it, so a title that compares the number
+against one it stored sees the one it stored.
 
 ## Documentation
 

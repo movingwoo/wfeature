@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -35,6 +34,12 @@ import (
 type javaPlatformMethod struct {
 	Words       int
 	Implementat func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error)
+	// Parks names what a guest thread still owes when this method is where it
+	// is parked, and is zero for every method that never parks one. A
+	// checkpoint cannot keep the Go call a parked thread is suspended inside,
+	// so it keeps this instead and performs the remainder when the thread is
+	// next granted a slice. See checkpoint_worker.go.
+	Parks javaRemainder
 }
 
 // javaMethodDispatch is the answer shared by coverage, diagnostics and the
@@ -378,9 +383,9 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// A title's game loop runs on a thread of its own; see java_thread.go.
 	"java/lang/Thread.<init>(Ljava/lang/Runnable;)V":     {Words: 2, Implementat: javaThreadConstructor},
 	"java/lang/Thread.<init>()V":                         {Words: 1, Implementat: javaThreadConstructor},
-	"java/lang/Thread.sleep(J)V":                         {Words: 2, Implementat: javaThreadSleep},
+	"java/lang/Thread.sleep(J)V":                         {Words: 2, Implementat: javaThreadSleep, Parks: javaRemainderResult},
 	"java/lang/Thread.currentThread()Ljava/lang/Thread;": {Implementat: javaCurrentThread},
-	"java/lang/Thread.yield()V":                          {Implementat: javaThreadYield},
+	"java/lang/Thread.yield()V":                          {Implementat: javaThreadYield, Parks: javaRemainderResult},
 }
 
 // The drawing surface is one table of its own, in java_screen.go, and it joins
@@ -616,12 +621,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// at 1 and `notify` at 5 are four apart, which is what `hashCode`,
 		// `equals` and `toString` fill, and the three `wait` forms follow
 		// `notifyAll` at 6 — the no-argument one last, at 9.
-		9: {Called: "wait()V", Method: javaPlatformMethod{Words: 1, Implementat: javaObjectWait}},
+		9: {Called: "wait()V", Method: javaPlatformMethod{Words: 1, Implementat: javaObjectWait, Parks: javaRemainderWait}},
 		// Slot 7 is the same call with a deadline: the receiver and a long,
 		// which the one site here passes as forty milliseconds. It sits two
 		// before the no-argument form, where `wait(long)` and
 		// `wait(long, int)` are declared.
-		7: {Called: "wait(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaObjectWaitTimed}},
+		7: {Called: "wait(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaObjectWaitTimed, Parks: javaRemainderWait}},
 	},
 	// `java/lang/Class` slot 16 takes one argument, a String, and answers an
 	// object the caller null-checks and then reads bytes out of — the resource
@@ -1006,7 +1011,7 @@ func javaRandomSetSeed(
 	// yet: seeding one and reseeding one are the same act.
 	runtime := client.javaRuntimeState()
 	seed := int64(arguments[2])<<32 | int64(arguments[1])
-	runtime.random[arguments[0]] = rand.New(rand.NewSource(seed))
+	runtime.random[arguments[0]] = newGuestRandom(seed)
 	return 0, nil
 }
 
@@ -1015,7 +1020,7 @@ func javaRandomSetSeed(
 func javaRandomConstructor(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	client.javaRuntimeState().random[arguments[0]] = rand.New(rand.NewSource(client.clock.unixMillis()))
+	client.javaRuntimeState().random[arguments[0]] = newGuestRandom(client.clock.unixMillis())
 	return 0, nil
 }
 

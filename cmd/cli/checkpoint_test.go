@@ -139,16 +139,19 @@ func TestCheckpointCLIPausedRestoreCanResumeThroughPark(t *testing.T) {
 	}
 }
 
-func TestCheckpointCLIProcess(t *testing.T)       { testCheckpointCLIProcess(t, false) }
-func TestCheckpointNativeCLIProcess(t *testing.T) { testCheckpointCLIProcess(t, true) }
+func TestCheckpointCLIProcess(t *testing.T) {
+	testCheckpointCLIProcess(t, "TestCheckpointCLIProcess", testfixture.KTFCheckpointStartupCounter, testfixture.KTFCheckpointArchive)
+}
 
-func testCheckpointCLIProcess(t *testing.T, native bool) {
-	counterAddress := uint32(testfixture.KTFCheckpointStartupCounter)
-	testName := "TestCheckpointCLIProcess"
-	if native {
-		counterAddress = testfixture.KTFNativeCheckpointStartupCounter
-		testName = "TestCheckpointNativeCLIProcess"
-	}
+func TestCheckpointNativeCLIProcess(t *testing.T) {
+	testCheckpointCLIProcess(t, "TestCheckpointNativeCLIProcess", testfixture.KTFNativeCheckpointStartupCounter, testfixture.KTFNativeCheckpointArchive)
+}
+
+func TestCheckpointLGTCLIProcess(t *testing.T) {
+	testCheckpointCLIProcess(t, "TestCheckpointLGTCLIProcess", testfixture.LGTCheckpointStartupCounter, testfixture.LGTCheckpointArchive)
+}
+
+func testCheckpointCLIProcess(t *testing.T, testName string, counterAddress uint32, build func() ([]byte, error)) {
 	if root := os.Getenv("WFEATURE_CLI_CHECKPOINT_ROOT"); root != "" {
 		args := []string{"run", filepath.Join(root, "fixture.zip"), "-save", filepath.Join(root, "saves"), "-quickload", "-ticks", "0", "-quicksave"}
 		if code := run(args, os.Stdout, os.Stderr); code != 0 {
@@ -156,16 +159,13 @@ func testCheckpointCLIProcess(t *testing.T, native bool) {
 		}
 		return
 	}
-	_, root, archive := checkpointCLIFixture(t)
-	if native {
-		var err error
-		archive, err = testfixture.KTFNativeCheckpointArchive()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "fixture.zip"), archive, 0600); err != nil {
-			t.Fatal(err)
-		}
+	archive, err := build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "fixture.zip"), archive, 0600); err != nil {
+		t.Fatal(err)
 	}
 	summary, err := session.Inspect(archive)
 	if err != nil {
@@ -256,6 +256,80 @@ func TestCheckpointCLIClaimsAndMissingSlotLeaveSavesUntouched(t *testing.T) {
 	release, err = backend.ClaimSaveDirectory(directory)
 	if err != nil {
 		t.Fatal("failed CLI startup leaked its claim")
+	}
+	release()
+}
+
+// The LGT Clet is driven through the same command: live quick save and load
+// between steps, a refused load that leaves the session running, and a slot a
+// later process can start from. Without -play its ticks run back to back, so
+// the frame count is the step count and not a function of how long the test
+// machine took.
+func TestCheckpointLGTCLILiveCommands(t *testing.T) {
+	archive, err := testfixture.LGTCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "fixture.zip")
+	if err := os.WriteFile(path, archive, 0600); err != nil {
+		t.Fatal(err)
+	}
+	saveRoot := filepath.Join(root, "saves")
+	commands := `{"cmd":"quickload"}
+{"cmd":"step","ticks":4}
+{"cmd":"key","key":"1","action":"press"}
+{"cmd":"quicksave"}
+{"cmd":"key","key":"1","action":"release"}
+{"cmd":"step","ticks":6}
+{"cmd":"quickload"}
+{"cmd":"step","ticks":2}
+{"cmd":"quicksave"}
+{"cmd":"quit"}
+`
+	var output, diagnostics bytes.Buffer
+	if code := runShared(t.Context(), path, []string{"-save", saveRoot, "-serve"}, strings.NewReader(commands), &output, &diagnostics); code != 0 {
+		t.Fatalf("CLI = %d: %s", code, diagnostics.String())
+	}
+	decoder := json.NewDecoder(&output)
+	for i := 0; i < 10; i++ {
+		var response serve.Response
+		if err := decoder.Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if response.OK != (i != 0) {
+			t.Fatalf("command %d = %+v", i, response)
+		}
+	}
+	store := backend.NewDirectorySaveStore(filepath.Join(saveRoot, testfixture.LGTCheckpointSaveOwner))
+	data, found, err := store.LoadCheckpoint(backend.SaveIdentity(archive))
+	if err != nil || !found {
+		t.Fatalf("CLI did not persist its slot: %v, %t", err, found)
+	}
+	game, err := session.RestoreCheckpoint(t.Context(), archive, data, session.Options{SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer game.Close()
+	// The second slot was written two steps after the first was loaded, with
+	// the hold the first one carried still owned.
+	if !reflect.DeepEqual(game.HeldKeys(), []int32{49}) {
+		t.Fatalf("the slot holds %v", game.HeldKeys())
+	}
+	word := func(address uint32) uint32 {
+		bytes, err := game.Cheat().ReadBytes(address, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return binary.LittleEndian.Uint32(bytes)
+	}
+	if word(testfixture.LGTCheckpointStartupCounter) != 1 || word(testfixture.LGTCheckpointFrameCounter) != 6 {
+		t.Fatalf("the slot is at start %d, frame %d: want one start and the six frames of four steps and two",
+			word(testfixture.LGTCheckpointStartupCounter), word(testfixture.LGTCheckpointFrameCounter))
+	}
+	release, err := backend.ClaimSaveDirectory(filepath.Join(saveRoot, testfixture.LGTCheckpointSaveOwner))
+	if err != nil {
+		t.Fatal(err)
 	}
 	release()
 }

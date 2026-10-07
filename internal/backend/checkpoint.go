@@ -21,6 +21,12 @@ const (
 	CheckpointKTFJava   uint16 = 1
 	CheckpointKTFModule uint16 = 2
 	CheckpointKTFNative uint16 = 3
+	// The LGT variants share one runtime; the number says which continuation
+	// the record carries. A Clet is called and returns, so its record has no
+	// parked guest call. An AOT Java title keeps guest threads parked inside
+	// platform calls, and its record carries what each one still owes.
+	CheckpointLGTClet uint16 = 4
+	CheckpointLGTJava uint16 = 5
 )
 
 var (
@@ -43,7 +49,7 @@ type Checkpoint struct {
 }
 
 func checkpointVariantSupported(variant uint16) bool {
-	return variant >= CheckpointKTFJava && variant <= CheckpointKTFNative
+	return variant >= CheckpointKTFJava && variant <= CheckpointLGTJava
 }
 
 // EncodeCheckpoint writes a profile-independent, little-endian version 1

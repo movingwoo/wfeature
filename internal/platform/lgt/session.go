@@ -36,6 +36,12 @@ type Session struct {
 	// pad makes a keyboard's overlapping holds look like a thumb on a handset
 	// pad; see SendKey.
 	pad keypad.Pad
+
+	// options and archiveIdentity are what a checkpoint is taken against: the
+	// policy the session was started under, and the archive it may be loaded
+	// back into. See session_checkpoint.go.
+	options         SessionOptions
+	archiveIdentity [32]byte
 }
 
 // SessionOptions configures a session.
@@ -152,20 +158,8 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			}
 		}
 		if authentication == backend.AuthenticationUnsupported {
-			contract := authenticationNotification(client.module)
-			if contract == nil {
-				contract = authenticationARMNotification(client.module)
-			}
-			if contract != nil {
-				client.notificationNetwork = &notificationNetwork{contract: *contract, identity: client.subscriberNumber}
-				authentication = backend.AuthenticationLGTNotification
-			}
-		}
-		if authentication == backend.AuthenticationUnsupported {
-			model, _ := client.systemProperty("PHONEMODEL")
-			if network := newAuthenticationHandshakeNetwork(authenticationHandshake(client.module), archive, client.subscriberNumber, model); network != nil {
-				client.notificationNetwork = network
-				authentication = backend.AuthenticationLGTHandshake
+			if network, status := client.recognizedNetwork(archive, false); network != nil {
+				client.notificationNetwork, authentication = network, status
 			}
 		}
 
@@ -176,10 +170,8 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			}
 		}
 		if authentication == backend.AuthenticationUnsupported && embeddedCertificate == nil {
-			model, _ := client.systemProperty("PHONEMODEL")
-			if network := newCertificateMessageNetwork(archive, client.subscriberNumber, model); network != nil {
-				client.notificationNetwork = network
-				authentication = backend.AuthenticationLGTCertificateMessage
+			if network, status := client.recognizedNetwork(archive, true); network != nil {
+				client.notificationNetwork, authentication = network, status
 			}
 		}
 
@@ -216,7 +208,38 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if tick <= 0 {
 		tick = defaultTick
 	}
-	return &Session{client: client, archive: archive, tick: tick, speed: backend.ClampSpeed(options.Speed), authentication: authentication}, nil
+	return &Session{client: client, archive: archive, tick: tick, speed: backend.ClampSpeed(options.Speed), authentication: authentication,
+		options: options, archiveIdentity: backend.SaveIdentity(data)}, nil
+}
+
+// recognizedNetwork answers the bounded local service this module's own code
+// is recognised as a client of, and the policy that names it. The two exchanges
+// a module can be matched against by its code come first; the certificate
+// message is the one that is matched by the archive instead, and it is asked
+// for separately because a module with an embedded certificate takes that path
+// and never reaches it.
+//
+// Nothing here reads or writes a save, so a restored session asks the same
+// question and gets the same service.
+func (client *Client) recognizedNetwork(archive *Archive, message bool) (*notificationNetwork, backend.AuthenticationStatus) {
+	model, _ := client.systemProperty("PHONEMODEL")
+	if message {
+		if network := newCertificateMessageNetwork(archive, client.subscriberNumber, model); network != nil {
+			return network, backend.AuthenticationLGTCertificateMessage
+		}
+		return nil, backend.AuthenticationUnsupported
+	}
+	contract := authenticationNotification(client.module)
+	if contract == nil {
+		contract = authenticationARMNotification(client.module)
+	}
+	if contract != nil {
+		return &notificationNetwork{contract: *contract, identity: client.subscriberNumber}, backend.AuthenticationLGTNotification
+	}
+	if network := newAuthenticationHandshakeNetwork(authenticationHandshake(client.module), archive, client.subscriberNumber, model); network != nil {
+		return network, backend.AuthenticationLGTHandshake
+	}
+	return nil, backend.AuthenticationUnsupported
 }
 
 // Authentication reports the policy selected for this run, independently of

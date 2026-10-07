@@ -32,7 +32,7 @@ the page reads as well.
 | `key` / `pointer` | Deliver supported input in guest coordinates. |
 | `speed` / `scale` | Change execution rate or presentation scaling. |
 | `text` | Open, commit, or cancel a supported native text edit. |
-| `quickSave` / `quickLoad` | Save or restore the current KTF archive's persistent checkpoint. |
+| `quickSave` / `quickLoad` | Save or restore the current KTF or LGT archive's persistent checkpoint. |
 | `cheat` / `report` | Operate diagnostics or write a session report. |
 | `ping` | Check connection liveness independently of guest execution. |
 
@@ -69,11 +69,17 @@ shutdown's ten-second deadline; a runner that has not let go by then is named
 in the log. Once a stop has begun, nothing starts, resumes or parks. Ordinary
 saves and explicit KTF checkpoint slots survive; a later page can choose to
 restore the slot instead of starting over.
+callbacks do not establish that all guest threads and clocks freeze. Stopping
+the server ends retained games. Ordinary saves and explicit checkpoint slots
+survive; a later page can choose to restore the slot instead of starting over.
 
-## KTF checkpoints
+<a id="ktf-checkpoints"></a>
+
+## Checkpoints
 
 The shared session supports KTF Java/AOT, older descriptor modules and native
-packages. The `started` description reports `can_checkpoint`, `has_checkpoint`,
+packages, and LGT Clets and AOT Java titles. SKT sessions report
+`can_checkpoint: false`. The `started` description reports `can_checkpoint`, `has_checkpoint`,
 `restored` and `speed`. A `start` request with `quick_load: true` constructs from
 the archive's slot without running guest startup. The ordinary `resume` command
 still means reconnecting to a retained in-memory session.
@@ -101,6 +107,12 @@ input, text and cheat state before the fresh complete frame. Binary messages kee
 their existing format; the ordered reset and queue ownership establish the boundary.
 The Host releases saved physical input and resumes a paused slot through the
 normal lifecycle. A CLI caller retains saved input and pause until it changes them.
+
+On LGT a key is queued and delivered by the next tick, so the release the Host
+sends for a restored hold reaches the title one tick after the load rather than
+inside it. That platform has no repeat event and no pointer, and its pad rule is
+the platform's own, so a checkpoint carries the Host's held keys and the pad's
+state and nothing else of the three.
 
 Loaded notes resume with their saved channel settings and PCM tails with their
 remaining samples. Oscillator phase, release tails and physical output latency

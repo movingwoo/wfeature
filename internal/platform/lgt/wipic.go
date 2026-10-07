@@ -1,9 +1,11 @@
 package lgt
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/bits"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1335,6 +1337,17 @@ func (client *Client) serviceTimers(ctx context.Context) error {
 			due = append(due, entry)
 		}
 	}
+	// Timers that come due in one tick fire in the order they came due, and
+	// two with the same deadline in the order of their structures. The table
+	// is a map, and firing in whatever order it happened to be walked made the
+	// same run take two different paths: a session and the checkpoint taken
+	// from it have to agree about which callback ran first.
+	slices.SortFunc(due, func(a, b *timer) int {
+		if a.dueAt != b.dueAt {
+			return cmp.Compare(a.dueAt, b.dueAt)
+		}
+		return cmp.Compare(a.structure, b.structure)
+	})
 	for _, entry := range due {
 		entry.armed = false
 	}

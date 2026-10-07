@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/keypad"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/platform/lgt"
 )
 
 var ErrCheckpointUnsupported = errors.New("session: execution checkpoints are unsupported for this platform or variant")
@@ -44,9 +45,17 @@ func ktfNativeOptions(options Options) ktf.NativeSessionOptions {
 		Speed: options.Speed, Logger: options.Logger, Width: options.width(), Height: options.height(), Clock: options.Clock}
 }
 
+func lgtOptions(options Options) lgt.SessionOptions {
+	return lgt.SessionOptions{DisableAuthentication: options.DisableAuthentication, Logger: options.Logger,
+		AudioSink: options.AudioSink, SaveStore: options.SaveStore,
+		Width: options.width(), Height: options.height(), Speed: options.Speed}
+}
+
 // CanCheckpoint reports whether the current execution variant has a codec.
 // Capture can still refuse a busy or unsupported continuation or save store.
-func (s *Session) CanCheckpoint() bool { return s != nil && (s.ktf != nil || s.ktfNative != nil) }
+func (s *Session) CanCheckpoint() bool {
+	return s != nil && (s.ktf != nil || s.ktfNative != nil || s.lgt != nil && s.lgt.CanCheckpoint())
+}
 
 // ArchiveIdentity names the immutable archive a checkpoint must reopen.
 func (s *Session) ArchiveIdentity() [32]byte { return s.archiveIdentity }
@@ -62,6 +71,9 @@ func (s *Session) ResumeCheckpointOutput() {
 	}
 	if s != nil && s.ktfNative != nil {
 		s.ktfNative.ResumeCheckpointOutput()
+	}
+	if s != nil && s.lgt != nil {
+		s.lgt.ResumeCheckpointOutput()
 	}
 }
 
@@ -144,10 +156,13 @@ func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error
 			return err
 		}
 		var guestSpeed float64
-		if s.ktf != nil {
+		switch {
+		case s.ktf != nil:
 			guestSpeed = s.ktf.Speed()
-		} else {
+		case s.ktfNative != nil:
 			guestSpeed = s.ktfNative.Speed()
+		default:
+			guestSpeed = s.lgt.Speed()
 		}
 		if backend.ClampSpeed(s.speed) != guestSpeed {
 			return fmt.Errorf("session checkpoint guest and repeat speeds disagree")
@@ -161,10 +176,13 @@ func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error
 		}
 		var checkpoint backend.Checkpoint
 		var err error
-		if s.ktf != nil {
+		switch {
+		case s.ktf != nil:
 			checkpoint, err = s.ktf.CaptureCheckpointWithSession(ctx, captureShared)
-		} else {
+		case s.ktfNative != nil:
 			checkpoint, err = s.ktfNative.CaptureCheckpointWithSession(ctx, captureShared)
+		default:
+			checkpoint, err = s.lgt.CaptureCheckpointWithSession(ctx, captureShared)
 		}
 		if err != nil {
 			return err
@@ -225,7 +243,13 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	if err != nil {
 		return nil, err
 	}
-	if checkpoint.Variant != backend.CheckpointKTFJava && checkpoint.Variant != backend.CheckpointKTFModule && checkpoint.Variant != backend.CheckpointKTFNative {
+	var platform detect.Platform
+	switch checkpoint.Variant {
+	case backend.CheckpointKTFJava, backend.CheckpointKTFModule, backend.CheckpointKTFNative:
+		platform = detect.KTF
+	case backend.CheckpointLGTClet, backend.CheckpointLGTJava:
+		platform = detect.LGT
+	default:
 		return nil, ErrCheckpointUnsupported
 	}
 	var saved checkpointSessionState
@@ -240,10 +264,10 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	if err != nil {
 		return nil, err
 	}
-	if summary.Platform != string(detect.KTF) {
+	if summary.Platform != string(platform) {
 		return nil, ErrCheckpointUnsupported
 	}
-	restored := &Session{platform: detect.KTF, summary: summary, options: options, archiveIdentity: identity,
+	restored := &Session{platform: platform, summary: summary, options: options, archiveIdentity: identity,
 		speed: saved.Speed, paused: saved.Paused, held: pad, repeat: repeat, heldKeys: slices.Clone(saved.HeldKeys), pointerHeld: saved.Pointer}
 	if options.Clock != nil {
 		restored.now = options.Clock.Now
@@ -253,7 +277,30 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	}
 	// Every shared record was validated before the durable commit. From here
 	// adoption only assigns already constructed state and fresh Host epochs.
-	if checkpoint.Variant == backend.CheckpointKTFNative {
+	if platform == detect.LGT {
+		// This platform has no repeat event and no pointer, and its pad is the
+		// platform's own: none of the three can be held at this layer.
+		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
+			return nil, fmt.Errorf("LGT checkpoint has unsupported pointer or repeat ownership")
+		}
+		prepared, err := lgt.PrepareSessionCheckpoint(archive, checkpoint, lgtOptions(options))
+		if err != nil {
+			return nil, err
+		}
+		defer prepared.Discard()
+		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
+			return nil, fmt.Errorf("session checkpoint guest and repeat speeds disagree")
+		}
+		var old *lgt.Session
+		if previous != nil {
+			if old = previous.lgt; old == nil {
+				return nil, ErrCheckpointUnsupported
+			}
+		}
+		if restored.lgt, err = prepared.Commit(ctx, old); err != nil {
+			return nil, err
+		}
+	} else if checkpoint.Variant == backend.CheckpointKTFNative {
 		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
 			return nil, fmt.Errorf("native checkpoint has unsupported pointer or repeat ownership")
 		}

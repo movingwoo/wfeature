@@ -86,6 +86,23 @@ type javaWorker struct {
 	waitSite     uint32
 	waits        int
 	waitReported bool
+	// waiting is the `Object.wait` this thread is parked inside, when it is in
+	// one: the object whose lock it gave up and how many levels of it. Both are
+	// locals of the call the thread is suspended in, and a checkpoint cannot
+	// reach a local, so they are kept here for as long as the wait lasts.
+	waiting javaWaitRecord
+	// restored is what a thread rebuilt from a checkpoint owes, until its
+	// first slice performs it. A second checkpoint taken before that slice
+	// records the same continuation again rather than a thread that never ran.
+	restored []javaCallState
+}
+
+// javaWaitRecord is what a thread parked in `Object.wait` has to take back
+// before the call returns.
+type javaWaitRecord struct {
+	active bool
+	object uint32
+	depth  int
 }
 
 type javaWorkerEvent struct {
@@ -333,19 +350,7 @@ func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 		grant:     make(chan context.Context),
 		events:    make(chan javaWorkerEvent, 1),
 	}
-	worker.armThread.SetStepBudget(javaThreadSliceSteps)
-	worker.armThread.SetLimitHook(func(context.Context) error {
-		// A thread holding a lock is granted another window rather than
-		// parked, which is what keeps a synchronized body indivisible under a
-		// scheduler that only switches at a park. The renewal count bounds it
-		// so a loop inside one cannot hold the frame for ever.
-		if worker.monitors > 0 && worker.renewals < maxJavaSliceRenewals {
-			worker.renewals++
-			return nil
-		}
-		worker.renewals = 0
-		return worker.park()
-	})
+	client.installJavaWorkerHook(worker)
 	runtime.workers = append(runtime.workers, worker)
 	go client.runJavaWorker(thread, worker)
 	return worker, nil
@@ -650,16 +655,34 @@ func (client *Client) grantJavaSlice(
 }
 
 // StopJavaThreads aborts every guest thread; parked ones wake, fail their run
-// and exit. A Host calls it when it tears the session down.
+// and exit. A Host calls it when it tears the session down, and a load calls
+// it on the session it replaces.
+//
+// **They are ended one at a time, and each is waited for.** A thread unwinds
+// through this client's own bookkeeping on its way out — the pins its platform
+// call took, its call depth, the locks it held — and waking all of them at
+// once had two of them doing that together, and the caller carrying on beside
+// them into a flush and a destroy. Taking them in turn costs nothing, because
+// an unwinding thread runs no guest code, and it means the client is quiet by
+// the time this returns.
 func (client *Client) StopJavaThreads() {
 	if client == nil || client.javaRun == nil || client.javaThreadsStopped {
 		return
 	}
 	client.javaThreadsStopped = true
 	for _, worker := range client.javaRun.workers {
-		if !worker.done {
-			close(worker.grant)
+		if worker.done {
+			continue
 		}
+		// A thread parked inside its own call answers with a last event when
+		// its run ends. One that has not been granted a slice yet — started,
+		// or restored, and still waiting for its first — returns without one.
+		parked := worker.restored == nil && worker.armThread != nil && len(worker.armThread.LiveContexts()) > 1
+		close(worker.grant)
+		if parked {
+			<-worker.events
+		}
+		worker.done = true
 	}
 	client.javaRun.workers = nil
 }
@@ -875,6 +898,8 @@ func (client *Client) waitOnJavaObject(
 		if timeout > 0 {
 			worker.wakeAt = client.clock.now() + timeout
 		}
+		worker.waiting = javaWaitRecord{active: true, object: object, depth: depth}
+		defer func() { worker.waiting = javaWaitRecord{} }()
 		if err := worker.park(); err != nil {
 			return 0, err
 		}
@@ -889,14 +914,25 @@ func (client *Client) waitOnJavaObject(
 			return 0, err
 		}
 	}
+	return 0, client.finishJavaWait(ctx, worker, object, depth)
+}
+
+// finishJavaWait is the half of a wait that runs once the turn comes back:
+// take the lock again, at the depth it was given up from. It is separate
+// because a restored thread runs only this half — its park was taken before
+// the checkpoint and the half above it is not run twice. See
+// checkpoint_worker.go.
+func (client *Client) finishJavaWait(
+	ctx context.Context, worker *javaWorker, object uint32, depth int,
+) error {
 	if err := client.javaMonitorEnter(ctx, object); err != nil {
-		return 0, err
+		return err
 	}
-	if retaken := runtime.monitors[object]; retaken != nil {
+	if retaken := client.javaRuntimeState().monitors[object]; retaken != nil {
 		retaken.count = depth
 		client.holdJavaMonitor(worker, depth-1)
 	}
-	return 0, nil
+	return nil
 }
 
 // runOtherJavaWorkers gives each live guest thread one slice. It is what the
