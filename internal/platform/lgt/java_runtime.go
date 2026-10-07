@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -86,7 +85,7 @@ type javaRuntime struct {
 	// title.
 	singletons map[string]uint32
 	// random is the generator behind each java/util/Random the title built.
-	random map[uint32]*rand.Rand
+	random map[uint32]*guestRandom
 	// streams are the resource streams a title has opened, and images the
 	// surfaces its Image objects stand for. See java_stream.go.
 	streams map[uint32]*javaStream
@@ -191,7 +190,7 @@ func newJavaRuntime() *javaRuntime {
 		strings:     map[uint32]string{},
 		named:       map[string]bool{},
 		singletons:  map[string]uint32{},
-		random:      map[uint32]*rand.Rand{},
+		random:      map[uint32]*guestRandom{},
 		streams:     map[uint32]*javaStream{},
 		images:      map[uint32]uint32{},
 		files:       map[uint32]uint32{},
@@ -274,6 +273,18 @@ func (client *Client) prepareJavaClass(
 			return nil, err
 		}
 	}
+	// **A class is not above itself.** The claim above stops the recursion on
+	// a record that names itself up its own chain, and what it answers the
+	// inner call with is the class being prepared — so without this the chain
+	// closes: a class whose superclass is itself, or two that are each
+	// other's. Every walk up a chain ends at a class with no superclass, and
+	// one of those would never end; a type check and an interface call both
+	// walk one. The link is taken back so the class that is left behind
+	// half-built is at least one that can be walked.
+	if javaChainReaches(class.Super, class) {
+		class.Super = nil
+		return nil, fmt.Errorf("class %s is above itself in its own superclass chain", record.Name)
+	}
 
 	// The class declares its members through the first of its three thunks,
 	// which calls back into the platform with the runs that belong to it.
@@ -296,6 +307,27 @@ func (client *Client) prepareJavaClass(
 			"object", class.Object)
 	}
 	return class, nil
+}
+
+// maxJavaChainDepth bounds a walk up a superclass chain that is looking for a
+// class. It is far past any chain a module holds, and it is why the walk that
+// decides whether a link may be made cannot itself be the walk that never ends.
+const maxJavaChainDepth = 1 << 16
+
+// javaChainReaches reports whether the chain of superclasses that starts at one
+// class passes through another. It follows the links already made, which is
+// what makes the answer worth having before a new one is: **every place that
+// gives a class a superclass asks this first**, so a chain never closes on
+// itself and every other walk can rely on reaching the end. A chain longer than
+// any module's is answered as reaching, which refuses the link.
+func javaChainReaches(from, class *javaRuntimeClass) bool {
+	for steps := 0; from != nil; steps++ {
+		if from == class || steps >= maxJavaChainDepth {
+			return true
+		}
+		from = from.Super
+	}
+	return false
 }
 
 // preparePlatformJavaClass lays out a class the module only ever extends. Its

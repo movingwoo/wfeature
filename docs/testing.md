@@ -245,6 +245,174 @@ The touch route also caught and verified the repair of canceled local-button
 pointerdown suppressing WebKit's generated click. These are browser checks, not
 physical-phone or real-game acceptance for this UI revision.
 
+<a id="lgt-checkpoints"></a>
+
+### LGT checkpoints
+
+LGT quick save/load reuses the envelope, save transaction, slot and Host
+commands above; what is new is the platform record and the guest-thread
+continuation, and those are what the tests below are about.
+
+**The property every test asks for is the same one**: a session restored from a
+checkpoint agrees with the session it was taken from after every tick that
+follows — in the frame it presents, its flush count, its retired instructions
+and its guest clock — and in guest memory and ordinary saves at the end. A
+matching still frame at the moment of the load establishes none of that.
+
+Authored tests in `internal/platform/lgt`:
+
+- `checkpoint_state_test.go` runs the authored Clet with a timer that counts,
+  draws, presents and arms itself again. It covers restoration into a fresh
+  client, a record that survives a round trip unchanged with every table
+  populated, a live load that replaces the saves and cuts the displaced session
+  off from them without closing it, thirty-two malformed records each refused
+  before a save is touched, capture away from a boundary, the two behaviors
+  the feature changed — timer order and the writable-open copy — and the
+  generator, whose sequence is checked against the standard library's for
+  5,000 draws over six seeds and restored at seven points in it.
+- `TestCheckpointAccountsForEveryRuntimeField` lists every field of the client,
+  the Java runtime, a guest thread and the structures they hold, and says for
+  each whether it is recorded, rebuilt, the Host's, fixed at a boundary or a
+  diagnostic. **A field added without a line there fails the test**, which is
+  the only thing that keeps "the checkpoint covers the runtime" true after the
+  next table is added.
+- `checkpoint_worker_test.go` gives the Clet a Java runtime and guest threads
+  whose `run` is assembled in the test, so where a thread is parked is chosen:
+  inside a sleep, behind a contended lock, in a two-level `wait`, at the end of
+  its budget, inside a static initializer and a C-library function call that
+  each outlast a slice, inside an armed try region, and before its first slice.
+  A thread beneath a class declaration thunk is refused by name and restored
+  once it has left it. Thirty Java records that do not add up are refused,
+  each for the reason the case names. A restored session saved again before it
+  runs writes the record it was restored from.
+- Three checks have tables of their own, because what they refuse is what a
+  panic boundary does not contain. `TestCheckpointRefusesAClassChainThatNeverEnds`
+  closes a superclass chain through recorded links and through the name a
+  platform class's superclass is looked up under.
+  `TestCheckpointRefusesAnObjectTheAllocatorDidNotHandOut` gives the
+  collector's table an address, a size and a shared block the allocator never
+  handed out. `TestCheckpointRefusesALayoutThatCannotBeWalked` closes a layout
+  chain through its own classes and through the specification's hierarchy, and
+  states sizes no class has. Each also accepts the well-formed table next to
+  the ones it refuses.
+- `TestCheckpointSurvivesADamagedRecord` changes one or two values anywhere in
+  a valid record — a number to a boundary, a flag, a list's length, an optional
+  part — and requires the result to be refused or to run ten bounded ticks,
+  never to panic or hang. A case that does not return is reported by its seed
+  rather than as a timeout, and every failing seed is listed, not the first.
+  It runs 250 seeded cases per variant as an ordinary gate;
+  `WFEATURE_LGT_CHECKPOINT_DAMAGE=100000` ran 200,000 on 2026-10-02 with no
+  failure, of which about 45% were accepted. **The same count has to be run
+  again whenever the record changes shape**, because a seed then names a
+  different change: a run after the generator's state was reworked found the
+  one case earlier runs had not, a dial marked as accepted by a local service
+  in a record that had no such service, which is now refused.
+  The test changes values, not relationships, so a record in which two tables
+  disagree is beyond it; those are what the three table tests above are for.
+- `TestCheckpointRestoresJavaThreadsInAnotherProcess` restores the Java
+  fixture's parked threads in a second process and compares what they counted,
+  the instruction total, the guest clock and the memory image six ticks later.
+
+Host tests use `testfixture.LGTCheckpointArchive`, a Clet authored in ARM words
+that starts through the ordinary loader. `internal/session/checkpoint_lgt_test.go`
+covers held input, pause, speed, the continuation and refusals through the
+shared API, and a slot restored by another process. `internal/webhost` runs the
+same WebSocket subprocess route the KTF fixtures do (`TestCheckpointLGTServerSubprocess`),
+and `cmd/cli` runs live `quicksave`/`quickload` commands and a `-quickload`
+restart (`TestCheckpointLGTCLIProcess`).
+
+**Local archives.** The opt-in probe runs every archive in the two local LGT
+directories, takes a checkpoint, restores it into a second session with saves
+of its own and ticks both, sending the same keys to each:
+
+```sh
+WFEATURE_LGT_CHECKPOINT=1 go test -run TestLocalLGTCheckpointsContinueIdentically -v ./internal/platform/lgt
+```
+
+`WFEATURE_LGT_CHECKPOINT_WARM` and `_ROUNDS` set the tick the checkpoint is
+taken at and how long the two are compared; `_MATCH` and `_DIR` narrow the set.
+`WFEATURE_LGT_CHECKPOINT_SWEEP=1` instead takes a checkpoint after every round
+and prepares a session from each, which is what finds a boundary that is
+refused.
+
+On 2026-10-02 the two directories held 130 archives: 105 Clets, 23 AOT Java
+titles, and two files no LGT loader claims. A title whose first run only
+installs itself is started again over the saves that run left.
+
+| run | Clets | Java titles |
+| --- | ---: | ---: |
+| checkpoint at tick 150, compared for 100 | 105 of 105 identical | 21 identical, 2 ended together |
+| checkpoint at tick 300, compared for 200 | 105 of 105 identical | 21 of 21 identical |
+| checkpoint at tick 400, compared for 250 | 105 of 105 identical | 21 of 21 identical |
+| a checkpoint at each of 260 boundaries from tick 20 | none refused | none refused while running |
+
+The two Java archives missing from the later rows are one title packaged twice;
+the probe's keys take it to its own exit before tick 300, and after that a
+checkpoint is refused because the title has ended. No other boundary was
+refused. An earlier inventory over 300 ticks found every guest thread at every
+boundary one call deep: in `Thread.sleep` (19 titles, two of them at times
+holding a lock), `Object.wait` (3 titles without a deadline and 1 with),
+`Thread.yield` (5), or waiting for a first slice. Nothing in the library was seen parked at
+its budget, inside an initializer or behind a contended lock at a boundary;
+those are covered by the authored threads above and by nothing else.
+
+**Another process.** For 128 of the 130 files, `run -ticks 500` and
+`run -ticks 300 -quicksave` followed by `run -quickload -ticks 200` in a new
+process end on the same screen digest. The other two are the files no loader
+claims. Slots were 0.82 to 6.3 MB at tick 300, median 1.96 MB.
+
+**Gameplay.** Two archives were driven by local routes into play — `a947f46eebb2`,
+a Clet, 1,790 ticks to a field scene, and `735a579d82ac`, an AOT Java title,
+5,915 ticks to an in-game dialogue. A fixed sequence of six key taps over 170
+ticks then gives the same per-command screen digests and flush counts in an
+uninterrupted run, in a fresh process started with `-quickload`, and after a
+live `quickload` that follows other input. Thirteen and seven distinct pictures
+occur in the sequence. Both pass with a debug binary saving and a release
+binary loading, and the reverse. Slots were 3.7 MB and 10.7 MB.
+
+**Browser.** Chromium and WebKit at 390 px with touch, against the release and
+the debug server, used the page's own picker and keypad: quick save and quick
+load were assigned to cells, the authored Clet's startup word returned to its
+saved value after a live load while its frame counter kept running, a slot with
+one byte changed was refused inline and loaded on retry, and the slot loaded
+after a real server restart and ordinary startup. A real Clet (`3cc7a9b4cb15`)
+and a real Java title (`a30bbe008b5e`) were then saved, loaded live and loaded
+again after a restart, each answered with fresh frames. All four pairs of
+engine and profile passed. Neither browser reported a page error from the page;
+WebKit reported the game-list request that the script's own reload cut off, in
+two of three release runs, and that is counted apart. Both real titles were on a
+notice screen, so that part establishes the controls and the transport, not
+gameplay; the route runs above are the gameplay evidence.
+
+**Cost while running.** What the work adds to a tick is the order timers fire
+in and a generator that keeps its own state; everything else runs at a save or
+a load. `TestLGTLoadCostProbe` was built from `4ae66a7` and from this work and
+run over the two gameplay routes above, 2,400 and 6,400 ticks, as six
+alternating pairs on one Go CPU with nothing else running. Both binaries
+retired the same number of instructions on each route, 3,420,023,111 and
+487,333,258. The median of the six per-pair ratios, this work over `4ae66a7`,
+was 0.996 for the Clet, with pairs from 0.994 to 1.006, and 1.008 for the Java
+title, with pairs from 0.998 to 1.013. Two earlier runs on a less quiet machine
+gave 0.995 and 0.998 for the Clet and 1.005 twice for the Java title.
+
+The Clet is inside the noise. The Java route was above one each time, by under
+one percent, so that was looked at rather than rounded away: in a CPU profile
+of the route in both binaries, neither the generator nor the timer ordering is
+among the functions that take half a percent of the time or more. Neither can
+account for the difference. An effect of that size is what the placement of
+code in a rebuilt binary produces, and this comparison cannot separate that
+from a cost; it does bound whichever it is at about one percent.
+
+**Gates.** On the final tree `make test` (including the 280 Node tests),
+`make test-debug`, `go test -race ./internal/...`, `go vet ./...`, `gofmt` and
+`git diff --check` pass, and the CLI and the server build without cgo for
+`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` and
+`windows/amd64`.
+
+These are bounded routes over one local library on macOS. They are not a
+physical phone, a listening test, or every title's every scene. Audio state is
+restored through the shared output record and was not listened to.
+
 ### Checkpoint adoption blocker
 
 A controlled concurrent read exposed a save-generation defect on 2026-10-01.
@@ -337,6 +505,17 @@ The alternate LGT graphics context layout remains unconfirmed. The later
 establishes tag-2 word results in the environment; other tags and wide
 environment returns remain unconfirmed. The earlier runtime-boundary change
 itself did not include new real-game, physical-device, or browser acceptance.
+
+An LGT module states what each of its classes extends, and can state a chain
+that comes back to itself. `java_class_chain_test.go` plants such records in
+guest memory — a class over itself, two over each other, and a class registered
+under the root of the platform's hierarchy above a platform class — and
+requires preparation to fail with the class named, the type check to return,
+and every chain left behind to end. The layout's check by name has a table of
+shapes it accepts and refuses, each then walked. Before the 2026-10-02 fix the
+first two prepared without error and the type check did not return. One more
+test requires the specification's hierarchy table to end, which several walks
+rely on and nothing else checks.
 
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.

@@ -213,6 +213,34 @@ func (layout *javaLayout) vtableSize(name string) uint32 {
 	return class.VTableSize
 }
 
+// chainReaches reports whether the chain of superclasses that starts at one
+// name passes through another. It goes up the way the walks here do — through
+// the classes that are laid out and, past those, through the specification's
+// hierarchy, which is what vtableSize fills in for a name it has not met.
+//
+// **A class is laid out only if its superclass's chain does not reach it.**
+// A module states what each of its classes extends, and one that states a
+// class above itself would have findVirtual go round for ever the next time a
+// class beneath it was laid out or prepared. vtableSize goes up the same
+// chains by recursion; it runs over a layout that has none of the module's
+// classes in it yet, and a layout restored from a checkpoint is held to this
+// rule as well. A walk visits each laid-out class and each name of the
+// specification's hierarchy at most once, so one that outlasts them all has
+// found a chain that was already closed, and is answered as reaching.
+func (layout *javaLayout) chainReaches(from, name string) bool {
+	for steps := 0; from != ""; steps++ {
+		if from == name || steps > len(layout.classes)+len(javaPlatformSupers)+4 {
+			return true
+		}
+		if class, laid := layout.classes[from]; laid {
+			from = class.Super
+		} else {
+			from = javaPlatformSuper(from)
+		}
+	}
+	return false
+}
+
 // findVirtual walks a class's superclasses for a name and descriptor, which is
 // how an override finds the slot it has to share.
 func (layout *javaLayout) findVirtual(name, key string) (uint32, bool) {
@@ -507,6 +535,9 @@ func (layout *javaLayout) layoutApplicationClass(
 	super := record.Super
 	if record.SuperName != "" {
 		super = record.SuperName
+	}
+	if layout.chainReaches(super, record.Name) {
+		return answers, fmt.Errorf("class %s is above itself in its own superclass chain", record.Name)
 	}
 	class := &javaLayoutClass{
 		Name: record.Name, Super: super, InstanceSize: uint32(record.InstanceSize),

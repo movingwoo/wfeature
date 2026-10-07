@@ -3,7 +3,6 @@ package lgt
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -807,7 +806,7 @@ func indexByte(block []byte, value byte) int {
 // clock rather than the wall clock, so a run that batches ticks reseeds the
 // same way a run on the wall clock does.
 func (client *Client) seedCRandom(seed int64) {
-	client.cRandom = rand.New(rand.NewSource(seed))
+	client.cRandom = newGuestRandom(seed)
 }
 
 // cRandomValue answers `rand`. A title that never called `srand` still gets a
