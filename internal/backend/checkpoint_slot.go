@@ -19,12 +19,19 @@ import (
 // it is reported as present, refused when it is loaded, and left for its owner.
 // A new quick save is written beside it under the current name, so no build
 // overwrites another format's slot.
+//
+// The owner directory may be a link to saves kept elsewhere. A slot is a file
+// in the reserved directory beside the link, named after it, and a quick save
+// or a quick load reaches the saves themselves only through ordinary reads and
+// writes, which follow the link; nothing here renames or stages the owner
+// directory. So a linked root is followed like any other. The reserved
+// directories themselves must still be real directories.
 func (store *DirectorySaveStore) checkpointDirectory(create bool) (string, bool, error) {
 	paths, err := replacementPaths(store.root)
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := existingSaveDirectory(paths.root); err != nil {
+	if _, err := ownerSaveDirectory(paths.root); err != nil {
 		return "", false, err
 	}
 	if create {

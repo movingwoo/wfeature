@@ -152,10 +152,11 @@ func prepareSaveDirectory(paths saveReplacementPaths) error {
 // and ordinary paths, where a link is followed rather than refused. A person
 // may keep one game's saves elsewhere and leave a link in its place; every
 // ordinary file operation goes through that link, as it did before the lock
-// existed. Replacing a whole generation renames the directory itself, which a
-// link does not survive, so that path and its recovery keep the stricter
-// check. A link that leads nowhere reads as a directory that is not there yet,
-// and the file operation that follows says what is wrong with it.
+// existed, and so do checkpoint slots, which live beside the link. Settling a
+// replacement an earlier build left renames the directory itself, which a link
+// does not survive, so that path keeps the stricter check. A link that leads
+// nowhere reads as a directory that is not there yet, and the file operation
+// that follows says what is wrong with it.
 func ownerSaveDirectory(path string) (bool, error) {
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {

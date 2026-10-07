@@ -525,9 +525,11 @@ refused.
 
 A per-game owner directory may itself be a symbolic link. Ordinary reads,
 writes, batches, listing, export, import and the claim go through it, as they
-did before the lock existed. Checkpoint slots still refuse a linked root, and
-so does settling a replacement an earlier build left half done, because that
-renames the directory itself.
+did before the lock existed. So do quick save and quick load: a slot is a file
+in the reserved directory beside the link, named after it, and a step reaches
+the saves only through ordinary reads and writes. Settling a replacement an
+earlier build left half done still refuses a linked root, because that renames
+the directory itself, and so do generation snapshots.
 
 An earlier build's quick load replaced the whole save folder: it staged the
 full set, verified it, recorded an intent, moved the live directory to

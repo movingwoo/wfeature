@@ -691,6 +691,16 @@ bytes before and after the change for all twenty. A probe build that reported
 the path showed two of them delete a database they held and open it again, and
 take the kept store at that open.
 
+**A linked save folder, 2026-10-07.** `TestCheckpointSlotBesideALinkedOwner`
+stores and loads a slot over an owner directory that is a link, and requires
+the slot to be in the reserved directory beside the link, the link to stay a
+link and the directory it leads to to hold the saves alone.
+`TestQuickSaveAndLoadOnALinkedSaveFolder` runs the scenario through the web
+host's runner on both host titles: quick save, save in the game, quick load,
+and the folder the link leads to is byte-identical across the load and is what
+the restored game reads. On the tree before the change both fail: the quick
+save is refused with "save replacement path is not a directory".
+
 **Real titles through the scenario, 2026-10-03.** No input script takes a real
 title to its save menu, so the save made in the game is one the title makes by
 itself. `run -serve` ran each archive in rounds of twenty ticks, with the fire
