@@ -15,8 +15,8 @@ var ErrSaveDirectoryBusy = errors.New("save directory is in use by another sessi
 // ClaimSaveDirectory excludes competing game sessions and save imports for
 // their entire lifetime. Reads take only the shorter transaction lock. Hosts
 // retain this claim while a game is parked and release it after closing the
-// runtime, including any final guest writes. Where the location cannot hold a
-// file lock the claim excludes this process alone; see acquireSaveLock.
+// runtime, including any final guest writes. If every location refuses a file
+// lock, the claim excludes this process alone; see acquireSaveLock.
 func ClaimSaveDirectory(root string) (release func(), err error) {
 	return acquireSaveLock(root, "session", false)
 }
@@ -29,17 +29,20 @@ func lockSaveTree(root string) (func(), error) {
 	return acquireSaveLock(root, "lock", true)
 }
 
-// Every lock is taken twice: in this process's own registry, keyed by the
-// absolute root, and then as a kernel lock on a file in the reserved sibling
-// directory. The kernel lock is what reaches another process, and it needs a
-// location that can be written and a file system that has locks to give. A
+// Every lock enters this process's registry under the resolved owner path,
+// then takes a kernel lock beside that owner. Linked owners also retain the
+// lock beside their original spelling for earlier processes and journals.
+// Slots and recovery paths continue to use the original spelling. The kernel
+// lock is what reaches another process, and it needs a location that can be
+// written and a file system that has locks to give. A
 // save tree does not always offer that — a read-only folder, a share without
 // lock support — and the releases before this lock ran there on one mutex per
-// store object. So a location that cannot hold the kernel lock keeps the
-// registry alone: stronger than that mutex was, since it covers every store
-// object on the root, and weaker than the lock, since another process is no
-// longer kept out. The registry is taken first either way, so callers in one
-// process exclude each other identically whichever answer the location gives.
+// store object. Every usable lock is retained when another location refuses
+// one; for example, a linked owner with an unwritable parent still keeps a
+// lock beside its writable target. If none work, the registry alone excludes
+// every store object on the root in this process, but not another process.
+// The registry is taken first either way, so callers in one process exclude
+// each other identically whichever answer the locations give.
 //
 // What falls back is a missing capability and nothing else. A lock somebody
 // holds is contention and is reported as that; a reserved path that is a link
@@ -49,18 +52,32 @@ func acquireSaveLock(root, name string, wait bool) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	leave, err := enterSaveGate(paths.root, name, wait)
+	identity, err := saveLockRoot(paths.root)
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := lockSaveDirectory(paths, name, wait)
+	resolved, err := replacementPaths(identity)
+	if err != nil {
+		return nil, err
+	}
+	leave, err := enterSaveGate(identity, name, wait)
+	if err != nil {
+		return nil, err
+	}
+	locations := []saveReplacementPaths{resolved}
+	if paths.root != resolved.root {
+		locations = append(locations, paths)
+	}
+	unlock, err := lockSaveDirectories(locations, name, wait)
 	if err != nil {
 		if !saveLockUnavailable(err) {
 			leave()
 			return nil, err
 		}
-		recordSaveLockFallback(paths.root, err)
-		unlock = func() {}
+		recordSaveLockFallback(identity, err)
+		if unlock == nil {
+			unlock = func() {}
+		}
 	}
 	var released sync.Once
 	return func() {
@@ -71,45 +88,161 @@ func acquireSaveLock(root, name string, wait bool) (func(), error) {
 	}, nil
 }
 
-// lockSaveDirectory takes the kernel lock on one file of the reserved
-// directory, creating both on first use.
-func lockSaveDirectory(paths saveReplacementPaths, name string, wait bool) (func(), error) {
-	if err := prepareSaveDirectory(paths); err != nil {
-		return nil, err
+// saveLockRoot resolves links even when the owner or a parent has not been
+// created yet. Resolving the nearest existing ancestor keeps a claim's identity
+// unchanged when the first save creates the directory. A dangling link still
+// names its target; neither the link nor the missing owner is created here.
+func saveLockRoot(root string) (string, error) {
+	trimSeparators := func(path string) string {
+		minimum := len(filepath.VolumeName(path)) + 1
+		for len(path) > minimum && os.IsPathSeparator(path[len(path)-1]) {
+			path = path[:len(path)-1]
+		}
+		return path
 	}
+	path, suffix := root, ""
+	for links := 0; ; {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			return filepath.Join(resolved, suffix), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			if saveLockUnavailable(err) {
+				// An unreadable prefix cannot be resolved. Ordinary access
+				// retains its existing error and process-only fallback.
+				return root, nil
+			}
+			return "", err
+		}
+		if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			if links++; links > 255 {
+				return "", fmt.Errorf("save lock root has too many symbolic links")
+			}
+			target, err := os.Readlink(path)
+			if err != nil {
+				return "", err
+			}
+			if !filepath.IsAbs(target) {
+				// Do not clean the target before following its links: in
+				// "jump/../owner", jump may lead to another parent entirely.
+				directory, _ := filepath.Split(path)
+				target = directory + target
+			}
+			path = trimSeparators(target)
+			continue
+		}
+		parent, base := filepath.Split(path)
+		parent = trimSeparators(parent)
+		if parent == path {
+			return "", err
+		}
+		suffix = filepath.Join(base, suffix)
+		path = parent
+	}
+}
+
+// Always take the resolved owner's lock before the caller's legacy lock.
+// Parent links, case aliases and Unicode aliases may name the same lock file;
+// compare opened identities before locking so those never lock themselves.
+func lockSaveDirectories(paths []saveReplacementPaths, name string, wait bool) (release func(), err error) {
+	var files []*os.File
+	var identities []fs.FileInfo
+	var locked []bool
+	closeFiles := func() {
+		for i := len(files) - 1; i >= 0; i-- {
+			if locked[i] {
+				unlockSaveFile(files[i])
+			}
+			_ = files[i].Close()
+		}
+	}
+	defer func() {
+		if err != nil && release == nil {
+			closeFiles()
+		}
+	}()
+	var unavailable error
+	for _, location := range paths {
+		if err := prepareSaveDirectory(location); err != nil {
+			if !saveLockUnavailable(err) {
+				return nil, err
+			}
+			if unavailable == nil {
+				unavailable = err
+			}
+			continue
+		}
+		file, info, err := openSaveLockFile(location, name)
+		if err != nil {
+			if !saveLockUnavailable(err) {
+				return nil, err
+			}
+			if unavailable == nil {
+				unavailable = err
+			}
+			continue
+		}
+		duplicate := false
+		for _, previous := range identities {
+			duplicate = duplicate || os.SameFile(previous, info)
+		}
+		if duplicate {
+			_ = file.Close()
+		} else {
+			files = append(files, file)
+			identities = append(identities, info)
+			locked = append(locked, false)
+		}
+	}
+	// Inspect both reserved locations before falling back: a permission error
+	// at one must never hide a tampered path at the other. Keep the original
+	// error so callers can also use the legacy os.IsPermission predicate.
+	// A linked owner's unavailable legacy location must not discard a usable
+	// target lock, or another process could enter through the target path.
+	for i, file := range files {
+		if err := saveFileLock(file, wait); err != nil {
+			if saveLockUnavailable(err) {
+				if unavailable == nil {
+					unavailable = err
+				}
+				continue
+			}
+			return nil, fmt.Errorf("lock save directory: %w", err)
+		}
+		locked[i] = true
+	}
+	return closeFiles, unavailable
+}
+
+// openSaveLockFile creates or opens one regular lock file without following
+// links inside the reserved directory.
+func openSaveLockFile(paths saveReplacementPaths, name string) (*os.File, fs.FileInfo, error) {
 	directory, err := os.OpenRoot(paths.directory)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer directory.Close()
 	info, err := directory.Lstat(name)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
+		return nil, nil, err
 	}
 	if err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("save lock is not a regular file")
+		return nil, nil, fmt.Errorf("save lock is not a regular file")
 	}
 	file, err := directory.OpenFile(name, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	actual, err := file.Stat()
 	if err != nil {
 		file.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if !actual.Mode().IsRegular() || info != nil && !os.SameFile(info, actual) {
 		file.Close()
-		return nil, fmt.Errorf("save lock changed while opening")
+		return nil, nil, fmt.Errorf("save lock changed while opening")
 	}
-	if err := saveFileLock(file, wait); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("lock save directory: %w", err)
-	}
-	return func() {
-		unlockSaveFile(file)
-		_ = file.Close()
-	}, nil
+	return file, actual, nil
 }
 
 // The two calls a location can refuse: making the reserved directory, and the
@@ -234,8 +367,9 @@ func saveLockUnavailable(err error) bool {
 	return false
 }
 
-// saveLockFallback is why one root has only the registry, and whether a Host
-// has said so yet.
+// saveLockFallback records why one of a root's locations could not hold a
+// kernel lock, and whether a Host has reported it. Other locations may still
+// hold locks.
 type saveLockFallback struct {
 	cause    error
 	reported bool
@@ -256,24 +390,30 @@ func recordSaveLockFallback(root string, cause error) {
 	}
 }
 
-// SaveLockFallback reports whether this process has excluded writers of a save
-// root only among its own goroutines, and the failure that showed the location
-// cannot hold the file lock. Other processes are not kept out of such a root.
+// SaveLockFallback reports whether any lock location for a save root was
+// unavailable, and its first failure. Usable locks are retained, but exclusion
+// cannot be promised for every alias or earlier process; with no usable lock,
+// only this process's goroutines are kept out.
 func SaveLockFallback(root string) (cause error, fallback bool) {
 	paths, err := replacementPaths(root)
 	if err != nil {
 		return nil, false
 	}
+	identity, err := saveLockRoot(paths.root)
+	if err != nil {
+		return nil, false
+	}
 	saveLockFallbacks.mutex.Lock()
 	defer saveLockFallbacks.mutex.Unlock()
-	if record := saveLockFallbacks.roots[paths.root]; record != nil {
+	if record := saveLockFallbacks.roots[identity]; record != nil {
 		return record.cause, true
 	}
 	return nil, false
 }
 
-// WarnSaveLockFallback says in a Host's log that a save root has no file lock,
-// once per root for the life of the process. The directory store has no logger
+// WarnSaveLockFallback warns in a Host's log when a save root could not take
+// every file lock, once per root for the life of the process. The warning is
+// conservative when other aliases retain a usable lock. The store has no logger
 // of its own and does not print, so each Host calls this where it takes the
 // directory: the server when it claims, the CLI when it starts.
 func WarnSaveLockFallback(logger *slog.Logger, root string) {
@@ -281,8 +421,12 @@ func WarnSaveLockFallback(logger *slog.Logger, root string) {
 	if logger == nil || err != nil {
 		return
 	}
+	identity, err := saveLockRoot(paths.root)
+	if err != nil {
+		return
+	}
 	saveLockFallbacks.mutex.Lock()
-	record := saveLockFallbacks.roots[paths.root]
+	record := saveLockFallbacks.roots[identity]
 	first := record != nil && !record.reported
 	if first {
 		record.reported = true

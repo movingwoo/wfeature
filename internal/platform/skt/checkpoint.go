@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -90,12 +91,60 @@ func (saved javaCheckpointState) validate() error {
 		saved.Frame.Width != w || saved.Frame.Height != h || saved.Presents == 0 && len(saved.Frame.RGBA) != 0 || saved.Presents != 0 && len(saved.Frame.RGBA) != length {
 		return fmt.Errorf("SKT checkpoint has invalid settings, clock or presentation")
 	}
-	for _, sound := range saved.Audio.Sounds {
-		if sound.StartedAt < 0 || sound.StartedAt > saved.Elapsed {
-			return fmt.Errorf("SKT checkpoint audio origin exceeds guest clock")
-		}
+	if err := validateCheckpointAudio(saved.Audio, saved.Elapsed); err != nil {
+		return err
 	}
 	return saved.Vibration.Validate()
+}
+
+// Audio advances each elapsed repeat cycle. A checksum-valid slot must also
+// bound the work its first tick can cause, for both Java and SGS sessions.
+func validateCheckpointAudio(audio backend.AudioState, elapsed time.Duration) error {
+	const maxPendingAudioEvents = 1 << 20
+	const maxPendingAudioBytes = 128 << 20
+	var work, pendingBytes, noteWork uint64
+	for _, sound := range audio.Sounds {
+		if sound.StartedAt < 0 || sound.StartedAt > elapsed || sound.Length < 0 {
+			return fmt.Errorf("SKT checkpoint sound clock is invalid")
+		}
+		if !sound.Playing {
+			continue
+		}
+		cycles := uint64(1)
+		if sound.Repeat && sound.Length > 0 {
+			cycles += uint64((elapsed - sound.StartedAt) / sound.Length)
+		}
+		if cycles > maxPendingAudioEvents || uint64(len(sound.Events)) > (maxPendingAudioEvents-work)/cycles {
+			return fmt.Errorf("SKT checkpoint audio catchup exceeds limit")
+		}
+		work += cycles * uint64(len(sound.Events))
+		var noteOns, noteOffs uint64
+		for _, event := range sound.Events {
+			// Repeated samples can be volume-scaled and copied for each
+			// emission, even when the event count itself is small.
+			size := 2*uint64(len(event.Wave)) + uint64(len(event.SysEx))
+			if size > (maxPendingAudioBytes-pendingBytes)/cycles {
+				return fmt.Errorf("SKT checkpoint audio catchup exceeds data limit")
+			}
+			pendingBytes += cycles * size
+			switch event.Type {
+			case smaf.EventNoteOn:
+				noteOns++
+			case smaf.EventNoteOff:
+				noteOffs++
+			}
+		}
+		// Each note-off scans the active-note slice. Bound its worst case,
+		// including note-ons accumulated by the pending repeats and one final
+		// pass that may silence those notes when a one-shot ends.
+		notes := uint64(len(sound.ActiveNotes)) + cycles*noteOns
+		visits := 1 + cycles*noteOffs
+		if notes > (maxPendingAudioEvents-noteWork)/visits {
+			return fmt.Errorf("SKT checkpoint audio catchup exceeds note work limit")
+		}
+		noteWork += notes * visits
+	}
+	return nil
 }
 
 // CaptureCheckpointWithSession serializes at one Host/worker barrier. Ordinary

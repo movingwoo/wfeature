@@ -87,6 +87,9 @@ type xFileData struct {
 	// dirty marks a file whose bytes have not reached the Host save store yet;
 	// close and flush are what write them.
 	dirty bool
+	// synced is the last issued save version reflected in this buffer. It is
+	// Host bookkeeping, rebuilt from current saves rather than checkpointed.
+	synced uint64
 }
 
 type xTextFieldData struct {

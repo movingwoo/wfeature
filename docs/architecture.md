@@ -515,15 +515,24 @@ store's advisory OS/filesystem guarantees. This is not a claim of verified
 power-loss durability on every target.
 
 Both the transaction lock and the claim are taken twice: in a registry of this
-process, keyed by the owner root, and as a kernel lock on a file in the reserved
-sibling directory. A location that cannot hold the kernel lock, because the
-reserved directory or the lock file cannot be created there or because the
-filesystem has no locks, keeps the registry alone. That is at least the
+process, keyed by the resolved owner root, and as a kernel lock on a file in the
+reserved sibling directory. Links share the target's identity even before the
+first save creates that directory. A linked owner takes the target's kernel lock
+first and retains the lock beside its original spelling for earlier processes.
+Aliases of the same lock file are locked only once. Slots and recovery journals
+keep their original paths beside the link. If no location can hold a kernel
+lock, because its reserved directory or lock file cannot be created or its
+filesystem has no locks, only the registry remains. That is at least the
 exclusion the releases before the lock had, which was one mutex per store
 object, but another process is no longer kept out, and each Host says so once
 per directory in its log. A lock that somebody holds is contention and never
 falls back, and a reserved path that is a link or not a directory is still
 refused.
+
+If only one of a linked owner's lock locations is unavailable, usable kernel
+locks remain held for the entire operation or claim. The fallback warning still
+reports incomplete exclusion; failure at the legacy location cannot release a
+usable target lock. Permission errors retain their original OS classification.
 
 A per-game owner directory may itself be a symbolic link. Ordinary reads,
 writes, batches, listing, export, import and the claim go through it, as they
@@ -815,8 +824,7 @@ save where it is; the restored game reads the saves as they are then, and what
 it writes afterwards lands on top of them. Nothing is backed up, nothing is
 kept aside, and no second path restores saves: the later write wins.
 
-That is one rule for the five checkpoint variants — KTF Java/AOT, the older KTF
-descriptor module, KTF native packages, LGT Clets and LGT AOT Java — and the CLI
+That is one rule for all supported KTF, LGT and SKT checkpoint variants. The CLI
 and the server reach it through the same `internal/session` calls.
 
 Two things stand between the rule and a runtime, and both steps deal with them
@@ -834,12 +842,19 @@ before the call that made it returns, so it has nothing to store. Nothing the
 game has not issued is written: bytes a title put into a stream and did not
 flush stay in the stream.
 
-On LGT the buffer of an open file is the file as it was when the handle was
-opened plus what was written through it, and storing it stores all of it. When
+On LGT and SKT the buffer of an open file is the file as it was when the handle
+was opened plus what was written through it, and storing it stores all of it. When
 the file has changed since, through another handle or a removal, the host would
 be putting the older part of the buffer over newer content, so the step is
 refused instead and names the file. The title's own close does exactly that
 write and is the title's to make.
+
+The preflight also refuses independently dirty handles sharing one normalized
+key, including an LGT File and DataBase that address the same container. LGT
+preloads any path lists needed by pending writes in an isolated view: a failed
+checkpoint read cannot clear dirty buffers or poison the live session's caches.
+A prior guest read failure blocks a load while issued writes remain pending;
+with none pending, a load can still recover the session.
 
 **The host keeps copies of what a game has open.** An open file's buffer, the
 records behind a database handle, the lists of removed and created names, the

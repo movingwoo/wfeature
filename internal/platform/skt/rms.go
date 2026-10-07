@@ -342,8 +342,8 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		// The version and the modification time the container declares are
 		// read and not used. Handing them to the store would be right for one
 		// session and wrong for every session after it: the save encoding
-		// carries records and nothing else, so the first write — which a plain
-		// close performs — loses them, and getVersion would answer the
+		// carries records and nothing else, so the first mutation loses them,
+		// and getVersion would answer the
 		// container's number once and zero from then on. Answering zero
 		// throughout is at least the same answer every time. Carrying them
 		// properly means a save format that holds more than records, on both
@@ -570,9 +570,33 @@ func (runtime *Runtime) rmsCloseRecordStore(_ *jvm.VM, arguments []jvm.Value) (j
 	}
 	store.mu.Unlock()
 	if closed {
-		runtime.persistStore(store)
+		// Mutations persist immediately. Closing only retries already-issued
+		// writes; an unchanged restored handle must not recreate a deletion.
+		runtime.retryRMSClose(store.name)
 	}
 	return jvm.VoidValue(), nil
+}
+
+func (runtime *Runtime) retryRMSClose(name string) {
+	key, err := recordStoreKey(name)
+	if err != nil {
+		return
+	}
+	runtime.savePendingMu.Lock()
+	defer runtime.savePendingMu.Unlock()
+	boundary := runtime.saveStoreBoundary()
+	if boundary == nil {
+		return
+	}
+	for _, key := range []string{rmsIndexKey, key} {
+		if data, pending := runtime.pendingSaves[key]; pending {
+			if err := boundary.StoreSave(key, data); err == nil {
+				delete(runtime.pendingSaves, key)
+			} else if runtime.logger != nil {
+				runtime.logger.Debug("RMS close retry failed", "name", name, "error", err)
+			}
+		}
+	}
 }
 
 func (runtime *Runtime) rmsCheckOpen(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

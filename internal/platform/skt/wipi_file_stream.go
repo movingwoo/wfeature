@@ -324,7 +324,8 @@ func (runtime *Runtime) persistWIPIFileStream(file *xFileData) error {
 	if err != nil {
 		return err
 	}
-	if err := runtime.storeSave(key, append([]byte(nil), file.data...)); err != nil {
+	file.synced, err = runtime.storeSaveVersion(key, append([]byte(nil), file.data...))
+	if err != nil {
 		return newGuestException(jvm.IOExceptionClass, err.Error())
 	}
 	file.dirty = false

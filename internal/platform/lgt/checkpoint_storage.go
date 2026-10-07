@@ -167,11 +167,64 @@ func (client *Client) issuedWritesBlocked() error {
 		// be stored one over the other, and the host would be choosing which
 		// of the title's writes is lost.
 		key := fileEpochKey(databaseFileName(database.name))
+		if file, shared := dirty[key]; shared {
+			return fmt.Errorf("the open file %s and database %s share one save and both have unstored writes", strconv.Quote(file), strconv.Quote(database.name))
+		}
 		if unsaved[key] {
 			return fmt.Errorf("two objects of the database %s both have an unstored write", strconv.Quote(database.name))
 		}
 		unsaved[key] = true
 	}
+	return nil
+}
+
+// prepareIssuedWriteLists reads the lists storeFile will need before any write
+// is attempted. A checkpoint's failed read must not install an empty list or
+// a sticky read error in the live session. Existing lists are only inspected;
+// newly read lists are adopted together after both reads succeed.
+func (client *Client) prepareIssuedWriteLists() error {
+	pending := client.removedUnsaved || client.createdUnsaved
+	needRemoved, needCreated := false, false
+	needsFile := func(name string) {
+		pending, needRemoved = true, true
+		if _, packaged := client.archive.Resource(name); !packaged {
+			needCreated = true
+		}
+	}
+	for _, file := range client.files {
+		if file != nil && file.dirty {
+			needsFile(file.name)
+		}
+	}
+	if client.javaRun != nil {
+		for _, database := range client.javaRun.databases {
+			if database == nil || !database.unsaved {
+				continue
+			}
+			name := databaseFileName(database.name)
+			if database.closed && database.synced != client.fileEpoch(name) {
+				continue
+			}
+			needsFile(name)
+		}
+	}
+	if !pending {
+		return nil
+	}
+	if client.saveReadError != nil {
+		return client.saveReadError
+	}
+	view := &Client{saveStore: client.saveStore, removed: client.removed, created: client.created}
+	if needRemoved {
+		view.removedFiles()
+	}
+	if needCreated {
+		view.createdFiles()
+	}
+	if view.saveReadError != nil {
+		return view.saveReadError
+	}
+	client.removed, client.created = view.removed, view.created
 	return nil
 }
 
@@ -186,10 +239,10 @@ func (client *Client) issuedWritesBlocked() error {
 // yet by this platform's own contract, and is left where it is.
 //
 // A session whose writes are held back by a failed save read stores nothing,
-// here as anywhere, and that is not an error: it is the rule that keeps a
-// save that could not be read from being overwritten.
+// here as anywhere. Pending writes refuse the step rather than being lost on
+// a load; a session with none may still recover by loading a checkpoint.
 func (client *Client) storeIssuedWrites() (int, error) {
-	if client.saveStore == nil || client.saveReadError != nil {
+	if client.saveStore == nil {
 		return 0, nil
 	}
 	refused := func(err error) error {
@@ -197,6 +250,12 @@ func (client *Client) storeIssuedWrites() (int, error) {
 	}
 	if err := client.issuedWritesBlocked(); err != nil {
 		return 0, refused(err)
+	}
+	if err := client.prepareIssuedWriteLists(); err != nil {
+		return 0, refused(err)
+	}
+	if client.saveReadError != nil {
+		return 0, nil
 	}
 	stored := 0
 	for _, key := range []string{fileRemovedKey, fileCreatedKey} {

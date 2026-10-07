@@ -1032,6 +1032,23 @@ CLI and webhost checkpoint suites now include both SKT variants. The rendered
 client route is `web/acceptance/checkpoint-skt.mjs`; it builds on the existing
 Playwright acceptance setup. Chromium and WebKit exercise actual keypad
 placement/save/load, restored pixels and input epochs, corrupt-slot feedback,
-and unchanged ordinary save hashes. Real-archive probes remain opt-in through
-`TestLocalSKTCheckpoint`, with separate temporary saves and anonymous digest
+and unchanged ordinary save hashes. It also checks that the first restored
+picture follows the reset and that a later speed change survives page reload,
+including the resumed metadata, control and saved preference. Real-archive probes
+remain opt-in through `TestLocalSKTCheckpoint`, with separate temporary saves and anonymous digest
 labels. No local game data is bundled in these tests.
+
+The [2026-10-07 review](quicksave-review-2026-10-07.md) records eight reproduced
+defects and their follow-up fixes. Maintained regressions now cover:
+
+- SKT stale or independently dirty file aliases, deletion, failed writes and
+  opens before pending writes reach disk; refusal preserves every buffer and
+  occurs before any checkpoint flush.
+- LGT File/DataBase collisions and unreadable path lists; refusal preserves
+  issued writes and the live Clet remains usable after a checkpoint read fault.
+- SKT RMS close after a later deletion, actual subsequent record mutations and
+  retrying failed writes on close.
+- Linked and real owner paths contending for claims and transactions in one or
+  separate processes, including process-only fallback and missing owner creation.
+- Java/SGS audio catchup limits, late reset arrival at the writer boundary and
+  current speed on both attached and parked session resumes.
