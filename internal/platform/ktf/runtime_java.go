@@ -2539,10 +2539,10 @@ func (runtime *initializationRuntime) resolveJavaDatabase(name string, recordSiz
 	return nil, storageAbsent, nil
 }
 
-// bindDetachedDatabase puts a store a quick load left without a database back
-// under its name once a write through it has been stored: the database exists
-// again, and this store is the one that holds it. For any other store it does
-// nothing.
+// bindDetachedDatabase puts a store left without a database — by a quick load,
+// or by a delete while an object held it — back under its name once a write
+// through it has been stored: the database exists again, and this store is
+// the one that holds it. For any other store it does nothing.
 func (runtime *initializationRuntime) bindDetachedDatabase(store *runtimeDataBaseStore) {
 	if runtime.detachedDatabases[store.name] != store {
 		return
@@ -2589,9 +2589,10 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 			runtime.countDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
 		}
-		// A store a quick load left without a database is the store of this
-		// name, so the open takes it rather than making a second one: the
-		// objects that kept it and this one share what is written from here.
+		// A store left without a database, by a quick load or by a delete,
+		// is the store of this name, so the open takes it rather than making
+		// a second one: the objects that kept it and this one share what is
+		// written from here.
 		store = runtime.detachedDatabases[name]
 		if store == nil {
 			store = &runtimeDataBaseStore{name: name}

@@ -117,6 +117,13 @@ What is particular to this platform:
   one name share it. A name the store has nothing for keeps its restored store
   empty and findable by name, so that the next open, create, rename or write of
   that name takes the same store rather than making a second one.
+- A Java database the title deletes while a `DataBase` object holds it is kept
+  the same way in a running session: the next open of the name takes the
+  store that object holds, and a write through the object makes the database
+  again under that store. An open used to make a second store, and the two
+  wrote their own record lists over each other's save. The WIPI C record
+  table closes a deleted database's handles instead, so it has nothing to
+  keep.
 - `FileSystem.list` and `DataBase.listDataBases` answer the packaged names plus
   the names this run knew, and do not read the disk. After a load they describe
   the run the checkpoint was taken in.

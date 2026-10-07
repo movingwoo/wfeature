@@ -312,8 +312,10 @@ type initializationRuntime struct {
 	// store now. Such a store is empty and out of its catalog, so a question
 	// about the name is answered from the store, and it is kept here by name
 	// so that the name still has one host store: the next open, rename or
-	// write of it takes this one. They are empty in a session that has not
-	// been loaded into. See storage_rebind.go.
+	// write of it takes this one. See storage_rebind.go. A Java database the
+	// title deleted while an object held it is kept in its table the same
+	// way (runtimeDataBaseDeleteStore); the other two are empty in a session
+	// that has not been loaded into.
 	detachedDatabases       map[string]*runtimeDataBaseStore
 	detachedCFiles          map[string]*runtimeCFile
 	detachedRecordDatabases map[string]*runtimeRecordDatabase
