@@ -70,7 +70,19 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 				t.Fatal(err)
 			}
 			freshClock := NewManualClock(time.Unix(1900000000, 0))
+			// A slot carries no save. The restored session gets a copy of what
+			// the source's store held at the boundary: the same disk, seen by
+			// another process.
 			freshStore := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+			boundary, err := store.SnapshotSaves()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range boundary {
+				if err := freshStore.StoreSave(entry.Key, entry.Data); err != nil {
+					t.Fatal(err)
+				}
+			}
 			options.Clock, options.SaveStore = freshClock, freshStore
 			began = time.Now()
 			prepared, err := PrepareNativeSessionCheckpoint(archive, saved, options)
@@ -78,7 +90,7 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer prepared.Discard()
-			restored, err := prepared.Commit(t.Context(), nil)
+			restored, err := prepared.Commit(t.Context(), nil, freshStore)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,8 +111,19 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(a.Runtime, b.Runtime) || !reflect.DeepEqual(a.Saves, b.Saves) {
-				t.Fatal("continued native state or durable saves differ")
+			if !bytes.Equal(a.Runtime, b.Runtime) {
+				t.Fatal("continued native state differs")
+			}
+			sourceSaves, err := store.SnapshotSaves()
+			if err != nil {
+				t.Fatal(err)
+			}
+			restoredSaves, err := freshStore.SnapshotSaves()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(sourceSaves, restoredSaves) {
+				t.Fatal("continued durable saves differ")
 			}
 			t.Logf("bytes=%d capture=%v restore=%v images=%d files=%d frames=%d steps=%d", len(encoded), captureCost, restoreCost, len(source.platform.images), len(source.platform.files), source.Flushes(), source.Client.Steps())
 		})

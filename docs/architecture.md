@@ -388,10 +388,12 @@ writes a title had issued reach its save files; see
 [retention and control](session.md#retention-and-control).
 
 KTF and LGT quick save/load join the shared session, CLI, server and browser
-controls. The envelope, the save transaction, the slot and the Host commands are
-one implementation; what differs per platform is the runtime record inside the
-envelope and how a parked guest thread is described. The KTF records are below,
-and [the LGT ones](#lgt-checkpoints) follow them.
+controls. The envelope, the slot and the Host commands are one implementation;
+what differs per platform is the runtime record inside the envelope and how a
+parked guest thread is described. A checkpoint is execution state only: it holds
+no ordinary save and a load replaces none, which
+[Quick load and ordinary saves](#quick-load-and-ordinary-saves) states in full.
+The KTF records are below, and [the LGT ones](#lgt-checkpoints) follow them.
 The [validation record](testing.md) describes authored and local-archive coverage.
 The ARM core can record parked derived calls and resume them in a fresh core;
 the platform supplies each pending supervisor operation's remainder. The KTF
@@ -422,11 +424,12 @@ permissions without reading, allocating, or changing its bytes.
 KTF Graphics records retain their drawing state and target memory view. Image
 records preserve bounds and both premultiplied RGBA and unassociated NRGBA colors,
 including RGB hidden by zero alpha. Images and guest framebuffers retain shared
-mutable transparency masks. Java database handles share their original store and
-catalog binding; a handle retained across deletion and reopening keeps its old
-store separately. Deleted and allocated empty records remain distinct. File and
-stream payloads retain shared bytes and cursors. These heap records join the
-service tables through the client construction path below.
+mutable transparency masks. A Java database handle is recorded as the name it
+was opened under, and a `File` as its name, position, open mode and, for one
+whose open asked for an empty file, the number of bytes it then held. Neither record holds
+save bytes: a load fills both from the save store. Handles of one name share one
+store after a load. These heap records join the service tables through the
+client construction path below.
 
 The heap component also preserves platform object roots, queued callbacks, key
 ownership, events, and pending timer deadlines. Weak image and clip owners remain
@@ -435,10 +438,11 @@ resource cleanup before capture. Separate audio records retain playback and outp
 state. Text editor records preserve the caret, character mode, UTF-16 limit,
 and pending multi-tap cycle. Their relative key time and timer deadlines rebase
 to the destination clock. Hosts must serialize input with capture and adoption.
-The storage component also records C file and record-database catalogs, shared
-open handles, cursors, handle counters, packaged-byte accounting, and deletion
-and directory caches. An unread cache stays distinct from a loaded empty cache.
-These in-memory tables do not replace the durable save files beneath them.
+The storage component records the names in the C file and record-database
+catalogs, the open handles with their cursors, the handle counters, each record
+database's record size, and the names of the files the session wrote. It records
+no file or record bytes and none of the deletion and directory lists: those are
+the saves, and a load reads them from the store again.
 
 Local relay records retain the service phase, identity/slot/label, incomplete
 outgoing frame, unread response bytes, individual close flags, and shared stream
@@ -492,25 +496,21 @@ initial grants, stack reuse, and recapture before and after a restored grant.
 The destination registers native implementations on a fresh VM without preparing
 guest interface tables or recreating the fixture's ARM code and objects. Startup
 and restoration share archive/Host attachment code. Per-run authentication save
-adapters retain their mutable certificate/deletion records and subscriber recovery
-inputs; constructing them does not read or write their supplied base store.
-A backend save-generation component now provides bounded snapshots and an
-isolated memory store. Directory replacement stages the full set and reads it
-back to verify the exact keys and bytes before touching the live or previous
-generation. Filesystem aliases, such as case or Unicode normalization, must not
-silently merge distinct snapshot entries. An incompatible snapshot is refused
-before creating a recovery intent. A verified stage uses that intent before
-moving the original directory and installing the new one.
-The displaced saves remain under the owner's parent in
-`.wfeature-quicksave/owners/<owner>/previous`. One previous
-generation is retained. An interrupted prepared or half-swapped operation rolls
-back on the next ordinary read/write or save-tree export; a completed swap keeps
-the new set. Complete reads, writes, recovery and replacements serialize through
-a kernel file lock outside the swapped tree, across store objects and processes.
-The reserved owner directory keeps the live owner filename so case and Unicode
-aliases share locking and recovery wherever the filesystem aliases those names.
-A separate nonblocking Host claim excludes competing sessions and imports while
-allowing read-only backup. It is retained while a session is parked.
+adapters travel as what they made for the run and never had on disk: an issued
+certificate, a removal made in this run, the subscriber recovery inputs.
+Whatever an adapter derived from a save is derived again from the store when a
+load commits; constructing one for validation reads and writes nothing.
+
+Complete reads, writes and recovery serialize through a kernel file lock in the
+reserved directory beside the owner's folder,
+`.wfeature-quicksave/owners/<owner>/`, across store objects and processes. The
+reserved directory keeps the live owner filename so case and Unicode aliases
+share locking wherever the filesystem aliases those names. A separate
+nonblocking Host claim excludes competing sessions and imports while allowing
+read-only backup, and is retained while a session is parked. File data is
+synced before it is renamed into place; directory syncing retains the existing
+store's advisory OS/filesystem guarantees. This is not a claim of verified
+power-loss durability on every target.
 
 Both the transaction lock and the claim are taken twice: in a registry of this
 process, keyed by the owner root, and as a kernel lock on a file in the reserved
@@ -525,29 +525,35 @@ refused.
 
 A per-game owner directory may itself be a symbolic link. Ordinary reads,
 writes, batches, listing, export, import and the claim go through it, as they
-did before the lock existed. Whole-generation replacement, its recovery,
-generation snapshots and checkpoint slots still refuse a linked root, because
-they rename or stage beside the directory itself.
+did before the lock existed. Checkpoint slots still refuse a linked root, and
+so does settling a replacement an earlier build left half done, because that
+renames the directory itself.
 
-File data is synced before the intent;
-directory syncing retains the existing store's advisory OS/filesystem guarantees.
-This is not a claim of verified power-loss durability on every target.
+An earlier build's quick load replaced the whole save folder: it staged the
+full set, verified it, recorded an intent, moved the live directory to
+`previous` and installed the staged one. **That writer has been removed.** What
+remains is its recovery, which every store operation runs first: a replacement
+that an earlier build left prepared or half-swapped rolls back, and a completed
+one keeps its new set and its `previous`. See
+[Leftovers from earlier builds](#leftovers-from-earlier-builds).
 
-The internal KTF session API now joins client and authentication records with
-the complete external save generation. Its envelope carries the full archive's
-SHA-256, an execution-variant number and a version shared by debug and release.
-A SHA-256 covers the header and all sections. The envelope bounds session data
-to 64 KiB, runtime data to 128 MiB and external saves to 64 MiB. Before typed
-JSON allocation, a schema-aware pass bounds depth, value count and estimated
+The internal KTF session API joins client and authentication records. Its
+envelope carries the full archive's SHA-256, an execution-variant number and a
+version shared by debug and release. A SHA-256 covers the header and both
+sections. The envelope bounds session data to 64 KiB and runtime data to
+128 MiB, and has no section for saves: the four header bytes that held the
+length of one in version 1 are reserved and must be zero. Before typed JSON
+allocation, a schema-aware pass bounds depth, value count and estimated
 allocation, and rejects missing, duplicate, unknown or wrongly typed fields.
-Byte payloads retain raw bytes; save keys use the existing binary save pack.
+Byte payloads retain raw bytes.
 
-Detached preparation reconstructs against an isolated memory store and silent
-outputs. Commit replaces the save generation, redirects the displaced client's
-saves to its own memory copy, detaches its outputs, and aborts its workers without
-calling destroyApp. Failed replacement leaves the original session usable.
-Rollback tracks completed moves and restores the original live directory even
-if its recovery intent disappears.
+Detached preparation reconstructs against a placeholder store that answers
+every read as absent, refuses every write and counts what reaches it, with
+silent outputs. Commit hands the restored runtime the live store, fills what it
+has open from that store with reads only, and then cuts the displaced client
+off: its saves go to an empty memory store of its own, its outputs are
+detached, and its workers are aborted without calling destroyApp. A failed
+commit leaves the original session usable and the saves as they were.
 The final adoption rebases guest clocks, timers, worker/pacing deadlines, every
 editor and vibration, so time spent parsing or staging files is not guest time.
 This API requires the caller to serialize whole rounds, input, lifecycle, cheats,
@@ -561,17 +567,22 @@ pause state, key-repeat phase and its clock anchor, the pad, all held Host keys
 (bounded to 64), and a held pointer. Restoring preserves input ownership;
 `ReleaseHeldInput` is a separate Host action after output/input epochs reset.
 It can execute guest callbacks, whereas capture and detached preparation do not.
-Shared settings and input records must validate before the durable commit.
+Shared settings and input records must validate before the commit.
 These operations use the same single-owner discipline as Tick and SendKey.
 The shared record and platform clock are captured before heap copies or file I/O.
 
 Directory stores offer one Host checkpoint slot per exact archive at
-`.wfeature-quicksave/owners/<owner>/<archive SHA-256>.wfq`, beside the
+`.wfeature-quicksave/owners/<owner>/<archive SHA-256>.v2.wfq`, beside the
 guest owner directory. Reads are bounded and confined to the reserved directory;
 links and nonregular files are refused. Writes validate the envelope and use the
-ordinary synced temporary-file replacement. Slots survive save-generation swaps
-and stay outside ordinary save exports. Future incompatible state/ABI changes
-must bump the relevant checkpoint version; debug and release use the same schema.
+ordinary synced temporary-file replacement. Slots stay outside ordinary save
+exports. The file name carries the envelope version, so no build writes over
+another format's slot: a file under the version 1 name, `<archive SHA-256>.wfq`,
+is reported as present, refused with `ErrCheckpointLegacy` when it is loaded,
+and never read, renamed or removed. Future incompatible state/ABI changes must
+bump the relevant checkpoint version; debug and release use the same schema. A
+slot is outside what an upgrade promises to keep working: an incompatible one
+is refused with its reason and left in place.
 
 Portable audio output now retains the page synthesizer's bounded voice set,
 note-on channel settings and emitted volume, current channels and remaining PCM
@@ -595,25 +606,35 @@ after server restart, including two local gameplay routes.
 
 Native packages use a separate versioned record under the same checkpoint
 envelope. It retains ARM memory, root registers, allocator ownership, built-in
-interfaces, application identity, screen/image pixels, open file positions,
-shared file/resource buffers, parsed resource indexes, unflushed writes,
-listeners, queued events/resumes, frame/timer deadlines and logical audio.
+interfaces, application identity, screen/image pixels, listeners, queued
+events/resumes, frame/timer deadlines and logical audio. An open file is
+recorded as its name, save key, position, whether it may be written and, for
+one whose open emptied the file, the number of bytes it then held.
+The record holds no file bytes: the table of names the session wrote, the marks
+on names not yet stored and the parsed resource cache are not restored, and a
+load opens each recorded file again, from the save store and then from the
+package.
 Native playback creates one-shot clips at nonnegative guest times. Restoration
-rejects repeat flags and negative playback origins before replacing saves, so a
-modified checkpoint cannot force the next tick to replay old audio cycles.
+rejects repeat flags and negative playback origins before the running session
+is displaced, so a modified checkpoint cannot force the next tick to replay old
+audio cycles.
 Cached image bytes and decoded pixels remain distinct from guest bytes that
 changed after decoding. Restoration installs fresh built-in bindings without
 running the package's entry, factory or startup event. Custom Host bindings and
-active tracing refuse capture. Native adoption replaces ordinary saves before
-publishing and detaches the old runtime without flushing its pending writes.
+active tracing refuse capture. A native package's writes wait in the platform
+until a file is closed or a frame ends, so both a capture and a load store what
+is waiting first; adoption then detaches the old runtime from the store.
 Elapsed time and deadlines rebase at adoption, excluding detached staging time.
 
-A concurrent recovery defect discovered on 2026-10-01 interrupted implementation:
-an independent reader could delete an active replacement's staging and intent,
-leaving the original generation only in its backup. Shared filesystem locking
-and explicit active rollback now cover that interleaving. The
-[regression evidence](testing.md#checkpoint-adoption-blocker) includes independent
-readers, aliases, refused replacement, process exclusion and crash recovery.
+A concurrent recovery defect discovered on 2026-10-01 interrupted implementation
+of the replacement path: an independent reader could delete an active
+replacement's staging and intent, leaving the original generation only in its
+backup. Shared filesystem locking closed that interleaving, and the lock is
+what every store operation still takes. The
+[record of that repair](testing.md#checkpoint-adoption-blocker) covers aliases
+and process exclusion. A load no longer replaces a save folder and the writer
+is gone; recovery of what an earlier build left is tested from literal on-disk
+states.
 Earlier measurements and rejected approaches are preserved in the
 [snapshot investigation](history/maintenance.md#snapshot-feasibility).
 
@@ -657,9 +678,10 @@ table the client keeps on the Go side:
 - the answers each pixel operation has already given. Without them a restored
   title would be asked again, and the instructions charged again — which moves
   the guest clock and makes a restored session a different session;
-- open files with their bytes, cursor and unflushed writes, and the two path
-  lists a title's file calls keep. A list that has not been read from the store
-  yet stays distinct from one that was read and found empty;
+- open files, as a handle, a path, a cursor, whether the handle may write and,
+  for one whose open asked for an empty file, how many bytes it then held. The record
+  holds no file bytes and neither of the two path lists a title's file calls
+  keep: a load reads all of them from the store again;
 - media clips, levels and mutes, the logical audio timeline and the vibrator;
 - the C library's generator, and each `java/util/Random`. The sequence a seed
   names is the standard library's, whose generator cannot be asked for its
@@ -677,7 +699,10 @@ open streams, images and the decode cache, vectors, calendars, sinks, record
 stores, widgets, Graphics state, monitors, and the collector's object table and
 schedule. A resource stream names the archive entry it reads rather than
 repeating it: a title that never closes its streams holds every resource it has
-read.
+read. A stream opened on a `File` is recorded as the offset its window starts at
+and how far it has read, and a `DataBase` as its name and record size; a load
+fills both from the store. What a title has written into a stream and not
+flushed travels in the record, because it has not reached a file yet.
 
 **A parked guest thread is recorded as what it still owes.** The ARM core
 supplies the registers of every call the thread is inside. For each call that
@@ -713,17 +738,19 @@ calls above builds an object before it parks.
 Authentication adapters travel as their moved state only. Which exchange a
 module is a client of is read from the module's code again, the same way it was
 at session start, and a record claiming an adapter the module does not match is
-refused. Restoring one reads no save and writes none.
+refused. Validating one reads no save and writes none; what an adapter derived
+from a save is derived again from the store when the load commits.
 
 Restoration loads the archive afresh, requires the record's memory map to be
 the one that load produces plus the guest thread stacks the record declares,
 and then builds every table before a single goroutine is started. It is
-prepared against an isolated memory copy of the checkpoint's saves with no
-audio device. Commit replaces the durable save generation and only then
-displaces the running session: its store and audio sink are detached and its
-guest threads are ended one at a time. **It is not closed**, because closing
-flushes its open files and calls `destroyClet`, and both would write the old
-session over the saves that were just restored.
+prepared against a placeholder store that answers nothing, with no audio
+device. Commit fills what the record has open from the live store, stores the
+writes the running session had issued and not yet stored, and only then
+displaces that session: its store and audio sink are detached and its guest
+threads are ended one at a time. **It is not closed**, because closing calls
+`destroyClet`, which is guest code that may write a save, and a load runs no
+exit callback.
 
 A record is checked against the platform it is restored into, not only against
 itself, wherever the runtime would otherwise act on a number the record states.
@@ -772,6 +799,148 @@ restart at a load. A pending calendar field assignment is restored in the
 Host's zone, which is the only zone the runtime sets. The subscriber identity a
 title was started with is restored with it, so a title that compares the number
 against one it stored sees the one it stored.
+
+<a id="quick-load-and-ordinary-saves"></a>
+
+### Quick load and ordinary saves
+
+**The game's own saves come first.** A checkpoint is execution state: guest
+memory, threads, the screen, sound and input. It holds no save. A quick load
+brings the game back to the moment the quick save was taken and leaves every
+save where it is; the restored game reads the saves as they are then, and what
+it writes afterwards lands on top of them. Nothing is backed up, nothing is
+kept aside, and no second path restores saves: the later write wins.
+
+That is one rule for the five checkpoint variants — KTF Java/AOT, the older KTF
+descriptor module, KTF native packages, LGT Clets and LGT AOT Java — and the CLI
+and the server reach it through the same `internal/session` calls.
+
+Two things stand between the rule and a runtime, and both steps deal with them
+the same way on every variant.
+
+**A write the game issued may still be in the host.** On LGT a write waits in
+the buffer of its open file until the file is closed, and a native KTF package's
+write waits in the platform until a file is closed or a frame ends. A checkpoint
+holds no save bytes, so such a write would be in no place at all once the
+session that made it is gone. A quick save and a quick load therefore store it
+first, through a write whose failure is reported: when the store refuses, the
+step is refused with `backend.ErrCheckpointSaveWrite`, the game carries on, and
+the write is still pending in it. The descriptor KTF runtime stores every write
+before the call that made it returns, so it has nothing to store. Nothing the
+game has not issued is written: bytes a title put into a stream and did not
+flush stay in the stream.
+
+On LGT the buffer of an open file is the file as it was when the handle was
+opened plus what was written through it, and storing it stores all of it. When
+the file has changed since, through another handle or a removal, the host would
+be putting the older part of the buffer over newer content, so the step is
+refused instead and names the file. The title's own close does exactly that
+write and is the title's to make.
+
+**The host keeps copies of what a game has open.** An open file's buffer, the
+records behind a database handle, the lists of removed and created names, the
+table of names a session wrote. Each answers the game before the store is asked
+and is written back whole. Restored from a record, a copy would answer with what
+the file held when the quick save was taken and then be written over the file as
+it is now. So a record names these objects and holds nothing of them, and
+committing a load fills each from the live store through the lookup a first open
+of that name makes: the removal list, the save key, then the packaged copy.
+
+The order inside a load, on every variant:
+
+1. The record is validated into a detached runtime over a placeholder store
+   that answers every read as absent, refuses every write and counts what
+   reaches it. The shared session logs a warning if validation asked it for
+   anything; no variant does.
+2. What can be refused without the saves is refused: the archive's identity,
+   a running session that is not at a boundary, a cancelled request.
+3. The restored runtime's storage is filled from the live store, with reads
+   only. A save that cannot be read, a container that does not decode, or more
+   bytes than the load's budget refuses the load with
+   `backend.ErrCheckpointSaveRead`. A directory where a file was is not a
+   failed read: a key that is a directory has no entry, so it is a save that
+   is not there.
+4. The running session's issued writes are stored. If that stored anything,
+   step 3 is done again, so the restored game reads them like any other save.
+5. The running session is cut off from the store and from the Host's outputs,
+   its guest threads are ended without an exit callback, and the restored
+   runtime is adopted over the live store. Nothing in this step can fail.
+
+A load therefore writes no save of its own: with nothing pending it makes no
+store write at all. A refused load leaves the running game running and reverts
+or removes nothing. A load into a new process (`run -quickload`, a start with
+`quick_load`) runs the same steps without a running session.
+
+The rules a rebuilt object follows are the same in every table:
+
+- A cursor stays where the record has it, even past the end of a file that is
+  shorter now. A read there answers end of file, and a write fills the gap with
+  zeros.
+- A name the store has nothing for leaves its object empty and still open. The
+  host creates nothing; the game's next write through the object creates the
+  name through the ordinary write path.
+- An object whose open asked for an empty file — a truncating open — takes at
+  most the bytes it held when the quick save was taken, from the front of the
+  file as it is now. The title is rewriting that file, and it never receives
+  the tail of a newer, longer one. An object whose open made a file that was
+  not there asked for no such thing and is given the whole file, like any
+  other: a title that keeps its save open for a session is in that position on
+  its first run, and what it saved through the object after the quick save must
+  not be cut off by its next write. KTF's WIPI C file table has no object of
+  the first kind: a truncating open there empties the file in the store at the
+  open itself, and its handles are cursors on the file as it is.
+- Every list the runtime keeps beside the files is read during the load, so a
+  list that cannot be read refuses the load rather than the game's first call
+  after it.
+- What is read is bounded and each key is read once: the names come from a
+  slot, which is untrusted input.
+
+**Accepted limits.** These are how a game behaves once its memory is older than
+its saves, and the emulator does not correct them:
+
+- A game that keeps save data in its own memory shows what it remembered. A
+  save list can look as it did at the quick save until the game reads the list
+  again, usually when it is started again; the files are as they are.
+- A game that then writes part of its save puts that part over the save as it
+  is now, and the save can hold two points in time.
+- A quick save taken while the game was in the middle of saving repeats the
+  rest of that sequence on every load, over the save as it is then.
+- On KTF, `FileSystem.list` and `DataBase.listDataBases` answer the packaged
+  names plus the names this run knew, and do not read the disk.
+- An authentication adapter's issued certificate travels in the slot, because
+  it was made for the run and never read from a save.
+- The LGT adapter that keeps a 100-byte file takes that file's original flag
+  and certificate from the file as it is when its header validates, and from
+  the record otherwise.
+- A record list read back from the store does not tell a record of no bytes
+  from a deleted one: `DecodeSaveRecords` answers both as absent. That is how a
+  restart has always read one, and a load now reads the store the same way,
+  where a slot used to carry the records and keep the two apart.
+
+<a id="leftovers-from-earlier-builds"></a>
+
+**Leftovers from earlier builds.** A build between 0.5.1 and this change wrote
+quick saves that embedded the saves and replaced them at a load. It can have
+left three things in `.wfeature-quicksave/owners/<owner>/`, and this build
+writes, reads and removes none of them:
+
+- `<archive SHA-256>.wfq`, a version 1 slot. It is reported as present so that
+  the load is offered, and loading it is refused with the reason. A new quick
+  save is written beside it under the version 2 name.
+- `previous/`, the saves a version 1 load set aside. They can be the newest
+  saves a person made before that load, and nothing knows whether they are
+  newer than the saves in use, so no code restores or removes them.
+- `next/`, the staging directory of a replacement that never recorded its
+  intent.
+
+The server writes one Info line per start that names the save folder when the
+first or the second is there. To put a `previous` tree back by hand: stop the
+server, move the contents of the owner's save folder somewhere else, copy the
+contents of `previous/` into the owner's save folder, and start the server
+again. Any of the three can be removed by hand once the game has been started
+once under this build: every store operation first settles a replacement an
+earlier build left half done, and after that the saves in use are never inside
+the reserved directory.
 
 ## Documentation
 

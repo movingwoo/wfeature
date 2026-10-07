@@ -155,8 +155,8 @@ runtime state is refused explicitly. The specialized `runktf`, `runlgt` and
 | --- | --- |
 | `-ticks N` | Run up to N ticks, default 64; accepts 0 through 1,000,000. |
 | `-save dir` | Platform save root; defaults to `var/savedata/<profile>/<platform>`. The archive's owner directory is appended. |
-| `-quicksave` | Store one checkpoint after the final tick. |
-| `-quickload` | Restore the existing checkpoint before any tick, without rerunning guest startup. Missing or invalid slots fail startup. |
+| `-quicksave` | Store one checkpoint of execution state after the final tick. It holds no ordinary save. |
+| `-quickload` | Restore execution state from the archive's quick save before any tick, without rerunning guest startup. Ordinary saves are left as they are. A missing or invalid slot, or one written in an earlier format, fails startup with status 1 and a reason that names the file. |
 | `-serve` | Read one JSON command per line; use `step` and `quicksave` commands instead of `-ticks` and `-quicksave`. Can combine with `-quickload`. |
 | `-frame path` | Write the final screen to a PNG. |
 | `-play` | Pace the game using wall time. Without it KTF uses a manual clock and advances to scheduled deadlines, and LGT, whose guest clock only a tick moves, runs its ticks back to back: the run is the one a paced Host would have had, without the waiting. SKT is paced either way. |
@@ -186,10 +186,13 @@ must issue releases when needed. The browser separately releases restored input
 while resetting its physical controls. The serve response's `total_ticks` counts
 Host steps since the command started and is not a restored guest counter.
 
-The slot is tied to the full archive digest. Loading also restores ordinary game
-saves from that checkpoint. Slots live in the reserved sibling
-`.wfeature-quicksave/owners/<owner>/` directory, outside `.wfs` exports, and
-survive save-directory replacement. Use the same explicit `-save` root to share
+The slot is tied to the full archive digest. Loading brings the game back and
+leaves its ordinary saves as they are: the restored game reads the saves on
+disk and writes on top of them, and a write the running game had issued and the
+host still held is stored before either a `quicksave` or a `quickload`. See
+[Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
+Slots live in the reserved sibling `.wfeature-quicksave/owners/<owner>/`
+directory, outside `.wfs` exports. Use the same explicit `-save` root to share
 a slot between build profiles; the default roots include the profile name.
 Restore format and runtime data are the same in both profiles.
 

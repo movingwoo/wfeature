@@ -191,11 +191,13 @@ func javaFileWriteByte(
 		return 0, fmt.Errorf("%s was opened read-only", file.name)
 	}
 	value := byte(arguments[1])
-	if file.cursor == len(file.data) {
-		file.data = append(file.data, value)
-	} else {
-		file.data[file.cursor] = value
+	// A cursor past the end fills the gap with zeros, as the array forms of
+	// this call do. Nothing a Java title does moves the cursor there; a file
+	// that is shorter after a quick load than it was before one does.
+	if file.cursor >= len(file.data) {
+		file.data = append(file.data, make([]byte, file.cursor+1-len(file.data))...)
 	}
+	file.data[file.cursor] = value
 	file.cursor++
 	file.dirty = true
 	return 1, nil
@@ -296,7 +298,7 @@ func (client *Client) openJavaFileInputStream(thread *armcore.Thread, file uint3
 		return 0, err
 	}
 	rest := append([]byte(nil), open.data[min(open.cursor, len(open.data)):]...)
-	runtime.streams[object] = &javaStream{Name: open.name, Data: rest}
+	runtime.streams[object] = &javaStream{Name: open.name, Data: rest, File: true, Offset: open.cursor}
 	runtime.streamFiles[object] = file
 	if client.logger != nil {
 		client.logger.Debug("LGT java file input stream opened",

@@ -37,10 +37,10 @@ import (
 // prevent, with no grace that could help here because the game is deliberately
 // still running. The backend now holds a directory transaction lock across
 // recovery and the complete export walk, so it cannot split a StoreSaves batch
-// or checkpoint replacement. Separate guest StoreSave calls remain separate
-// transactions; an export can still land between those calls. Where the save
-// location cannot hold a file lock, that transaction excludes this process's
-// own writers and no other's.
+// or the recovery of a replacement an earlier build left. Separate guest
+// StoreSave calls remain separate transactions; an export can still land
+// between those calls. Where the save location cannot hold a file lock, that
+// transaction excludes this process's own writers and no other's.
 //
 // An import writes, so it takes the claim the save API takes —
 // `holdSaveDirectory`, for the length of the write. A restore landing under a

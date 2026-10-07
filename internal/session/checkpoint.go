@@ -144,6 +144,18 @@ func (saved checkpointSessionState) validate() (keypad.Pad, keypad.Repeat, error
 // Hosts enqueue it between whole rounds and exclude external save operations
 // for the duration. It does not invoke lifecycle callbacks. A canceled request
 // produces no checkpoint, and a refusal leaves the current session usable.
+//
+// A checkpoint is execution state only. It holds no ordinary save, and taking
+// one never reverts or removes a save. A session without a save store cannot
+// be captured: a load has nowhere to find the saves of such a session.
+//
+// The one thing a capture writes is what the game had already written: a
+// write the game issued and the host still holds (an open file's buffer, a
+// key the store refused earlier) is given to the store first, because the
+// checkpoint will not carry it and a load displaces the session that has it.
+// Nothing the game has not issued is written. When the store refuses, the
+// capture is refused with backend.ErrCheckpointSaveWrite and the game keeps
+// running with its writes still pending.
 func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error) {
 	if s == nil || !s.Running() {
 		return nil, ErrNotRunning
@@ -202,6 +214,12 @@ func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error
 // RestoreCheckpoint constructs a session after process restart without replaying
 // guest startup. The caller must own the destination save directory. Output and
 // input reconciliation belong to the Host after this function succeeds.
+//
+// The restored game runs over options.SaveStore as it is: the saves on disk
+// are neither replaced nor reverted, and the game reads and writes them there.
+// Whatever the checkpoint says the game had open is filled from that store,
+// with reads only; a save that cannot be read refuses the restoration with
+// backend.ErrCheckpointSaveRead.
 func RestoreCheckpoint(ctx context.Context, archive, data []byte, options Options) (restored *Session, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -214,6 +232,22 @@ func RestoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 // LoadCheckpoint atomically adopts a prepared replacement on this session's
 // owning goroutine. The original archive bytes are required even for a running
 // session, so replacing a file in the library cannot bypass identity checks.
+//
+// A load restores execution state only. The game's own saves come first: no
+// save is replaced, reverted or removed, the restored game reads the saves as
+// they are now, and whatever it writes afterwards lands on top of them.
+//
+// In order: the checkpoint is validated against a placeholder store that
+// answers nothing; the saves it needs are read from the live store; the
+// writes the running game had issued and the host still held are stored, as
+// CaptureCheckpoint stores them; what the restored game has open is filled
+// from the store as it is then; and the running session is replaced. The load
+// writes no save of its own, so with nothing pending it makes no store write.
+//
+// A failed load keeps the running session and reverts nothing. It answers
+// backend.ErrCheckpointSaveWrite when the store refused the running game's
+// writes, which then stay pending in that game, and
+// backend.ErrCheckpointSaveRead when a save could not be read.
 func (s *Session) LoadCheckpoint(ctx context.Context, archive, data []byte) error {
 	if s == nil || !s.Running() {
 		return ErrNotRunning
@@ -275,8 +309,10 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	if previous != nil {
 		restored.now = previous.now
 	}
-	// Every shared record was validated before the durable commit. From here
-	// adoption only assigns already constructed state and fresh Host epochs.
+	// Every shared record was validated before the running session is
+	// displaced. Each platform validates against a placeholder store and is
+	// handed the live one only by Commit, which is the single place a restored
+	// runtime meets the saves.
 	if platform == detect.LGT {
 		// This platform has no repeat event and no pointer, and its pad is the
 		// platform's own: none of the three can be held at this layer.
@@ -297,7 +333,8 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 				return nil, ErrCheckpointUnsupported
 			}
 		}
-		if restored.lgt, err = prepared.Commit(ctx, old); err != nil {
+		warnPreparationStoreCalls(options, prepared)
+		if restored.lgt, err = prepared.Commit(ctx, old, options.SaveStore); err != nil {
 			return nil, err
 		}
 	} else if checkpoint.Variant == backend.CheckpointKTFNative {
@@ -319,7 +356,8 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 				return nil, ErrCheckpointUnsupported
 			}
 		}
-		restored.ktfNative, err = prepared.Commit(ctx, old)
+		warnPreparationStoreCalls(options, prepared)
+		restored.ktfNative, err = prepared.Commit(ctx, old, options.SaveStore)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +377,8 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 				return nil, ErrCheckpointUnsupported
 			}
 		}
-		restored.ktf, err = prepared.Commit(ctx, old)
+		warnPreparationStoreCalls(options, prepared)
+		restored.ktf, err = prepared.Commit(ctx, old, options.SaveStore)
 		if err != nil {
 			return nil, err
 		}
@@ -352,6 +391,16 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 		restored.lastTick = now.Add(-saved.LastTickAge)
 	}
 	return restored, nil
+}
+
+// warnPreparationStoreCalls says in the log when validating a checkpoint
+// reached for a save. Validation runs against a placeholder that answers
+// nothing, so such a call changed nothing; it is reported because a restored
+// table that was filled from it would not be the saves on disk.
+func warnPreparationStoreCalls(options Options, prepared interface{ PreparationStoreCalls() (int, string) }) {
+	if calls, first := prepared.PreparationStoreCalls(); calls != 0 && options.Logger != nil {
+		options.Logger.Warn("checkpoint validation asked the save store", "calls", calls, "first", first)
+	}
 }
 
 func (s *Session) checkKeyHold(action string, code int32) error {

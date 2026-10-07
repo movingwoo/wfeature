@@ -36,7 +36,7 @@ func TestAuthoredCheckpointArchiveStartsAndRestoresWithoutStartup(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
-	restored, err := prepared.Commit(t.Context(), source)
+	restored, err := prepared.Commit(t.Context(), source, store)
 	if err != nil {
 		t.Fatal(err)
 	}

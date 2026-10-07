@@ -2475,6 +2475,87 @@ func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) error
 
 const maxDataBaseRecords = 1 << 16
 
+// storageSource says where a name's content was found.
+type storageSource int
+
+const (
+	// storageAbsent is a name nothing has: no save, or a save its table's
+	// removal list hides, and no copy in the archive that a list does not hide.
+	storageAbsent storageSource = iota
+	// storageSaved is a save in the store, which wins over the archive's copy.
+	storageSaved
+	// storagePackaged is the copy the archive ships.
+	storagePackaged
+)
+
+// resolveJavaDatabase finds a Java database by name where it lives outside
+// this session's own catalog: the save, then the copy the archive ships. It is
+// the lookup a first open makes, and a quick load rebuilds its databases
+// through it, so the two cannot answer differently.
+//
+// A database this title deleted is gone rather than empty, and both the save
+// under it and the copy the archive carries stay hidden while it is on the
+// list. See recordDatabaseRemovals. This table's own list hides this table's
+// own save; the shared archive is hidden by either. Reading the shared answer
+// for the save let the WIPI C table's delete hide an unrelated Java save under
+// the same name, and nothing on this side ever took that name off the other
+// table's list, so the save was gone for good.
+//
+// A database this archive ships is the database, exactly as it is for the
+// WIPI C table next door. A save wins over it, because a game that has written
+// since owns what it wrote; with no save, the packaged records are what the
+// game finds, and finding them is what tells a title carrying its own data
+// that it has nothing to download. A save wins, and an empty one is still a
+// save. Reading an empty record list as "not really a save" would have carried
+// the archive's copy to a player whose earlier build created one — worth
+// something, four local titles' worth — but the same shape is what a title
+// leaves when it deletes a slot and creates it again, and no amount of
+// bookkeeping tells those two apart without a third list per table.
+// Resurrecting a save somebody cleared is worse than making them clear it once
+// more, so the rule is not here: clearing the game's save is what adopts the
+// packaged copy, and the release notes say so.
+func (runtime *initializationRuntime) resolveJavaDatabase(name string, recordSize uint32) ([][]byte, storageSource, error) {
+	deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
+	saved, present, err := backend.ReadSave(runtime.client.saveStore, "jdb/"+name)
+	if err != nil {
+		return nil, storageAbsent, err
+	}
+	if deleted {
+		present = false
+	}
+	if present {
+		records, err := decodeSaveRecords(saved)
+		if err != nil {
+			return nil, storageAbsent, fmt.Errorf("corrupt database %s: %v", name, err)
+		}
+		return records, storageSaved, nil
+	}
+	if !runtime.databaseDeleted(name) {
+		if records, packaged := runtime.packagedRecordDatabase(name, recordSize); packaged {
+			runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
+			return records, storagePackaged, nil
+		}
+	}
+	return nil, storageAbsent, nil
+}
+
+// bindDetachedDatabase puts a store a quick load left without a database back
+// under its name once a write through it has been stored: the database exists
+// again, and this store is the one that holds it. For any other store it does
+// nothing.
+func (runtime *initializationRuntime) bindDetachedDatabase(store *runtimeDataBaseStore) {
+	if runtime.detachedDatabases[store.name] != store {
+		return
+	}
+	delete(runtime.detachedDatabases, store.name)
+	if runtime.databases == nil {
+		runtime.databases = make(map[string]*runtimeDataBaseStore)
+	}
+	if runtime.databases[store.name] == nil {
+		runtime.databases[store.name] = store
+	}
+}
+
 func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) < 3 {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase expected name, record size, and create flag, got %d arguments", len(arguments))
@@ -2500,70 +2581,35 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	}
 	store := runtime.databases[name]
 	if store == nil {
-		store = &runtimeDataBaseStore{name: name}
-		// A database this title deleted is gone rather than empty, and both
-		// the save under it and the copy the archive carries stay hidden
-		// while it is on the list. See recordDatabaseRemovals.
-		// This table's own list hides this table's own save; the shared
-		// archive is hidden by either. Reading the shared answer here let the
-		// WIPI C table's delete hide an unrelated Java save under the same
-		// name, and nothing on this side ever took that name off the other
-		// table's list, so the save was gone for good.
-		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
-		saved, present, readErr := backend.ReadSave(runtime.client.saveStore, "jdb/"+name)
-		if readErr != nil {
-			return jvm.VoidValue(), runtimeDataBaseException(readErr.Error())
+		records, source, resolveErr := runtime.resolveJavaDatabase(name, uint32(recordSize))
+		if resolveErr != nil {
+			return jvm.VoidValue(), runtimeDataBaseException(resolveErr.Error())
 		}
-		if deleted {
-			present = false
-		}
-		if present {
-			records, decodeErr := decodeSaveRecords(saved)
-			if decodeErr != nil {
-				return jvm.VoidValue(), runtimeDataBaseException(fmt.Sprintf("corrupt database %s: %v", name, decodeErr))
-			} else {
-				store.records = records
-			}
-		}
-		// A database this archive ships is the database, exactly as it is for
-		// the WIPI C table next door. A save wins over it, because a game that
-		// has written since owns what it wrote; with no save, the packaged
-		// records are what the game finds, and finding them is what tells a
-		// title carrying its own data that it has nothing to download.
-		// A save wins, and an empty one is still a save. Reading an empty
-		// record list as "not really a save" would have carried the archive's
-		// copy to a player whose earlier build created one — worth something,
-		// four local titles' worth — but the same shape is what a title
-		// leaves when it deletes a slot and creates it again, and no amount
-		// of bookkeeping tells those two apart without a third list per
-		// table. Resurrecting a save somebody cleared is worse than making
-		// them clear it once more, so the rule is not here: clearing the
-		// game's save is what adopts the packaged copy, and the release
-		// notes say so.
-		packaged := false
-		if !present && !runtime.databaseDeleted(name) {
-			if records, hasPackaged := runtime.packagedRecordDatabase(name, uint32(recordSize)); hasPackaged {
-				store.records = records
-				packaged = true
-				runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
-			}
-		}
-		if !present && !packaged && create == 0 {
+		if source == storageAbsent && create == 0 {
 			runtime.countDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
+		}
+		// A store a quick load left without a database is the store of this
+		// name, so the open takes it rather than making a second one: the
+		// objects that kept it and this one share what is written from here.
+		store = runtime.detachedDatabases[name]
+		if store == nil {
+			store = &runtimeDataBaseStore{name: name}
 		}
 		// A database opened for creation exists from that moment, even with
 		// no record in it yet, so the next open finds it rather than throwing
 		// again. One the archive carries is already found without a save.
-		if !present && !packaged {
-			if err := store.persist(runtime); err != nil {
+		if source == storageAbsent {
+			if err := (&runtimeDataBaseStore{name: name}).persist(runtime); err != nil {
 				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 			}
 		}
+		store.records = records
 		if runtime.databases == nil {
 			runtime.databases = make(map[string]*runtimeDataBaseStore)
 		}
 		runtime.databases[name] = store
+		delete(runtime.detachedDatabases, name)
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",
@@ -2627,6 +2673,7 @@ func runtimeDataBaseInsert(runtime *initializationRuntime, _ *jvm.VM, arguments 
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
+	runtime.bindDetachedDatabase(store)
 	// WIPI record identifiers are zero-based, unlike one-based MIDP records.
 	return jvm.IntValue(int32(len(store.records) - 1)), nil
 }
@@ -2721,6 +2768,7 @@ func runtimeDataBaseUpdate(runtime *initializationRuntime, _ *jvm.VM, arguments 
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
+	runtime.bindDetachedDatabase(store)
 	return jvm.VoidValue(), nil
 }
 
@@ -2747,6 +2795,7 @@ func runtimeDataBaseDelete(runtime *initializationRuntime, _ *jvm.VM, arguments 
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
+	runtime.bindDetachedDatabase(store)
 	return jvm.VoidValue(), nil
 }
 

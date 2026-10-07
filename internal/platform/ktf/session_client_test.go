@@ -58,7 +58,7 @@ func TestDetachedSessionClientRestoresOlderModuleWithoutEntry(t *testing.T) {
 	}
 	saved := roundTripClientState(t, captureClientForTest(t, source))
 	archive := &Archive{JAR: &JAR{Client: source.image}}
-	restored, err := restoreSessionClient(archive, saved, saveAdapterState{Version: 1}, SessionOptions{MaxSteps: saved.Core.MaxSteps, Clock: NewManualClock(time.Unix(1900000000, 0))})
+	restored, err := restoreSessionClient(archive, saved, saveAdapterState{Version: saveAdapterVersion}, SessionOptions{MaxSteps: saved.Core.MaxSteps, Clock: NewManualClock(time.Unix(1900000000, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}

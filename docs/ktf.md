@@ -97,6 +97,47 @@ below that saved file falls through to the archive without recording a storage
 failure. The bounded local slot service also accepts the first, zero-based
 slot. See [slot creation and save overlay evidence](ktf-save-slots-2026-09-23.md).
 
+## Quick save and quick load
+
+All three kinds of KTF package can be recorded between two rounds and restored
+later: the Java/AOT descriptor package, the older descriptor module and the
+native package. A checkpoint is execution state only. A load leaves the title's
+saves as they are, the restored title reads and writes them there, and the rule
+and its accepted limits are in
+[Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
+What is particular to this platform:
+
+- The descriptor runtime stores every write before the call that made it
+  returns, so neither step has anything to store first. What it does keep are
+  host copies of the saves: the WIPI C file table, the record databases, the
+  Java databases, the bytes behind each `File` object, the table of names the
+  session wrote and the five removal and directory lists. A record names them
+  and holds none of their bytes, and a load fills every one from the store.
+- After a load a name has one host store in each table. Handles restored for
+  one name share it. A name the store has nothing for keeps its restored store
+  empty and findable by name, so that the next open, create, rename or write of
+  that name takes the same store rather than making a second one.
+- `FileSystem.list` and `DataBase.listDataBases` answer the packaged names plus
+  the names this run knew, and do not read the disk. After a load they describe
+  the run the checkpoint was taken in.
+- A `File` opened in the truncating mode, and a native object opened in the
+  mode that empties the file, take at most what they had written after a load,
+  from the front of the file as it is. Every other object takes the whole
+  file, one whose open made the file among them. The WIPI C file table empties
+  a file in the store at the truncating open itself, so its handles are cursors
+  on the file as it is and nothing of the truncation is left to carry.
+- A native package's write waits in the platform until a file is closed or a
+  frame ends. A quick save and a quick load store what is waiting first, and
+  are refused when the store refuses it. A name the ordinary flush could not
+  store is remembered and tried again at the next quick step and when the
+  session closes; the ordinary boundaries still make one attempt each.
+- A native package's file is kept under its lower-cased base name, with a
+  backslash read as a separator. Reads always looked a name up that way; writes
+  did not split on a backslash, so a file written under a name with one was
+  refused by the store and never saved. Both use the same key now.
+- When two package entries share a lower-cased base name, a native open takes
+  the one whose entry name sorts first, on every run.
+
 ## Diagnostics and limits
 
 Use [CLI commands](cli.md) for `runktf`, `ktfdump`, routes, imports, profiles,
