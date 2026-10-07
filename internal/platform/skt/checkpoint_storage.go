@@ -15,27 +15,63 @@ import (
 // write may outlive its file or RMS handle (including deletion and index writes),
 // so the retry belongs to the runtime, rather than to its current open handles.
 func (runtime *Runtime) storeSave(key string, data []byte) error {
+	_, err := runtime.storeSaveVersion(key, data)
+	return err
+}
+
+func (runtime *Runtime) storeSaveVersion(key string, data []byte) (uint64, error) {
 	runtime.savePendingMu.Lock()
 	defer runtime.savePendingMu.Unlock()
+	if runtime.saveVersions == nil {
+		runtime.saveVersions = make(map[string]uint64)
+	}
+	runtime.saveVersions[key]++
+	version := runtime.saveVersions[key]
 	store := runtime.saveStoreBoundary()
 	if store == nil {
-		return nil
+		return version, nil
 	}
 	err := store.StoreSave(key, data)
 	if err == nil {
 		delete(runtime.pendingSaves, key)
-		return nil
+		return version, nil
 	}
 	if runtime.pendingSaves == nil {
 		runtime.pendingSaves = make(map[string][]byte)
 	}
 	runtime.pendingSaves[key] = slices.Clone(data)
-	return err
+	return version, err
+}
+
+// The guest barrier holds every file still. Refuse all ambiguous writes before
+// flushing any: a checkpoint must not choose between independently dirty
+// handles or overwrite a newer write/deletion from another handle.
+func (runtime *Runtime) checkCheckpointFiles(files []*xFileData) error {
+	runtime.savePendingMu.Lock()
+	defer runtime.savePendingMu.Unlock()
+	dirty := make(map[string]*xFileData)
+	for _, file := range files {
+		if !file.dirty {
+			continue
+		}
+		key, err := xFileKey(file.name)
+		if err != nil {
+			return fmt.Errorf("%w: SKT file path: %v", backend.ErrCheckpointSaveWrite, err)
+		}
+		if file.synced != runtime.saveVersions[key] || dirty[key] != nil && dirty[key] != file {
+			return fmt.Errorf("%w: SKT file %q has conflicting pending writes", backend.ErrCheckpointSaveWrite, file.name)
+		}
+		dirty[key] = file
+	}
+	return nil
 }
 
 // flushCheckpointSaves requires the guest barrier. Captured file payloads carry
 // only provenance/cursor, so their dirty buffers must reach the live store first.
 func (runtime *Runtime) flushCheckpointSaves(ctx context.Context, files []*xFileData) (bool, error) {
+	if err := runtime.checkCheckpointFiles(files); err != nil {
+		return false, err
+	}
 	wrote := false
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
@@ -90,7 +126,7 @@ func (heap *checkpointHeap) rebuildCheckpointSavesWithin(live backend.SaveStore,
 	}
 	archives := make(map[string]map[string][]byte)
 	for _, file := range heap.files {
-		file.data, file.dirty = nil, false
+		file.data, file.dirty, file.synced = nil, false, 0
 		if file.name == "" {
 			continue
 		}

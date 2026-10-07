@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -114,8 +116,8 @@ func (warnings *fallbackWarnings) WithGroup(string) slog.Handler      { return w
 
 // A per-game save directory may be a link. The releases before the file lock
 // read and wrote through one, so the lock must not be what ends that: every
-// ordinary operation and the session claim go through the link, and the
-// reserved directory stays beside the link rather than following it.
+// ordinary operation and the session claim go through the link. Slots and
+// journals stay beside the link; shared lock files also live beside its target.
 func TestLinkedOwnerDirectoryWorksThroughTheLink(t *testing.T) {
 	root, target := linkedOwner(t)
 	store := NewDirectorySaveStore(root)
@@ -181,8 +183,414 @@ func TestLinkedOwnerDirectoryWorksThroughTheLink(t *testing.T) {
 	if filepath.Dir(filepath.Dir(filepath.Dir(paths.directory))) != filepath.Dir(paths.root) || filepath.Base(paths.directory) != "owner" {
 		t.Fatalf("the reserved directory %s is not beside the link, named after it", paths.directory)
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Dir(target), ".wfeature-quicksave")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("a reserved directory followed the link: %v", err)
+	targetPaths, err := replacementPaths(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entriesAtTarget, err := os.ReadDir(targetPaths.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entriesAtTarget {
+		names = append(names, entry.Name())
+	}
+	if !reflect.DeepEqual(names, []string{"lock", "session"}) {
+		t.Fatalf("the target's reserved directory holds %q, want only shared locks", names)
+	}
+}
+
+func TestLinkedOwnerClaimsExcludeAliases(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		for _, linkFirst := range []bool{false, true} {
+			name := fmt.Sprintf("fallback=%t/link-first=%t", fallback, linkFirst)
+			t.Run(name, func(t *testing.T) {
+				if fallback {
+					refuseSaveFileLock(t, errors.ErrUnsupported)
+				}
+				root, target := linkedOwner(t)
+				first, alias := target, root
+				if linkFirst {
+					first, alias = root, target
+				}
+				release, err := ClaimSaveDirectory(first)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				if other, err := ClaimSaveDirectory(alias); !errors.Is(err, ErrSaveDirectoryBusy) {
+					if other != nil {
+						other()
+					}
+					t.Fatalf("alias bypassed the claim: %v", err)
+				}
+				if fallback {
+					if cause, ok := SaveLockFallback(alias); !ok || !errors.Is(cause, errors.ErrUnsupported) {
+						t.Fatalf("alias did not share fallback status: %t, %v", ok, cause)
+					}
+					warnings := &fallbackWarnings{}
+					WarnSaveLockFallback(slog.New(warnings), first)
+					WarnSaveLockFallback(slog.New(warnings), alias)
+					if !reflect.DeepEqual(warnings.directories, []string{first}) {
+						t.Fatalf("aliases reported fallback more than once: %q", warnings.directories)
+					}
+				} else {
+					if cause, ok := SaveLockFallback(first); ok {
+						t.Skipf("this location cannot test process locking: %v", cause)
+					}
+					child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSaveClaimsExcludeSessionsButAllowReadsAndReleaseOnExit$", "-test.timeout=15s")
+					child.Env = append(os.Environ(), "WFEATURE_SAVE_CLAIM_CHILD="+alias)
+					if output, err := child.CombinedOutput(); err != nil {
+						t.Fatalf("child alias bypassed the claim: %v: %s", err, output)
+					}
+				}
+				release()
+				other, err := ClaimSaveDirectory(alias)
+				if err != nil {
+					t.Fatalf("released claim remained held: %v", err)
+				}
+				other()
+			})
+		}
+	}
+}
+
+func TestLinkedOwnerClaimKeepsIdentityWhenTargetIsCreated(t *testing.T) {
+	root, target := linkedOwner(t)
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	release, err := ClaimSaveDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for _, create := range []bool{false, true} {
+		if create {
+			if err := os.Mkdir(target, 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if other, err := ClaimSaveDirectory(target); !errors.Is(err, ErrSaveDirectoryBusy) {
+			if other != nil {
+				other()
+			}
+			t.Fatalf("target creation changed claim identity (created=%t): %v", create, err)
+		}
+	}
+}
+
+func TestLinkedOwnerClaimKeepsRelativeTargetIdentity(t *testing.T) {
+	for _, absolute := range []bool{false, true} {
+		t.Run(fmt.Sprintf("absolute=%t", absolute), func(t *testing.T) {
+			parent, elsewhere := t.TempDir(), t.TempDir()
+			if err := os.Mkdir(filepath.Join(elsewhere, "subdir"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(elsewhere, "subdir"), filepath.Join(parent, "jump")); err != nil {
+				t.Skipf("this platform cannot create the intermediate link: %v", err)
+			}
+			root := filepath.Join(parent, "linked")
+			link := filepath.FromSlash("jump/../owner")
+			if absolute {
+				link = parent + string(filepath.Separator) + link
+			}
+			if err := os.Symlink(link, root); err != nil {
+				t.Skipf("this platform cannot create the owner link: %v", err)
+			}
+			target := filepath.Join(elsewhere, "owner")
+			release, err := ClaimSaveDirectory(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			if err := os.Mkdir(target, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if other, err := ClaimSaveDirectory(target); !errors.Is(err, ErrSaveDirectoryBusy) {
+				if other != nil {
+					other()
+				}
+				t.Fatalf("creating the relative target changed claim identity: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinkedOwnerClaimsRetainLegacyLock(t *testing.T) {
+	root, target := linkedOwner(t)
+	paths, err := replacementPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := lockSaveDirectories([]saveReplacementPaths{paths}, "session", false)
+	if legacy != nil {
+		defer legacy()
+	}
+	if saveLockUnavailable(err) {
+		t.Skipf("this location cannot test process locking: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release, err := ClaimSaveDirectory(root); !errors.Is(err, ErrSaveDirectoryBusy) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("claim bypassed the original lock: %v", err)
+	}
+	// Refusing the second lock must release the first and its registry gate.
+	release, err := ClaimSaveDirectory(target)
+	if err != nil {
+		t.Fatalf("refused claim leaked the target lock: %v", err)
+	}
+	release()
+}
+
+func TestLinkedOwnerFallbackDoesNotHideTamperedAlias(t *testing.T) {
+	root, _ := linkedOwner(t)
+	paths, err := replacementPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := filepath.Dir(filepath.Dir(paths.directory))
+	if err := os.Symlink(t.TempDir(), reserved); err != nil {
+		t.Skipf("this platform cannot create the reserved link: %v", err)
+	}
+	refuseReservedDirectory(t, fs.ErrPermission)
+	if release, err := ClaimSaveDirectory(root); err == nil || saveLockUnavailable(err) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("unavailable target lock hid the tampered alias: %v", err)
+	}
+	if cause, fallback := SaveLockFallback(root); fallback {
+		t.Fatalf("tampering enabled the process-only fallback: %v", cause)
+	}
+}
+
+func TestSaveLockFallbackPreservesPermissionCause(t *testing.T) {
+	for _, linked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("linked=%t", linked), func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "owner")
+			if linked {
+				root, _ = linkedOwner(t)
+			}
+			refuseReservedDirectory(t, fs.ErrPermission)
+			release, err := ClaimSaveDirectory(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			if cause, fallback := SaveLockFallback(root); !fallback || !os.IsPermission(cause) {
+				t.Fatalf("fallback = %t, %v; want the original permission failure", fallback, cause)
+			}
+		})
+	}
+}
+
+func TestLinkedOwnerFallbackRetainsWritableTargetLock(t *testing.T) {
+	root, target := linkedOwner(t)
+	readOnlyDirectories(t, filepath.Dir(root))
+	release, err := ClaimSaveDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if cause, fallback := SaveLockFallback(root); !fallback || !os.IsPermission(cause) {
+		t.Fatalf("unwritable alias fallback = %t, %v", fallback, cause)
+	}
+	if err := NewDirectorySaveStore(root).StoreSave("db/slot", []byte("live")); err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSaveClaimsExcludeSessionsButAllowReadsAndReleaseOnExit$", "-test.timeout=15s")
+	child.Env = append(os.Environ(), "WFEATURE_SAVE_CLAIM_CHILD="+target)
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("target claim bypassed linked live writer: %v: %s", err, output)
+	}
+}
+
+func TestLinkedOwnerFallbackRetainsSupportedFileLocks(t *testing.T) {
+	for _, refuseTarget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refuse-target=%t", refuseTarget), func(t *testing.T) {
+			root, target := linkedOwner(t)
+			unavailable, held := root, target
+			if refuseTarget {
+				var err error
+				unavailable, err = saveLockRoot(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				held = root
+			}
+			paths, err := replacementPaths(unavailable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := saveFileLock
+			saveFileLock = func(file *os.File, wait bool) error {
+				if file.Name() == filepath.Join(paths.directory, "session") {
+					return errors.ErrUnsupported
+				}
+				return previous(file, wait)
+			}
+			t.Cleanup(func() { saveFileLock = previous })
+			release, err := ClaimSaveDirectory(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			if cause, fallback := SaveLockFallback(root); !fallback || !errors.Is(cause, errors.ErrUnsupported) {
+				t.Fatalf("unsupported lock fallback = %t, %v", fallback, cause)
+			}
+			child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSaveClaimsExcludeSessionsButAllowReadsAndReleaseOnExit$", "-test.timeout=15s")
+			child.Env = append(os.Environ(), "WFEATURE_SAVE_CLAIM_CHILD="+held)
+			if output, err := child.CombinedOutput(); err != nil {
+				t.Fatalf("supported lock did not exclude another process: %v: %s", err, output)
+			}
+			release()
+			other, err := ClaimSaveDirectory(root)
+			if err != nil {
+				t.Fatalf("partial fallback leaked a lock: %v", err)
+			}
+			other()
+		})
+	}
+}
+
+func TestLinkedOwnerTransactionsExcludeAliases(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback=%t", fallback), func(t *testing.T) {
+			if fallback {
+				refuseSaveFileLock(t, errors.ErrUnsupported)
+			}
+			root, target := linkedOwner(t)
+			if err := storeSaveGeneration(root, "old"); err != nil {
+				t.Fatal(err)
+			}
+			for _, first := range []string{root, target} {
+				alias := root
+				if first == root {
+					alias = target
+				}
+				for _, batch := range []bool{false, true} {
+					unlock, err := lockSaveTree(first)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer unlock()
+					started, done := make(chan struct{}), make(chan error, 1)
+					go func() {
+						close(started)
+						done <- linkedSaveOperation(alias, batch)
+					}()
+					<-started
+					select {
+					case err := <-done:
+						t.Fatalf("alias bypassed active transaction (batch=%t): %v", batch, err)
+					case <-time.After(30 * time.Millisecond):
+					}
+					unlock()
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("alias operation remained blocked after unlock")
+					}
+				}
+			}
+		})
+	}
+}
+
+func linkedSaveOperation(root string, batch bool) error {
+	if batch {
+		return storeSaveGeneration(root, "old")
+	}
+	entries, err := ReadSaveTree(root)
+	if err == nil && !reflect.DeepEqual(entries, saveGeneration("old")) {
+		return fmt.Errorf("alias read a different generation: %+v", entries)
+	}
+	return err
+}
+
+func TestLinkedOwnerTransactionsExcludeOtherProcesses(t *testing.T) {
+	if root := os.Getenv("WFEATURE_SAVE_LINK_TRANSACTION"); root != "" {
+		fmt.Println("linked operation ready")
+		if err := linkedSaveOperation(root, os.Getenv("WFEATURE_SAVE_LINK_BATCH") == "yes"); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, linkFirst := range []bool{false, true} {
+		for _, batch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("link-first=%t/batch=%t", linkFirst, batch), func(t *testing.T) {
+				root, target := linkedOwner(t)
+				if err := storeSaveGeneration(root, "old"); err != nil {
+					t.Fatal(err)
+				}
+				first, alias := target, root
+				if linkFirst {
+					first, alias = root, target
+				}
+				unlock, err := lockSaveTree(first)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer unlock()
+				if cause, ok := SaveLockFallback(first); ok {
+					t.Skipf("this location cannot test process locking: %v", cause)
+				}
+				child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestLinkedOwnerTransactionsExcludeOtherProcesses$", "-test.timeout=15s")
+				child.Env = append(os.Environ(), "WFEATURE_SAVE_LINK_TRANSACTION="+alias)
+				if batch {
+					child.Env = append(child.Env, "WFEATURE_SAVE_LINK_BATCH=yes")
+				}
+				var stderr bytes.Buffer
+				child.Stderr = &stderr
+				stdout, err := child.StdoutPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := child.Start(); err != nil {
+					t.Fatal(err)
+				}
+				defer child.Process.Kill()
+				ready, done := make(chan struct{}), make(chan error, 1)
+				go func() {
+					scanner := bufio.NewScanner(stdout)
+					for scanner.Scan() {
+						if scanner.Text() == "linked operation ready" {
+							close(ready)
+						}
+					}
+					done <- errors.Join(scanner.Err(), child.Wait())
+				}()
+				select {
+				case <-ready:
+				case err := <-done:
+					t.Fatalf("child did not start: %v: %s", err, stderr.String())
+				case <-time.After(5 * time.Second):
+					t.Fatal("child did not start")
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("child bypassed active transaction: %v: %s", err, stderr.String())
+				case <-time.After(50 * time.Millisecond):
+				}
+				unlock()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatalf("child failed: %v: %s", err, stderr.String())
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("child remained blocked after unlock")
+				}
+			})
+		}
 	}
 }
 

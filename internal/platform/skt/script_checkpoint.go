@@ -124,12 +124,7 @@ func (saved scriptCheckpointState) validate() error {
 	if err := saved.Vibration.Validate(); err != nil {
 		return err
 	}
-	for _, sound := range saved.Audio.Sounds {
-		if sound.StartedAt < 0 || sound.StartedAt > saved.Clock {
-			return fmt.Errorf("SGS checkpoint sound clock is invalid")
-		}
-	}
-	return nil
+	return validateCheckpointAudio(saved.Audio, saved.Clock)
 }
 
 // PreparedScriptSession owns a detached runtime. No initialization, exit event,

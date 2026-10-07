@@ -502,9 +502,11 @@ A per-game save folder may be a symbolic link to a directory kept elsewhere;
 saves are read and written through it, and quick save and quick load work as
 they do anywhere else. The quick save is kept beside the link, in
 `.wfeature-quicksave/owners/<folder>/`, and never in the directory the link
-leads to. On a save location that cannot be written, a game still starts and
-reads its saves, and the game's own save fails as a write. On a filesystem
-without file locks games run normally. In both cases the log says once per
+leads to. Lock files also live in a reserved sibling directory beside the target,
+so opening the same saves through the link and the real path cannot start two
+competing sessions. On a save location that cannot be written, a game still
+starts and reads its saves, and the game's own save fails as a write. On a
+filesystem without file locks games run normally. In both cases the log says once per
 folder that it has no file lock, which means a second server or CLI process is
 not kept out of it.
 

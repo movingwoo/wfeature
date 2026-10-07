@@ -965,6 +965,7 @@ func (r *sessionRunner) park() {
 func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	if r.game != nil {
 		if r.token == message.Token {
+			r.started.Speed = r.game.Speed()
 			identity := r.started
 			r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
 			r.forceFrame = true
@@ -1043,6 +1044,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 		}
 	}
 	r.server.logger.Info("session resumed", "game", r.label)
+	r.started.Speed = r.game.Speed()
 	identity := r.started
 	r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
 	// The game did not move while it was parked, so the picture it had is the
@@ -1539,7 +1541,7 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 			}
 		}
 		if picture != nil {
-			batch = append(batch, *picture)
+			batch = r.appendPicture(batch, *picture)
 		}
 		wire = wire[:0]
 		written := 0
@@ -1581,6 +1583,14 @@ func (r *sessionRunner) writeMessages(ctx context.Context, cancel context.Cancel
 // skipped rather than waited for, and sound is not held longer than a frame's
 // worth of time on any title here.
 const frameLinger = 10 * time.Millisecond
+
+// appendPicture orders the selected picture after its queued lifecycle messages.
+// A reset may arrive after the writer's earlier text drain, followed by the
+// picture that drain did not see yet. Once the picture is selected, its reset
+// is already queued, so this final drain cannot let that picture overtake it.
+func (r *sessionRunner) appendPicture(batch []outboundMessage, picture outboundMessage) []outboundMessage {
+	return append(r.drainText(batch), picture)
+}
 
 // drainText moves what is queued now, and only that, onto batch.
 func (r *sessionRunner) drainText(batch []outboundMessage) []outboundMessage {

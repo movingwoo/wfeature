@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 // A quick load brings back the title and leaves its saves alone. These cover
@@ -365,6 +368,187 @@ func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 			closeFiles()
 			if _, err := session.CaptureCheckpoint(context.Background()); err != nil {
 				t.Fatalf("the quick save after the title closed its file: %v", err)
+			}
+		})
+	}
+}
+
+// A Java File can hold the same container a DataBase writes. Neither pending
+// buffer may be chosen over the other by a quick step, under any spelling of
+// their shared save key.
+func TestCheckpointRefusesPendingFileAndDatabaseOnOneKey(t *testing.T) {
+	for _, path := range []string{"rank.db", "./rank.db", "//rank.db"} {
+		for _, operation := range []string{"save", "load"} {
+			t.Run(path+"/"+operation, func(t *testing.T) {
+				store := newFaultStore(t, nil)
+				fixture := newJavaThreadFixture(t, store)
+				client := fixture.client
+				database := openFixtureDatabase(t, client, "rank", 4)
+				insertFixtureRecord(t, client, database, []byte{1, 2, 3, 4})
+				fixture.settle()
+				checkpoint := roundTripCheckpoint(t, fixture.archive, fixture.session)
+
+				file, err := newTestObject(t, client, javaFileClass)
+				if err != nil {
+					t.Fatal(err)
+				}
+				name, err := client.newJavaString(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := javaFileOpen(client, t.Context(), client.thread, []uint32{file, name, 4}); err != nil {
+					t.Fatal(err)
+				}
+				// The header stays valid, but the File now has an issued write.
+				if written, err := javaFileWriteByte(client, t.Context(), client.thread, []uint32{file, 'W'}); err != nil || written != 1 {
+					t.Fatalf("File.write = %d, %v", written, err)
+				}
+				store.refuse = true
+				insertFixtureRecord(t, client, database, []byte{5, 6, 7, 8})
+				store.refuse = false
+				fixture.settle()
+				_, open, err := client.javaFileHandle(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				held := client.javaRun.databases[database]
+				before, attempts := store.snapshot(t), store.attempts
+				if operation == "save" {
+					_, err = fixture.session.CaptureCheckpoint(t.Context())
+				} else {
+					_, err = commitFixture(t, fixture.archive, checkpoint, fixture.session, store)
+				}
+				if !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(err.Error(), "rank") {
+					t.Fatalf("quick %s with competing file and database writes = %v", operation, err)
+				}
+				if store.attempts != attempts || !reflect.DeepEqual(store.snapshot(t), before) || !open.dirty || !held.unsaved || fixture.session.client != client {
+					t.Fatal("the refused step changed the saves, lost an issued write or replaced the session")
+				}
+				// The title, not the checkpoint, chooses which write comes last.
+				if _, err := javaFileClose(client, t.Context(), client.thread, []uint32{file}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := javaCloseDataBase(client, t.Context(), client.thread, []uint32{database}); err != nil {
+					t.Fatal(err)
+				}
+				if store.held("fs/rank.db") != string(held.encode()) {
+					t.Fatal("the title's later database close did not keep both records")
+				}
+				fixture.settle()
+				if _, err := fixture.session.CaptureCheckpoint(t.Context()); err != nil {
+					t.Fatalf("capture after the title resolved its writes: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// Reading a list for the first time while flushing must not leave an empty
+// cached list, a sticky guest error or a clean buffer when that read fails.
+// The authored Clet reaches this state through its ordinary save and hold keys.
+func TestCheckpointListReadFailureKeepsTheGameAndItsPendingWrite(t *testing.T) {
+	archive, err := testfixture.LGTSaveArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newFaultStore(t, nil)
+	start := func() *Session {
+		t.Helper()
+		session, err := StartSession(t.Context(), archive, SessionOptions{SaveStore: store, Width: 16, Height: 8})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close(context.Background()) })
+		return session
+	}
+	session := start()
+	act := func(value uint32, key int32) {
+		t.Helper()
+		if err := session.client.writeWord(testfixture.LGTSaveProgress, value); err != nil {
+			t.Fatal(err)
+		}
+		for _, pressed := range []bool{true, false} {
+			session.SendKey(pressed, uint32(key))
+			tickSession(t, session, 1)
+		}
+	}
+	tickSession(t, session, 2)
+	act(1, testfixture.LGTSaveKeySave)
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	session = start()
+	tickSession(t, session, 2)
+	checkpoint := roundTripCheckpoint(t, archive, session)
+	act(2, testfixture.LGTSaveKeyHold)
+	client := session.client
+	handle, err := client.readWord(testfixture.LGTSaveHeld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.created != nil || client.files[handle] == nil || !client.files[handle].dirty {
+		t.Fatal("the title did not leave a pending write before reading its created-path list")
+	}
+	before, attempts := store.snapshot(t), store.attempts
+	store.unreadable = fileCreatedKey
+	if _, err := session.CaptureCheckpoint(t.Context()); !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(err.Error(), fileCreatedKey) {
+		t.Fatalf("capture while the created-path list cannot be read = %v", err)
+	}
+	if session.client != client || !client.files[handle].dirty || client.created != nil || client.saveReadError != nil || store.attempts != attempts || !reflect.DeepEqual(store.snapshot(t), before) {
+		t.Fatal("the refused capture changed the saves, cleared the pending write or poisoned the live session")
+	}
+	// Even while the list is unreadable, unrelated frame work still runs.
+	tickSession(t, session, 2)
+	store.unreadable = ""
+	act(3, testfixture.LGTSaveKeyFinish)
+	want := binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(nil, 2), 3^testfixture.LGTSaveXOR)
+	if store.held(testfixture.LGTSaveFileKey) != string(want) {
+		t.Fatal("the title did not finish the pending write after the store recovered")
+	}
+	if _, err := session.CaptureCheckpoint(t.Context()); err != nil {
+		t.Fatalf("capture after the store recovered: %v", err)
+	}
+	mustCommitFixture(t, archive, checkpoint, session, store)
+	if store.held(testfixture.LGTSaveFileKey) != string(want) {
+		t.Fatal("loading the earlier checkpoint changed the title's later save")
+	}
+}
+
+// A read error that occurred in guest code remains sticky. Loading can recover
+// a session with no pending writes, but may not discard writes held by one.
+func TestCheckpointLoadAfterReadFailureKeepsIssuedWrites(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			archive := fixtureArchive(t)
+			store := newFaultStore(t, map[string]string{"fs/open.dat": "original"})
+			session := checkpointFixtureSession(t, archive, store)
+			tickSession(t, session, 2)
+			checkpoint := roundTripCheckpoint(t, archive, session)
+			files := newGuestFiles(t, session.client)
+			handle := files.open("open.dat", fileOpenReadWrite)
+			if pending {
+				files.write(handle, "NEW-DATA")
+			}
+			store.unreadable = "fs/unrelated.dat"
+			thread := armcore.NewThread(armcore.NewContext())
+			if err := thread.SetRegister(0, files.name("unrelated.dat")); err != nil {
+				t.Fatal(err)
+			}
+			if err := session.client.handleWIPICSVC(t.Context(), thread, slotFsIsExist); err == nil {
+				t.Fatal("the guest read did not report the injected failure")
+			}
+			store.unreadable = ""
+			client, before, attempts := session.client, store.snapshot(t), store.attempts
+			_, err := commitFixture(t, archive, checkpoint, session, store)
+			if pending {
+				if !errors.Is(err, backend.ErrCheckpointSaveWrite) || session.client != client || !client.files[handle].dirty || client.saveReadError == nil {
+					t.Fatalf("load discarded or changed a write held behind the read failure: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("load with no issued write to lose: %v", err)
+			}
+			if store.attempts != attempts || !reflect.DeepEqual(store.snapshot(t), before) {
+				t.Fatal("load after a failed read changed the saves")
 			}
 		})
 	}

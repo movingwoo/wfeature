@@ -105,6 +105,14 @@ func (runtime *Runtime) initXFileName(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 		return jvm.VoidValue(), err
 	}
 	file := &xFileData{name: name, mode: mode, open: true, writable: mode&xFileWrite != 0}
+	// Keep the read and its version together with respect to issued writes.
+	runtime.savePendingMu.Lock()
+	defer runtime.savePendingMu.Unlock()
+	file.synced = runtime.saveVersions[key]
+	if _, pending := runtime.pendingSaves[key]; pending {
+		// A failed newer write has not reached the bytes read below.
+		file.synced--
+	}
 
 	found := false
 	if store := runtime.saveStoreBoundary(); store != nil {
@@ -331,14 +339,13 @@ func (runtime *Runtime) xFileClose(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 // persistXFile writes a modified file through the Host save boundary.
 func (runtime *Runtime) persistXFile(file *xFileData) {
 	file.mu.Lock()
+	defer file.mu.Unlock()
 	if !file.dirty || file.name == "" {
-		file.mu.Unlock()
 		return
 	}
 	data := append([]byte(nil), file.data...)
 	name := file.name
 	file.dirty = false
-	file.mu.Unlock()
 
 	store := runtime.saveStoreBoundary()
 	if store == nil {
@@ -348,7 +355,8 @@ func (runtime *Runtime) persistXFile(file *xFileData) {
 	if err != nil {
 		return
 	}
-	if err := runtime.storeSave(key, data); err != nil && runtime.logger != nil {
+	file.synced, err = runtime.storeSaveVersion(key, data)
+	if err != nil && runtime.logger != nil {
 		runtime.logger.Debug("XFile store failed", "name", name, "error", err)
 	}
 }

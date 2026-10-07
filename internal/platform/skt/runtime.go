@@ -172,6 +172,7 @@ type Runtime struct {
 	saveStore     backend.SaveStore
 	savePendingMu sync.Mutex
 	pendingSaves  map[string][]byte
+	saveVersions  map[string]uint64
 	rmsOnce       sync.Once
 	rmsState      *rmsState
 	// now reads the wall clock RecordStore.getLastModified reports. It is a

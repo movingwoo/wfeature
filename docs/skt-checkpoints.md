@@ -69,6 +69,10 @@ index/removal state and packaged defaults. A missing current file becomes empty;
 a load never reconstructs its older bytes from a slot. Later guest writes use the
 live store.
 
+An unchanged RMS handle does not write on close. Close retries only writes
+already issued by the guest, so closing a handle restored over a later deletion
+leaves that deletion intact. A later record mutation can create the store again.
+
 Failed writes are retained by key even after the originating handle closes or
 is removed. This includes RMS index/deletion writes. A dirty file is flushed
 before capture; storage failure refuses capture/load and preserves pending writes
@@ -77,6 +81,14 @@ no ordinary save access. Commit reads through a bounded, read-only cache before
 attempting the old session's writes, and rebuilds again if those writes changed
 anything. Unique reads and reconstructed cache copies each have a 128 MiB budget;
 repeated handles cannot multiply one large save into unbounded allocations.
+
+Before flushing anything, a quick step compares dirty file buffers with the
+latest issued write for their normalized key. A later write or deletion through
+another handle, two independently dirty aliases, or an open over a failed newer
+write refuses the step with `backend.ErrCheckpointSaveWrite`. All buffers and
+current saves remain available to the running guest. Its own explicit flush or
+close still decides the order of writes. These versions are Host bookkeeping;
+they are rebuilt on load and do not change the checkpoint or save format.
 
 WIPI streams retain file provenance. Input streams keep an independent cursor
 and mark; output streams write the original file buffer and flush through the
@@ -109,8 +121,13 @@ are refused, as on the other platforms. A save store is required.
 Archive identity, version/policy, bounds, frame shapes, root types, monitor
 ownership, native references, menu selections, timestamps and save paths are
 checked before adoption. Invalid data or failed reads do not replace the running
-session. Changing the authentication compatibility setting between capture and
-load is refused because it can change the bytecode underlying a continuation.
+session. Java and SGS also bound pending audio catchup to 1,048,576 repeat cycles
+and aggregate events, and 128 MiB of repeated PCM/SysEx payloads before adoption;
+a separate 1,048,576-visit budget bounds note-off scans over both saved active
+notes and notes accumulated during catchup. A forged old repeat cannot force
+unbounded work on the first tick. Changing the authentication compatibility
+setting between capture and load is refused because it can change the bytecode
+underlying a continuation.
 This does not make independently scheduled Java workers deterministic:
 restored workers preserve execution state, but their subsequent interleaving
 still depends on scheduling.

@@ -126,7 +126,17 @@ try {
   });
   const page = await context.newPage();
   page.on("pageerror", error => result.errors.push(error.message));
-  const events = () => page.evaluate(() => checkpointProbe.events);
+  // Keep the wire order across page reloads; each new page also keeps its own
+  // probe for waiting on the requests sent through the actual client.
+  const received = [];
+  page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
+    if (typeof payload === "string") {
+      try { received.push(JSON.parse(payload)); } catch {}
+    } else if (payload.length >= 16 && payload.readUInt32BE(0) === 0x57465032) {
+      received.push({ kind: "picture", operation: payload[4] });
+    }
+  }));
+  const events = async () => received.slice();
   const snapshot = () => page.evaluate(() => {
     const canvas = document.querySelector("#canvas");
     const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
@@ -134,10 +144,18 @@ try {
     for (const byte of pixels) hash = Math.imul(hash ^ byte, 16777619);
     return { width: canvas.width, height: canvas.height, hash: hash >>> 0 };
   });
+  const waitForFrame = expected => page.waitForFunction(expected => {
+    const canvas = document.querySelector("#canvas");
+    if (canvas.width !== expected.width || canvas.height !== expected.height) return false;
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let hash = 2166136261;
+    for (const byte of pixels) hash = Math.imul(hash ^ byte, 16777619);
+    return (hash >>> 0) === expected.hash;
+  }, expected, { timeout: 15000 });
   const color = rgb => page.waitForFunction(expected => {
     const canvas = document.querySelector("#canvas");
     const pixel = canvas.getContext("2d").getImageData(40, 40, 1, 1).data;
-    return expected.every((value, index) => value === pixel[index]);
+    return pixel[3] === 255 && expected.every((value, index) => value === pixel[index]);
   }, rgb);
   const settings = async () => {
     if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) {
@@ -201,7 +219,7 @@ try {
     assert.ok(Object.keys(savesBeforeLoad).length, "fixture did not persist ordinary save data");
     await load.click();
     await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브 시점으로 돌아갔습니다. 세이브는 되돌리지 않았습니다.");
-    await color(initial);
+    await waitForFrame(savedFrame);
     assert.deepEqual(await snapshot(), savedFrame);
     assert.deepEqual(ordinarySaves(), savesBeforeLoad);
     const restoredEvents = (await events()).slice(beforeLoad);
@@ -210,7 +228,11 @@ try {
     const restored = restoredEvents[restoredIndex];
     assert.equal(restored.started.restored, true);
     assert.equal(restored.started.has_checkpoint, true);
-    assert.equal(restoredEvents.slice(restoredIndex + 1).find(message => message.kind === "picture")?.operation, 0);
+    // These fixtures are static before the load. Check the first picture of
+    // the whole operation, including a picture that wrongly beats the reset.
+    const firstPicture = restoredEvents.findIndex(message => message.kind === "picture");
+    assert.ok(firstPicture > restoredIndex, "the first checkpoint picture must follow its reset");
+    assert.equal(restoredEvents[firstPicture].operation, 0);
     assert.equal(await page.locator('button[data-key="1"]').first().evaluate(element => element.classList.contains("pressed")), false);
     result.fixtures[kind].epoch = restored.epoch;
     await page.screenshot({ path: join(output, `${kind}-restored.png`) });
@@ -219,10 +241,46 @@ try {
     await page.keyboard.up("1");
     const sentBefore = await page.evaluate(() => checkpointProbe.sent.length);
     await page.keyboard.press("1");
-    await color(changed);
+    await waitForFrame(changedFrame);
     const nextKeys = await page.evaluate(at => checkpointProbe.sent.slice(at).filter(message => message.kind === "key"), sentBefore);
     assert.deepEqual(nextKeys.map(message => [message.action, message.epoch]), [["press", restored.epoch], ["release", restored.epoch]]);
     check(`${kind}: new keyboard input reaches the restored session with its new epoch`);
+
+    const path = `games/library/${kind}.zip`;
+    const frameBeforeReconnect = await snapshot(), savesBeforeReconnect = ordinarySaves();
+    await settings();
+    await page.locator("#game-speed").selectOption("2");
+    assert.equal(await page.locator("#game-speed").inputValue(), "2");
+    assert.equal(await page.evaluate(path => localStorage.getItem(`wfeature:speed:${path}`), path), "2");
+    // The page's park request follows its speed request. Its answer proves
+    // the server processed both before reload closes this connection.
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForFunction(() => {
+      const park = checkpointProbe.sent.findLast(message => message.kind === "park");
+      return park && checkpointProbe.events.some(message => message.kind === "result" && message.id === park.id);
+    });
+    const beforeReconnect = (await events()).length;
+    await page.reload();
+    await page.waitForFunction(path => checkpointProbe.events.some(message =>
+      message.kind === "started" && message.started?.game === path) &&
+      !document.querySelector('button[data-key="QUICK_SAVE"]').disabled, path);
+    await waitForFrame(frameBeforeReconnect);
+    const resumed = (await events()).slice(beforeReconnect).find(message => message.kind === "started");
+    assert.equal(resumed?.started.token, restored.started.token);
+    assert.equal(resumed.started.restored, true);
+    assert.equal(resumed.started.speed, 2);
+    assert.deepEqual(await snapshot(), frameBeforeReconnect);
+    assert.deepEqual(ordinarySaves(), savesBeforeReconnect);
+    await settings();
+    assert.equal(await page.locator("#game-speed").inputValue(), "2");
+    assert.equal(await page.evaluate(path => localStorage.getItem(`wfeature:speed:${path}`), path), "2");
+    result.fixtures[kind].resumedSpeed = resumed.started.speed;
+    await page.screenshot({ path: join(output, `${kind}-reconnected.png`) });
+    check(`${kind}: page reconnect keeps later speed, static pixels and ordinary saves`);
+
     await settings();
     await page.locator("#restart").click();
     await page.locator("#confirm-accept").click();
