@@ -141,11 +141,13 @@ faster.
 ```sh
 wfeature run var/games/ktf/game.zip -ticks 300 -quicksave
 wfeature run var/games/ktf/game.zip -quickload -ticks 100 -frame build/restored.png
+wfeature run var/games/lgt/game.zip -ticks 300 -quicksave
 wfeature run var/games/ktf/game.zip -serve
 ```
 
 `run` calls the same `internal/session` API as the server. Its checkpoint
-support covers supported KTF Java, older module and native package states. Unsupported
+support covers supported KTF Java, older module and native package states, and
+LGT Clets and AOT Java titles. Unsupported
 runtime state is refused explicitly. The specialized `runktf`, `runlgt` and
 `runskt` commands retain their profiling, routes and platform diagnostics.
 
@@ -157,7 +159,7 @@ runtime state is refused explicitly. The specialized `runktf`, `runlgt` and
 | `-quickload` | Restore the existing checkpoint before any tick, without rerunning guest startup. Missing or invalid slots fail startup. |
 | `-serve` | Read one JSON command per line; use `step` and `quicksave` commands instead of `-ticks` and `-quicksave`. Can combine with `-quickload`. |
 | `-frame path` | Write the final screen to a PNG. |
-| `-play` | Pace KTF using wall time. The default uses a manual clock and advances to scheduled deadlines. |
+| `-play` | Pace the game using wall time. Without it KTF uses a manual clock and advances to scheduled deadlines, and LGT, whose guest clock only a tick moves, runs its ticks back to back: the run is the one a paced Host would have had, without the waiting. SKT is paced either way. |
 | `-speed N` | Guest speed, 0.1 through 16; default 1. This flag does not imply `-play` for this command. |
 | `-screen WxH` | Handset dimensions for a newly started session. Restoration uses saved runtime settings. |
 

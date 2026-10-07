@@ -323,7 +323,12 @@ func (client *Client) javaSuperOf(class *javaRuntimeClass) *javaRuntimeClass {
 		return nil
 	}
 	super, err := client.preparePlatformJavaClass(javaPlatformSuper(class.Name))
-	if err != nil {
+	// The class a name answers to is whichever one was registered under it,
+	// and a module registers its own classes under the names its records
+	// carry. One named as a platform class can therefore sit below the very
+	// class whose superclass that name is, and linking the two would close
+	// the chain. Such a link is not made: the chain ends here instead.
+	if err != nil || javaChainReaches(super, class) {
 		return nil
 	}
 	class.Super = super

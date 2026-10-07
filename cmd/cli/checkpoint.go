@@ -33,7 +33,7 @@ func runShared(ctx context.Context, path string, args []string, in io.Reader, ou
 	load := flags.Bool("quickload", false, "restore the archive's checkpoint without guest startup")
 	save := flags.Bool("quicksave", false, "save a checkpoint after the final tick")
 	frame := flags.String("frame", "", "write the final screen to a PNG file")
-	play := flags.Bool("play", false, "pace KTF against wall time instead of a manual clock")
+	play := flags.Bool("play", false, "pace the game against wall time instead of running each tick as soon as the last ends")
 	speed := flags.Float64("speed", 1, "guest speed multiplier")
 	screen := flags.String("screen", "", "handset size, WxH")
 	if err := flags.Parse(args); err != nil {
@@ -212,7 +212,11 @@ func sharedServeDriver(game *session.Session, play bool) *serve.Driver {
 			if err != nil {
 				return progress.Progressed, err
 			}
-			if !play && game.SkipToNextDeadline() {
+			// Without -play nothing is watching, so the wait between ticks is
+			// skipped where skipping it changes nothing the guest can see: a
+			// manual clock is moved to the next deadline, and a clock that only
+			// a tick moves has already been moved by the tick.
+			if !play && (game.SkipToNextDeadline() || game.VirtualClock()) {
 				return progress.Progressed, nil
 			}
 			if progress.Wait > 0 {
