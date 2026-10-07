@@ -370,6 +370,44 @@ func TestStorageRebindKeepsOneStoreForAJavaDatabaseThatIsGone(t *testing.T) {
 	})
 }
 
+// A database the title deleted while an object held it is kept for the next
+// open of its name in the running session, and a checkpoint taken then comes
+// back the same way: the object is on the one store of the name, and an open
+// after the load takes it.
+func TestStorageRebindKeepsADatabaseDeletedWhileHeld(t *testing.T) {
+	saves := map[string][]byte{"jdb/save": encodeSaveRecords(nil), javaDatabaseRemovedKey: joinRemovalList([]string{"save"})}
+	storage := restoreStorage(t, func(source *initializationRuntime) []*jvm.Object {
+		source.client.saveStore = testSaveStore(t, nil)
+		vm := source.client.JVM()
+		name := jvm.ReferenceValue(vm.NewString("save"))
+		value, err := runtimeOpenDataBase(source, vm, []jvm.Value{name, jvm.IntValue(8), jvm.IntValue(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runtimeDataBaseDeleteStore(source, vm, []jvm.Value{name}); err != nil {
+			t.Fatal(err)
+		}
+		object, _ := value.Reference()
+		if source.detachedDatabases["save"] != object.Native {
+			t.Fatal("the delete did not keep the store the object holds")
+		}
+		return []*jvm.Object{object}
+	}, saves).mustBind()
+	kept := storage.roots[0].Native.(*runtimeDataBaseStore)
+	if storage.runtime.databases["save"] != nil || storage.runtime.detachedDatabases["save"] != kept {
+		t.Fatal("the held store did not come back as the name's one store")
+	}
+	value, err := runtimeOpenDataBase(storage.runtime, storage.client.vm, []jvm.Value{
+		jvm.ReferenceValue(storage.client.vm.NewString("save")), jvm.IntValue(8), jvm.IntValue(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, _ := value.Reference()
+	if opened.Native != any(kept) {
+		t.Fatal("an open after the load made a second store for the name")
+	}
+}
+
 // What a title is shown when it lists its saves after a load is the names the
 // restored run knew that are still there. A name it knew that is gone is not
 // listed, and neither is one that was first written after the checkpoint,

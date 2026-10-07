@@ -912,10 +912,6 @@ its saves, and the emulator does not correct them:
 - The LGT adapter that keeps a 100-byte file takes that file's original flag
   and certificate from the file as it is when its header validates, and from
   the record otherwise.
-- A record list read back from the store does not tell a record of no bytes
-  from a deleted one: `DecodeSaveRecords` answers both as absent. That is how a
-  restart has always read one, and a load now reads the store the same way,
-  where a slot used to carry the records and keep the two apart.
 
 <a id="leftovers-from-earlier-builds"></a>
 

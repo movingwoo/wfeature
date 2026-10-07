@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"reflect"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -803,5 +804,126 @@ func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
 	}
 	if reopened := object.Native.(*runtimeDataBaseStore); len(reopened.records) != 0 {
 		t.Fatalf("records = %q, want the database to have stayed cleared", reopened.records)
+	}
+}
+
+// A DataBase record of no bytes is a record: its id reads back, the count
+// includes it, and so does a later session. Its bytes used to be copied by
+// appending to nil, which gave nil, and nil is what a deleted record is.
+func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	open := func(runtime *initializationRuntime) jvm.Value {
+		t.Helper()
+		name := jvm.ReferenceValue(runtime.client.JVM().NewString("slots"))
+		database, err := runtimeOpenDataBase(runtime, runtime.client.JVM(), []jvm.Value{name, jvm.IntValue(8), jvm.IntValue(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return database
+	}
+	holds := func(runtime *initializationRuntime, database jvm.Value, when string, sizes ...int) {
+		t.Helper()
+		count, err := runtimeDataBaseCount(runtime, runtime.client.JVM(), []jvm.Value{database})
+		if got, _ := count.Int32(); err != nil || int(got) != len(sizes) {
+			t.Fatalf("%s: count = %d, %v; want %d", when, got, err, len(sizes))
+		}
+		for id, want := range sizes {
+			value, err := runtimeDataBaseSelect(runtime, runtime.client.JVM(), []jvm.Value{database, jvm.IntValue(int32(id))})
+			if err != nil {
+				t.Fatalf("%s: select %d = %v", when, id, err)
+			}
+			array, _ := value.Reference()
+			data, err := jvm.ByteArraySnapshot(array)
+			if err != nil || len(data) != want {
+				t.Fatalf("%s: record %d = %v, %v; want %d bytes", when, id, data, err, want)
+			}
+		}
+	}
+
+	client, runtime := newTestRuntime(t)
+	client.saveStore = store
+	database := open(runtime)
+	nothing := jvm.ReferenceValue(jvm.NewByteArray(nil))
+	if id, err := runtimeDataBaseInsert(runtime, client.JVM(), []jvm.Value{database, nothing, jvm.IntValue(0), jvm.IntValue(0)}); err != nil {
+		t.Fatal(err)
+	} else if got, _ := id.Int32(); got != 0 {
+		t.Fatalf("insert = %d, want 0", got)
+	}
+	if _, err := runtimeDataBaseInsert(runtime, client.JVM(), []jvm.Value{database, jvm.ReferenceValue(jvm.NewByteArray([]byte("abc")))}); err != nil {
+		t.Fatal(err)
+	}
+	holds(runtime, database, "after the inserts", 0, 3)
+	next, nextRuntime := newTestRuntime(t)
+	next.saveStore = store
+	holds(nextRuntime, open(nextRuntime), "in a later session", 0, 3)
+
+	// Updating a record to no bytes keeps it as well.
+	if _, err := runtimeDataBaseUpdate(runtime, client.JVM(), []jvm.Value{database, jvm.IntValue(1), nothing}); err != nil {
+		t.Fatal(err)
+	}
+	holds(runtime, database, "after the update", 0, 0)
+	last, lastRuntime := newTestRuntime(t)
+	last.saveStore = store
+	holds(lastRuntime, open(lastRuntime), "in a session after the update", 0, 0)
+}
+
+// A title that deletes a database while it holds it, opens the name again and
+// writes through both objects writes one database. The open used to make a
+// second store beside the one the old object kept, and each wrote its own
+// record list over the other's save: what was written through the new object
+// was gone after a write through the old one.
+func TestADatabaseOpenedAgainAfterADeleteIsTheOneTheOldObjectHolds(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	client, runtime := newTestRuntime(t)
+	client.saveStore = store
+	vm := client.JVM()
+	name := jvm.ReferenceValue(vm.NewString("save"))
+	open := func() jvm.Value {
+		t.Helper()
+		database, err := runtimeOpenDataBase(runtime, vm, []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return database
+	}
+	insert := func(database jvm.Value, data string) {
+		t.Helper()
+		if _, err := runtimeDataBaseInsert(runtime, vm, []jvm.Value{database, jvm.ReferenceValue(jvm.NewByteArray([]byte(data)))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records := func(database jvm.Value) [][]byte {
+		t.Helper()
+		object, err := database.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return object.Native.(*runtimeDataBaseStore).records
+	}
+
+	old := open()
+	insert(old, "gone")
+	if _, err := runtimeDataBaseDeleteStore(runtime, vm, []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := open()
+	insert(fresh, "new1")
+	insert(old, "new2")
+	want := [][]byte{[]byte("new1"), []byte("new2")}
+	for label, database := range map[string]jvm.Value{"the old object": old, "the new object": fresh} {
+		if got := records(database); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s holds %q, want %q", label, got, want)
+		}
+	}
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records(value); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the next session reads %q, want %q", got, want)
 	}
 }

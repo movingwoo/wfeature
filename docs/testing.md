@@ -662,6 +662,35 @@ made was read.
   directory with an error, which ends the session. That defect is in the
   released build and is not changed here.
 
+**Records of no bytes, 2026-10-07.** `TestSaveRecordsKeepAnEmptyRecordApartFromADeletedOne`
+pins the encoded bytes of a list holding empty, deleted and filled records and
+requires decoding to give each back as it was. The KTF Java `DataBase`, the
+KTF WIPI C record table and SKT RMS each write an empty record, read it in a
+later session (counted, selectable, and on SKT a null `getRecord` and a
+`setRecord` that fills it), and fail on the tree before the change. Saves made
+from nothing by the released 0.5.1 over the local library — 300 KTF and 106
+SKT files, 500 ticks with the fire key tapped seven times — hold 183 record
+lists and not one record of no bytes, so no second run over them reads
+differently. Run with this change, the 59 KTF titles that keep Java databases
+write one such record: one title inserts an empty record 0 before its data,
+which 0.5.1 stored as deleted. Two `runktf` runs of it over one save folder,
+twice on each tree, all end normally on the same scene of play, the change's
+saves holding the empty record and the earlier tree's the deleted one; the
+final frames differ between any two runs of either tree, which `runktf`'s
+wall-clock pacing does to this title.
+
+**A Java database deleted while held, 2026-10-07.** In a running session the
+next open of a deleted name takes the store a `DataBase` object kept; a test
+writes through the old and the new object and reads one record list in both
+and in a later session (it fails without the change), and a checkpoint taken
+in that state comes back with the object on the name's one store. Twenty local
+KTF archives name `deleteDataBase`. Through `run -serve`, forty rounds of
+twenty ticks with the fire key tapped every third round, a first and a second
+run over one save folder end on the same screen digest and leave the same save
+bytes before and after the change for all twenty. A probe build that reported
+the path showed two of them delete a database they held and open it again, and
+take the kept store at that open.
+
 **Real titles through the scenario, 2026-10-03.** No input script takes a real
 title to its save menu, so the save made in the game is one the title makes by
 itself. `run -serve` ran each archive in rounds of twenty ticks, with the fire
