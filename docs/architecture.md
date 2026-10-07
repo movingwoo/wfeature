@@ -509,12 +509,12 @@ synced before it is renamed into place; directory syncing retains the existing
 store's advisory OS/filesystem guarantees. This is not a claim of verified
 power-loss durability on every target.
 
-The store still carries the whole-generation replacement an earlier build's
-quick load used: stage the full set, verify it, record an intent, move the live
-directory to `previous` and install the staged one. **Nothing calls it any
-more.** What remains in use is its recovery, which every store operation runs
-first: a replacement that an earlier build left prepared or half-swapped rolls
-back, and a completed one keeps its new set and its `previous`. See
+An earlier build's quick load replaced the whole save folder: it staged the
+full set, verified it, recorded an intent, moved the live directory to
+`previous` and installed the staged one. **That writer has been removed.** What
+remains is its recovery, which every store operation runs first: a replacement
+that an earlier build left prepared or half-swapped rolls back, and a completed
+one keeps its new set and its `previous`. See
 [Leftovers from earlier builds](#leftovers-from-earlier-builds).
 
 The internal KTF session API joins client and authentication records. Its
@@ -609,11 +609,12 @@ Elapsed time and deadlines rebase at adoption, excluding detached staging time.
 A concurrent recovery defect discovered on 2026-10-01 interrupted implementation
 of the replacement path: an independent reader could delete an active
 replacement's staging and intent, leaving the original generation only in its
-backup. Shared filesystem locking and explicit active rollback cover that
-interleaving. The [regression evidence](testing.md#checkpoint-adoption-blocker)
-includes independent readers, aliases, refused replacement, process exclusion
-and crash recovery. A load no longer replaces a generation, so that path is now
-only reached through recovery of what an earlier build left.
+backup. Shared filesystem locking closed that interleaving, and the lock is
+what every store operation still takes. The
+[record of that repair](testing.md#checkpoint-adoption-blocker) covers aliases
+and process exclusion. A load no longer replaces a save folder and the writer
+is gone; recovery of what an earlier build left is tested from literal on-disk
+states.
 Earlier measurements and rejected approaches are preserved in the
 [snapshot investigation](history/maintenance.md#snapshot-feasibility).
 

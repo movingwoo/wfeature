@@ -13,14 +13,6 @@ import (
 
 const maxSnapshotSaveEntries = 65536
 
-// SaveSnapshotStore exposes a complete writable generation. Callers must hold
-// their session's admission barrier while capturing or replacing that generation.
-type SaveSnapshotStore interface {
-	SaveStore
-	SnapshotSaves() ([]SaveEntry, error)
-	ReplaceSaves([]SaveEntry) error
-}
-
 func validateSnapshotSaves(entries []SaveEntry) ([]SaveEntry, error) {
 	if len(entries) > maxSnapshotSaveEntries {
 		return nil, fmt.Errorf("save snapshot entry count exceeds limit")
@@ -48,9 +40,11 @@ func validateSnapshotSaves(entries []SaveEntry) ([]SaveEntry, error) {
 	return ordered, nil
 }
 
-// MemorySaveStore is an isolated generation used while validating a restored
-// session. Reads, writes, batches and snapshots own their bytes. It uses the same
-// key and file/directory collision rules as a directory store.
+// MemorySaveStore is a save store that exists only in memory: what a displaced
+// runtime is handed at a quick load, so that nothing it still does reaches the
+// saves, and what tests run a session over. Reads, writes, batches and
+// snapshots own their bytes. It uses the same key and file/directory collision
+// rules as a directory store.
 type MemorySaveStore struct {
 	mu      sync.Mutex
 	entries map[string][]byte
@@ -139,6 +133,8 @@ func cloneSaveEntries(entries []SaveEntry) map[string][]byte {
 	return result
 }
 
+// ReplaceSaves makes the store hold exactly these entries. Only the memory
+// store has it: nothing replaces the content of a save folder on disk.
 func (store *MemorySaveStore) ReplaceSaves(entries []SaveEntry) error {
 	if store == nil {
 		return fmt.Errorf("memory save store is nil")
