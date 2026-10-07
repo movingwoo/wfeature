@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"reflect"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -864,4 +865,65 @@ func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
 	last, lastRuntime := newTestRuntime(t)
 	last.saveStore = store
 	holds(lastRuntime, open(lastRuntime), "in a session after the update", 0, 0)
+}
+
+// A title that deletes a database while it holds it, opens the name again and
+// writes through both objects writes one database. The open used to make a
+// second store beside the one the old object kept, and each wrote its own
+// record list over the other's save: what was written through the new object
+// was gone after a write through the old one.
+func TestADatabaseOpenedAgainAfterADeleteIsTheOneTheOldObjectHolds(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	client, runtime := newTestRuntime(t)
+	client.saveStore = store
+	vm := client.JVM()
+	name := jvm.ReferenceValue(vm.NewString("save"))
+	open := func() jvm.Value {
+		t.Helper()
+		database, err := runtimeOpenDataBase(runtime, vm, []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return database
+	}
+	insert := func(database jvm.Value, data string) {
+		t.Helper()
+		if _, err := runtimeDataBaseInsert(runtime, vm, []jvm.Value{database, jvm.ReferenceValue(jvm.NewByteArray([]byte(data)))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records := func(database jvm.Value) [][]byte {
+		t.Helper()
+		object, err := database.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return object.Native.(*runtimeDataBaseStore).records
+	}
+
+	old := open()
+	insert(old, "gone")
+	if _, err := runtimeDataBaseDeleteStore(runtime, vm, []jvm.Value{name}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := open()
+	insert(fresh, "new1")
+	insert(old, "new2")
+	want := [][]byte{[]byte("new1"), []byte("new2")}
+	for label, database := range map[string]jvm.Value{"the old object": old, "the new object": fresh} {
+		if got := records(database); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s holds %q, want %q", label, got, want)
+		}
+	}
+
+	_, next := newTestRuntime(t)
+	next.client.saveStore = store
+	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records(value); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the next session reads %q, want %q", got, want)
+	}
 }

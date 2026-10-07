@@ -312,7 +312,20 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = nil
-	delete(runtime.databases, name)
+	if runtime.databases[name] == store {
+		delete(runtime.databases, name)
+		// An object the title opened before the delete still holds this
+		// store, and a title may open the name again and go on using both.
+		// The next open takes this store, as it takes one a quick load left
+		// without a database, and a write through the old object puts it
+		// back under its name (bindDetachedDatabase). Making a second store
+		// left two record lists under one name, each writing its own over
+		// the other's save.
+		if runtime.detachedDatabases == nil {
+			runtime.detachedDatabases = make(map[string]*runtimeDataBaseStore)
+		}
+		runtime.detachedDatabases[name] = store
+	}
 	return jvm.VoidValue(), nil
 }
 
@@ -400,6 +413,7 @@ func runtimeDataBaseUpdateRange(runtime *initializationRuntime, _ *jvm.VM, argum
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
+	runtime.bindDetachedDatabase(store)
 	return jvm.VoidValue(), nil
 }
 
