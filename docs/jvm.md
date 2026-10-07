@@ -11,6 +11,15 @@ file.
 
 ## Implemented
 
+The SKT checkpoint path joins bytecode continuations, a cancelable worker barrier
+and the heap. It preserves nested frames, native wait remainders, sleep/join,
+monitor wait/notification and contended entry, including synchronized native
+entry before its body runs. Authored timer bytecode retains task continuations;
+platform audio wait tokens retain the original playback generation. Detached
+restoration runs no initializer or lifecycle callback. The existing standalone
+heap and AOT execution contracts remain unchanged. See
+[the implementation record](skt-checkpoints.md) for limits and tests.
+
 The internal `NativeExecutionState` component preserves execution identity and
 spent bytecode budget while a platform supplies the remaining AOT work. It
 includes the core library's forwarding `Thread.run` bodies. Active bytecode

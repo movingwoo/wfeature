@@ -171,7 +171,7 @@ func (runtime *Runtime) initXFileArchive(_ *jvm.VM, arguments []jvm.Value) (jvm.
 	if !found {
 		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such archive entry: "+entry)
 	}
-	receiver.Native = &xFileData{name: name + "!/" + entry, data: contents, mode: xFileRead, open: true}
+	receiver.Native = &xFileData{name: name + "!/" + entry, archiveName: name, archiveEntry: entry, data: contents, mode: xFileRead, open: true}
 	return jvm.VoidValue(), nil
 }
 
@@ -299,11 +299,11 @@ func (runtime *Runtime) xFileSeek(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, 
 	default:
 		return jvm.IntValue(-1), nil
 	}
-	position := base + int(offset)
-	if position < 0 {
+	position := int64(base) + int64(offset)
+	if position < 0 || position > 1<<31-1 {
 		return jvm.IntValue(-1), nil
 	}
-	file.cursor = position
+	file.cursor = int(position)
 	return jvm.IntValue(int32(position)), nil
 }
 
@@ -348,7 +348,7 @@ func (runtime *Runtime) persistXFile(file *xFileData) {
 	if err != nil {
 		return
 	}
-	if err := store.StoreSave(key, data); err != nil && runtime.logger != nil {
+	if err := runtime.storeSave(key, data); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("XFile store failed", "name", name, "error", err)
 	}
 }
@@ -424,7 +424,7 @@ func (runtime *Runtime) xFileUnlink(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	if store == nil {
 		return jvm.IntValue(-1), nil
 	}
-	if err := store.StoreSave(key, nil); err != nil {
+	if err := runtime.storeSave(key, nil); err != nil {
 		return jvm.IntValue(-1), nil
 	}
 	return jvm.IntValue(0), nil

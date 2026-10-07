@@ -21,7 +21,7 @@ func (vm *VM) execute(
 	method *classfile.Member,
 	code *classfile.Code,
 	arguments []Value,
-) (Value, error) {
+) (result Value, executeErr error) {
 	if state.frames >= vm.config.MaxFrames {
 		return VoidValue(), ErrFrameLimit
 	}
@@ -32,8 +32,37 @@ func (vm *VM) execute(
 	if err != nil {
 		return VoidValue(), fmt.Errorf("create frame for %s.%s%s: %w", class.Name, method.Name, method.Descriptor, err)
 	}
-	defer state.releaseFrame(frame)
+	state.topFrame = frame
+	defer func() {
+		state.topFrame = frame.parent
+		state.releaseFrame(frame)
+	}()
+	if m := vm.bytecodeFrameMonitor(frame); m != nil {
+		frame.monitorPending = true
+		if err := vm.enterMonitor(state, m); err != nil {
+			return VoidValue(), err
+		}
+		frame.monitorPending = false
+		defer func() {
+			if err := m.exit(state.id); executeErr == nil {
+				executeErr = err
+			}
+		}()
+	}
+	return vm.executeFrame(state, frame)
+}
+
+// executeFrame runs an already constructed frame. A restored continuation
+// enters here after its pending callee has returned, without repeating the
+// invoke instruction or its argument pops.
+func (vm *VM) executeFrame(state *execution, frame *frame) (Value, error) {
+	class, method := frame.class, frame.method
 	for {
+		if vm.checkpointPause.Load() != nil && state.thread != nil {
+			if err := vm.parkThread(state); err != nil {
+				return VoidValue(), err
+			}
+		}
 		if frame.pc < 0 || frame.pc >= len(frame.code.Bytecode) {
 			return VoidValue(), fmt.Errorf("method %s.%s%s fell off bytecode at pc %d", class.Name, method.Name, method.Descriptor, frame.pc)
 		}
@@ -43,6 +72,7 @@ func (vm *VM) execute(
 			}
 		}
 		opcodePC := frame.pc
+		frame.opcodePC = opcodePC
 		opcode, _ := frame.byte()
 		state.steps++
 		if vm.traceInstructions {
@@ -592,8 +622,16 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 			return stepResult{}, guestException("java/lang/NullPointerException", "monitor operation")
 		}
 		if opcode == 0xc2 {
-			object.monitor.enter(state.id)
-			return stepResult{}, nil
+			// Entry has no effect until the lock is held. Retain its operand
+			// and instruction budget at that boundary while it is pending.
+			if err := frame.push(ReferenceValue(object)); err != nil {
+				return stepResult{}, err
+			}
+			frame.pc, state.steps = opcodePC, state.steps-1
+			err := vm.enterMonitor(state, &object.monitor)
+			frame.pc, state.steps = opcodePC+1, state.steps+1
+			_, _ = frame.pop()
+			return stepResult{}, err
 		}
 		if err := object.monitor.exit(state.id); err != nil {
 			return stepResult{}, guestException("java/lang/IllegalMonitorStateException", err.Error())

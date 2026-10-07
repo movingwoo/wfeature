@@ -56,10 +56,12 @@ func (runtime *Runtime) SendKey(eventType KeyEventType, keyCode int32) error {
 	if _, ok := keyCallback(eventType); !ok {
 		return fmt.Errorf("%w: %q", ErrInvalidKeyEvent, eventType)
 	}
+	runtime.dispatchMu.Lock()
+	defer runtime.dispatchMu.Unlock()
 	// A repeat is neither a press nor a release, so it does not move the pad;
 	// it is delivered to whatever the pad last reported.
 	if eventType == KeyRepeated {
-		return runtime.deliverKey(eventType, keyCode)
+		return runtime.deliverKeyLocked(eventType, keyCode)
 	}
 	runtime.padMu.Lock()
 	if runtime.pad.IsPad == nil {
@@ -72,7 +74,7 @@ func (runtime *Runtime) SendKey(eventType KeyEventType, keyCode int32) error {
 		if event.Pressed {
 			kind = KeyPressed
 		}
-		if err := runtime.deliverKey(kind, event.Code); err != nil {
+		if err := runtime.deliverKeyLocked(kind, event.Code); err != nil {
 			return err
 		}
 	}
@@ -103,12 +105,12 @@ func isPadKey(keyCode int32) bool {
 	return false
 }
 
-func (runtime *Runtime) deliverKey(eventType KeyEventType, keyCode int32) error {
+func (runtime *Runtime) deliverKeyLocked(eventType KeyEventType, keyCode int32) error {
 	callback, ok := keyCallback(eventType)
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrInvalidKeyEvent, eventType)
 	}
-	return runtime.dispatch("Canvas."+callback, func() error {
+	return runtime.dispatchLocked("Canvas."+callback, func() error {
 		return runtime.deliverCurrentCanvasKey(eventType, callback, keyCode)
 	})
 }

@@ -21,6 +21,10 @@ func heapType(descriptor string) (Type, error) {
 }
 
 func (saved HeapState) validate(options Options) error {
+	return saved.validateThreads(options, false)
+}
+
+func (saved HeapState) validateThreads(options Options, threads bool) error {
 	if saved.Version != heapStateVersion || saved.MaxArrayLength != options.MaxArrayLength || saved.CooperativeThreads != (options.GuestThreadStarter != nil) || saved.NextObject > 1<<31-1 || saved.NextExecution > maxRestoredExecutionID {
 		return fmt.Errorf("JVM heap version, identity counters, or execution policy is incompatible")
 	}
@@ -96,7 +100,7 @@ func (saved HeapState) validate(options Options) error {
 			}
 		}
 		if state := object.Thread; state != nil {
-			if state.Alive && !state.Started || state.Registered != state.Alive || state.Registered && !saved.CooperativeThreads {
+			if state.Alive && !state.Started || state.Registered != state.Alive || state.Registered && !saved.CooperativeThreads && !threads {
 				return fmt.Errorf("JVM heap has inconsistent thread state")
 			}
 		}
@@ -288,10 +292,14 @@ func (saved HeapState) validate(options Options) error {
 // Callers must exclude all execution and rebind every platform-owned root to the
 // returned objects. A failed decode leaves the destination VM unchanged.
 func (vm *VM) RestoreHeapState(saved HeapState, codec HeapCodec) ([]*Object, error) {
+	return vm.restoreHeapState(saved, codec, false)
+}
+
+func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed bool) ([]*Object, error) {
 	if vm == nil {
 		return nil, fmt.Errorf("restore JVM heap without a VM")
 	}
-	if err := saved.validate(vm.config); err != nil {
+	if err := saved.validateThreads(vm.config, threadsAllowed); err != nil {
 		return nil, err
 	}
 	select {

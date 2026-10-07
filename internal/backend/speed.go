@@ -104,6 +104,15 @@ func (clock *SpeedClock) Speed() float64 {
 	return clock.speed
 }
 
+// Rebase resumes a parked guest clock at the supplied guest instant. Hosts
+// exclude guest execution while using this for checkpoint capture or adoption,
+// so encoding and validation time never becomes elapsed guest time.
+func (clock *SpeedClock) Rebase(instant time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.scaledAt, clock.sourceAt = instant, clock.source()
+}
+
 // SourceDuration answers what a stretch of the game's time costs on the clock
 // underneath, which is what a Host waiting out a callback interval waits.
 func (clock *SpeedClock) SourceDuration(scaled time.Duration) time.Duration {

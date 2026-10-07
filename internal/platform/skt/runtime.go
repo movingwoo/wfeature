@@ -88,16 +88,17 @@ type Runtime struct {
 	// cycle, before the next serial callback can clear frame input.
 	runningSerial bool
 
-	framebuffer  backend.Framebuffer
-	frameWidth   int
-	frameHeight  int
-	legacyClip   bool
-	renderMu     sync.Mutex
-	frameRGBA    []byte
-	refreshFrame []byte
-	pendingPaint paintRect
-	paintCanvas  *jvm.Object
-	paintQueued  bool
+	framebuffer       backend.Framebuffer
+	checkpointSurface *javaCheckpointFramebuffer
+	frameWidth        int
+	frameHeight       int
+	legacyClip        bool
+	renderMu          sync.Mutex
+	frameRGBA         []byte
+	refreshFrame      []byte
+	pendingPaint      paintRect
+	paintCanvas       *jvm.Object
+	paintQueued       bool
 	// paintPosted tracks the queued callback separately from dirty pixels:
 	// serviceRepaints can paint those pixels before the Host drains that callback.
 	paintPosted bool
@@ -167,10 +168,12 @@ type Runtime struct {
 	// the thread outlives the program it belongs to. See audioClipPlay.
 	audioWaits map[chan struct{}]struct{}
 
-	saveMu    sync.RWMutex
-	saveStore backend.SaveStore
-	rmsOnce   sync.Once
-	rmsState  *rmsState
+	saveMu        sync.RWMutex
+	saveStore     backend.SaveStore
+	savePendingMu sync.Mutex
+	pendingSaves  map[string][]byte
+	rmsOnce       sync.Once
+	rmsState      *rmsState
 	// now reads the wall clock RecordStore.getLastModified reports. It is a
 	// field so a test can pin it; nothing else in this runtime depends on
 	// real time.
@@ -191,6 +194,8 @@ func (runtime *Runtime) SetSpeed(multiplier float64) {
 	if runtime == nil || runtime.pace == nil {
 		return
 	}
+	runtime.dispatchMu.Lock()
+	defer runtime.dispatchMu.Unlock()
 	runtime.pace.SetSpeed(multiplier)
 }
 
@@ -275,6 +280,19 @@ type DisplaySummary struct {
 // event loop. Runtime-owned MIDP classes take precedence over classes bundled
 // by the application.
 func Start(archive *Archive, options Options) (*Runtime, error) {
+	runtime, err := newRuntime(archive, options)
+	if err != nil {
+		return runtime, err
+	}
+	if err := runtime.dispatch("start", runtime.start); err != nil {
+		return runtime, err
+	}
+	return runtime, nil
+}
+
+// newRuntime installs the same services for startup and detached restoration.
+// It allocates no application object and runs no guest initializer or callback.
+func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	if archive == nil {
 		return nil, fmt.Errorf("SKT archive is nil")
 	}
@@ -400,6 +418,10 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	for index := 3; index < len(runtime.frameRGBA); index += 4 {
 		runtime.frameRGBA[index] = 0xff
 	}
+	if options.Framebuffer != nil {
+		runtime.checkpointSurface = &javaCheckpointFramebuffer{output: options.Framebuffer, width: frameWidth, height: frameHeight}
+		runtime.framebuffer = runtime.checkpointSurface
+	}
 
 	isMIDlet, err := machine.IsSubclassOf(archive.Descriptor.MainClass, midp.MIDletClass)
 	if err != nil {
@@ -432,9 +454,6 @@ func Start(archive *Archive, options Options) (*Runtime, error) {
 	}
 	if err := runtime.registerWIPINatives(); err != nil {
 		return runtime, runtime.fail("register WIPI Java services", err)
-	}
-	if err := runtime.dispatch("start", runtime.start); err != nil {
-		return runtime, err
 	}
 	return runtime, nil
 }
@@ -641,6 +660,12 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 func (runtime *Runtime) dispatch(name string, handler func() error) error {
 	runtime.dispatchMu.Lock()
 	defer runtime.dispatchMu.Unlock()
+	return runtime.dispatchLocked(name, handler)
+}
+
+// dispatchLocked lets a Host key keep pad ownership and all derived callbacks
+// in the same operation, including with a checkpoint requested concurrently.
+func (runtime *Runtime) dispatchLocked(name string, handler func() error) error {
 	if err := runtime.events.Post(name, handler); err != nil {
 		return runtime.fail("queue "+name, err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
@@ -17,6 +18,182 @@ import (
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
+
+func checkpointSKTCLIArchive(t *testing.T, kind string) []byte {
+	t.Helper()
+	if kind == "java" {
+		archive, err := os.ReadFile(filepath.Join("..", "..", "internal", "platform", "skt", "testdata", "checkpoint-skt.zip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return archive
+	}
+	// Authored SGS: load a counter and show white; each key saves its next
+	// value and shows black. Shutdown has no save side effect.
+	data := make([]byte, 52)
+	data[0] = 1
+	copy(data[10:26], "Host checkpoint")
+	for index, code := range [][]byte{
+		{5, 16, 5, 1, 0x98, 0x55, 0x78, 0xff}, {0xff}, {0xff},
+		{0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0x56, 0x78, 0xff},
+	} {
+		binary.LittleEndian.PutUint16(data[28+index*2:], uint16(len(data)))
+		data = append(data, code...)
+	}
+	variables := len(data)
+	for range 17 {
+		data = append(data, 1, 1, 0, 0)
+	}
+	for i, offset := range []int{variables, len(data), len(data), len(data)} {
+		binary.LittleEndian.PutUint16(data[44+i*2:], uint16(offset))
+	}
+	var descriptor []byte
+	for _, value := range []string{"application/x-gnex-sgs", "SGS"} {
+		descriptor = binary.LittleEndian.AppendUint32(descriptor, uint32(len(value)))
+		descriptor = append(descriptor, value...)
+	}
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{{"checkpoint.mod", descriptor}, {"checkpoint.sgs", data}} {
+		file, err := writer.Create(entry.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
+}
+
+func checkpointSKTCLIFixture(t *testing.T, kind string) (saveCLIFixture, *backend.DirectorySaveStore) {
+	t.Helper()
+	archive := checkpointSKTCLIArchive(t, kind)
+	summary, err := session.Inspect(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	fixture := saveCLIFixture{path: filepath.Join(root, "checkpoint.zip"), saveRoot: filepath.Join(root, "saves"), archive: archive}
+	fixture.slots = filepath.Join(fixture.saveRoot, ".wfeature-quicksave", "owners", summary.SaveOwner)
+	if err := os.WriteFile(fixture.path, archive, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return fixture, backend.NewDirectorySaveStore(filepath.Join(fixture.saveRoot, summary.SaveOwner))
+}
+
+func TestCheckpointSKTCLILiveCommandsSurviveInvalidLoad(t *testing.T) {
+	for _, kind := range []string{"java", "sgs"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture, store := checkpointSKTCLIFixture(t, kind)
+			seed, err := session.Start(t.Context(), fixture.archive, session.Options{SaveStore: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(seed.Close)
+			if !seed.CanCheckpoint() {
+				t.Fatal("SKT fixture does not advertise checkpoints")
+			}
+			data, err := seed.CaptureCheckpoint(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity := backend.SaveIdentity(fixture.archive)
+			if err := store.StoreCheckpoint(identity, data); err != nil {
+				t.Fatal(err)
+			}
+			seed.Close()
+			data[len(data)-1] ^= 1
+			if err := os.WriteFile(filepath.Join(fixture.slots, fmt.Sprintf("%x.v2.wfq", identity)), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			commands := `{"cmd":"quickload"}
+{"cmd":"key","key":"1","action":"press"}
+{"cmd":"quicksave"}
+{"cmd":"screen"}
+{"cmd":"key","key":"1","action":"release"}
+{"cmd":"key","key":"2","action":"press"}
+{"cmd":"key","key":"2","action":"release"}
+{"cmd":"quickload"}
+{"cmd":"quicksave"}
+{"cmd":"quit"}
+`
+			replies := serveSaveCLI(t, fixture, commands)
+			for i, reply := range replies {
+				if reply.OK != (i != 0) || reply.Ended {
+					t.Fatalf("SKT command %d = %+v", i, reply)
+				}
+			}
+			if replies[0].Error == "" || replies[3].Screen == nil || replies[7].Digest != replies[2].Digest {
+				t.Fatal("invalid load was not refused or the saved frame was not restored")
+			}
+			data, found, err := store.LoadCheckpoint(identity)
+			if err != nil || !found {
+				t.Fatalf("SKT CLI did not replace the damaged slot: %v, %t", err, found)
+			}
+			restored, err := session.RestoreCheckpoint(t.Context(), fixture.archive, data, session.Options{SaveStore: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			if !restored.CanCheckpoint() || !restored.Running() || restored.Paused() || !reflect.DeepEqual(restored.HeldKeys(), []int32{'1'}) {
+				t.Fatalf("CLI restored incorrect execution/input state: %v", restored.HeldKeys())
+			}
+			if _, err := restored.Tick(t.Context(), 0); err != nil {
+				t.Fatalf("restored CLI execution cannot continue: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckpointSKTCLIPausedStartupResumesThroughPark(t *testing.T) {
+	for _, kind := range []string{"java", "sgs"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture, store := checkpointSKTCLIFixture(t, kind)
+			game, err := session.Start(t.Context(), fixture.archive, session.Options{SaveStore: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(game.Close)
+			if err := game.Pause(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			data, err := game.CaptureCheckpoint(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity := backend.SaveIdentity(fixture.archive)
+			if err := store.StoreCheckpoint(identity, data); err != nil {
+				t.Fatal(err)
+			}
+			game.Close()
+			replies := serveSaveCLI(t, fixture, "{\"cmd\":\"step\"}\n{\"cmd\":\"park\",\"ms\":0}\n{\"cmd\":\"step\"}\n{\"cmd\":\"quicksave\"}\n{\"cmd\":\"quit\"}\n", "-quickload")
+			for i, reply := range replies {
+				if !reply.OK || reply.Ended || i == 0 && !reply.Stalled {
+					t.Fatalf("paused SKT command %d = %+v", i, reply)
+				}
+			}
+			data, _, err = store.LoadCheckpoint(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored, err := session.RestoreCheckpoint(t.Context(), fixture.archive, data, session.Options{SaveStore: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			if restored.Paused() || !restored.Running() {
+				t.Fatal("park did not resume the paused SKT checkpoint")
+			}
+		})
+	}
+}
 
 func checkpointCLIFixture(t *testing.T) (path, root string, archive []byte) {
 	t.Helper()

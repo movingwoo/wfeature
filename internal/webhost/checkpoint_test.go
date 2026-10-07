@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,59 @@ import (
 	"github.com/movingwoo/wfeature/internal/testfixture"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
+
+func checkpointSKTBrowserArchive(t *testing.T, kind string) []byte {
+	t.Helper()
+	if kind == "java" {
+		archive, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "checkpoint-skt.zip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return archive
+	}
+	// Authored SGS: load a counter and show white; each key saves its next
+	// value and shows black. Shutdown has no save side effect.
+	data := make([]byte, 52)
+	data[0] = 1
+	copy(data[10:26], "Host checkpoint")
+	for index, code := range [][]byte{
+		{5, 16, 5, 1, 0x98, 0x55, 0x78, 0xff}, {0xff}, {0xff},
+		{0x3a, 16, 1, 5, 16, 5, 1, 0x99, 0x56, 0x78, 0xff},
+	} {
+		binary.LittleEndian.PutUint16(data[28+index*2:], uint16(len(data)))
+		data = append(data, code...)
+	}
+	variables := len(data)
+	for range 17 {
+		data = append(data, 1, 1, 0, 0)
+	}
+	for i, offset := range []int{variables, len(data), len(data), len(data)} {
+		binary.LittleEndian.PutUint16(data[44+i*2:], uint16(offset))
+	}
+	var descriptor []byte
+	for _, value := range []string{"application/x-gnex-sgs", "SGS"} {
+		descriptor = binary.LittleEndian.AppendUint32(descriptor, uint32(len(value)))
+		descriptor = append(descriptor, value...)
+	}
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{{"checkpoint.mod", descriptor}, {"checkpoint.sgs", data}} {
+		file, err := writer.Create(entry.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
+}
 
 func checkpointServer(t *testing.T, root string) *Server {
 	t.Helper()
@@ -48,9 +103,13 @@ func writeCheckpointGame(t *testing.T, root, platform string, archive []byte) {
 }
 
 func TestCheckpointBrowserHostResumesAPausedSlot(t *testing.T) {
-	for _, platform := range []string{"ktf", "lgt"} {
+	for _, variant := range []string{"ktf", "lgt", "skt_java", "skt_sgs"} {
+		platform := variant
+		if strings.HasPrefix(variant, "skt_") {
+			platform = "skt"
+		}
 		for _, startup := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s_startup_%t", platform, startup), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s_startup_%t", variant, startup), func(t *testing.T) {
 				root, _ := checkpointServerFiles(t)
 				game := "games/" + platform + "/checkpoint.zip"
 				if platform == "lgt" {
@@ -59,6 +118,9 @@ func TestCheckpointBrowserHostResumesAPausedSlot(t *testing.T) {
 						t.Fatal(err)
 					}
 					writeCheckpointGame(t, root, platform, archive)
+				}
+				if platform == "skt" {
+					writeCheckpointGame(t, root, platform, checkpointSKTBrowserArchive(t, strings.TrimPrefix(variant, "skt_")))
 				}
 				r := &sessionRunner{server: checkpointServer(t, root), frames: make(chan pendingFrame, 1), outText: make(chan outboundMessage, 64)}
 				r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: game, ID: 1})
@@ -91,6 +153,150 @@ func TestCheckpointBrowserHostResumesAPausedSlot(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCheckpointSKTBrowserHandlersPreserveFailedLoadAndResetEpochs(t *testing.T) {
+	for _, kind := range []string{"java", "sgs"} {
+		t.Run(kind, func(t *testing.T) {
+			archive := checkpointSKTBrowserArchive(t, kind)
+			root := t.TempDir()
+			writeCheckpointGame(t, root, "skt", archive)
+			r := &sessionRunner{server: checkpointServer(t, root), frames: make(chan pendingFrame, 8), outText: make(chan outboundMessage, 64)}
+			r.startGame(t.Context(), clientMessage{Kind: clientStart, Game: "games/skt/checkpoint.zip", ID: 1})
+			if r.game == nil || !r.started.CanCheckpoint || r.started.HasCheckpoint {
+				t.Fatalf("SKT checkpoint capability missing: %+v", readCheckpointReplies(t, r))
+			}
+			t.Cleanup(r.stopGame)
+			readCheckpointReplies(t, r)
+			r.handle(t.Context(), clientMessage{Kind: clientKey, Action: session.KeyPress, Code: '1'})
+			r.handle(t.Context(), clientMessage{Kind: clientQuickSave, ID: 2})
+			if replies := readCheckpointReplies(t, r); len(replies) != 1 || replies[0].Kind != serverResult || !r.started.HasCheckpoint {
+				t.Fatalf("SKT save result=%+v", replies)
+			}
+			savedFrame, _, _, _ := r.game.Frame()
+			r.handle(t.Context(), clientMessage{Kind: clientKey, Action: session.KeyRelease, Code: '1'})
+			r.handle(t.Context(), clientMessage{Kind: clientKey, Action: session.KeyPress, Code: '2'})
+			before, _, _, _ := r.game.Frame()
+			store := backend.NewDirectorySaveStore(r.saveDirectory)
+			if err := store.StoreSave("progress", []byte("later progress")); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "games", "skt", "checkpoint.zip")
+			if err := os.WriteFile(path, append(bytes.Clone(archive), 0), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r.handle(t.Context(), clientMessage{Kind: clientQuickLoad, ID: 3})
+			if replies := readCheckpointReplies(t, r); len(replies) != 1 || replies[0].Kind != serverError || r.outputEpoch.Load() != 0 || !r.game.Running() || r.game.Failed() != nil {
+				t.Fatalf("failed SKT load displaced its source: %+v", replies)
+			}
+			after, _, _, _ := r.game.Frame()
+			if !bytes.Equal(before, after) || !reflect.DeepEqual(r.game.HeldKeys(), []int32{'2'}) {
+				t.Fatal("failed SKT load changed the live frame or held input")
+			}
+			if _, err := r.game.Tick(t.Context(), 0); err != nil {
+				t.Fatalf("source cannot continue after refused load: %v", err)
+			}
+			if err := os.WriteFile(path, archive, 0600); err != nil {
+				t.Fatal(err)
+			}
+			r.handle(t.Context(), clientMessage{Kind: clientQuickLoad, ID: 4})
+			replies := readCheckpointReplies(t, r)
+			if len(replies) == 0 || replies[0].Kind != serverRestored || replies[0].Epoch != 1 || !r.started.Restored || len(r.game.HeldKeys()) != 0 || len(r.heldKeys) != 0 {
+				t.Fatalf("SKT load did not reset output/input epochs: %+v", replies)
+			}
+			after, _, _, _ = r.game.Frame()
+			if !bytes.Equal(savedFrame, after) {
+				t.Fatal("SKT load did not restore its presented frame")
+			}
+			var final pendingFrame
+			for len(r.frames) > 0 {
+				final = <-r.frames
+			}
+			if final.Epoch != 1 || !final.Force {
+				t.Fatal("restored SKT output did not request a complete frame")
+			}
+			r.handle(t.Context(), clientMessage{Kind: clientKey, ID: 5, Action: session.KeyPress, Code: '3'})
+			if replies := readCheckpointReplies(t, r); len(replies) != 1 || replies[0].Kind != serverError || len(r.game.HeldKeys()) != 0 {
+				t.Fatalf("stale SKT input reached the restored guest: %+v", replies)
+			}
+			r.handle(t.Context(), clientMessage{Kind: clientKey, Action: session.KeyPress, Code: '4', Epoch: 1})
+			if !reflect.DeepEqual(r.game.HeldKeys(), []int32{'4'}) {
+				t.Fatal("current SKT input epoch was refused")
+			}
+			if data, found := store.LoadSave("progress"); !found || string(data) != "later progress" {
+				t.Fatal("SKT load rewound the later ordinary save")
+			}
+		})
+	}
+}
+
+func TestCheckpointSKTBrowserProtocol(t *testing.T) {
+	for _, kind := range []string{"java", "sgs"} {
+		t.Run(kind, func(t *testing.T) {
+			archive := checkpointSKTBrowserArchive(t, kind)
+			root := t.TempDir()
+			writeCheckpointGame(t, root, "skt", archive)
+			server := checkpointServer(t, root)
+			connection, _ := dialCheckpointServer(t, server)
+			send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/checkpoint.zip", ID: 1})
+			started := expectMessage(t, connection, serverStarted)
+			if started.Started == nil || !started.Started.CanCheckpoint || started.Started.HasCheckpoint {
+				t.Fatalf("SKT wire capability=%+v", started)
+			}
+			send(t, connection, clientMessage{Kind: clientKey, Action: session.KeyPress, Code: '1'})
+			send(t, connection, clientMessage{Kind: clientQuickSave, ID: 2})
+			if reply := expectMessage(t, connection, serverResult); reply.ID != 2 {
+				t.Fatalf("save acknowledgement=%+v", reply)
+			}
+			send(t, connection, clientMessage{Kind: clientKey, Action: session.KeyRelease, Code: '1'})
+			send(t, connection, clientMessage{Kind: clientQuickLoad, ID: 3})
+			restored := expectMessage(t, connection, serverRestored)
+			if restored.Epoch != 1 || restored.Started == nil || !restored.Started.HasCheckpoint || !restored.Started.Restored {
+				t.Fatalf("SKT wire restore=%+v", restored)
+			}
+			for {
+				opcode, payload, err := connection.ReadMessage()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if opcode != wsproto.OpBinary || !bytes.HasPrefix(payload, pictureMagic) {
+					continue
+				}
+				if len(payload) < pictureHeaderSize || payload[4] != pictureComplete {
+					t.Fatal("new SKT timeline began without a complete picture")
+				}
+				picture, _ := applyStreamMessage(t, nil, payload)
+				if picture.Bounds().Empty() {
+					t.Fatal("restored SKT picture is empty")
+				}
+				break
+			}
+			send(t, connection, clientMessage{Kind: clientKey, ID: 4, Action: session.KeyPress, Code: '2'})
+			if reply := expectMessage(t, connection, serverError); reply.ID != 4 || reply.Epoch != 1 || !strings.Contains(reply.Message, "previous timeline") {
+				t.Fatalf("stale SKT wire input=%+v", reply)
+			}
+			send(t, connection, clientMessage{Kind: clientKey, Action: session.KeyPress, Code: '3', Epoch: 1})
+			send(t, connection, clientMessage{Kind: clientQuickSave, ID: 5, Epoch: 1})
+			if reply := expectMessage(t, connection, serverResult); reply.ID != 5 {
+				t.Fatalf("restored SKT session stopped responding: %+v", reply)
+			}
+			send(t, connection, clientMessage{Kind: clientStop, ID: 6, Epoch: 1})
+			expectMessage(t, connection, serverResult)
+			store := backend.NewDirectorySaveStore(server.saveDirectory("skt", started.Started.SaveOwner))
+			data, found, err := store.LoadCheckpoint(backend.SaveIdentity(archive))
+			if err != nil || !found {
+				t.Fatalf("SKT protocol did not persist its slot: %v", err)
+			}
+			game, err := session.RestoreCheckpoint(t.Context(), archive, data, session.Options{SaveStore: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer game.Close()
+			if !reflect.DeepEqual(game.HeldKeys(), []int32{'3'}) {
+				t.Fatalf("wire load retained old input or dropped current input: %v", game.HeldKeys())
+			}
+		})
 	}
 }
 

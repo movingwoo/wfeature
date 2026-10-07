@@ -75,13 +75,15 @@ type sisImageData struct {
 }
 
 type xFileData struct {
-	mu       sync.Mutex
-	name     string
-	mode     int32
-	data     []byte
-	cursor   int
-	open     bool
-	writable bool
+	mu           sync.Mutex
+	name         string
+	archiveName  string
+	archiveEntry string
+	mode         int32
+	data         []byte
+	cursor       int
+	open         bool
+	writable     bool
 	// dirty marks a file whose bytes have not reached the Host save store yet;
 	// close and flush are what write them.
 	dirty bool
@@ -109,10 +111,11 @@ type xTextFieldData struct {
 }
 
 type audioClipData struct {
-	mu     sync.Mutex
-	handle backend.AudioHandle
-	loop   bool
-	paused bool
+	mu         sync.Mutex
+	handle     backend.AudioHandle
+	loop       bool
+	paused     bool
+	generation uint64
 	// playing is closed when whatever is playing stops being what `play` is
 	// waiting for — a stop, a pause, a close, or another start on the same
 	// clip. A waiting thread selects on it so that a title that stops its own
@@ -125,6 +128,7 @@ type audioClipData struct {
 // session ends a wait nothing else will.
 func (runtime *Runtime) startPlaying(clip *audioClipData) chan struct{} {
 	runtime.endPlaying(clip)
+	clip.generation++
 	clip.playing = make(chan struct{})
 	runtime.audioMu.Lock()
 	if runtime.audioWaits == nil {
@@ -1145,23 +1149,10 @@ func (runtime *Runtime) audioClipStart(call *jvm.Invocation, arguments []jvm.Val
 		wait = runtime.realDuration(length)
 	}
 	clip.mu.Lock()
-	stopped := runtime.startPlaying(clip)
+	runtime.startPlaying(clip)
+	token := &audioCheckpointWait{runtime: runtime, clip: clip, generation: clip.generation, repeat: repeat}
 	clip.mu.Unlock()
-	waited := call.WaitAsGuestThread(wait, stopped)
-	clip.mu.Lock()
-	interrupted := clip.playing != stopped
-	if clip.playing == stopped {
-		runtime.endPlaying(clip)
-	}
-	clip.mu.Unlock()
-	// A caller that stopped playback did not finish the piece. Guest audio
-	// workers use their exception path to clear repeat state; reporting a
-	// normal return can leave them sleeping while holding a monitor that
-	// the next event callback needs.
-	if waited && interrupted {
-		return jvm.VoidValue(), newGuestException(skvm.UserStopExceptionClass, "audio playback stopped")
-	}
-	return jvm.VoidValue(), nil
+	return token.ResumeCheckpointWait(call, !repeat, max(wait, 0))
 }
 
 // realDuration converts a length on the MIDlet's own clock — which is what the

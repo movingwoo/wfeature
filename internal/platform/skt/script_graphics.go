@@ -12,6 +12,8 @@ import (
 
 // scriptGraphics retains indexed pixels until the guest explicitly presents.
 type scriptGraphics struct {
+	lastFrame []byte
+	presents  uint64
 	// Byte palettes alias the original renderer's adjacent queue state. Native
 	// pointer bytes become unknown when queued; never substitute host addresses.
 	bitmapQueueScratch                   [256 - 182]byte
@@ -194,7 +196,11 @@ func (g *scriptGraphics) present() error {
 		rgba[i*4+2] = byte(int(c&3) * 255 / 3)
 		rgba[i*4+3] = 255
 	}
-	return g.framebuffer.Present(backend.Frame{Width: g.width, Height: g.height, RGBA: rgba})
+	if err := g.framebuffer.Present(backend.Frame{Width: g.width, Height: g.height, RGBA: rgba}); err != nil {
+		return err
+	}
+	g.lastFrame, g.presents = rgba, g.presents+1
+	return nil
 }
 
 func (g *scriptGraphics) call(op byte, vm *sgsvm.VM) (bool, error) {

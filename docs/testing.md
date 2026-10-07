@@ -1015,3 +1015,23 @@ checks. [Coverage audits](history/coverage.md) retain the 2026-09-12 source
 snapshot; their missing-method tables are historical, not a current task list.
 Current platform overviews identify supported behavior and remaining limits.
 Documentation consolidation itself is not a new runtime acceptance run.
+
+### SKT execution checkpoints
+
+[The SKT checkpoint record](skt-checkpoints.md) describes the implementation and
+its supported boundaries. Focused suites are `TestThreadCheckpoint`,
+`TestCheckpointNativeWait`, `TestJavaCheckpoint`, `TestJavaPlatformCheckpoint`,
+`TestScriptCheckpoint` and the shared `TestCheckpointSKTJava`/
+`TestCheckpointScript`. Authored worker fixtures verify continuation and monitor
+ownership; platform tests verify current ordinary-save reconstruction and
+refused-load isolation. Subprocess tests accept
+`WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY` to exercise both debug/release
+directions using separately compiled test executables.
+
+CLI and webhost checkpoint suites now include both SKT variants. The rendered
+client route is `web/acceptance/checkpoint-skt.mjs`; it builds on the existing
+Playwright acceptance setup. Chromium and WebKit exercise actual keypad
+placement/save/load, restored pixels and input epochs, corrupt-slot feedback,
+and unchanged ordinary save hashes. Real-archive probes remain opt-in through
+`TestLocalSKTCheckpoint`, with separate temporary saves and anonymous digest
+labels. No local game data is bundled in these tests.
