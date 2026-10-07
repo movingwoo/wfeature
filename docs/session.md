@@ -55,6 +55,20 @@ budget or a limit on every socket and archive-inspection request.
 
 Parking releases held input, detaches presentation, and drives the platform's
 pause boundary. Resuming reattaches presentation and drives resume. These
+callbacks do not establish that all guest threads and clocks freeze.
+
+Stopping the server ends every game it holds. A parked game is closed where it
+waits. A game whose page is still attached is asked to close: its runner
+finishes the round it is in and closes the session on its own goroutine, the
+way a page's `stop` does, and the server waits for that before it exits. The
+HTTP server's own shutdown does not reach a session socket, so without this a
+connected game would end with the process, and whatever its title had written
+and not yet handed to the save store — a file it left open, keys a native
+package keeps until a frame ends — would be lost. The wait shares the
+shutdown's ten-second deadline; a runner that has not let go by then is named
+in the log. Once a stop has begun, nothing starts, resumes or parks. Ordinary
+saves and explicit KTF checkpoint slots survive; a later page can choose to
+restore the slot instead of starting over.
 callbacks do not establish that all guest threads and clocks freeze. Stopping
 the server ends retained games. Ordinary saves and explicit checkpoint slots
 survive; a later page can choose to restore the slot instead of starting over.

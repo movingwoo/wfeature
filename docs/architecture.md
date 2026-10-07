@@ -382,7 +382,10 @@ framing:
 
 A parked session retains live objects and suspended Go call stacks in server
 memory. It survives a disconnected browser, but not server shutdown. Guest
-save files and `.wfs` exports do not capture that execution state.
+save files and `.wfs` exports do not capture that execution state. A server
+that stops closes parked and attached sessions alike before it exits, so the
+writes a title had issued reach its save files; see
+[retention and control](session.md#retention-and-control).
 
 KTF and LGT quick save/load join the shared session, CLI, server and browser
 controls. The envelope, the save transaction, the slot and the Host commands are
