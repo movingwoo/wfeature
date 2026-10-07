@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 	"syscall"
@@ -92,8 +91,8 @@ func (store *DirectorySaveStore) readSaveLimit(name string, limit int64) ([]byte
 		return nil, false, err
 	}
 	file, err := os.Open(path)
-	// The two answers readSave gives for a key with no entry: nothing at the
-	// path, and a path that runs below a saved file.
+	// Two of the answers readSave gives for a key with no entry: nothing at
+	// the path, and a path that runs below a saved file.
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return nil, false, nil
 	}
@@ -107,12 +106,12 @@ func (store *DirectorySaveStore) readSaveLimit(name string, limit int64) ([]byte
 	if err != nil {
 		return nil, false, err
 	}
-	// A directory opens without complaint and has a size of its own. Reading
-	// it is the error an ordinary read reports, and it has to be decided
-	// before the size is compared, or a directory would be refused as a save
-	// that is too large.
+	// The third: a directory, which keys below it made (see keyIsDirectory).
+	// It opens without complaint and has a size of its own, so it has to be
+	// decided before the size is compared, or a directory would be refused as
+	// a save that is too large.
 	if info.IsDir() {
-		return nil, false, &fs.PathError{Op: "read", Path: path, Err: syscall.EISDIR}
+		return nil, false, nil
 	}
 	if info.Size() > limit {
 		return nil, false, saveLimitError(name, info.Size(), limit)

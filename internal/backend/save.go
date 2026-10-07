@@ -102,8 +102,8 @@ func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
 	return data, exists
 }
 
-// ReadSave reports absence for a missing file or a path below a non-directory,
-// preserving other read errors.
+// ReadSave reports absence for a missing file, a path below a non-directory and
+// a path that is a directory, preserving other read errors.
 func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	if store == nil {
 		return nil, false, fmt.Errorf("save store has no root")
@@ -132,9 +132,28 @@ func (store *DirectorySaveStore) readSave(name string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	if err != nil {
+		if keyIsDirectory(path) {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	return data, true, nil
+}
+
+// keyIsDirectory reports whether a key's path is a directory, which keys below
+// it made: "fs/saves/slot" is stored as a file in a directory named "saves".
+// Nothing was ever stored under "fs/saves" itself, since a write there fails,
+// so a read of it has no entry. That is the answer the same read gave before
+// the keys below it were written, and the one the memory store gives. A title
+// that keeps its saves in a folder and asks whether the folder exists was told
+// "no" on its first run and ended with a read error on every run after it.
+//
+// It is asked only after a read failed, so a read that succeeds costs nothing
+// more, and it asks the path rather than matching the error: reading a
+// directory is EISDIR on one system and a different error on another.
+func keyIsDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // StoreSave writes one entry, creating the key's directories as needed.
@@ -280,7 +299,9 @@ func EncodeSaveRecords(records [][]byte) []byte {
 	return encoded
 }
 
-// DecodeSaveRecords reverses EncodeSaveRecords, rejecting truncated input.
+// DecodeSaveRecords reverses EncodeSaveRecords, rejecting truncated input. An
+// empty record comes back empty and not nil: nil is a deleted record, and the
+// encoding keeps the two apart.
 func DecodeSaveRecords(encoded []byte) ([][]byte, error) {
 	if len(encoded) < 4 {
 		return nil, fmt.Errorf("save records header is truncated")
@@ -304,7 +325,9 @@ func DecodeSaveRecords(encoded []byte) ([][]byte, error) {
 		if uint64(offset)+uint64(length) > uint64(len(encoded)) {
 			return nil, fmt.Errorf("save record %d data is truncated", index)
 		}
-		records = append(records, append([]byte(nil), encoded[offset:offset+int(length)]...))
+		record := make([]byte, length)
+		copy(record, encoded[offset:])
+		records = append(records, record)
 		offset += int(length)
 	}
 	if offset != len(encoded) {

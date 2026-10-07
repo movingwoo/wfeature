@@ -855,9 +855,11 @@ The order inside a load, on every variant:
 2. What can be refused without the saves is refused: the archive's identity,
    a running session that is not at a boundary, a cancelled request.
 3. The restored runtime's storage is filled from the live store, with reads
-   only. A save that cannot be read, a container that does not decode, a
-   directory where a file was, or more bytes than the load's budget refuses the
-   load with `backend.ErrCheckpointSaveRead`.
+   only. A save that cannot be read, a container that does not decode, or more
+   bytes than the load's budget refuses the load with
+   `backend.ErrCheckpointSaveRead`. A directory where a file was is not a
+   failed read: a key that is a directory has no entry, so it is a save that
+   is not there.
 4. The running session's issued writes are stored. If that stored anything,
    step 3 is done again, so the restored game reads them like any other save.
 5. The running session is cut off from the store and from the Host's outputs,
@@ -910,10 +912,6 @@ its saves, and the emulator does not correct them:
 - The LGT adapter that keeps a 100-byte file takes that file's original flag
   and certificate from the file as it is when its header validates, and from
   the record otherwise.
-- A record list read back from the store does not tell a record of no bytes
-  from a deleted one: `DecodeSaveRecords` answers both as absent. That is how a
-  restart has always read one, and a load now reads the store the same way,
-  where a slot used to carry the records and keep the two apart.
 
 <a id="leftovers-from-earlier-builds"></a>
 

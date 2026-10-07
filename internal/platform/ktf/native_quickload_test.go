@@ -543,9 +543,10 @@ func TestNativeQuickLoadReadFailureStoresNothing(t *testing.T) {
 	}
 }
 
-// On a directory store a file can have become a directory behind a slot. The
-// load is refused for the read, and the tree is what it was.
-func TestNativeQuickLoadRefusesADirectoryWhereAFileWas(t *testing.T) {
+// On a directory store a file can have become a directory behind a slot. A
+// key that is a directory has no entry, so the load takes it as a save that is
+// not there: the object is empty, and the load writes nothing.
+func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	const first, second = 0x11111111, 0x22222222
 	archive, err := testfixture.KTFNativeSaveArchiveWithoutFrame()
 	if err != nil {
@@ -583,11 +584,18 @@ func TestNativeQuickLoadRefusesADirectoryWhereAFileWas(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
-	if _, err := prepared.Commit(t.Context(), nil, store); !errors.Is(err, backend.ErrCheckpointSaveRead) {
+	restored, err := prepared.Commit(t.Context(), nil, store)
+	if err != nil {
 		t.Fatalf("a load over a directory where the save was = %v", err)
 	}
+	defer restored.Close()
+	for _, open := range restored.platform.files {
+		if len(open.data) != 0 {
+			t.Fatalf("an object over the directory holds %x", open.data)
+		}
+	}
 	if data, err := os.ReadFile(filepath.Join(file, "below")); err != nil || string(data) != "kept" {
-		t.Fatalf("the refused load changed the tree: %q, %v", data, err)
+		t.Fatalf("the load changed the tree: %q, %v", data, err)
 	}
 }
 

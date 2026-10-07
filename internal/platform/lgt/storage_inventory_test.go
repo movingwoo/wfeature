@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -302,18 +303,29 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 	}
 }
 
+// keyRefusingStore fails every read of one key and answers the rest.
+type keyRefusingStore struct {
+	*backend.MemorySaveStore
+	key string
+}
+
+func (store keyRefusingStore) ReadSave(name string) ([]byte, bool, error) {
+	if name == store.key {
+		return nil, false, errors.New("injected read failure")
+	}
+	return store.MemorySaveStore.ReadSave(name)
+}
+
 // A lookup the store refuses is counted as that and compared with nothing, and
 // the failure stays with the probe's own view: the session's retained error is
 // reported, not caused.
 func TestStorageInventoryCountsWhatTheStoreRefuses(t *testing.T) {
-	// A key with an entry below it is a directory to this store, and reading
-	// it is an error rather than an absence.
-	store, err := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "fs/saves/slot", Data: []byte("x")}})
+	memory, err := backend.NewMemorySaveStore(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := fixtureClient(t)
-	client.saveStore = store
+	client.saveStore = keyRefusingStore{MemorySaveStore: memory, key: "fs/saves"}
 	if got := inventoryStorage(client, nil); got != (storageInventory{}) {
 		t.Fatalf("a client that has opened nothing counted %v", got)
 	}
@@ -326,7 +338,7 @@ func TestStorageInventoryCountsWhatTheStoreRefuses(t *testing.T) {
 		t.Fatalf("open answered %d", handle)
 	}
 	if client.saveReadError == nil {
-		t.Fatal("the store answered a read of a directory without an error")
+		t.Fatal("the store's refusal did not reach the session")
 	}
 	held := client.saveReadError
 	var noted []string

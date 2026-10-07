@@ -2707,7 +2707,12 @@ func runtimeDataBaseBytes(arguments []jvm.Value) ([]byte, error) {
 		}
 		data = data[offset : offset+length]
 	}
-	return append([]byte(nil), data...), nil
+	// A record of no bytes is still a record. Copying it by appending to nil
+	// gave nil, which a store reads as a deleted record: the insert returned
+	// an id that no select could read and the count left out.
+	record := make([]byte, len(data))
+	copy(record, data)
+	return record, nil
 }
 
 func runtimeDataBaseRecordIndex(store *runtimeDataBaseStore, arguments []jvm.Value) (int, error) {
