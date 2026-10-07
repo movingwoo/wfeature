@@ -29,6 +29,7 @@ type scriptTimer struct {
 // ScriptSession drives SGS events on the host's session goroutine. Guest
 // timers use a virtual clock and cannot create unbounded goroutines.
 type ScriptSession struct {
+	archive       *Archive
 	vibrator      backend.Vibrator
 	overlayPolicy byte
 	audio         *backend.Audio
@@ -42,6 +43,7 @@ type ScriptSession struct {
 	paused        bool
 	closed        bool
 	random        *rand.Rand
+	randomSource  *rand.PCG
 }
 
 func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (*ScriptSession, error) {
@@ -52,7 +54,8 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	if err != nil {
 		return nil, err
 	}
-	s := &ScriptSession{graphics: graphics, options: options, last: time.Now(), random: rand.New(rand.NewPCG(1, 2))}
+	source := rand.NewPCG(1, 2)
+	s := &ScriptSession{archive: archive, graphics: graphics, options: options, last: time.Now(), random: rand.New(source), randomSource: source}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
 	s.vm = sgsvm.New(archive.Script, s)
@@ -405,7 +408,8 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		return scriptCalendarCall(op, vm, time.Now())
 	case 0xa0:
 		seed := uint64(uint16(vm.Pop()))
-		s.random = rand.New(rand.NewPCG(seed, seed+1))
+		s.randomSource = rand.NewPCG(seed, seed+1)
+		s.random = rand.New(s.randomSource)
 	case 0xa1:
 		a := vm.Args(2)
 		lo, hi := int(a[0]), int(a[1])

@@ -217,7 +217,7 @@ func (runtime *Runtime) storeIndex(state *rmsState) {
 		}
 		names = append(names, name)
 	}
-	if err := boundary.StoreSave(rmsIndexKey, joinStoreIndex(names)); err != nil && runtime.logger != nil {
+	if err := runtime.storeSave(rmsIndexKey, joinStoreIndex(names)); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS index store failed", "error", err)
 	}
 }
@@ -386,7 +386,11 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 func (runtime *Runtime) persistStore(store *recordStore) {
 	state := runtime.rms()
 	state.mu.Lock()
-	if state.unwritten[store.name] {
+	if state.unwritten[store.name] || !state.contains(store.name) {
+		if !state.contains(store.name) {
+			state.names = append(state.names, store.name)
+			state.stores[store.name] = store
+		}
 		delete(state.unwritten, store.name)
 		runtime.storeIndex(state)
 	}
@@ -412,7 +416,7 @@ func (runtime *Runtime) persist(store *recordStore) {
 	store.mu.Lock()
 	encoded := backend.EncodeSaveRecords(store.records)
 	store.mu.Unlock()
-	if err := boundary.StoreSave(key, encoded); err != nil && runtime.logger != nil {
+	if err := runtime.storeSave(key, encoded); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS store failed", "name", store.name, "error", err)
 	}
 }
@@ -479,6 +483,7 @@ func (runtime *Runtime) rmsListRecordStores(vm *jvm.VM, _ []jvm.Value) (jvm.Valu
 	state := runtime.rms()
 	state.mu.Lock()
 	if err := runtime.loadIndex(state); err != nil {
+		state.mu.Unlock()
 		return jvm.VoidValue(), err
 	}
 	names := append([]string(nil), state.names...)
@@ -546,7 +551,7 @@ func (runtime *Runtime) rmsDeleteRecordStore(_ *jvm.VM, arguments []jvm.Value) (
 	// with no records, which the index no longer names.
 	if boundary := runtime.saveStoreBoundary(); boundary != nil {
 		if key, keyErr := recordStoreKey(name); keyErr == nil {
-			_ = boundary.StoreSave(key, backend.EncodeSaveRecords(nil))
+			_ = runtime.storeSave(key, backend.EncodeSaveRecords(nil))
 		}
 	}
 	return jvm.VoidValue(), nil

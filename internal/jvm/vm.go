@@ -209,6 +209,9 @@ type VM struct {
 	mainThread        *Object
 	closeOnce         sync.Once
 	closed            chan struct{}
+	checkpointMu      sync.Mutex
+	checkpointPause   atomic.Pointer[ParkedThreads]
+	checkpointWake    chan struct{} // guarded by threadMu
 	aotClasses        map[string]AOTClassMetadata
 	aotAddresses      map[uint32]string
 	aotObjects        map[uint32]aotBinding
@@ -236,6 +239,9 @@ type execution struct {
 	id           uint64
 	initializing map[string]bool
 	thread       *Object
+	topFrame     *frame
+	wait         *bytecodeThreadWait
+	restored     *restoredBytecodeThread
 	// framePool is this execution's finished frames, waiting to be lent to the
 	// next call it makes. One execution is one guest thread, so nothing here
 	// needs a lock. See newFrame.
@@ -289,6 +295,7 @@ func New(source ClassSource, options Options) *VM {
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
 		closed:          make(chan struct{}),
+		checkpointWake:  make(chan struct{}),
 		aotClasses:      make(map[string]AOTClassMetadata),
 		aotAddresses:    make(map[uint32]string),
 		aotObjects:      make(map[uint32]aotBinding),
@@ -570,18 +577,7 @@ func (vm *VM) invokeStatic(state *execution, className, name, descriptor string,
 	if code == nil {
 		return VoidValue(), fmt.Errorf("method has no code: %s.%s%s", class.Name, name, descriptor)
 	}
-	var classMonitor *monitor
-	if method.AccessFlags&0x0020 != 0 {
-		classMonitor = vm.classMonitor(class.Name)
-		classMonitor.enter(state.id)
-	}
-	result, executeErr := vm.execute(state, class, method, code, arguments)
-	if classMonitor != nil {
-		if exitErr := classMonitor.exit(state.id); executeErr == nil && exitErr != nil {
-			executeErr = exitErr
-		}
-	}
-	return result, executeErr
+	return vm.execute(state, class, method, code, arguments)
 }
 
 func (vm *VM) invokeInstance(
@@ -641,7 +637,12 @@ func (vm *VM) invokeInstanceReceived(
 	}
 	if contextNative != nil || native != nil {
 		if synchronizedNative {
-			receiver.monitor.enter(state.id)
+			state.wait = &bytecodeThreadWait{kind: "native-monitor", arguments: combined}
+			if err := vm.enterMonitor(state, &receiver.monitor); err != nil {
+				state.wait = nil
+				return VoidValue(), err
+			}
+			state.wait = nil
 		}
 		result, err := vm.callNative(state, nativeEntry{context: contextNative, plain: native}, combined)
 		if synchronizedNative {
@@ -673,16 +674,7 @@ func (vm *VM) invokeInstanceReceived(
 	if code == nil {
 		return VoidValue(), fmt.Errorf("method has no code: %s.%s%s", class.Name, name, descriptor)
 	}
-	if method.AccessFlags&0x0020 != 0 {
-		receiver.monitor.enter(state.id)
-	}
-	result, executeErr := vm.execute(state, class, method, code, combined)
-	if method.AccessFlags&0x0020 != 0 {
-		if exitErr := receiver.monitor.exit(state.id); executeErr == nil && exitErr != nil {
-			executeErr = exitErr
-		}
-	}
-	return result, executeErr
+	return vm.execute(state, class, method, code, combined)
 }
 
 func (vm *VM) resolveStaticMethod(className, name, descriptor string) (*classfile.Class, *classfile.Member, error) {

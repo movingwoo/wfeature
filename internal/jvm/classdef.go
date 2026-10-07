@@ -201,6 +201,23 @@ func (vm *VM) DefineClass(definition ClassDefinition) error {
 	return vm.defineClass(definition, false)
 }
 
+// DefineClassFile installs runtime-owned bytecode before application classes
+// can resolve it. Long-lived library continuations can therefore use ordinary
+// interpreter frames instead of retaining an opaque Go call stack.
+func (vm *VM) DefineClassFile(data []byte) error {
+	class, err := classfile.Parse(data)
+	if err != nil {
+		return err
+	}
+	if err := vm.loader.Define(class); err != nil {
+		return err
+	}
+	vm.mu.Lock()
+	clear(vm.declaringFields)
+	vm.mu.Unlock()
+	return nil
+}
+
 // defineClass installs a definition, optionally marking its bodies as the
 // runtime's own. A built-in body may be replaced by a platform later — KTF
 // answers Class.getName from its own class records — while two platform

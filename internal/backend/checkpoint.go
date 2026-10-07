@@ -25,8 +25,10 @@ const (
 	// the record carries. A Clet is called and returns, so its record has no
 	// parked guest call. An AOT Java title keeps guest threads parked inside
 	// platform calls, and its record carries what each one still owes.
-	CheckpointLGTClet uint16 = 4
-	CheckpointLGTJava uint16 = 5
+	CheckpointLGTClet   uint16 = 4
+	CheckpointLGTJava   uint16 = 5
+	CheckpointSKTJava   uint16 = 6
+	CheckpointSKTScript uint16 = 7
 )
 
 var (
@@ -50,7 +52,7 @@ type Checkpoint struct {
 }
 
 func checkpointVariantSupported(variant uint16) bool {
-	return variant >= CheckpointKTFJava && variant <= CheckpointLGTJava
+	return variant >= CheckpointKTFJava && variant <= CheckpointSKTScript
 }
 
 // EncodeCheckpoint writes a profile-independent, little-endian version 2

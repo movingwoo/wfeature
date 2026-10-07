@@ -387,13 +387,15 @@ that stops closes parked and attached sessions alike before it exits, so the
 writes a title had issued reach its save files; see
 [retention and control](session.md#retention-and-control).
 
-KTF and LGT quick save/load join the shared session, CLI, server and browser
+KTF, LGT and SKT quick save/load join the shared session, CLI, server and browser
 controls. The envelope, the slot and the Host commands are one implementation;
 what differs per platform is the runtime record inside the envelope and how a
 parked guest thread is described. A checkpoint is execution state only: it holds
 no ordinary save and a load replaces none, which
 [Quick load and ordinary saves](#quick-load-and-ordinary-saves) states in full.
 The KTF records are below, and [the LGT ones](#lgt-checkpoints) follow them.
+[SKT checkpoints](skt-checkpoints.md) describe JVM worker continuations and SGS
+event-boundary restoration through the same Host path.
 The [validation record](testing.md) describes authored and local-archive coverage.
 The ARM core can record parked derived calls and resume them in a fresh core;
 the platform supplies each pending supervisor operation's remainder. The KTF

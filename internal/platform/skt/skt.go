@@ -5,6 +5,7 @@ package skt
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"path"
 	"strings"
@@ -23,7 +24,12 @@ const msdSuffix = ".msd"
 // and the JAR's own manifest names no MIDlet at all — the identity is in the
 // .msd. A bare JAR that does name its MIDlet is the other shape, and it is
 // what the fixtures and any repacked title look like.
-func Open(data []byte) (*Archive, error) {
+func Open(data []byte) (opened *Archive, err error) {
+	defer func() {
+		if err == nil && opened != nil {
+			opened.identity = sha256.Sum256(data)
+		}
+	}()
 	if script, err := openScript(data); err != nil || script != nil {
 		return script, err
 	}

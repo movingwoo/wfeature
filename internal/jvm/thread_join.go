@@ -31,29 +31,54 @@ func threadJoin(vm *VM, execution *execution, arguments []Value) (Value, error) 
 	if current == nil {
 		current = vm.mainThreadObject()
 	}
-	waiter := vm.threadState(current)
-	waiter.mu.Lock()
-	interrupted := waiter.interrupted
+	if vm.consumeThreadInterrupt(current) {
+		return VoidValue(), guestException("java/lang/InterruptedException", "thread interrupted")
+	}
+	return VoidValue(), vm.waitCheckpointJoin(execution, thread)
+}
+
+func (vm *VM) consumeThreadInterrupt(thread *Object) bool {
+	state := vm.threadState(thread)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	interrupted := state.interrupted
 	if interrupted {
-		waiter.interrupted = false
+		state.interrupted = false
 		select {
-		case <-waiter.wake:
+		case <-state.wake:
 		default:
 		}
 	}
-	waiter.mu.Unlock()
-	if interrupted {
-		return VoidValue(), guestException("java/lang/InterruptedException", "thread interrupted")
+	return interrupted
+}
+
+func (vm *VM) waitCheckpointJoin(execution *execution, thread *Object) error {
+	execution.wait = &bytecodeThreadWait{kind: "join", object: thread}
+	defer func() { execution.wait = nil }()
+	current := execution.thread
+	if current == nil {
+		current = vm.mainThreadObject()
 	}
-	select {
-	case <-state.done:
-		return VoidValue(), nil
-	case <-vm.closed:
-		return VoidValue(), ErrClosed
-	case <-waiter.wake:
-		waiter.mu.Lock()
-		waiter.interrupted = false
-		waiter.mu.Unlock()
-		return VoidValue(), guestException("java/lang/InterruptedException", "thread interrupted")
+	waiter, target := vm.threadState(current), vm.threadState(thread)
+	for {
+		vm.threadMu.Lock()
+		wake := vm.checkpointWake
+		vm.threadMu.Unlock()
+		if vm.checkpointPause.Load() != nil && execution.thread != nil {
+			if err := vm.parkThread(execution); err != nil {
+				return err
+			}
+			continue
+		}
+		select {
+		case <-target.done:
+			return nil
+		case <-vm.closed:
+			return ErrClosed
+		case <-waiter.wake:
+			vm.consumeThreadInterrupt(current)
+			return guestException("java/lang/InterruptedException", "thread interrupted")
+		case <-wake:
+		}
 	}
 }

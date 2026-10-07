@@ -7,14 +7,22 @@ import (
 )
 
 type frame struct {
-	class      *classfile.Class
-	method     *classfile.Member
-	returnType Type
-	code       *classfile.Code
-	pc         int
-	locals     []Value
-	stack      []Value
-	stackSlots int
+	monitorPending bool
+	class          *classfile.Class
+	method         *classfile.Member
+	returnType     Type
+	code           *classfile.Code
+	pc             int
+	locals         []Value
+	stack          []Value
+	stackSlots     int
+	// The live chain is also the continuation at a parked native call. These
+	// links borrow frames from this execution; they never keep finished frames.
+	parent       *frame
+	opcodePC     int
+	nativeDepth  int
+	threadRuns   int
+	syncReceiver *Object
 }
 
 // newFrame fills a frame for one method body. The frame comes from the calling
@@ -38,6 +46,15 @@ func newFrame(state *execution, class *classfile.Class, method *classfile.Member
 	result.code = code
 	result.pc = 0
 	result.stackSlots = 0
+	result.parent = state.topFrame
+	result.opcodePC = 0
+	result.nativeDepth = state.nativeDepth
+	result.threadRuns = state.threadRuns
+	result.monitorPending = false
+	result.syncReceiver = nil
+	if method.AccessFlags&0x0020 != 0 && method.AccessFlags&0x0008 == 0 && len(arguments) > 0 {
+		result.syncReceiver = arguments[0].ref
+	}
 	// Both slices arrive zeroed — a fresh frame's are nil and a returned one
 	// was emptied on the way back — so this only has to size them.
 	if locals := int(code.MaxLocals); cap(result.locals) < locals {
@@ -93,6 +110,8 @@ func (state *execution) releaseFrame(result *frame) {
 	result.class = nil
 	result.method = nil
 	result.code = nil
+	result.parent = nil
+	result.syncReceiver = nil
 	state.framePool = append(state.framePool, result)
 }
 

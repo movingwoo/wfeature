@@ -110,3 +110,19 @@ func (loop *EventLoop) Pending() int {
 	defer loop.mu.Unlock()
 	return len(loop.events)
 }
+
+// CaptureNames records FIFO ownership while the platform has excluded every
+// producer. Handlers are reconstructed by that platform from named operations;
+// closures and in-progress calls never form part of a checkpoint.
+func (loop *EventLoop) CaptureNames() ([]string, error) {
+	loop.mu.Lock()
+	defer loop.mu.Unlock()
+	if loop.running {
+		return nil, ErrEventLoopBusy
+	}
+	names := make([]string, len(loop.events))
+	for i, event := range loop.events {
+		names[i] = event.name
+	}
+	return names, nil
+}

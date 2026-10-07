@@ -57,3 +57,18 @@ own name for them, which is the name a compiler emits.
 javac -source 1.8 -target 1.8 -g:none -d internal/jvm/testdata \
     internal/jvm/testdata/CoreMembers.java internal/jvm/testdata/Inherited.java
 ```
+## Checkpoint continuation fixtures
+
+`BytecodeCheckpointProbe.java` tests nested bytecode continuation, shared
+references, wide locals, exceptions and forwarding `Thread.run` calls.
+`ThreadCheckpointProbe.java` tests worker barriers and restoration of a sleeping
+thread holding a recursive monitor. `WaitCheckpointProbe.java` covers wait,
+notification, join, contended monitor entry and synchronized native entry with
+wide arguments and an aliased object. Compile the fixtures with:
+
+```sh
+javac -source 1.8 -target 1.8 -nowarn -g:none \
+  internal/jvm/testdata/BytecodeCheckpointProbe.java \
+  internal/jvm/testdata/ThreadCheckpointProbe.java \
+  internal/jvm/testdata/WaitCheckpointProbe.java
+```

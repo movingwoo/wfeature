@@ -1,5 +1,13 @@
 # SKT fixtures
 
+`src/BytecodeCheckpointMIDlet.java` and `bytecode-checkpoint.jar` exercise
+restoration of an active bytecode call chain inside a lifecycle callback.
+The JAR contains only `BytecodeCheckpointMIDlet.class` and the authored
+`BytecodeCheckpointProbe.class` from `internal/jvm/testdata`, with
+`BYTECODE_CHECKPOINT.MF`. Compile with Java 8 target settings against the
+generated MIDP signatures; do not bundle those signatures. This is a JVM
+continuation integration test, not a full SKT session checkpoint.
+
 `src/NativeCheckpointMIDlet.java` and `native-checkpoint.jar` check that refusing
 an incomplete JVM execution record leaves MIDlet resume and its bytecode caller
 working. A second test restores the MIDlet's heap into a fresh VM without
@@ -126,3 +134,14 @@ The browser Host detects SKT containers, so `persistence-skt.zip` wraps
 root. `text-input-skt.zip` similarly wraps the existing `text-input.jar` and
 `TEXT_INPUT.MF` renamed to `text-input.msd`. Both ZIPs contain only authored
 fixtures. Regenerate the outer ZIP after rebuilding either JAR.
+
+## Full SKT checkpoints
+
+`src/CheckpointMIDlet.java`, `checkpoint.jar` and `checkpoint-skt.zip` are newly
+authored fixtures. They keep RMS and XFile/FileInputStream handles open, expose
+startup/termination counters, draw a visible canvas and sleep inside a Java
+worker. Tests restore that worker over newer ordinary saves and prove that only
+the suffix runs. Compile with the generated MIDP/SKVM signatures into a private
+output directory, then package only `CheckpointMIDlet` and its nested class with
+`CHECKPOINT.MF`. The outer ZIP contains the JAR and that manifest renamed to
+`checkpoint.msd`; no generated library stubs belong in either archive.

@@ -736,12 +736,26 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 	case s.runtime != nil:
 		// The MIDP runtime takes the page's codes unchanged: they are the MIDP
 		// values, and translating them is the WIPI path's business.
-		return s.runtime.SendKey(skt.KeyEventType(action), code)
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
+		if err := s.runtime.SendKey(skt.KeyEventType(action), code); err != nil {
+			return err
+		}
+		s.noteKeyHold(action, code)
+		return nil
 	case s.script != nil:
 		if action != KeyPress && action != KeyRelease {
 			return fmt.Errorf("session: unknown key action %q", action)
 		}
-		return s.script.SendKey(ctx, action, code)
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
+		if err := s.script.SendKey(ctx, action, code); err != nil {
+			return err
+		}
+		s.noteKeyHold(action, code)
+		return nil
 	}
 	return ErrNotRunning
 }

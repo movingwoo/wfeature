@@ -677,11 +677,11 @@ func (runtime *Runtime) wipiFileRemove(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 }
 
 func (runtime *Runtime) wipiFileInputStream(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	return runtime.wipiFileStream(vm, arguments, jvm.ByteArrayInputStreamClass, "([B)V")
+	return runtime.newWIPIFileStream(arguments, false)
 }
 
 func (runtime *Runtime) wipiFileDataInputStream(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	inner, err := runtime.wipiFileStream(vm, arguments, jvm.ByteArrayInputStreamClass, "([B)V")
+	inner, err := runtime.wipiFileInputStream(vm, arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -692,43 +692,11 @@ func (runtime *Runtime) wipiFileDataInputStream(vm *jvm.VM, arguments []jvm.Valu
 	return jvm.ReferenceValue(stream), nil
 }
 
-// wipiFileStream hands the file's bytes to a stream the guest reads. The file
-// stays open behind it, which is what a title expects when it reads a save
-// through a stream and then seeks the handle itself.
-func (runtime *Runtime) wipiFileStream(vm *jvm.VM, arguments []jvm.Value, className, descriptor string) (jvm.Value, error) {
-	file, err := xFileArgument(arguments)
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	file.mu.Lock()
-	data := append([]byte(nil), file.data...)
-	file.mu.Unlock()
-	stream, err := vm.NewObject(className, descriptor, jvm.ReferenceValue(jvm.NewByteArray(data)))
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	return jvm.ReferenceValue(stream), nil
-}
-
 // The writing streams are the file itself: a WIPI title opens one, writes its
 // save through it and closes it, and what has to reach the save store is the
 // handle's bytes rather than a buffer nobody reads back.
 func (runtime *Runtime) wipiFileOutputStream(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	file, err := xFileArgument(arguments)
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	stream, err := vm.NewObject(jvm.ByteArrayOutputStreamClass, "()V")
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	runtime.wipiStreamMu.Lock()
-	if runtime.wipiFileStreams == nil {
-		runtime.wipiFileStreams = make(map[*jvm.Object]*xFileData)
-	}
-	runtime.wipiFileStreams[stream] = file
-	runtime.wipiStreamMu.Unlock()
-	return jvm.ReferenceValue(stream), nil
+	return runtime.newWIPIFileStream(arguments, true)
 }
 
 func (runtime *Runtime) wipiFileDataOutputStream(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -934,6 +902,9 @@ func (runtime *Runtime) showCard(_ *jvm.VM, card *jvm.Object) (jvm.Value, error)
 }
 
 func (runtime *Runtime) registerWIPINatives() error {
+	if err := runtime.registerWIPIFileStreams(); err != nil {
+		return err
+	}
 	for _, registration := range runtime.wipiRegistrations() {
 		if err := runtime.registerNative(registration.class, registration.name, registration.descriptor, registration.method); err != nil {
 			return fmt.Errorf("register %s.%s%s: %w", registration.class, registration.name, registration.descriptor, err)

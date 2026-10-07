@@ -124,10 +124,7 @@ func (vm *VM) registerMonitorBuiltins() {
 				}
 				timeout = time.Duration(milliseconds) * time.Millisecond
 			}
-			if err := object.monitor.wait(state.id, vm.guestDelay(timeout)); err != nil {
-				return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
-			}
-			return VoidValue(), nil
+			return VoidValue(), vm.waitMonitor(state, object, vm.guestDelay(timeout))
 		})
 	}
 	vm.contextBuiltin("java/lang/Object", "notify", "()V", func(_ *VM, state *execution, arguments []Value) (Value, error) {
@@ -159,6 +156,7 @@ type guestThread struct {
 	interrupted bool
 	wake        chan struct{}
 	done        chan struct{}
+	execution   *execution // installed before publishing a JVM-owned thread
 }
 
 func (vm *VM) registerThreadBuiltins() {
@@ -176,9 +174,14 @@ func (vm *VM) registerThreadBuiltins() {
 		}
 		state.started = true
 		state.alive = true
+		if vm.config.GuestThreadStarter == nil {
+			state.execution = vm.newExecution()
+			state.execution.thread = thread
+		}
 		state.mu.Unlock()
 		vm.threadMu.Lock()
 		vm.threads[thread] = state
+		vm.notifyThreadCheckpoint()
 		vm.threadMu.Unlock()
 		if vm.config.GuestThreadStarter != nil {
 			err := vm.config.GuestThreadStarter(thread)
@@ -230,7 +233,7 @@ func (vm *VM) registerThreadBuiltins() {
 		requested := vm.guestDelay(time.Duration(milliseconds) * time.Millisecond)
 		if execution.thread == nil {
 			time.Sleep(requested)
-		} else if err := vm.sleepGuestThread(execution.thread, requested); err != nil {
+		} else if err := vm.sleepCheckpointThread(execution, requested); err != nil {
 			return VoidValue(), err
 		}
 		return VoidValue(), vm.threadYield()
@@ -860,6 +863,7 @@ func (vm *VM) EndGuestThread(thread *Object) {
 	state.mu.Unlock()
 	vm.threadMu.Lock()
 	delete(vm.threads, thread)
+	vm.notifyThreadCheckpoint()
 	vm.threadMu.Unlock()
 }
 
@@ -868,8 +872,7 @@ func (vm *VM) EndGuestThread(thread *Object) {
 const guestPanicStack = 16 << 10
 
 func (vm *VM) runGuestThread(thread *Object, state *guestThread) {
-	execution := vm.newExecution()
-	execution.thread = thread
+	execution := state.execution
 	// The run is wrapped rather than deferred over the function because what
 	// follows has to happen either way: a thread that panicked is still a
 	// thread that is no longer alive, and a title that waits on isAlive would
@@ -894,7 +897,14 @@ func (vm *VM) runGuestThread(thread *Object, state *guestThread) {
 				err = fmt.Errorf("JVM guest thread %s panicked: %v", thread.ClassName, recovered)
 			}
 		}()
-		_, err = vm.invokeInstance(execution, thread.ClassName, thread, "run", "()V", nil)
+		if err = vm.parkThread(execution); err == nil {
+			if restored := execution.restored; restored != nil {
+				execution.restored = nil
+				_, err = restored.run(vm, execution)
+			} else {
+				_, err = vm.invokeInstance(execution, thread.ClassName, thread, "run", "()V", nil)
+			}
+		}
 	}()
 	vm.EndGuestThread(thread)
 	if err != nil {
@@ -904,30 +914,6 @@ func (vm *VM) runGuestThread(thread *Object, state *guestThread) {
 		} else if vm.config.Logger != nil {
 			vm.config.Logger.Error("JVM guest thread failed", "error", wrapped)
 		}
-	}
-}
-
-func (vm *VM) sleepGuestThread(thread *Object, duration time.Duration) error {
-	state := vm.threadState(thread)
-	state.mu.Lock()
-	if state.interrupted {
-		state.interrupted = false
-		state.mu.Unlock()
-		return guestException("java/lang/InterruptedException", "thread interrupted")
-	}
-	state.mu.Unlock()
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-vm.closed:
-		return ErrClosed
-	case <-state.wake:
-		state.mu.Lock()
-		state.interrupted = false
-		state.mu.Unlock()
-		return guestException("java/lang/InterruptedException", "thread interrupted")
 	}
 }
 

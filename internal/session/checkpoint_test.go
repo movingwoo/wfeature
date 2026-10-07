@@ -317,7 +317,7 @@ func TestCheckpointStartsAfterSourceSessionHasClosed(t *testing.T) {
 	}
 }
 
-func TestCheckpointRejectsWrongArchiveCancellationAndUnsupportedPlatform(t *testing.T) {
+func TestCheckpointRejectsWrongArchiveCancellationAndMissingSaveStore(t *testing.T) {
 	s, archive, _ := startCheckpointFixture(t)
 	saved, err := s.CaptureCheckpoint(t.Context())
 	if err != nil {
@@ -340,8 +340,8 @@ func TestCheckpointRejectsWrongArchiveCancellationAndUnsupportedPlatform(t *test
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if _, err := other.CaptureCheckpoint(t.Context()); !errors.Is(err, ErrCheckpointUnsupported) {
-		t.Fatalf("unsupported platform = %v", err)
+	if _, err := other.CaptureCheckpoint(t.Context()); err == nil || !other.Running() {
+		t.Fatalf("checkpoint without a save store = %v", err)
 	}
 }
 

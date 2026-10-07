@@ -169,6 +169,12 @@ func (capture *heapCapture) references(objects []*Object) []uint32 {
 // records, and live AOT bindings. It neither assigns identities nor re-pins weak
 // bindings. In-progress/failed initialization and held monitors are refused.
 func (vm *VM) CaptureHeapState(roots []*Object, codec HeapCodec) (HeapState, error) {
+	return vm.captureHeapState(roots, codec, nil)
+}
+
+// A thread checkpoint records held monitors beside the existing heap format.
+// Keeping the permission private leaves standalone/AOT heap capture strict.
+func (vm *VM) captureHeapState(roots []*Object, codec HeapCodec, recordMonitor func(uint32, string, uint64, int)) (HeapState, error) {
 	if vm == nil {
 		return HeapState{}, fmt.Errorf("capture JVM heap without a VM")
 	}
@@ -215,7 +221,9 @@ func (vm *VM) CaptureHeapState(roots []*Object, codec HeapCodec) (HeapState, err
 		}
 		capture.charge(len(name), 1)
 		monitor.mu.Lock()
-		if monitor.owner != 0 || monitor.depth != 0 {
+		if recordMonitor != nil {
+			recordMonitor(0, name, monitor.owner, monitor.depth)
+		} else if monitor.owner != 0 || monitor.depth != 0 {
 			capture.err = fmt.Errorf("JVM class monitor is held")
 		}
 		capture.saved.ClassMonitors = append(capture.saved.ClassMonitors, HeapClassMonitorState{Class: name, Signal: monitor.signal})
@@ -230,7 +238,7 @@ func (vm *VM) CaptureHeapState(roots []*Object, codec HeapCodec) (HeapState, err
 		vm.threadMu.Unlock()
 		return HeapState{}, capture.err
 	}
-	if len(vm.threads) != 0 && vm.config.GuestThreadStarter == nil {
+	if len(vm.threads) != 0 && vm.config.GuestThreadStarter == nil && recordMonitor == nil {
 		capture.err = fmt.Errorf("JVM heap has independently scheduled threads")
 	}
 	registered := make(map[*Object]bool, len(vm.threads))
@@ -289,7 +297,9 @@ func (vm *VM) CaptureHeapState(roots []*Object, codec HeapCodec) (HeapState, err
 		vm.aotMu.RUnlock()
 		record := HeapObjectState{Class: object.ClassName, Identity: object.identity.Load(), Retained: retained}
 		object.monitor.mu.Lock()
-		if object.monitor.owner != 0 || object.monitor.depth != 0 {
+		if recordMonitor != nil {
+			recordMonitor(uint32(index+1), "", object.monitor.owner, object.monitor.depth)
+		} else if object.monitor.owner != 0 || object.monitor.depth != 0 {
 			capture.err = fmt.Errorf("JVM object monitor is held")
 		}
 		record.MonitorSignal = object.monitor.signal
@@ -326,7 +336,7 @@ func (vm *VM) CaptureHeapState(roots []*Object, codec HeapCodec) (HeapState, err
 	if err := capture.validateListRanges(); err != nil {
 		return HeapState{}, err
 	}
-	if err := capture.saved.validate(vm.config); err != nil {
+	if err := capture.saved.validateThreads(vm.config, recordMonitor != nil); err != nil {
 		return HeapState{}, err
 	}
 	return capture.saved, nil

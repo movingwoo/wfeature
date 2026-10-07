@@ -102,6 +102,12 @@ const (
 // directory, an audio sink — actually is.
 func Define(machine *jvm.VM) error {
 	for _, definition := range definitions() {
+		if definition.Name == TimerThreadClass {
+			if err := defineBytecodeTimer(machine); err != nil {
+				return fmt.Errorf("MIDP timer library: %w", err)
+			}
+			continue
+		}
 		if err := machine.DefineClass(definition); err != nil {
 			return fmt.Errorf("MIDP library: %w", err)
 		}
