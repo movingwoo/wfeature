@@ -611,3 +611,41 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 		t.Fatalf("removal list = %q, want it untouched", moved)
 	}
 }
+
+// A WIPI-C record of no bytes is kept as one in memory, and a later session
+// read it as a deleted record: the save holds a length of zero, and decoding
+// turned that into nil. The count and a select both say it is there.
+func TestAnEmptyRecordDatabaseRecordOutlivesTheSession(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	call := func(runtime *initializationRuntime, slot uint32, registers ...uint32) uint32 {
+		t.Helper()
+		thread := armcore.NewThread(armcore.Context{})
+		for register, value := range registers {
+			if err := thread.SetRegister(register, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.handleWIPICRecordDatabaseCall(thread, slot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	const buffer = platformDataBase + 0x9000
+	for _, session := range []string{"first", "later"} {
+		client, runtime := newTestRuntime(t)
+		client.saveStore = store
+		handle := openRecordDatabase(t, runtime, "SLOTS", 4, 1)
+		if session == "first" {
+			if id := call(runtime, wipicRecordDatabaseInsert, handle, buffer, 0); id != 1 {
+				t.Fatalf("insert of no bytes = %d, want 1", id)
+			}
+		}
+		if count := call(runtime, wipicRecordDatabaseNumRecords, handle); count != 1 {
+			t.Fatalf("%s session: count = %d, want 1", session, count)
+		}
+		if result := call(runtime, wipicRecordDatabaseSelect, handle, 1, buffer, 4); result != 0 {
+			t.Fatalf("%s session: select of the empty record = %#x, want 0", session, result)
+		}
+	}
+}

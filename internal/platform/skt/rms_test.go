@@ -188,3 +188,66 @@ func TestTheSharedFileScopeReservesTheListTheOtherPlatformKeeps(t *testing.T) {
 		t.Fatalf("xFileKey on an ordinary path = %v", err)
 	}
 }
+
+// A record of no bytes, which MIDP allows and answers with a null getRecord,
+// is a record in a later session as well: the count includes it and setRecord
+// can fill it. The save holds a length of zero for it, and decoding used to
+// read that as a deleted record, so a title that reserved its slots with empty
+// records found them gone on its next launch and could not write them.
+func TestAnEmptyRecordOutlivesTheSession(t *testing.T) {
+	root := t.TempDir()
+	directory := func() backend.SaveStore {
+		return backend.NewDirectorySaveStore(filepath.Join(root, "RecordStore Fixture"))
+	}
+	call := func(runtime *Runtime, method func(*jvm.VM, []jvm.Value) (jvm.Value, error), arguments ...jvm.Value) jvm.Value {
+		t.Helper()
+		value, err := method(runtime.VM, arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	open := func(runtime *Runtime) jvm.Value {
+		t.Helper()
+		return call(runtime, runtime.rmsOpenRecordStore, jvm.ReferenceValue(runtime.VM.NewString("slots")), jvm.IntValue(1))
+	}
+	holds := func(runtime *Runtime, store jvm.Value, when string, sizes ...int32) {
+		t.Helper()
+		if count, _ := call(runtime, runtime.rmsGetNumRecords, store).Int32(); int(count) != len(sizes) {
+			t.Fatalf("%s: getNumRecords = %d, want %d", when, count, len(sizes))
+		}
+		for index, want := range sizes {
+			id := jvm.IntValue(int32(index + 1))
+			if size, _ := call(runtime, runtime.rmsGetRecordSize, store, id).Int32(); size != want {
+				t.Fatalf("%s: getRecordSize(%d) = %d, want %d", when, index+1, size, want)
+			}
+			record, _ := call(runtime, runtime.rmsGetRecordBytes, store, id).Reference()
+			if (record == nil) != (want == 0) {
+				t.Fatalf("%s: getRecord(%d) = %v, want null exactly for an empty record", when, index+1, record)
+			}
+		}
+	}
+
+	first := startRecordStoreFixture(t, directory())
+	store := open(first)
+	null := jvm.ReferenceValue(nil)
+	for range 2 {
+		call(first, first.rmsAddRecord, store, null, jvm.IntValue(0), jvm.IntValue(0))
+	}
+	holds(first, store, "after the adds", 0, 0)
+	call(first, first.rmsCloseRecordStore, store)
+
+	second := startRecordStoreFixture(t, directory())
+	store = open(second)
+	holds(second, store, "in a later session", 0, 0)
+	filled, err := newByteArray(second.VM, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call(second, second.rmsSetRecord, store, jvm.IntValue(2), jvm.ReferenceValue(filled), jvm.IntValue(0), jvm.IntValue(1))
+	holds(second, store, "after filling one", 0, 1)
+	call(second, second.rmsCloseRecordStore, store)
+
+	third := startRecordStoreFixture(t, directory())
+	holds(third, open(third), "in the session after that", 0, 1)
+}

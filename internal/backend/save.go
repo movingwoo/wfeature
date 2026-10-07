@@ -299,7 +299,9 @@ func EncodeSaveRecords(records [][]byte) []byte {
 	return encoded
 }
 
-// DecodeSaveRecords reverses EncodeSaveRecords, rejecting truncated input.
+// DecodeSaveRecords reverses EncodeSaveRecords, rejecting truncated input. An
+// empty record comes back empty and not nil: nil is a deleted record, and the
+// encoding keeps the two apart.
 func DecodeSaveRecords(encoded []byte) ([][]byte, error) {
 	if len(encoded) < 4 {
 		return nil, fmt.Errorf("save records header is truncated")
@@ -323,7 +325,9 @@ func DecodeSaveRecords(encoded []byte) ([][]byte, error) {
 		if uint64(offset)+uint64(length) > uint64(len(encoded)) {
 			return nil, fmt.Errorf("save record %d data is truncated", index)
 		}
-		records = append(records, append([]byte(nil), encoded[offset:offset+int(length)]...))
+		record := make([]byte, length)
+		copy(record, encoded[offset:])
+		records = append(records, record)
 		offset += int(length)
 	}
 	if offset != len(encoded) {

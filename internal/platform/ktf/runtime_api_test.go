@@ -805,3 +805,63 @@ func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
 		t.Fatalf("records = %q, want the database to have stayed cleared", reopened.records)
 	}
 }
+
+// A DataBase record of no bytes is a record: its id reads back, the count
+// includes it, and so does a later session. Its bytes used to be copied by
+// appending to nil, which gave nil, and nil is what a deleted record is.
+func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
+	store := NewDirectorySaveStore(t.TempDir())
+	open := func(runtime *initializationRuntime) jvm.Value {
+		t.Helper()
+		name := jvm.ReferenceValue(runtime.client.JVM().NewString("slots"))
+		database, err := runtimeOpenDataBase(runtime, runtime.client.JVM(), []jvm.Value{name, jvm.IntValue(8), jvm.IntValue(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return database
+	}
+	holds := func(runtime *initializationRuntime, database jvm.Value, when string, sizes ...int) {
+		t.Helper()
+		count, err := runtimeDataBaseCount(runtime, runtime.client.JVM(), []jvm.Value{database})
+		if got, _ := count.Int32(); err != nil || int(got) != len(sizes) {
+			t.Fatalf("%s: count = %d, %v; want %d", when, got, err, len(sizes))
+		}
+		for id, want := range sizes {
+			value, err := runtimeDataBaseSelect(runtime, runtime.client.JVM(), []jvm.Value{database, jvm.IntValue(int32(id))})
+			if err != nil {
+				t.Fatalf("%s: select %d = %v", when, id, err)
+			}
+			array, _ := value.Reference()
+			data, err := jvm.ByteArraySnapshot(array)
+			if err != nil || len(data) != want {
+				t.Fatalf("%s: record %d = %v, %v; want %d bytes", when, id, data, err, want)
+			}
+		}
+	}
+
+	client, runtime := newTestRuntime(t)
+	client.saveStore = store
+	database := open(runtime)
+	nothing := jvm.ReferenceValue(jvm.NewByteArray(nil))
+	if id, err := runtimeDataBaseInsert(runtime, client.JVM(), []jvm.Value{database, nothing, jvm.IntValue(0), jvm.IntValue(0)}); err != nil {
+		t.Fatal(err)
+	} else if got, _ := id.Int32(); got != 0 {
+		t.Fatalf("insert = %d, want 0", got)
+	}
+	if _, err := runtimeDataBaseInsert(runtime, client.JVM(), []jvm.Value{database, jvm.ReferenceValue(jvm.NewByteArray([]byte("abc")))}); err != nil {
+		t.Fatal(err)
+	}
+	holds(runtime, database, "after the inserts", 0, 3)
+	next, nextRuntime := newTestRuntime(t)
+	next.saveStore = store
+	holds(nextRuntime, open(nextRuntime), "in a later session", 0, 3)
+
+	// Updating a record to no bytes keeps it as well.
+	if _, err := runtimeDataBaseUpdate(runtime, client.JVM(), []jvm.Value{database, jvm.IntValue(1), nothing}); err != nil {
+		t.Fatal(err)
+	}
+	holds(runtime, database, "after the update", 0, 0)
+	last, lastRuntime := newTestRuntime(t)
+	last.saveStore = store
+	holds(lastRuntime, open(lastRuntime), "in a session after the update", 0, 0)
+}
