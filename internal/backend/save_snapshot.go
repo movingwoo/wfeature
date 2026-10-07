@@ -79,14 +79,9 @@ func (store *MemorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// A key that only prefixes others names a directory to the directory
+	// store, and has no entry there either; see keyIsDirectory.
 	data, present := store.entries[key]
-	if !present {
-		for child := range store.entries {
-			if strings.HasPrefix(child, key+"/") {
-				return nil, false, fmt.Errorf("save key names a directory")
-			}
-		}
-	}
 	return bytes.Clone(data), present, nil
 }
 

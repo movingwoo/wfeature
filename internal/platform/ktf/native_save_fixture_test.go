@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,10 +30,19 @@ var nativeSaveFixtureForms = []struct {
 	{"no frame callback", testfixture.KTFNativeSaveArchiveWithoutFrame, false},
 }
 
-// nativeSaveFixtureStore is a memory store that counts the writes it is given.
+// nativeSaveFixtureStore is a memory store that counts the writes it is given,
+// and fails every read of one key when a test names it.
 type nativeSaveFixtureStore struct {
 	*backend.MemorySaveStore
-	writes int
+	writes     int
+	unreadable string
+}
+
+func (store *nativeSaveFixtureStore) ReadSave(name string) ([]byte, bool, error) {
+	if store.unreadable != "" && name == store.unreadable {
+		return nil, false, errors.New("injected read failure")
+	}
+	return store.MemorySaveStore.ReadSave(name)
 }
 
 func (store *nativeSaveFixtureStore) StoreSave(name string, data []byte) error {
@@ -556,12 +566,11 @@ func TestNativeSaveFixtureReportsAReadThatFallsShort(t *testing.T) {
 // fails with the store's own error, and the status word still holds what READ
 // cleared it to, so a test has to look at the error and not at the word.
 func TestNativeSaveFixtureStoreFailureIsTheKeysError(t *testing.T) {
-	// A key below the save's own name makes the save's name a directory, which
-	// a store reports as a failed read rather than as an absent entry.
-	store := newNativeSaveFixtureStore(t, backend.SaveEntry{Key: testfixture.KTFNativeSaveStoreKey + "/below", Data: []byte{1}})
+	store := newNativeSaveFixtureStore(t)
+	store.unreadable = testfixture.KTFNativeSaveStoreKey
 	fixture := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchiveWithoutFrame, store)
 	err := fixture.session.SendKey(t.Context(), KeyPressed, testfixture.KTFNativeSaveKeyRead)
-	if err == nil || !strings.Contains(err.Error(), "directory") {
+	if err == nil || !strings.Contains(err.Error(), "injected read failure") {
 		t.Fatalf("READ over an unreadable store = %v, want the store's error", err)
 	}
 	if fixture.word(testfixture.KTFNativeSaveStatus) != testfixture.KTFNativeSaveStatusMissing || len(fixture.session.platform.files) != 0 {

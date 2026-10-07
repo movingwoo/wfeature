@@ -597,6 +597,17 @@ first two prepared without error and the type check did not return. One more
 test requires the specification's hierarchy table to end, which several walks
 rely on and nothing else checks.
 
+A save key whose path is a directory reads as no entry (2026-10-07).
+`TestSaveReadOfADirectoryReportsMissing` asks it of the directory and memory
+stores, through the ordinary and the bounded read, before and after a save
+below it, and requires a write to it to fail without touching that save. The
+KTF `FileSystem.exists` and LGT `MC_fsIsExist` tests ask about a folder over
+three and two runs of one save directory; all three fail on the tree before
+the fix. Two local KTF titles that keep their saves in a folder ended their
+second `runktf` with `read save fs/<folder>: ... is a directory` before the
+fix and run to the end after it. The tests that used a directory as their
+unreadable entry now use a file without permissions or an injected failure.
+
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.
 Its bridge declaration is compile-time only; the test installs the ARM body.

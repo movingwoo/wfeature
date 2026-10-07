@@ -42,3 +42,25 @@ func TestAuthenticationOptionViewPreservesReadFailure(t *testing.T) {
 		t.Fatal("failed authentication read reached persistent writes")
 	}
 }
+
+// MC_fsIsExist on a folder that holds saves answers what it answered before the
+// first save went into it. Reading the folder's name used to end the session
+// with a read error on every run after the first.
+func TestAFolderOfSavesAnswersAsOnTheFirstRun(t *testing.T) {
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	for _, run := range []string{"first", "second"} {
+		t.Run(run, func(t *testing.T) {
+			client := fixtureClient(t)
+			client.saveStore = store
+			if data, ok := client.readFile("saves"); ok || data != nil || client.saveReadError != nil {
+				t.Fatalf("the folder = %q, %t, save error = %v", data, ok, client.saveReadError)
+			}
+			if run == "first" {
+				client.writeFile("saves/slot", []byte("progress"))
+			}
+			if data, ok := client.readFile("saves/slot"); !ok || string(data) != "progress" || client.saveReadError != nil {
+				t.Fatalf("the save = %q, %t, save error = %v", data, ok, client.saveReadError)
+			}
+		})
+	}
+}

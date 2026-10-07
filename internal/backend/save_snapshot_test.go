@@ -40,8 +40,8 @@ func TestMemorySaveSnapshotOwnsBytesAndReplacesWholeGeneration(t *testing.T) {
 	if data, present, err := store.ReadSave("db/b"); err != nil || !present || len(data) != 0 {
 		t.Fatalf("empty save differs from missing: %t, %v", present, err)
 	}
-	if _, _, err := store.ReadSave("db"); err == nil {
-		t.Fatal("directory read did not fail")
+	if _, present, err := store.ReadSave("db"); err != nil || present {
+		t.Fatal("a directory read differs from a directory store")
 	}
 	if _, present, err := store.ReadSave("db/a/child"); err != nil || present {
 		t.Fatal("read below a file differs from a directory store")
