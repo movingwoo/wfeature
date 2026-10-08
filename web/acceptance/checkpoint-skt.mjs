@@ -166,7 +166,7 @@ try {
   await page.waitForFunction(() => !document.querySelector("#game-start").disabled);
   await settings();
   await page.locator("#keypad-arrange-open").click();
-  for (const [cell, label] of [["pad-r1c1", "퀵세이브"], ["pad-r3c1", "퀵로드"]]) {
+  for (const [cell, label] of [["r2c1", "퀵세이브"], ["r6c1", "퀵로드"]]) {
     await page.locator(`[data-cell="${cell}"]`).click();
     await page.locator("#keypad-arrange-keys").getByRole("button", { name: label, exact: true }).click();
   }

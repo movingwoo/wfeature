@@ -57,30 +57,38 @@ test("the shell list names only files that exist", () => {
 
 // Model a late response from the replaced worker, without a browser-specific
 // timer. The integration route separately upgrades a real installed worker.
-const workerFixture = async () => {
-  const { runInNewContext } = await import("node:vm");
-  const handlers = new Map(), stores = new Map();
-  const caches = {
+const cacheFixture = () => {
+  const stores = new Map();
+  return {
     async keys() { return [...stores.keys()]; },
     async delete(name) { return stores.delete(name); },
     async open(name) {
       if (!stores.has(name)) stores.set(name, new Map());
       const entries = stores.get(name);
       return {
+        async add(url) { entries.set(new URL(url, "https://example.test/").href, new Response("installed shell")); },
         async put(request, response) { entries.set(request.url, response); },
-        async match(request) { return entries.get(request.url); },
+        async match(request) { return entries.get(request.url)?.clone(); },
       };
     },
     async match(request) {
       for (const entries of stores.values()) if (entries.has(request.url)) return entries.get(request.url);
     },
   };
+};
+const workerFixture = async ({ source = worker, caches = cacheFixture(), fetchResponse } = {}) => {
+  const { runInNewContext } = await import("node:vm");
+  const handlers = new Map();
   let offline = false;
-  runInNewContext(worker, {
+  runInNewContext(source, {
     URL, caches,
     self: { location: { origin: "https://example.test" }, clients: { claim: async () => {} },
+      skipWaiting: () => {},
       addEventListener: (name, callback) => handlers.set(name, callback) },
-    fetch: async () => { if (offline) throw new Error("offline"); return new Response("current shell"); },
+    fetch: async () => {
+      if (offline) throw new Error("offline");
+      return fetchResponse ? fetchResponse() : new Response("current shell");
+    },
   });
   const dispatch = async (name, request) => {
     const pending = [];
@@ -115,4 +123,46 @@ test("offline reads never fall back to a leftover cache from another shell", asy
   await (await f.caches.open("wfeature-shell-old")).put(request, new Response("stale module"));
   f.goOffline();
   assert.equal(await f.dispatch("fetch", request), undefined);
+});
+
+test("a late legacy navigation cannot delete the newly installed offline shell", async () => {
+  const f = await workerFixture();
+  await f.caches.open("wfeature-shell-v34");
+  await f.dispatch("install");
+  await f.dispatch("activate");
+  // Reproduce the shipped version-34 fetch completion, after replacement. Its
+  // prefix-wide sweep is immutable in browsers that already installed it.
+  const request = { method: "GET", url: "https://example.test/", mode: "navigate" };
+  await (await f.caches.open("wfeature-shell-v34")).put(request, new Response("old navigation"));
+  for (const name of await f.caches.keys()) {
+    if (name.startsWith("wfeature-shell-") && name !== "wfeature-shell-v34") await f.caches.delete(name);
+  }
+  f.goOffline();
+  for (const url of ["/", "/app.js", "/keypad-editor.js", "/keypad-layout.js", "/keypad-geometry.js"]) {
+    const response = await f.dispatch("fetch", { ...request, url: `https://example.test${url}` });
+    assert.ok(response, `${url} must survive the old worker's sweep`);
+    assert.equal(await response.text(), "installed shell");
+  }
+});
+
+test("a replaced worker's late response preserves future and unrelated caches", async () => {
+  const currentName = worker.match(/const cacheName = "([^"]+)"/)[1];
+  const nextName = currentName.replace(/\d+$/, digits => String(Number(digits) + 1));
+  const shared = cacheFixture();
+  let finish;
+  const old = await workerFixture({ caches: shared, fetchResponse: () => new Promise(resolve => { finish = resolve; }) });
+  const next = await workerFixture({ caches: shared, source: worker.replace(currentName, nextName) });
+  await shared.open("another-app");
+  await old.dispatch("install");
+  const request = { method: "GET", url: "https://example.test/", mode: "navigate" };
+  const pending = old.dispatch("fetch", request);
+  await next.dispatch("install");
+  await next.dispatch("activate");
+  finish(new Response("late old response"));
+  await pending;
+  next.goOffline();
+  const offline = await next.dispatch("fetch", request);
+  assert.ok(offline, "the next version must stay available offline");
+  assert.equal(await offline.text(), "installed shell");
+  assert.ok((await shared.keys()).includes("another-app"));
 });

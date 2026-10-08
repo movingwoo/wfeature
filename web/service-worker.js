@@ -1,9 +1,8 @@
-// The name is the shell's version, and it moves whenever the list below does:
-// activate deletes older shell caches, so a new name is what
-// retires the entries an older shell left behind. The fetch handler is network
-// first, so a stale entry is not what this prevents — an entry for a file the
-// shell no longer has is.
-const cacheName = "wfeature-shell-v34";
+// Increment the version when the shell changes. Legacy workers delete every
+// other wfeature-shell-* cache on a late navigation, even after replacement.
+// A separate prefix protects this shell from that already-installed code.
+const cacheName = "wfeature-pwa-v40";
+const cacheVersion = Number(cacheName.match(/-v(\d+)$/)[1]);
 
 // The shell is what the page needs to come up, which is now only the page: a
 // game runs on the server and this page draws what it sends.
@@ -28,7 +27,8 @@ const shell = [
   "./key-holds.js",
   "./rapid-fire.js",
   "./game-speed.js",
-  "./keypad-size.js",
+  "./keypad-geometry.js",
+  "./keypad-editor.js",
   "./keypad-layout.js",
   "./storage.js",
   "./touch.js",
@@ -53,7 +53,13 @@ self.addEventListener("install", event => {
 });
 
 const retireOldShells = () => caches.keys().then(keys => Promise.all(
-  keys.filter(key => key.startsWith("wfeature-shell-") && key !== cacheName)
+  keys.filter(key => {
+    if (key.startsWith("wfeature-shell-")) return true;
+    const version = /^wfeature-pwa-v(\d+)$/.exec(key);
+    // This worker may finish a response after its replacement activates.
+    // Only retire predecessors; never delete a future worker's shell.
+    return version && Number(version[1]) < cacheVersion;
+  })
     .map(key => caches.delete(key)),
 ));
 

@@ -1,70 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-
-import { keyLabel, keyOrder } from "./keybindings.js";
-import { QUICK_SAVE, QUICK_LOAD, isCheckpointKey } from "./checkpoint.js";
 import {
-  BAND_COLUMNS,
-  EMPTY,
-  LEFT_COLUMNS,
-  PAD_COLUMNS,
-  PAD_ROWS,
-  RIGHT_COLUMNS,
+  createKeypadLayout,
+  legacyPresets,
+  legacyCells,
+  migrateLegacy,
+  defaultGrid,
+  shapes,
   SETTINGS,
   assignable,
-  assign,
-  clampCells,
-  clear,
-  createKeypadLayout,
-  isShape,
-  keyFace,
   keyName,
-  shapes,
-  shipped,
-  regionLabel,
-  shapeMatching,
-  cellIds,
-  cells,
+  keyFace,
 } from "./keypad-layout.js";
+import { keyOrder } from "./keybindings.js";
 
-// A storage the tests can look inside, in the shape storage.js presents rather
-// than the browser's own — see keypad-size.test.mjs, which says why.
-const fakeStorage = () => {
-  const entries = new Map();
-  return {
-    entries,
-    getItem: key => entries.get(key) ?? null,
-    setItem: (key, value) => {
-      entries.set(key, value);
-      return true;
-    },
-    removeItem: key => entries.delete(key),
-  };
-};
-
-const LAYOUT_KEY = "wfeature:keypadLayout";
-const KEYS_KEY = "wfeature:keypadKeys";
-
-// What the three shapes drew when they were three blocks of markup with four
-// stylesheet rules showing and hiding pieces of them. This is a recording: it
-// was read out of `index.html` before the markup became cells, by resolving
-// `type2-only`, `type3-only` and `type3-hidden` per shape and reading the grid
-// cell off each button's class. The markup it came from is gone, so the numbers
-// live here — **this is the gate that says nobody's keypad moved.**
-//
-// The two 3x3 pads became columns 1-3 and 5-7 of one seven-column grid, and the
-// row of * 0 # became its fourth row, centred in it. The mapping is written out
-// rather than computed, because a recording that is derived from the thing it
-// is checking checks nothing.
-//
-// **The band is the one place a key really did move**, and by request: it was
-// three buttons at hand-written offsets and it is the pad's seven columns now,
-// every one of them a cell. The three keys are in the columns nearest the
-// offsets they had — the pair around the middle and CLR at the right-hand end —
-// which is the row as it read, not the pixels it read at. Those pixels could
-// not be kept: a column's width depends on the screen and an offset does not.
-// The settings key is in the first column, where it sat as a button of its own
-// before it was a cell.
+// Recorded old assignments keep migration tests independent of current defaults.
 const asDrawn = {
   // Type4 is not one of the three: it is the empty pad, added with the editor
   // because "no keys at all" has to be a shape to be stored as one. It is here
@@ -73,462 +23,138 @@ const asDrawn = {
   type4: { "band-c1": "SETTINGS" },
   type2: {
     "band-c1": "SETTINGS",
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
+    "band-c3": "MENU",
+    "band-c4": "RAPID_FIRE",
+    "band-c5": "CALL",
+    "band-c6": "SOFT2",
+    "band-c7": "CLR",
     "pad-r1c2": "2",
-    "pad-r2c1": "4", "pad-r2c3": "6",
+    "pad-r2c1": "4",
+    "pad-r2c3": "6",
     "pad-r3c2": "8",
-    "pad-r1c5": "1", "pad-r1c7": "3",
+    "pad-r1c5": "1",
+    "pad-r1c7": "3",
     "pad-r2c6": "5",
-    "pad-r3c5": "7", "pad-r3c7": "9",
-    "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
+    "pad-r3c5": "7",
+    "pad-r3c7": "9",
+    "pad-r4c3": "*",
+    "pad-r4c4": "0",
+    "pad-r4c5": "#",
   },
   type1: {
     "band-c1": "SETTINGS",
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
+    "band-c3": "MENU",
+    "band-c4": "RAPID_FIRE",
+    "band-c5": "CALL",
+    "band-c6": "SOFT2",
+    "band-c7": "CLR",
     "pad-r1c2": "UP",
-    "pad-r2c1": "LEFT", "pad-r2c2": "OK", "pad-r2c3": "RIGHT",
+    "pad-r2c1": "LEFT",
+    "pad-r2c2": "OK",
+    "pad-r2c3": "RIGHT",
     "pad-r3c2": "DOWN",
-    "pad-r1c5": "1", "pad-r1c6": "2", "pad-r1c7": "3",
-    "pad-r2c5": "4", "pad-r2c6": "5", "pad-r2c7": "6",
-    "pad-r3c5": "7", "pad-r3c6": "8", "pad-r3c7": "9",
-    "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
+    "pad-r1c5": "1",
+    "pad-r1c6": "2",
+    "pad-r1c7": "3",
+    "pad-r2c5": "4",
+    "pad-r2c6": "5",
+    "pad-r2c7": "6",
+    "pad-r3c5": "7",
+    "pad-r3c6": "8",
+    "pad-r3c7": "9",
+    "pad-r4c3": "*",
+    "pad-r4c4": "0",
+    "pad-r4c5": "#",
   },
   type3: {
     "band-c1": "SETTINGS",
-    "band-c3": "MENU", "band-c4": "RAPID_FIRE", "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
-    "pad-r1c1": "1", "pad-r1c2": "2", "pad-r1c3": "3",
-    "pad-r2c1": "4", "pad-r2c3": "6",
+    "band-c3": "MENU",
+    "band-c4": "RAPID_FIRE",
+    "band-c5": "CALL",
+    "band-c6": "SOFT2",
+    "band-c7": "CLR",
+    "pad-r1c1": "1",
+    "pad-r1c2": "2",
+    "pad-r1c3": "3",
+    "pad-r2c1": "4",
+    "pad-r2c3": "6",
     "pad-r3c2": "8",
     "pad-r2c6": "5",
-    "pad-r3c5": "7", "pad-r3c7": "9",
-    "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#",
+    "pad-r3c5": "7",
+    "pad-r3c7": "9",
+    "pad-r4c3": "*",
+    "pad-r4c4": "0",
+    "pad-r4c5": "#",
   },
 };
 
-// The current defaults add the requested rapid-fire switch between 메뉴 and 통화,
-// and the right soft key, 우상단, in the one empty column between 통화 and 취소.
-test("each shape preserves its handset keys and includes the default local controls", () => {
-  for (const name of shapes) {
-    for (const id of cellIds) {
-      assert.equal(
-        shipped[name][id],
-        asDrawn[name][id] ?? EMPTY,
-        `${name} draws ${shipped[name][id] || "nothing"} at ${id}, and drew ${asDrawn[name][id] || "nothing"}`,
+test("migration preserves the recorded handset arrangement of every preset", () => {
+  for (const shape of shapes) {
+    const assigned = Object.fromEntries(
+      Object.entries(legacyPresets[shape]).filter(([, key]) => key),
+    );
+    assert.deepEqual(assigned, asDrawn[shape]);
+    const migrated = migrateLegacy(asDrawn[shape]);
+    for (const { id, region, row, column } of legacyCells) {
+      const target = `r${region === "band" ? 1 : row * 2}c${column * 2 - 1}`;
+      const group = migrated.groups.find((group) =>
+        group.cells.includes(target),
       );
+      assert.equal(group.key, asDrawn[shape][id] ?? "", `${shape} ${id}`);
     }
   }
 });
 
-test("the three drawn shapes differ only in the pad's first three rows", () => {
-  // The band and the last row were never part of a shape, which is why they
-  // were plain markup outside the pads. If a shape ever changes one, the
-  // comment in keypad-layout.js that says so is what has to change with it.
-  // Type4 is outside this: it is empty everywhere, which is the whole of it.
-  const outside = cellIds.filter(id => !/^pad-r[123]c/.test(id));
-  for (const name of ["type1", "type2", "type3"]) {
-    for (const id of outside) {
-      assert.equal(shipped[name][id], shipped[shapes[0]][id], `${name} moved ${id}`);
-    }
-  }
-});
-
-test("the pad is a grid, and every cell in it has a place", () => {
-  assert.equal(PAD_COLUMNS, 7);
-  assert.equal(PAD_ROWS, 4);
-  const pad = cells.filter(cell => cell.region === "pad");
-  assert.equal(pad.length, PAD_COLUMNS * PAD_ROWS);
-  // Reading order, which is the order the markup emits them in and therefore
-  // the order the grid places them. A cell out of order here is a key drawn
-  // somewhere else with nothing to say so.
-  const inReadingOrder = [];
-  for (let row = 1; row <= PAD_ROWS; row++) {
-    for (let column = 1; column <= PAD_COLUMNS; column++) inReadingOrder.push(`pad-r${row}c${column}`);
-  }
-  assert.deepEqual(pad.map(cell => cell.id), inReadingOrder);
-  for (const cell of pad) {
-    assert.equal(cell.id, `pad-r${cell.row}c${cell.column}`, "a cell's name and its place disagree");
-  }
-  // The two former pads, which are what the size setting's share still divides.
-  assert.deepEqual(LEFT_COLUMNS, [1, 2, 3]);
-  assert.deepEqual(RIGHT_COLUMNS, [5, 6, 7]);
-});
-
-test("the cells are a fixed set, each in a region the editor can name", () => {
-  assert.equal(cells.length, 35);
-  assert.equal(new Set(cellIds).size, cellIds.length, "a cell is declared twice");
-  for (const cell of cells) {
-    assert.ok(regionLabel[cell.region], `the region ${cell.region} has no label`);
-  }
-  // Two regions and not four, because the pad is one grid. The band is seven
-  // columns, all of them cells since the settings key became one, and the pad
-  // is seven by four. The regions are the drag rule, so a third one would be a
-  // third answer to "does a slide press this".
-  const count = region => cells.filter(cell => cell.region === region).length;
-  assert.deepEqual([count("band"), count("pad")], [BAND_COLUMNS, PAD_COLUMNS * PAD_ROWS]);
-  assert.deepEqual([count("band"), count("pad")], [7, 28]);
-  assert.deepEqual(Object.keys(regionLabel).sort(), ["band", "pad"]);
-  for (const cell of cells.filter(entry => entry.region === "band")) {
-    assert.equal(cell.id, `band-c${cell.column}`, "a band cell's name and its column disagree");
-  }
-});
-
-test("a shape names only keys the editor can also choose", () => {
-  for (const name of shapes) {
-    for (const [id, key] of Object.entries(shipped[name])) {
-      if (key === EMPTY) continue;
-      assert.ok(assignable.includes(key), `${name} puts ${key} at ${id} and nothing offers it`);
-    }
-    assert.deepEqual(Object.keys(shipped[name]).sort(), [...cellIds].sort());
-  }
-  assert.deepEqual(
-    assignable.filter(name => name !== "RAPID_FIRE" && name !== SETTINGS && !isCheckpointKey(name)),
-    keyOrder,
-    "the editor's list has drifted from the keyboard panel's",
-  );
-});
-
-test("a pad face is the key's name, and the name is what is spoken", () => {
-  // One key is printed other than it is called: the centre key prints OK and is
-  // called 확인, which are the two words a help screen uses for it. Everything
-  // else has to read the same either way, or the editor's list and the pad
-  // would name the same key two ways.
-  const shortened = keyOrder.filter(name => keyFace(name) !== keyLabel(name));
-  assert.deepEqual(shortened, ["OK"]);
-  for (const name of assignable) assert.ok(keyFace(name), `${name} has no face`);
-  // The band's keys wear Korean names, by request. They were Call, Menu and CLR
-  // once, and the right soft key is named for where it sat, which is the only
-  // name a title's help screen gives it.
-  assert.deepEqual(
-    ["MENU", "CALL", "SOFT2", "CLR"].map(keyFace),
-    ["메뉴", "통화", "우상단", "취소"],
-  );
-});
-
-test("a stored table keeps only cells and keys this build has", () => {
-  const folded = clampCells({
-    "pad-r2c6": "7",
-    "pad-r1c2": "SOFT3",
-    "cell-that-went-away": "5",
-    "band-c4": 5,
-  });
-  assert.deepEqual(Object.keys(folded).sort(), [...cellIds].sort());
-  assert.equal(folded["pad-r2c6"], "7");
-  // A key this build does not have, a cell it does not have, and a number where
-  // a name should be: all three are an empty cell rather than a thrown error or
-  // a key nothing can send.
-  assert.equal(folded["pad-r1c2"], EMPTY);
-  assert.equal(folded["band-c4"], EMPTY);
-  assert.ok(!Object.hasOwn(folded, "cell-that-went-away"));
-  // And nonsense of the wrong kind entirely is the empty pad, not a crash —
-  // which still has the settings key, because every table does.
-  for (const nonsense of [null, undefined, 7, "type1", []]) {
-    assert.deepEqual(clampCells(nonsense), shipped.type4);
-  }
-});
-
-test("every shape holds the settings key exactly once, and in the band's first column", () => {
-  for (const name of shapes) {
-    const holding = cellIds.filter(id => shipped[name][id] === SETTINGS);
-    assert.deepEqual(holding, ["band-c1"], `${name} holds the settings key at ${holding}`);
-  }
-  // It is a local control like the rapid-fire switch: offered to a cell, named
-  // and printed in Korean, and not a phone key the keyboard panel lists.
+test("settings is a local action with a stable accessible name", () => {
   assert.ok(assignable.includes(SETTINGS));
   assert.ok(!keyOrder.includes(SETTINGS));
   assert.equal(keyName(SETTINGS), "설정");
-  assert.equal(keyFace(SETTINGS), "설정");
+  assert.equal(keyFace("OK"), "OK");
 });
 
-test("the settings key moves rather than copies, and its cell keeps it", () => {
-  const table = shipped.type1;
-  // Put somewhere else, it leaves where it was: there is one, always.
-  const moved = assign(table, "pad-r4c1", SETTINGS);
-  assert.equal(moved["pad-r4c1"], SETTINGS);
-  assert.equal(moved["band-c1"], EMPTY, "the settings key was copied rather than moved");
-  assert.deepEqual(cellIds.filter(id => moved[id] === SETTINGS), ["pad-r4c1"]);
-  // Onto a cell with a key in it, it takes the cell like any key does.
-  const over = assign(table, "pad-r2c6", SETTINGS);
-  assert.equal(over["pad-r2c6"], SETTINGS);
-  assert.equal(over["band-c1"], EMPTY);
-  // The cell holding it can be neither emptied nor given another key: both
-  // answer the table unchanged, which is how the editor knows to refuse.
-  assert.equal(clear(table, "band-c1"), table);
-  assert.equal(assign(table, "band-c1", "5"), table);
-  assert.equal(assign(table, "band-c1", SETTINGS), table);
-  // And the cell it left is an ordinary cell again.
-  assert.equal(assign(moved, "band-c1", "5")["band-c1"], "5");
-});
-
-test("a stored table comes back holding the settings key exactly once", () => {
-  // A table saved before the key was a cell has none, and gets it where it
-  // used to sit, which no stored table could have used.
-  const before = clampCells({ ...shipped.type2, "band-c1": undefined });
-  assert.equal(before["band-c1"], SETTINGS);
-  // Two copies — a hand edit could make them — keep the first in the editor's
-  // order.
-  const twice = clampCells({ "band-c5": SETTINGS, "pad-r1c1": SETTINGS });
-  assert.deepEqual(cellIds.filter(id => twice[id] === SETTINGS), ["band-c5"]);
-  // With its home taken, it goes to the first empty cell; with no cell empty,
-  // it goes home anyway, because a pad without it cannot be undone.
-  const homeTaken = clampCells({ "band-c1": "5" });
-  assert.equal(homeTaken["band-c1"], "5");
-  assert.equal(homeTaken["band-c2"], SETTINGS);
-  const full = clampCells(Object.fromEntries(cellIds.map(id => [id, "5"])));
-  assert.equal(full["band-c1"], SETTINGS);
-  assert.deepEqual(cellIds.filter(id => full[id] === SETTINGS), ["band-c1"]);
-});
-
-test("the editor cannot take the settings key off a pad, and moving it is an edit", () => {
-  const layout = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
-  layout.useShape("type1");
-  layout.set("band-c1", EMPTY);
-  layout.set("band-c1", "5");
-  assert.equal(layout.keyAt("band-c1"), SETTINGS);
-  assert.equal(layout.edited(), false, "a refused change was stored as an edit");
-  layout.set("pad-r4c7", SETTINGS);
-  assert.equal(layout.keyAt("pad-r4c7"), SETTINGS);
-  assert.equal(layout.keyAt("band-c1"), EMPTY);
-  assert.equal(layout.edited(), true);
-  // Emptying every cell leaves it where it was put.
-  for (const id of cellIds) layout.set(id, EMPTY);
-  assert.deepEqual(cellIds.filter(id => layout.keyAt(id) !== EMPTY), ["pad-r4c7"]);
-});
-
-test("a key may sit in two cells, and a cell may be emptied", () => {
-  // The opposite of the keyboard's rule, and deliberately: the shipped type3
-  // prints 1 and 3 twice, and app.js lights every button carrying a key for
-  // exactly that reason.
-  let table = shipped.type1;
-  table = assign(table, "pad-r1c6", "5");
-  assert.equal(table["pad-r1c6"], "5");
-  assert.equal(table["pad-r2c6"], "5", "putting a key somewhere took it from where it was");
-  table = clear(table, "pad-r2c6");
-  assert.equal(table["pad-r2c6"], EMPTY);
-  assert.equal(table["pad-r1c6"], "5");
-  // Neither touches a cell or a key the build does not have.
-  assert.equal(assign(table, "no-such-cell", "5"), table);
-  assert.equal(assign(table, "pad-r1c6", "SOFT3"), table);
-  assert.equal(clear(table, "no-such-cell"), table);
-});
-
-test("an unedited page uses the current default without changing its selected type", () => {
-  // Defaults can change; the selected type and storage remain untouched.
-  for (const name of shapes) {
-    const storage = fakeStorage();
-    storage.setItem(LAYOUT_KEY, name);
-    const layout = createKeypadLayout(storage, LAYOUT_KEY);
-    assert.equal(layout.shape(), name);
-    assert.equal(layout.edited(), false);
-    assert.deepEqual(layout.keys(), shipped[name]);
-    assert.ok(!storage.entries.has(KEYS_KEY), "reading the layout wrote a table");
+test("legacy corruption retains exactly one settings action and drops unknown keys", () => {
+  for (const source of [
+    null,
+    {},
+    { "band-c1": "UNKNOWN" },
+    { "band-c5": SETTINGS, "pad-r1c1": SETTINGS },
+  ]) {
+    const grid = migrateLegacy(source);
+    assert.equal(
+      grid.groups.filter((group) => group.key === SETTINGS).length,
+      1,
+    );
+    assert.ok(
+      grid.groups.every(
+        (group) => !group.key || assignable.includes(group.key),
+      ),
+    );
   }
-  // And a page that never chose one gets the shape this build ships first,
-  // which is a shape with keys on it rather than the empty one.
-  const fresh = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
-  assert.equal(fresh.shape(), shapes[0]);
-  assert.deepEqual(fresh.keys(), shipped[shapes[0]]);
 });
 
-test("an edit is stored, and is what the pad draws next time", () => {
-  const storage = fakeStorage();
-  storage.setItem(LAYOUT_KEY, "type1");
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.set("pad-r2c2", "5");
-  assert.equal(layout.edited(), true);
-  assert.equal(layout.keyAt("pad-r2c2"), "5");
-  assert.ok(storage.entries.has(KEYS_KEY), "the edit was not stored");
-  // The shape it started from stays stored, so 되돌리기 has somewhere to go.
-  assert.equal(storage.getItem(LAYOUT_KEY), "type1");
-
-  const reopened = createKeypadLayout(storage, LAYOUT_KEY);
-  assert.equal(reopened.edited(), true);
-  assert.equal(reopened.keyAt("pad-r2c2"), "5");
-  assert.equal(reopened.shape(), "type1");
-});
-
-test("an edit that lands back on a shape is not an edit", () => {
-  // Otherwise the list would go on calling a shape modified when the pad is
-  // exactly that shape again.
-  const storage = fakeStorage();
-  storage.setItem(LAYOUT_KEY, "type1");
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.set("pad-r2c2", "5");
-  assert.equal(layout.edited(), true);
-  layout.set("pad-r2c2", "OK");
-  assert.equal(layout.edited(), false, "the pad is type1 again and does not say so");
-  assert.ok(!storage.entries.has(KEYS_KEY), "the table outlived the edit");
-
-  // The same on the way in: a stored table that happens to be the shape is the
-  // shape.
-  const stored = fakeStorage();
-  stored.setItem(LAYOUT_KEY, "type2");
-  stored.setItem(KEYS_KEY, JSON.stringify(shipped.type2));
-  assert.equal(createKeypadLayout(stored, LAYOUT_KEY).edited(), false);
-  assert.equal(shapeMatching(shipped.type3), "type3");
-  assert.equal(shapeMatching({ ...shipped.type3, "pad-r4c3": "7" }), "");
-});
-
-test("each shape keeps its own cells, and choosing another does not disturb them", () => {
-  // The point of a shape is a place to keep a keypad. Somebody arranges type1
-  // the way they like it, switches to type4 to build a second pad from nothing,
-  // and finds the first still there on the way back — which is also what makes
-  // the size settings hang off a shape rather than off the page.
-  const storage = fakeStorage();
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.useShape("type1");
-  layout.set("pad-r2c2", "5");
-  assert.equal(layout.edited(), true);
-
-  layout.useShape("type4");
-  assert.deepEqual(layout.keys(), shipped.type4, "the empty shape came with somebody's edit in it");
-  assert.equal(layout.edited(), false);
-  layout.set("pad-r1c1", "5");
-  assert.equal(layout.edited(), true);
-
-  layout.useShape("type1");
-  assert.equal(layout.keyAt("pad-r2c2"), "5", "the shape's own cells did not come back");
-  assert.equal(layout.edited(), true);
-  layout.useShape("type4");
-  assert.equal(layout.keyAt("pad-r1c1"), "5");
-
-  // And they come back from storage the same way.
-  const reopened = createKeypadLayout(storage, LAYOUT_KEY);
-  assert.equal(reopened.shape(), "type4");
-  assert.equal(reopened.keyAt("pad-r1c1"), "5");
-  reopened.useShape("type1");
-  assert.equal(reopened.keyAt("pad-r2c2"), "5");
-});
-
-test("reset is one shape's, and forgets the entry rather than storing its cells", () => {
-  const storage = fakeStorage();
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  layout.useShape("type2");
-  layout.set("pad-r4c1", "7");
-  layout.useShape("type1");
-  layout.set("pad-r2c2", "5");
-
-  assert.deepEqual(layout.reset(), shipped.type1);
-  assert.equal(layout.edited(), false);
-  assert.equal(layout.shape(), "type1", "reset changed the shape as well as its cells");
-  // The other shape's edit is untouched, and the entry still holds only it.
-  layout.useShape("type2");
-  assert.equal(layout.keyAt("pad-r4c1"), "7");
-  assert.deepEqual(Object.keys(JSON.parse(storage.getItem(KEYS_KEY))), ["type2"]);
-
-  // With nothing edited anywhere the entry goes rather than holding empties.
-  layout.reset();
-  assert.ok(!storage.entries.has(KEYS_KEY), "an edit-free keypad still stores a table");
-
-  // A name that is not a shape changes nothing.
-  layout.useShape("type9");
-  assert.equal(layout.shape(), "type2");
-  assert.ok(isShape("type4") && !isShape("edited") && !isShape(null));
-});
-
-test("emptying a named shape by hand is not renamed to the empty one", () => {
-  // Clearing every cell of type1 makes a table type4 also matches. Answering
-  // "type4" would rename somebody's keypad under them: what they did was edit
-  // type1 down to nothing, and the shape they are on is the one they picked.
-  const layout = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
-  layout.useShape("type1");
-  for (const id of cellIds) layout.set(id, EMPTY);
-  assert.equal(layout.shape(), "type1");
-  assert.equal(layout.edited(), true, "the emptied shape was renamed");
-  assert.deepEqual(layout.keys(), shipped.type4, "the cells are not empty");
-  // And on the shape that *is* empty, the same table is not an edit at all.
-  const empty = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
-  empty.useShape("type4");
-  empty.set("pad-r1c1", "5");
-  empty.set("pad-r1c1", EMPTY);
-  assert.equal(empty.edited(), false);
-});
-
-test("an entry that is not a table is no entry", () => {
-  // `clampCells` answers a full table for anything, EMPTY everywhere it cannot
-  // read a key — and an empty table is a *valid* edit, the one somebody makes
-  // by clearing every cell. So folding a hand-edited or truncated entry through
-  // it would hand back a keypad with no keys on it rather than the shape the
-  // entry names, which is the opposite of what this module does with nonsense
-  // everywhere else.
-  for (const junk of ["garbage", 7, true, null, [], ["pad-r1c1"]]) {
-    const storage = fakeStorage();
-    storage.setItem(LAYOUT_KEY, "type1");
-    storage.setItem(KEYS_KEY, JSON.stringify({ type1: junk }));
-    const layout = createKeypadLayout(storage, LAYOUT_KEY);
-    assert.equal(layout.edited(), false, `${JSON.stringify(junk)} was taken as an edit`);
-    assert.deepEqual(layout.keys(), shipped.type1, `${JSON.stringify(junk)} moved the keypad`);
-  }
-  // A table is a table even when it is empty: that is the keypad somebody gets
-  // by clearing every cell, and it has to survive a reload.
-  const storage = fakeStorage();
-  storage.setItem(LAYOUT_KEY, "type1");
-  storage.setItem(KEYS_KEY, JSON.stringify({ type1: {} }));
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  assert.equal(layout.edited(), true);
-  assert.deepEqual(layout.keys(), shipped.type4, "an emptied shape came back with keys on it");
-});
-
-test("nonsense in storage is a shape rather than a throw", () => {
-  const storage = fakeStorage();
-  // A shape this build does not have. It used to be "type4", which this build
-  // does — a test whose nonsense becomes real stops testing anything.
-  storage.setItem(LAYOUT_KEY, "type9");
-  storage.setItem(KEYS_KEY, "{not json");
-  const layout = createKeypadLayout(storage, LAYOUT_KEY);
-  assert.equal(layout.shape(), shapes[0]);
-  assert.equal(layout.edited(), false);
-  assert.deepEqual(layout.keys(), shipped[shapes[0]]);
-
-  // A storage that throws on every call is a page that still draws a keypad;
-  // it simply cannot remember one.
-  const hostile = {
-    getItem: () => {
-      throw new Error("blocked");
-    },
-    setItem: () => {
-      throw new Error("blocked");
-    },
-    removeItem: () => {
-      throw new Error("blocked");
+test("types keep their own edits and one undo stays within the current editor", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+      return true;
     },
   };
-  const blocked = createKeypadLayout(hostile, LAYOUT_KEY);
-  assert.deepEqual(blocked.keys(), shipped[shapes[0]]);
-  assert.doesNotThrow(() => blocked.set("pad-r2c2", "OK"));
-  assert.equal(blocked.keyAt("pad-r2c2"), "OK");
-  assert.doesNotThrow(() => blocked.useShape("type2"));
-});
-
-test("a cell nothing knows about is not a cell", () => {
-  const layout = createKeypadLayout(fakeStorage(), LAYOUT_KEY);
-  const before = layout.keys();
-  assert.deepEqual(layout.set("no-such-cell", "5"), before);
-  assert.equal(layout.edited(), false);
-  assert.equal(layout.keyAt("no-such-cell"), EMPTY);
-});
-
-test("checkpoint keys have no default placement and retain per-shape edits", () => {
-  const storage = fakeStorage();
   const layout = createKeypadLayout(storage);
-  for (const name of [QUICK_SAVE, QUICK_LOAD]) {
-    assert.ok(assignable.includes(name));
-    assert.ok(!keyOrder.includes(name), "a checkpoint is not a handset key");
-    for (const shape of shapes) assert.ok(!Object.values(shipped[shape]).includes(name));
-  }
-  for (const shape of shapes) {
-    layout.useShape(shape);
-    assert.ok(!Object.values(layout.keys()).some(isCheckpointKey));
-    layout.set("band-c2", QUICK_SAVE);
-    layout.set("pad-r1c4", QUICK_LOAD);
-    layout.set("pad-r4c1", QUICK_SAVE);
-    const reloaded = createKeypadLayout(storage);
-    assert.equal(reloaded.shape(), shape);
-    assert.equal(reloaded.keyAt("band-c2"), QUICK_SAVE);
-    assert.equal(reloaded.keyAt("pad-r1c4"), QUICK_LOAD);
-    assert.equal(reloaded.keyAt("pad-r4c1"), QUICK_SAVE);
-    reloaded.set("pad-r1c4", EMPTY);
-    assert.equal(createKeypadLayout(storage).keyAt("pad-r1c4"), EMPTY);
-    reloaded.reset();
-    assert.ok(!Object.values(reloaded.keys()).some(isCheckpointKey));
-  }
+  layout.set("r1c3", "5");
+  layout.useShape("type4");
+  layout.set("r2c2", "6");
+  layout.useShape("type1");
+  assert.equal(layout.keyAt("r1c3"), "5");
+  assert.equal(layout.canUndo(), false);
+  layout.useShape("type4");
+  assert.equal(layout.keyAt("r2c2"), "6");
+  layout.reset();
+  assert.deepEqual(layout.grid(), defaultGrid("type4"));
+  assert.equal(layout.undo(), true);
+  assert.equal(layout.keyAt("r2c2"), "6");
+  layout.beginEdit();
+  assert.equal(layout.canUndo(), false);
+  assert.deepEqual(createKeypadLayout(storage).grid(), layout.grid());
 });

@@ -120,8 +120,8 @@ test("switch placement persists but never becomes a handset keyboard binding", (
   const data = new Map();
   const storage = { getItem: key => data.get(key), setItem: (key, value) => data.set(key, value) };
   const layout = createKeypadLayout(storage);
-  layout.set("pad-r1c1", RAPID_FIRE);
-  assert.equal(createKeypadLayout(storage).keyAt("pad-r1c1"), RAPID_FIRE);
+  layout.set("r2c1", RAPID_FIRE);
+  assert.equal(createKeypadLayout(storage).keyAt("r2c1"), RAPID_FIRE);
   assert.ok(assignable.includes(RAPID_FIRE));
   assert.ok(!keyOrder.includes(RAPID_FIRE));
 });

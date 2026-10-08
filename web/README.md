@@ -72,7 +72,7 @@ the token, so the restart button still starts a game over.
   given the new button — it is in the editor's list.
   Quick save and quick load are local actions in that same cell editor. Neither
   has a default position in any type. Assigned buttons act immediately during a
-  session the server reports as `can_checkpoint` — KTF and LGT titles today —
+  session the server reports as `can_checkpoint` — KTF, LGT and SKT titles —
   with brief inline feedback instead of a popup. They send
   no handset key, never activate during a slide or while editing, and are disabled
   during another checkpoint operation. An absent slot disables quick load during
@@ -85,18 +85,11 @@ the token, so the restart button still starts a game over.
   refusal shows the server's reason after `퀵로드 실패:` or `퀵세이브 실패:`; the
   server words the three a person can act on in Korean, and a slot from an
   earlier build keeps quick load enabled so that pressing it says why.
-  Cell assignment and sizing share the keypad editor, opened from `설정` and
-  drawn over the game screen rather than in the settings panel: that panel is a
-  centred modal on a phone and covers the very keypad the sliders move. Four
-  numbers, which are the keypad's four bands — the size of a key, how the middle
-  band's width is split between the direction pad and the number pad, the height
-  of the top row, and the last row against the pad's own keys. `keypad-size.js`
-  holds them, clamps anything that arrives from storage, and writes the same
-  custom properties `style.css` declares, so one write moves the pad, the gaps
-  **and the game screen**: the two are one budget, and a bigger keypad is a
-  smaller screen above it rather than a pad pushed off the bottom. That is also
-  why the panel stands on the canvas — the room it loses as the pad grows is the
-  room being spent.
+  The grid editor opens from `설정` over the game screen and leaves the keypad
+  visible. It assigns keys, merges adjacent cells into buttons, splits a button,
+  clears its action, and undoes the last edit. All types use the same grid;
+  sizing sliders are retired. See [Grid keypad](#grid-keypad) for geometry,
+  input, and storage contracts.
   Keys are sent as press/release over the session
   socket; the platform the code is translated for is the engine's business, not
   the page's. A held key lights its button, by pointer and by keyboard alike,
@@ -124,28 +117,13 @@ the token, so the restart button still starts a game over.
   These are the lines a saved report carries, so what is on screen during a run
   and what is read back afterwards cannot disagree. Wide windows and debug
   builds only.
-- **Settings (`설정`)** — MIDI and effect volume, the magnification filter, the
-  speed multiplier, the keypad layout, the keypad size, the key settings, the
-  cheat panel toggle, the debug report button, and a restart that reloads the
-  page. The keypad size is a button rather than rows of sliders: it opens a
-  screen of its own over the canvas, where the pad being sized stays visible and
-  pressable. The keypad
-  layout is a list here rather than the cycling button it used to be in the
-  keypad's own top row: that spot went to the menu key, and a choice made once
-  reads better as three named options than as a press that moves to the next.
-  It is remembered, which the button never was. The key settings appear only
-  where a key has actually been pressed — a list of keyboard keys is nothing a
-  phone can use, and only a keypress proves there is a keyboard to use them
-  with. `설정` is a key in one of the keypad's cells — the band's first column
-  unless a person moved it — drawn in dark red, and it is there from the first
-  paint: it does not start over the canvas and move when a game is chosen. It is
-  the one key a pad holds exactly once: the editor moves it rather than copying
-  it, and the cell holding it can be neither emptied nor given another key,
-  because it is the only way back into the panel that would undo an empty
-  keypad — which is why Type4 keeps it. A table stored before it was a cell
-  gets it back in its old place. The report is written by the server, which is
-  the side with the numbers, and the page's own log is saved beside it — a
-  dropped socket or a draw failure shows up in no other place.
+- **Settings (`설정`)** — MIDI and effect volume, magnification, speed, keypad
+  type and grid editing, keyboard bindings, cheats, debug reports, and restart.
+  Both type lists select the same stored type and show whether it was edited.
+  The keyboard binding panel appears after a physical keyboard key is used.
+  The dark-red settings button starts at the first grid cell and can move or
+  merge, but exactly one group always retains it, including in Type4.
+  Debug reports join the server's runtime evidence with the page's own log.
 - **Cheat panel** — a progressive memory search over the running game: type and
   endianness, the value filters, undo/reset, a freeze list whose values stay
   editable, write watching, and saving or loading a cheat table. Candidate
@@ -170,7 +148,7 @@ the token, so the restart button still starts a game over.
   page, so the control still works and only its memory is lost, and the run log
   says so once at load. `localStorage` holds the last game, the per-game screen
   size and speed, the magnification, music and effects volume, vibration, the
-  keypad type, the keypad size and the key bindings;
+  keypad type, grid arrangements and key bindings;
   `sessionStorage` holds the resume token, which belongs to one tab.
 
 The run log and the report button are the developer's half of the page, and a
@@ -190,6 +168,101 @@ generated from the Go tables). Game execution remains on the server. Keys go up
 as JSON; sound arrives as compact binary MIDI and PCM events, each sample
 carried once (`audio-stream.js`), and is played by the synthesiser here; the
 cheat panel's operations are a request and an answer.
+
+## Grid keypad
+
+`keypad-layout.js` owns a complete partition of fourteen columns and nine rows.
+A group stores its first cell as its stable identifier, all owned cell coordinates,
+one action, and its `press` or `slide` activation policy. Empty cells are groups
+as well. Every cell has one owner, each group is connected through shared edges,
+and exactly one group holds settings. Diagonal contact alone is insufficient.
+The supported shapes include rectangles, L and T shapes, and rings around empty
+cells or other buttons. Keys may be duplicated in separate groups.
+
+Each former top-row cell is divided horizontally into two columns. The previous
+top row maps to row 1, and previous pad row `r` maps to rows `2*r` and `2*r+1`.
+Previous column `c` maps to columns `2*c-1` and `2*c`. Assigned top-row buttons
+start as two-cell groups and assigned pad keys as four-cell groups. Version-1
+grid buttons and custom merged shapes retain their owned area through the same
+paired-column mapping, including empty merged shapes. Former single empty cells
+become independent empty halves. This preserves assignments and topology while
+allowing finer edits through splitting and merging.
+
+The keypad fills the game column's safe width, up to 480 px, without decorative
+side or bottom padding. Game and keypad share the dynamic viewport height after
+all four safe-area insets and the desktop's 16 px top margin. CSS uses `100dvh`
+where supported and falls back to `100vh`. It reserves the smaller of 284 px or
+55% of usable height for the keypad, fits the 3:4 game wrapper into the remaining
+budget, then gives all space below that wrapper to the keypad. The board can grow
+beyond the reservation on tall or narrow screens. The normal 4 px gaps also shrink
+in extremely short or narrow windows; the renderer reads the computed gap when
+building visible shapes and hit targets.
+
+Every row and column scales equally on its axis. Coordinates and cell ownership
+never change with device, OS, browser chrome, rotation or resize. Larger screens
+enlarge cells rather than adding logical rows; smaller screens retain all cells.
+Small targets can be enlarged by merging. The old size, split and band preferences
+remain stored for rollback but no longer size the page. Safe areas deliberately
+remain clear of buttons. Dynamic browser chrome and physical touch still require
+the device observations listed in [testing](../docs/testing.md#grid-keypad).
+
+`keypad-editor.js` renders one native button per group and preserves one accessible
+name and focus target. `keypad-geometry.js` computes one union of cell rectangles
+for both clipping and the visible outline. Shared seams are filled; missing
+corners and holes stay outside the hit target. The label occupies the largest
+filled rectangle, so it cannot float inside a hole. Labels stay on one line;
+the renderer measures the actual text with a DOM range and reduces the font size
+when it exceeds that rectangle's available width. Fitting starts from the normal
+CSS size on each resize, merge or assignment, so a larger button can restore it.
+The rapid-fire mode label is fitted again when its text changes. Resize updates
+geometry without rewriting storage and releases held input.
+
+The editor has assignment and multiple-selection modes. Taps toggle selection;
+dragging adds each crossed group once. Existing merged groups are selected as a
+whole. A successful merge returns to assignment mode with the resulting button
+selected, so the next key choice immediately updates it. A failed merge retains
+multiple-selection mode and its selected groups. A merge with conflicting
+assignments requires the resulting action to be chosen. A merge containing
+settings retains settings. Assigning settings elsewhere
+moves it. Clearing preserves the group's shape; splitting keeps its action in
+its first cell and empties the rest. Undo restores the last successful edit in
+the current editor and type, including reset. Reset affects only the selected
+type. Opening the editor or changing type starts a new undo boundary.
+
+Input continues through `key-holds.js`, rapid fire, and the existing session key
+codes. A slide inside a group stays one press. The last pointer or keyboard
+holder releases the guest key, and duplicate buttons share pressed feedback.
+Native Space/Enter activates a focused gameplay button; local controls retain
+the browser's native click path. During editing, keyboard and pointer input
+selects controls without reaching the guest, rapid fire or checkpoint requests.
+
+Migration retains old band cells' direct-press behavior and old pad cells' slide
+behavior even for custom assignments. New action assignments use sliding for
+direction/number gameplay keys and direct press for menu, call, soft-key and
+clear controls. A merge retaining a key retains the first selected matching
+group's policy. Settings, rapid fire and checkpoint actions always require direct
+activation. Sliding across those actions never triggers them.
+
+The selected type remains `wfeature:keypadLayout`. `wfeature:keypadGridV2` stores
+`{version: 2, layouts: {type1, type2, type3, type4}}`, where an entry is either a
+validated `{columns, rows, groups}` grid or `null` for that type's current preset.
+Explicit default entries prevent reset from reviving legacy edits. Migration
+reads version 1 from `wfeature:keypadGrid` only when the new slot is absent. If
+both grid slots are absent, it reads `wfeature:keypadKeys`. All old records,
+including `wfeature:keypadSize`, remain unchanged. Separate storage prevents an
+already-open coarse editor from overwriting refined edits. Older clients still
+read their own records and do not see subsequent grid edits. Once version 2 has
+been saved, including an explicit reset, later old-tab changes are not imported.
+
+Stored text is bounded to 65,536 code units before parsing, and each type is
+bounded to 126 groups and 126 unique owned cells. Invalid dimensions, actions,
+connectivity, ownership or settings counts reject that type independently.
+Valid siblings survive. Before an edit replaces a damaged record, its source
+is retained as `wfeature:keypadGridV2Backup`; a failed backup keeps the edit only
+in memory. A damaged old-slot source needs no copy because migration never writes
+that slot. Future versions and oversized records are not overwritten. Failed
+writes retain a working layout for the current tab and show an inline notice.
+The service worker carries all three grid modules in `wfeature-pwa-v40`.
 
 ## Server
 
@@ -241,10 +314,12 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
-Activation retires only older `wfeature-shell-*` caches. A controlled navigation
-also retires caches recreated by a replaced worker's late response. Offline
-fallback reads only the current shell, never another app's cache or an older
-shell. Cache writes extend the fetch event lifetime.
+Shell version 40 uses `wfeature-pwa-v40`. The prefix introduced in version 35 prevents already-installed
+workers from deleting it through their broad `wfeature-shell-*` cleanup.
+Activation removes legacy shell caches and strictly older `wfeature-pwa-vN`
+versions, preserving future versions and unrelated caches. A controlled navigation
+also retires old caches recreated by a replaced worker's late response. Offline
+fallback reads only the current shell. Cache writes extend the fetch event lifetime.
 
 Game-key presses and supported canvas touches ask the existing audio boundary
 to resume a suspended AudioContext. Actual audible recovery still needs a

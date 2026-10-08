@@ -23,7 +23,7 @@ const port = listener.address().port;
 await new Promise(done => listener.close(done));
 const origin = `http://127.0.0.1:${port}`;
 const server = spawn(resolve(binary), ["-addr", `127.0.0.1:${port}`, "-games", games, "-ext", ext,
-  "-saves", saves, "-logs", join(output, "logs"), "-web", join(output, "no-external-web"), "-open=false"]);
+  "-saves", join(saves, "ktf"), "-logs", join(output, "logs"), "-web", join(output, "no-external-web"), "-open=false"]);
 let logs = "", browser;
 server.stdout.on("data", data => { logs += data; });
 server.stderr.on("data", data => { logs += data; });
@@ -57,14 +57,27 @@ try {
   await page.waitForFunction(() => !document.querySelector("#restart").classList.contains("hidden"));
   if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator('button[data-key="SETTINGS"]').click();
   await page.locator("#keypad-arrange-open").click();
-  await page.locator('[data-cell="pad-r1c1"]').click();
+  await page.locator('[data-cell="r2c1"]').click();
   await page.locator("#keypad-arrange-keys").getByRole("button", { name: "연사", exact: true }).click();
   await page.locator("#keypad-arrange-close").click();
-  const toggle = page.locator('button[data-cell="pad-r1c1"][data-key="RAPID_FIRE"]');
+  const toggle = page.locator('button[data-cell="r2c1"][data-key="RAPID_FIRE"]');
   assert.equal(await toggle.textContent(), "연사 off");
   result.checks.push("switch assigned through keypad editor");
   const clear = () => page.evaluate(() => { window.rapidMessages = []; });
   const messages = () => page.evaluate(() => window.rapidMessages);
+  // Global bindings are tested with focus outside the local control. Focused
+  // Space/Enter intentionally activate that control through its native click.
+  const gameKey = async code => {
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.keyboard.press(code);
+  };
+  await toggle.focus();
+  for (const [code, mode] of [["Space", "manual"], ["Enter", "auto"], ["Space", "off"]]) {
+    await page.keyboard.press(code);
+    assert.equal(await toggle.textContent(), `연사 ${mode}`);
+  }
+  assert.deepEqual(await messages(), []);
+  result.checks.push("focused Space/Enter changes mode without a handset key");
   await pause(2000);
   await toggle.click();
   await clear();
@@ -81,7 +94,7 @@ try {
   await toggle.click();
   await clear(); await pause(200); assert.deepEqual(await messages(), []);
   result.checks.push("auto waits for a target key");
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await clear();
   await pause(1000);
   sent = await messages();
@@ -99,15 +112,15 @@ try {
   await tapFive.click();
   await clear(); await pause(200); assert.deepEqual(await messages(), []);
   await tapFive.click();
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await clear(); await pause(500);
   sent = await messages();
   assert.ok(sent.some(message => message.action === "press"));
   assert.ok(sent.every(message => message.code === 148));
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await clear(); await pause(200); assert.deepEqual(await messages(), []);
   result.checks.push("auto switches both ways and toggles each target off");
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
   assert.equal(await toggle.textContent(), "연사 off");
   await clear(); await pause(200); assert.deepEqual(await messages(), []);
@@ -117,20 +130,23 @@ try {
   const five = page.locator('button[data-key="5"]').first();
   const box = await five.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down(); await pause(250); await page.mouse.up();
+  await page.mouse.down();
+  await page.waitForFunction(() => window.rapidMessages.filter(message => message.action === "press").length >= 2,
+    null, { timeout: 3000 });
+  await page.mouse.up();
   sent = await messages();
   assert.ok(sent.filter(message => message.action === "press").length >= 2);
   assert.equal(sent.at(-1).action, "release");
   await clear(); await pause(150); assert.deepEqual(await messages(), []);
   result.checks.push("pointer hold repeats and lift stops");
   await toggle.click();
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await page.locator("#keypad-arrange-open").click();
   assert.equal(await toggle.textContent(), "연사 off");
   await page.locator("#keypad-arrange-close").click();
   result.checks.push("editing resets auto");
   await toggle.click(); await toggle.click();
-  await page.keyboard.press("Space");
+  await gameKey("Space");
   await page.locator("#restart").click();
   await page.locator("#confirm-accept").click();
   await page.locator("#game-start").click();
@@ -149,4 +165,5 @@ try {
   writeFileSync(join(output, "result.json"), JSON.stringify(result, null, 2));
   writeFileSync(join(output, "server.log"), logs);
   rmSync(ext, { recursive: true, force: true });
+  rmSync(games, { recursive: true, force: true });
 }

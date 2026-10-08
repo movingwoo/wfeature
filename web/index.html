@@ -86,37 +86,14 @@
             <button id="session-takeover" class="game-start">이 화면에서 이어하기</button>
           </div>
 
-          <!-- One screen for the whole keypad: which shape it is, how much room
-               it gets, and which key is in which cell. There were two panels
-               and the size one is gone — the two answered halves of the same
-               question and each shape wants its own answer to both, so they are
-               stored together and set together.
-
-               It is drawn over the game screen rather than listed in the
-               settings panel, and on a phone that is the difference between
-               choosing and guessing: that panel is a centred modal and covers
-               the very keypad being changed. Here the pad stays where it is and
-               under a thumb, every drag shows on it, and the screen this panel
-               stands on shrinks as the pad grows — which is the other half of
-               the trade being made.
-
-               **And the pad is the editor.** While this is open the keypad sends
-               nothing and a press picks that cell instead, so what is being
-               edited is the thing being looked at. The empty cells a shape
-               leaves are shown here and nowhere else; that is where a key goes.
-
-               The slider rows are built in script from the list in
-               keypad-size.js and the shape list from keypad-layout.js, so the
-               panel cannot come to disagree with either about what there is. -->
+          <!-- The editor covers the game screen and keeps the keypad visible.
+               Empty cells appear only while arranging; guest input is suspended. -->
           <div class="keypad-arrange" id="keypad-arrange">
             <div class="panel-header">
               <span>🎮 키패드 세부 조정</span>
               <button id="keypad-arrange-close" class="panel-close">완료</button>
             </div>
             <label class="keypad-arrange-shape">타입
-              <!-- The shape list lives here rather than in the settings panel,
-                   because this is where changing it can be seen: the pad below
-                   redraws, and its own size comes back with it. -->
               <select id="keypad-shape-panel" class="game-speed keypad-shape-list">
                 <option value="type1" selected>Type1</option>
                 <option value="type2">Type2</option>
@@ -124,15 +101,20 @@
                 <option value="type4">Type4</option>
               </select>
             </label>
-            <div id="keypad-size-list" class="keypad-size-list"></div>
-            <p class="keypad-arrange-hint" id="keypad-arrange-hint"></p>
+            <div class="keypad-arrange-tools" id="keypad-arrange-tools">
+              <button id="keypad-arrange-multiple" type="button" aria-pressed="false">여러 칸 선택</button>
+              <button id="keypad-arrange-unselect" type="button">선택 해제</button>
+              <button id="keypad-arrange-merge" type="button" disabled>합치기</button>
+              <button id="keypad-arrange-split" type="button" disabled>나누기</button>
+              <button id="keypad-arrange-clear" type="button" disabled>비우기</button>
+              <button id="keypad-arrange-undo" type="button" disabled>되돌리기</button>
+            </div>
+            <p id="keypad-arrange-storage" class="keypad-arrange-storage" role="status" hidden></p>
+            <p class="keypad-arrange-hint" id="keypad-arrange-hint" role="status"></p>
             <!-- The picker replaces the hint's place rather than opening over
                  the pad: a list floating on top of the keypad would cover the
                  cell it is a list for. -->
             <div class="keypad-arrange-keys" id="keypad-arrange-keys" hidden></div>
-            <!-- One button, and it undoes both halves: the shape's own cells and
-                 its own size. Two buttons for the two would leave a person
-                 wondering which of them had moved. -->
             <button id="keypad-arrange-reset" class="panel-button">기본값으로 되돌리기</button>
           </div>
         </div>
@@ -173,83 +155,9 @@
           <button id="status-close" class="status-close">확인</button>
         </div>
 
-        <!-- Every key here is a cell rather than a key: the markup says where a
-             button sits and `keypad-layout.js` says which phone key is in it,
-             so the three keypad shapes are shipped in one table and a person
-             can put a key wherever they want it. The label and the data-key are
-             filled in from that table on load — a cell holding nothing is
-             hidden, which is how a shape leaves nine of these empty.
-
-             What must stay in the markup is the *region*, because `initInput`
-             reads it: a button inside the pad's grid is one a sliding finger
-             presses on its way across, and one in the band above is aimed at a
-             key at a time. Moving a button between the two here would change
-             what a drag does with nothing else to say so. And the pad's own
-             order is load-bearing twice over — the grid places a cell by where
-             its button sits, so reading order is the layout. -->
+        <!-- Shapes and cell ownership are rendered from the validated layout. -->
         <div class="button-container">
-          <!-- The band, and it is the pad's seven columns above the pad. It was
-               three buttons at hand-written offsets — one at each edge and two
-               either side of the centre — which is why there were three of them:
-               an absolute position has to be written one at a time. As a row of
-               columns there are seven, and every one is a person's to fill.
-
-               The settings key (설정) is in the first by default. It is a key a
-               cell holds like any other, but exactly one cell always holds it —
-               it is the only way back into the panel that would undo an empty
-               keypad — so it moves rather than copies, and cannot be removed.
-
-               This row is a grid of its own rather than the pad's first row, and
-               the reason is the drag rule below: a finger crossing the pad
-               presses what it crosses, and up here it aims at one key at a time.
-               CLR in the middle of a game is an expensive thing to brush past. -->
-          <div class="keypad-band">
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c1"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c2"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c3"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c4"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c5"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c6"></button>
-            <button class="keypad-cell keypad-band-cell" data-cell="band-c7"></button>
-          </div>
-          <!-- One grid, seven columns by four rows. It was two 3x3 pads with a
-               wide gap between them and a row of * 0 # in a band below; the gap
-               is a column now and that row is the fourth, so every key is where
-               it was and the sixteen cells nothing was using are reachable.
-
-               No cell carries a row or a column: they are emitted in reading
-               order and the grid places them, so moving a button here moves it
-               on the pad. -->
-          <div class="keypad-pad">
-              <button class="keypad-cell" data-cell="pad-r1c1"></button>
-              <button class="keypad-cell" data-cell="pad-r1c2"></button>
-              <button class="keypad-cell" data-cell="pad-r1c3"></button>
-              <button class="keypad-cell" data-cell="pad-r1c4"></button>
-              <button class="keypad-cell" data-cell="pad-r1c5"></button>
-              <button class="keypad-cell" data-cell="pad-r1c6"></button>
-              <button class="keypad-cell" data-cell="pad-r1c7"></button>
-              <button class="keypad-cell" data-cell="pad-r2c1"></button>
-              <button class="keypad-cell" data-cell="pad-r2c2"></button>
-              <button class="keypad-cell" data-cell="pad-r2c3"></button>
-              <button class="keypad-cell" data-cell="pad-r2c4"></button>
-              <button class="keypad-cell" data-cell="pad-r2c5"></button>
-              <button class="keypad-cell" data-cell="pad-r2c6"></button>
-              <button class="keypad-cell" data-cell="pad-r2c7"></button>
-              <button class="keypad-cell" data-cell="pad-r3c1"></button>
-              <button class="keypad-cell" data-cell="pad-r3c2"></button>
-              <button class="keypad-cell" data-cell="pad-r3c3"></button>
-              <button class="keypad-cell" data-cell="pad-r3c4"></button>
-              <button class="keypad-cell" data-cell="pad-r3c5"></button>
-              <button class="keypad-cell" data-cell="pad-r3c6"></button>
-              <button class="keypad-cell" data-cell="pad-r3c7"></button>
-              <button class="keypad-cell" data-cell="pad-r4c1"></button>
-              <button class="keypad-cell" data-cell="pad-r4c2"></button>
-              <button class="keypad-cell" data-cell="pad-r4c3"></button>
-              <button class="keypad-cell" data-cell="pad-r4c4"></button>
-              <button class="keypad-cell" data-cell="pad-r4c5"></button>
-              <button class="keypad-cell" data-cell="pad-r4c6"></button>
-              <button class="keypad-cell" data-cell="pad-r4c7"></button>
-          </div>
+          <div class="keypad-grid" id="keypad-grid" aria-label="키패드"></div>
         </div>
       </main>
 
