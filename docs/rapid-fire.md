@@ -2,10 +2,10 @@
 
 The keypad editor offers a local **연사** switch in any assignable cell. It is
 not a handset key and is not part of keyboard mapping. Type1, Type2 and Type3
-include it between Menu and Call by default; Type4 remains empty. Saved custom
-layouts are preserved. Resetting a layout restores the new default, or the
-switch can be assigned manually. Its placement uses the existing per-layout
-storage; its mode is never persisted.
+include it in top-row column 7, between quick load and menu; Type4 leaves it
+unassigned. Saved custom layouts are preserved. Resetting a layout restores the
+new default, or the switch can be assigned manually. Its placement uses the
+existing per-layout storage; its mode is never persisted.
 
 Type1 now uses the former Type2 default (named directions, OK and the full
 number pad); Type2 uses the former Type1 numeric-direction default. Only the

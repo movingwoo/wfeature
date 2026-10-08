@@ -70,9 +70,10 @@ the token, so the restart button still starts a game over.
   remembered. A key this build adds takes its default only where the user has
   not already spent that keyboard key, and a keypad a user edited is not
   given the new button — it is in the editor's list.
-  Quick save and quick load are local actions in that same cell editor. Neither
-  has a default position in any type. Assigned buttons act immediately during a
-  session the server reports as `can_checkpoint` — KTF, LGT and SKT titles —
+  Quick save and quick load are local actions in that same cell editor. Type1,
+  Type2 and Type3 place them in top-row columns 5 and 6 by default; Type4 leaves
+  them unassigned. Assigned buttons act immediately during a session the server
+  reports as `can_checkpoint` — KTF, LGT and SKT titles —
   with brief inline feedback instead of a popup. They send
   no handset key, never activate during a slide or while editing, and are disabled
   during another checkpoint operation. An absent slot disables quick load during
@@ -181,12 +182,19 @@ cells or other buttons. Keys may be duplicated in separate groups.
 
 Each former top-row cell is divided horizontally into two columns. The previous
 top row maps to row 1, and previous pad row `r` maps to rows `2*r` and `2*r+1`.
-Previous column `c` maps to columns `2*c-1` and `2*c`. Assigned top-row buttons
+Previous column `c` maps to columns `2*c-1` and `2*c`. Migrated top-row buttons
 start as two-cell groups and assigned pad keys as four-cell groups. Version-1
 grid buttons and custom merged shapes retain their owned area through the same
 paired-column mapping, including empty merged shapes. Former single empty cells
 become independent empty halves. This preserves assignments and topology while
 allowing finer edits through splitting and merging.
+
+Type1, Type2 and Type3 presets keep settings in merged columns 1–2 and clear in
+merged columns 13–14 of row 1. Columns 3–12 are single cells: columns 5–10 hold
+quick save, quick load, rapid fire, menu, call and the right soft key, respectively;
+columns 3, 4, 11 and 12 are empty. Type4 keeps its settings-only preset. These
+defaults apply to new or reset layouts; saved custom groups and legacy migration
+keep their recorded assignments and shapes.
 
 The keypad fills the game column's safe width, up to 480 px, without decorative
 side or bottom padding. Game and keypad share the dynamic viewport height after
@@ -262,7 +270,7 @@ is retained as `wfeature:keypadGridV2Backup`; a failed backup keeps the edit onl
 in memory. A damaged old-slot source needs no copy because migration never writes
 that slot. Future versions and oversized records are not overwritten. Failed
 writes retain a working layout for the current tab and show an inline notice.
-The service worker carries all three grid modules in `wfeature-pwa-v40`.
+The service worker carries all three grid modules in `wfeature-pwa-v42`.
 
 ## Server
 

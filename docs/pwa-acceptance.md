@@ -18,7 +18,7 @@ library or saves. Files live under a unique hidden directory in `var/games`,
 `var/ext`, and `var/savedata`. Logs, screenshots, browser storage and JSON results
 remain under ignored `var/acceptance/pwa-<engine>-<timestamp>/`.
 
-The current candidate uses `wfeature-pwa-v41`, outside the cleanup prefix of
+The current candidate uses `wfeature-pwa-v42`, outside the cleanup prefix of
 already-installed legacy workers. It retires legacy caches and strictly older
 versions in the new prefix. The runner reads the candidate's cache name from its
 embedded worker. It waits for cache retirement after navigation, including the

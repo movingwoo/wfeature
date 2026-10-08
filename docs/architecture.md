@@ -608,8 +608,8 @@ The worktree contains server and page checkpoint controls. Commands run between
 whole rounds; successful load advances a connection epoch, discards old queued
 frames/sound and input commands, resets compression, releases held input and
 reconstructs output. Protocol callers can explicitly restore a disk slot at
-startup. The page exposes save/load as optional keypad assignments with immediate,
-nonmodal feedback; its picker starts games normally. The CLI's
+startup. The page exposes save/load as customizable keypad assignments with
+immediate, nonmodal feedback; its picker starts games normally. The CLI's
 `run` command uses the same session API for live commands and startup restoration;
 both hosts pass subprocess restoration in both debug/release directions for
 Java and native packages. A visible browser resumes a saved paused session
