@@ -981,9 +981,12 @@ reloads the cached page to establish offline shell availability; it does not
 claim offline game execution. WebKit's forced-offline API is avoided for the
 [already recorded navigation limitation](pwa-acceptance.md).
 
-The fourteen-column geometry checks have not run in a rendered browser yet:
-the current sandbox blocks both server binding and browser launch. Earlier
-seven-column measurements do not establish the revised CSS behavior.
+The fourteen-column route passes with the embedded release server in Chromium
+and WebKit and with the debug server in Chromium. All nine viewports and explicit
+safe-area inputs pass. The shortest screen also checks that the first and last
+start-menu controls remain reachable by scrolling inside the game area. Actual
+range widths prove the single-cell labels fit; rapid-fire mode changes are
+checked after the authored game starts.
 
 The checkpoint route uses the new grid positions while retaining Java/SGS pixel,
 input-epoch, ordinary-save and reconnect assertions. The two-version PWA route
@@ -993,11 +996,13 @@ instructions are in the root README; the technical contract is in
 [the web host reference](../web/README.md#grid-keypad).
 
 The [2026-10-08 validation record](history/testing.md#keypad-grid-validation-2026-10-08)
-separates completed browser checks from the pending physical-phone, real-game
-play and final-binary reruns. It retains the initial Chromium update cache failure
+separates completed browser checks from the pending physical-phone and real-game
+play observations. It retains the initial Chromium update cache failure
 and the subsequent fix. Service-worker regression tests reproduce a late legacy
 navigation and overlapping future workers; both failed before the repair and pass
-afterward. The repaired worker still needs the two-version browser route.
+afterward. Both engines pass the version-34 and version-35 updates to version 41.
+The route waits for cache retirement after navigation, because the worker's
+fetch lifetime can extend beyond the completed response.
 
 ## Rapid-fire input
 

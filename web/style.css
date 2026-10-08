@@ -81,7 +81,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   /* Adding a game and starting one are two different intentions, and the gap
      is what says so: without it the second row reads as part of the first and
      a thumb aimed at 실행 lands on ＋ 게임 추가. */
@@ -89,7 +89,16 @@ body {
   padding: 24px;
   background: #22262a;
   box-sizing: border-box;
+  /* Short screens keep the menu inside the game area. Safe alignment leaves
+     its first controls reachable when the contents need to scroll. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   transition: opacity 0.3s ease;
+}
+
+.prestart > * {
+  flex-shrink: 0;
 }
 
 .prestart.hidden {

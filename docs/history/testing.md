@@ -220,6 +220,47 @@ and actual text widths at every viewport, but remains unrun under the recorded
 execution restriction. Shell cache version 38 carries the fix. Logs and hashes
 are retained under `var/acceptance/keypad-labels/`.
 
+### Final fourteen-column browser validation
+
+After execution permissions changed, the embedded version-41 client passed the
+rendered checks below. These runs supersede the browser-execution restrictions
+recorded above; they do not establish physical-phone behavior or real-game play.
+
+| Route | Chromium result directory | WebKit result directory |
+| --- | --- | --- |
+| Release grid | `keypad-grid-chromium-1791433016855` | `keypad-grid-webkit-1791433016855` |
+| Debug grid | `keypad-grid-chromium-1791433068926` | Not repeated |
+| Version 34 to 41 | `pwa-chromium-1791433160722` | `pwa-webkit-1791433200401` |
+| Version 35 to 41 | `pwa-chromium-1791433200398` | `pwa-webkit-1791433160722` |
+
+Each directory is under `var/acceptance/` and retains its JSON result, screenshots
+and server logs. The grid runs cover all nine viewport sizes, four safe-area
+inputs, unchanged coordinates, label widths, migration, editor operations,
+immediate assignment after merging, input ownership, native shape hit areas,
+failed storage and offline shell reload. Chromium also checks two touch contacts.
+No page errors were recorded. These routes use isolated saves and authored
+fixtures, so the earlier save-directory correction is now exercised.
+
+The first retry exposed an acceptance-runner error: it tried to cycle rapid fire
+before starting a game, although the existing handler requires a running game.
+The check now runs after startup. The next retry found actual overflow at
+240 by 320 px: start-menu controls extended the document to 346 px despite the
+keypad ending at 320 px. The menu now scrolls inside the game area with safe
+alignment, and the runner checks that its first and last controls remain reachable.
+
+One Chromium upgrade run observed the legacy cache before asynchronous fetch
+cleanup completed. The PWA runner now waits for the cache state after navigation
+as well as network idleness; its final sole-cache assertion is unchanged. Both
+baseline versions pass in both engines, preserving old layout records, archive
+and save hashes, guest progress, backup restoration, text input and offline shell
+availability. The current shell stays outside the legacy cleanup prefix.
+
+`make test` (including all 270 Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, both embedded server builds and
+`git diff --check` pass. Build and test logs, source hashes and binary hashes are
+retained under `var/acceptance/keypad-pr/`. Real-game gameplay and physical-phone
+observations remain open in [maintenance](../maintenance.md#keypad-grid-acceptance).
+
 <a id="implementation-testing"></a>
 
 ## Implementation and validation record

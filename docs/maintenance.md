@@ -21,12 +21,12 @@ height and all four safe-area insets determine the available space; rows and
 columns never change with device, OS, orientation or browser chrome. Smaller
 windows scale the same coordinates instead of dropping cells or adding rows.
 
-The 270-test Node suite, focused Go shell handlers in both profiles and both
-embedded server builds pass. Acceptance still requires browser checks for full
-width, bottom alignment, safe areas, rotation, short windows and changed viewport
-height. Browser launch and server binding are currently blocked by the sandbox;
-a formula check alone must not be called rendered-browser evidence. The retained
-proof and exact limit are in [the follow-up record](history/testing.md#horizontal-refinement-and-available-space).
+The 270-test Node suite, both Go test profiles, race checks, vet and both embedded
+server builds pass. Chromium and WebKit release runs and a Chromium debug run
+verify full width, bottom alignment, safe areas, rotation, short windows, label
+fitting and input. At 240 by 320 px the start menu scrolls inside the game area
+without covering the keypad. The retained proof is in
+[the final browser record](history/testing.md#final-fourteen-column-browser-validation).
 
 ## Keypad grid acceptance
 
@@ -44,14 +44,12 @@ Acceptance is still open:
   does not establish gameplay.
 - Observe a physical phone using L-shaped buttons, two fingers, rotation and
   reload. Automated touch contacts do not replace this observation.
-- Repeat the embedded browser routes after final formatting and the grid runner's
-  save-directory isolation correction. The final debug and release binaries build,
-  but the current sandbox refuses server port binding.
-- Recheck the repaired PWA update in both browsers. A late version-34 navigation
-  can delete other legacy shell caches. Shells from version 35 use a protected prefix,
-  and its cleanup only removes predecessors. Both overlapping-worker regression
-  tests pass; the repaired two-version browser route remains blocked by port
-  binding. See the validation history.
+
+Both browsers pass the version-34 and version-35 updates to shell version 41,
+including retained assignments, save bytes and offline shell loading. The new
+prefix protects the current cache from late legacy-worker cleanup, and cleanup
+only removes predecessors. The runner waits for asynchronous cache retirement
+after navigation; response completion alone does not establish that it is done.
 
 Layout sharing, server-side settings, additional services and external runtime
 dependencies remain outside this request.

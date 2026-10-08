@@ -130,6 +130,12 @@ const updateWorker = async () => {
   await page.waitForLoadState("networkidle");
   await page.reload();
   await page.waitForLoadState("networkidle");
+  // Cache writes and retirement run in fetch waitUntil, after the response.
+  // Network idleness alone does not establish that cleanup has finished.
+  await page.waitForFunction(async name => {
+    const names = await caches.keys();
+    return names.length === 1 && names[0] === name;
+  }, result.expectedCache);
 };
 try {
   await startServer(baseline, "baseline"); await openBrowser(); await ready();

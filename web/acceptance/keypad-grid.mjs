@@ -384,17 +384,6 @@ try {
     }
   };
   await labelsFit();
-  for (const mode of ["manual", "auto", "off"]) {
-    await page.locator('[data-cell="r1c8"]').click();
-    assert.equal(
-      await page.locator('[data-cell="r1c8"] .keypad-label').textContent(),
-      `연사 ${mode}`,
-    );
-    await labelsFit();
-  }
-  check(
-    "two-character, long and changing single-cell labels fit without wrapping",
-  );
   const settled = () =>
     page.waitForFunction(() => {
       const element = document.querySelector("#keypad-grid");
@@ -442,6 +431,7 @@ try {
         scrollWidth: document.documentElement.scrollWidth,
       };
     });
+    result.geometry.push({ width, height, ...geometry });
     assert.ok(
       Math.abs(geometry.grid.bottom - height) < 1,
       JSON.stringify({ width, height, geometry }),
@@ -460,6 +450,7 @@ try {
     assert.ok(Math.abs(geometry.edge.bottom - geometry.grid.bottom) < 1);
     assert.ok(
       geometry.scroll <= height + 1 && geometry.scrollWidth <= width + 1,
+      JSON.stringify({ width, height, geometry }),
     );
     assert.equal(geometry.columns, 14);
     assert.ok(geometry.settings.width > 0 && geometry.settings.height > 0);
@@ -468,7 +459,18 @@ try {
     assert.equal(await hit("r9c14"), "7");
     await labelsFit();
     assert.equal(await record(), saved);
-    result.geometry.push({ width, height, ...geometry });
+    if (width === 240) {
+      for (const id of ["game-select", "save-import"]) {
+        const control = page.locator(`#${id}`);
+        await control.scrollIntoViewIfNeeded();
+        const bounds = await control.boundingBox();
+        assert.ok(bounds.y >= geometry.canvas.y);
+        assert.ok(bounds.y + bounds.height <= geometry.canvas.bottom + 1);
+      }
+      check(
+        "short-screen menus scroll to their first and last controls inside the game area",
+      );
+    }
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => {
@@ -506,6 +508,18 @@ try {
     () => !document.querySelector("#restart").classList.contains("hidden"),
   );
   await pause(300);
+  // Rapid-fire mode changes are available only while a game is running.
+  for (const mode of ["manual", "auto", "off"]) {
+    await page.locator('[data-cell="r1c8"]').click();
+    assert.equal(
+      await page.locator('[data-cell="r1c8"] .keypad-label').textContent(),
+      `연사 ${mode}`,
+    );
+    await labelsFit();
+  }
+  check(
+    "two-character, long and changing single-cell labels fit without wrapping",
+  );
   await clearMessages();
   const p1 = await point("r2c2"),
     p2 = await point("r3c2"),
