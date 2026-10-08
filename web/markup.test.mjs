@@ -97,7 +97,7 @@ test("the panels are where the stylesheet and the script expect them", () => {
   under("canvas", "div.canvas-wrapper");
   // The keypad screen holds all three of its halves, which is the whole of the
   // reason it is one screen.
-  for (const id of ["keypad-shape-panel", "keypad-size-list", "keypad-arrange-keys", "keypad-arrange-reset"]) {
+  for (const id of ["keypad-shape-panel", "keypad-arrange-tools", "keypad-arrange-keys", "keypad-arrange-reset"]) {
     under(id, "div#keypad-arrange");
   }
   // And the way in is in the settings panel rather than on the pad, where the

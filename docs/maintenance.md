@@ -5,6 +5,55 @@ constraints, evidence triggers, and unresolved decisions. It does not authorize
 implementation of every possible compatibility gap. Dated reviews and retired
 plans are preserved in [maintenance history](history/maintenance.md).
 
+## Keypad density and available space
+
+The follow-up halves each former cell horizontally, producing a fixed 14 by 9
+board. Existing assigned buttons and custom merged shapes retain their footprint
+through paired columns. Former single empty cells become two independent empty
+cells. Version 2 is stored separately as `wfeature:keypadGridV2`; the former
+`wfeature:keypadGrid` record stays intact. Already-open version-1 tabs cannot
+overwrite refined arrangements, and failed writes leave the source available.
+
+Remove the keypad's decorative side and bottom padding. The game column shares
+its available width with the board, up to the existing 480 px cap. Fill the
+height below the game through the bottom safe-area boundary. Dynamic viewport
+height and all four safe-area insets determine the available space; rows and
+columns never change with device, OS, orientation or browser chrome. Smaller
+windows scale the same coordinates instead of dropping cells or adding rows.
+
+The 270-test Node suite, both Go test profiles, race checks, vet and both embedded
+server builds pass. Chromium and WebKit release runs and a Chromium debug run
+verify full width, bottom alignment, safe areas, rotation, short windows, label
+fitting and input. At 240 by 320 px the start menu scrolls inside the game area
+without covering the keypad. The retained proof is in
+[the final browser record](history/testing.md#final-fourteen-column-browser-validation).
+
+## Keypad grid acceptance
+
+The initial 7 by 9 grid, legacy migration, connected button shapes and editor
+were implemented before the refinement above. The former size, left/right share
+and top-row controls are removed. The maintained contract is in [the web host reference](../web/README.md#grid-keypad),
+and repeatable checks are in [testing](testing.md#grid-keypad). The measured
+layout and completed browser routes are recorded in
+[the validation history](history/testing.md#keypad-grid-validation-2026-10-08).
+
+Acceptance is still open:
+
+- Run a local real game through gameplay with merged keypad buttons. The recorded
+  KTF run confirms menu and character-selection input only; its screenshot name
+  does not establish gameplay.
+- Observe a physical phone using L-shaped buttons, two fingers, rotation and
+  reload. Automated touch contacts do not replace this observation.
+
+Both browsers pass the version-34 and version-35 updates to shell version 41,
+including retained assignments, save bytes and offline shell loading. The new
+prefix protects the current cache from late legacy-worker cleanup, and cleanup
+only removes predecessors. The runner waits for asynchronous cache retirement
+after navigation; response completion alone does not establish that it is done.
+
+Layout sharing, server-side settings, additional services and external runtime
+dependencies remain outside this request.
+
 ## Execution and acceptance follow-up
 
 PWA acceptance still needs an explicit scope for installation, service-worker

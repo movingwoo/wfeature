@@ -18,10 +18,23 @@ library or saves. Files live under a unique hidden directory in `var/games`,
 `var/ext`, and `var/savedata`. Logs, screenshots, browser storage and JSON results
 remain under ignored `var/acceptance/pwa-<engine>-<timestamp>/`.
 
+The current candidate uses `wfeature-pwa-v41`, outside the cleanup prefix of
+already-installed legacy workers. It retires legacy caches and strictly older
+versions in the new prefix. The runner reads the candidate's cache name from its
+embedded worker. It waits for cache retirement after navigation, including the
+worker's asynchronous work after the response completes. The
+[final grid validation record](history/testing.md#final-fourteen-column-browser-validation)
+records successful version-34 and version-35 upgrades in both engines; earlier
+records retain the overlapping-worker failure and regression proof.
+The baseline may also be the seven-column grid build. Its version-1 layout must
+migrate to paired columns in the candidate's fourteen-column grid, while the old
+record remains byte-for-byte intact in its separate storage slot.
+
 The route checks:
 
 1. Load the previous release, activate its service worker, change keypad type
-   and size through the page, and upload an archive through the file picker.
+   and a key assignment through the page, adjust size on a baseline that still
+   has sliders, and upload an archive through the file picker.
 2. Run the persistence fixture, advance its counter with a touch on Confirm,
    stop it, and export a `.wfs` through the page. The counter writes an RMS
    record through the guest runtime; it is not a file seeded by the runner.

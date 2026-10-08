@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { keyOrder } from "./keybindings.js";
 import { isCheckpointKey } from "./checkpoint.js";
-import { assignable, shapes, shipped, cellIds } from "./keypad-layout.js";
+import { assignable, shapes, legacyPresets as shipped, cellIds } from "./keypad-layout.js";
 
 // The keypad is a layout table on one side and a code table on the other, and
 // nothing at runtime complains when they disagree: a cell holding a key with no
@@ -19,7 +19,7 @@ import { assignable, shapes, shipped, cellIds } from "./keypad-layout.js";
 // sliding finger presses them, and that is markup.
 
 const page = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+const app = readFileSync(new URL("./app.js", import.meta.url), "utf8") + readFileSync(new URL("./keypad-editor.js", import.meta.url), "utf8");
 const style = readFileSync(new URL("./style.css", import.meta.url), "utf8");
 
 // Every key any shape puts on the pad, plus every key the editor may put there:
@@ -195,89 +195,14 @@ test("no two keys share a code", () => {
   }
 });
 
-test("the cells a finger can slide across are the pad's, and the band is not", () => {
-  // app.js decides what a slide may press by where a button sits: inside
-  // `.keypad-pad` a finger crossing a cell presses it, and outside it the cell
-  // is in the band, which is aimed at one key at a time. Moving a button
-  // between the two in the markup would change what a drag does with nothing
-  // else to say so — and now that the keys are a setting it is the *cell* that
-  // carries the rule, so this is what has to be pinned.
-  const container = page.slice(page.indexOf('class="button-container"'), page.indexOf("</main>"));
-  const padStart = container.indexOf('class="keypad-pad"');
-  assert.ok(padStart > 0, "the keypad's own markup has moved");
-
-  const cellsIn = source => [...source.matchAll(/data-cell="([^"]+)"/g)].map(match => match[1]);
-  // The band, which is a grid of its own for exactly this reason: its cells are
-  // aimed at one at a time. Every button in it is a cell — the settings key
-  // is one now rather than a button of its own, and wherever it is put, it is
-  // found by its key rather than by an id.
-  assert.deepEqual(
-    cellsIn(container.slice(0, padStart)),
-    cellIds.filter(id => id.startsWith("band-")),
-  );
-  assert.ok(!page.includes('id="settings-toggle"'), "the settings key is a fixed button again");
-  assert.match(app, /closest\(`button\[data-key="\$\{SETTINGS\}"\]`\)/,
-    "the settings panel does not open from the settings key's cell");
-  // Everything else, and the pad is where a slide runs. The order is the grid's
-  // too: the cells are placed by where they sit in the markup, so this is also
-  // what says row 1 is drawn before row 2.
-  assert.deepEqual(
-    cellsIn(container.slice(padStart)),
-    cellIds.filter(id => !id.startsWith("band-")),
-  );
-});
-
-test("every cell the layout declares is a button on the page, and no others", () => {
-  // Two lists that have to be the same one: a cell the module names and the
-  // markup lacks is a key that can be chosen and never appears, and a button
-  // the markup has and the module does not name can never be given a key —
-  // both of which look like the editor losing a press.
-  const container = page.slice(page.indexOf('class="button-container"'), page.indexOf("</main>"));
-  const drawn = [...container.matchAll(/data-cell="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual([...drawn].sort(), [...cellIds].sort());
-  assert.equal(new Set(drawn).size, drawn.length, "a cell is drawn twice");
-});
-
-test("the cells carry no key of their own, and the shapes are gone from the page", () => {
-  // The whole of the change: what used to be three blocks of markup with keys
-  // written into them is one block of cells with none. A `data-key` back in the
-  // page would be a key the editor cannot move and the code table never sees.
-  const container = page.slice(page.indexOf('class="button-container"'), page.indexOf("</main>"));
-  assert.ok(!container.includes("data-key="), "a keypad button carries a key of its own again");
-  for (const gone of ["type1-direction-pad", "type2-direction-pad", "type2-only", "type3-only",
-                      "type3-hidden", "keypad-main", "number-pad", "key-top-left"]) {
-    assert.ok(!page.includes(gone), `the page still draws shapes with ${gone}`);
-    assert.ok(!style.includes(gone), `the stylesheet still implements shapes with ${gone}`);
+test("the grid editor replaces the sizing controls and retains its entry points", () => {
+  for (const id of ["keypad-grid", "keypad-arrange", "keypad-arrange-open", "keypad-arrange-close",
+    "keypad-arrange-multiple", "keypad-arrange-merge", "keypad-arrange-split", "keypad-arrange-clear", "keypad-arrange-undo"]) {
+    assert.ok(page.includes(`id="${id}"`));
   }
-  // And the editor has to be reachable, or the cells are a table nobody can
-  // change: a missing id is a button that silently never appears.
-  for (const id of ["keypad-arrange", "keypad-arrange-open", "keypad-arrange-close",
-                    "keypad-arrange-keys", "keypad-arrange-reset", "keypad-arrange-hint"]) {
-    assert.ok(page.includes(`id="${id}"`), `the page has no ${id}`);
-    assert.ok(app.includes(`"${id}"`), `app.js never looks up ${id}`);
-  }
-});
-
-test("the editor makes the pad inert, and says so where both halves can see it", () => {
-  // A pad that both edited and played would send the key it was being asked to
-  // replace. The pointer handler and the keydown handler each read the same
-  // flag, and the stylesheet reveals the empty cells off the same class.
-  assert.match(app, /if \(keypadArranging\) \{/, "the pointer handler does not check the flag");
-  assert.match(app, /if \(keypadArranging\) return;/, "the keydown handler does not check the flag");
-  assert.match(style, /\.button-container\.arranging \.keypad-cell\.empty \{/);
-  // An empty cell has to keep its place. The grid places cells by auto-flow in
-  // markup order, so one taken out of the layout is not a hole — every cell
-  // after it moves up one and the pad is scrambled from there on. `display:
-  // none` is exactly that mistake, and it is the obvious way to write this.
-  assert.match(style, /\.keypad-cell\.empty \{\s*visibility: hidden;/,
-    "an empty cell is hidden in a way that moves the cells after it");
-  assert.match(style, /\.button-container\.arranging \.keypad-cell\.empty \{\s*visibility: visible;/);
-  const padRule = style.slice(style.indexOf(".keypad-pad {"), style.indexOf("}", style.indexOf(".keypad-pad {")));
-  assert.ok(!/grid-auto-flow/.test(padRule), "the pad's flow is no longer the markup's order");
-  // The key list is toggled with `el.hidden`, and an author rule setting
-  // `display` beats the browser's own `[hidden] { display: none }` whatever its
-  // specificity. The page has been caught by that once already — the settings
-  // panel's own rows carry the same rule — so the pair is pinned here.
-  assert.match(style, /\.keypad-arrange-keys\[hidden\] \{\s*display: none;/);
-  assert.match(page, /id="keypad-arrange-keys"[^>]*hidden/, "the key list starts open");
+  assert.ok(!page.includes("keypad-size-list"));
+  assert.ok(!app.includes("keypad-size.js"));
+  assert.ok(!style.includes("--keypad-split"));
+  assert.ok(!style.includes("--keypad-band"));
+  assert.equal(cellIds.length, 126);
 });

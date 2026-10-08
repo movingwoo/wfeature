@@ -930,6 +930,80 @@ replacement, audible audio activation/recovery, touch, real-phone suspension,
 and saved progression need explicit routes and observations. A mocked bitmap
 decoder does not establish successful decoding in a real browser.
 
+## Grid keypad
+
+The grid model and geometry suites cover preset topology, every legacy cell's
+migration, action policies, connected shapes, holes, conflicts, settings
+uniqueness, split/clear/undo, per-type reset, reload, corrupted records, unknown
+versions and failed writes. The recorded old preset table remains independent
+of the new defaults. Removed slider assertions are replaced by these behavior
+checks and actual rendered-browser coverage.
+`keypad-refinement.test.mjs` independently records the version-1 seven-column
+schema and checks paired-column migration, assigned and cleared shapes, occupied
+holes, activation policies, independent empty halves, split/reload, failed writes,
+per-type recovery and a concurrent old tab writing its separate storage slot.
+`keypad-editor.test.mjs` drives the actual editor event handlers with DOM stubs.
+It reproduces the stale multiple-selection mode after merging, then checks
+immediate assignment to the selected merged button, conflict recovery and
+settings protection. These checks do not render a browser; the browser route
+also includes the merge-then-assign interaction without a manual mode change.
+Explicit font metrics additionally check that single-cell labels fit, including
+two-character names, that resizing or merging restores available font size, and
+that changing rapid-fire text refits without accumulating shrink. The browser
+route checks actual range widths and no-wrap styles across its viewport sizes;
+the metric stubs do not establish real font rendering.
+
+Run the browser route with the existing Playwright installation:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/keypad-grid.mjs build/release/wfeature-server chromium
+```
+
+Use `webkit` for the second engine and a debug server executable for the other
+profile. The runner uses the embedded client and an authored SKT canvas archive,
+with isolated runtime directories. It creates rectangle, L, T and ring buttons
+through the editor, checks the hole's separate key and the native hit targets,
+and observes actual session key messages. It covers mouse drag selection,
+touch taps, keyboard/pointer shared ownership, duplicate pressed feedback,
+focused activation, cancellation, blur, local-action exclusion, reload and full
+storage. Chromium additionally supplies two actual browser touch contacts through
+its automation protocol. These contacts are not physical-device evidence.
+
+Geometry checks cover 240 by 320, 320 by 480, 320 by 568, 390 by 844, 390 by 700,
+768 by 1024, 844 by 390, 1280 by 900 and 1280 by 390 px windows, plus explicit
+inputs for all four safe-area insets. They wait for resized button positions
+before checking full width, contact with the game wrapper, bottom alignment,
+overflow, the last cell's hit target and unchanged saved coordinates. The route
+also loads a version-1 grid and checks paired columns and retained source storage.
+The route stops its server and
+reloads the cached page to establish offline shell availability; it does not
+claim offline game execution. WebKit's forced-offline API is avoided for the
+[already recorded navigation limitation](pwa-acceptance.md).
+
+The fourteen-column route passes with the embedded release server in Chromium
+and WebKit and with the debug server in Chromium. All nine viewports and explicit
+safe-area inputs pass. The shortest screen also checks that the first and last
+start-menu controls remain reachable by scrolling inside the game area. Actual
+range widths prove the single-cell labels fit; rapid-fire mode changes are
+checked after the authored game starts.
+
+The checkpoint route uses the new grid positions while retaining Java/SGS pixel,
+input-epoch, ordinary-save and reconnect assertions. The two-version PWA route
+edits a legacy cell or coarse grid, retains the old records, and verifies the
+migrated key and stored source after the new shell replaces the old one. Release-facing
+instructions are in the root README; the technical contract is in
+[the web host reference](../web/README.md#grid-keypad).
+
+The [2026-10-08 validation record](history/testing.md#keypad-grid-validation-2026-10-08)
+separates completed browser checks from the pending physical-phone and real-game
+play observations. It retains the initial Chromium update cache failure
+and the subsequent fix. Service-worker regression tests reproduce a late legacy
+navigation and overlapping future workers; both failed before the repair and pass
+afterward. Both engines pass the version-34 and version-35 updates to version 41.
+The route waits for cache retirement after navigation, because the worker's
+fetch lifetime can extend beyond the completed response.
+
 ## Rapid-fire input
 
 [Rapid-fire behavior and measurements](rapid-fire.md) records the deterministic

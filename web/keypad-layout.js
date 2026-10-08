@@ -1,193 +1,143 @@
 import { RAPID_FIRE } from "./rapid-fire.js";
 import { QUICK_SAVE, QUICK_LOAD } from "./checkpoint.js";
-// Which phone key sits in which cell of the keypad.
-//
-// The pad this page draws had three shapes, and they were three blocks of
-// markup with four stylesheet rules showing and hiding pieces of them. Written
-// out, the three turn out to be one thing: the same cells with different keys
-// in them.
-//
-//     where            type1       type2            type3
-//     direction pad    ↑ ← 확인 → ↓     2 4 6 8     1 2 3 4 6 8
-//     number pad       1‥9              1 3 5 7 9   5 7 9
-//
-// So this module is that table. The shapes are entries in it rather than a mode
-// the stylesheet implements. What the person gets for it is the thing the
-// shapes could not give: a cell whose key is theirs to choose.
-//
-// **And once the cells are a table, the pad is one grid.** The two 3x3 pads had
-// a wide gap between them that a thumb crossed and nothing used, and the row of
-// * 0 # was a band of its own below them. Filling the gap makes the middle a
-// column like the others and the last row a row like the others: seven columns
-// by four rows, twenty-eight cells, of which the shipped shape fills twelve.
-// The keys did not move — every one of them is in the cell it was drawn in —
-// and the grid is what makes the other sixteen reachable.
-//
-// The merge is free in the layout, which is why it is a merge rather than a
-// redesign: the band gap that used to sit between the pads and the last row is
-// gone and the grid's own row gap took its place, and the two are the same
-// eight pixels, so `--keypad-floor` and `--keypad-slack` in style.css are the
-// numbers they always were.
-//
-// Two rules here are the opposite of the ones `keybindings.js` holds, and the
-// difference is not an oversight in either place:
-//
-//   - **A key may sit in more than one cell.** The keyboard's table may not do
-//     that — one physical key sending two phone keys is one press sending two
-//     keys to the game — but the pad has always printed 1 and 3 twice in the
-//     type3 shape, and `initInput` lights *every* button carrying a key for
-//     exactly that reason. Nothing has to be taken away to put a key somewhere.
-//   - **A cell may be empty, and most are.** Sixteen of the twenty-eight are
-//     empty in the shipped shape, which is what makes it that shape.
-//
-// And one key is the exception to both: **the settings key is in exactly one
-// cell, always.** It opens the panel this editor lives in, so a pad without it
-// would be a pad nothing could undo — which is also why the empty shape keeps
-// it. Putting it in a cell moves it there, and the cell holding it can be
-// neither emptied nor given another key: to use that cell, the key goes
-// somewhere else first. It used to be a button of its own in the band's first
-// column rather than a cell, and a column nobody could use is what that cost;
-// as a cell it can go wherever a person wants the room.
-//
-// And one rule is worth stating because a person editing cannot see it: **a
-// finger sliding across keys only presses the pad's.** `app.js` decides that by
-// which element a button sits in — inside the pad a drag presses what it
-// crosses, in the band above it aims at one key at a time — so a key moved into
-// the band stops answering a slide. The cell keeps its region; only its key
-// changes. Merging the last row into the pad changed nothing there: it was
-// already inside the region a slide runs through.
-
 import { local } from "./storage.js";
 import { keyLabel, keyOrder } from "./keybindings.js";
 
-const KEYPAD_KEYS_KEY = "wfeature:keypadKeys";
-
-// The pad is one grid, and these are its dimensions. Seven columns because the
-// two three-column pads had a gap between them that a thumb crossed and nothing
-// used: filling it makes the middle a column like the others and the row of
-// * 0 # a row like the others. Four rows because that row is now one of them —
-// the last band gap became the grid's own row gap, which is why the height
-// budget in style.css did not have to change.
-export const PAD_COLUMNS = 7;
-export const PAD_ROWS = 4;
-
-// The band above is the same seven columns. It was three buttons placed by
-// hand — one at the left edge, two either side of the centre, one at the
-// right — which is why there were three: absolute positions have to be written
-// one at a time. As a row of the pad's own columns there are seven, and every
-// one of them is a cell.
-//
-// Seven and not more, and the narrowest phone is what decides it: at a 320px
-// viewport the band is 288 pixels of content box, so seven columns are 37.7
-// each and eight are 32.5. Thirty-six is the smallest key the pad itself will
-// draw — `--keypad-key-min` — and "설정" needs about thirty-two of those pixels
-// for its label, so eight is under both. Seven also lines the band up with the
-// pad, which no other count does.
-export const BAND_COLUMNS = 7;
-
-// The column the two former pads occupied, which is what the size setting's
-// left/right share still weighs. The middle column belongs to neither.
-export const LEFT_COLUMNS = [1, 2, 3];
-export const RIGHT_COLUMNS = [5, 6, 7];
-
-// The cells, in the order the editor walks them, which is the order they sit on
-// the page: the band above and then the grid, row by row. `region` is the drag
-// rule above; the grid places a cell by where its button is in the markup, so
-// nothing here says which row or column a cell is in beyond naming it.
-export const cells = [
-  ...bandCells(),
-  ...padCells(),
+export const COLUMNS = 14;
+export const ROWS = 9;
+export const EMPTY = "";
+export const SETTINGS = "SETTINGS";
+export const GRID_KEY = "wfeature:keypadGridV2";
+export const GRID_V1_KEY = "wfeature:keypadGrid";
+const MAX_RECORD = 65536;
+const OLD_COLUMNS = 7;
+export const shapes = ["type1", "type2", "type3", "type4"];
+export const isShape = (name) => shapes.includes(name);
+export const assignable = [
+  SETTINGS,
+  ...keyOrder,
+  RAPID_FIRE,
+  QUICK_SAVE,
+  QUICK_LOAD,
 ];
+const knownKey = new Set([EMPTY, ...assignable]);
+const localKeys = new Set([RAPID_FIRE, QUICK_SAVE, QUICK_LOAD, SETTINGS]);
+const directKeys = new Set([...localKeys, "MENU", "CALL", "SOFT2", "CLR"]);
+export const defaultActivation = (key) =>
+  directKeys.has(key) ? "press" : "slide";
+const localNames = {
+  [RAPID_FIRE]: "연사",
+  [QUICK_SAVE]: "퀵세이브",
+  [QUICK_LOAD]: "퀵로드",
+  [SETTINGS]: "설정",
+};
+export const keyName = (key) => localNames[key] ?? keyLabel(key);
+export const keyFace = (key) => (key === "OK" ? "OK" : keyName(key));
 
-// The band's cells, left to right. Like the pad's they carry no row or column
-// of their own: the markup emits them in this order and the grid places them.
-function bandCells() {
-  const cells = [];
-  for (let column = 1; column <= BAND_COLUMNS; column++) {
-    cells.push({ id: `band-c${column}`, region: "band", row: 0, column });
+export const cells = Array.from({ length: ROWS * COLUMNS }, (_, index) => ({
+  id: `r${Math.floor(index / COLUMNS) + 1}c${(index % COLUMNS) + 1}`,
+  row: Math.floor(index / COLUMNS) + 1,
+  column: (index % COLUMNS) + 1,
+}));
+export const cellIds = cells.map((cell) => cell.id);
+const cellById = new Map(cells.map((cell) => [cell.id, cell]));
+const order = new Map(cellIds.map((id, index) => [id, index]));
+const sortCells = (values) =>
+  [...values].sort((a, b) => order.get(a) - order.get(b));
+const copy = (grid) => ({
+  columns: COLUMNS,
+  rows: ROWS,
+  groups: grid.groups.map((group) => ({ ...group, cells: [...group.cells] })),
+});
+const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const singleton = (cell, key = EMPTY, activation = defaultActivation(key)) => ({
+  id: cell,
+  cells: [cell],
+  key,
+  activation,
+});
+const sortedGrid = (groups, columns = COLUMNS) => ({
+  columns,
+  rows: ROWS,
+  groups: groups.sort((a, b) => order.get(a.id) - order.get(b.id)),
+});
+
+// Version 1 used one wide cell where version 2 has two half-width cells.
+// Preserve buttons, including cleared custom shapes, while exposing both halves
+// of an ordinary empty cell for immediate selection.
+const refineGrid = (grid) => {
+  const groups = [];
+  for (const group of grid.groups) {
+    const members = sortCells(
+      group.cells.flatMap((id) => {
+        const { row, column } = cellById.get(id);
+        return [`r${row}c${column * 2 - 1}`, `r${row}c${column * 2}`];
+      }),
+    );
+    if (!group.key && group.cells.length === 1)
+      groups.push(...members.map((id) => singleton(id)));
+    else groups.push({ ...group, id: members[0], cells: members });
   }
-  return cells;
-}
+  return sortedGrid(groups);
+};
 
-// The pad's own cells, row by row, which is the order the markup emits them in
-// and therefore the order the grid places them: no cell carries a row or a
-// column of its own, and moving one in the markup moves it on the pad.
-function padCells() {
-  const cells = [];
-  for (let row = 1; row <= PAD_ROWS; row++) {
-    for (let column = 1; column <= PAD_COLUMNS; column++) {
-      cells.push({ id: `pad-r${row}c${column}`, region: "pad", row, column });
+export const connected = (members) => {
+  if (
+    !members.length ||
+    members.length > cells.length ||
+    members.some((id) => !cellById.has(id))
+  )
+    return false;
+  const remaining = new Set(members),
+    pending = [members[0]];
+  remaining.delete(members[0]);
+  for (let at = 0; at < pending.length; at++) {
+    const { row, column } = cellById.get(pending[at]);
+    for (const neighbor of [
+      `r${row - 1}c${column}`,
+      `r${row + 1}c${column}`,
+      `r${row}c${column - 1}`,
+      `r${row}c${column + 1}`,
+    ]) {
+      if (remaining.delete(neighbor)) pending.push(neighbor);
     }
   }
-  return cells;
-}
-
-export const cellIds = cells.map(cell => cell.id);
-const knownCell = new Set(cellIds);
-
-// What the editor calls each region. The band and the row below are named by
-// where they are rather than by what is in them, because what is in them is the
-// thing being changed.
-export const regionLabel = {
-  band: "윗줄",
-  pad: "키패드",
+  return remaining.size === 0;
 };
 
-// An empty cell is this rather than an absent entry, so a table always names
-// every cell and "cleared" and "never set" cannot be told apart — they are the
-// same thing on a pad.
-export const EMPTY = "";
-
-// The key that opens the settings panel. It is not a phone key — it sends the
-// game nothing and has no keyboard binding — and it is the one key a table
-// holds exactly once; see the rule at the top of this file.
-export const SETTINGS = "SETTINGS";
-
-// Where it goes when a table has no place for it yet: the band's first column,
-// which is where it sat when it was a button of its own.
-const SETTINGS_HOME = "band-c1";
-
-// The band and the pad are cells either way, so one table serves both: a shape
-// names every cell it fills and leaves the rest at EMPTY.
-const fill = assignment => {
-  const table = Object.fromEntries(cellIds.map(id => [id, EMPTY]));
-  return { ...table, ...assignment };
-};
-
-// Type1–Type3 share the top band. The local rapid-fire switch sits between
-// 메뉴 and 통화, and the right soft key, 우상단, takes the column between 통화
-// and 취소: the one empty cell on that side, so nothing that was already up
-// there moved for it. Type4 stays empty. Saved cell edits still replace the
-// whole table, so a new default does not overwrite a user's arrangement.
+// These positions are the old storage contract. Keep their mapping independent
+// of viewport dimensions so rotating a phone never rewrites an arrangement.
+export const legacyCells = [
+  ...Array.from({ length: 7 }, (_, c) => ({
+    id: `band-c${c + 1}`,
+    region: "band",
+    row: 0,
+    column: c + 1,
+  })),
+  ...Array.from({ length: 28 }, (_, index) => ({
+    id: `pad-r${Math.floor(index / 7) + 1}c${(index % 7) + 1}`,
+    region: "pad",
+    row: Math.floor(index / 7) + 1,
+    column: (index % 7) + 1,
+  })),
+];
+const fillLegacy = (assignments) => ({
+  ...Object.fromEntries(legacyCells.map((cell) => [cell.id, EMPTY])),
+  ...assignments,
+});
 const band = {
-  [SETTINGS_HOME]: SETTINGS,
-  "band-c3": "MENU", "band-c4": RAPID_FIRE, "band-c5": "CALL", "band-c6": "SOFT2", "band-c7": "CLR",
+  "band-c1": SETTINGS,
+  "band-c3": "MENU",
+  "band-c4": RAPID_FIRE,
+  "band-c5": "CALL",
+  "band-c6": "SOFT2",
+  "band-c7": "CLR",
 };
-// The last row's three, centred in it: the row is seven cells wide and these
-// are the middle three, which is where they sat when the row was a band of its
-// own that centred whatever was in it.
-const lastRow = { "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#" };
-
-// The three shapes this page has always drawn, in the cells they were drawn in.
-// `keypad-layout.test.mjs` compares each one against what the markup used to
-// hide and show, because a shape that does not reproduce what it drew is a
-// keypad that moved under somebody who never asked it to.
-//
-// Read the tables as the grid: seven columns, and the two former pads are
-// columns 1-3 and 5-7 with the new one between them.
-export const shipped = {
-  // Named direction keys on the left and the whole number pad on the right,
-  // which is the shape for a title that reads the arrows rather than the
-  // digits. It is the only one with a 확인 key: the other two spend that cell
-  // on 5, which is what a handset's centre key sent.
-  //
-  //     .  ↑  .  |  .  |  1  2  3
-  //     ←  확 →  |  .  |  4  5  6
-  //     .  ↓  .  |  .  |  7  8  9
-  //           *  0  #
-  type1: fill({
+const footer = { "pad-r4c3": "*", "pad-r4c4": "0", "pad-r4c5": "#" };
+export const legacyPresets = {
+  type1: fillLegacy({
     ...band,
-    ...lastRow,
+    ...footer,
     "pad-r1c2": "UP",
     "pad-r2c1": "LEFT",
     "pad-r2c2": "OK",
@@ -203,16 +153,9 @@ export const shipped = {
     "pad-r3c6": "8",
     "pad-r3c7": "9",
   }),
-  // The arrows are the number keys a handset put them on, so the left is
-  // 2 4 6 8 and the right keeps the corners and the centre.
-  //
-  //     .  2  .  |  .  |  1  .  3
-  //     4  .  6  |  .  |  .  5  .
-  //     .  8  .  |  .  |  7  .  9
-  //           *  0  #
-  type2: fill({
+  type2: fillLegacy({
     ...band,
-    ...lastRow,
+    ...footer,
     "pad-r1c2": "2",
     "pad-r2c1": "4",
     "pad-r2c3": "6",
@@ -223,17 +166,9 @@ export const shipped = {
     "pad-r3c5": "7",
     "pad-r3c7": "9",
   }),
-  // type2 with the two upper diagonals brought over, so the row a thumb rests
-  // on reads 1 2 3. The same keys moved rather than added — the number pad
-  // gives them up while this shape holds.
-  //
-  //     1  2  3  |  .  |  .  .  .
-  //     4  .  6  |  .  |  .  5  .
-  //     .  8  .  |  .  |  7  .  9
-  //           *  0  #
-  type3: fill({
+  type3: fillLegacy({
     ...band,
-    ...lastRow,
+    ...footer,
     "pad-r1c1": "1",
     "pad-r1c2": "2",
     "pad-r1c3": "3",
@@ -244,250 +179,326 @@ export const shipped = {
     "pad-r3c5": "7",
     "pad-r3c7": "9",
   }),
+  type4: fillLegacy({ "band-c1": SETTINGS }),
 };
 
-// The empty pad. It is a shape like the other three rather than a button that
-// clears them, because that is what makes it survive a reload and what lets the
-// size settings hang off it: everything here is stored per shape, and "no keys
-// at all" has to be one of them to be stored at all.
-//
-// It empties the band as well, all but the settings key: that one cannot leave
-// a pad, so the panel that undoes this is always on screen, and a shape that
-// kept any other key nobody asked for would not be the empty one.
-shipped.type4 = fill({ [SETTINGS_HOME]: SETTINGS });
-
-export const shapes = ["type1", "type2", "type3", "type4"];
-
-// A shape has no name here. It had four, for the three "start from this one"
-// buttons the editor used to carry, and one reset button replaced them — after
-// which the only place a shape is named is the markup's own `<option>`, which
-// `draw` reads to know what to put back when a pad stops being edited. A second
-// list of the same four names would be a second place for them to be wrong.
-
-// Local controls have no handset code or keyboard binding. Checkpoint actions
-// are offered only by the editor; no shipped layout places them.
-export const assignable = [...keyOrder, RAPID_FIRE, QUICK_SAVE, QUICK_LOAD, SETTINGS];
-const knownKey = new Set(assignable);
-
-// What a key is called. The phone keys are named in keybindings.js, where the
-// keyboard panel lists them; the local controls have no row there and are
-// named here.
-const localNames = { [RAPID_FIRE]: "연사", [QUICK_SAVE]: "퀵세이브", [QUICK_LOAD]: "퀵로드", [SETTINGS]: "설정" };
-
-export const keyName = name => localNames[name] ?? keyLabel(name);
-
-// What a key is called *on a pad button*, where it differs from its name. One
-// does: the centre key prints OK and is called 확인, and both are right — a
-// help screen says "OK키" for it more often than "확인키", and means the same
-// key. Every other key reads the same either way. The send and menu keys were
-// printed as Call and Menu once, on the reading that a 48-pixel key could not
-// carry 통화 beside a 5; they are printed the way the panel names them now,
-// by request. The rapid-fire switch prints its mode beside its name, which
-// app.js does.
-const faces = { OK: "OK" };
-
-export const keyFace = name => faces[name] ?? keyName(name);
-
-// clampCells folds whatever was stored into the table this build declares:
-// every cell this build has, holding a key this build knows, and EMPTY for
-// anything else. A cell or a key the page no longer has is dropped by never
-// being asked for, which is what keeps an entry left behind by an older build
-// from coming back when a later one reuses the name. And the table comes back
-// holding the settings key exactly once, whatever was stored — an edit saved
-// before the key was a cell has none, and gets it where it used to sit.
-export const clampCells = stored => {
-  const record = stored !== null && typeof stored === "object" ? stored : {};
-  return withSettings(Object.fromEntries(
-    cellIds.map(id => {
-      const asked = record[id];
-      return [id, typeof asked === "string" && knownKey.has(asked) ? asked : EMPTY];
-    }),
-  ));
-};
-
-// withSettings holds a table to the settings key's rule. A second copy is
-// emptied, the first in the editor's order staying. A table with none gets it
-// at home, or in the first empty cell when home is taken, or at home over
-// whatever is there when no cell is empty: a pad without the key is the one
-// pad nothing can undo, so the key outranks any other.
-const withSettings = table => {
-  const holding = cellIds.filter(id => table[id] === SETTINGS);
-  if (holding.length === 1) return table;
-  const next = { ...table };
-  if (holding.length > 1) {
-    for (const id of holding.slice(1)) next[id] = EMPTY;
-    return next;
-  }
-  const home = next[SETTINGS_HOME] === EMPTY
-    ? SETTINGS_HOME
-    : cellIds.find(id => next[id] === EMPTY) ?? SETTINGS_HOME;
-  next[home] = SETTINGS;
-  return next;
-};
-
-export const isShape = name => Object.hasOwn(shipped, name);
-
-// shapeMatching reports which shape a table *is*, if any, so a page that stored
-// an edit which happens to equal a shape selects that shape plainly rather than
-// calling it a modified one.
-export const shapeMatching = table => {
-  const asked = clampCells(table);
-  return shapes.find(name => cellIds.every(id => shipped[name][id] === asked[id])) ?? "";
-};
-
-// Which shape a table is *while a shape is chosen*. Emptying every cell of
-// type1 by hand makes a table that is also type4, and answering "type4" there
-// would rename somebody's keypad under them: what they did was edit type1 down
-// to nothing, and the shape they are on is the one they picked. So the chosen
-// shape wins whenever the table matches it, and only otherwise is it looked up.
-const shapeFor = (table, chosen) =>
-  cellIds.every(id => shipped[chosen]?.[id] === table[id]) ? chosen : shapeMatching(table);
-
-// assign puts a key in a cell, and clear empties one. Neither takes the key
-// away from anywhere else — see the rule at the top of this file — except the
-// settings key, which moves: putting it in one cell takes it out of the one it
-// was in. And the cell holding it keeps it, so neither can empty that cell or
-// put another key there; both answer the table unchanged.
-export const assign = (table, id, name) => {
-  if (!knownCell.has(id) || !knownKey.has(name) || table[id] === SETTINGS) return table;
-  if (name !== SETTINGS) return { ...table, [id]: name };
-  const next = Object.fromEntries(
-    Object.entries(table).map(([cell, key]) => [cell, key === SETTINGS ? EMPTY : key]),
+export const migrateLegacy = (source) => {
+  const table = Object.fromEntries(
+    legacyCells.map(({ id }) => [
+      id,
+      knownKey.has(source?.[id]) ? source[id] : EMPTY,
+    ]),
   );
-  next[id] = SETTINGS;
-  return next;
-};
-
-export const clear = (table, id) =>
-  knownCell.has(id) && table[id] !== SETTINGS ? { ...table, [id]: EMPTY } : table;
-
-// createKeypadLayout answers the object app.js drives, over whatever storage it
-// is given. The storage is a parameter so a test can hand it a map; the default
-// is the page's own fail-safe store, for the reason keypad-size.js states at
-// its own default — a browser told to block site data throws on the property,
-// and a default argument is evaluated at the call.
-//
-// Two entries are read, and which one is present is the whole of the
-// migration. `wfeature:keypadLayout` is the setting this page has always
-// stored and still means "which shape" — **the entry keeps its 0.2 name on
-// purpose**, because renaming it would lose the choice of everybody who has
-// one, and a storage key is a promise to a browser rather than a word in this
-// file. `wfeature:keypadKeys` appears only once somebody edits a cell. **A page with no second entry draws exactly the
-// keypad it drew before**, which is what makes this safe for everybody who
-// never opens the editor.
-export const createKeypadLayout = (storage = local, layoutKey = "wfeature:keypadLayout") => {
-  const readJSON = () => {
-    try {
-      const stored = JSON.parse(storage?.getItem(KEYPAD_KEYS_KEY) ?? "null");
-      return stored !== null && typeof stored === "object" ? stored : {};
-    } catch {
-      // Both halves can fail: a storage handed in by a caller may throw where
-      // the page's own does not, and a stored string that is not JSON is what
-      // a hand edit leaves behind. Either way every shape is its own.
-      return {};
+  const settings = legacyCells.filter((cell) => table[cell.id] === SETTINGS);
+  if (!settings.length)
+    table[legacyCells.find((cell) => !table[cell.id])?.id ?? "band-c1"] =
+      SETTINGS;
+  for (const cell of settings.slice(1)) table[cell.id] = EMPTY;
+  const groups = [];
+  for (const cell of legacyCells) {
+    const row = cell.region === "band" ? 1 : cell.row * 2;
+    const first = `r${row}c${cell.column}`,
+      key = table[cell.id];
+    const activation =
+      localKeys.has(key) || cell.region === "band" ? "press" : "slide";
+    const group = singleton(first, key, activation);
+    if (cell.region === "pad") {
+      const second = `r${row + 1}c${cell.column}`;
+      if (key) group.cells.push(second);
+      else groups.push(singleton(second));
     }
-  };
-
-  const readShape = () => {
-    try {
-      const stored = storage?.getItem(layoutKey);
-      return isShape(stored) ? stored : shapes[0];
-    } catch {
-      return shapes[0];
-    }
-  };
-
-  let shape = readShape();
-
-  // **The edits are kept per shape**, which is what lets somebody arrange type1
-  // the way they like, switch to type4 to build another pad from nothing, and
-  // find the first one still there on the way back. A shape with no entry is
-  // the shape as shipped.
-  //
-  // An edit is not merged into its shape: a cell somebody emptied has to stay
-  // empty where the shipped shape fills it, or clearing a key would not be
-  // something this editor can do.
-  const stored = readJSON();
-  const edits = new Map();
-  for (const name of shapes) {
-    // An entry that is not a table at all is no entry. Folding one through
-    // `clampCells` would answer every cell EMPTY, and an empty table is a
-    // *valid* edit — so a hand-edited or truncated entry would come back as a
-    // keypad with no keys on it rather than as the shape it names.
-    const entry = stored[name];
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const table = clampCells(entry);
-    if (shapeFor(table, name) === name) continue;
-    edits.set(name, table);
+    groups.push(group);
   }
+  return refineGrid(sortedGrid(groups, OLD_COLUMNS));
+};
+export const defaultGrid = (shape) =>
+  migrateLegacy(legacyPresets[isShape(shape) ? shape : shapes[0]]);
 
-  const writeKeys = () => {
+// A record is a complete partition of a bounded board. Refuse an invalid type
+// as a whole rather than salvaging half a button or silently losing settings.
+const validate = (value, columns) => {
+  const limit = columns * ROWS;
+  if (
+    !value ||
+    value.columns !== columns ||
+    value.rows !== ROWS ||
+    !Array.isArray(value.groups) ||
+    value.groups.length < 1 ||
+    value.groups.length > limit
+  )
+    return null;
+  const occupied = new Set(),
+    groups = [];
+  let settings = 0;
+  for (const group of value.groups) {
+    if (
+      !group ||
+      !Array.isArray(group.cells) ||
+      !group.cells.length ||
+      group.cells.length > limit ||
+      !knownKey.has(group.key) ||
+      !["press", "slide"].includes(group.activation) ||
+      (localKeys.has(group.key) && group.activation !== "press")
+    )
+      return null;
+    const members = sortCells(group.cells);
+    if (group.id !== members[0] || !connected(members)) return null;
+    for (const id of members) {
+      if (cellById.get(id).column > columns) return null;
+      if (occupied.has(id)) return null;
+      occupied.add(id);
+    }
+    if (group.key === SETTINGS) settings++;
+    groups.push({
+      id: members[0],
+      cells: members,
+      key: group.key,
+      activation: group.activation,
+    });
+  }
+  return occupied.size === limit && settings === 1
+    ? sortedGrid(groups, columns)
+    : null;
+};
+export const validateGrid = (value) => validate(value, COLUMNS);
+
+const record = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const fail = (error) => ({ ok: false, error });
+
+export const createKeypadLayout = (
+  storage = local,
+  layoutKey = "wfeature:keypadLayout",
+) => {
+  let status = { saved: true, reason: "" },
+    backup = null,
+    protectedRecord = false;
+  const read = (key) => {
     try {
-      if (edits.size === 0) {
-        storage?.removeItem?.(KEYPAD_KEYS_KEY);
-        return true;
+      return storage?.getItem(key) ?? null;
+    } catch {
+      status = { saved: false, reason: "storage" };
+      return null;
+    }
+  };
+  const write = (key, value) => {
+    try {
+      return storage?.setItem(key, value) !== false && storage != null;
+    } catch {
+      return false;
+    }
+  };
+  const parse = (text) => {
+    try {
+      return text && text.length <= MAX_RECORD ? JSON.parse(text) : null;
+    } catch {
+      return null;
+    }
+  };
+  let shape = read(layoutKey);
+  if (!isShape(shape)) shape = shapes[0];
+  const original = read(GRID_KEY);
+  // Older tabs can still write the coarse grid. Keep its storage slot separate
+  // so their edits cannot overwrite a refined arrangement after migration.
+  const coarseSource = original === null ? read(GRID_V1_KEY) : null;
+  const source = original ?? coarseSource;
+  const stored = parse(source);
+  const layouts = new Map(shapes.map((name) => [name, defaultGrid(name)]));
+  let migrated = false;
+  if (source !== null) {
+    if (
+      record(stored) &&
+      stored.version !== 2 &&
+      !(coarseSource !== null && stored.version === 1)
+    ) {
+      protectedRecord = true;
+      status = { saved: false, reason: "future" };
+    } else if (source.length > MAX_RECORD) {
+      protectedRecord = true;
+      status = { saved: false, reason: "oversized" };
+    } else {
+      let corrupt =
+        !record(stored) ||
+        ![1, 2].includes(stored.version) ||
+        !record(stored.layouts);
+      for (const name of shapes) {
+        const entry = stored?.layouts?.[name];
+        if (entry === null || entry === undefined) continue;
+        const old = stored.version === 1;
+        const valid = validate(entry, old ? OLD_COLUMNS : COLUMNS);
+        if (valid) layouts.set(name, old ? refineGrid(valid) : valid);
+        else corrupt = true;
       }
-      return storage?.setItem(KEYPAD_KEYS_KEY, JSON.stringify(Object.fromEntries(edits))) !== false;
-    } catch {
-      return false;
+      if (corrupt) {
+        backup = original;
+        status = { saved: true, reason: "recovered" };
+      }
+      if (coarseSource !== null && [1, 2].includes(stored?.version)) {
+        migrated = true;
+      }
     }
-  };
-
-  const writeShape = () => {
-    try {
-      return storage?.setItem(layoutKey, shape) !== false;
-    } catch {
-      return false;
+  } else {
+    const legacy = parse(read("wfeature:keypadKeys"));
+    for (const name of shapes) {
+      if (record(legacy?.[name])) {
+        layouts.set(name, migrateLegacy(legacy[name]));
+        migrated = true;
+      }
     }
+  }
+  const persist = () => {
+    if (protectedRecord) return;
+    // Keep the source before replacing a damaged record. Failed backups leave
+    // it intact and retain the new edit only in this page's model.
+    if (backup !== null) {
+      if (!write(`${GRID_KEY}Backup`, backup)) {
+        status = { saved: false, reason: "storage" };
+        return;
+      }
+      backup = null;
+    }
+    const layoutsRecord = Object.fromEntries(
+      shapes.map((name) => [
+        name,
+        equal(layouts.get(name), defaultGrid(name)) ? null : layouts.get(name),
+      ]),
+    );
+    const saved = write(
+      GRID_KEY,
+      JSON.stringify({ version: 2, layouts: layoutsRecord }),
+    );
+    status = { saved, reason: saved ? "" : "storage" };
   };
-
-  const table = () => ({ ...(edits.get(shape) ?? shipped[shape]) });
-
+  if (migrated) {
+    const recovered = status.reason === "recovered";
+    persist();
+    if (status.saved && recovered) status.reason = "recovered";
+  }
+  const current = () => layouts.get(shape);
+  const groupAt = (id) =>
+    current().groups.find((group) => group.cells.includes(id));
+  let previous = null;
+  const commit = (next) => {
+    if (equal(current(), next)) return { ok: true, changed: false };
+    previous = copy(current());
+    layouts.set(shape, next);
+    persist();
+    return { ok: true, changed: true };
+  };
   return {
-    // keys answers the table the pad is drawn from, whichever half it came out
-    // of.
-    keys: table,
-
-    // shape is the shape the panel shows as chosen, and edited says whether
-    // the pad is still that shape. The panel needs both: it selects a shape
-    // *and* says the pad is no longer it.
+    grid: () => copy(current()),
     shape: () => shape,
-    edited: () => edits.has(shape),
-
-    keyAt: id => table()[id] ?? EMPTY,
-
-    // set puts a key in a cell of the shape now chosen, and answers the table
-    // that resulted.
-    set: (id, name) => {
-      if (!knownCell.has(id)) return table();
-      const next = name === EMPTY ? clear(table(), id) : assign(table(), id, name);
-      // An edit that lands back on the shape is not an edit. Storing it as one
-      // would leave the list calling a shape modified when it is not — and
-      // emptying every cell of type1 makes a table type4 also matches, which is
-      // why the shape now chosen is asked about first.
-      if (shapeFor(next, shape) === shape) edits.delete(shape);
-      else edits.set(shape, next);
-      writeKeys();
-      return table();
+    edited: () => !equal(current(), defaultGrid(shape)),
+    groupAt: (id) => {
+      const group = groupAt(id);
+      return group ? { ...group, cells: [...group.cells] } : null;
     },
-
-    // useShape chooses a shape. The edits of the one being left are kept and
-    // so are the edits of the one being arrived at, because a shape is a place
-    // to keep a keypad rather than a button that builds one.
-    useShape: name => {
-      if (!isShape(name)) return table();
+    keyAt: (id) => groupAt(id)?.key ?? EMPTY,
+    keys: () =>
+      Object.fromEntries(
+        current().groups.flatMap((group) =>
+          group.cells.map((id) => [id, group.key]),
+        ),
+      ),
+    persistence: () => ({ ...status }),
+    beginEdit: () => {
+      previous = null;
+    },
+    canUndo: () => previous !== null,
+    useShape: (name) => {
+      if (!isShape(name) || name === shape) return;
       shape = name;
-      writeShape();
-      return table();
+      previous = null;
+      if (!write(layoutKey, shape) && !protectedRecord)
+        status = { saved: false, reason: "storage" };
     },
-
-    // reset takes the chosen shape back to the keypad this page ships it as,
-    // and forgets the edit rather than storing the shape's own cells: a stored
-    // copy would go on meaning "this shape" after the shipped one changed.
-    reset: () => {
-      edits.delete(shape);
-      writeKeys();
-      return table();
+    set: (id, key) => {
+      const group = groupAt(id);
+      if (!group || !knownKey.has(key)) return fail("invalid");
+      if (group.key === SETTINGS && key !== SETTINGS) return fail("settings");
+      const next = copy(current());
+      for (const other of next.groups) {
+        if (other.id === group.id) {
+          if (other.key !== key) other.activation = defaultActivation(key);
+          other.key = key;
+        } else if (key === SETTINGS && other.key === SETTINGS)
+          other.key = EMPTY;
+      }
+      return commit(next);
+    },
+    merge: (ids, chosenKey) => {
+      if (
+        !Array.isArray(ids) ||
+        ids.length > cells.length ||
+        ids.some((id) => !groupAt(id))
+      )
+        return fail("invalid");
+      const selected = [...new Set(ids.map((id) => groupAt(id).id))].map(
+        groupAt,
+      );
+      if (selected.length < 2) return fail("select-more");
+      const members = sortCells(selected.flatMap((group) => group.cells));
+      if (!connected(members)) return fail("disconnected");
+      const keys = [
+        ...new Set(selected.map((group) => group.key).filter(Boolean)),
+      ];
+      if (chosenKey !== undefined && !knownKey.has(chosenKey))
+        return fail("invalid");
+      if (
+        keys.includes(SETTINGS) &&
+        chosenKey !== undefined &&
+        chosenKey !== SETTINGS
+      )
+        return fail("settings");
+      if (
+        !keys.includes(SETTINGS) &&
+        chosenKey === undefined &&
+        keys.length > 1
+      )
+        return fail("choose-key");
+      const key = keys.includes(SETTINGS)
+        ? SETTINGS
+        : (chosenKey ?? keys[0] ?? EMPTY);
+      const activation = localKeys.has(key)
+        ? "press"
+        : (selected.find((group) => group.key === key)?.activation ??
+          defaultActivation(key));
+      const removed = new Set(selected.map((group) => group.id));
+      const kept = copy(current()).groups.filter(
+        (group) => !removed.has(group.id),
+      );
+      if (key === SETTINGS)
+        for (const group of kept) if (group.key === SETTINGS) group.key = EMPTY;
+      return commit(
+        sortedGrid([
+          ...kept,
+          { id: members[0], cells: members, key, activation },
+        ]),
+      );
+    },
+    split: (id) => {
+      const group = groupAt(id);
+      if (!group || group.cells.length === 1) return fail("select-merged");
+      return commit(
+        sortedGrid([
+          ...copy(current()).groups.filter((other) => other.id !== group.id),
+          ...group.cells.map((cell, index) =>
+            singleton(
+              cell,
+              index === 0 ? group.key : EMPTY,
+              index === 0 ? group.activation : defaultActivation(EMPTY),
+            ),
+          ),
+        ]),
+      );
+    },
+    reset: () => commit(defaultGrid(shape)),
+    undo: () => {
+      if (!previous) return false;
+      layouts.set(shape, previous);
+      previous = null;
+      persist();
+      return true;
     },
   };
 };

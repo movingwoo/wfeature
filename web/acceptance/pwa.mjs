@@ -130,6 +130,12 @@ const updateWorker = async () => {
   await page.waitForLoadState("networkidle");
   await page.reload();
   await page.waitForLoadState("networkidle");
+  // Cache writes and retirement run in fetch waitUntil, after the response.
+  // Network idleness alone does not establish that cleanup has finished.
+  await page.waitForFunction(async name => {
+    const names = await caches.keys();
+    return names.length === 1 && names[0] === name;
+  }, result.expectedCache);
 };
 try {
   await startServer(baseline, "baseline"); await openBrowser(); await ready();
@@ -139,9 +145,17 @@ try {
   await settings(); await page.selectOption("#keypad-shape-settings", "type2");
   await page.locator("#keypad-arrange-open").click();
   // Store a non-default size through the actual editor.
-  await page.locator('#keypad-size-list input[type="range"]').first().evaluate(element => {
-    element.value = "52"; element.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const oldSize = page.locator('#keypad-size-list input[type="range"]');
+  if (await oldSize.count()) {
+    await oldSize.first().evaluate(element => {
+      element.value = "52"; element.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await page.locator('[data-cell="band-c2"]').click();
+  } else {
+    const columns = Number(await page.locator("#keypad-grid").getAttribute("data-columns") ?? 7);
+    await page.locator(`[data-cell="${columns === 14 ? "r1c3" : "r1c2"}"]`).click();
+  }
+  await page.locator("#keypad-arrange-keys").getByRole("button", {name: "5", exact: true}).click();
   await page.locator("#keypad-arrange-close").click();
   if (await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await closeSettings();
   await page.locator("#game-file").setInputFiles("internal/platform/skt/testdata/canvas-skt.zip");
@@ -164,7 +178,9 @@ try {
   assert.ok(!result.baselineCaches.includes(result.expectedCache), "baseline must serve a different embedded shell");
   assert.deepEqual(tree(games), before.games); assert.deepEqual(tree(ext), before.ext); assert.deepEqual(tree(saves), before.saves);
   await openBrowser(); await ready(); await updateWorker(); await ready();
-  assert.deepEqual(await storage(), before.storage);
+  const afterStorage = await storage();
+  for (const [key, value] of Object.entries(before.storage)) assert.equal(afterStorage[key], value, key);
+  assert.equal(await page.locator('[data-cell="r1c3"]').getAttribute("data-key"), "5");
   assert.equal(await page.locator("#keypad-shape-settings").inputValue(), "type2");
   result.cacheObservation = await page.evaluate(async () => {
     const entries = {};
@@ -176,7 +192,8 @@ try {
   })));
   result.candidateCaches = await page.evaluate(() => caches.keys());
   assert.deepEqual(result.candidateCaches, [result.expectedCache]);
-  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--keypad-key-pref").trim()), "52px");
+  assert.equal(await page.locator("#keypad-size-list").count(), 0);
+  assert.equal(await page.locator("#keypad-grid").count(), 1);
   const listed = await page.locator("#game-select option").evaluateAll(options => options.map(option => option.value));
   assert.ok(listed.some(value => value.endsWith("persistence.zip")));
   assert.ok(listed.some(value => value.startsWith("ext/") && value.endsWith("canvas-skt.zip")));

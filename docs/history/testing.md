@@ -9,6 +9,7 @@ This consolidation adds no execution or acceptance evidence.
 
 ## Contents
 
+- [Keypad grid validation (2026-10-08)](#keypad-grid-validation-2026-10-08)
 - [Implementation and validation record](#implementation-testing)
 - [Running them](#implementation-running-them)
 - [Runtime boundary regressions](#implementation-runtime-boundary-regressions)
@@ -35,6 +36,230 @@ This consolidation adds no execution or acceptance evidence.
 - [Recorded failure](#webkit-recorded-failure)
 - [Current phase-instrumented checks](#webkit-current-phase-instrumented-checks)
 - [Decision and remaining limit](#webkit-decision-and-remaining-limit)
+
+## Keypad grid validation (2026-10-08)
+
+These observations cover the uncommitted keypad change based on
+`b726341b12034180aa514ab436e9f2f2e6bc763a`, on macOS with Playwright Chromium
+153.0.8010.12 and WebKit 26.6. The implementation contract is maintained in
+[the web host reference](../../web/README.md#grid-keypad). Acceptance remains
+open for the device and gameplay observations below.
+The measurements and browser runs first describe the seven-column grid. The
+fourteen-column follow-up at the end of this section has separate validation limits.
+
+The old embedded shell's baseline measurements are retained locally in
+`var/acceptance/keypad-grid-baseline/geometry.json`. Both engines measured the
+same 28 px top-row button height, seven equal columns and 4 px gaps. At 390 by
+844 px the old keypad occupied 296 px, including 12 px bottom clearance. Nine
+rows use its 284 px content budget exactly: nine 28 px cells and eight 4 px gaps.
+The first old row maps to one grid row and each old pad row maps to two.
+
+| Viewport (px) | New board height (px) | Single cell height (px) | Game wrapper height (px) |
+| --- | ---: | ---: | ---: |
+| 320 by 568 | 284 | 28 | 272 |
+| 390 by 844 | 284 | 28 | 520 |
+| 844 by 390 | 207.89 | 19.53 | 170.08 |
+| 1280 by 900 | 284 | 28 | 572 |
+| 1280 by 390 | 190.30 | 17.58 | 155.69 |
+
+Chromium and WebKit agree at the recorded precision. No tested viewport gains
+vertical overflow. The smaller 320 px phone previously had a 348 px game wrapper;
+its reduction to 272 px is the explicit cost of keeping all nine base-height
+rows. Short landscape windows compress all rows uniformly. Additional safe-area
+budget checks preserve settings and the final row without changing saved cells.
+
+The completed embedded-grid runs are
+`keypad-grid-chromium-1791388269804` and `keypad-grid-webkit-1791388270804`
+(release), and `keypad-grid-chromium-1791388464527` (debug), under
+`var/acceptance/`. Each retains `result.json`, rendered screenshots and server
+logs. They establish migration, tap/drag selection, rectangle/L/T/ring shapes,
+conflict choice, split/clear/undo, settings protection, reload, rotation, native
+hit targets, internal-seam continuity, hole input, keyboard/pointer ownership,
+focused activation, cancellation, direct-only checkpoint actions, failed writes
+and cached-shell load with the server stopped. Chromium also exercises two
+browser touch contacts. No page errors were recorded. The grid runner's save
+argument was subsequently corrected to the isolated `ktf` leaf, because the
+server resolves SKT/LGT saves as siblings; that corrected runner still needs a
+rerun. No runtime save-layout change was made.
+
+The Java/SGS checkpoint routes passed in
+`checkpoint-skt-chromium-1791388329638` and
+`checkpoint-skt-webkit-1791388330648`, retaining quicksave/load pixels, input
+epochs, reconnect and ordinary-save assertions. The rapid-fire routes passed
+in `rapid-fire-chromium-1791389652836` and `rapid-fire-webkit-1791389500812`.
+They cover focused native Space/Enter, manual and automatic modes, shared input,
+pointer release, focus loss, editor entry and session reset. Their save roots
+are isolated. The Chromium route waits for observed pointer pulses instead of
+assuming a fixed 250 ms wall-clock scheduling window; deterministic cadence
+assertions remain in the Node suite.
+
+The version-34-to-35 PWA route passed in
+`pwa-chromium-1791388657799` and `pwa-webkit-1791388464548`. Their records identify
+baseline SHA-256
+`d6e21960dd1ca1c16032f8208f6f2c513635d6dcfb097377f6b339a1621dbed6`
+and candidate
+`e540535b2cb2537b270dc92b2d869bb3d5d86e9dbd491b570059a74bdc2b682e`.
+The migrated Type2 key, legacy key/size records, uploaded archive, ordinary saves,
+save export/import, touch, audio-context activation, text input and unavailable-server
+shell load survived replacement. These are automation observations, not OS
+installation or audible-output proof.
+
+The earlier `pwa-chromium-1791388464539` run failed its retirement assertion:
+after observing version 35, the final cache list contained only
+`wfeature-shell-v34`. An identical rerun passed without a production fix.
+The original worker's navigation sweep deletes every differently named shell.
+A deterministic source-level reproduction starts a version-34 navigation, installs
+and activates version 35, then completes the old response. Its final cache list
+matches the failed run: the old worker recreates version 34 and deletes version 35.
+The reproduction and operation log are retained as `cache-race.mjs` and
+`cache-race.json` under `var/acceptance/keypad-grid/`. This proves that the source
+permits the race; it does not trace the actual browser run's event ordering.
+The sweep logic predates the grid change. Changing only the new worker's
+retirement filter cannot alter already-installed version-34 code. The successful
+rerun does not establish race freedom.
+
+The subsequent repair moves version 35 to `wfeature-pwa-v35`, outside that legacy
+sweep's prefix. Cleanup removes the legacy prefix and strictly older numbered
+versions in the new prefix, preserving future versions and unrelated caches.
+Two regression tests in `service-worker.test.mjs` fail before the repair and
+pass afterward: a version-34 late navigation must leave the new page and grid
+modules readable offline, and a replaced worker's delayed response must preserve
+its successor's cache. The normal offline fallback and retirement tests also
+pass. The two-version browser route reads the candidate name from its worker;
+the grid route now does the same. The repaired binary has not yet run in a real
+browser because port binding remains prohibited.
+
+`make test` passed with 254 Node cases, `make test-debug`,
+`go test -race ./internal/...` and `go vet ./...` passed. Final model boundary
+checks added migrated activation after merging, failed recovery-backup protection,
+oversized-record preservation and invalid membership/action policies. The model-only
+Node run passes 257 cases; the subsequent cache repair raises the passing total
+to 259. Debug/release builds after the repair also pass; their source and
+binary SHA-256 values are retained in
+`var/acceptance/keypad-grid/final-source.json`. Those builds include the cache
+repair and are not the binaries identified by the earlier
+browser records.
+The final pure-handler shell-serving, compression/revalidation and unknown-path
+tests also pass with the sandbox active.
+
+The local KTF archive with SHA-256
+`2dab850c3aa252b26ba39dab8fdd155966db0bc8db15fac7ecf4170ab18fe000`
+responded to a merged L-shaped OK button through menu and character selection.
+Its `local-chromium-*` screenshots under `var/acceptance/keypad-grid/` do not
+show gameplay. A route or screenshot named `ingame` is not sufficient evidence.
+Finish that route through observed play, then verify a physical phone using
+an L-shaped button, two fingers, rotation and reload. Neither step is complete.
+The current sandbox refuses server binding with `bind: operation not permitted`,
+so the previously shared preview is stopped and final embedded-browser reruns
+remain pending. No real-game archives were added to tracked files.
+
+### Horizontal refinement and available space
+
+The follow-up uses fourteen columns and nine rows. Each former cell maps to two
+horizontal cells; assigned buttons and merged shapes keep their action, activation
+policy and topology, while ordinary empty cells expose independent halves.
+Version 2 is saved under `wfeature:keypadGridV2`. Keeping the original
+`wfeature:keypadGrid` slot intact preserves rollback data and prevents an
+already-open version-1 tab from overwriting refined edits. Explicit defaults in
+the new record also prevent reset from reviving old edits.
+
+The keypad now takes the safe width of the game column, capped at 480 px, and
+all height below the fitted game wrapper. Decorative side and bottom padding are
+removed. Dynamic viewport height, all four safe-area insets and the desktop top
+margin share one budget. The grid stays fourteen by nine on resize; cell sizes
+and, in very small windows, gaps scale instead of dropping coordinates.
+
+The complete Node suite passes 264 tests, including five new refinement cases
+for shapes and activation, empty halves, denied writes, damaged sibling types,
+and old-tab storage isolation. The installable-shell, compression/revalidation
+and unknown-path Go handler tests pass in both debug and release profiles.
+Both embedded server builds pass. Their build log contains a nonfatal module
+stat-cache write warning from the sandbox; the build commands exit successfully.
+Source and binary hashes, test/build logs and the browser preflight are retained
+under `var/acceptance/keypad-density/`. The unchanged seven-column release server
+is kept as `build/keypad-density/baseline/wfeature-server` for the update route.
+
+The updated browser runner covers nine viewport sizes, all four safe-area inputs,
+last-column hit testing, width/bottom alignment, overflow and retained storage.
+It also checks migration from both old storage formats. Its JavaScript syntax
+check passes, but its rendered assertions have not run. Server binding fails
+with `listen EPERM: operation not permitted 127.0.0.1`, and ordinary Chromium
+and WebKit launches both fail under the current sandbox. These failures occur
+before any page is rendered. The earlier seven-column screenshots and PWA runs
+do not validate this follow-up. Full viewport checks, version-34/35-to-36 updates,
+real-game play and physical-phone observations remain pending.
+
+### Key assignment after merging
+
+The editor cleared its selection after a successful merge but kept multiple-selection
+mode active. A later key choice only staged another merge instead of assigning the
+key. The fix returns to assignment mode with the merged button selected; refused
+merges retain their mode and selection. Three editor-handler regressions fail before
+the fix and pass afterward, including conflicting keys and settings protection.
+The full Node suite now passes 267 tests, both embedded server builds pass, and the
+focused shell-handler checks pass in both profiles. The browser route includes the
+interaction but remains unrun under the existing execution restriction. Shell cache
+version 37 delivers the fix. Logs and hashes are retained separately under
+`var/acceptance/keypad-merge-selection/`; the earlier density artifacts are unchanged.
+
+### Single-cell label fitting
+
+The height-based font size and wrapping label style left two-character names
+large enough to wrap in a narrow cell. Labels now stay on one line, and the
+editor measures their actual text width with a DOM range before shrinking the
+font to the available label rectangle. It resets the font before each fit so
+resize, merging and shorter text can restore the normal size. Rapid-fire mode
+changes run the same fitting path.
+
+Two editor regressions fail before the fix and pass afterward; a third checks
+changing labels and repeated fitting. The font metrics are explicit DOM stubs,
+not rendered-font evidence. The full Node suite passes 270 tests, both server
+builds pass, and focused shell-handler checks pass in both profiles. The browser
+route now checks two-character and longer single-cell labels, rapid-fire modes,
+and actual text widths at every viewport, but remains unrun under the recorded
+execution restriction. Shell cache version 38 carries the fix. Logs and hashes
+are retained under `var/acceptance/keypad-labels/`.
+
+### Final fourteen-column browser validation
+
+After execution permissions changed, the embedded version-41 client passed the
+rendered checks below. These runs supersede the browser-execution restrictions
+recorded above; they do not establish physical-phone behavior or real-game play.
+
+| Route | Chromium result directory | WebKit result directory |
+| --- | --- | --- |
+| Release grid | `keypad-grid-chromium-1791433016855` | `keypad-grid-webkit-1791433016855` |
+| Debug grid | `keypad-grid-chromium-1791433068926` | Not repeated |
+| Version 34 to 41 | `pwa-chromium-1791433160722` | `pwa-webkit-1791433200401` |
+| Version 35 to 41 | `pwa-chromium-1791433200398` | `pwa-webkit-1791433160722` |
+
+Each directory is under `var/acceptance/` and retains its JSON result, screenshots
+and server logs. The grid runs cover all nine viewport sizes, four safe-area
+inputs, unchanged coordinates, label widths, migration, editor operations,
+immediate assignment after merging, input ownership, native shape hit areas,
+failed storage and offline shell reload. Chromium also checks two touch contacts.
+No page errors were recorded. These routes use isolated saves and authored
+fixtures, so the earlier save-directory correction is now exercised.
+
+The first retry exposed an acceptance-runner error: it tried to cycle rapid fire
+before starting a game, although the existing handler requires a running game.
+The check now runs after startup. The next retry found actual overflow at
+240 by 320 px: start-menu controls extended the document to 346 px despite the
+keypad ending at 320 px. The menu now scrolls inside the game area with safe
+alignment, and the runner checks that its first and last controls remain reachable.
+
+One Chromium upgrade run observed the legacy cache before asynchronous fetch
+cleanup completed. The PWA runner now waits for the cache state after navigation
+as well as network idleness; its final sole-cache assertion is unchanged. Both
+baseline versions pass in both engines, preserving old layout records, archive
+and save hashes, guest progress, backup restoration, text input and offline shell
+availability. The current shell stays outside the legacy cleanup prefix.
+
+`make test` (including all 270 Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, both embedded server builds and
+`git diff --check` pass. Build and test logs, source hashes and binary hashes are
+retained under `var/acceptance/keypad-pr/`. Real-game gameplay and physical-phone
+observations remain open in [maintenance](../maintenance.md#keypad-grid-acceptance).
 
 <a id="implementation-testing"></a>
 
