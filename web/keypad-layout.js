@@ -211,8 +211,33 @@ export const migrateLegacy = (source) => {
   }
   return refineGrid(sortedGrid(groups, OLD_COLUMNS));
 };
-export const defaultGrid = (shape) =>
-  migrateLegacy(legacyPresets[isShape(shape) ? shape : shapes[0]]);
+export const defaultGrid = (shape) => {
+  const name = isShape(shape) ? shape : shapes[0];
+  const grid = migrateLegacy(legacyPresets[name]);
+  if (name === "type4") return grid;
+  // Presets may change without rewriting the legacy storage contract.
+  const topKeys = [
+    EMPTY,
+    EMPTY,
+    QUICK_SAVE,
+    QUICK_LOAD,
+    RAPID_FIRE,
+    "MENU",
+    "CALL",
+    "SOFT2",
+    EMPTY,
+    EMPTY,
+  ];
+  return sortedGrid([
+    ...grid.groups.filter(
+      (group) =>
+        !group.id.startsWith("r1c") ||
+        group.id === "r1c1" ||
+        group.id === "r1c13",
+    ),
+    ...topKeys.map((key, index) => singleton(`r1c${index + 3}`, key)),
+  ]);
+};
 
 // A record is a complete partition of a bounded board. Refuse an invalid type
 // as a whole rather than salvaging half a button or silently losing settings.

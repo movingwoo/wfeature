@@ -244,11 +244,12 @@ FPS or a bound on all gameplay costs.
 
 ### Checkpoint keypad controls
 
-The 2026-10-02 UI revision removes picker/settings checkpoint buttons and offers
-quick save/load only as optional keypad assignments. All four default layouts
-remain unchanged. Node tests cover per-type persistence, duplicate assignments,
-editing unavailable cells, immediate requests, pending-operation exclusion,
-inline failure feedback and retry. `make test` passes, including 280 Node tests.
+The 2026-10-02 UI revision removed picker/settings checkpoint buttons. Quick save
+and quick load use keypad assignments; the Type1–3 defaults now include them in
+top-row columns 5 and 6, while Type4 leaves them unassigned. Node tests cover
+default row geometry, legacy preservation, reset, per-type persistence, duplicate
+assignments, editing unavailable cells, immediate requests, pending-operation
+exclusion, inline failure feedback and retry. The Node suite passes 270 tests.
 
 Chromium at 320 px and WebKit at 390 px, both with touch enabled, exercised the
 embedded release page against the repository-authored native checkpoint fixture.

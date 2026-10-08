@@ -47,11 +47,28 @@ test("all presets cover the same grid and keep one reachable settings action", (
       grid.groups.filter((group) => group.key === SETTINGS).length,
       1,
     );
-    assert.ok(
-      !grid.groups.some((group) =>
-        ["QUICK_SAVE", "QUICK_LOAD"].includes(group.key),
-      ),
-    );
+    if (shape !== "type4") {
+      assert.deepEqual(
+        grid.groups
+          .filter((group) => group.id.startsWith("r1c"))
+          .map((group) => [group.cells, group.key]),
+        [
+          [["r1c1", "r1c2"], SETTINGS],
+          [["r1c3"], ""],
+          [["r1c4"], ""],
+          [["r1c5"], "QUICK_SAVE"],
+          [["r1c6"], "QUICK_LOAD"],
+          [["r1c7"], "RAPID_FIRE"],
+          [["r1c8"], "MENU"],
+          [["r1c9"], "CALL"],
+          [["r1c10"], "SOFT2"],
+          [["r1c11"], ""],
+          [["r1c12"], ""],
+          [["r1c13", "r1c14"], "CLR"],
+        ],
+        shape,
+      );
+    }
   }
   assert.deepEqual(
     defaultGrid("type4")
@@ -211,7 +228,11 @@ test("migration is idempotent and reset never resurrects legacy edits", () => {
   assert.deepEqual(createKeypadLayout(storage).grid(), layout.grid());
   assert.equal(storage.getItem(GRID_KEY), migrated);
   layout.reset();
-  assert.equal(createKeypadLayout(storage).keyAt("r1c3"), "");
+  const reset = createKeypadLayout(storage);
+  assert.equal(reset.keyAt("r1c3"), "");
+  assert.equal(reset.keyAt("r1c5"), "QUICK_SAVE");
+  assert.equal(reset.keyAt("r1c6"), "QUICK_LOAD");
+  assert.deepEqual(reset.groupAt("r1c5").cells, ["r1c5"]);
   layout.useShape("type2");
   assert.equal(layout.keyAt("r1c3"), "QUICK_LOAD");
   assert.equal(storage.getItem("wfeature:keypadKeys"), legacy);

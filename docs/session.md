@@ -81,10 +81,11 @@ packages, and LGT Clets and AOT Java titles. SKT sessions report
 the archive's slot without running guest startup. The ordinary `resume` command
 still means reconnecting to a retained in-memory session.
 
-The page offers quick save/load as optional keypad assignments, with no default
-placement. Clicking an assigned key sends its request immediately and displays
-brief inline feedback without a confirmation or result popup. All copies are
-disabled while a request is pending; editing a cell never sends a request.
+The page offers quick save/load as keypad assignments, included in top-row columns
+5 and 6 of the Type1–3 defaults and optional in Type4. Clicking an assigned key
+sends its request immediately and displays brief inline feedback without a
+confirmation or result popup. All copies are disabled while a request is pending;
+editing a cell never sends a request.
 The picker offers ordinary startup only. To restore after a server restart,
 start the game and press its assigned quick-load key. Explicit startup restoration
 remains available to protocol and CLI callers.
