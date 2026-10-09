@@ -1,4 +1,4 @@
-import { clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
+import { capturing, clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
 import { initAudioSettings } from "./audio-settings.js";
 import { createRapidFire, RAPID_FIRE } from "./rapid-fire.js";
@@ -558,7 +558,7 @@ const openSession = async handlers => {
   const opening = new GameSession({
     ...handlers,
     onFrame: (picture, presentation) => { if (playing()) drawFrame(picture, presentation); },
-    onAudio: events => { if (playing()) playAudioEvents(pageAudio, events); },
+    onAudio: events => { if (playing()) return playAudioEvents(pageAudio, events); },
     onVibrate: request => { if (playing()) vibration.request(request); },
     onReset: () => {
       releaseInput();
@@ -630,6 +630,7 @@ const initResumeOnReturn = () => {
 // rather than to a variable, because the log is what a report reads back.
 const recordSessionStats = stats => {
   if (!stats) return;
+  pageAudio?.reportTiming();
   // The speed and the tick rate are what make the rest readable. A frame rate
   // below the game's own says nothing on its own — titles differ in how many
   // ticks they take per picture — and the tick cost only says whether the
@@ -822,6 +823,7 @@ const initDebugLog = debugBuild => {
       // Two halves, saved together: the server knows what the guest did, and
       // only the page knows what became of the frames and the socket.
       const answer = await session.report(currentGameLabel);
+      pageAudio?.reportTiming();
       const pageLog = await saveReport(currentGameLabel).catch(() => null);
       setStatus(pageLog
         ? `세션 보고서를 ${answer.message} 에, 페이지 로그를 var/logs/${pageLog} 에 저장했습니다.`
@@ -875,7 +877,10 @@ const initLogView = debugBuild => {
     if (pinned) view.scrollTop = view.scrollHeight;
   });
 
-  document.getElementById("log-clear")?.addEventListener("click", () => clearLog());
+  document.getElementById("log-clear")?.addEventListener("click", () => {
+    pageAudio?.clearTiming();
+    clearLog();
+  });
 };
 
 // Tapping the dimmed page behind a modal closes it, the same gesture that
@@ -1501,7 +1506,7 @@ const main = async () => {
     onError: error => { recordEvent(`checkpoint failed: ${error.message ?? error}`); console.error(error); },
   });
   initModalBackdrop();
-  pageAudio = new PageAudio({ report: recordEvent });
+  pageAudio = new PageAudio({ report: recordEvent, diagnostics: capturing });
   initSettings();
   initVibrationSetting({ document, vibration });
   initKeyBindings();

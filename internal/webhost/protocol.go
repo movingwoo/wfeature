@@ -101,20 +101,21 @@ type clientMessage struct {
 
 // Message kinds the page may send.
 const (
-	clientStart     = "start"
-	clientResume    = "resume"
-	clientPark      = "park"
-	clientPing      = "ping"
-	clientKey       = "key"
-	clientPointer   = "pointer"
-	clientText      = "text"
-	clientSpeed     = "speed"
-	clientScale     = "scale"
-	clientCheat     = "cheat"
-	clientReport    = "report"
-	clientStop      = "stop"
-	clientQuickSave = "quickSave"
-	clientQuickLoad = "quickLoad"
+	clientStart       = "start"
+	clientResume      = "resume"
+	clientPark        = "park"
+	clientPing        = "ping"
+	clientAudioResume = "audioResume"
+	clientKey         = "key"
+	clientPointer     = "pointer"
+	clientText        = "text"
+	clientSpeed       = "speed"
+	clientScale       = "scale"
+	clientCheat       = "cheat"
+	clientReport      = "report"
+	clientStop        = "stop"
+	clientQuickSave   = "quickSave"
+	clientQuickLoad   = "quickLoad"
 )
 
 // serverMessage is anything the server sends in a text frame. A picture
@@ -329,21 +330,26 @@ type statsMessage struct {
 // the guest's calls rather than shipping samples: the events arrive over the
 // socket and are played in the page.
 type audioEvent struct {
-	Kind     string `json:"kind"`
-	Channel  uint8  `json:"channel,omitempty"`
-	Note     uint8  `json:"note,omitempty"`
-	Velocity uint8  `json:"velocity,omitempty"`
-	Program  uint8  `json:"program,omitempty"`
-	Control  uint8  `json:"control,omitempty"`
-	Value    uint16 `json:"value,omitempty"`
+	Kind       string   `json:"kind"`
+	At         *float64 `json:"at,omitempty"` // Presentation seconds; nil preserves legacy arrival scheduling.
+	Sound      uint32   `json:"sound,omitempty"`
+	Channel    uint8    `json:"channel,omitempty"`
+	PCMChannel uint16   `json:"pcmChannel,omitempty"`
+	Note       uint8    `json:"note,omitempty"`
+	Velocity   uint8    `json:"velocity,omitempty"`
+	Program    uint8    `json:"program,omitempty"`
+	Control    uint8    `json:"control,omitempty"`
+	Value      uint16   `json:"value,omitempty"`
+	Age        uint32   `json:"age,omitempty"` // Elapsed note envelope time in milliseconds.
 
 	// Channels, Rate and Samples describe a sampled sound. Samples are
 	// base64-encoded signed 16-bit little-endian frames rather than a JSON
 	// array of numbers: a one-second sound is tens of thousands of samples,
 	// and as text that is an order of magnitude more bytes than the sound.
-	Channels uint8  `json:"channels,omitempty"`
-	Rate     uint32 `json:"rate,omitempty"`
-	Samples  string `json:"samples,omitempty"`
+	Channels   uint8  `json:"channels,omitempty"`
+	Rate       uint32 `json:"rate,omitempty"`
+	Samples    string `json:"samples,omitempty"`
+	FramePhase uint32 `json:"framePhase,omitempty"` // Billionths of the first remaining PCM frame.
 
 	// Data carries a SysEx message, base64-encoded for the same reason.
 	Data string `json:"data,omitempty"`
@@ -357,13 +363,18 @@ type audioEvent struct {
 
 // Audio event kinds.
 const (
+	audioClock         = "clock"
 	audioNoteOn        = "noteOn"
+	audioNoteResume    = "noteResume"
 	audioNoteOff       = "noteOff"
 	audioProgramChange = "programChange"
 	audioControlChange = "controlChange"
+	audioPCMControl    = "pcmControl"
 	audioPitchBend     = "pitchBend"
 	audioSysEx         = "sysex"
 	audioPlayWave      = "playWave"
+	audioStopSound     = "stopSound"
+	audioSoundGain     = "soundGain"
 	// audioAllOff has no counterpart in the guest's sink: it is what the
 	// server says when a game ends, because a note that was sounding at that
 	// moment has no one left to release it.

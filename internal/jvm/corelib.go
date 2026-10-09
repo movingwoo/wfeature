@@ -133,6 +133,7 @@ func stringDefinition() ClassDefinition {
 			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: native},
 			{Name: "hashCode", Descriptor: "()I", Access: native},
 			{Name: "concat", Descriptor: "(Ljava/lang/String;)Ljava/lang/String;", Access: native},
+			{Name: "intern", Descriptor: "()Ljava/lang/String;", Access: native},
 			{Name: "getBytes", Descriptor: "()[B", Access: native},
 			{Name: "getBytes", Descriptor: "(Ljava/lang/String;)[B", Access: native, Throws: []string{"java/io/UnsupportedEncodingException"}},
 			{Name: "getChars", Descriptor: "(II[CI)V", Access: native},

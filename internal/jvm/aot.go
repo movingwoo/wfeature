@@ -205,8 +205,8 @@ func StringText(object *Object) (string, bool) {
 	return nativeStringObject(object)
 }
 
-// NewString creates the same runtime-owned java/lang/String object used by
-// interpreted bytecode and native CLDC services.
+// NewString creates a fresh runtime-owned java/lang/String object. Use
+// InternString for native constants that must share bytecode literal identity.
 func (vm *VM) NewString(value string) *Object {
 	object := nativeStringValue(value)
 	if vm != nil {

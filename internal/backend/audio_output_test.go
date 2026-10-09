@@ -26,16 +26,7 @@ func (sink *outputProbe) MIDIProgramChange(channel, program uint8) {
 }
 func (sink *outputProbe) MIDIControlChange(channel, control, value uint8) {
 	sink.recordingSink.MIDIControlChange(channel, control, value)
-	switch control {
-	case 7:
-		sink.channels[channel].Volume = value
-	case 10:
-		sink.channels[channel].Pan = value
-	case 11:
-		sink.channels[channel].Expression = value
-	case 64:
-		sink.channels[channel].Sustain = value
-	}
+	sink.channels[channel].controlChange(control, value)
 }
 func (sink *outputProbe) MIDIPitchBend(channel uint8, value uint16) {
 	sink.recordingSink.MIDIPitchBend(channel, value)
@@ -77,6 +68,10 @@ func TestAudioOutputRestoresEmittedLevelsAndSamplePosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(saved.Output.Notes) != 1 || saved.Output.Notes[0].Velocity != 80 || saved.Output.Sounds[0].Gain != 2500 ||
+		!reflect.DeepEqual(saved.Output.Waves[0].Samples, []int16{8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30}) {
+		t.Fatalf("capture did not retain raw output and the current gain: %+v", saved.Output)
+	}
 	data, err := EncodeCheckpointRecord(saved)
 	if err != nil {
 		t.Fatal(err)
@@ -99,12 +94,12 @@ func TestAudioOutputRestoresEmittedLevelsAndSamplePosition(t *testing.T) {
 	fresh.ActivateOutputClock()
 	fresh.ActivateOutputClock()
 	fresh.ResumeOutput()
-	wantVoice := AudioVoiceState{Channel: 2, Note: 64, Velocity: 80, StartedWith: AudioChannelState{Program: 27, Volume: 90, Expression: 127, Pan: 30, Bend: 8192}}
-	if !reflect.DeepEqual(sink.voices, []AudioVoiceState{wantVoice}) || sink.channels[2] != saved.Output.Channels[2] {
+	wantVoice := AudioVoiceState{Channel: 2, Note: 64, Velocity: 20, StartedWith: defaultPitchState(AudioChannelState{Program: 27, Volume: 40, Expression: 127, Pan: 30, Bend: 9000})}
+	if !reflect.DeepEqual(sink.voices, []AudioVoiceState{wantVoice}) || sink.channels[2] != saved.Output.Sounds[0].Channels[2] {
 		t.Fatalf("note-on settings or final channel settings changed: %+v, %+v", sink.voices, sink.channels[2])
 	}
-	if !reflect.DeepEqual(sink.waves, [][]int16{{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}}) {
-		t.Fatalf("PCM tail or original emitted volume changed: %v", sink.waves)
+	if !reflect.DeepEqual(sink.waves, [][]int16{{2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7}}) {
+		t.Fatalf("PCM tail did not use the current quarter volume: %v", sink.waves)
 	}
 	again, err := fresh.CaptureState()
 	if err != nil || !reflect.DeepEqual(again, saved) {
@@ -153,19 +148,23 @@ func TestAudioOutputMatchesVoiceStealingAndExpiresPercussion(t *testing.T) {
 	}
 }
 
-func TestAudioOutputRefusesUntrackedPCMWhileKeepingPlayback(t *testing.T) {
+func TestAudioOutputRefusesExcessPCMBeforeEmissionAndReusesExpiredCapacity(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	sink := &recordingSink{}
 	audio := NewAudioWithClock(sink, func() time.Time { return now })
 	for i := 0; i <= maxOutputWaves; i++ {
 		audio.sink.PlayWave(1, 1, []int16{1})
 	}
-	if _, err := audio.CaptureState(); err == nil || sink.count("wave") != maxOutputWaves+1 {
-		t.Fatal("overflow capture succeeded or ordinary output was dropped")
+	if state, err := audio.CaptureState(); err != nil || len(state.Output.Waves) != maxOutputWaves || sink.count("wave") != maxOutputWaves {
+		t.Fatal("audible and retained PCM differ at the admission limit")
 	}
 	now = now.Add(2 * time.Second)
 	if state, err := audio.CaptureState(); err != nil || len(state.Output.Waves) != 0 {
 		t.Fatalf("expired output still refused capture: %v", err)
+	}
+	audio.sink.PlayWave(1, 1, []int16{2})
+	if state, err := audio.CaptureState(); err != nil || len(state.Output.Waves) != 1 || sink.count("wave") != maxOutputWaves+1 {
+		t.Fatal("expired PCM did not release its admission capacity")
 	}
 }
 

@@ -26,7 +26,7 @@ The ignored root `TODO.md` is the local work queue.
 | [KTF](ktf.md), [LGT](lgt.md), [SKT Java](skvm.md) | Platform loading, behavior, and remaining limitations. |
 | [LCDUI](lcdui.md), [native text input](native-text-input.md) | Screens, widgets, Host keyboard/IME, and input ownership. |
 | [RMS](rms.md) | MIDP record storage and layout. |
-| [Audio](audio.md), [hqx](hqx.md) | Sound formats/timelines and image scaling. |
+| [Audio](audio.md), [audio ownership](audio-ownership.md), [hqx](hqx.md) | Sound formats/timelines, clip ownership and output recovery, and image scaling. |
 | [Network](network.md), [authentication](authentication.md) | Offline policy and recognized compatibility services. |
 | [Code-revision compatibility](platform-compatibility.md) | Embedded exception registry and rendering evidence. |
 
@@ -41,6 +41,7 @@ The ignored root `TODO.md` is the local work queue.
 | [Coverage](history/coverage.md) | The 2026-09-12 API audits; not a current missing-feature queue. |
 | [Authentication](history/authentication.md) | Scheme recognition, controlled routes, and acceptance evidence. |
 | [Maintenance](history/maintenance.md) | Superseded plans, performance watches, and paused snapshot research. |
+| [Audio](history/audio.md) | The cross-platform playback audit, corpus evidence, unverified vendor mappings, and the app timing investigation. |
 
 ## Paused SGS work
 

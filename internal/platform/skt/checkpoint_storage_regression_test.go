@@ -227,7 +227,11 @@ func TestCheckpointAudioCatchupBudget(t *testing.T) {
 	}
 	audio.Sounds[0].Repeat = true
 	audio.Sounds = append(audio.Sounds, audio.Sounds[0])
-	if err := validateCheckpointAudio(audio, (1<<19)*time.Millisecond); err == nil {
+	audio.Sounds[1].Handle, audio.Next = 2, 2
+	if err := validateCheckpointAudio(audio, (1<<19)*time.Millisecond); err != nil {
+		t.Fatalf("exact aggregate pending event limit refused: %v", err)
+	}
+	if err := validateCheckpointAudio(audio, ((1<<19)+1)*time.Millisecond); err == nil {
 		t.Fatal("aggregate pending event limit was not enforced")
 	}
 	for _, kind := range []smaf.EventType{smaf.EventWave, smaf.EventSysEx} {
@@ -246,6 +250,65 @@ func TestCheckpointAudioCatchupBudget(t *testing.T) {
 		if err := validateCheckpointAudio(audio, time.Second); err == nil {
 			t.Fatalf("type %v accepted over a gigabyte of pending audio data", kind)
 		}
+	}
+}
+
+func TestJavaCheckpointAcceptsConsumedAudioPrefix(t *testing.T) {
+	for _, prepare := range []bool{false, true} {
+		t.Run(map[bool]string{false: "capture", true: "prepare"}[prepare], func(t *testing.T) {
+			source, store := startWIPIDisplayCheckpoint(t)
+			clock := installMediaPauseClock(source, newMediaPauseProbe())
+			slot, err := source.CaptureCheckpointWithSession(t.Context(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const pairs = 1200
+			events := make([]smaf.Event, 0, pairs*2+1)
+			for i := range uint32(pairs) {
+				events = append(events,
+					smaf.Event{Time: i*2 + 1, Type: smaf.EventNoteOn, Note: 60, Velocity: 80},
+					smaf.Event{Time: i*2 + 2, Type: smaf.EventNoteOff, Note: 60})
+			}
+			events = append(events, smaf.Event{Time: pairs*2 + 1, Type: smaf.EventEnd})
+			handle, err := source.audio.LoadEvents(events)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = source.audio.Play(handle, 0, false); err != nil {
+				t.Fatal(err)
+			}
+			clock.advance(pairs * 2 * time.Millisecond)
+			source.AdvanceAudio()
+			audio, err := source.audio.CaptureState()
+			if err != nil || len(audio.Sounds) != 1 || audio.Sounds[0].Cursor != pairs*2 || len(audio.Sounds[0].ActiveNotes) != 0 {
+				t.Fatalf("authored prefix was not consumed: %v", err)
+			}
+			before, _ := store.SnapshotSaves()
+			if prepare {
+				var state javaCheckpointState
+				if err = backend.DecodeCheckpointRecord(slot.Runtime, &state); err != nil {
+					t.Fatal(err)
+				}
+				state.Audio, state.Elapsed, state.Instant = audio, source.GuestElapsed(), clock.now().UnixNano()
+				if slot.Runtime, err = backend.EncodeCheckpointRecord(state); err != nil {
+					t.Fatal(err)
+				}
+			} else if slot, err = source.CaptureCheckpointWithSession(t.Context(), nil); err != nil {
+				t.Fatalf("consumed score prefix prevented capture: %v", err)
+			}
+			prepared, err := PrepareJavaCheckpoint(audioGainJAR, slot, Options{})
+			if err != nil {
+				t.Fatalf("consumed score prefix prevented preparation: %v", err)
+			}
+			defer prepared.Discard()
+			if calls, _ := prepared.PreparationStoreCalls(); calls != 0 {
+				t.Fatal("detached preparation accessed live saves")
+			}
+			after, _ := store.SnapshotSaves()
+			if source.State() != StateActive || !reflect.DeepEqual(before, after) || prepared.saved.Audio.Sounds[0].Cursor != pairs*2 {
+				t.Fatal("checkpoint changed saves, displaced the source or replayed the consumed prefix")
+			}
+		})
 	}
 }
 
@@ -275,9 +338,9 @@ func TestRMSCloseRetriesOnlyIssuedWrites(t *testing.T) {
 
 func TestCheckpointRejectsQuadraticAudioCatchup(t *testing.T) {
 	for _, accumulated := range []bool{false, true} {
-		name := "saved active notes"
+		name := "saved keys and absent note-offs"
 		if accumulated {
-			name = "pending note-ons"
+			name = "pending distinct note-ons"
 		}
 		t.Run(name, func(t *testing.T) {
 			archive, source, store, _, _ := newScriptCheckpointTest(t)
@@ -286,18 +349,25 @@ func TestCheckpointRejectsQuadraticAudioCatchup(t *testing.T) {
 			if err := backend.DecodeCheckpointRecord(slot.Runtime, &state); err != nil {
 				t.Fatal(err)
 			}
-			state.Clock = 1000 * time.Second
+			state.Clock = 1025 * time.Millisecond
 			state.Audio = checkpointLoopAudio(t)
 			sound := &state.Audio.Sounds[0]
-			sound.Events = []smaf.Event{{Time: 1, Type: smaf.EventNoteOff, Note: 61}}
+			sound.Events = []smaf.Event{{Time: 1, Type: smaf.EventNoteOff, Channel: 15, Note: 127}}
 			if accumulated {
-				sound.Events = append([]smaf.Event{{Type: smaf.EventNoteOn, Note: 60, Velocity: 64}}, sound.Events...)
-				state.Clock = 2 * time.Second
-			} else {
-				sound.ActiveNotes = make([]backend.AudioNoteState, 1<<19)
-				for i := range sound.ActiveNotes {
-					sound.ActiveNotes[i].Note = 60
+				notes := make([]smaf.Event, 1450, 1451)
+				for i := range notes {
+					notes[i] = smaf.Event{Type: smaf.EventNoteOn, Channel: uint8(i / 128), Note: uint8(i % 128), Velocity: 64}
 				}
+				sound.Events = append(notes, sound.Events...)
+				state.Clock = time.Millisecond
+			} else {
+				sound.ActiveNotes = make([]backend.AudioNoteState, 1024)
+				for i := range sound.ActiveNotes {
+					sound.ActiveNotes[i] = backend.AudioNoteState{Channel: uint8(i / 128), Note: uint8(i % 128)}
+				}
+			}
+			if _, err := backend.NewAudioFromState(state.Audio, nil); err != nil {
+				t.Fatalf("adversarial audio must have a valid saved shape: %v", err)
 			}
 			var err error
 			slot.Runtime, err = backend.EncodeCheckpointRecord(state)

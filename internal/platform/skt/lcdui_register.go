@@ -125,6 +125,12 @@ func (runtime *Runtime) registerHighLevelNatives() error {
 		{midp.PlayerClass, "getContentType", "()" + text, runtime.playerContentType},
 		{midp.PlayerClass, "addPlayerListener", "(Ljavax/microedition/media/PlayerListener;)V", runtime.addPlayerListener},
 		{midp.PlayerClass, "removePlayerListener", "(Ljavax/microedition/media/PlayerListener;)V", runtime.removePlayerListener},
+		{midp.PlayerClass, "getControl", "(" + text + ")Ljavax/microedition/media/Control;", runtime.playerControl},
+		{midp.PlayerClass, "getControls", "()[Ljavax/microedition/media/Control;", runtime.playerControls},
+		{midp.RuntimeVolumeControlClass, "setLevel", "(I)I", runtime.setPlayerVolumeLevel},
+		{midp.RuntimeVolumeControlClass, "getLevel", "()I", runtime.playerVolumeLevel},
+		{midp.RuntimeVolumeControlClass, "setMute", "(Z)V", runtime.setPlayerVolumeMute},
+		{midp.RuntimeVolumeControlClass, "isMuted", "()Z", runtime.playerVolumeMuted},
 	}
 
 	// TextField and TextBox have the same text methods on different receivers,

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -25,12 +26,12 @@ const (
 	SpeedCeiling = 16.0
 )
 
-// ClampSpeed answers the multiplier a session would actually run at. A zero or
-// negative value selects the speed the game was written for, because "no
+// ClampSpeed answers the multiplier a session would actually run at. NaN, zero
+// or a negative value selects the speed the game was written for, because "no
 // setting" and "the normal setting" are the same thing to a game.
 func ClampSpeed(multiplier float64) float64 {
 	switch {
-	case multiplier <= 0:
+	case math.IsNaN(multiplier) || multiplier <= 0:
 		return 1
 	case multiplier < SpeedFloor:
 		return SpeedFloor
@@ -88,13 +89,16 @@ func (clock *SpeedClock) now() time.Time {
 }
 
 // SetSpeed changes the rate. See ClampSpeed for what a value outside the range
-// becomes.
-func (clock *SpeedClock) SetSpeed(multiplier float64) {
+// becomes. The returned guest instant is the exact transition boundary; audio
+// uses it to map score deadlines through the old rate before adopting the new.
+func (clock *SpeedClock) SetSpeed(multiplier float64) time.Time {
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
-	clock.scaledAt = clock.now()
-	clock.sourceAt = clock.source()
+	now := clock.source()
+	clock.scaledAt = clock.scaledAt.Add(time.Duration(float64(now.Sub(clock.sourceAt)) * clock.speed))
+	clock.sourceAt = now
 	clock.speed = ClampSpeed(multiplier)
+	return clock.scaledAt
 }
 
 // Speed reports the multiplier in force.

@@ -201,6 +201,10 @@ func PrepareScriptCheckpoint(archive []byte, checkpoint backend.Checkpoint, opti
 	if s.audio, err = backend.NewAudioFromState(saved.Audio, nil); err != nil {
 		return nil, err
 	}
+	s.audio.SetLogger(s.options.Logger)
+	if err = s.audio.RebasePlaybackClock(saved.Clock, saved.Speed); err != nil {
+		return nil, err
+	}
 	if s.sound != 0 {
 		if _, ok := s.audio.Length(s.sound); !ok {
 			return nil, fmt.Errorf("SGS checkpoint sound handle is missing")

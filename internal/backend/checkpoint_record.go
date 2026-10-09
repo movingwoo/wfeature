@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
 )
 
 type checkpointRecordLimits struct {
@@ -29,6 +31,45 @@ type checkpointRecordWalk struct {
 	bytes  uint64
 	nodes  int
 	fields map[reflect.Type]map[string]int
+	audio  *checkpointAudioShape
+}
+
+// Versions 7, 8 and 9 added PCM controls, retained wave admission charges and
+// frame phases. Track each addition until the enclosing AudioState ends, since
+// Version can follow its children. Unknown versions require the complete current
+// shape; their semantic version checks remain the audio component's responsibility.
+type checkpointAudioShape struct {
+	version          uint32
+	present, omitted uint8
+}
+
+const (
+	checkpointAudioPCMFields uint8 = 1 << iota
+	checkpointAudioWaveBudgetField
+	checkpointAudioWavePhaseField
+)
+
+func checkpointAudioAddedField(t reflect.Type, name string) uint8 {
+	switch t {
+	case reflect.TypeFor[smaf.Event]():
+		if name == "PCMChannel" {
+			return checkpointAudioPCMFields
+		}
+	case reflect.TypeFor[AudioWaveState]():
+		switch name {
+		case "PCMChannel":
+			return checkpointAudioPCMFields
+		case "BudgetBytes":
+			return checkpointAudioWaveBudgetField
+		case "FramePhase":
+			return checkpointAudioWavePhaseField
+		}
+	case reflect.TypeFor[AudioOutputState]():
+		if name == "PCMChannels" {
+			return checkpointAudioPCMFields
+		}
+	}
+	return 0
 }
 
 func (walk *checkpointRecordWalk) charge(size uint64) error {
@@ -215,12 +256,18 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 		if token != json.Delim('{') {
 			return invalid()
 		}
+		var audio *checkpointAudioShape
+		if t == reflect.TypeFor[AudioState]() {
+			previous := walk.audio
+			audio = &checkpointAudioShape{}
+			walk.audio = audio
+			defer func() { walk.audio = previous }()
+		}
 		fields, err := walk.schema(t)
 		if err != nil {
 			return err
 		}
 		seen := make([]bool, t.NumField())
-		count := 0
 		for decoder.More() {
 			key, err := decoder.Token()
 			if err != nil {
@@ -231,7 +278,7 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 			if !ok || !exists || seen[index] {
 				return fmt.Errorf("checkpoint record has an unknown or repeated field")
 			}
-			seen[index], count = true, count+1
+			seen[index] = true
 			item, err := decoder.Token()
 			if err != nil {
 				return err
@@ -239,13 +286,47 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 			if err := walk.inspect(decoder, item, t.Field(index).Type, depth+1); err != nil {
 				return err
 			}
+			if audio != nil && name == "Version" {
+				// The field inspection already validated the uint32 token.
+				version, _ := strconv.ParseUint(string(item.(json.Number)), 10, 32)
+				audio.version = uint32(version)
+			}
 		}
-		if count != len(fields) {
-			return fmt.Errorf("checkpoint record is missing fields")
+		for index, present := range seen {
+			var added uint8
+			if walk.audio != nil {
+				added = checkpointAudioAddedField(t, t.Field(index).Name)
+			}
+			if added != 0 {
+				if present {
+					walk.audio.present |= added
+				} else {
+					walk.audio.omitted |= added
+				}
+			} else if !present {
+				return fmt.Errorf("checkpoint record is missing fields")
+			}
 		}
 		end, err := decoder.Token()
 		if err != nil || end != json.Delim('}') {
 			return invalid()
+		}
+		if audio != nil {
+			required := checkpointAudioPCMFields | checkpointAudioWaveBudgetField | checkpointAudioWavePhaseField
+			switch audio.version {
+			case 6:
+				required = 0
+			case 7:
+				required = checkpointAudioPCMFields
+			case 8:
+				required = checkpointAudioPCMFields | checkpointAudioWaveBudgetField
+			}
+			if audio.present&^required != 0 {
+				return fmt.Errorf("version %d audio checkpoint contains newer fields", audio.version)
+			}
+			if audio.omitted&required != 0 {
+				return fmt.Errorf("audio checkpoint is missing versioned fields")
+			}
 		}
 	case reflect.Slice, reflect.Array:
 		if t.Kind() == reflect.Slice && token == nil {

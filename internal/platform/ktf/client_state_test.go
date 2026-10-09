@@ -73,7 +73,7 @@ func TestClientCheckpointResumesWorkersAndLogicalDevices(t *testing.T) {
 	source.client.framePending, source.client.flushCount, source.client.forcedSlice = false, 19, true
 	source.client.vibrator.SetClock(source.clock.Now)
 	source.client.vibrator.Vibrate(60, 150)
-	source.client.audio = backend.NewAudio(nil)
+	source.client.audio = backend.NewAudioWithClock(nil, source.clock.Now)
 	handle, err := source.client.audio.LoadEvents([]smaf.Event{{Time: 0, Type: smaf.EventNoteOn, Channel: 0, Note: 60, Velocity: 100}, {Time: 100, Type: smaf.EventEnd}})
 	if err != nil {
 		t.Fatal(err)

@@ -193,11 +193,12 @@ type Client struct {
 	// own clock, so a run batching ticks hears the same sequence as one on the
 	// wall clock, only faster. The clips and the volume and mute levels are the
 	// media block's state; see wipic_media.go.
-	audio        *backend.Audio
-	clips        map[uint32]*mediaClip
-	volume       int32
-	sourceVolume map[uint32]int32
-	sourceMuted  map[uint32]bool
+	audio           *backend.Audio
+	clips           map[uint32]*mediaClip
+	javaMediaEvents []javaMediaEvent
+	volume          int32
+	sourceVolume    map[uint32]int32
+	sourceMuted     map[uint32]bool
 
 	// vibrator holds what the guest has asked the handset's motor to do. Both
 	// surfaces that reach it — the WIPI C media block and the Java class —
@@ -456,6 +457,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		audio:  backend.NewAudio(options.AudioSink),
 		volume: mediaMaxVolume,
 	}
+	client.audio.SetLogger(options.Logger)
 	client.wideGraphicsContexts = hasWideGraphicsContexts(client.archive.Module)
 	client.wideExclusiveClip = hasWideExclusiveClip(client.archive.Module)
 	if err := client.applyOriginCompatibility(); err != nil {

@@ -1,9 +1,52 @@
 package backend
 
 import (
+	"math"
 	"testing"
 	"time"
 )
+
+func TestSpeedClockChangeReturnsOneSampledTransition(t *testing.T) {
+	now := time.Unix(1000, 0)
+	reads := 0
+	clock := NewSpeedClock(func() time.Time { reads++; return now })
+	now = now.Add(125 * time.Millisecond)
+	before := reads
+	boundary := clock.SetSpeed(2)
+	if reads != before+1 || !boundary.Equal(now) {
+		t.Fatalf("rate transition read %d times at %s, want one source sample at %s", reads-before, boundary, now)
+	}
+	now = now.Add(75 * time.Millisecond)
+	if got := clock.Now().Sub(boundary); got != 150*time.Millisecond {
+		t.Fatalf("new rate interval = %s", got)
+	}
+}
+
+func TestSpeedClockNormalizesNonfiniteRates(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		rate, want float64
+	}{{"NaN", math.NaN(), 1}, {"positive infinity", math.Inf(1), SpeedCeiling}, {"negative infinity", math.Inf(-1), 1}} {
+		t.Run(test.name, func(t *testing.T) {
+			source := time.Unix(1000, 0)
+			clock := NewSpeedClock(func() time.Time { return source })
+			clock.SetSpeed(2)
+			source = source.Add(time.Second)
+			before := clock.Now()
+			clock.SetSpeed(test.rate)
+			if got := ClampSpeed(test.rate); got != test.want {
+				t.Fatalf("normalized rate = %v, want %v", got, test.want)
+			}
+			if clock.Speed() != test.want || !clock.Now().Equal(before) {
+				t.Fatal("rate change corrupted the current clock")
+			}
+			source = source.Add(time.Second)
+			if got := clock.Now().Sub(before); got != time.Duration(test.want*float64(time.Second)) {
+				t.Fatalf("new rate advanced the clock by %v", got)
+			}
+		})
+	}
+}
 
 func TestClampSpeedKeepsWhatAHostOffers(t *testing.T) {
 	// The values the browser's own control carries all pass through unchanged:

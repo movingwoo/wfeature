@@ -1,5 +1,84 @@
 # SKT fixtures
 
+`src/WIPIListenerMIDlet.java`, `wipi-listener.jar` and `WIPI_LISTENER.MF`
+exercise integer playback events, single-listener replacement/removal,
+deferred reentrant restart and bounded callback history. Go supplies an authored
+400 ms score and tests forced collection and full checkpoints with active,
+paused, idle and queued Clip owners. Listener instances retain only their ID;
+the fixture can drop its Clip and clear history to prove collection. The
+package-private `WIPIListenerExtension` extends `PlayListener`, checking
+transitive interface identity during listener installation and restoration.
+Compile against the MIDlet signature and the WIPI signatures below with
+Java 8 target settings and `-g:none`; package `WIPIListenerMIDlet.class` and
+`WIPIListenerExtension.class` with `WIPI_LISTENER.MF`. No generated signatures or sound assets belong in
+the JAR.
+
+`src/MediaLifecycleMIDlet.java`, `media-lifecycle.jar` and `MEDIA_LIFECYCLE.MF`
+exercise finite repeats, media time, ordered asynchronous notifications and
+boxed event payloads. Bounded event history records callback ownership and
+whether delivery happened inside a native operation; listeners compare standard
+event names by reference and can request
+one restart or a volume change. Go supplies the authored 400 ms score and
+checks full checkpoint restoration with undelivered events and a previously
+retained event name. Compile against
+the generated MIDP signatures using Java 8 settings and `-g:none`; package
+only `MediaLifecycleMIDlet.class` with `MEDIA_LIFECYCLE.MF`.
+
+`src/MediaVolumeMIDlet.java`, `media-volume.jar` and `MEDIA_VOLUME.MF` exercise
+MIDP control lookup, interface casts/calls, stable object identity, fresh arrays,
+volume/mute getters and change notifications. Go supplies authored mixed
+MIDI/PCM bytes and restores the player/control/listener graph through a full
+checkpoint. The callback queries the control and can queue another mute change.
+Compile against the generated MIDP/SKVM signatures with Java 8 target settings
+and `-g:none`; package only `MediaVolumeMIDlet.class` with `MEDIA_VOLUME.MF`.
+No generated signatures or sound assets belong in this JAR.
+
+`src/AudioGainMIDlet.java`, `audio-gain.jar` and `AUDIO_GAIN.MF` exercise
+SKVM device volume, both WIPI Clip volume signatures and transient MIDP tones.
+The Go tests supply authored SMAF bytes, change levels while two clips play,
+and restore the clips or an active tone through a complete checkpoint.
+
+Compile with the generated MIDP/SKVM signatures described below and these
+additional compile-only WIPI signatures (the generator does not emit WIPI):
+
+```java
+package org.kwis.msp.media;
+public class Clip {
+    public Clip(String type, byte[] data) {}
+    public native void setListener(PlayListener listener);
+    public native String getType();
+    public native boolean setVolume(int level);
+    public native int getVolume();
+}
+```
+
+```java
+package org.kwis.msp.media;
+public class Player {
+    public static native boolean play(Clip clip, boolean repeat);
+    public static native boolean stop(Clip clip);
+    public static native boolean pause(Clip clip);
+    public static native boolean resume(Clip clip);
+}
+```
+
+```java
+package org.kwis.msp.media;
+public interface PlayListener {
+    int ERROR=-1, END_OF_DATA=1, START=2, STOP=3, PAUSE=4, RESUME=5,
+        RECORD=6, FULL_OF_DATA=7;
+    void playUpdate(Clip clip, int event, int parm);
+}
+```
+
+Place them in `org/kwis/msp/media/Clip.java`, `Player.java` and
+`PlayListener.java` beside the other
+generated signatures, compile that classpath, and compile the fixture with
+Java 8 target settings and `-g:none`. Package only `AudioGainMIDlet.class`
+with `AUDIO_GAIN.MF`. No signature class belongs in the JAR; the runtime
+supplies their behavior. The void volume extension is exercised directly by
+the Go test because Java cannot overload a method by return type alone.
+
 `src/BytecodeCheckpointMIDlet.java` and `bytecode-checkpoint.jar` exercise
 restoration of an active bytecode call chain inside a lifecycle callback.
 The JAR contains only `BytecodeCheckpointMIDlet.class` and the authored

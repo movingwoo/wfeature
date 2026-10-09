@@ -289,6 +289,13 @@ func (client *Client) CollectJavaObjects(extraRoots []uint32) (CollectionStats, 
 func (client *Client) collectJavaObjects(extraRoots []uint32) (CollectionStats, error) {
 	runtime := client.javaRun
 	stats := CollectionStats{Tracked: len(runtime.objects)}
+	// Audio completion may queue a listener root. Reconcile before marking,
+	// and timestamp any orphan PCM cancellation at this collection boundary.
+	if client.audio != nil && client.clock != nil {
+		if err := client.syncJavaMedia(client.clock.now()); err != nil {
+			return stats, err
+		}
+	}
 	if len(runtime.objects) == 0 {
 		client.scheduleNextJavaCollection()
 		return stats, nil
@@ -378,6 +385,17 @@ func (client *Client) markJavaPlatformRoots(mark func(uint32)) {
 	for _, pinned := range runtime.pins {
 		mark(pinned)
 	}
+	// Playback owns its Java Clip even when the application drops its last
+	// reference. Stopped clips are ordinary collectible objects.
+	for object, clip := range client.clips {
+		if clip.java && clip.loaded && (client.audio.Playing(clip.handle) || client.audio.Paused(clip.handle)) {
+			mark(object)
+		}
+	}
+	for _, event := range client.javaMediaEvents {
+		mark(event.clip)
+		mark(event.listener)
+	}
 	// The application object, the card on the display, the Graphics a paint is
 	// handed, and the platform's own thread object.
 	mark(runtime.jlet)
@@ -461,6 +479,9 @@ func (client *Client) readJavaSpan(address, size uint32, buffer *[]byte, mark fu
 // in guest memory would have named it.
 func (client *Client) walkJavaPayload(object uint32, mark func(uint32)) {
 	runtime := client.javaRun
+	if clip := client.clips[object]; clip != nil && clip.java {
+		mark(clip.listener)
+	}
 	// A vector holds its elements here rather than in a guest array.
 	for _, element := range runtime.vectors[object] {
 		mark(element)
@@ -562,6 +583,10 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 	surfaces := make([]uint32, 0, 4)
 	files := make([]uint32, 0, 4)
 	for _, object := range dead {
+		if clip := client.clips[object]; clip != nil && clip.java {
+			client.releaseClipSound(clip)
+			delete(client.clips, object)
+		}
 		if handle, ok := runtime.images[object]; ok {
 			surfaces = append(surfaces, handle)
 		}

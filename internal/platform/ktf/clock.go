@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -91,13 +92,95 @@ func (clock *ManualClock) Set(instant time.Time) {
 // and runs the guest clock twice as fast, so a game that measures elapsed time
 // itself speeds up by the same factor instead of fighting the change. Values
 // outside [0.1, 16] clamp, and a zero or negative multiplier selects 1.
+// Elapsed guest time is retained; only the future rate changes. A change whose
+// rebased origin cannot fit a duration leaves the previous rate in force.
 func (client *Client) SetSpeed(multiplier float64) {
 	if client == nil {
 		return
 	}
 	client.run.Lock()
 	defer client.run.Unlock()
-	client.speed = clampSpeed(multiplier)
+	next, previous := clampSpeed(multiplier), client.speedOrDefault()
+	if next == previous {
+		client.speed = next
+		return
+	}
+	// Both prepared and active runtimes read the client's rate. Compute every
+	// new anchor at the same instant before changing either runtime or rate.
+	runtimes := [2]*initializationRuntime{client.runtime, client.prepared}
+	if runtimes[0] == nil && runtimes[1] == nil && client.audio != nil {
+		if err := client.audio.SetPlaybackRate(0, next); err != nil {
+			client.log("KTF speed change could not update audio rate", "error", err)
+			return
+		}
+	}
+	var anchors [2]time.Time
+	now := client.now()
+	for index, runtime := range runtimes {
+		if runtime == nil || index == 1 && runtime == runtimes[0] {
+			continue
+		}
+		var ok bool
+		anchors[index], ok = clockBaseForSpeed(now, runtime.clockBase, previous, next)
+		if !ok {
+			client.log("KTF speed change exceeds clock duration range", "speed", next)
+			return
+		}
+	}
+	for index, runtime := range runtimes {
+		if runtime != nil && (index == 0 || runtime != runtimes[0]) {
+			if client.audio != nil && (index == 0 || runtimes[0] == nil) {
+				elapsed := time.Duration(float64(max(now.Sub(runtime.clockBase), 0)) * previous)
+				if err := runtime.syncClipCompletions(elapsed); err != nil {
+					client.log("KTF speed change could not service audio", "error", err)
+					return
+				}
+				if err := client.audio.SetPlaybackRate(elapsed, next); err != nil {
+					client.log("KTF speed change could not update audio rate", "error", err)
+					return
+				}
+			}
+			runtime.clockBase = anchors[index]
+		}
+	}
+	client.speed = next
+}
+
+// clockBaseForSpeed keeps the existing clock representation used by snapshots.
+// A duration is an integer count of nanoseconds, so division by a fractional
+// speed can round the guest backwards. Find the smallest representable age
+// that reaches the old reading instead. The search costs at most 63 steps and
+// checks floating-point bounds before converting back to a duration.
+func clockBaseForSpeed(now, base time.Time, previous, next float64) (time.Time, bool) {
+	if next <= 0 || math.IsNaN(next) || math.IsInf(next, 0) {
+		return time.Time{}, false
+	}
+	age := now.Sub(base)
+	if !base.Add(age).Equal(now) {
+		return time.Time{}, false
+	}
+	scaled := float64(max(age, 0)) * previous
+	if scaled < 0 || math.IsNaN(scaled) || scaled >= float64(math.MaxInt64) {
+		return time.Time{}, false
+	}
+	wanted := float64(time.Duration(scaled))
+	if float64(math.MaxInt64)*next < wanted {
+		return time.Time{}, false
+	}
+	low, high := int64(0), int64(math.MaxInt64)
+	for low < high {
+		middle := low + (high-low)/2
+		if float64(middle)*next < wanted {
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	if float64(low)*next >= float64(math.MaxInt64) {
+		return time.Time{}, false
+	}
+	anchor := now.Add(-time.Duration(low))
+	return anchor, anchor.Add(time.Duration(low)).Equal(now)
 }
 
 // Speed reports the current multiplier.
@@ -431,6 +514,7 @@ func (client *Client) nextDeadline(futureOnly bool) (time.Time, bool) {
 		consider(worker.wakeAt)
 	}
 	if client.runtime != nil {
+		client.runtime.mediaDeadlines(client.now(), consider)
 		// A guest thread that has been started but not yet adopted as a worker
 		// is runnable right now, and the next round is what adopts it. Leaving
 		// it out reports the game as idle until whatever else is parked comes

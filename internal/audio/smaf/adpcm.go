@@ -54,7 +54,8 @@ func (state *adpcmState) step(nibble uint8) int16 {
 	return int16(value)
 }
 
-// DecodeADPCM expands Yamaha ADPCM-B into signed 16-bit samples.
+// DecodeADPCM expands Yamaha ADPCM-B into signed 16-bit samples. It returns nil
+// when the output would exceed the per-file PCM byte limit.
 //
 // **The low nibble of a byte is the earlier sample.** Reading them the other
 // way round decodes a stream that is not the one that was written, and because
@@ -62,6 +63,9 @@ func (state *adpcmState) step(nibble uint8) int16 {
 // right: the error is kept. Read high-first, the local set's sounds drift; read
 // low-first they stay centred. Same evidence as the table above.
 func DecodeADPCM(data []byte) []int16 {
+	if len(data) > maxDecodedPCMBytes/4 {
+		return nil
+	}
 	samples := make([]int16, 0, len(data)*2)
 	state := adpcmState{stepSize: 127}
 	for _, encoded := range data {

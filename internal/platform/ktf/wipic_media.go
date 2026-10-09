@@ -93,6 +93,16 @@ type wipicMediaClip struct {
 
 // handleWIPICMediaCall services the media table.
 func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Thread, function uint32) (uint32, error) {
+	// These calls can change existing output, including clip eviction during
+	// creation. Reconcile every Java owner before a C command mutates the shared
+	// timeline; callbacks retain the recipient that owned the elapsed pass.
+	switch function {
+	case wipicMediaClipCreate, wipicMediaClipPutData, wipicMediaStop,
+		wipicMediaClipClearData, wipicMediaClipFree, wipicMediaSetVolume:
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return 0, err
+		}
+	}
 	switch function {
 	case wipicMediaClipCreate:
 		return runtime.wipicCreateClip(thread)
@@ -328,6 +338,10 @@ func (runtime *initializationRuntime) wipicPlayClip(thread *armcore.Thread) (uin
 	if runtime.client.audio == nil || len(clip.state.data) == 0 {
 		return wipiErrorCode, nil
 	}
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return 0, err
+	}
 	if !clip.state.loaded {
 		handle, loadErr := runtime.client.audio.Load(clip.state.data)
 		if loadErr != nil {
@@ -336,7 +350,7 @@ func (runtime *initializationRuntime) wipicPlayClip(thread *armcore.Thread) (uin
 		}
 		clip.state.handle, clip.state.loaded = handle, true
 	}
-	if err := runtime.client.audio.Play(clip.state.handle, runtime.guestElapsed(), repeat != 0); err != nil {
+	if err := runtime.client.audio.Play(clip.state.handle, now, repeat != 0); err != nil {
 		runtime.countDiagnostic(fmt.Sprintf("wipic media clip cannot be played: %v", err))
 		return wipiErrorCode, nil
 	}

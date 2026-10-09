@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -11,8 +12,9 @@ import (
 // AudioSink is what a Host has to provide to make sound audible. It is split
 // into PCM and MIDI because SMAF is: a file's percussion and melody are note
 // events for a synthesiser, while its sampled sounds are waveforms to mix, and
-// no Host renders both the same way. The browser drives a soundfont
-// synthesiser and Web Audio; the CLI records instead of playing.
+// no Host renders both the same way. The browser uses its oscillator
+// synthesizer and Web Audio; the CLI records instead of playing. A Host that
+// implements OwnedAudioSink additionally receives independent clip identities.
 //
 // Audio serializes sink calls under its mutex. Calls also occur during Play,
 // Stop, Close and volume changes, not only Advance. A sink must not call back
@@ -37,8 +39,9 @@ type AudioHandle uint32
 // same sequence a Host running in real time does, only faster.
 //
 // Play and Advance must use one monotonic guest-time domain per Audio instance:
-// the same origin, units and rate. A playback-speed change affects how quickly
-// the Host advances guest time, not a second scaling inside Audio. Restarting
+// the same origin and units. A playback-speed change affects how quickly the
+// Host advances guest time. SetPlaybackRate maps output deadlines into real
+// presentation seconds without rescaling score cursors or pitch. Restarting
 // the guest clock requires a new timeline; backward timestamps are not a seek.
 type Audio struct {
 	mutex  sync.Mutex
@@ -47,25 +50,33 @@ type Audio struct {
 	next   AudioHandle
 	// maxSounds bounds what a game can retain by loading and never closing.
 	maxSounds int
-	// volume is the device level, 0 to 100, which a guest sets through its
-	// platform's media API. It scales note velocities and wave samples on the
-	// way to the sink rather than being a gain the Host applies, because the
-	// Host's own volume control is the user's and these two are different
-	// settings: a game that fades its music out has not turned the speaker
-	// down. A note already sounding keeps the level it started at — the scale
-	// is applied where an event is emitted — so a fade moves in note-sized
-	// steps, which is what the games doing it play anyway.
+	// Admission sums cached per-sound costs instead of rescanning old payloads.
+	resourceLimits audioResourceUsage
+	// volume is the guest device level, independent of the user's Host mixer.
+	// Gain-capable Hosts apply device and clip levels to active sources too.
 	volume int
+	timing audioTiming
 }
 
 type sound struct {
-	events []smaf.Event
+	handle    AudioHandle
+	events    []smaf.Event
+	resources audioResourceUsage
+	volume    int
+	muted     bool
+	// transient sounds belong to a fire-and-forget call, not a reusable clip.
+	transient bool
 	// length is the timestamp of the last event, which is where a repeat
 	// restarts — not the last note, so trailing silence is preserved.
 	length time.Duration
 
-	playing bool
-	repeat  bool
+	playing   bool
+	repeat    bool
+	paused    bool
+	pausedAt  time.Duration
+	remaining int32 // Additional finite passes; repeat is the unbounded mode.
+	completed uint64
+	position  time.Duration
 	// startedAt is the clock reading this pass through the events began at.
 	startedAt time.Duration
 	cursor    int
@@ -85,10 +96,11 @@ func NewAudio(sink AudioSink) *Audio {
 	return NewAudioWithClock(sink, nil)
 }
 
-// NewAudioWithClock uses an unscaled Host clock for the samples sent to the
-// output device. MIDI scheduling still uses the guest clock passed to Advance.
+// NewAudioWithClock uses an unscaled Host clock between presentation service
+// boundaries. MIDI scheduling uses the guest clock passed to Advance; sample
+// and envelope ages also include the already elapsed part of a coarse batch.
 func NewAudioWithClock(sink AudioSink, now func() time.Time) *Audio {
-	return &Audio{sink: newAudioOutput(sink, now), sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, volume: maxAudioVolume}
+	return &Audio{sink: newAudioOutput(sink, now), sounds: map[AudioHandle]*sound{}, maxSounds: defaultMaxSounds, resourceLimits: defaultAudioResourceLimits(), volume: maxAudioVolume}
 }
 
 // SetSink swaps the Host output a timeline plays through, keeping everything
@@ -103,39 +115,31 @@ func (audio *Audio) SetSink(sink AudioSink) {
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
 	audio.sink.sink = sink
+	audio.outputTime(audio.timing.current)
+	if live, ok := sink.(AudioGainSink); ok {
+		for _, current := range audio.sounds {
+			if _, active := audio.sink.soundChannels[current.handle]; active {
+				live.SoundGain(current.handle, audio.soundGain(current))
+			}
+		}
+	}
 }
 
 // maxAudioVolume is the loudest a WIPI or MIDP volume goes; zero is silent.
 const maxAudioVolume = 100
 
 // SetVolume sets the device level a guest asked for, clamped to 0..100.
-// Zero silences everything sounding now as well, because a game that sets the
-// volume to nothing expects the note under it to stop rather than to ring on
-// until it happens to end.
+// Hosts implementing AudioGainSink also update active MIDI and PCM without
+// discarding their playback positions, so raising the level restores them.
 func (audio *Audio) SetVolume(percent int) {
 	if audio == nil {
 		return
 	}
-	switch {
-	case percent < 0:
-		percent = 0
-	case percent > maxAudioVolume:
-		percent = maxAudioVolume
-	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	audio.volume = percent
-	if percent > 0 || audio.sink == nil {
-		return
-	}
+	audio.volume = min(max(percent, 0), maxAudioVolume)
 	for _, current := range audio.sounds {
-		if !current.playing {
-			continue
-		}
-		for _, note := range current.activeNotes {
-			audio.sink.MIDINoteOff(note.channel, note.note, 0)
-		}
-		current.activeNotes = nil
+		audio.updateGain(current)
 	}
 }
 
@@ -156,27 +160,25 @@ func (audio *Audio) Load(data []byte) (AudioHandle, error) {
 	if audio == nil {
 		return 0, fmt.Errorf("audio is not configured")
 	}
-	events := smaf.Play(data)
+	events, err := smaf.Decode(data)
+	if err != nil {
+		return 0, fmt.Errorf("decode audio: %w", err)
+	}
 	if len(events) == 0 {
 		return 0, fmt.Errorf("audio data is not a playable sound (%d bytes)", len(data))
 	}
 
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	if len(audio.sounds) >= audio.maxSounds {
-		return 0, fmt.Errorf("more than %d sounds loaded at once", audio.maxSounds)
-	}
-	audio.next++
-	handle := audio.next
-	audio.sounds[handle] = &sound{events: events, length: time.Duration(events[len(events)-1].Time) * time.Millisecond}
-	return handle, nil
+	return audio.loadEvents(events, false)
 }
 
 // LoadEvents answers a handle for a sequence the caller built itself. MIDP's
 // Manager.playTone is one note rather than a file, and giving it a handle here
 // keeps every sound on the one timeline Advance drives instead of adding a
-// second path to the sink. The outer event slice is copied. Nested PCM and SysEx
-// slices remain shared and must stay immutable until the handle is closed.
+// second path to the sink. Events and nested PCM/SysEx data are copied, so the
+// caller can reuse its buffers after return. Admission checks the combined
+// loaded payload before copying or allocating a handle.
 // Events must be ordered by their nonnegative millisecond offsets.
 func (audio *Audio) LoadEvents(events []smaf.Event) (AudioHandle, error) {
 	if audio == nil {
@@ -187,14 +189,36 @@ func (audio *Audio) LoadEvents(events []smaf.Event) (AudioHandle, error) {
 	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
+	return audio.loadEvents(events, true)
+}
+
+// loadEvents runs under Audio.mutex. Its caller has checked the nonempty input.
+// Decoded events already own their buffers; authored events need an owned copy.
+func (audio *Audio) loadEvents(events []smaf.Event, copyEvents bool) (AudioHandle, error) {
 	if len(audio.sounds) >= audio.maxSounds {
 		return 0, fmt.Errorf("more than %d sounds loaded at once", audio.maxSounds)
+	}
+	if audio.next == ^AudioHandle(0) {
+		return 0, fmt.Errorf("audio handle space exhausted")
+	}
+	resources, err := soundResourceUsage(events, nil)
+	if err != nil {
+		return 0, err
+	}
+	if err := audio.admitSoundResources(resources); err != nil {
+		return 0, err
+	}
+	if copyEvents {
+		events = cloneAudioEvents(events)
 	}
 	audio.next++
 	handle := audio.next
 	audio.sounds[handle] = &sound{
-		events: append([]smaf.Event(nil), events...),
-		length: time.Duration(events[len(events)-1].Time) * time.Millisecond,
+		handle:    handle,
+		volume:    maxAudioVolume,
+		events:    events,
+		resources: resources,
+		length:    time.Duration(events[len(events)-1].Time) * time.Millisecond,
 	}
 	return handle, nil
 }
@@ -226,8 +250,16 @@ func (audio *Audio) Play(handle AudioHandle, now time.Duration, repeat bool) err
 	if !ok {
 		return fmt.Errorf("audio handle %d is not loaded", handle)
 	}
+	if current.transient && repeat {
+		return fmt.Errorf("a transient sound cannot repeat")
+	}
+	audio.advanceSounds(now)
 	audio.silence(current)
+	audio.sink.stopSound(handle)
+	audio.sink.setGain(handle, audio.soundGain(current))
 	current.playing, current.repeat, current.startedAt, current.cursor = true, repeat, now, 0
+	current.paused, current.pausedAt = false, 0
+	current.remaining, current.completed, current.position = 0, 0, 0
 	return nil
 }
 
@@ -240,6 +272,11 @@ func (audio *Audio) Stop(handle AudioHandle) {
 	defer audio.mutex.Unlock()
 	if current, ok := audio.sounds[handle]; ok {
 		audio.silence(current)
+		current.position = 0
+		audio.sink.stopSound(handle)
+		if current.transient {
+			delete(audio.sounds, handle)
+		}
 	}
 }
 
@@ -255,6 +292,7 @@ func (audio *Audio) Close(handle AudioHandle) error {
 		return fmt.Errorf("audio handle %d is not loaded", handle)
 	}
 	audio.silence(current)
+	audio.sink.stopSound(handle)
 	delete(audio.sounds, handle)
 	return nil
 }
@@ -268,6 +306,11 @@ func (audio *Audio) StopAll() {
 	defer audio.mutex.Unlock()
 	for _, current := range audio.sounds {
 		audio.silence(current)
+		current.position = 0
+		audio.sink.stopSound(current.handle)
+		if current.transient {
+			delete(audio.sounds, current.handle)
+		}
 	}
 }
 
@@ -280,61 +323,40 @@ func (audio *Audio) Playing(handle AudioHandle) bool {
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
 	current, ok := audio.sounds[handle]
-	return ok && current.playing
+	return ok && current.playing && !current.paused
 }
 
-// Advance emits everything due at now. The Host calls it once per tick; a
-// batched Host whose clock jumps forward emits the skipped events in order
-// rather than dropping them, because a note-off that is skipped never stops.
+// Advance emits all due scores in global deadline order. Equal deadlines use
+// handle order, then the original event order within each score. The Host calls
+// it once per tick; coarser ticks preserve the shared voice-admission order.
 func (audio *Audio) Advance(now time.Duration) {
 	if audio == nil {
 		return
 	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	for _, current := range audio.sounds {
-		audio.advanceSound(current, now)
-	}
-}
-
-func (audio *Audio) advanceSound(current *sound, now time.Duration) {
-	for current.playing {
-		for current.cursor < len(current.events) {
-			event := current.events[current.cursor]
-			due := current.startedAt + time.Duration(event.Time)*time.Millisecond
-			if due > now {
-				return
-			}
-			current.cursor++
-			audio.emit(current, event)
-		}
-
-		if !current.repeat {
-			audio.silence(current)
-			return
-		}
-		// Restarting from the track's length rather than from now keeps a
-		// looping sound on its own grid however coarsely the Host ticks.
-		current.startedAt += current.length
-		current.cursor = 0
-		if current.length <= 0 {
-			// A zero-length track would spin forever; treat it as one-shot.
-			audio.silence(current)
-			return
-		}
-	}
+	audio.advanceSounds(now)
 }
 
 func (audio *Audio) emit(current *sound, event smaf.Event) {
 	if audio.sink == nil {
 		return
 	}
+	audio.sink.sound = current.handle
 	switch event.Type {
 	case smaf.EventWave:
-		audio.sink.PlayWave(event.WaveChannels, event.SamplingRate, audio.scaleWave(event.Wave))
+		audio.sink.playWave(event)
+	case smaf.EventPCMControl:
+		audio.sink.PCMControl(event.PCMChannel, event.Control, event.Value)
 	case smaf.EventNoteOn:
-		audio.sink.MIDINoteOn(event.Channel, event.Note, audio.scaleVelocity(event.Velocity))
-		current.activeNotes = append(current.activeNotes, activeNote{event.Channel, event.Note})
+		audio.sink.MIDINoteOn(event.Channel, event.Note, event.Velocity)
+		if event.Velocity == 0 {
+			current.releaseNote(event.Channel, event.Note)
+		} else if note := (activeNote{event.Channel, event.Note}); !slices.Contains(current.activeNotes, note) {
+			// The output and page replace the same key on a retrigger. Keeping
+			// duplicates here would grow forever for an unbalanced loop.
+			current.activeNotes = append(current.activeNotes, note)
+		}
 		current.markChannel(event.Channel)
 	case smaf.EventNoteOff:
 		audio.sink.MIDINoteOff(event.Channel, event.Note, event.Velocity)
@@ -353,42 +375,19 @@ func (audio *Audio) emit(current *sound, event smaf.Event) {
 	}
 }
 
-// scaleVelocity applies the device volume to a note. A note whose velocity
-// scales to zero is still sent: a note-on at zero velocity is a note-off, which
-// is what a note played at silence should be, and dropping it instead would
-// leave the note-off that follows unmatched.
-func (audio *Audio) scaleVelocity(velocity uint8) uint8 {
-	if audio.volume >= maxAudioVolume {
-		return velocity
-	}
-	return uint8(int(velocity) * audio.volume / maxAudioVolume)
-}
-
-// scaleWave applies the device volume to a sampled sound. It copies rather
-// than scaling in place: the samples belong to the loaded sound and a repeat
-// plays them again.
-func (audio *Audio) scaleWave(samples []int16) []int16 {
-	if audio.volume >= maxAudioVolume || len(samples) == 0 {
-		return samples
-	}
-	scaled := make([]int16, len(samples))
-	for index, sample := range samples {
-		scaled[index] = int16(int(sample) * audio.volume / maxAudioVolume)
-	}
-	return scaled
-}
-
 // silence ends playback and leaves the synthesiser as it found it: every note
 // this sound started is released, and every channel it touched has its sustain
 // pedal lifted and its sound and notes cut. Without the last part a sound
 // stopped during a sustained chord rings on under the next one.
 func (audio *Audio) silence(current *sound) {
+	current.paused, current.pausedAt = false, 0
 	if !current.playing {
 		current.activeNotes = nil
 		return
 	}
 	current.playing = false
 	if audio.sink != nil {
+		audio.sink.sound = current.handle
 		for _, note := range current.activeNotes {
 			audio.sink.MIDINoteOff(note.channel, note.note, 0)
 		}

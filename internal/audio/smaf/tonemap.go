@@ -218,6 +218,12 @@ func (tones *toneMap) updateControl(channel, control, value uint8) {
 		tones.bankLSB[index] = value & 0x7f
 	case 7:
 		tones.volumes[index] = min(value, 0x7f)
+	case 121:
+		// SMAF mobile Reset All Controllers also clears the remembered
+		// velocity used by notes without an explicit velocity operand.
+		if tones.formatType != HandyPhoneStandard {
+			tones.velocities[index] = 64
+		}
 	}
 }
 
@@ -367,7 +373,7 @@ func (tones *toneMap) effectiveVolume(channel uint8) uint8 {
 	return uint8(min(value, 127))
 }
 
-func (tones *toneMap) noteDuration(channel uint8, duration uint32) uint32 {
+func (tones *toneMap) noteDuration(channel uint8, duration uint64) uint64 {
 	if tones.atmosphere[tones.pseudoChannel(channel)] {
 		return duration + 120
 	}

@@ -143,9 +143,12 @@ inside it. That platform has no repeat event and no pointer, and its pad rule is
 the platform's own, so a checkpoint carries the Host's held keys and the pad's
 state and nothing else of the three.
 
-Loaded notes resume with their saved channel settings and PCM tails with their
-remaining samples. Oscillator phase, release tails and physical output latency
-are not serialized; resumed notes restart their envelopes. This is not a claim of
+Loaded notes resume with their original programs, current channel controllers
+and saved envelope ages on capable pages. Pitch sensitivity and RPN/NRPN selection
+are restored before notes; pedal-held released keys receive note-off immediately
+after resuming under sustain. PCM tails resume with their remaining samples. Paused clips stay
+silent until explicitly resumed. Oscillator phase, release tails and physical
+output latency and short controller smoothing transitions are not serialized. This is not a claim of
 sample-exact audio continuity. Runtime state compatibility requires the same
 archive and a compatible checkpoint schema; debug and release share the schema.
 
@@ -268,6 +271,81 @@ holds are bounded at 8 MiB, past which the server tells it to forget them and
 starts over. A sound message that is shed because the connection is behind
 leaves the page's definitions unknown, so the next one starts over the same way.
 The page skips a sound whose definition it does not hold.
+
+The `sound=owned` query enables clip ownership in either sound format. JSON
+adds `sound`, `stopSound` and `soundGain`; binary adds `0x07` plus a big-endian
+32-bit sound handle, `0x08` to stop it and `0x09` plus a big-endian 16-bit gain
+from 0 to 10,000. Selection begins at zero in each message.
+Global `allOff` and content definitions retain their previous meanings. Older
+clients receive the original operations. See [audio ownership](audio-ownership.md).
+
+Current pages request `sound=resume`, which adds envelope ages to ownership
+and gain. JSON `noteResume` carries channel, note, velocity and unsigned 32-bit
+`age` in milliseconds. Binary opcode `0x0a` carries those three bytes followed
+by the big-endian age. Earlier `sound=owned` pages receive ordinary note-on
+events on reconstruction, avoiding an unsupported opcode. Paused owners are
+omitted from every output reconstruction until the guest resumes them.
+
+`pcm=1` with either ownership mode enables independent ATR PCM channels. JSON
+wave events add nonzero `pcmChannel`, and `pcmControl` carries that group plus
+`control` (7, 11 or 10) and `value` (0–127; omitted zero has the same meaning).
+Binary `0x14` carries a big-endian 32-bit wave-definition ID, one physical-channel
+byte (currently mono), big-endian 32-bit sampling rate and big-endian 16-bit PCM
+group. Binary `0x15` carries the 16-bit group followed by control and value bytes.
+The existing `0x11` wave reference keeps its original size and meaning. Definitions
+contain only sample content and can be reused across groups and owners. Zero is
+reserved for ordinary ungrouped waves; new controls require group 1–65535.
+Older pages receive ordinary waves rendered with the current PCM gain/pan at
+onset. Reconnection refreshes capability before replay, so the same parked
+session can move between old and new pages. The new page also accepts old servers.
+
+`phase=1` with either ownership mode additionally enables fractional PCM resume
+positions, independently of PCM-group support or timestamp negotiation. JSON
+`playWave.framePhase` is an integer in `[0, 1000000000)`, measuring billionths
+of the first remaining sample frame; an absent field means zero. Binary `0x16`
+carries a 32-bit definition ID, physical-channel byte, 32-bit sampling rate,
+16-bit PCM group (zero permits ungrouped waves), and 32-bit phase, all multibyte
+fields big-endian. A nonzero group still requires mono. This operation leaves
+the existing `0x11` and `0x14` sizes unchanged; zero-phase starts retain those
+operations. Definitions continue to contain only raw samples and are shared
+across offsets. The page checks phase before batch dispatch and starts the
+buffer at `phase/(1e9*rate)` seconds without changing its presentation timestamp.
+Old pages receive the same whole-frame suffix without phase metadata, and old
+servers can ignore the new query. Reconnect adopts the new page's capability.
+
+`timing=1`, negotiated separately with `sound=resume`, preserves presentation
+seconds without removing compatibility with older servers. JSON adds optional
+`at` (zero is meaningful) and a final `{kind:"clock", at:...}` frontier, even
+for an otherwise silent tick. Binary `0x0b` selects time: presence byte zero
+clears selection, or one precedes a big-endian IEEE 754 float64. Binary `0x0c`
+is a frontier float64 independent of selection. Time selection resets for each
+message and after `allOff`. Finite signed event times allow overdue restored
+deadlines; the frontier is nonnegative. Invalid/truncated operands reject the
+batch. Earlier clients receive neither timestamps nor clock operations.
+
+If a timed batch cannot fit the page's bounded scheduling window, or decoding
+lost an operation, the page sends the epoch-bound `audioResume` command once
+and ignores pending batches until `allOff` plus reconstructed output arrives.
+The server clears cached definitions before replaying; guest execution never
+waits for playback or socket capacity. A malformed first packet defers this
+request until a valid clock confirms that the server supports timing. A new
+quick-load epoch clears recovery state before acknowledging the load.
+
+A dropped audio batch or collector overflow requests current-output
+reconstruction on the next tick with queue capacity, even without fresh events.
+The reset and reconstructed notes/remaining PCM travel together; the guest never
+waits for the socket. Reconnect and quick load also reconstruct owned output.
+Normal collection is bounded to 4,096 operations and full reconstruction to
+65,536, including pitch sensitivity, both parameter selectors and at most three
+controls for each of 2,048 PCM groups. PCM controls precede remaining wave tails.
+The page atomically preflights PCM metadata and the group bound before applying
+any events, including an untimed batch or a reset reconstruction. Owned pages
+receive all channel controls before notes. For legacy pages with flattened
+channels, the Host requests each note's owner controls immediately before its
+note-on instead. Debug logs separate audio drops, collector overflow and reconstruction.
+The page's [playout timing aggregate](audio.md#playout-lateness-diagnostics)
+records batch-admission deadline lateness separately, using existing session
+statistics/report actions to flush it. It adds no wire fields or messages.
 
 ### Writes and statistics
 

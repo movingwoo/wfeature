@@ -350,7 +350,7 @@ func buildDefinedClass(definition ClassDefinition) (*classfile.Class, []definedC
 
 // seedDefinedConstants gives a defined class's static finals their values, the
 // way initializeStaticFields reads them out of a class file's constant pool.
-func (vm *VM) seedDefinedConstants(className string) {
+func (vm *VM) seedDefinedConstants(className string) error {
 	vm.mu.Lock()
 	constants := vm.definedConstants[className]
 	vm.mu.Unlock()
@@ -358,11 +358,16 @@ func (vm *VM) seedDefinedConstants(className string) {
 		value := constant.value
 		if object, err := value.Reference(); err == nil && object != nil {
 			if text, ok := StringText(object); ok {
-				value = ReferenceValue(vm.NewString(text))
+				interned, err := vm.InternString(text)
+				if err != nil {
+					return err
+				}
+				value = ReferenceValue(interned)
 			}
 		}
 		vm.mu.Lock()
 		vm.statics[constant.field] = value
 		vm.mu.Unlock()
 	}
+	return nil
 }

@@ -68,6 +68,7 @@ func (platform *NativePlatform) installSound() {
 // title still runs its playback calls and still gets the answers it expects.
 func (platform *NativePlatform) AttachAudio(sink backend.AudioSink) {
 	platform.audio = backend.NewAudioWithClock(sink, platform.source.Now)
+	_ = platform.audio.SetPlaybackRate(0, platform.Speed())
 }
 
 // setClip loads the SMAF file the title points at.
@@ -108,6 +109,7 @@ func (platform *NativePlatform) setClip(thread *armcore.Thread) (uint32, error) 
 	// screen that plays the same effect on every hit sets it every time — so
 	// what was loaded before is closed rather than left to accumulate.
 	if platform.clip != 0 {
+		platform.audio.Advance(platform.guestElapsed())
 		_ = platform.audio.Close(platform.clip)
 		platform.clip = 0
 	}
@@ -139,6 +141,7 @@ func (platform *NativePlatform) stopClip(*armcore.Thread) (uint32, error) {
 		return 1, nil
 	}
 	if platform.clip != 0 {
+		platform.audio.Advance(platform.guestElapsed())
 		platform.audio.Stop(platform.clip)
 	}
 	platform.sounding = false

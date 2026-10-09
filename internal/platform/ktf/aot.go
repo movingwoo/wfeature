@@ -973,6 +973,18 @@ func (runtime *initializationRuntime) aotClassSummary(address uint32) (aotClassS
 	if summary, ok := runtime.classSummaries[address]; ok {
 		return summary, nil
 	}
+	summary, err := runtime.readAOTClassSummary(address)
+	if err != nil {
+		return aotClassSummary{}, err
+	}
+	if runtime.classSummaries == nil {
+		runtime.classSummaries = make(map[uint32]aotClassSummary)
+	}
+	runtime.classSummaries[address] = summary
+	return summary, nil
+}
+
+func (runtime *initializationRuntime) readAOTClassSummary(address uint32) (aotClassSummary, error) {
 	if address&3 != 0 {
 		return aotClassSummary{}, fmt.Errorf("class address %#x is not word-aligned", address)
 	}
@@ -1010,10 +1022,6 @@ func (runtime *initializationRuntime) aotClassSummary(address uint32) (aotClassS
 			}
 		}
 	}
-	if runtime.classSummaries == nil {
-		runtime.classSummaries = make(map[uint32]aotClassSummary)
-	}
-	runtime.classSummaries[address] = summary
 	return summary, nil
 }
 

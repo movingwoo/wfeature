@@ -171,28 +171,12 @@ func validateClientAudio(saved clientState) error {
 		return fmt.Errorf("KTF guest clock exceeds the audio duration range")
 	}
 	handles := make(map[backend.AudioHandle]bool)
-	const maxPendingAudioEvents = 1 << 20
-	work := uint64(0)
 	if saved.Audio != nil {
-		if len(saved.Audio.Sounds) > 256 {
-			return fmt.Errorf("KTF audio sound count exceeds limit")
+		if err := backend.ValidateAudioCatchup(*saved.Audio, time.Duration(elapsed)); err != nil {
+			return fmt.Errorf("KTF checkpoint: %w", err)
 		}
 		for _, sound := range saved.Audio.Sounds {
 			handles[sound.Handle] = true
-			if !sound.Playing {
-				continue
-			}
-			if sound.StartedAt < 0 || sound.Length < 0 {
-				return fmt.Errorf("KTF audio has a negative playback origin or length")
-			}
-			cycles := uint64(1)
-			if sound.Repeat && sound.Length > 0 && time.Duration(elapsed) > sound.StartedAt {
-				cycles += uint64((time.Duration(elapsed) - sound.StartedAt) / sound.Length)
-			}
-			if cycles > maxPendingAudioEvents || uint64(len(sound.Events)) > (maxPendingAudioEvents-work)/cycles {
-				return fmt.Errorf("KTF audio catch-up exceeds its event limit")
-			}
-			work += cycles * uint64(len(sound.Events))
 		}
 	}
 	for _, clip := range saved.Heap.Roots.Clips {
@@ -205,7 +189,7 @@ func validateClientAudio(saved clientState) error {
 			return fmt.Errorf("KTF C clip has no loaded audio handle")
 		}
 	}
-	return nil
+	return validateMediaHeap(saved.Heap, saved.Audio)
 }
 
 // restoreClientState is for a fresh, detached LoadClient with registered native
@@ -265,9 +249,10 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 		if err != nil {
 			return err
 		}
+		audio.SetLogger(client.logger)
 	}
 	now := client.now()
-	heapContext := &heapNativeContext{runtime: client.runtime, now: now}
+	heapContext := &heapNativeContext{runtime: client.runtime, now: now, audioState: saved.Audio}
 	roots, err := client.runtime.restoreHeapWithContext(saved.Heap, heapContext)
 	if err != nil {
 		return err
@@ -293,6 +278,12 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 	client.lastPaint, client.nextRoundPaint = saved.LastPaint.restore(now), saved.NextRoundPaint.restore(now)
 	client.paintLoad, client.paintCost, client.entryCost, client.workBaseline = saved.PaintLoad, saved.PaintCost, saved.EntryCost, saved.WorkBaseline
 	client.audio = audio
+	if audio != nil {
+		elapsed := time.Duration(float64(max(saved.Heap.Control.ClockAge, 0)) * saved.Speed)
+		if err := audio.RebasePlaybackClock(elapsed, saved.Speed); err != nil {
+			return err
+		}
+	}
 	client.workerStackCount, client.freeWorkerStacks = saved.WorkerStackCount, slices.Clone(saved.FreeWorkerStacks)
 	client.workers, client.runningTimerTasks = workers, timers
 	// Frame sampling and diagnostic caches start empty. The retained LCD above

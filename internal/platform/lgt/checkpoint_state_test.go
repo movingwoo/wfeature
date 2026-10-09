@@ -844,7 +844,8 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"traceLive":       host, "traceOut": host, "tmStorage": recorded, "cRandom": recorded, "strtokScan": recorded,
 			"inputMode": recorded, "inputModeTableAddress": recorded, "cTextInput": recorded,
 			"javaApplication": recorded, "javaClasses": diagnostic, "javaLink": recorded, "javaRun": recorded,
-			"javaTry": boundary, "javaTryBuffers": recorded, "javaCallDepth": boundary,
+			"javaMediaEvents": recorded,
+			"javaTry":         boundary, "javaTryBuffers": recorded, "javaCallDepth": boundary,
 			"activeJavaWorker": boundary, "javaThreadsStopped": boundary, "collecting": boundary,
 			"collectNanos": diagnostic, "collectorOff": host, "applicationIDAddress": recorded,
 			"resourceIDs": recorded, "resourceNames": recorded, "trace": host, "imports": recorded,
@@ -922,8 +923,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		"mediaClip": {
 			"callback": recorded, "status": recorded, "pending": recorded, "mediaType": recorded, "data": recorded,
 			"volume": recorded, "handle": recorded, "loaded": recorded, "javaPaused": recorded,
-			"javaRepeat": recorded, "listener": recorded,
+			"javaRepeat": recorded, "listener": recorded, "java": recorded, "completed": recorded,
 		},
+		"javaMediaEvent": {"clip": recorded, "listener": recorded, "code": recorded},
 		"pendingNetConnect": {
 			"offline": recorded, "generation": recorded, "callback": recorded, "param": recorded, "dueAt": recorded,
 		},
@@ -971,7 +973,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 	for _, value := range []any{
 		Client{}, javaRuntime{}, javaWorker{}, javaThread{}, javaMonitor{}, javaRuntimeClass{}, javaTryFrame{},
 		javaStream{}, javaWidget{}, javaDatabase{}, javaGraphics{}, javaCalendar{}, javaObjectRecord{}, javaLink{},
-		javaLayoutClass{}, framebuffer{}, timer{}, openFile{}, mediaClip{}, pendingNetConnect{}, pendingEvent{},
+		javaLayoutClass{}, framebuffer{}, timer{}, openFile{}, mediaClip{}, javaMediaEvent{}, pendingNetConnect{}, pendingEvent{},
 		cTextInputState{}, pixelOpCache{}, guestClock{}, arena{}, notificationNetwork{}, notificationSocketState{},
 		authenticationOptionStore{}, authenticationCertificate58Store{}, authenticationCertificate100Store{},
 		Session{},

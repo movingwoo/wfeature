@@ -86,6 +86,97 @@ func TestRepeatingClipDoesNotReportEnd(t *testing.T) {
 	}
 }
 
+func TestMediaPauseResumesCursorAndReportsTransitions(t *testing.T) {
+	for _, repeat := range []uint32{0, 1} {
+		t.Run(map[uint32]string{0: "once", 1: "repeat"}[repeat], func(t *testing.T) {
+			client, sink, advance := pauseMediaClient(t)
+			callback := guestThumbStub(t, client, 0x47706001) // str r1, [r0]; bx lr.
+			sound := oneNoteSound(t)
+			clip := callSlot(t, client, slotClipCreate, 0, uint32(len(sound)), callback)
+			callSlot(t, client, slotClipPutData, clip, writeGuest(t, client, sound), uint32(len(sound)))
+			call := func(slot uint32, want int32, arguments ...uint32) {
+				t.Helper()
+				if got := int32(callSlot(t, client, slot, arguments...)); got != want {
+					t.Fatalf("media slot %#x = %d, want %d", slot, got, want)
+				}
+			}
+			callbackStatus := func(want uint32) {
+				t.Helper()
+				if got, err := client.readWord(clip); err != nil || got != want {
+					t.Fatalf("callback status = %d, %v; want %d", got, err, want)
+				}
+			}
+			service := func(want uint32) {
+				t.Helper()
+				if err := client.serviceMediaCallbacks(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				callbackStatus(want)
+			}
+			call(slotClipPause, wipiError, clip)
+			call(slotClipResume, wipiError, clip)
+			if len(client.clips[clip].pending) != 0 {
+				t.Fatal("an invalid transition queued a callback")
+			}
+			call(slotClipPlay, wipiSuccess, clip, repeat)
+			handle := client.clips[clip].handle
+			service(mediaStarted)
+			call(slotClipResume, wipiError, clip)
+			advance(20 * time.Millisecond)
+			advance(5 * time.Millisecond)
+			call(slotClipPause, wipiSuccess, clip)
+			callbackStatus(mediaStarted)
+			service(mediaPaused)
+			call(slotClipPause, wipiError, clip)
+			if len(client.clips[clip].pending) != 0 {
+				t.Fatal("duplicate pause queued a callback")
+			}
+			advance(2 * time.Second)
+			service(mediaPaused)
+			if sink.ons[handle] != 1 || sink.offs[handle] != 0 {
+				t.Fatal("paused C clip emitted more notes or expired its gate")
+			}
+			// Resume takes only r0. Poison r1 with the opposite repeat choice.
+			call(slotClipResume, wipiSuccess, clip, repeat^1)
+			callbackStatus(mediaPaused)
+			service(mediaResumed)
+			call(slotClipResume, wipiError, clip)
+			if len(client.clips[clip].pending) != 0 {
+				t.Fatal("duplicate resume queued a callback")
+			}
+			if ages := sink.resumed[handle]; len(ages) != 1 || ages[0] != 5*time.Millisecond {
+				t.Fatalf("C resumed envelope ages = %v, want [5ms]", ages)
+			}
+			advance(14 * time.Millisecond)
+			if sink.offs[handle] != 0 {
+				t.Fatal("C resume shortened the remaining gate")
+			}
+			advance(time.Millisecond)
+			if sink.offs[handle] != 1 {
+				t.Fatal("C resume restarted the gate instead of continuing")
+			}
+			advance(20 * time.Millisecond)
+			if sink.ons[handle] != 1+int(repeat) || client.audio.Playing(handle) != (repeat != 0) {
+				t.Fatal("C resume consumed r1 or lost the saved repeat boundary")
+			}
+			if repeat != 0 {
+				service(mediaResumed)
+				call(slotClipPause, wipiSuccess, clip)
+				service(mediaPaused)
+			} else {
+				service(mediaEnded)
+			}
+			call(slotClipStop, wipiSuccess, clip)
+			service(mediaStopped)
+			call(slotClipResume, wipiError, clip)
+			call(slotClipPause, wipiError, clip)
+			if len(client.clips[clip].pending) != 0 {
+				t.Fatal("stopped C clip accepted a pause or resume notification")
+			}
+		})
+	}
+}
+
 func TestMediaCallbackCanStopWithoutRecursiveNotifications(t *testing.T) {
 	client := mediaClient(t, nil)
 	// Record the status, then call MC_mdaStop on the same clip.

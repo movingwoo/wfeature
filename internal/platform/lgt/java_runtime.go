@@ -420,6 +420,9 @@ var javaPlatformStatics = map[string]map[string]string{
 // initializePlatformStatics fills in the static fields this platform owns on a
 // class it has just laid out.
 func (client *Client) initializePlatformStatics(class *javaRuntimeClass) error {
+	if class.Name == javaPlayListenerClass {
+		return client.initializeJavaPlayListenerStatics(class)
+	}
 	held, known := javaPlatformStatics[class.Name]
 	if !known || client.javaLink == nil || client.javaLink.layout == nil {
 		return nil

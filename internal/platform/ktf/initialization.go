@@ -386,6 +386,7 @@ type initializationRuntime struct {
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
 	clips         map[weak.Pointer[jvm.Object]]*clipState
+	mediaEvents   []clipEvent
 	imageSurfaces map[weak.Pointer[jvm.Object]]uint32
 	// wipicClips is the same thing for the WIPI C media block, whose clips are
 	// guest addresses rather than Java objects. wipicClipOrder is their

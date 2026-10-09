@@ -542,7 +542,7 @@ func testCheckpointServerSubprocess(t *testing.T, testName, platform string, cou
 	if err != nil || !found {
 		t.Fatalf("checkpoint slot missing: %v", err)
 	}
-	slots, err := filepath.Glob(filepath.Join(root, "saves", platform, ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.v2.wfq", identity)))
+	slots, err := filepath.Glob(filepath.Join(root, "saves", platform, ".wfeature-quicksave", "owners", "*", fmt.Sprintf("%x.v3.wfq", identity)))
 	if err != nil || len(slots) != 1 {
 		t.Fatalf("slot paths = %v, %v", slots, err)
 	}

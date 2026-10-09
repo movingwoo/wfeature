@@ -447,8 +447,11 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	}
 
 	phase = client.phaseClock()
-	client.serviceAudio()
+	audioErr := client.serviceAudio()
 	client.sincePhase(phase, &client.costs.Audio)
+	if audioErr != nil {
+		return true, audioErr
+	}
 
 	phase = client.phaseClock()
 	collectErr := session.collectGuestObjects()

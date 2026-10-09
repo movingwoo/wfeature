@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,14 +62,21 @@ func TestCheckpointSlotSurvivesStoreRestartAndOrdinaryWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(paths.directory, fmt.Sprintf("%x.v2.wfq", identity))); err != nil {
-		t.Fatalf("the slot is not under its version 2 name: %v", err)
+	if _, err := os.Stat(filepath.Join(paths.directory, fmt.Sprintf("%x.v3.wfq", identity))); err != nil {
+		t.Fatalf("the slot is not under its version 3 name: %v", err)
 	}
 }
 
 // A slot an earlier build wrote is its owner's: this build reports it, refuses
 // to load it and never writes under its name. A new quick save lands beside it.
+// Version 2 is what 0.5.2 wrote; version 1 came before it.
 func TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot(t *testing.T) {
+	for _, format := range []string{"%x.v2.wfq", "%x.wfq"} {
+		t.Run(format, func(t *testing.T) { checkEarlierBuildsSlot(t, format) })
+	}
+}
+
+func checkEarlierBuildsSlot(t *testing.T, format string) {
 	root := filepath.Join(t.TempDir(), "owner")
 	store := NewDirectorySaveStore(root)
 	identity := SaveIdentity([]byte("authored slot archive"))
@@ -79,7 +87,8 @@ func TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot(t *testing.T) {
 	if err := os.MkdirAll(paths.directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	earlierPath := filepath.Join(paths.directory, fmt.Sprintf("%x.wfq", identity))
+	earlierName := fmt.Sprintf(format, identity)
+	earlierPath := filepath.Join(paths.directory, earlierName)
 	earlier := []byte("an earlier build's quick save, which nothing here decodes")
 	if err := os.WriteFile(earlierPath, earlier, 0600); err != nil {
 		t.Fatal(err)
@@ -98,8 +107,8 @@ func TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot(t *testing.T) {
 		t.Fatalf("the earlier slot is not reported: %t, %v", legacy, err)
 	}
 	data, found, err := store.LoadCheckpoint(identity)
-	if !found || data != nil || !errors.Is(err, ErrCheckpointLegacy) || errors.Is(err, ErrCheckpointVersion) {
-		t.Fatalf("loading an earlier slot = %d bytes, found=%t, %v; want found with the earlier-format refusal", len(data), found, err)
+	if !found || data != nil || !errors.Is(err, ErrCheckpointLegacy) || errors.Is(err, ErrCheckpointVersion) || !strings.Contains(err.Error(), earlierName) {
+		t.Fatalf("loading an earlier slot = %d bytes, found=%t, %v; want found with the earlier-format refusal naming it", len(data), found, err)
 	}
 	untouched("a refused load")
 
@@ -129,7 +138,7 @@ func TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot(t *testing.T) {
 	if exists, err := store.HasCheckpoint(other); err != nil || exists {
 		t.Fatalf("another archive inherited a slot: %t, %v", exists, err)
 	}
-	if err := os.Mkdir(filepath.Join(paths.directory, fmt.Sprintf("%x.wfq", other)), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(paths.directory, fmt.Sprintf(format, other)), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if exists, err := store.HasCheckpoint(other); err != nil || exists {

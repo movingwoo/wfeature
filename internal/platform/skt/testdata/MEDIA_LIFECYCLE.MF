@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+MIDlet-1: Media Lifecycle Fixture, , MediaLifecycleMIDlet
+MIDlet-Name: Media Lifecycle Fixture
+MIDlet-Version: 1.0
+MIDlet-Vendor: wfeature
+

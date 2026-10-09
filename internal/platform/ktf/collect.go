@@ -164,6 +164,13 @@ func (index extentIndex) lookup(word uint32) (uint32, bool) {
 // guest state holding references is the memory and registers it scans.
 func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (CollectionStats, error) {
 	stats := CollectionStats{Tracked: len(runtime.objects)}
+	// Completion callbacks may become roots. Publish them before marking;
+	// orphan output cancellation then shares the same command boundary.
+	if runtime.client != nil && runtime.client.audio != nil {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return stats, err
+		}
+	}
 	if len(runtime.objects) == 0 {
 		runtime.scheduleNextCollection()
 		return stats, nil

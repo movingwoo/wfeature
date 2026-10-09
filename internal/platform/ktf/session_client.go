@@ -39,6 +39,8 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 	client.SetScreen(options.Width, options.Height)
 	client.SetDiagnostics(options.TraceLimit, options.Logger)
 	client.audio = backend.NewAudioWithClock(options.AudioSink, client.now)
+	client.audio.SetLogger(options.Logger)
+	_ = client.audio.SetPlaybackRate(0, options.Speed)
 	client.frameSink = options.FrameSink
 	client.threadSliceSteps = options.ThreadSliceSteps
 	client.serviceSteps, client.serviceWait = options.ServiceSteps, options.ServiceWait

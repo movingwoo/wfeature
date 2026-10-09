@@ -21,8 +21,8 @@ func TestCheckpointEnvelopeCarriesNoSaves(t *testing.T) {
 	if want := checkpointHeaderSize + len("session") + len("runtime"); len(data) != want {
 		t.Fatalf("the envelope is %d bytes, want the header and two sections: %d", len(data), want)
 	}
-	if binary.LittleEndian.Uint16(data[8:10]) != 2 || binary.LittleEndian.Uint32(data[52:56]) != 0 {
-		t.Fatalf("version %d with reserved word %#x, want version 2 and zero",
+	if binary.LittleEndian.Uint16(data[8:10]) != 3 || binary.LittleEndian.Uint32(data[52:56]) != 0 {
+		t.Fatalf("version %d with reserved word %#x, want version 3 and zero",
 			binary.LittleEndian.Uint16(data[8:10]), binary.LittleEndian.Uint32(data[52:56]))
 	}
 	first := bytes.Clone(data)
@@ -43,23 +43,27 @@ func TestCheckpointEnvelopeCarriesNoSaves(t *testing.T) {
 	}
 }
 
-// An envelope of the earlier format is refused for its version, whatever its
-// size. That format embedded a save generation and could be larger than this
-// one's limit, and its owner has to be told "an earlier format", not "damaged".
-// A buffer too short to hold a version is damaged and is not read past its end.
+// An envelope of an earlier format is refused for its version, whatever its
+// size. Version 1 embedded a save generation and could be larger than this
+// one's limit; version 2, which 0.5.2 wrote, has this layout but records this
+// build cannot read. Its owner has to be told "an earlier format", not
+// "damaged". A buffer too short to hold a version is damaged and is not read
+// past its end.
 func TestCheckpointRefusesAnEarlierFormatByVersion(t *testing.T) {
 	identity := SaveIdentity([]byte("authored checkpoint archive"))
-	earlier := func(size int) []byte {
+	earlier := func(version uint16, size int) []byte {
 		data := make([]byte, size)
 		copy(data, checkpointMagic)
-		binary.LittleEndian.PutUint16(data[8:10], 1)
+		binary.LittleEndian.PutUint16(data[8:10], version)
 		binary.LittleEndian.PutUint16(data[10:12], CheckpointKTFJava)
 		copy(data[12:44], identity[:])
 		return data
 	}
-	for _, size := range []int{checkpointHeaderSize, checkpointHeaderSize + 4096, CheckpointLimit + 1} {
-		if _, err := DecodeCheckpoint(earlier(size), identity); !errors.Is(err, ErrCheckpointVersion) {
-			t.Fatalf("an earlier envelope of %d bytes was refused with %v, want the version", size, err)
+	for _, version := range []uint16{1, 2} {
+		for _, size := range []int{checkpointHeaderSize, checkpointHeaderSize + 4096, CheckpointLimit + 1} {
+			if _, err := DecodeCheckpoint(earlier(version, size), identity); !errors.Is(err, ErrCheckpointVersion) {
+				t.Fatalf("a version %d envelope of %d bytes was refused with %v, want the version", version, size, err)
+			}
 		}
 	}
 	current, err := EncodeCheckpoint(Checkpoint{Identity: identity, Variant: CheckpointKTFJava})

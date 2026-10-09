@@ -8,8 +8,13 @@ import (
 )
 
 const (
-	checkpointMagic        = "WFSTATE\x00"
-	checkpointVersion      = 2
+	checkpointMagic = "WFSTATE\x00"
+	// checkpointVersion names the records inside the envelope as well as its
+	// layout. Version 3 keeps version 2's layout; it is the first whose
+	// session and runtime records carry this build's audio, JVM heap and media
+	// listener state, which a version 2 record lacks. A slot file is named
+	// after it, so an earlier build's slot is refused for what it is.
+	checkpointVersion      = 3
 	checkpointHeaderSize   = 88
 	checkpointSessionLimit = 64 << 10
 	checkpointRuntimeLimit = 128 << 20
@@ -55,12 +60,12 @@ func checkpointVariantSupported(variant uint16) bool {
 	return variant >= CheckpointKTFJava && variant <= CheckpointSKTScript
 }
 
-// EncodeCheckpoint writes a profile-independent, little-endian version 2
+// EncodeCheckpoint writes a profile-independent, little-endian version 3
 // envelope: magic(8), version(2), variant(2), archive SHA-256(32), two section
 // lengths(4 each), a reserved word that is zero(4), SHA-256(32), then the
 // session and runtime sections. The digest covers the first 56 header bytes
 // and both sections. The reserved word is where version 1 kept the length of
-// an embedded save generation.
+// an embedded save generation; version 2 had this same layout.
 func EncodeCheckpoint(saved Checkpoint) ([]byte, error) {
 	if !checkpointVariantSupported(saved.Variant) {
 		return nil, ErrCheckpointVersion

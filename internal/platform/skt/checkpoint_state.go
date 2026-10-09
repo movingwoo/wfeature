@@ -52,6 +52,11 @@ type checkpointRMSCache struct {
 	Name   string
 	Native int
 }
+type checkpointPlayerEvent struct {
+	Player, Data int
+	Name         string
+	Listeners    []int
+}
 type checkpointVendorState struct {
 	BacklightColor                                         int32
 	BacklightOn, KeyToneOn                                 bool
@@ -83,6 +88,8 @@ type javaPlatformState struct {
 	DisplayUpdateQueued, RefreshPending         bool
 	LastRefresh                                 checkpointTime
 	PendingSerial                               []int
+	Players                                     []int
+	MediaEvents                                 []checkpointPlayerEvent
 	Width, Height                               int
 	FrameRGBA, RefreshFrame                     []byte
 	PendingPaint                                checkpointRect
@@ -124,6 +131,9 @@ func (runtime *Runtime) capturePlatformState(heap *checkpointHeap) (javaPlatform
 		runtime.painting || runtime.runningSerial || runtime.lastError != nil || runtime.asyncError != nil {
 		return javaPlatformState{}, nil, fmt.Errorf("SKT checkpoint platform is not at an idle boundary")
 	}
+	if err := runtime.validateCheckpointDisplayOwner(runtime.display, runtime.displayOwner); err != nil {
+		return javaPlatformState{}, nil, err
+	}
 	saved := javaPlatformState{Version: 1, State: runtime.state, Authentication: runtime.authentication, SubscriberNumber: runtime.subscriberNumber,
 		ResumeWithoutStart: runtime.resumeWithoutStart, StartCompleted: runtime.startCompleted, Jlet: runtime.jlet, LegacyClip: runtime.legacyClip,
 		DisplayRevision: runtime.displayRevision, DisplayUpdateQueued: runtime.displayUpdateQueued, RefreshPending: runtime.refreshPending,
@@ -159,6 +169,43 @@ func (runtime *Runtime) capturePlatformState(heap *checkpointHeap) (javaPlatform
 	saved.ScreenGraphicsObject, saved.ScreenGraphicsContext = ref(runtime.screenGraphicsObject), ref(heap.wrap(runtime.screenGraphicsContext))
 	for _, object := range runtime.pendingSerial {
 		saved.PendingSerial = append(saved.PendingSerial, ref(object))
+	}
+	runtime.mediaMu.Lock()
+	if len(runtime.mediaPlayers) > maxMediaPlayers || len(runtime.mediaEvents) > maxPlayerEvents {
+		runtime.mediaMu.Unlock()
+		return javaPlatformState{}, nil, fmt.Errorf("SKT checkpoint media state exceeds limits")
+	}
+	players := make(map[backend.AudioHandle]*jvm.Object, len(runtime.mediaPlayers))
+	for handle, object := range runtime.mediaPlayers {
+		players[handle] = object
+	}
+	mediaEvents := make([]playerEvent, len(runtime.mediaEvents))
+	for i, event := range runtime.mediaEvents {
+		if len(event.Listeners) > maxPlayerListeners {
+			runtime.mediaMu.Unlock()
+			return javaPlatformState{}, nil, fmt.Errorf("SKT checkpoint media listener count exceeds limit")
+		}
+		mediaEvents[i] = event
+		mediaEvents[i].Listeners = slices.Clone(event.Listeners)
+	}
+	runtime.mediaMu.Unlock()
+	if err := runtime.validateCheckpointMedia(players, mediaEvents); err != nil {
+		return javaPlatformState{}, nil, err
+	}
+	handles := make([]backend.AudioHandle, 0, len(players))
+	for handle := range players {
+		handles = append(handles, handle)
+	}
+	slices.Sort(handles)
+	for _, handle := range handles {
+		saved.Players = append(saved.Players, ref(players[handle]))
+	}
+	for _, event := range mediaEvents {
+		record := checkpointPlayerEvent{Player: ref(event.Player), Data: ref(event.Data), Name: event.Name}
+		for _, listener := range event.Listeners {
+			record.Listeners = append(record.Listeners, ref(listener))
+		}
+		saved.MediaEvents = append(saved.MediaEvents, record)
 	}
 	for _, object := range runtime.cardStack {
 		saved.CardStack = append(saved.CardStack, ref(object))
@@ -242,8 +289,9 @@ func (saved javaPlatformState) validate() error {
 		!saved.LastRefresh.valid() || len(saved.PendingSerial) > maxPendingSerialRunnables || len(saved.CardStack) > checkpointListLimit ||
 		len(saved.FullScreen) > checkpointListLimit || len(saved.Fonts) > checkpointListLimit || len(saved.Displayables) > checkpointListLimit ||
 		len(saved.Stores) > checkpointListLimit || len(saved.FileStreams) > checkpointListLimit || len(saved.Events) > 1024 ||
+		len(saved.Players) > maxMediaPlayers || len(saved.MediaEvents) > maxPlayerEvents ||
 		!saved.LCDUI && len(saved.Displayables) != 0 || !saved.RMS && len(saved.Stores) != 0 || saved.PaintDeferred && !saved.PaintQueued ||
-		(saved.ScreenGraphicsObject == 0) != (saved.ScreenGraphicsContext == 0) || (saved.Display == 0) != (saved.DisplayOwner == 0) {
+		(saved.ScreenGraphicsObject == 0) != (saved.ScreenGraphicsContext == 0) || saved.Display == 0 && saved.DisplayOwner != 0 {
 		return fmt.Errorf("SKT checkpoint platform settings or buffers are invalid")
 	}
 	if _, err := saved.PendingPaint.restore(); err != nil {
@@ -267,6 +315,46 @@ func (saved javaPlatformState) validate() error {
 			if id == 0 {
 				return fmt.Errorf("SKT checkpoint platform list contains a null root")
 			}
+			refs = append(refs, id)
+		}
+	}
+	players := make(map[int]bool, len(saved.Players))
+	for _, id := range saved.Players {
+		if id == 0 || players[id] {
+			return fmt.Errorf("SKT checkpoint media registry contains a null or duplicate player")
+		}
+		players[id] = true
+		refs = append(refs, id)
+	}
+	for _, event := range saved.MediaEvents {
+		if event.Player == 0 || len(event.Listeners) == 0 || len(event.Listeners) > maxPlayerListeners {
+			return fmt.Errorf("SKT checkpoint media event has invalid player or listeners")
+		}
+		if _, isWIPI := wipiPlaybackEvent(event.Name); isWIPI {
+			if event.Data == 0 || len(event.Listeners) != 1 {
+				return fmt.Errorf("SKT checkpoint WIPI media event has invalid Clip or listener")
+			}
+		} else {
+			switch event.Name {
+			case midp.PlayerEventStarted, midp.PlayerEventStopped, "endOfMedia", "durationUpdated", midp.PlayerEventVolumeChanged:
+				if event.Data == 0 {
+					return fmt.Errorf("SKT checkpoint media event payload is missing")
+				}
+			case midp.PlayerEventClosed:
+				if event.Data != 0 {
+					return fmt.Errorf("SKT checkpoint closed media event has a payload")
+				}
+			default:
+				return fmt.Errorf("SKT checkpoint media event name is invalid")
+			}
+		}
+		refs = append(refs, event.Player, event.Data)
+		listeners := make(map[int]bool, len(event.Listeners))
+		for _, id := range event.Listeners {
+			if id == 0 || listeners[id] {
+				return fmt.Errorf("SKT checkpoint media event contains a null or duplicate listener")
+			}
+			listeners[id] = true
 			refs = append(refs, id)
 		}
 	}
@@ -380,6 +468,9 @@ func (runtime *Runtime) restorePlatformState(saved javaPlatformState, roots []*j
 			return err
 		}
 	}
+	if err := runtime.validateCheckpointDisplayOwner(ref(saved.Display), ref(saved.DisplayOwner)); err != nil {
+		return err
+	}
 	serial, cards := make([]*jvm.Object, len(saved.PendingSerial)), make([]*jvm.Object, len(saved.CardStack))
 	for i, id := range saved.PendingSerial {
 		if err := checkClass(id, jvm.RunnableClass); err != nil {
@@ -392,6 +483,26 @@ func (runtime *Runtime) restorePlatformState(saved javaPlatformState, roots []*j
 			return err
 		}
 		cards[i] = ref(id)
+	}
+	players := make(map[backend.AudioHandle]*jvm.Object, len(saved.Players))
+	for _, id := range saved.Players {
+		object := ref(id)
+		player, err := checkpointNative[playerData](object)
+		if err != nil || player == nil || players[player.handle] != nil {
+			return fmt.Errorf("SKT checkpoint media registry has an invalid or duplicate handle")
+		}
+		players[player.handle] = object
+	}
+	mediaEvents := make([]playerEvent, len(saved.MediaEvents))
+	for i, event := range saved.MediaEvents {
+		record := playerEvent{Player: ref(event.Player), Data: ref(event.Data), Name: event.Name}
+		for _, id := range event.Listeners {
+			record.Listeners = append(record.Listeners, ref(id))
+		}
+		mediaEvents[i] = record
+	}
+	if err := runtime.validateCheckpointMedia(players, mediaEvents); err != nil {
+		return err
 	}
 	fullScreen := make(map[*jvm.Object]bool, len(saved.FullScreen))
 	for _, entry := range saved.FullScreen {
@@ -490,6 +601,7 @@ func (runtime *Runtime) restorePlatformState(saved javaPlatformState, roots []*j
 	runtime.currentDisplayable, runtime.pendingDisplayable = ref(saved.CurrentDisplayable), ref(saved.PendingDisplayable)
 	runtime.displayRevision, runtime.displayUpdateQueued, runtime.refreshPending = saved.DisplayRevision, saved.DisplayUpdateQueued, saved.RefreshPending
 	runtime.pendingSerial, runtime.runningSerial, runtime.lastRefresh = serial, false, saved.LastRefresh.restore(heap.guestNow)
+	runtime.mediaPlayers, runtime.mediaEvents = players, mediaEvents
 	runtime.pendingPaint, _ = saved.PendingPaint.restore()
 	runtime.paintCanvas, runtime.paintQueued, runtime.paintPosted, runtime.paintDeferred = ref(saved.PaintCanvas), saved.PaintQueued, saved.PaintPosted, saved.PaintDeferred
 	runtime.painting, runtime.screenPaintQueued = false, saved.ScreenPaintQueued
@@ -509,6 +621,98 @@ func (runtime *Runtime) restorePlatformState(saved javaPlatformState, roots []*j
 	if saved.RMS {
 		runtime.rmsState = &rmsState{stores: stores}
 		runtime.rmsOnce.Do(func() {})
+	}
+	return nil
+}
+
+// WIPI's static display factory has no MIDlet owner argument and may run before
+// application construction completes. Only that display family permits an
+// absent MIDP owner; the root's actual class is checked at both boundaries.
+func (runtime *Runtime) validateCheckpointDisplayOwner(display, owner *jvm.Object) error {
+	if display == nil {
+		if owner != nil {
+			return fmt.Errorf("SKT checkpoint Display owner has no Display")
+		}
+		return nil
+	}
+	if !runtime.VM.IsInstance(display, midp.DisplayClass) {
+		return fmt.Errorf("SKT checkpoint Display has an invalid class")
+	}
+	if owner == nil {
+		if !runtime.VM.IsInstance(display, wipi.DisplayClass) {
+			return fmt.Errorf("SKT checkpoint MIDP Display has no owner")
+		}
+	} else if !runtime.VM.IsInstance(owner, midp.MIDletClass) {
+		return fmt.Errorf("SKT checkpoint Display owner is not a MIDlet")
+	}
+	return nil
+}
+
+// validateCheckpointMedia runs only at a held capture barrier or on detached
+// restored objects. It does not invoke Java or advance the audio timeline.
+func (runtime *Runtime) validateCheckpointMedia(players map[backend.AudioHandle]*jvm.Object, events []playerEvent) error {
+	if len(players) > maxMediaPlayers || len(events) > maxPlayerEvents {
+		return fmt.Errorf("SKT checkpoint media state exceeds limits")
+	}
+	seen := make(map[*jvm.Object]bool, len(players))
+	for handle, object := range players {
+		player, err := checkpointNative[playerData](object)
+		if err != nil || player == nil || object.ClassName != midp.PlayerClass || handle == 0 ||
+			player.handle != handle || player.state == playerClosed || seen[object] {
+			return fmt.Errorf("SKT checkpoint media registry ownership is invalid")
+		}
+		seen[object] = true
+		if _, ok := runtime.audioTimeline().Length(handle); !ok {
+			return fmt.Errorf("SKT checkpoint media registry sound is missing")
+		}
+	}
+	for _, event := range events {
+		player, err := checkpointNative[playerData](event.Player)
+		if err != nil || player == nil || event.Player.ClassName != midp.PlayerClass ||
+			player.state != playerClosed && players[player.handle] != event.Player ||
+			len(event.Listeners) == 0 || len(event.Listeners) > maxPlayerListeners {
+			return fmt.Errorf("SKT checkpoint media event ownership is invalid")
+		}
+		if _, isWIPI := wipiPlaybackEvent(event.Name); isWIPI {
+			clip, err := checkpointNative[wipiClipData](event.Data)
+			if err != nil || clip == nil || clip.object != event.Data || clip.player != event.Player ||
+				len(event.Listeners) != 1 || event.Listeners[0] == nil || !runtime.VM.IsInstance(event.Listeners[0], wipi.PlayListenerClass) {
+				return fmt.Errorf("SKT checkpoint WIPI media event ownership is invalid")
+			}
+			if err := runtime.validateCheckpointWIPIClip(clip); err != nil {
+				return err
+			}
+			continue
+		}
+		listeners := make(map[*jvm.Object]bool, len(event.Listeners))
+		for _, listener := range event.Listeners {
+			if listener == nil || listeners[listener] || !runtime.VM.IsInstance(listener, midp.PlayerListenerClass) {
+				return fmt.Errorf("SKT checkpoint media event listener is invalid")
+			}
+			listeners[listener] = true
+		}
+		switch event.Name {
+		case midp.PlayerEventStarted, midp.PlayerEventStopped, "endOfMedia", "durationUpdated":
+			if event.Data == nil || event.Data.ClassName != jvm.LongClass {
+				return fmt.Errorf("SKT checkpoint media event time is not a Long")
+			}
+			value, ok := event.Data.Native.(int64)
+			if !ok || value < 0 && (event.Name != "durationUpdated" || value != -1) {
+				return fmt.Errorf("SKT checkpoint media event time is invalid")
+			}
+		case midp.PlayerEventVolumeChanged:
+			control, err := checkpointNative[volumeControlData](event.Data)
+			if err != nil || control == nil || event.Data.ClassName != midp.RuntimeVolumeControlClass ||
+				control.player != event.Player || player.volumeControl != event.Data {
+				return fmt.Errorf("SKT checkpoint media event control has a different owner")
+			}
+		case midp.PlayerEventClosed:
+			if event.Data != nil || player.state != playerClosed {
+				return fmt.Errorf("SKT checkpoint closed media event is invalid")
+			}
+		default:
+			return fmt.Errorf("SKT checkpoint media event name is invalid")
+		}
 	}
 	return nil
 }

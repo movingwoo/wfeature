@@ -2,6 +2,8 @@ package smaf
 
 import (
 	"encoding/binary"
+	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -52,7 +54,7 @@ func TestMobileVariableNumber(t *testing.T) {
 
 func TestMobileReservedStatusBytesBecomeNops(t *testing.T) {
 	// duration 0, reserved status 0xa5 with two data bytes, then end of stream.
-	events, err := parseSequenceMobile([]byte{0x00, 0xa5, 0x12, 0x34, 0x00, 0xff, 0x2f, 0x00})
+	events, err := parseSequenceMobile([]byte{0x00, 0xa5, 0x12, 0x34, 0x00, 0xff, 0x2f, 0x00}, newDecodeBudget())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,14 +68,14 @@ func TestMobileReservedStatusBytesBecomeNops(t *testing.T) {
 func TestHandySequenceEndingShortDoesNotOverrun(t *testing.T) {
 	// A stream whose tail is shorter than the four-byte terminator must stop,
 	// not read past it.
-	if _, err := parseSequenceHandyLike([]byte{0x00, 0x01, 0x00}, false); err != nil {
+	if _, err := parseSequenceHandyLike([]byte{0x00, 0x01, 0x00}, false, newDecodeBudget()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestHandyShortFormControlEvents(t *testing.T) {
 	t.Run("pitch bend", func(t *testing.T) {
-		events, err := parseSequenceHandyLike([]byte{0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00}, false)
+		events, err := parseSequenceHandyLike([]byte{0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00}, false, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,7 +87,7 @@ func TestHandyShortFormControlEvents(t *testing.T) {
 		}
 	})
 	t.Run("expression", func(t *testing.T) {
-		events, err := parseSequenceHandyLike([]byte{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}, false)
+		events, err := parseSequenceHandyLike([]byte{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}, false, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +101,7 @@ func TestHandyShortFormControlEvents(t *testing.T) {
 
 func TestHandyNoteCarriesNoVelocity(t *testing.T) {
 	// Status 0x49 is channel 1, octave 0, voice 9.
-	events, err := parseSequenceHandyLike([]byte{0x00, 0x49, 0x00, 0x00, 0x00, 0x00, 0x00}, false)
+	events, err := parseSequenceHandyLike([]byte{0x00, 0x49, 0x00, 0x00, 0x00, 0x00, 0x00}, false, newDecodeBudget())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +114,7 @@ func TestHandyNoteCarriesNoVelocity(t *testing.T) {
 
 func TestExclusiveDelimitingDiffersByDialect(t *testing.T) {
 	t.Run("softbank length prefix", func(t *testing.T) {
-		events, err := parseSequenceHandyLike([]byte{0x00, 0xff, 0xf0, 0x03, 0x41, 0x42, 0x43, 0x00, 0x00, 0x00, 0x00}, true)
+		events, err := parseSequenceHandyLike([]byte{0x00, 0xff, 0xf0, 0x03, 0x41, 0x42, 0x43, 0x00, 0x00, 0x00, 0x00}, true, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,22 +124,22 @@ func TestExclusiveDelimitingDiffersByDialect(t *testing.T) {
 			t.Fatalf("no length-prefixed exclusive in %+v", events)
 		}
 	})
-	t.Run("handset terminator", func(t *testing.T) {
-		events, err := parseSequenceHandyLike([]byte{0x00, 0xff, 0xf0, 0x41, 0x42, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00}, false)
+	t.Run("handset length includes terminator", func(t *testing.T) {
+		events, err := parseSequenceHandyLike([]byte{0x00, 0xff, 0xf0, 0x03, 0x41, 0x42, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00}, false, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !hasEvent(events, func(event SequenceEvent) bool {
-			return event.Kind == SeqExclusive && string(event.Exclusive) == "AB"
+			return event.Kind == SeqExclusive && string(event.Exclusive) == "AB\xf7"
 		}) {
-			t.Fatalf("no 0xf7-terminated exclusive in %+v", events)
+			t.Fatalf("no sized, 0xf7-terminated exclusive in %+v", events)
 		}
 	})
 }
 
 func TestPCMShortFormControlEvents(t *testing.T) {
 	t.Run("expression", func(t *testing.T) {
-		events, err := parsePCMSequence([]byte{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00})
+		events, err := parsePCMSequence([]byte{0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00}, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +150,7 @@ func TestPCMShortFormControlEvents(t *testing.T) {
 		}
 	})
 	t.Run("pitch bend", func(t *testing.T) {
-		events, err := parsePCMSequence([]byte{0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00})
+		events, err := parsePCMSequence([]byte{0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00}, newDecodeBudget())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +268,7 @@ func TestMobileNoteWithoutVelocityReusesThePrevious(t *testing.T) {
 	events, _ := sequenceEvents([]SequenceEvent{
 		{Kind: SeqNote, Channel: 0, Note: 60, Velocity: 96, HasVelocity: true, GateTime: 10},
 		{Kind: SeqNote, Channel: 0, Note: 62, GateTime: 10},
-	}, 1, 1, 0, false, nil, tones)
+	}, 1, 1, 0, false, nil, tones, newDecodeBudget())
 
 	if !hasPlayedFunc(events, func(event Event) bool {
 		return event.Type == EventNoteOn && event.Note == 62 && event.Velocity == 96
@@ -275,12 +277,152 @@ func TestMobileNoteWithoutVelocityReusesThePrevious(t *testing.T) {
 	}
 }
 
+func TestMobileStreamNotePreservesVelocityMemory(t *testing.T) {
+	for _, probe := range []struct {
+		name      string
+		wave      []byte
+		wantWaves int
+	}{
+		{"mapped", []byte{0x11, 0x1f, 0x40, 0, 128, 255}, 3},
+		{"absent", nil, 0},
+		{"unsupported-width", []byte{0x13, 0x1f, 0x40, 0, 0, 0, 0}, 0},
+		{"unsupported-stereo", []byte{0x91, 0x1f, 0x40, 0, 128, 255, 128}, 0},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			sequence := []byte{
+				0, 0x80, 60, 1, // Initial omitted velocity is 64 on either channel.
+				1, 0x81, 61, 1,
+				1, 0x91, 62, 77, 1,
+				1, 0x90, 0, 96, 1, // A stream note still stores its explicit velocity.
+				1, 0x80, 63, 1,
+				1, 0x81, 64, 1, // Another channel keeps its own previous value.
+				1, 0x90, 0, 0, 1,
+				1, 0x80, 65, 1, // Explicit zero must remain zero when omitted.
+				1, 0x90, 66, 88, 1,
+				1, 0x80, 0, 1, // An omitted stream velocity preserves the stored value.
+				1, 0x80, 67, 1,
+				1, 0xff, 0x2f, 0,
+			}
+			events := decodeMobileNoteFixture(t, sequence, probe.wave)
+			assertMobileNoteFixture(t, events, []Event{
+				{Type: EventNoteOn, Note: 60, Velocity: 64},
+				{Time: 1, Type: EventNoteOn, Channel: 1, Note: 61, Velocity: 64},
+				{Time: 2, Type: EventNoteOn, Channel: 1, Note: 62, Velocity: 77},
+				{Time: 4, Type: EventNoteOn, Note: 63, Velocity: 96},
+				{Time: 5, Type: EventNoteOn, Channel: 1, Note: 64, Velocity: 77},
+				{Time: 7, Type: EventNoteOn, Note: 65, Velocity: 0},
+				{Time: 8, Type: EventNoteOn, Note: 66, Velocity: 88},
+				{Time: 10, Type: EventNoteOn, Note: 67, Velocity: 88},
+			})
+			var waves []Event
+			for _, event := range events {
+				if event.Type == EventWave {
+					waves = append(waves, event)
+				}
+			}
+			if len(waves) != probe.wantWaves {
+				t.Fatalf("stream notes emitted %d waves, want %d", len(waves), probe.wantWaves)
+			}
+			for index, wave := range waves {
+				if wave.Time != []uint32{3, 6, 9}[index] || wave.WaveChannels != 1 || wave.SamplingRate != 8000 ||
+					!reflect.DeepEqual(wave.Wave, []int16{-32768, 0, 32512}) {
+					t.Fatalf("velocity memory changed stream mapping, timing or raw samples: %+v", wave)
+				}
+			}
+		})
+	}
+}
+
+func TestMobileResetControllersRestoresVelocityMemory(t *testing.T) {
+	for _, seed := range []struct {
+		name string
+		note byte
+	}{{"ordinary", 60}, {"stream", 0}} {
+		for _, operand := range []byte{0, 37} {
+			t.Run(fmt.Sprintf("%s/operand-%d", seed.name, operand), func(t *testing.T) {
+				sequence := []byte{
+					0, 0xb0, 0, 0x7c,
+					0, 0xb0, 32, 1,
+					0, 0xb0, 7, 73,
+					0, 0xb0, 10, 23,
+					0, 0xc0, 0x22,
+					0, 0x91, 70, 77, 1,
+					1, 0x90, seed.note, 96, 1,
+					1, 0x80, 61, 1,
+					1, 0xb0, 121, operand,
+					1, 0x80, 0, 1,
+					1, 0x80, 62, 1,
+					1, 0x81, 71, 1,
+					1, 0xc0, 0x22, // The bank selection still maps this program to 81.
+					1, 0x90, 0, 101, 1,
+					1, 0x80, 63, 1,
+					1, 0xff, 0x2f, 0,
+				}
+				events := decodeMobileNoteFixture(t, sequence, []byte{0x11, 0x1f, 0x40, 0, 128, 255})
+				want := []Event{{Type: EventNoteOn, Channel: 1, Note: 70, Velocity: 77}}
+				if seed.note != 0 {
+					want = append(want, Event{Time: 1, Type: EventNoteOn, Note: seed.note, Velocity: 96})
+				}
+				want = append(want,
+					Event{Time: 2, Type: EventNoteOn, Note: 61, Velocity: 96},
+					Event{Time: 5, Type: EventNoteOn, Note: 62, Velocity: 64},
+					Event{Time: 6, Type: EventNoteOn, Channel: 1, Note: 71, Velocity: 77},
+					Event{Time: 9, Type: EventNoteOn, Note: 63, Velocity: 101})
+				assertMobileNoteFixture(t, events, want)
+				var controls []Event
+				for _, event := range events {
+					if event.Type == EventControlChange || event.Type == EventProgramChange {
+						controls = append(controls, event)
+					}
+				}
+				if want := []Event{
+					{Type: EventControlChange, Control: 0, Value: 0x7c},
+					{Type: EventControlChange, Control: 32, Value: 1},
+					{Type: EventControlChange, Control: 7, Value: 73},
+					{Type: EventControlChange, Control: 10, Value: 23},
+					{Type: EventProgramChange, Program: 81},
+					{Time: 3, Type: EventControlChange, Control: 121, Value: operand},
+					{Time: 7, Type: EventProgramChange, Program: 81},
+				}; !reflect.DeepEqual(controls, want) {
+					t.Fatalf("velocity reset changed bank, program, gain or pan events:\ngot  %+v\nwant %+v", controls, want)
+				}
+			})
+		}
+	}
+}
+
+func decodeMobileNoteFixture(t *testing.T, sequence, wave []byte) []Event {
+	t.Helper()
+	children := [][]byte{chunk("Mtsq", sequence)}
+	if wave != nil {
+		children = append(children, chunk("Mtsp", chunk("Mwa\x01", wave)))
+	}
+	events, err := Decode(buildSMAF(limitsScore(MobileStandardNoCompress, children...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func assertMobileNoteFixture(t *testing.T, events, want []Event) {
+	t.Helper()
+	var notes []Event
+	for _, event := range events {
+		if event.Type == EventNoteOn {
+			notes = append(notes, event)
+		}
+	}
+	if !reflect.DeepEqual(notes, want) {
+		t.Fatalf("decoded mobile velocity memory:\ngot  %+v\nwant %+v", notes, want)
+	}
+}
+
 func TestDurationAppliesBeforeItsEvent(t *testing.T) {
 	tones := newToneMap()
 	tones.initTrack(MobileStandardNoCompress, nil, 0)
 	events, _ := sequenceEvents([]SequenceEvent{
 		{Kind: SeqNote, Channel: 0, Note: 60, Velocity: 64, HasVelocity: true, Duration: 5, GateTime: 2},
-	}, 4, 4, 0, false, nil, tones)
+	}, 4, 4, 0, false, nil, tones, newDecodeBudget())
 
 	// The duration precedes its event, so the note starts at 5*4 and lasts 2*4.
 	if !hasPlayedFunc(events, func(event Event) bool {
@@ -299,7 +441,7 @@ func TestPCMTrackDurationAppliesBeforeItsEvent(t *testing.T) {
 	events := pcmTrackEvents(&PCMAudioTrack{
 		Format: PCMAdpcm, Channels: Mono, SamplingFreq: 8000, TimebaseD: 4, TimebaseG: 4,
 		Sequence: []PCMEvent{{Kind: PCMEventNop, Duration: 5}},
-	})
+	}, 1, newDecodeBudget())
 	if !hasPlayedFunc(events, func(event Event) bool { return event.Type == EventEnd && event.Time == 20 }) {
 		t.Fatalf("track does not end at 20ms: %+v", events)
 	}
@@ -308,7 +450,7 @@ func TestPCMTrackDurationAppliesBeforeItsEvent(t *testing.T) {
 func TestHandsetTracksKeepIndependentChannelAllocations(t *testing.T) {
 	tones := newToneMap()
 	tones.initTrack(HandyPhoneStandard, []ChannelStatus{{Kind: ChannelMelody}}, 0)
-	events, _ := sequenceEvents([]SequenceEvent{{Kind: SeqProgramChange, Channel: 0, Program: 40}}, 1, 1, 0, true, nil, tones)
+	events, _ := sequenceEvents([]SequenceEvent{{Kind: SeqProgramChange, Channel: 0, Program: 40}}, 1, 1, 0, true, nil, tones, newDecodeBudget())
 	if !hasPlayed(events, Event{Type: EventProgramChange, Channel: 0, Program: 40}) {
 		t.Fatalf("first track did not take MIDI channel 0: %+v", events)
 	}
@@ -316,7 +458,7 @@ func TestHandsetTracksKeepIndependentChannelAllocations(t *testing.T) {
 	// The second track continues the allocation rather than restarting it,
 	// which is why the handset tone map is shared across tracks.
 	tones.initTrack(HandyPhoneStandard, []ChannelStatus{{Kind: ChannelMelody}}, 4)
-	events, _ = sequenceEvents([]SequenceEvent{{Kind: SeqProgramChange, Channel: 0, Program: 41}}, 1, 1, 4, true, nil, tones)
+	events, _ = sequenceEvents([]SequenceEvent{{Kind: SeqProgramChange, Channel: 0, Program: 41}}, 1, 1, 4, true, nil, tones, newDecodeBudget())
 	if !hasPlayed(events, Event{Type: EventProgramChange, Channel: 1, Program: 41}) {
 		t.Fatalf("second track did not take MIDI channel 1: %+v", events)
 	}
@@ -329,7 +471,7 @@ func TestHandsetRhythmUsesProgramAsDrumKey(t *testing.T) {
 		{Kind: SeqProgramChange, Channel: 0, Program: 35},
 		{Kind: SeqExpression, Channel: 0, Value: 92},
 		{Kind: SeqNote, Channel: 0, Note: 1, GateTime: 10},
-	}, 1, 1, 0, true, nil, tones)
+	}, 1, 1, 0, true, nil, tones, newDecodeBudget())
 
 	if !hasPlayed(events, Event{Type: EventProgramChange, Channel: midiDrumChannel}) {
 		t.Fatalf("rhythm program change did not go to the drum channel: %+v", events)
@@ -351,7 +493,7 @@ func TestHandsetMelodyExpressionFoldsIntoVolume(t *testing.T) {
 	events, _ := sequenceEvents([]SequenceEvent{
 		{Kind: SeqVolume, Channel: 0, Value: 100},
 		{Kind: SeqExpression, Channel: 0, Value: 92},
-	}, 1, 1, 0, true, nil, tones)
+	}, 1, 1, 0, true, nil, tones, newDecodeBudget())
 
 	// 100 * 92 / 127 = 72, sent as channel volume rather than expression.
 	if !hasPlayed(events, Event{Type: EventControlChange, Channel: 0, Control: 7, Value: 72}) {
