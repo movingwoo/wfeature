@@ -394,8 +394,12 @@ type initializationRuntime struct {
 	// wipic_media.go.
 	wipicClips     map[uint32]*wipicMediaClip
 	wipicClipOrder []uint32
-	runtimeObjects map[string]*jvm.Object
-	classAliases   map[uint32]uint32
+	// wipicMutedSources is what MC_mdaSetMuteState was told, per source, so
+	// MC_mdaGetMuteState answers it back. No source here routes to a sound;
+	// see wipicMediaSetMuteState.
+	wipicMutedSources map[uint32]bool
+	runtimeObjects    map[string]*jvm.Object
+	classAliases      map[uint32]uint32
 	// leds is the indicator-light mask a title last set. This handset has no
 	// lights, so the only thing an LED read can honestly answer with is what
 	// the last write asked for. See runtime_library.go.

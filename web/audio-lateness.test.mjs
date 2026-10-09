@@ -6,7 +6,7 @@ import { GameSession, playAudioEvents } from "./session.js";
 const prefix = "audio playout timing: ";
 const clock = at => ({ kind: "clock", at });
 const control = at => ({ kind: "controlChange", sound: 7, channel: 0, control: 7, value: 80, at });
-const empty = () => ({ batches: 0, admitted: 0, refused: { late: 0, future: 0, range: 0 }, clock_only_batches: 0, events: 0,
+const empty = () => ({ batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 }, clock_only_batches: 0, events: 0,
   not_late: 0, late_le_5ms: 0, late_le_20ms: 0, late_le_100ms: 0, late_gt_100ms: 0,
   invalid_events: 0, max_event_late_ms: 0, max_frontier_late_ms: 0 });
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);
@@ -108,16 +108,47 @@ test("first window failure determines the reason while invalid and future events
     events: 3, not_late: 2, late_gt_100ms: 1, max_event_late_ms: 150 });
 });
 
-test("silent late frontiers are distinct from event lateness and reset anchors are counted separately", t => {
+// A batch holding nothing but its frontier loses nothing when it arrives late:
+// the server fell behind the render clock and has caught up. Live sessions
+// showed two thirds of all late refusals were such batches, each answered by
+// asking for the current output, which cuts every sounding voice to replay it.
+// The anchor moves to the frontier instead; a late batch with events is still
+// refused, since it would otherwise have to play them late.
+test("a late frontier without events moves the anchor and keeps playing", t => {
+  const { audio, reports, sources } = setup(t);
+  assert.equal(audio.prepareBatch([clock(0)]), true);
+  audio.context.currentTime = 1.3;
+  assert.equal(playAudioEvents(audio, [clock(.1)]), true);
+  close(audio.presentationAnchor.audio, 1.4);
+  assert.equal(audio.presentationAnchor.presentation, .1);
+  assert.equal(audio.presentationFrontier, .1);
+  let snapshot = flush(audio, reports);
+  group(snapshot.anchored, { ...empty(), batches: 1, admitted: 1, clock_only_batches: 1 });
+  group(snapshot.continuing, { ...empty(), batches: 1, reanchored: 1, clock_only_batches: 1, max_frontier_late_ms: 100 });
+
+  // Later events are placed from the moved anchor, a lead ahead of the clock.
+  assert.equal(playAudioEvents(audio, [{ kind: "noteOn", sound: 7, channel: 0, note: 60, velocity: 90, at: .12 }, clock(.12)]), true);
+  close(sources.at(-1).starts[0][0], 1.42);
+  snapshot = flush(audio, reports);
+  group(snapshot.continuing, { ...empty(), batches: 1, admitted: 1, events: 1, not_late: 1 });
+
+  audio.context.currentTime = 1.7;
+  assert.equal(audio.prepareBatch([control(.2), clock(.2)]), false, "a late batch with events still asks for the current output");
+  snapshot = flush(audio, reports);
+  group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
+    events: 1, late_gt_100ms: 1, max_event_late_ms: 200, max_frontier_late_ms: 200 });
+});
+
+test("a reset anchor after a refusal is counted apart from continuing batches", t => {
   const { audio, reports } = setup(t);
   assert.equal(audio.prepareBatch([clock(0)]), true);
   audio.context.currentTime = 1.3;
-  assert.equal(audio.prepareBatch([clock(.1)]), false);
+  assert.equal(audio.prepareBatch([control(.1), clock(.1)]), false);
   assert.equal(playAudioEvents(audio, [{ kind: "allOff" }, control(.1), clock(.1)]), true);
   let snapshot = flush(audio, reports);
   group(snapshot.anchored, { ...empty(), batches: 2, admitted: 2, clock_only_batches: 1, events: 1, not_late: 1 });
   group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
-    clock_only_batches: 1, max_frontier_late_ms: 100 });
+    events: 1, late_le_100ms: 1, max_event_late_ms: 100, max_frontier_late_ms: 100 });
   assert.equal(audio.prepareBatch([clock(.15)]), true);
   snapshot = flush(audio, reports);
   group(snapshot.anchored, empty());

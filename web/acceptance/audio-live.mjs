@@ -12,6 +12,10 @@ import { pathToFileURL } from "node:url";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 const archive = process.env.WFEATURE_AUDIO_ARCHIVE;
+// A longer run that keeps pressing keys after the three confirms is how a
+// title is held in play long enough to show its sustained sound load.
+const seconds = Number(process.env.WFEATURE_AUDIO_SECONDS || 12);
+const mash = process.env.WFEATURE_AUDIO_KEYS === "mash";
 if (!binary || !archive || !process.env.PLAYWRIGHT_MODULE) {
   throw new Error("Usage: WFEATURE_AUDIO_ARCHIVE=/path/to/archive PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-live.mjs DEBUG_SERVER [chromium|webkit]");
 }
@@ -50,7 +54,8 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   await context.addInitScript(() => {
     const probe = window.audioProbe = { sockets: [], sent: {}, soundPackets: 0, soundBytes: 0, errors: [],
-      contexts: [], starts: 0, scheduledStarts: 0, lateStarts: 0, minimumLead: null, maximumLead: null };
+      contexts: [], starts: 0, scheduledStarts: 0, lateStarts: 0, minimumLead: null, maximumLead: null,
+      live: 0, maximumLive: 0, peak: 0, clippedReads: 0, meters: [] };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) {
@@ -87,15 +92,45 @@ try {
         constructor(...args) {
           super(...args);
           probe.contexts.push(this);
+          // Everything the page connects to the speakers is also summed here,
+          // so the meter reads the mix the listener hears before the device.
+          this.meter = this.createAnalyser();
+          this.meter.fftSize = 32768;
+          probe.meters.push(this.meter);
         }
       };
     }
+    const connect = AudioNode.prototype.connect;
+    AudioNode.prototype.connect = function (target, ...rest) {
+      const result = connect.call(this, target, ...rest);
+      if (target === this.context.destination && this.context.meter && this !== this.context.meter) {
+        connect.call(this, this.context.meter);
+      }
+      return result;
+    };
+    const frame = new Float32Array(32768);
+    setInterval(() => {
+      for (const meter of probe.meters) {
+        meter.getFloatTimeDomainData(frame);
+        let over = false;
+        for (const sample of frame) {
+          const level = Math.abs(sample);
+          if (level > probe.peak) probe.peak = level;
+          over ||= level > 1;
+        }
+        // Reads overlap, so a read is counted rather than its samples.
+        if (over) probe.clippedReads++;
+      }
+    }, 250);
     // How far ahead of the render clock each source is started. Zero means
     // "now"; a negative lead beyond the page's 5 ms tolerance is a late start.
     for (const Node of [window.OscillatorNode, window.AudioBufferSourceNode]) {
       const start = Node.prototype.start;
       Node.prototype.start = function (when = 0, ...rest) {
         probe.starts++;
+        probe.live++;
+        probe.maximumLive = Math.max(probe.maximumLive, probe.live);
+        this.addEventListener("ended", () => { probe.live--; }, { once: true });
         if (when > 0) {
           const lead = when - this.context.currentTime;
           probe.scheduledStarts++;
@@ -116,15 +151,32 @@ try {
   // own presentation times: a late page and a jumping server look different.
   await page.evaluate(async () => {
     const { PageAudio } = await import("/audio.js");
+    // The debug log view keeps only its last lines, and a long run pushes the
+    // first timing reports out of it, so every report is copied as it lands.
+    audioProbe.timingLines = [];
+    const view = document.querySelector("#log-view");
+    const marker = "audio playout timing: ";
+    const collect = row => {
+      const line = row.textContent || "";
+      if (line.includes(marker)) audioProbe.timingLines.push(line.slice(line.indexOf(marker) + marker.length));
+    };
+    view?.querySelectorAll(".log-line").forEach(collect);
+    new MutationObserver(records => {
+      for (const record of records) record.addedNodes.forEach(node => { if (node.nodeType === 1) collect(node); });
+    }).observe(view, { childList: true });
     const recordTiming = PageAudio.prototype.recordTiming;
     audioProbe.batches = [];
-    PageAudio.prototype.recordTiming = function (events, anchor, current, fresh, refused) {
+    // A late batch holding only its frontier is reported with its reason and
+    // a flag saying the anchor moved instead; every argument is passed on.
+    PageAudio.prototype.recordTiming = function (events, anchor, current, fresh, refused, ...rest) {
+      const reanchored = rest[0] === true;
       if (audioProbe.batches.length < 160 || refused) {
-        audioProbe.batches.push({ page: performance.now() / 1000, current, fresh, refused,
+        audioProbe.batches.push({ page: performance.now() / 1000, current, fresh,
+          refused: reanchored ? null : refused, reanchored,
           anchorAudio: anchor.audio, anchorPresentation: anchor.presentation,
           first: events[0]?.at, clock: events.at(-1)?.at, events: events.length - 1 });
       }
-      return recordTiming.call(this, events, anchor, current, fresh, refused);
+      return recordTiming.call(this, events, anchor, current, fresh, refused, ...rest);
     };
   });
   await page.locator("#game-select").selectOption(`games/library/${game}`);
@@ -138,7 +190,14 @@ try {
     await pause(120);
     await page.keyboard.up("Space");
   }
-  await pause(4000);
+  const keys = ["Space", "ArrowUp", "Space", "ArrowRight", "Digit5", "ArrowDown", "Space", "ArrowLeft"];
+  for (let at = 8000, index = 0; at < (seconds - 4) * 1000 && mash; at += 400, index++) {
+    await page.keyboard.down(keys[index % keys.length]);
+    await pause(120);
+    await page.keyboard.up(keys[index % keys.length]);
+    await pause(280);
+  }
+  await pause(Math.max(4000, mash ? 4000 : (seconds - 8) * 1000));
   const observed = await page.evaluate(() => ({
     url: audioProbe.sockets.at(-1)?.url,
     sent: audioProbe.sent,
@@ -153,9 +212,10 @@ try {
     minimumLead: audioProbe.minimumLead,
     maximumLead: audioProbe.maximumLead,
     batches: audioProbe.batches,
-    timing: [...document.querySelectorAll("#log-view .log-line")].map(row => row.textContent)
-      .filter(line => line.includes("audio playout timing: "))
-      .map(line => JSON.parse(line.slice(line.indexOf("audio playout timing: ") + 22))),
+    maximumLive: audioProbe.maximumLive,
+    peak: audioProbe.peak,
+    clippedReads: audioProbe.clippedReads,
+    timing: audioProbe.timingLines.map(line => JSON.parse(line)),
   }));
   result.observed = { ...observed, timing: undefined, batches: undefined, timingReports: observed.timing.length };
   result.reports = observed.timing;
@@ -175,15 +235,18 @@ try {
   assert.ok(observed.scheduledStarts > 0, `no source was scheduled (${observed.starts} immediate starts)`);
   assert.equal(observed.lateStarts, 0, `late source starts, minimum lead ${observed.minimumLead}`);
   check(`${observed.scheduledStarts} sources started ahead of the render clock (lead ${observed.minimumLead.toFixed(3)}–${observed.maximumLead.toFixed(3)} s)`);
+  // Reported, not asserted: how many sources were ever alive at once, and how
+  // loud the mix got before the device, at the page's default sliders.
+  console.log(`${engineName}: at most ${observed.maximumLive} sources alive at once; mix peak ${observed.peak.toFixed(3)}, ${observed.clippedReads} meter reads over full scale`);
 
   // Fold every report into totals. A report covers the batches since the one
   // before it, so the sum is the whole run.
-  const totals = { batches: 0, admitted: 0, refused: { late: 0, future: 0, range: 0 }, events: 0, not_late: 0,
+  const totals = { batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 }, events: 0, not_late: 0,
     late_le_5ms: 0, late_le_20ms: 0, late_le_100ms: 0, late_gt_100ms: 0, max_event_late_ms: 0 };
   for (const report of observed.timing) {
     for (const group of [report.anchored, report.continuing]) {
-      for (const key of ["batches", "admitted", "events", "not_late", "late_le_5ms", "late_le_20ms", "late_le_100ms", "late_gt_100ms"]) {
-        totals[key] += group[key];
+      for (const key of ["batches", "admitted", "reanchored", "events", "not_late", "late_le_5ms", "late_le_20ms", "late_le_100ms", "late_gt_100ms"]) {
+        totals[key] += group[key] ?? 0;
       }
       for (const reason of ["late", "future", "range"]) totals.refused[reason] += group.refused[reason];
       totals.max_event_late_ms = Math.max(totals.max_event_late_ms, group.max_event_late_ms);
@@ -192,8 +255,8 @@ try {
   result.timing = totals;
   assert.ok(observed.timing.length > 0, "the debug page reported no playout timing");
   assert.ok(totals.admitted > 0 && totals.events > 0, JSON.stringify(totals));
-  check(`debug timing: ${totals.admitted}/${totals.batches} batches admitted, ${totals.events} events, ` +
-    `${totals.late_gt_100ms} over 100 ms late, recovery requests ${observed.sent.audioResume ?? 0}`);
+  check(`debug timing: ${totals.admitted}/${totals.batches} batches admitted, ${totals.reanchored} re-anchored, ` +
+    `${totals.events} events, ${totals.late_gt_100ms} over 100 ms late, recovery requests ${observed.sent.audioResume ?? 0}`);
 
   assert.deepEqual(observed.errors, []);
   assert.deepEqual(result.errors, []);

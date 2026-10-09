@@ -113,10 +113,10 @@ func (runtime *initializationRuntime) validateClipListener(listener *jvm.Object)
 //
 // Only a walk that reads every record and never meets the target answers no,
 // as checkAOTType does. An older relocatable module's implements list holds
-// reference cells naming an interface rather than class records, and refusing
-// a listener for that stopped one title's startApp at setListener. A record
-// the walk cannot read leaves the answer open, and the caller's checks on the
-// callback still apply.
+// reference cells naming an interface rather than class records; they are
+// read by name (aotInterfaceEntry), since refusing a listener over one
+// stopped one title's startApp at setListener. A record the walk still cannot
+// read leaves the answer open, and the caller's checks on the callback apply.
 func (runtime *initializationRuntime) validateAOTMediaType(address uint32, name, target string) error {
 	pending, seen := []uint32{address}, map[uint32]bool{address: true}
 	undecided := false
@@ -138,7 +138,15 @@ func (runtime *initializationRuntime) validateAOTMediaType(address uint32, name,
 		for index := -1; index < len(summary.interfaces); index++ {
 			parent := summary.parent
 			if index >= 0 {
-				parent = summary.interfaces[index]
+				cellName, address, err := runtime.aotInterfaceEntry(summary.interfaces[index])
+				if cellName == target {
+					return nil
+				}
+				if err != nil || (address == 0 && cellName != "") {
+					undecided = true
+					continue
+				}
+				parent = address
 			}
 			if parent != 0 && !seen[parent] {
 				seen[parent] = true

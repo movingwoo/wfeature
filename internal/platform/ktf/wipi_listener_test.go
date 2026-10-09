@@ -490,6 +490,47 @@ func TestKTFWIPIListenerAcceptsAnUnlinkedImplementsEntry(t *testing.T) {
 	prepared.Discard()
 }
 
+// With the module's name table to read, the same cell is answered by its name
+// rather than left open: a cell naming PlayListener is a decided yes, and one
+// naming an unrelated interface is refused like any other unrelated listener.
+func TestKTFWIPIListenerReadsAModuleImplementsCellByName(t *testing.T) {
+	fixture := newKTFWIPIListenerFixture(t)
+	metadata, ok := fixture.client.JVM().AOTClass(testfixture.KTFListenerClass)
+	if !ok {
+		t.Fatal("authored listener class was not loaded")
+	}
+	word := func(address uint32) uint32 {
+		return binary.LittleEndian.Uint32(readTestBytes(t, fixture.client, address, 4))
+	}
+	interfaces := word(word(metadata.Address+8) + 16)
+	original := word(interfaces)
+	writeModuleNameTable(t, fixture.runtime, runtimePlayListenerClass, "fixture/IOther")
+	fixture.runtime.moduleClassByName = map[string]uint32{
+		"fixture/IOther": writeGuestClass(t, fixture.runtime, "fixture/IOther", 0, nil, 0x601),
+	}
+	setCell := func(cell uint32) {
+		if err := fixture.client.Core().Memory().Write(interfaces, binary.LittleEndian.AppendUint32(nil, cell)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setCell(moduleCell(1))
+	_, rejected := fixture.client.JVM().InvokeVirtual(fixture.clip, "setListener", "(Lorg/kwis/msp/media/PlayListener;)V",
+		jvm.ReferenceValue(fixture.listeners[1]))
+	setCell(moduleCell(0))
+	fixture.setListener(fixture.listeners[0])
+	setCell(original)
+	fixture.client.moduleSegment, fixture.runtime.moduleClassByName = 0, nil
+	if rejected == nil {
+		t.Fatal("setListener accepted a listener whose implements cell names an unrelated interface")
+	}
+	if count := fixture.session.Diagnostics().Counts["media type undecided for "+runtimePlayListenerClass]; count != 0 {
+		t.Fatalf("a readable cell left the listener type undecided %d times", count)
+	}
+	fixture.call("play", true, false)
+	fixture.drain()
+	fixture.wantHistory(fixture.event(0, 2))
+}
+
 func TestKTFWIPIListenerRequiresExecutableInstanceCallback(t *testing.T) {
 	for _, test := range []struct {
 		name   string

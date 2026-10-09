@@ -89,7 +89,7 @@ const melodyLevel = (peak, elapsed) => {
 };
 const drumLevel = (peak, elapsed) => elapsed < 0.18 ? peak * Math.pow(0.0001 / peak, elapsed / 0.18) : 0.0001;
 const timingCounts = () => ({
-  batches: 0, clock_only_batches: 0, admitted: 0, refused: { late: 0, future: 0, range: 0 },
+  batches: 0, clock_only_batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 },
   events: 0, not_late: 0, late_le_5ms: 0, late_le_20ms: 0,
   late_le_100ms: 0, late_gt_100ms: 0, invalid_events: 0,
   max_event_late_ms: 0, max_frontier_late_ms: 0,
@@ -213,7 +213,7 @@ export class PageAudio {
   // Sample the render deadline at batch admission, before source creation or
   // JSON PCM decoding. This does not measure network or audible output delay.
   // Only fixed counters survive the call; no event/sample payload is retained.
-  recordTiming(events, anchor, current, fresh, refused) {
+  recordTiming(events, anchor, current, fresh, refused, reanchored = false) {
     if (!this.diagnostics()) {
       this.timing = null;
       return;
@@ -222,7 +222,8 @@ export class PageAudio {
     const counts = fresh ? this.timing.anchored : this.timing.continuing;
     counts.batches++;
     if (events.length === 1) counts.clock_only_batches++;
-    if (refused) counts.refused[refused]++;
+    if (reanchored) counts.reanchored++;
+    else if (refused) counts.refused[refused]++;
     else counts.admitted++;
     // Visit the entire valid batch even when its first event missed a bound.
     // The final clock is a frontier, not another musical/controller event.
@@ -590,7 +591,20 @@ export class PageAudio {
       else if (at > current + 0.35) refused = "future";
       if (refused) break;
     }
-    this.recordTiming(events, anchor, current, reset || !this.presentationAnchor, refused);
+    // A batch that holds nothing but its frontier loses nothing by arriving
+    // late: the server fell behind the render clock and has caught up. The
+    // anchor moves to that frontier, a lead ahead, rather than asking for the
+    // current output, which would cut every sounding voice to replay it. A
+    // late batch with events is still refused, because it would otherwise
+    // have to play them late. Everything already scheduled is in the past by
+    // then, so the move cannot reorder it.
+    const reanchor = refused === "late" && events.length === 1 && !reset && this.presentationAnchor !== null;
+    this.recordTiming(events, anchor, current, reset || !this.presentationAnchor, refused, reanchor);
+    if (reanchor) {
+      this.presentationAnchor = { audio: current + lead, presentation: clock.at };
+      this.presentationFrontier = clock.at;
+      return true;
+    }
     if (refused) return false;
     // Validate a reset before cancelling the old timeline, then install its
     // new anchor after stopAll has cleared the previous presentation state.

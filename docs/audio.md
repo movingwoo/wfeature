@@ -325,7 +325,13 @@ handset latency; see the rendering acceptance in the testing guide.
 
 An out-of-window, backward or malformed batch requests `audioResume` and
 suppresses further old output until a reset and current-state reconstruction
-arrive. The request is negotiated and output-epoch checked. Definitions are
+arrive. The exception is a late batch that holds nothing but its frontier: it
+lost nothing, so the anchor moves to place that frontier one lead ahead of the
+render clock and playback continues without a reconstruction, which would cut
+every sounding voice to replay it. Everything already scheduled is behind the
+render clock by then, so the move cannot reorder it. Live sessions found two
+thirds of late refusals were such batches, mostly from a title whose server
+ticks stall ([measurements](testing.md#sustained-sound-load-in-real-titles)). The request is negotiated and output-epoch checked. Definitions are
 invalidated too, so a malformed first definition cannot lose subsequent PCM.
 Interruption waits for a running context before requesting fresh output;
 quick load clears an outstanding recovery request with the old epoch.
@@ -337,8 +343,10 @@ Expired percussion leaves voice admission before the next authored attack,
 even if its browser `onended` notification has not run yet. This schedules a
 bounded time window directly; there is no unbounded JavaScript playback queue.
 The receiver also bounds retained sources and PCM references as described below.
-Native CPU, allocation and clipping remain measurement work in the
-[audit](history/audio.md#guest-event-delivery).
+Native cost up to those bounds, and the load and mix level real titles reach,
+are measured in the testing guide's
+[native cost](testing.md#native-cost-of-the-largest-sound-loads) and
+[sustained load](testing.md#sustained-sound-load-in-real-titles) sections.
 
 ### Playout lateness diagnostics
 
@@ -350,7 +358,8 @@ sampled when the complete batch reaches the scheduling-window check. The
 anchor. Keeping them separate prevents the new anchor's intentional lead from
 being mistaken for measured initial delivery latency.
 
-Each group counts checked/admitted batches, clock-only batches and the first
+Each group counts checked/admitted batches, clock-only batches, late
+clock-only batches that moved the anchor (`reanchored`) and the first
 window-refusal reason (`late`, `future`, or negative/nonfinite time `range`).
 All non-clock events in a checked batch contribute, including events after
 the first refusal: not late, positive lateness up to 5 ms, over 5 through 20 ms,
@@ -399,7 +408,10 @@ room for transient tails. Backend PCM admission now shares its retained-output
 budget, as described below. The receiver still needs its own bound: MIDI
 release tails, sequential short waves and retired graphs can remain connected
 until browser callbacks run. These resource policies do not establish handset
-voice-stealing behavior. Native performance remains acceptance work.
+voice-stealing behavior. They bound memory and recovery rather than real-time
+cost: on the development machine Chromium's audio thread stops keeping up
+between 128 and 256 simultaneous waves, while real titles stay far below
+either bound ([measurements](testing.md#native-cost-of-the-largest-sound-loads)).
 
 ### PCM admission and restoration
 
@@ -570,13 +582,15 @@ implemented the Java classes and left the C block at accepted no-ops — and
 they created clips, filled them with SMAF and played them, and every call
 succeeded into nothing.
 
-That block is now real: create, put data, play, stop, clear, free, volume,
-vibrator and mute, on the same `backend.Audio` timeline the Java classes use.
-Its function numbers are read off the callers rather than off the
-specification's print order, which this vendor's table does not follow — the
-table, the argument shapes it was recovered from, and the one call left
-deliberately unread are in [`ktf.md`](ktf.md), "Sound in C, and the table that
-was accepted and thrown away".
+That block is now real: create, put data, play, pause, resume, stop, clear,
+free, device and clip volume, vibrator and mute, on the same `backend.Audio`
+timeline the Java classes use. Its function numbers are read off the callers
+rather than off the specification's print order, which this vendor's table does
+not follow — the table and the argument shapes it was recovered from are in
+[the KTF history](history/ktf.md#implementation-sound-in-c-and-the-table-that-was-accepted-and-thrown-away),
+and the five read later from a lifecycle sweep and from answering two getters
+with marker values are in
+[the audio history](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers).
 
 The lesson for the next platform is the one the KTF record database taught
 first: **a stub that answers success is a value the game will believe.** Nothing
@@ -1166,18 +1180,17 @@ empty media is refused rather than yielding an inert player.
 ## Deliberately incomplete
 
 - **`Player.record`** is refused outright: no microphone can be offered.
-- **Clip helper contracts.** The separate `playUpdate(int,int)` and
-  `playStart(boolean)` methods need further verification. They are distinct
-  from the PlayListener callback implemented on all three Java paths.
-- **Source mute/default-volume extensions** still need verified vendor numeric
-  mappings. KTF extension calls are stubs; LGT remembers these values without
-  routing them to a clip. Known clip/device levels and MIDP VolumeControl,
-  including zero and mute, already control active browser output.
-- **KTF C pause/resume bindings** still need verified slot mappings. The Java,
-  MIDP, SKVM and LGT C paths retain their cursor, repeat mode, note envelope age
-  and PCM position; see [clip pause and resume](audio-ownership.md#clip-pause-and-resume).
-  The evidence for both vendor items is in the
-  [audio history](history/audio.md#unverified-vendor-source-and-slot-mappings).
+- **Clip helper hooks.** `Clip.playStart(boolean)` and `Clip.playUpdate(int,int)`
+  are not called by `Player`. One KTF image names both, and its run reaches
+  neither; every local title that wants playback events takes them through
+  `PlayListener`, which all three Java paths deliver.
+- **Source mutes reach no sound.** KTF C and LGT remember a source's mute state
+  and answer it back; neither routes it to a clip, because the titles that set
+  one go on playing every clip they have (see
+  [the evidence](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers)).
+  The KTF Java `Volume` mute and default-volume extensions stay stubs: no local
+  KTF image names any of the four. LGT's source volume is remembered; its one
+  caller copies the same level to the device volume itself.
 - **Stream-wave assignment and HPS device commands.** 23 local files trigger
   stream notes that the current channel-plus-one mapping turns into waves they
   do not carry, and twelve HPS files hold only device commands. They stay
@@ -1186,9 +1199,15 @@ empty media is refused rather than yielding an inert player.
 - **Wave format coverage.** Score-attached waves support mono 4-bit Yamaha
   ADPCM and mono 8-bit signed/unsigned PCM. PCM audio tracks decode mono ADPCM.
   Stereo, 16-bit PCM, TwinVQ and MP3 playback remain unsupported.
-- **PCM timing and tuning contracts.** ATR volume/expression/pan are implemented;
-  bend, gate cutoff, looping and retrigger semantics remain unverified. Stream
-  sample velocity/gain still needs profile evidence. See [PCM controls](#live-pcm-track-controls).
+- **PCM timing and tuning contracts.** ATR volume/expression/pan are implemented.
+  No local sound carries an ATR bend event, so bend waits for a caller. Section
+  2.2 of the SMAF specification makes every event's gate its internal note-off,
+  but whether a stream wave stops there or plays its sample out is the
+  handset's, as are looping and same-channel retrigger; a hard cutoff would trim
+  more than a tenth from 5,042 of the 8,752 local wave triggers, so the natural
+  tail stays until a handset is heard. Stream sample velocity/gain still needs
+  profile evidence. See [PCM controls](#live-pcm-track-controls) and
+  [the census](history/audio.md#pcm-contract-evidence).
 - **`runskt -audio` exists now**, and the reasoning that kept it away is worth
   keeping: it was that `Player`'s registrations are among the ones no local
   title has ever called. That is still true and was still the wrong measure —

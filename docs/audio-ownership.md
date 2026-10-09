@@ -59,8 +59,9 @@ receive gain updates. Checkpoint validation checks effective gain against the
 saved device/clip levels, and reconstruction sends gain before source events.
 Late sink attachment also supplies current gains before future playback.
 
-Connected guest controls are KTF Java Clip and Volume, KTF C device volume,
-LGT Java/C clip and device volume, SKVM device volume and SKT WIPI Clip volume.
+Connected guest controls are KTF Java Clip and Volume, KTF C device and clip
+volume, LGT Java/C clip and device volume, SKVM device volume and SKT WIPI Clip
+volume.
 SKT MIDP `VolumeControl` uses the same per-clip level and mute state.
 They clamp to 0..100 and read back their stored setting. SKT accepts WIPI's
 boolean `Clip.setVolume` signature and retains the existing void extension.
@@ -72,8 +73,10 @@ decoded handle; merely clearing its loaded flag left active sound orphaned.
 Legacy diagnostic sinks and older pages scale future velocities/samples and
 release held MIDI notes at zero. They cannot adjust active PCM or resume held
 notes after mute. The new page applies the complete gain contract. Vendor
-numeric source mappings (including source mute/default-volume extensions)
-remain unverified and are not treated as device-wide controls. MIDP control
+source mutes are remembered and read back but reach no clip: the local titles
+mute sources that their own clips then play through, as
+[the audio history](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers)
+records. MIDP control
 lookup, notifications and their remaining delivery limitation are described in
 [the audio contract](audio.md#midp-per-player-volume-controls).
 
@@ -120,15 +123,16 @@ note gates. It preserves one-shot/repeating mode. `SetRepeat` can change the
 next score-end action without resetting the cursor. Repeated backend pause or
 resume calls are idempotent; explicit Stop, Close or Play discards the cursor.
 
-KTF Java, LGT Java/C, SKT WIPI Java and SKVM use this path. LGT C resume reads
-only its clip argument, preserves repeat and retains PAUSED/RESUMED callbacks.
+KTF Java/C, LGT Java/C, SKT WIPI Java and SKVM use this path. LGT and KTF C
+resume read only their clip argument and preserve repeat; LGT C retains
+PAUSED/RESUMED callbacks, and KTF C, which has never delivered a C media
+callback, still delivers none.
 WIPI pause/resume reject invalid transitions. MIDP stop/start retains position;
 deallocate retains it too; setting media time to zero rewinds the current pass
 without replenishing its remaining loop budget. WIPI
 Stop remains cancellation, and WIPI Play starts a new pass. SKVM pause still
 interrupts a blocking play/loop with `UserStopException`; resume is nonblocking
-and creates no replacement wait. KTF C pause/resume slot bindings remain
-unverified. MIDP finite counts, media time, natural-end state and deferred
+and creates no replacement wait. MIDP finite counts, media time, natural-end state and deferred
 notifications follow the [lifecycle contract](audio.md#midp-playback-lifecycle).
 
 The optional `AudioResumeSink` callback carries note age. The page reconstructs
@@ -326,9 +330,9 @@ Per-file decode budgets and aggregate loaded-sound admission now pass the
 corpus output, bounded fuzzing and the six-scene smoke check. The known Display
 refusal remains unchanged at this stage.
 
-Unverified source controls and KTF C pause bindings,
-guest timestamps and synthesis quality remain tracked in the sound audit and
-local `SOUND.md`. The physical-phone APK confirmation remains outstanding.
+Source controls and the KTF C pause bindings were later settled from callers
+([audio history](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers)).
+Synthesis quality and the physical-phone APK confirmation remain outstanding.
 
 ## Checkpoint Display and audio catch-up
 

@@ -870,13 +870,17 @@ func (runtime *initializationRuntime) aotAssignable(className string, objectAddr
 		}
 	}
 	// Without the object's own class record the registry is all there is, and
-	// it only reaches as far as the classes already registered.
+	// it only reaches as far as the classes already registered. It records
+	// superclass names and no interfaces, so the end of its chain is a no only
+	// for a class target: an interface the guest's records could not settle is
+	// one the registry cannot rule out either.
+	interfaceTarget := target.AccessFlags&jvm.AccessInterface != 0
 	for current, depth := className, 0; depth < maxAOTHierarchyDepth; depth++ {
 		if current == target.Name {
 			return true, true
 		}
 		if current == "java/lang/Object" || current == "" {
-			return false, true
+			return false, !interfaceTarget
 		}
 		metadata, ok := runtime.client.vm.AOTClass(current)
 		if !ok || metadata.SuperName == current {
@@ -941,7 +945,17 @@ func (runtime *initializationRuntime) aotImplements(interfaces []uint32, name st
 	if depth >= maxAOTHierarchyDepth {
 		return false, false
 	}
-	for _, address := range interfaces {
+	for _, entry := range interfaces {
+		cellName, address, err := runtime.aotInterfaceEntry(entry)
+		if err != nil {
+			return false, false
+		}
+		if cellName == name {
+			return true, true
+		}
+		if address == 0 {
+			return false, false
+		}
 		summary, err := runtime.aotClassSummary(address)
 		if err != nil {
 			return false, false
@@ -958,6 +972,34 @@ func (runtime *initializationRuntime) aotImplements(interfaces []uint32, name st
 		}
 	}
 	return false, true
+}
+
+// aotInterfaceEntry reads one word of a class descriptor's implements list.
+//
+// The current generation leaves class record pointers there. An older
+// relocatable module leaves reference cells — a name-table index with the
+// unresolved bit — and nothing in the module ever resolves them, because the
+// type check is the platform's to answer; so the platform reads the name. A
+// record pointer is word-aligned, which is what tells the two apart. The
+// address returned is the record a cell's name resolves to, the module's own
+// class or a registered one, and zero when neither is known: the name still
+// answers whether the entry is the target, and anything past it is undecided.
+// No cell is written back, since the module never reads one.
+func (runtime *initializationRuntime) aotInterfaceEntry(entry uint32) (string, uint32, error) {
+	if entry&moduleUnresolved == 0 || runtime.client.moduleSegment == 0 {
+		return "", entry, nil
+	}
+	name, err := runtime.moduleName(entry)
+	if err != nil {
+		return "", 0, err
+	}
+	if address, ok := runtime.moduleClassByName[name]; ok {
+		return name, address, nil
+	}
+	if metadata, ok := runtime.client.vm.AOTClass(name); ok {
+		return name, metadata.Address, nil
+	}
+	return name, 0, nil
 }
 
 // aotClassSummary is the part of a guest class record the type check needs:

@@ -7582,9 +7582,12 @@ the guest's class records cannot read that entry. The media listener check
 stopped that title's `startApp` on it until it learned to leave such an entry
 undecided ([Whole-corpus acceptance against
 0.5.2](../testing.md#whole-corpus-acceptance-against-052)). The type check's
-registry fallback still answers no for an interface target in that case. None
+registry fallback answered no for an interface target in that case. None
 of the three modules asked the type check anything in a 600-tick run with
-keys, so no local title is known to depend on that answer.
+keys, so no local title is known to depend on that answer. Both checks now read
+the cell's name out of the name table the module's own resolvers index, and
+the fallback no longer claims a no it cannot see
+([Older module implements cells](../testing.md#older-module-implements-cells)).
 
 **The rest of the runtime's state is one block, reached through `fp`.** Five
 words of it are ever read, and the module's own glue names each one: `+0x24`

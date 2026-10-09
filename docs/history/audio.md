@@ -123,6 +123,77 @@ No matching carrier ABI table was found in the published specification corpus
 or existing traces. Implementation needs matching SDK/import declarations or
 named original-runtime dispatch entries, followed by an authored caller test.
 These unresolved mappings must not become guessed global mute controls.
+The next section settles them from what titles pass instead.
+
+### Source mutes and the KTF C media slots, read from callers
+
+On 2026-10-09 a lifecycle sweep answered what the section above left open. It
+watched what titles hand each function and when, rather than numbering a list.
+
+**Method.** A temporary probe counted every KTF C media call with its argument
+registers, its link register and the lifecycle phase it arrived in: inside
+`pauseApp`, inside `resumeApp`, or an ordinary tick. Each of the 300 local KTF
+archives (273 distinct) ran `runktf -play -speed 4 -ticks 900` with four key
+presses and `-park 650:300`, and 71 of them reached the C media block. The 130
+LGT archives ran 2,400 ticks with `runlgt -trace-live` on the media slots. Two
+follow-ups used the same probe: one answered functions 14 and 25 with the marker
+values 77 and 66, and one rewrote a single byte of the settings file a title
+carries in its archive. The probe is not part of the tree.
+
+**9 and 10 are pause and resume.** Function 9 arrives only inside `pauseApp`
+(three titles) and function 10 only inside `resumeApp` (two); no title reaches
+either anywhere else. In the title that makes both calls, each names the clip
+its last function 8 played and had not stopped. A second title pauses and
+resumes a clip it never created; the third pauses its music and on resume stops,
+refills and plays it again. That is `MC_mdaPause(clip)` and `MC_mdaResume(clip)`.
+
+**14, 25 and 26 are the two volume getters and the clip setter.** 26 arrives on
+every clip between its putData and its play in 41 titles, with a level from 0 to
+100 that is constant per title and differs between them (0 in fifteen, 60 in
+nine, 20 in five, and 34, 40, 45, 75, 90, 100 among the rest). 14 takes nothing —
+r0 holds the same platform stub address in every title, which is what a call
+without arguments leaves there — and 25 takes a clip. With the getters answering
+markers, seven of the eight titles that call one passed exactly that marker to
+26: 77 in the four that call 14, 66 in the three that call only 25. The eighth
+passes its own 50 either way. So 14 and 25 read a volume and 26 is handed one:
+`MC_mdaGetVolume()`, `MC_mdaClipGetVolume(clip)` and
+`MC_mdaClipSetVolume(clip, level)`, the setter sitting past the vibrator with
+its getter in front of it. The reading of 26 as a streaming clip's water mark,
+the other contract with a clip and a percentage, is out. While unnamed, both
+getters answered zero, so those titles were asking for every clip to be silent
+through a call this platform discarded.
+
+**A title's own volume setting is that level.** One title that passes 0 without
+calling either getter carries a settings file whose first byte is a step from 0
+to 5. Rewriting it to 0, 1, 2, 3 and 5 made 26 receive 0, 20, 40, 60 and 100.
+The archive ships step 0, so on a handset that save plays muted by the title's
+own option; here the option did nothing until 26 was bound.
+
+**Source mutes are not the clips' source.** On KTF, 25 titles call 17: 23 mute
+source 3 at startup, one mutes source 0 and one unmutes source 3. Nineteen of
+the 23 go on to play their clips through function 8 for the rest of the run,
+and an ordered trace of two of them shows the mute is their first media call.
+Fourteen also call 18 with the same `(3)`, which is `MC_mdaGetMuteState`. On
+LGT, 46 titles set a mute at startup — 32 source 6, nine source 0, three source
+3, two with an address where the source belongs — and 33 of the 44 that name a
+source then play clips through `clipPlay`. Had any of those sources been the one their clips play
+through, those titles would have been silent on a handset; the tone a handset
+makes on a key press fits, and this platform makes none. So a source mute is
+remembered and read back and reaches no clip. LGT's source volume has one
+caller, which reads source 11 and hands the level to `MC_mdaSetVolume` itself.
+
+**The KTF Java `Volume` extensions are unused.** `getMute`, `setMute`,
+`getDefaultVolume` and `setDefaultVolume` appear in no local KTF image, nested
+archives included, while 162 images name `setVolume`. They stay stubs.
+
+**The `Clip` helper hooks are unused too.** `playStart(boolean)` and
+`playUpdate(int,int)` appear in one KTF image's name pool, and its run reaches
+neither: it receives its five playback events through `PlayListener`.
+
+What changed: KTF C functions 9, 10, 14, 18, 25 and 26 are bound, with clip
+volume applied beside the device level and mute state remembered; both are part
+of the C control record a quick save keeps. Functions no local title reaches
+are refused as before. [Verification](../testing.md#ktf-c-media-slots-read-from-callers).
 
 ### Rendered controller behavior
 
@@ -195,6 +266,16 @@ not recorded handset behavior: neither overlap nor a long gate proves looping
 or replacement. The 1,014 known archive-member read exclusions remain.
 The scanner, per-record anonymous counts and summary remain under
 `build/sound-pcm-contract/`; no game files or saves are changed.
+
+A boundary census on 2026-10-09 decoded every SMAF member of the local KTF and
+LGT archives (5,976 and 3,628 distinct files, 6,645 and 2,340 wave events) and
+measured how far each wave starts and ends from zero. No wave starts above a
+tenth of full scale. 115 KTF and 100 LGT waves end above a tenth, and 25 and 62
+above a quarter, which is a step to silence when the buffer runs out; 40 and 71
+carry a DC offset above 5%. A short fade at a wave's natural end would remove
+those steps and change nothing audible in the rest, but whether the handset
+ends a stream that way is not known, so it is left for a listening decision.
+The scanner counts only; no sample left the machine.
 
 Current score note zero selects `waves[channel+1]` and discards missing waves.
 It now updates channel velocity memory before that dispatch, even when the wave

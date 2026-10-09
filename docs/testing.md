@@ -1978,6 +1978,16 @@ the production diff also passes independent review. Evidence is retained under
 not native rendering, network transit, post-admission source allocation cost,
 physical-device distributions or listening acceptance.
 
+A later change stops refusing a late batch that holds only its frontier. "A
+late frontier without events moves the anchor and keeps playing" replaces the
+silent clock-only refusal case: the anchor moves to place the frontier one lead
+ahead, the batch is counted as `reanchored`, a note that follows is scheduled
+from the moved anchor, and a late batch that carries an event is still refused.
+"A reset anchor after a refusal is counted apart from continuing batches" keeps
+the reset accounting the old case covered, now through a refused event batch.
+Both fail against the previous page; all 428 Node tests pass. The live sessions
+that motivated it are in [sustained load](#sustained-sound-load-in-real-titles).
+
 ### Fractional PCM reconstruction
 
 The authored baseline at 4 Hz captures a one-second wave at 125 ms. At another
@@ -2093,7 +2103,11 @@ reach a running context and that every source the page schedules starts ahead
 of the render clock, and it folds the debug page's `audio playout timing`
 reports into totals. A wrapper around the page's own window check records the
 first batches and every refusal with page time, render time and the batch's
-presentation times.
+presentation times. It also reports the most sources alive at once and the
+peak of the mix the page sends to the speakers. `WFEATURE_AUDIO_SECONDS`
+lengthens the run and `WFEATURE_AUDIO_KEYS=mash` keeps pressing keys after the
+three confirms; timing reports are copied as they are logged, because a long
+run pushes the first ones out of the debug log view.
 
 ```sh
 WFEATURE_AUDIO_ARCHIVE=/path/to/archive PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
@@ -2123,6 +2137,108 @@ server, not lost timestamps. Whether an event a few milliseconds late should
 play at once instead of reconstructing is a tuning question for device
 lateness data. Per-run results without archive names are in
 `build/sound-live-audio/`.
+
+### Native cost of the largest sound loads
+
+`web/acceptance/audio-load.mjs` renders the page's own `PageAudio` offline, four
+seconds at 48 kHz, under loads up to the two admission ceilings, and samples the
+browser's resident memory from outside while it runs. The time a render takes
+against the audio it produces is the audio thread's share of one core:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-load.mjs chromium
+```
+
+Every wave is a distinct 8 kHz buffer, so nothing is shared through the buffer
+cache. On 2026-10-09, on the development machine (Apple silicon, Chromium 153
+and WebKit 26.6 through Playwright 1.63):
+
+| Load | Native sources | Chromium (× real time) | WebKit (× real time) |
+| --- | ---: | ---: | ---: |
+| 24 notes | 24 | 40 | 98 |
+| 24 notes + 4 waves | 28 | 24 | 80 |
+| 24 notes + 16 waves | 40 | 8.8 | 71 |
+| 24 notes + 32 waves | 56 | 4.5 | 59 |
+| 24 notes + 64 waves | 88 | 2.3 | 42 |
+| 24 notes + 128 waves | 152 | 1.4 | 25 |
+| backend ceiling: 24 notes + 256 waves, 32 MiB of 16-bit charges | 280 | 0.8 | 15 |
+| receiver ceiling: 512 sources, just under 128 MiB of floats | 512 | 0.5 | 8.3 |
+
+Every load was admitted and rendered. A wave costs Chromium far more than a
+note, and somewhere between 128 and 256 simultaneous waves its audio thread
+stops keeping up on this machine; WebKit keeps up at both ceilings. Chromium's
+renderer grew from 357 MiB to 488 MiB under the backend ceiling and to 608 MiB
+under the receiver's; WebKit runs its audio outside the processes the harness
+can see. A phone is slower than this machine, so these are upper bounds on
+what an Android WebView sustains. The ceilings bound memory and recovery, not
+real-time cost: the [sustained load in real titles](#sustained-sound-load-in-real-titles)
+is what says how far below them play stays. Logs: `build/sound-load/`.
+
+### Sustained sound load in real titles
+
+A temporary probe recorded, for each run, the most PCM references and raw bytes
+the backend held at once, the most retained notes, every wave started and every
+wave refused. Each local archive ran 3,000 ticks with a key pressed every
+twelve ticks, cycling OK, 5, the four directions, 2 and 8 (KTF under
+`runktf -play -speed 4`, LGT under `runlgt`, SKT under `runskt`):
+
+| Group | Runs | Runs with PCM | Most waves at once | Most bytes at once | Waves started | Refused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| KTF | 300 (260 distinct finished) | 138 | 7 | 156,768 | 4,272 | 0 |
+| LGT | 130 (90 distinct finished) | 44 | 2 | 69,860 | 1,020 | 0 |
+| SKT | 106 (90 distinct finished) | 44 | 7 | 106,640 | 2,166 | 0 |
+
+Against the backend's 256 references and 32 MiB, the busiest title holds 2.7%
+of the first and 0.5% of the second; the most notes held is the 24-note voice
+limit. A run that was cut at the 180-second probe timeout prints nothing, which
+is what the distinct counts leave out. A second pass over the 71 titles that use
+the KTF C media block, with functions 14, 25 and 26 bound, found at most two
+waves at once. Three titles run with both builds side by side started 3 and 3,
+0 and 0, and 60 and 42 waves. That third title is what `-play` does to a count:
+eight runs of the earlier build started 27 to 90 waves and six of this one 11
+to 63, and every run's peak was a single wave.
+
+The two titles with the most PCM on each platform then ran for 90 seconds in
+the real page, against a debug server, with keys pressed the same way:
+
+```sh
+WFEATURE_AUDIO_SECONDS=90 WFEATURE_AUDIO_KEYS=mash WFEATURE_AUDIO_ARCHIVE=/path/to/archive \
+  PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/audio-live.mjs build/debug/wfeature-server chromium
+```
+
+| Archive prefix | Most sources alive (Chromium / WebKit) | Mix peak at default sliders | Late refusals, frontier-only in brackets (Chromium / WebKit) |
+| --- | --- | ---: | --- |
+| KTF `ab601085` | 24 / 25 | 0.27 | 3 (2) / 0 |
+| KTF `599c1325` | 25 / 25 | 0.11 | 0 / 0 |
+| SKT `858d7a15` | 20 / 18 | 0.42 | 1 (1) / 0 |
+| SKT `2f524600` | 7 / 7 | 0.18 | 3 (3) / 0 |
+| LGT `ecb1bf8d` | 13 / 13 | 0.10 | 31 (25) / 18 (13) |
+| LGT `c9b287e3` | 31 / 28 | 0.08 | 4 (0) / 2 (1) |
+
+No source started late and no meter read crossed full scale. At most 31 sources
+were alive against the 512 the page admits. The page's two sliders default to
+half and its master gain is fixed, so full sliders double the mix: the loudest
+peak, 0.42, would reach about 0.84, short of clipping, so this sample calls for
+no limiter. The meter sums everything the page connects to the speakers, read
+four times a second over overlapping windows.
+
+Every late refusal asked the server for its current output, and 80 of the 121
+over both passes were batches holding only their frontier, which lose nothing
+by arriving late. Most came from one LGT title whose server ticks stall for up
+to a quarter second under the debug build. The page now moves its anchor for
+such a batch instead of reconstructing ([the contract](audio.md#presentation-timestamps-and-recovery)).
+Run again on that title for the same 90 seconds, it asked for 6 reconstructions
+in Chromium and 7 in WebKit where it had asked for 31 and 18, and 14 batches in
+each moved the anchor instead; the remaining requests all follow batches that
+carried events.
+
+The first KTF title stopped in both engines partway through its run: its guest
+thread called `new Character(char)`, which the KTF class table does not declare
+although the JVM implements it. The CLI sweep found the same in one title and
+`InputMethodHandler.notifyKeyInput(II)Z` missing in two. Neither is a sound
+defect; both are tracked as follow-ups. Results and the probe's patch are
+under `build/sound-load/`.
 
 ### Quick saves from 0.5.2
 
@@ -2178,7 +2294,9 @@ Two archives got worse and none got better:
   type check does, and still requires a concrete, executable `playUpdate`.
   `TestKTFWIPIListenerAcceptsAnUnlinkedImplementsEntry` covers the entry and a
   quick save over it. All three older modules pass all eight rungs again, and
-  the regressed one receives four `playUpdate` calls in 600 ticks.
+  the regressed one receives four `playUpdate` calls in 600 ticks. Both this
+  check and the guest's type check later learned to read such a cell by its
+  name ([below](#older-module-implements-cells)).
 - **An SKT title passed the interactive rung in the 0.5.2 batch but skipped it
   in this one**, because its screen was still changing. Run alone, both trees
   skip it three times out of three for the same reason, so the batch pass was
@@ -2186,3 +2304,50 @@ Two archives got worse and none got better:
 
 Every other archive reached the same rung, with the same outcome at every
 stage.
+
+### Older module implements cells
+
+An older relocatable module leaves each implements-list entry as a reference
+cell: a name-table index with the unresolved bit. The guest's type check and the
+media listener check both walk those lists. Before, neither could read a cell,
+so the listener check left the answer open and the type check fell back to the
+Host registry, which records superclass names only and answered no to every
+interface target — including the one a class names outright. Both now read a
+cell's name from the module's name table, compare it with the target and follow
+the record it names; a name neither the module nor the registry knows stays
+undecided. The registry fallback also stops answering no for an interface
+target at all, since it cannot see one.
+
+`TestCheckTypeReadsAModuleImplementsCellByName` covers a cell naming the target
+(yes), one naming an interface that extends it (yes), one naming an unrelated
+interface (a decided no) and an unknown name (permissive yes); the first three
+answered no before. `TestCheckTypeRegistryFallbackLeavesAnInterfaceTargetOpen`
+covers the fallback. `TestKTFWIPIListenerReadsAModuleImplementsCellByName`
+refuses a listener whose cell names an unrelated interface — the previous check
+accepted it as undecided — and accepts one naming `PlayListener` without an
+undecided count. None of the three local older modules asks the type check
+anything in a 600-tick run with keys, so no local title changes.
+
+### KTF C media slots read from callers
+
+The evidence for functions 9, 10, 14, 18, 25 and 26 of the KTF C media block is
+in [the audio history](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers).
+It came from a temporary probe, kept out of the tree, that counted each call
+with its argument registers, link register and lifecycle phase, over all 300
+local KTF archives:
+
+```sh
+wfeature runktf <archive> -play -speed 4 -ticks 900 \
+  -key 200:fire -key 300:fire -key 400:fire -key 500:5 -park 650:300 -diag <report>
+```
+
+and over the LGT archives with `runlgt -ticks 2400 -trace-live` on the media
+slot names. `TestWIPICMediaPauseAndResumeKeepTheClipsPlace` pauses a playing C
+clip at 250 ms, holds it for ten seconds without output, resumes the held note
+at age 250 ms and ends its gate at the remaining 250 ms; second calls, a stopped
+clip and a null clip answer `M_E_ERROR`. `TestWIPICMediaClipVolumeIsTheTitlesOwn`
+reads the device level, sets a clip level before load and after, and clamps.
+`TestWIPICMediaMuteStateIsRememberedAndSilencesNothing` reads back what was set,
+plays a clip under a muted source and bounds the sources a guest can name. The
+control-state round trip carries mute state and clip volume through a quick
+save, and two malformed records are refused.
