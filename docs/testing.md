@@ -2147,5 +2147,42 @@ against both names: a start from the slot and a quick load both answer the
 page's sentence for an earlier build, the running game and its saves are
 unchanged, the log names the file left in place, and the new quick save beside
 it loads. The rehearsal program is the ignored `build/_rehearsal`
-(`rehearsal capture|load GAMES_DIR OUT_DIR PREFIX...`), built once in a 0.5.2
-worktree and once here.
+(`rehearsal capture|load|store GAMES_DIR OUT_DIR PREFIX...`), built once in a
+0.5.2 worktree and once here.
+
+The same seven slots then went through this tree's slot store as the bytes
+0.5.2 wrote. The `store` mode puts each one where a directory store keeps
+slots, as `<archive SHA-256>.v2.wfq`, and asks for it the way a Host does. All
+seven are offered, all seven are refused with `ErrCheckpointLegacy` naming the
+file, none returns a byte, and every file is unchanged afterwards.
+
+### Whole-corpus acceptance against 0.5.2
+
+On 2026-10-09 the acceptance tool behind `make acceptance` ran the seven local
+corpora twice with `-since '' -cache=false`: once with the 0.5.2 tree and once
+with this one. They hold 546 archives across KTF, LGT and SKT. The default
+60-minute stage timeout stopped the largest KTF corpus's interactive rung after
+126 of its 257 archives on both sides, so that rung compares those 126. The
+other rungs and corpora compare every archive. One run recorded absolute corpus
+paths and the other relative ones, so the repository prefix was stripped before
+`-compare`.
+
+Two archives got worse and none got better:
+
+- **An older relocatable KTF module stopped at `startApp` in `Clip.setListener`.**
+  0.5.2 ignored listeners. The new check read the listener's implements-list
+  entry `0xb` as a class record, but it is a reference cell naming
+  `org/kwis/msp/media/PlayListener`
+  ([the older modules](history/ktf.md#the-older-modules-run-under-the-platform-and-all-three-of-them-play)).
+  The check now treats a record it cannot read as undecided, as the guest's
+  type check does, and still requires a concrete, executable `playUpdate`.
+  `TestKTFWIPIListenerAcceptsAnUnlinkedImplementsEntry` covers the entry and a
+  quick save over it. All three older modules pass all eight rungs again, and
+  the regressed one receives four `playUpdate` calls in 600 ticks.
+- **An SKT title passed the interactive rung in the 0.5.2 batch but skipped it
+  in this one**, because its screen was still changing. Run alone, both trees
+  skip it three times out of three for the same reason, so the batch pass was
+  load timing.
+
+Every other archive reached the same rung, with the same outcome at every
+stage.

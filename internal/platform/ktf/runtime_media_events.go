@@ -110,12 +110,24 @@ func (runtime *initializationRuntime) validateClipListener(listener *jvm.Object)
 
 // Read the guest records again: cached summaries in a checkpoint are not
 // evidence that its callback owner actually implements the declared type.
+//
+// Only a walk that reads every record and never meets the target answers no,
+// as checkAOTType does. An older relocatable module's implements list holds
+// reference cells naming an interface rather than class records, and refusing
+// a listener for that stopped one title's startApp at setListener. A record
+// the walk cannot read leaves the answer open, and the caller's checks on the
+// callback still apply.
 func (runtime *initializationRuntime) validateAOTMediaType(address uint32, name, target string) error {
 	pending, seen := []uint32{address}, map[uint32]bool{address: true}
+	undecided := false
 	for next := 0; next < len(pending) && next < maxAOTHierarchyDepth; next++ {
 		summary, err := runtime.readAOTClassSummary(pending[next])
 		if err != nil {
-			return err
+			if next == 0 {
+				return err
+			}
+			undecided = true
+			continue
 		}
 		if next == 0 && summary.name != name {
 			return fmt.Errorf("KTF media guest class differs from its binding")
@@ -133,6 +145,10 @@ func (runtime *initializationRuntime) validateAOTMediaType(address uint32, name,
 				pending = append(pending, parent)
 			}
 		}
+	}
+	if undecided && len(pending) <= maxAOTHierarchyDepth {
+		runtime.countDiagnostic("media type undecided for " + target)
+		return nil
 	}
 	return fmt.Errorf("KTF media object does not implement %s within the class graph limit", target)
 }

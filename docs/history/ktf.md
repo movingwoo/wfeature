@@ -7573,6 +7573,19 @@ an array class's element class, arrive as reference cells rather than pointers;
 the vtable word is zero. Linking is resolving the two cells by name and laying
 out the table the method records already number.
 
+**The implements list stays unlinked.** Its entries are reference cells too,
+and nothing resolves them: the module never reads them, and the type check is
+the platform's to answer. One module's listener class still names
+`org/kwis/msp/media/PlayListener` as cell `0xb`, name-table index 5 with the
+unresolved bit, when its first instance reaches `Clip.setListener`, so a walk of
+the guest's class records cannot read that entry. The media listener check
+stopped that title's `startApp` on it until it learned to leave such an entry
+undecided ([Whole-corpus acceptance against
+0.5.2](../testing.md#whole-corpus-acceptance-against-052)). The type check's
+registry fallback still answers no for an interface target in that case. None
+of the three modules asked the type check anything in a 600-tick run with
+keys, so no local title is known to depend on that answer.
+
 **The rest of the runtime's state is one block, reached through `fp`.** Five
 words of it are ever read, and the module's own glue names each one: `+0x24`
 parks the caller's stack pointer while a helper runs, `+0x2c` heads the chain

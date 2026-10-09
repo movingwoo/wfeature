@@ -454,6 +454,42 @@ func TestKTFWIPIListenerChecksDeclaredGuestInterface(t *testing.T) {
 	fixture.wantHistory(fixture.event(0, 2))
 }
 
+// An older relocatable module leaves its implements list as reference cells
+// naming the interface, which no class record sits at. The listener is still
+// accepted, after a quick save too, on the strength of its callback.
+func TestKTFWIPIListenerAcceptsAnUnlinkedImplementsEntry(t *testing.T) {
+	fixture := newKTFWIPIListenerFixture(t)
+	metadata, ok := fixture.client.JVM().AOTClass(testfixture.KTFListenerClass)
+	if !ok {
+		t.Fatal("authored listener class was not loaded")
+	}
+	word := func(address uint32) uint32 {
+		return binary.LittleEndian.Uint32(readTestBytes(t, fixture.client, address, 4))
+	}
+	interfaces := word(word(metadata.Address+8) + 16)
+	// 0xb is the cell one module's listener carried: name-table index 5 with
+	// the unresolved bit set.
+	if err := fixture.client.Core().Memory().Write(interfaces, binary.LittleEndian.AppendUint32(nil, 0xb)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.setListener(fixture.listeners[0])
+	fixture.call("play", true, false)
+	fixture.drain()
+	fixture.wantHistory(fixture.event(0, 2))
+
+	checkpoint, err := fixture.session.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := fixture.session.options
+	options.Clock, options.AudioSink = NewManualClock(time.Unix(1900000000, 0)), &audioPauseProbe{}
+	prepared, err := PrepareSessionCheckpoint(fixture.archive, checkpoint, options)
+	if err != nil {
+		t.Fatalf("quick save with an unlinked implements entry was refused: %v", err)
+	}
+	prepared.Discard()
+}
+
 func TestKTFWIPIListenerRequiresExecutableInstanceCallback(t *testing.T) {
 	for _, test := range []struct {
 		name   string
