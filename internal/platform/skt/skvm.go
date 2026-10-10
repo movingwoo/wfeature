@@ -1874,12 +1874,13 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil || font == nil {
 		font, _ = fontReceiver(runtime.fontObject(fontSystem, fontPlain, fontMedium))
 	}
-	previous := context.color
-	context.color = screenForeground
+	// The field draws in the colour the title set, as every other drawing
+	// call on a Graphics does. It used to be black whatever the title chose,
+	// which put two local titles' names black on their own black and dark
+	// input bars; the title draws the bar and the field over it in its paint.
 	context.withDestinationWrite(func() {
 		font.render(context, text, int64(x)+int64(context.translateX), int64(y)+int64(context.translateY))
 	})
-	context.color = previous
 	return jvm.VoidValue(), nil
 }
 

@@ -2,6 +2,7 @@ package lgt
 
 import (
 	"context"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -82,6 +83,12 @@ func (session *Session) javaTextInput() (*backend.TextInput, error) {
 			}
 			state.text = replacement
 			state.revision++
+			// A card paints only when asked, and no key reached the title to
+			// make it ask: the committed text stayed off screen until the
+			// next press. Request the frame a changed component would.
+			if runtime.card != 0 {
+				runtime.cardDirty = true
+			}
 			return nil
 		},
 	}, nil
@@ -126,19 +133,27 @@ func (session *Session) cTextInput() *backend.TextInput {
 
 			calls := state.calls
 			state.pending = encoded
+			// Only the guest runs until the deferred reset, so an input-method
+			// call it makes is part of delivering this text.
+			state.delivering = true
 			delivered := false
 			defer func() {
 				state.pending = nil
+				state.delivering = false
 				if delivered {
 					state.revision++
 				}
 			}()
 			for len(state.pending) != 0 {
-				before := len(state.pending)
+				before, reached := len(state.pending), state.calls
 				err = client.callClet(ctx, "handleCletEvent", handler,
 					[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
+				if err == nil && state.calls == reached {
+					err = client.serviceDeferredCarrier(ctx, reached)
+				}
 				delivered = delivered || len(state.pending) < before
-				if err != nil || len(state.pending) >= before || state.revision != revision {
+				if err != nil || len(state.pending) >= before || state.revision != revision ||
+					client.inputMode != mode || client.clet.HandleEvent != handler {
 					break
 				}
 			}
@@ -146,21 +161,66 @@ func (session *Session) cTextInput() *backend.TextInput {
 			if err != nil {
 				return err
 			}
-			if state.revision != revision {
-				return backend.ErrTextInputChanged
-			}
 			if consumed {
 				return nil
 			}
+			if state.revision != revision || client.inputMode != mode || client.clet.HandleEvent != handler {
+				return backend.ErrTextInputChanged
+			}
+			if delivered {
+				// The widget took a prefix and stopped asking for more, which
+				// is its own length limit at work: the keys a handset sent
+				// past it would have gone nowhere too.
+				return nil
+			}
 			if state.calls == calls {
+				// The carrier went to the game as a key and never reached the
+				// automaton: no field is taking keys, whatever the last mode
+				// selection suggested.
+				state.active = false
 				return backend.ErrTextInputChanged
 			}
 			// The widget reached MC_imHandleInput but its completion buffer
-			// could not hold the whole value. Nothing was inserted, so the
-			// same edit can be retried with a shorter string.
+			// could not hold even the first character. Nothing was inserted,
+			// so the same edit can be retried.
 			return backend.ErrInvalidTextInput
 		},
 	}
+}
+
+// Bounds on waiting for a widget that reads its keys in a timer.
+const (
+	maxDeferredCarrierRounds = 8
+	maxDeferredCarrierWait   = time.Second
+)
+
+// serviceDeferredCarrier runs the Clet's timers after a carrier event that did
+// not reach the input method. One local title queues the keys it is handed and
+// reads them in its frame timer: the carrier reached the automaton only after
+// the commit had returned, and the title took it as the digit it is. The KTF
+// C route waits for such a timer in the same way. Timers fire in their own
+// order at their own deadlines, so this is the next frames of the game run
+// early; it stops at the first input-method call, or when nothing is armed
+// within the bound and the carrier stays a key the title did not route.
+func (client *Client) serviceDeferredCarrier(ctx context.Context, reached uint64) error {
+	state := &client.cTextInput
+	var waited time.Duration
+	for round := 0; round < maxDeferredCarrierRounds && state.calls == reached && len(state.pending) != 0; round++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		wait, armed := client.nextTimerDue()
+		if !armed || waited+max(wait, 0) > maxDeferredCarrierWait {
+			return nil
+		}
+		if wait > 0 {
+			waited += client.clock.advance(wait)
+		}
+		if err := client.serviceTimers(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateCTextInput(text string) ([]byte, error) {

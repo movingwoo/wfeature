@@ -254,6 +254,12 @@ func cTextInputFixture(t *testing.T, mode uint32) *Session {
 	if applied := callSlot(t, session.client, slotIMSetCurrentMode, mode); applied != 1 {
 		t.Fatalf("setting input mode %d answered %d", mode, applied)
 	}
+	// The widget is open once a key the player pressed reached it: the
+	// fixture passes every key to the automaton, as a name widget does.
+	session.client.SendEvent(EventKeyPressed, '#', 0)
+	if err := session.client.deliverEvents(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	return session
 }
 
@@ -323,13 +329,18 @@ func TestCTextInputValidatesEncodingAndCapacityBeforeInsertion(t *testing.T) {
 	if err := input.Commit(t.Context(), "🙂"); !errors.Is(err, backend.ErrInvalidTextInput) {
 		t.Fatalf("unencodable commit error = %v", err)
 	}
-	// The fixture widget supplies a 16-byte buffer. A value that needs 17
-	// bytes including its terminator is rejected atomically and can be retried.
-	if err := input.Commit(t.Context(), "1234567890123456"); !errors.Is(err, backend.ErrInvalidTextInput) {
+	// The fixture widget supplies a 16-byte buffer. A value that needs more
+	// arrives over successive carriers in whole characters, the buffer full
+	// each time but the last: 15 bytes, then the remaining character.
+	calls := session.client.cTextInput.calls
+	if err := input.Commit(t.Context(), "123456789012345가"); err != nil {
 		t.Fatalf("over-capacity commit error = %v", err)
 	}
-	if err := input.Commit(t.Context(), "123456789012345"); err != nil {
-		t.Fatalf("capacity retry: %v", err)
+	if got := session.client.cTextInput.calls - calls; got != 2 {
+		t.Fatalf("carriers taken = %d, want 2", got)
+	}
+	if got, err := session.client.readCString(fixtureInputCompleted); err != nil || decodeEUCKR([]byte(got)) != "가" {
+		t.Fatalf("last completion = %q: %v", got, err)
 	}
 }
 
@@ -652,5 +663,24 @@ func TestAddChildRejectsShellsAndCyclesBeforeMutation(t *testing.T) {
 	}
 	if got := len(client.javaWidgetState(child).children); got != 0 {
 		t.Fatalf("rejected cycle added %d children", got)
+	}
+}
+
+// A card only paints when it has asked to, and a Host commit reaches the field
+// without a key that would have made the title ask. The committed text stayed
+// off screen until the next press.
+func TestTextInputCommitAsksThePushedCardToPaint(t *testing.T) {
+	session, _, _ := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "old")
+	runtime := session.client.javaRun
+	runtime.card, runtime.cardDirty = 0x1000, false
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Commit(context.Background(), "new"); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.cardDirty {
+		t.Fatal("commit left the pushed card without a paint request")
 	}
 }

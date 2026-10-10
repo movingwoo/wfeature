@@ -336,3 +336,42 @@ func TestTextInputRecognizesAnAOTTextFieldSubclass(t *testing.T) {
 		t.Fatalf("subclass text = %q", got)
 	}
 }
+
+// A Host commit changes what the field shows without a key reaching the title,
+// so nothing in the title asks for the frame a key would have led it to
+// request. A card whose worker owns its frame cadence is not painted
+// automatically, and the committed text stayed off screen until the next key.
+func TestTextInputCommitRequestsAFrameForTheShownCard(t *testing.T) {
+	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	client, runtime := session.Client, session.Client.runtime
+	painted := 0
+	if err := client.JVM().RegisterNative("test/Card", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V",
+		func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+			painted++
+			return jvm.VoidValue(), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	card := &jvm.Object{ClassName: "test/Card", Fields: make(map[string]jvm.Value)}
+	runtime.displayCards = append(runtime.displayCards, card)
+	client.workers = []*guestWorker{{paintedCard: card}}
+	if _, err := runtime.paintTopCard(); err != nil {
+		t.Fatal(err)
+	}
+	if painted != 0 {
+		t.Fatal("a worker-owned card was painted without a request")
+	}
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Commit(context.Background(), "new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.paintTopCard(); err != nil {
+		t.Fatal(err)
+	}
+	if painted != 1 {
+		t.Fatalf("paints after commit = %d, want 1", painted)
+	}
+}

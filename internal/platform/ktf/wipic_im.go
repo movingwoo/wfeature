@@ -109,6 +109,11 @@ type cInputState struct {
 	discardCarrier              bool
 	clearPending                bool
 	timerPointer, timerCallback uint32
+	// delivering covers the Host's own carrier event. Input-method calls the
+	// widget makes while processing it — a flush after taking the completed
+	// character, or the same key routed again — belong to that delivery and
+	// are not a key the player pressed.
+	delivering bool
 }
 
 func (runtime *initializationRuntime) rememberCInputTimer() {
@@ -157,7 +162,9 @@ func (runtime *initializationRuntime) wipicHandleInput(thread *armcore.Thread) (
 		clearing := state.clearPending && timer != nil && state.card == runtime.cInputCard() &&
 			timer.pointer == state.timerPointer && timer.callback == state.timerCallback
 		runtime.rememberCInputTimer()
-		state.revision++
+		if !state.delivering {
+			state.revision++
+		}
 		// Flushing finishes composition; it does not dismiss the widget.
 		if byte(args[0]) != cInputFlush || clearing {
 			state.active = true

@@ -54,13 +54,13 @@ separate Java `char` callbacks. Each callback is followed by an ownership and
 cancellation check before another character or repaint is delivered. A detached
 or replaced target, queued screen change, or cancellation stops delivery; any
 accepted prefix remains guest-owned and the consumed snapshot cannot be retried.
-LGT WIPI-C is the other bounded route: after a native widget selects or
-calls the platform input method, a Host commit enters its Clet with one character-key
-carrier. The widget's
-normal `MC_imHandleInput` call receives the complete EUC-KR string in its
-completion buffer. The carrier is substituted inside the platform and is not
-composed as a keypad character. If the current Clet route no longer reaches the
-input method, the edit is rejected as stale.
+LGT WIPI-C is the other bounded route: while a native widget is taking the
+player's keys through the platform input method, a Host commit enters its Clet
+with character-key carriers. The widget's normal `MC_imHandleInput` call
+receives the completed EUC-KR text in its completion buffer, as much as the
+buffer holds each time. The carrier is substituted inside the platform and is
+not composed as a keypad character. If the current Clet route no longer
+reaches the input method, the edit is rejected as stale.
 
 ## Supported editors
 
@@ -145,20 +145,97 @@ submission and rejects controls and text outside strict EUC-KR. Input-mode
 selection describes the handset keypad automaton, not a field constraint, so
 Host composition accepts Korean even when the widget selected `N123`. Numeric
 keypad events still produce digits in that mode. The widget still enforces
-its own smaller field limits. Ordinary capacity-taking callers reject an
-oversized submission atomically. One recognized SDK caller uses output-only
-lengths with five-byte local buffers; completed EUC-KR characters are delivered
-in batches of at most four bytes through successive guest callbacks. Recognition
-requires the instruction sequence and matching live stack arguments, not a game
-name or a zero size value. Other callers retain their declared capacities.
-Consuming any completion bytes invalidates the snapshot even if a later guest
-callback faults. Errors before delivery and atomic capacity rejections retain
-the retry path. Opening a fresh edit is required after consumed input.
+its own smaller field limits; a widget that takes part of the text and then
+stops asking for more has applied its own limit, and the commit succeeds.
+Completed EUC-KR characters go to every caller in batches that fit its
+completion buffer, through successive carriers; only a buffer too small for
+the first character rejects the submission, atomically. One recognized SDK
+caller uses output-only lengths with five-byte local buffers, so its batches
+are at most four bytes. Recognition requires the instruction sequence and
+matching live stack arguments, not a game name or a zero size value. Other
+callers retain their declared capacities. A widget that queues the carrier and
+reads it in a timer is served by running the Clet's due timers, at most eight
+and one second of guest time, until the input method is called. Consuming any
+completion bytes invalidates the snapshot even if a later guest callback
+faults. Errors before delivery and atomic capacity rejections retain the retry
+path. Opening a fresh edit is required after consumed input.
+
+LGT C input is offered while the widget is evidently taking keys. Input-method
+calls before the first key press are start-up configuration and do not count.
+After that, a mode selection or a `MC_imHandleInput` call opens input, and a
+key press the Clet handles without calling the input method at all closes it,
+as does a carrier that never reaches the input method. A name widget passes
+its keys to the automaton or at least selects its mode again for them, and the
+key that moves focus off a field is the one that does neither.
 
 Java field limits count UTF-16 units in both Host composition and the shared
 keypad editor; supplementary characters consume two units. Keypad caret movement,
 backspace and truncation keep complete characters. Native entry does not infer
 fields drawn by game code.
+
+## What a title sees after a commit
+
+A handset only ever changed a field through keys, so a title's own code after
+a key is often what puts the new text on screen. A Host commit has no key, and
+three consequences of that were reported as "the name appears only after I
+press another button" and "only the first letter appeared until I deleted it
+and typed it again".
+
+**Whole-value fields ask for a frame.** A KTF LWC or KFC commit sets
+`repaintPending` (and posts the repaint event to a guest event loop); an LGT
+Java commit marks the pushed card dirty. That is the request a component makes
+when its contents change. Without it, a KTF card whose worker owns its frame
+cadence, and every LGT Java card, kept the old text until the next key.
+
+**Title-owned SKT fields get one key.** After a commit to an `XTextField` or a
+title's `TextComponent`, the runtime delivers a press and release of key code
+0 to the current Canvas. Two local titles draw such a field only in their own
+key handling, after passing the key to the field: one title's
+`TextComponent.repaint` is empty and its game thread redraws after it takes a
+queued key; another's `paint` draws the field only on the pass its key
+handler requested. Repainting the Canvas therefore was not enough. Code 0 is
+no handset key, neither vendor input method edits with it, `getGameAction(0)`
+answers 0, and the key travels the title's own path, so a title that queues
+keys for a game thread redraws when that thread takes it. One title clears its
+name field on the first key after the name prompt appears; a commit made
+before that key is cleared by the redraw key exactly as it would be by the
+player's next key, and a commit made after it is kept and shown.
+
+**A widget's own input-method calls are part of the delivery.** KTF and LGT
+WIPI-C commits hand text to the widget through a carrier key. A widget may call
+the input method again while handling that key — one LGT name widget flushes
+the automaton and routes the same key a second time, another selects its mode
+again after every key. Each of those calls used to advance the snapshot
+revision, which is how a player's key is detected. On KTF, where text goes one
+character per carrier, delivery stopped after the first character and the page
+reported the field as changed. On LGT the first widget had the whole string
+and the page still reported failure; the second is fed four bytes per carrier
+and kept only its first two Korean characters. Calls made while
+the Host's own carrier is being processed no longer move the revision. A key
+between snapshot and commit, a mode change or a different event handler still
+makes the edit stale. A checkpoint is refused while a carrier is in flight.
+
+**A vendor field draws in the title's colour.** `XTextField.paint` draws
+with the colour the title set on its Graphics, as every other drawing call
+does. It used to draw black whatever the title chose: two titles that draw a
+black or dark input bar and then the field over it showed nothing, and with
+the title's colour both show the name in white. A third leaves a dark outline
+colour set from its own lettering and its name stays hard to read; no evidence
+says what the vendor field drew instead.
+
+**LGT C input follows the widget.** LGT WIPI-C input used to become available
+at the first input-method call and stay so. Several titles select a mode while
+starting and on every screen change, so eleven local archives offered input on
+splash, menu and gameplay screens, and a commit there delivered a stray `0`
+key. Availability now follows the rules in [Supported editors](#supported-editors).
+One title's ranking name widget reads its keys in a timer and holds eight
+bytes per call; it refused every commit before and now takes the whole name.
+
+Not a text-input defect: one KTF title draws its name field as an LWC
+component the platform is expected to paint (`ShellComponent` with a
+`TextBoxComponent` and foreground and background colours). This runtime does
+not paint LWC components, so the field stays empty whether the name arrives
+from the Host or from the keypad; the value is there and reads back.
 
 ## Validation
 

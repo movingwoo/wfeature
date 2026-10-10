@@ -650,9 +650,25 @@ func (client *Client) deliverEvents(ctx context.Context) error {
 			client.logger.Debug("LGT clet event delivered",
 				"kind", event.kind, "param1", int32(event.param1), "param2", event.param2)
 		}
+		input := &client.cTextInput
+		pressed := event.kind == EventKeyPressed
+		calls, modes := input.calls, input.modes
+		if pressed {
+			input.keyed = true
+		}
 		if err := client.callClet(ctx, "handleCletEvent", handler,
 			[]uint32{event.kind, event.param1, event.param2}); err != nil {
 			return err
+		}
+		// A key the Clet handled without calling the input method went to
+		// something other than a text field. Several titles select a mode on
+		// every screen change, which made input look available on screens
+		// with no field at all. A name widget passes its keys to the
+		// automaton, or at least selects its mode again for them, and the key
+		// that moves focus off one is the key that does neither.
+		if pressed && input.active && input.calls == calls && input.modes == modes {
+			input.active = false
+			input.revision++
 		}
 	}
 }

@@ -139,6 +139,12 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 				client.textEditor = textinput.NewUTF16(replacement, maxLength)
 			}
 			client.textMu.Unlock()
+			// No key reached the title, so nothing in it asks for the frame
+			// a key would have: a card whose worker owns its cadence kept the
+			// old text on screen until the next press. Request it the way a
+			// component repaints after its contents change.
+			client.runtime.repaintPending = true
+			client.runtime.postRepaintEvent()
 			return nil
 		},
 	}, nil

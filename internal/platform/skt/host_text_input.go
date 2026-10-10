@@ -201,10 +201,36 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 	if err != nil {
 		return err
 	}
+	if target.kind == hostXTextField || target.kind == hostTextComponent {
+		if err := runtime.redrawTitleField(); err != nil {
+			return err
+		}
+	}
 	if err := runtime.runEvents(); err != nil {
 		return err
 	}
 	return runtime.presentRefresh()
+}
+
+// hostTextRedrawKey is the key a title is handed after a Host commit to a
+// field it draws itself. No handset key has the code, so neither vendor input
+// method edits with it, and a title's own handling finds nothing to act on.
+const hostTextRedrawKey int32 = 0
+
+// redrawTitleField hands the title one key after its field changed without
+// one. A title draws such a field in its own key handling, after passing the
+// key to the field: one local title's TextComponent.repaint is empty, and
+// another's paint draws the field only on the pass its key handler asked
+// for. Repainting the Canvas left the committed text off screen until the
+// player pressed something. The key goes through the title's own path, so a
+// title that queues keys for a game thread redraws when that thread gets it.
+func (runtime *Runtime) redrawTitleField() error {
+	for _, kind := range []KeyEventType{KeyPressed, KeyReleased} {
+		if err := runtime.deliverKeyLocked(kind, hostTextRedrawKey); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // hostTextComponentInput exposes a title-owned TextComponent as an append
