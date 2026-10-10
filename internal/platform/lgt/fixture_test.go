@@ -37,6 +37,10 @@ const (
 	// fixtureFlushAfterInput, when nonzero, makes the widget flush the
 	// automaton after each key, the way a native widget finishes a character.
 	fixtureFlushAfterInput = fixtureDataBase + 0xf8
+	// fixtureRouteKeys limits which keys reach the automaton: zero passes
+	// every key, one passes none, and n passes the next n-1 and then none,
+	// the way a widget behaves once focus leaves it or its field is full.
+	fixtureRouteKeys = fixtureDataBase + 0xfc
 )
 
 const (
@@ -230,6 +234,17 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent, 
 	a.emit(armPushLR)
 	a.emit(armMovReg(4, 0)) // r4 = kind
 	a.emit(armMovReg(5, 1)) // r5 = key
+	a.literal(7, fixtureRouteKeys)
+	a.emit(armLdr(6, 7, 0))
+	a.emit(armCmpImm(6, 0))
+	routeAlways := len(a.words)
+	a.emit(0) // beq to the input-method call, patched below
+	a.emit(armCmpImm(6, 1))
+	routeNone := len(a.words)
+	a.emit(0) // beq past both input-method calls, patched below
+	a.emit(armSubImm(6, 6, 1))
+	a.emit(armStr(6, 7, 0))
+	a.words[routeAlways] = armBranchEq(int32(len(a.words) - routeAlways - 2))
 	a.literal(6, fixtureInputSizes)
 	a.emit(armMovImm(0, 16))
 	a.emit(armStr(0, 6, 0), armStr(0, 6, 4))
@@ -262,6 +277,7 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent, 
 	a.call(7)
 	a.emit(armAddImm(13, 13, 8))
 	a.words[skipFlush] = armBranchEq(int32(len(a.words) - skipFlush - 2))
+	a.words[routeNone] = armBranchEq(int32(len(a.words) - routeNone - 2))
 	a.literal(4, fixtureLastEvent)
 	a.emit(armStr(5, 4, 0))
 	a.literal(4, fixtureFrameBuffer)

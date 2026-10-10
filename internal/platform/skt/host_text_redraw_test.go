@@ -121,3 +121,51 @@ func TestHostCommitRedrawsATitleXTextField(t *testing.T) {
 		t.Fatalf("field after the redraw key = %+v, %v", current, err)
 	}
 }
+
+// A title paints its name bar and then the field over it with its own colour
+// set; the field used to draw black whatever the title chose.
+func TestXTextFieldPaintsInTheTitlesColour(t *testing.T) {
+	framebuffer := newTestFramebuffer(t, 32, 24)
+	r := startUIFixtureWith(t, framebuffer)
+	var field *jvm.Object
+	if err := r.VM.DefineClass(jvm.ClassDefinition{
+		Name: "test/NameBarCanvas", SuperName: midp.CanvasClass, Access: jvm.AccessPublic,
+		Methods: []jvm.MethodDefinition{{Name: "paint", Descriptor: "(Ljavax/microedition/lcdui/Graphics;)V", Access: jvm.AccessPublic,
+			Body: func(_ *jvm.Invocation, args []jvm.Value) (jvm.Value, error) {
+				graphics, _ := args[1].Reference()
+				for _, call := range []struct {
+					name, descriptor string
+					arguments        []jvm.Value
+				}{
+					{"setColor", "(I)V", []jvm.Value{jvm.IntValue(0)}},
+					{"fillRect", "(IIII)V", []jvm.Value{jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(32), jvm.IntValue(24)}},
+					{"setColor", "(I)V", []jvm.Value{jvm.IntValue(0xffffff)}},
+				} {
+					if _, err := r.VM.InvokeVirtual(graphics, call.name, call.descriptor, call.arguments...); err != nil {
+						return jvm.VoidValue(), err
+					}
+				}
+				return r.VM.InvokeVirtual(field, "paint", "(Ljavax/microedition/lcdui/Graphics;)V", args[1])
+			}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	canvas := &jvm.Object{ClassName: "test/NameBarCanvas"}
+	field = newXTextField(t, r, canvas, "WW", 8, 0)
+	if _, err := r.VM.InvokeVirtual(r.display, "setCurrent", "(Ljavax/microedition/lcdui/Displayable;)V", jvm.ReferenceValue(canvas)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RunPending(); err != nil {
+		t.Fatal(err)
+	}
+	frame, _ := framebuffer.Snapshot()
+	ink := 0
+	for index := 0; index+4 <= len(frame.RGBA); index += 4 {
+		if frame.RGBA[index] == 0xff && frame.RGBA[index+1] == 0xff && frame.RGBA[index+2] == 0xff {
+			ink++
+		}
+	}
+	if ink == 0 {
+		t.Fatal("the field's text is not in the colour the title set")
+	}
+}

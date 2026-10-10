@@ -930,7 +930,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"offline": recorded, "generation": recorded, "callback": recorded, "param": recorded, "dueAt": recorded,
 		},
 		"pendingEvent":    {"kind": recorded, "param1": recorded, "param2": recorded},
-		"cTextInputState": {"active": recorded, "revision": recorded, "calls": recorded, "pending": recorded, "delivering": boundary},
+		"cTextInputState": {"active": recorded, "revision": recorded, "calls": recorded, "pending": recorded, "delivering": boundary, "keyed": rebuilt, "modes": rebuilt},
 		"pixelOpCache":    {"results": recorded},
 		"guestClock":      {"mu": rebuilt, "elapsed": recorded, "origin": rebuilt, "steps": rebuilt, "baseline": recorded},
 		"arena": {

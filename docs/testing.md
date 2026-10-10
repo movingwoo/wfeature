@@ -2375,10 +2375,11 @@ titles showed the committed text only after another key on the
 other), and one on `XTextField`. With the redraw key all four fields show the
 text within 30 ticks and none gains a character. The LGT name widget reported
 every commit as changed although the name reached it; with the delivery fix
-the same commit succeeds. Three titles keep the text off screen whatever key
-follows: two draw black `XTextField` text over a dark field (open), and a KTF
-title's name box stays empty with the frame request in place (cause not
-established). No KTF C editor reached flushes inside its key, so the
+the same commit succeeds. Three titles kept the text off screen whatever key
+followed: two drew black `XTextField` text over a dark field, and a KTF
+title's name box stays empty because it expects the platform to paint an LWC
+`TextBoxComponent`, which keypad input shows as well. No KTF C editor reached
+flushes inside its key, so the
 first-character stop is reproduced by
 `TestCInputHostDeliveryToleratesAFlushInsideTheCarrier`, which delivers `b0a1`
 (one character) and reports the field changed before the fix.
@@ -2393,3 +2394,27 @@ snapshot and commit to stale the edit; the KTF test does the same.
 passing a key to its field, and require exactly one redraw after the commit and
 no extra character. Package tests, `-race` on the KTF, LGT, SKT, session and
 webhost packages, and `go vet` pass.
+
+A second pass the same day looked at the screens the first one could not
+explain. On the eleven LGT archives that offered input where no field was
+shown, 1,500-tick runs with the same key cycle made 57 offers before the
+availability change and 9 after: two name editors, which commit; a ranking
+name widget, which commits once its field is in edit mode; and four loading or
+menu screens entered by a key that also selected a mode. The ranking widget
+reads its keys in a frame timer and holds eight bytes per call; before, every
+commit there failed and its carrier landed in the name as `0`. The name widget
+fed four bytes per carrier selects its mode again after each key; a route from
+an earlier report reaches it, and a four-character commit now arrives in two
+carriers, with the widget's own four-character limit keeping what fits.
+`TestLGTCInputFollowsTheKeysTheWidgetTakes` uses a fixture word that stops the
+widget passing keys to the automaton: a start-up mode selection offers
+nothing, a passed key opens input, a key that is not passed closes it and
+stales the edit, and an unrouted carrier closes it. The capacity test now
+requires a value over the fixture's 16 bytes to arrive in two carriers.
+
+`XTextField.paint` was compared between black text and the title's colour on
+the twelve SKT archives that call it. The editor was reached in five: two
+change from no visible name to white text, one sets black itself and is
+unchanged, one keeps its dark leftover colour, and one shows no field on the
+screen reached. `TestXTextFieldPaintsInTheTitlesColour` paints a black bar,
+sets white and paints the field, and fails on the earlier code.

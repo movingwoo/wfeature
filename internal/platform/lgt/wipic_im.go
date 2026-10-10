@@ -53,8 +53,15 @@ func (client *Client) handleInputMethod(thread *armcore.Thread, slot uint32) err
 			return answer(0)
 		}
 		client.inputMode = mode
-		client.cTextInput.active = true
-		client.cTextInput.revision++
+		client.cTextInput.modes++
+		if client.cTextInput.keyed {
+			client.cTextInput.active = true
+		}
+		// A widget can select its mode again while it handles the Host's
+		// carrier; that is part of the delivery, as its other calls are.
+		if !client.cTextInput.delivering {
+			client.cTextInput.revision++
+		}
 		return answer(1)
 
 	case slotIMGetCurrentMode:
@@ -112,6 +119,13 @@ type cTextInputState struct {
 	// completed string, or the same key routed again — belong to that
 	// delivery and are not a key the player pressed.
 	delivering bool
+	// keyed is set once a key press has reached the Clet. Input-method calls
+	// before it are start-up configuration: several local titles select a
+	// mode while starting and show no field for a long time after.
+	keyed bool
+	// modes counts mode selections. A widget can answer a key by selecting
+	// its mode again without passing that key to the automaton.
+	modes uint64
 }
 
 type inputBuffer struct {
@@ -173,7 +187,9 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	}
 
 	hostCommit := key == hostTextInputCarrier && len(client.cTextInput.pending) != 0
-	client.cTextInput.active = true
+	if client.cTextInput.keyed || hostCommit {
+		client.cTextInput.active = true
+	}
 	client.cTextInput.calls++
 	if !hostCommit && !client.cTextInput.delivering {
 		client.cTextInput.revision++
@@ -181,23 +197,30 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 
 	var value []byte
 	if hostCommit {
+		// A completion buffer holds what one key completes, so the text goes
+		// in as complete EUC-KR characters over successive carriers, as many
+		// as the buffer takes each time, the way the KTF C route sends it.
+		// One local name widget's buffer holds eight bytes and its field five
+		// Korean characters; asking it to take the whole name at once refused
+		// every name over three. The SDK caller that only reports lengths
+		// reserves four data bytes and a terminator, which its five says.
 		value = client.cTextInput.pending
-		if outputOnly {
-			// The SDK reserves four data bytes and a terminator. Deliver
-			// complete EUC-KR characters over successive widget callbacks.
-			n := 0
-			for n < len(value) {
-				width := 1
-				if value[n] >= 0x80 {
-					width = 2
-				}
-				if n+width > 4 || n+width > len(value) {
-					break
-				}
-				n += width
-			}
-			value = value[:n]
+		var room int
+		if completedBuffer.capacity > 0 {
+			room = int(min(completedBuffer.capacity-1, uint32(len(value))))
 		}
+		n := 0
+		for n < len(value) {
+			width := 1
+			if value[n] >= 0x80 {
+				width = 2
+			}
+			if n+width > room {
+				break
+			}
+			n += width
+		}
+		value = value[:n]
 	} else if client.inputMode == 3 &&
 		(kind == EventKeyPressed || kind == EventKeyRepeated) && key >= '0' && key <= '9' {
 		value = []byte{byte(key)}

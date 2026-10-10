@@ -1065,8 +1065,10 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 		}
 	}
 	client.inputMode, client.inputModeTableAddress = saved.InputMode, saved.InputModeTable
+	// A checkpoint is taken from a game being played, so keys have reached it;
+	// the mode count only ever compares within one event.
 	client.cTextInput = cTextInputState{active: saved.TextInput.Active, revision: saved.TextInput.Revision,
-		calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending)}
+		calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending), keyed: true}
 	client.applicationIDAddress, client.javaApplication = saved.ApplicationID, saved.JavaApplication
 	if len(saved.Resources) != 0 {
 		client.resourceIDs = make(map[string]uint32, len(saved.Resources))

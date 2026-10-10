@@ -142,3 +142,71 @@ func TestLGTDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
 		t.Fatalf("commit after a player key: %v", err)
 	}
 }
+
+// Several local titles select an input mode while starting and again on every
+// screen change, and the C route offered input from then on: on splash and
+// menu screens a commit sent the game a stray carrier key and failed.
+func TestLGTCInputFollowsTheKeysTheWidgetTakes(t *testing.T) {
+	session, err := StartSession(t.Context(), fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := session.client
+	press := func(key uint32) {
+		t.Helper()
+		c.SendEvent(EventKeyPressed, key, 0)
+		if err := c.deliverEvents(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A mode selected before any key is start-up configuration.
+	callSlot(t, c, slotIMSetCurrentMode, 2)
+	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("start-up mode selection offered input: %v", err)
+	}
+	// A key the widget passes to the automaton opens it.
+	press('#')
+	edit, err := session.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("widget taking keys: %v", err)
+	}
+	// A key it does not pass on closes it, and the old edit with it.
+	if err := c.writeWord(fixtureRouteKeys, 1); err != nil {
+		t.Fatal(err)
+	}
+	press('#')
+	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("key that bypassed the automaton left input available: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("edit outlived the key: %v", err)
+	}
+	// A mode selected after keys have arrived opens it again, and a carrier
+	// that never reaches the automaton closes it rather than leave it offered.
+	callSlot(t, c, slotIMSetCurrentMode, 2)
+	edit, err = session.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("mode selection after keys: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("unrouted carrier: %v", err)
+	}
+	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("input stayed available after an unrouted carrier: %v", err)
+	}
+	// Passing keys on again restores it.
+	if err := c.writeWord(fixtureRouteKeys, 0); err != nil {
+		t.Fatal(err)
+	}
+	press('#')
+	edit, err = session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "ab"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.readCString(fixtureInputCompleted); err != nil || got != "ab" {
+		t.Fatalf("delivered %q %v", got, err)
+	}
+}
