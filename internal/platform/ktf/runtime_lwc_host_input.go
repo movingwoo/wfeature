@@ -131,6 +131,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 				return nil
 			}
 			component.Fields[componentTextField] = jvm.ReferenceValue(client.vm.NewString(replacement))
+			setComponentCursor(component, len([]rune(replacement)))
+			if err := client.runtime.publishTextComponent(component); err != nil {
+				return err
+			}
 			// Keep the two keypad adapters in step if either is used after a
 			// Host composition. Their next key starts a fresh composition.
 			textEditorFor(component).SetText(replacement)

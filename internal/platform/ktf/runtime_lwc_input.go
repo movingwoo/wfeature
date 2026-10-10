@@ -66,6 +66,12 @@ func (client *Client) TypeKey(key rune) bool {
 		text := editor.Text()
 		client.textMu.Unlock()
 		component.Fields[componentTextField] = jvm.ReferenceValue(client.vm.NewString(text))
+		setComponentCursor(component, len([]rune(text)))
+		if client.runtime != nil {
+			if err := client.runtime.publishTextComponent(component); err != nil {
+				client.log("KTF text component publish failed", "error", err)
+			}
+		}
 	}
 	// The star and hash keys are the mode and backspace keys, so they are
 	// consumed whether or not they changed the text.

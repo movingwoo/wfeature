@@ -843,6 +843,19 @@ func (vm *VM) threadState(thread *Object) *guestThread {
 	return state
 }
 
+// GuestThreadAlive answers what isAlive answers: the thread was started and
+// its run() has not returned. A platform that drives the threads itself waits
+// on that for a join the JVM's own body cannot block for.
+func (vm *VM) GuestThreadAlive(thread *Object) bool {
+	if vm == nil || thread == nil {
+		return false
+	}
+	state := vm.threadState(thread)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.alive
+}
+
 // EndGuestThread records that a thread's run() has returned.
 //
 // A platform that installs GuestThreadStarter takes over Thread.start, and

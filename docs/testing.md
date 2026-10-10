@@ -921,18 +921,57 @@ every twelve ticks — was run again on the final change: 267 archives ran to th
 end of the script, 15 ended with an error — seven of them the title's own
 `System.exit` — and 18 were still running at the 180-second limit, where the run
 that found the three had 254, 20 and 26. The three titles run all 3,000 ticks,
-and no run stops on a method lookup; the one lookup still failing is the field
+and no run stops on a method lookup; the one lookup still failing was the field
 `TextComponent.m_cPos:I` in one title, a failure [recorded
-before](ktf-qa-2026-09-21.md#comparison-and-current-gates). Every title whose
+before](ktf-qa-2026-09-21.md#comparison-and-current-gates) and published since
+(below). Every title whose
 outcome differs between runs had already flipped the same way across the earlier
 runs of this sweep, and the four that looked worse on the first rerun gave the
 same result twice each on `main` and on this change, so the differences are the
 run-to-run variation of a `-play` session and the load of eight workers on eight
-cores. Two titles end some runs on an uncaught guest exception — a
+cores. Two titles ended some runs on an uncaught guest exception — a
 `StringIndexOutOfBoundsException` after typing into an LWC text box and a
-`NumberFormatException` — in the run that found the three as well, which leaves
-their cause open. See [the KTF
+`NumberFormatException` — in the run that found the three as well; both are the
+titles' own code in `keyNotify`, and the key path ends only that call now
+(below). See [the KTF
 history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
+
+The rest of the core library, a text component's fields and a key's exception
+(2026-10-10). `runtime_core_members_test.go` resolves the 45 members the KTF
+table lacked through the guest's class record and runs the ones with a value to
+give: the radix forms in both signs, `Long`'s hash of a value with a high word,
+`Math` against values the specification names exactly, `String.intern` handing
+two equal strings one object, and a character array printed to the log.
+`TestEveryPublishedCoreClassDeclaresItsCLDCMembers` requires every public or
+protected core-library member of a published class to be declared, apart from
+five the library keeps for itself, and fails on the earlier table.
+`TestThreadPriorityIsKeptForGetPriority` keeps an in-range priority and ignores
+one out of range; `TestThreadJoinParksTheWorkerUntilTheThreadEnds` parks a worker
+through three slices of a live thread and returns once it ends, and
+`TestThreadJoinOutsideAWorkerReturns` returns at once for a thread never started
+and on the client thread. `runtime_text_component_fields_test.go` builds a text
+field in guest memory and reads its payload: the handler, characters exactly as
+long as the text, their count, the caret, the mode, -1 for no limit, the
+constraint, the font and the display, each field resolving through a text
+field's class record at the offset it is published at. A title's own caret
+survives a call that edits nothing, and an insert, a delete and a new value each
+put it where they leave it; a title's own mode word survives a text edit and
+gives way when the handler is given a mode; a Host commit reaches the character
+words; and a component registered under the earlier four-byte layout keeps
+every word past it. `TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey` sends a
+key whose `keyNotify` throws: the session goes on, the exception is counted, and
+the next key is delivered; it fails before the change.
+
+On real archives the title that stopped on `m_cPos` runs all 3,000 ticks of the
+sweep's key script, through its name entry to its menus, where it stopped at
+tick 883 before. The two exception titles each ran the script four times on the
+fixed build and reached 3,000 ticks every time. `run -ticks 500` gives the same
+digest before and after over the 282 local archives — two titles that differed
+once with eight runs at a time agree when run alone — and the 44 titles that
+extend `Thread`, `InputStream` or `Random` reach the same tick with the same
+error under the key script, the two exceptions finishing alike on three repeats
+each. See [the KTF
+history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library).
 
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.

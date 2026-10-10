@@ -356,6 +356,7 @@ func runtimeGTextFieldConstructor(_ *initializationRuntime, vm *jvm.VM, argument
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(text))
 	receiver.Fields[componentMaxLengthField] = jvm.IntValue(0)
 	attachInputMethodHandler(receiver, jvm.IntValue(0))
+	setComponentCursor(receiver, len([]rune(text)))
 	if len(arguments) > 3 {
 		if length, intErr := arguments[3].Int32(); intErr == nil && length > 0 {
 			receiver.Fields[componentMaxLengthField] = jvm.IntValue(length)
@@ -374,6 +375,7 @@ func runtimeGTextFieldSetString(_ *initializationRuntime, vm *jvm.VM, arguments 
 		text, _ = jvm.StringText(object)
 	}
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(text))
+	setComponentCursor(receiver, len([]rune(text)))
 	runtimeComponentIncrementRevision(receiver, componentKFCTextRevisionField)
 	return jvm.VoidValue(), nil
 }

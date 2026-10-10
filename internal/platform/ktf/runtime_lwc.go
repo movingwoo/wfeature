@@ -33,8 +33,61 @@ const (
 )
 
 // textComponentFieldsSize is how many payload bytes TextComponent's own field
-// records describe: the one imHandler reference.
-const textComponentFieldsSize = 4
+// records describe; see textComponentFields.
+const textComponentFieldsSize = 36
+
+// textComponentFields are the protected fields the specification declares on
+// TextComponent that this runtime holds a value for, in payload order. A title
+// that builds its own field on a text component reads and writes them rather
+// than asking: one sets m_cPos to the length of its initial text as soon as
+// the platform constructor returns, one moves the caret to the end of m_td
+// before handing the platform a key, one reads m_td and m_cPos to draw its
+// own caret, and two compare iMode with the Hangul mode before they draw. The
+// guest loads each word at the offset its record gives, so all of them are
+// published into the payload; see publishGuestTextComponent for what each one
+// holds and when it changes.
+//
+// Two declared fields are not here. constChecker has a type the specification
+// does not publish. modeViewer is the card the platform shows the input mode
+// on, and a title that reads it pops that card off the display, which only
+// means something once the platform shows it; see "Deliberately incomplete"
+// in docs/history/ktf.md.
+var textComponentFields = []runtimeJavaField{
+	{name: "imHandler", descriptor: "Lorg/kwis/msp/lcdui/InputMethodHandler;", accessFlags: 0x0004, offset: 0},
+	{name: "m_cPos", descriptor: "I", accessFlags: 0x0004, offset: 4},
+	{name: "m_td", descriptor: "[C", accessFlags: 0x0004, offset: 8},
+	{name: "charCount", descriptor: "I", accessFlags: 0x0004, offset: 12},
+	{name: "iMode", descriptor: "I", accessFlags: 0x0004, offset: 16},
+	{name: "maxLength", descriptor: "I", accessFlags: 0x0004, offset: 20},
+	{name: "constraint", descriptor: "I", accessFlags: 0x0004, offset: 24},
+	{name: "f", descriptor: "Lorg/kwis/msp/lcdui/Font;", accessFlags: 0x0004, offset: 28},
+	{name: "display", descriptor: "Lorg/kwis/msp/lcdui/Display;", accessFlags: 0x0004, offset: 32},
+}
+
+// The payload words of textComponentFields, as word indexes.
+const (
+	textComponentHandlerWord = iota
+	textComponentCursorWord
+	textComponentDataWord
+	textComponentCountWord
+	textComponentModeWord
+	textComponentMaxLengthWord
+	textComponentConstraintWord
+	textComponentFontWord
+	textComponentDisplayWord
+)
+
+// componentCursorField and componentModeChangedField carry an edit's effect on
+// the two words a title also writes — the caret and the input mode — from the
+// call that made it to the publish that ends it. They are consumed there, so a
+// guest's own value survives every call that does not move the caret or change
+// the mode; see publishGuestTextComponent.
+const (
+	componentCursorField      = "host:text-cursor"
+	componentModeChangedField = "host:text-mode-changed"
+	// componentFontField is the font setFont gave a text component.
+	componentFontField = "host:text-font"
+)
 
 func runtimeTextComponentClassDefinition() runtimeJavaClass {
 	const class = runtimeTextComponentClass
@@ -48,11 +101,10 @@ func runtimeTextComponentClassDefinition() runtimeJavaClass {
 		// how a title that draws its own text field gets the characters. The
 		// field record alone is not enough for that: the guest loads the word
 		// at the offset the record gives it, so the handler is published into
-		// the payload too. See fieldSyncs.
+		// the payload too, and so are the other protected fields a title's
+		// own field reaches for. See textComponentFields and fieldSyncs.
 		instanceSize: textComponentFieldsSize,
-		fields: []runtimeJavaField{
-			{name: "imHandler", descriptor: "Lorg/kwis/msp/lcdui/InputMethodHandler;", accessFlags: 0x0004, offset: 0},
-		},
+		fields:       textComponentFields,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeTextComponentConstructor},
 			{class: class, name: "setMaxLength", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetMaxLength},
@@ -61,6 +113,16 @@ func runtimeTextComponentClassDefinition() runtimeJavaClass {
 			// runtime_lwc_key.go for why this one class overrides the
 			// toolkit's rule that a widget answers a key as unconsumed.
 			{class: class, name: "keyNotify", descriptor: "(II)Z", accessFlags: 0x0001, implementation: runtimeTextComponentKeyNotify},
+			// The rest of what the specification declares on TextComponent
+			// itself, so a text field answers it as a text box does: the two
+			// edits at a position, and the font, constraint and limit read
+			// back.
+			{class: class, name: "insert", descriptor: "([CIII)V", accessFlags: 0x0001, implementation: runtimeTextComponentInsert},
+			{class: class, name: "delete", descriptor: "(II)V", accessFlags: 0x0001, implementation: runtimeTextComponentDelete},
+			{class: class, name: "setFont", descriptor: "(Lorg/kwis/msp/lcdui/Font;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("TextComponent.setFont", componentFontField)},
+			{class: class, name: "getFont", descriptor: "()Lorg/kwis/msp/lcdui/Font;", accessFlags: 0x0001, implementation: runtimeTextComponentGetFont},
+			{class: class, name: "getConstraint", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeTextComponentGetConstraint},
+			{class: class, name: "getMaxLength", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeTextComponentGetMaxLength},
 		},
 	}
 }
@@ -76,7 +138,7 @@ func runtimeTextFieldComponentClassDefinition() runtimeJavaClass {
 			// setString replaces the field's text. The specification declares
 			// it on the field rather than on TextComponent, which is why it is
 			// here and not beside getString above.
-			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("TextFieldComponent.setString", componentTextField)},
+			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetString},
 		},
 	}
 }
@@ -127,7 +189,7 @@ func runtimeTextBoxComponentClassDefinition() runtimeJavaClass {
 			// input method drives it a run of characters at a time. Nothing
 			// drives it here, so what they do is edit the text the component
 			// holds — which is the half a title that edits its own box uses.
-			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("TextBoxComponent.setString", componentTextField)},
+			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetString},
 			{class: class, name: "insert", descriptor: "([CIII)V", accessFlags: 0x0001, implementation: runtimeTextComponentInsert},
 			{class: class, name: "delete", descriptor: "(II)V", accessFlags: 0x0001, implementation: runtimeTextComponentDelete},
 			{class: class, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("focused:Z")},
@@ -186,6 +248,7 @@ func runtimeTextComponentInsert(runtime *initializationRuntime, vm *jvm.VM, argu
 		grown = grown[:limit]
 	}
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(string(grown)))
+	setComponentCursor(receiver, min(at+len(inserted), len(grown)))
 	return jvm.VoidValue(), nil
 }
 
@@ -217,6 +280,7 @@ func runtimeTextComponentDelete(_ *initializationRuntime, vm *jvm.VM, arguments 
 	}
 	kept := append(append([]rune{}, symbols[:at]...), symbols[at+count:]...)
 	receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(string(kept)))
+	setComponentCursor(receiver, at)
 	return jvm.VoidValue(), nil
 }
 
@@ -264,6 +328,7 @@ func runtimeTextComponentConstructor(_ *initializationRuntime, _ *jvm.VM, argume
 	}
 	receiver.Fields[componentMaxLengthField] = jvm.IntValue(0)
 	attachInputMethodHandler(receiver, jvm.IntValue(0))
+	setComponentCursor(receiver, 0)
 	return jvm.VoidValue(), nil
 }
 
@@ -272,11 +337,94 @@ func runtimeTextComponentConstructor(_ *initializationRuntime, _ *jvm.VM, argume
 // component's own constructor and a title reaches it through the protected
 // field rather than constructing one, so a component without one hands the
 // title a null to register its listener on.
+//
+// The handler keeps the component it belongs to, so that a mode it is given
+// reaches the component's iMode; see runtimeInputMethodSetMode.
 func attachInputMethodHandler(receiver *jvm.Object, constraint jvm.Value) {
 	receiver.Fields[componentInputHandlerField] = jvm.ReferenceValue(&jvm.Object{
 		ClassName: runtimeInputMethodHandlerClass,
-		Fields:    map[string]jvm.Value{inputMethodModeField: constraint, inputMethodConstraintField: constraint},
+		Fields: map[string]jvm.Value{
+			inputMethodModeField:       constraint,
+			inputMethodConstraintField: constraint,
+			inputMethodOwnerField:      jvm.ReferenceValue(receiver),
+		},
 	})
+	receiver.Fields[componentModeChangedField] = jvm.IntValue(1)
+}
+
+// setComponentCursor records where an edit the runtime made left the caret,
+// for the publish that ends the call to write into m_cPos. This runtime keeps
+// no caret of its own — Host text and the keypad append — so between edits the
+// word is the title's to move, and only an edit moves it here: to the end
+// after a whole new value or an append, after the run an insert put in, and
+// to the index a delete removed from.
+func setComponentCursor(component *jvm.Object, cursor int) {
+	if component.Fields == nil {
+		component.Fields = make(map[string]jvm.Value)
+	}
+	component.Fields[componentCursorField] = jvm.IntValue(int32(cursor))
+}
+
+// runtimeTextComponentSetString replaces a text field's or box's text. The
+// caret goes to the end of it, which is where the next Host text or keypad
+// character is appended.
+func runtimeTextComponentSetString(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextComponent.setString", arguments, 2)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	receiver.Fields[componentTextField] = arguments[1]
+	setComponentCursor(receiver, len([]rune(runtimeComponentText(receiver))))
+	return jvm.VoidValue(), nil
+}
+
+// runtimeTextComponentGetFont answers the font setFont gave the component, or
+// the platform font a component starts with.
+func runtimeTextComponentGetFont(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextComponent.getFont", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.ReferenceValue(runtime.textComponentFont(receiver)), nil
+}
+
+// textComponentFont is the font a text component draws in: the one setFont
+// gave it, or the platform's one font.
+func (runtime *initializationRuntime) textComponentFont(component *jvm.Object) *jvm.Object {
+	if font, err := component.Fields[componentFontField].Reference(); err == nil && font != nil {
+		return font
+	}
+	return runtime.platformFont()
+}
+
+// runtimeTextComponentGetConstraint answers the input constraint the component
+// was built with; one built without one accepts anything, CONSTRAINT_ANY.
+func runtimeTextComponentGetConstraint(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextComponent.getConstraint", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	constraint, _ := receiver.Fields[componentConstraintField].Int32()
+	return jvm.IntValue(constraint), nil
+}
+
+// runtimeTextComponentGetMaxLength answers the limit setMaxLength set, and -1,
+// which the specification gives maxLength for no limit, when none is set.
+func runtimeTextComponentGetMaxLength(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	receiver, err := runtimeComponentReceiver("TextComponent.getMaxLength", arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.IntValue(publishedMaxLength(receiver)), nil
+}
+
+// publishedMaxLength is the component's limit as the specification states it:
+// -1 for none, which this runtime keeps as zero.
+func publishedMaxLength(component *jvm.Object) int32 {
+	if limit := runtimeComponentMaxLength(component); limit > 0 {
+		return limit
+	}
+	return -1
 }
 
 // runtimeTextComponentConstructorWithText keeps the initial text and the input
@@ -289,6 +437,7 @@ func runtimeTextComponentConstructorWithText(_ *initializationRuntime, _ *jvm.VM
 	receiver.Fields[componentTextField] = arguments[1]
 	receiver.Fields["constraint:I"] = arguments[2]
 	attachInputMethodHandler(receiver, arguments[2])
+	setComponentCursor(receiver, len([]rune(runtimeComponentText(receiver))))
 	return jvm.VoidValue(), nil
 }
 

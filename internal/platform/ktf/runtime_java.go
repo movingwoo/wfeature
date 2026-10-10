@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"weak"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -141,6 +142,11 @@ func init() {
 				{class: "java/io/PrintStream", name: "print", descriptor: "(Ljava/lang/Object;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "write", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 				{class: "java/io/PrintStream", name: "flush", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				// A character array is text and goes where a string does; the
+				// stream has nothing to release.
+				{class: "java/io/PrintStream", name: "print", descriptor: "([C)V", accessFlags: 0x0001, implementation: runtimePrintStreamChars},
+				{class: "java/io/PrintStream", name: "println", descriptor: "([C)V", accessFlags: 0x0001, implementation: runtimePrintStreamChars},
+				{class: "java/io/PrintStream", name: "close", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			},
 		},
 		// java/lang/Thread exposes the JVM-owned CLDC thread class. Constructors
@@ -169,7 +175,12 @@ func init() {
 				{class: "java/lang/Thread", name: "sleep", descriptor: "(J)V", accessFlags: 0x0009, implementation: runtimeThreadSleep},
 				{class: "java/lang/Thread", name: "yield", descriptor: "()V", accessFlags: 0x0009},
 				{class: "java/lang/Thread", name: "currentThread", descriptor: "()Ljava/lang/Thread;", accessFlags: 0x0009, implementation: runtimeThreadCurrent},
-				{class: "java/lang/Thread", name: "setPriority", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "java/lang/Thread", name: "setPriority", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeThreadSetPriority},
+				// getPriority reads what setPriority keeps; join parks the
+				// caller the way a sleep does. See runtimeThreadJoin.
+				{class: "java/lang/Thread", name: "getPriority", descriptor: "()I", accessFlags: 0x0011},
+				{class: "java/lang/Thread", name: "join", descriptor: "()V", accessFlags: 0x0011, implementation: runtimeThreadJoin},
+				{class: "java/lang/Thread", name: "activeCount", descriptor: "()I", accessFlags: 0x0009},
 			},
 		},
 		// java/lang/Class answers class names and JAR resources for guest code.
@@ -185,6 +196,7 @@ func init() {
 				// registry holds under the same name the descriptor uses.
 				{class: "java/lang/Class", name: "forName", descriptor: "(Ljava/lang/String;)Ljava/lang/Class;", accessFlags: 0x0009},
 				{class: "java/lang/Class", name: "getResourceAsStream", descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", accessFlags: 0x0001, implementation: runtimeClassGetResourceAsStream},
+				{class: "java/lang/Class", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
 		// java/io stream classes expose the JVM-owned CLDC implementations.
@@ -245,6 +257,9 @@ func init() {
 				{class: "java/io/DataOutputStream", name: "writeChars", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0011},
 				{class: "java/io/DataOutputStream", name: "flush", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/DataOutputStream", name: "close", descriptor: "()V", accessFlags: 0x0001},
+				// The floating-point halves CLDC 1.1 added beside the integer ones.
+				{class: "java/io/DataOutputStream", name: "writeFloat", descriptor: "(F)V", accessFlags: 0x0011},
+				{class: "java/io/DataOutputStream", name: "writeDouble", descriptor: "(D)V", accessFlags: 0x0011},
 			},
 		},
 		"java/io/InputStream": {
@@ -270,6 +285,8 @@ func init() {
 				{class: "java/io/InputStream", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/io/InputStream", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
 				{class: "java/io/InputStream", name: "reset", descriptor: "()V", accessFlags: 0x0001},
+				// The constructor a title's own stream calls as its super().
+				{class: "java/io/InputStream", name: "<init>", descriptor: "()V", accessFlags: 0x0001},
 			},
 		},
 		"java/io/ByteArrayInputStream": {
@@ -338,6 +355,9 @@ func init() {
 				{class: "java/io/DataInputStream", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/io/DataInputStream", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
 				{class: "java/io/DataInputStream", name: "reset", descriptor: "()V", accessFlags: 0x0001},
+				// The floating-point halves CLDC 1.1 added beside the integer ones.
+				{class: "java/io/DataInputStream", name: "readFloat", descriptor: "()F", accessFlags: 0x0011},
+				{class: "java/io/DataInputStream", name: "readDouble", descriptor: "()D", accessFlags: 0x0011},
 			},
 		},
 		// java/lang/Math exposes the JVM-owned builtins through KTF metadata.
@@ -355,6 +375,7 @@ func init() {
 				{class: "java/util/Calendar", name: "set", descriptor: "(II)V", accessFlags: 0x0001},
 				{class: "java/util/Calendar", name: "getTime", descriptor: "()Ljava/util/Date;", accessFlags: 0x0011},
 				{class: "java/util/Calendar", name: "setTime", descriptor: "(Ljava/util/Date;)V", accessFlags: 0x0011},
+				{class: "java/util/Calendar", name: "setTimeZone", descriptor: "(Ljava/util/TimeZone;)V", accessFlags: 0x0001},
 			},
 		},
 		// java/util/GregorianCalendar is the concrete calendar, and a title
@@ -424,6 +445,20 @@ func init() {
 				// an int. The core library already had both bodies.
 				{class: "java/lang/Math", name: "min", descriptor: "(JJ)J", accessFlags: 0x0009},
 				{class: "java/lang/Math", name: "max", descriptor: "(JJ)J", accessFlags: 0x0009},
+				// CLDC 1.1's floating-point half, every one a value the
+				// specification names exactly.
+				{class: "java/lang/Math", name: "min", descriptor: "(FF)F", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "max", descriptor: "(FF)F", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "min", descriptor: "(DD)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "max", descriptor: "(DD)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "ceil", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "floor", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "sqrt", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "sin", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "cos", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "tan", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "toRadians", descriptor: "(D)D", accessFlags: 0x0009},
+				{class: "java/lang/Math", name: "toDegrees", descriptor: "(D)D", accessFlags: 0x0009},
 			},
 		},
 		// java/lang/Character is published whole. It had only isDigit, the one
@@ -470,6 +505,14 @@ func init() {
 				{class: "java/lang/Integer", name: "shortValue", descriptor: "()S", accessFlags: 0x0001},
 				{class: "java/lang/Integer", name: "longValue", descriptor: "()J", accessFlags: 0x0001},
 				{class: "java/lang/Integer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// The radix forms, the value equality with its hash and the
+				// widening conversions CLDC 1.1 added.
+				{class: "java/lang/Integer", name: "toString", descriptor: "(II)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Integer", name: "valueOf", descriptor: "(Ljava/lang/String;I)Ljava/lang/Integer;", accessFlags: 0x0009},
+				{class: "java/lang/Integer", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Integer", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Integer", name: "floatValue", descriptor: "()F", accessFlags: 0x0001},
+				{class: "java/lang/Integer", name: "doubleValue", descriptor: "()D", accessFlags: 0x0001},
 			},
 		},
 		// java/lang/Boolean is the fourth box, and the one nothing published
@@ -514,6 +557,11 @@ func init() {
 				{class: "java/lang/Byte", name: "byteValue", descriptor: "()B", accessFlags: 0x0001},
 				{class: "java/lang/Byte", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/Byte", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// The radix parse and the value equality with its hash; see
+				// "Publishing the rest of the core library" in docs/history/ktf.md.
+				{class: "java/lang/Byte", name: "parseByte", descriptor: "(Ljava/lang/String;I)B", accessFlags: 0x0009},
+				{class: "java/lang/Byte", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Byte", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
 			},
 		},
 		"java/lang/Short": {
@@ -526,6 +574,10 @@ func init() {
 				{class: "java/lang/Short", name: "shortValue", descriptor: "()S", accessFlags: 0x0001},
 				{class: "java/lang/Short", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/Short", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// The radix parse and the value equality with its hash.
+				{class: "java/lang/Short", name: "parseShort", descriptor: "(Ljava/lang/String;I)S", accessFlags: 0x0009},
+				{class: "java/lang/Short", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Short", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
 			},
 		},
 		"java/lang/Long": {
@@ -539,6 +591,14 @@ func init() {
 				{class: "java/lang/Long", name: "longValue", descriptor: "()J", accessFlags: 0x0001},
 				{class: "java/lang/Long", name: "intValue", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/Long", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// The radix forms, the value equality with its hash and the
+				// widening conversions CLDC 1.1 added.
+				{class: "java/lang/Long", name: "parseLong", descriptor: "(Ljava/lang/String;I)J", accessFlags: 0x0009},
+				{class: "java/lang/Long", name: "toString", descriptor: "(JI)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/Long", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "floatValue", descriptor: "()F", accessFlags: 0x0001},
+				{class: "java/lang/Long", name: "doubleValue", descriptor: "()D", accessFlags: 0x0001},
 			},
 		},
 		// java/util/Random exposes the JVM-owned CLDC implementation.
@@ -553,6 +613,9 @@ func init() {
 				{class: "java/util/Random", name: "nextInt", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/util/Random", name: "nextInt", descriptor: "(I)I", accessFlags: 0x0001},
 				{class: "java/util/Random", name: "nextLong", descriptor: "()J", accessFlags: 0x0001},
+				// The generator the public draws are made from, which a subclass
+				// may call.
+				{class: "java/util/Random", name: "next", descriptor: "(I)I", accessFlags: 0x0004},
 			},
 		},
 		// java/lang/String exposes the JVM-owned CLDC implementation through KTF
@@ -615,6 +678,7 @@ func init() {
 				{class: "java/lang/String", name: "valueOf", descriptor: "(I)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(J)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", accessFlags: 0x0009},
+				{class: "java/lang/String", name: "intern", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
 		// java/lang/StringBuffer exposes the JVM-owned CLDC implementation through
@@ -1754,6 +1818,32 @@ func runtimePrintStreamText(runtime *initializationRuntime, _ *jvm.VM, arguments
 	return jvm.VoidValue(), nil
 }
 
+// runtimePrintStreamChars prints a character array the way a string is
+// printed. A null array is ignored, as a null string is.
+func runtimePrintStreamChars(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) < 2 {
+		return jvm.VoidValue(), nil
+	}
+	array, err := arguments[1].Reference()
+	if err != nil || array == nil {
+		return jvm.VoidValue(), nil
+	}
+	_, values, err := jvm.ArraySnapshot(array)
+	if err != nil {
+		return jvm.VoidValue(), nil
+	}
+	units := make([]uint16, 0, len(values))
+	for _, value := range values {
+		unit, err := value.Int32()
+		if err != nil {
+			return jvm.VoidValue(), nil
+		}
+		units = append(units, uint16(unit))
+	}
+	runtime.client.guestPrint(string(utf16.Decode(units)))
+	return jvm.VoidValue(), nil
+}
+
 const maxPendingThreads = 64
 
 // serialDispatchInterval is how long the event loop waits between serial
@@ -1864,6 +1954,62 @@ func runtimeThreadSleep(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 		}
 	}
 	return jvm.VoidValue(), nil
+}
+
+// runtimeThreadJoin is Thread.join on the cooperative scheduler. The JVM's own
+// join refuses to block once a platform drives the threads, because blocking
+// there would hold the only guest core; a worker here parks instead, a slice
+// at a time, until the thread it waits for has returned from run — the same
+// parking an untimed Object.wait does, re-testing the one condition join has.
+// A thread that joins itself parks for good, as it would wait for good on a
+// handset, and the others go on running.
+//
+// A join made on the client thread — inside a card's paint or key handling,
+// or a lifecycle call — cannot park: the Host goroutine is inside the call,
+// and the thread being waited for cannot run until it returns. It returns at
+// once, which a caller tearing its thread down sees only as that thread
+// finishing a little later.
+func runtimeThreadJoin(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 1 {
+		return jvm.VoidValue(), fmt.Errorf("Thread.join expected a receiver, got %d arguments", len(arguments))
+	}
+	thread, err := arguments[0].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	for vm.GuestThreadAlive(thread) {
+		if runtime.client.activeWorker == nil {
+			runtime.countDiagnostic("Thread.join on the client thread returned at once")
+			return jvm.VoidValue(), nil
+		}
+		if err := runtime.sleepCurrentWorker(waitSliceWithoutTimeout); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
+	return jvm.VoidValue(), nil
+}
+
+// runtimeThreadSetPriority keeps the priority a title gives a thread, in the
+// field the JVM's getPriority reads, so the two agree. The scheduler runs the
+// workers in turn and reads no priority, which is why this used to keep
+// nothing at all; a value outside MIN_PRIORITY..MAX_PRIORITY is still ignored
+// rather than refused, as it always has been here.
+func runtimeThreadSetPriority(_ *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 2 {
+		return jvm.VoidValue(), fmt.Errorf("Thread.setPriority expected a receiver and a priority, got %d arguments", len(arguments))
+	}
+	thread, err := arguments[0].Reference()
+	if err != nil || thread == nil {
+		return jvm.VoidValue(), err
+	}
+	priority, err := arguments[1].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if priority < 1 || priority > 10 {
+		return jvm.VoidValue(), nil
+	}
+	return jvm.VoidValue(), vm.SetField(thread, "java/lang/Thread", "priority", "I", jvm.IntValue(priority))
 }
 
 // waitSliceWithoutTimeout is how long an untimed wait parks before returning.
@@ -2201,11 +2347,7 @@ func fontConstantFields() []runtimeJavaField {
 // style, and size the caller asked for so the attribute queries report them
 // back. There is one pixel face behind every request.
 func runtimeFontGetFont(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	font := runtime.runtimeObjects["org/kwis/msp/lcdui/Font"]
-	if font == nil {
-		font = &jvm.Object{ClassName: "org/kwis/msp/lcdui/Font", Fields: make(map[string]jvm.Value)}
-		runtime.runtimeObjects["org/kwis/msp/lcdui/Font"] = font
-	}
+	font := runtime.platformFont()
 	if len(arguments) == 3 {
 		for index, name := range []string{"face:I", "style:I", "size:I"} {
 			value, err := arguments[index].Int32()
@@ -2216,6 +2358,16 @@ func runtimeFontGetFont(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 		}
 	}
 	return jvm.ReferenceValue(font), nil
+}
+
+// platformFont is the platform's one font object, made on first request.
+func (runtime *initializationRuntime) platformFont() *jvm.Object {
+	font := runtime.runtimeObjects["org/kwis/msp/lcdui/Font"]
+	if font == nil {
+		font = &jvm.Object{ClassName: "org/kwis/msp/lcdui/Font", Fields: make(map[string]jvm.Value)}
+		runtime.runtimeObjects["org/kwis/msp/lcdui/Font"] = font
+	}
+	return font
 }
 
 func runtimeFontAttribute(key string) runtimeJavaImplementation {
@@ -3158,12 +3310,17 @@ func runtimeGetDefaultDisplay(runtime *initializationRuntime, _ *jvm.VM, argumen
 	if len(arguments) != 0 {
 		return jvm.VoidValue(), fmt.Errorf("Display.getDefaultDisplay expected no arguments, got %d", len(arguments))
 	}
+	return jvm.ReferenceValue(runtime.defaultDisplay()), nil
+}
+
+// defaultDisplay is the one Display, made on first request.
+func (runtime *initializationRuntime) defaultDisplay() *jvm.Object {
 	display := runtime.runtimeObjects[runtimeDisplayClass]
 	if display == nil {
 		display = &jvm.Object{ClassName: runtimeDisplayClass, Fields: make(map[string]jvm.Value)}
 		runtime.runtimeObjects[runtimeDisplayClass] = display
 	}
-	return jvm.ReferenceValue(display), nil
+	return display
 }
 
 func (runtime *initializationRuntime) registerRuntimeJavaNatives() error {

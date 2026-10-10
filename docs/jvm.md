@@ -427,7 +427,9 @@ and past `maxToStringDepth` it gets the identity it would have had before.
 - complete guest thread lifecycle (daemon and timed join) and full interruption
   semantics outside `Thread.sleep` and `Thread.join()`. Untimed join supports
   multiple waiters, interruption and `VM.Close`; a live thread owned by a
-  cooperative scheduler is explicitly unsupported. Finished and failed-start
+  cooperative scheduler is the platform's to wait for, and the JVM refuses
+  rather than block the one guest core (KTF parks the calling worker; see
+  [the KTF history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library)). Finished and failed-start
   threads leave the root set while their objects retain restart prohibition. `Thread.currentThread` answers the running
   execution's thread, and the execution that is not a guest thread gets one
   object of its own and keeps it. **Priority is kept and not honoured**: guest

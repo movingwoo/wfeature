@@ -59,6 +59,11 @@ This consolidation adds no execution or acceptance evidence.
 - [Five titles the interactive rung failed, and not one of them was stopped](#implementation-five-titles-the-interactive-rung-failed-and-not-one-of-them-was-stopped)
 - [A directory the platform made, and the two questions that answered it differently](#implementation-a-directory-the-platform-made-and-the-two-questions-that-answered-it-differently)
 - [A batch Host's clock had no rate, and a guest that waited paid for it](#implementation-a-batch-hosts-clock-had-no-rate-and-a-guest-that-waited-paid-for-it)
+- [Three members a sweep that held keys down reached](#implementation-three-members-a-sweep-that-held-keys-down-reached)
+- [Publishing the rest of the core library](#implementation-publishing-the-rest-of-the-core-library)
+- [A text component's protected fields](#implementation-a-text-components-protected-fields)
+- [A key is a callback](#implementation-a-key-is-a-callback)
+- [A packaged save that holds the address of the phone that wrote it](#implementation-a-packaged-save-that-holds-the-address-of-the-phone-that-wrote-it)
 - [Deliberately incomplete](#implementation-deliberately-incomplete)
 - [Compatibility follow-up (2026-09-12)](#followup-ktf-compatibility-follow-up)
 - [Native loading stall](#followup-native-loading-stall)
@@ -8329,7 +8334,7 @@ radix forms, the boxed equalities, `Math`'s floating-point functions and a
 handful of stream, thread and calendar members — carry a signature no local
 image has, or one so common it says nothing (`equals`, `hashCode`, `close`),
 and nothing in the sweep reaches one, so they are a follow-up of their own
-rather than part of this.
+rather than part of this — see "Publishing the rest of the core library".
 
 **The third is a contract, and the titles that call it settle it.** A title
 that draws its own text field builds an `InputMethodHandler`, registers a
@@ -8410,6 +8415,167 @@ takes `김철수`. The second title's store name takes `닭집`, and eight chara
 are kept to its six. A quick save taken with the first title's field open loads
 with the text input offered before any key, and `이순신` reaches the field.
 
+<a id="implementation-publishing-the-rest-of-the-core-library"></a>
+
+### Publishing the rest of the core library
+
+The 45 members the sweep left are published now: the radix forms of `Byte`,
+`Short`, `Integer` and `Long`, their value equalities and hashes, the widening
+`floatValue` and `doubleValue`, `Math`'s floating-point half, `String.intern`,
+`Class.toString`, the floating-point reads and writes of the data streams,
+`InputStream`'s constructor, `PrintStream`'s character-array forms and `close`,
+`Calendar.setTimeZone`, `Random.next`, and `Thread.activeCount`, `getPriority`
+and `join`. `TestEveryPublishedCoreClassDeclaresItsCLDCMembers` holds the table
+to it from here on: every public or protected member the core library has for a
+class the table publishes is declared, except five the library keeps for itself
+and CLDC does not name (`PrintStream(int)` and its two `byte[]` prints,
+`Byte.toString(byte)` and the library's own enumeration).
+
+**Most of them are a declaration and nothing else; three were not.** The JVM's
+`Thread.join` refuses to block once a platform drives the threads, because
+blocking there holds the one guest core, so publishing its body would have
+turned a missing method into a refused one. `join` on this platform parks the
+calling worker a slice at a time until the thread it waits for has returned
+from `run`, the same parking an untimed `wait` does; a join made on the client
+thread — inside a paint, a key or a lifecycle call — cannot park, because the
+thread it waits for cannot run until the call returns, so it returns at once.
+`setPriority` kept nothing, which would have left a published `getPriority`
+answering the default whatever a title set; it keeps an in-range value in the
+field `getPriority` reads, and still ignores one out of range rather than
+throwing, as it always has. The console's character-array prints log the text
+the way the string forms do, and `close` releases nothing.
+
+**Adding members to a class titles extend does not move their methods.** A
+class record in a current-generation image carries the slot numbers its
+compiler gave against the original runtime — one canvas overrides at 24, 25 and
+27 and starts its own methods at 33 — and the client renumbers them when it
+prepares the class, from the end of the table this runtime published: the same
+canvas runs with those methods at 30, 31, 32 and 33 under a 30-slot `Card`. A
+600-tick probe of the 282 local archives registered 2,208 guest classes, and
+every one whose parent is a platform class numbers its own methods from the end
+of that parent's published table; the gaps and the one override placed in its
+parent's slot are within it. The three relocatable modules do lay their own
+numbers over the parent table, and none of them extends a class that gained a
+member. Over the whole set `run -ticks 500` gives the same digest on both
+sides; two titles differed once while eight ran at a time and agree when run
+alone, which is how they had always varied. The 44 titles that extend `Thread`,
+`InputStream` or `Random` — 41, 2 and 1 — ran the sweep's key script for 1,500
+ticks: 42 alike, and the two that were not finish alike on three repeats each.
+
+<a id="implementation-a-text-components-protected-fields"></a>
+
+### A text component's protected fields
+
+One title stopped on a field rather than a method:
+
+```
+KTF AOT field m_cPos:I was not found from class org/kwis/msp/lwc/TextComponent
+```
+
+in the constructor of its own `TextFieldComponent` subclass, the moment its
+main menu built the name entry. The constructor calls the platform constructor
+and then sets `m_cPos` to the length of the text it was built with. The
+specification declares it on `TextComponent` as `protected int m_cPos`, "현재
+문자 데이타의 위치", beside the other state the class keeps: the characters
+`m_td`, their count, the input mode `iMode`, the limit, the constraint, the
+font, the display, the handler, a card that shows the mode, and a checker.
+
+**Seven local titles reach for them, all from a field of their own built on the
+platform's.** Two set `m_cPos` to the end of the text after building the field.
+One moves it to the end of `m_td` before handing the platform a key. One draws
+its own caret from `m_td` and `m_cPos` and clamps a caret it moves to
+`m_td.length`, so `m_td` is exactly as long as the text. One reads `m_cPos` and
+presses right until it reaches the end of the text — with a word that never
+moves, that loop never ends. Two compare `iMode` with the Hangul mode, 3, before
+they draw, and one writes a number of its own there and hands it to the
+handler itself. One reads the font in its constructor, and one reads
+`modeViewer`.
+
+**Every one this runtime holds a value for is published, and kept current.**
+`imHandler` was already; `m_cPos`, `m_td`, `charCount`, `iMode`, `maxLength`,
+`constraint`, `f` and `display` are beside it in the payload, and the class
+gains the members the specification declares on `TextComponent` itself and only
+the box had: `insert`, `delete`, `setFont`, `getFont`, `getConstraint` and
+`getMaxLength`. The characters, their count, the limit (-1 for none, as the
+specification gives it), the constraint, the font and the display follow the
+component on every call that can change them, and Host text and the keypad's
+focused component, which edit outside a call, publish as they edit. **Two words
+are also the title's to write.** This runtime keeps no caret — Host text and the
+keypad append — so `m_cPos` is written only when an edit moves it: to the end
+after a new value or an append, after the run an insert put in, to the index a
+delete removed from. `iMode` is written when the component is built and when its
+handler is given a mode. Between those, a title's own value stands.
+
+Two are not published. `constChecker` has a type the specification does not
+publish. `modeViewer` is the card the platform shows the input mode on, and the
+one title that reads it pops that card off the display; this runtime never puts
+it there, so handing the title a card would pop the title's own — see
+"Deliberately incomplete".
+
+**A payload is written only as far as its class was registered.** A component
+allocated under an earlier, smaller layout — restored from a checkpoint an
+earlier build took — keeps every word past the size its class record gave, so
+an object without room for the new fields does not have them written over its
+neighbour. `TestAComponentUnderAnEarlierLayoutKeepsTheRestOfItsPayload` holds
+that.
+
+**What it moved.** The title runs all 3,000 ticks of the key script instead of
+stopping at tick 883, through its name entry to its menus.
+
+<a id="implementation-a-key-is-a-callback"></a>
+
+### A key is a callback
+
+Two titles ended whole sessions on an exception of their own in `keyNotify`,
+on some runs of the sweep and not others. Neither is a value this runtime got
+wrong. One collects the keys it receives in a numeric-entry state as characters
+and parses the buffer with `Integer.parseInt`; a fire key, which it shifts into
+its own range first, is not a digit. The other hands a key to its text box's
+platform `keyNotify` and then reads `getString().charAt(4)` without looking at
+the length, and a name shorter than five characters throws. A handset ends the
+call and the game goes on, which is what "An exception nothing caught ends the
+callback, not the program" made this runtime do for a paint, a timer task, a
+thread and a guest event loop. The Host's own key and pointer delivery had been
+left out, so the same throw from a key ended the session. Both now end only the
+call: the key that threw goes no further down the card stack, and the next one
+is delivered.
+
+**What it moved.** Four runs of each title through the same key script all reach
+3,000 ticks. In two runs the parsing title absorbed 224 and 226 such keys, which
+is that title being in its numeric-entry state for most of the run;
+`TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey` fails before the change.
+
+<a id="implementation-a-packaged-save-that-holds-the-address-of-the-phone-that-wrote-it"></a>
+
+### A packaged save that holds the address of the phone that wrote it
+
+One WIPI-C title stopped on its first load, 167 ticks in:
+
+```
+service KTF timer: ... write KTF database read buffer: write guest memory at 0x1d14250 (920 bytes): guest memory is not mapped
+```
+
+**The address is in the save, and the save came with the archive.** The title
+saves a 192-byte structure and then the 920-byte array that structure points
+to, and loads them back the same way: it reads the structure over its live copy
+and then reads the array into the pointer it just loaded. The array is static —
+in this runtime it is at `0x166660`, in the image's BSS — so the pointer is the
+address the handset that wrote the save had loaded the image at, plus the
+array's offset. The archive packages that handset's `save.sav`, and the word at
+offset 532 is `0x01d14250`: an image loaded near `0x01cadbf0`. On any device
+that loads the image somewhere else, this one included, loading that save sends
+the read to an address nothing owns. `MC_fsRead` was answering exactly what it
+was asked.
+
+**Everything the title writes here reads back here.** Choosing NEW GAME instead
+of the load the menu offers first runs the opening and play for 2,500 ticks; a
+save from the in-game system menu writes `0x166660` at offset 532; and a new
+process that loads it reads the array to `0x166660` and plays on. The packaged
+save is the one thing that cannot load, and it would not on another handset
+either, so this is named here and left off the list of walls, like the other
+causes that live in an archive (see "What a sweep of a 262-archive set asked
+for").
+
 <a id="implementation-deliberately-incomplete"></a>
 
 ### Deliberately incomplete
@@ -8464,6 +8630,12 @@ with the text input offered before any key, and `이순신` reaches the field.
   loop.** Left out as the C input method leaves it: a carrier is consumed in
   the title's own time, so whether it reached the field is unknown — see
   "Three members a sweep that held keys down reached"
+- **`TextComponent.modeViewer`.** The card that shows the input mode, which
+  the platform puts on the display while a text component edits. This
+  runtime never shows it, and the one local title that reads the field pops
+  that card off the display through it, so a card handed over unshown would
+  take the title's own card with it — see "A text component's protected
+  fields". Publishing it waits for the platform to show it
 
 
 <a id="followup-ktf-compatibility-follow-up"></a>
