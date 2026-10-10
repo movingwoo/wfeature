@@ -430,6 +430,18 @@ func runtimeEventQueuePostEventStatic(runtime *initializationRuntime, _ *jvm.VM,
 // A card's keyNotify returning true propagates to the card below it, matching
 // the original runtime's card stack traversal.
 func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) error {
+	// A title's own field is open while the title hands it the presses it
+	// receives. A press it does not see — fire that confirms, clear on an empty
+	// field — closed it. The Host's own carriers are judged by their senders.
+	if eventType == KeyPressed && len(runtime.cInput.pending) == 0 && runtime.javaInput.pending == nil {
+		runtime.javaInput.touched, runtime.javaInput.keyTaken = false, false
+		defer func() {
+			if !runtime.javaInput.touched {
+				runtime.unseenPress()
+			}
+			runtime.javaInput.keyTaken = false
+		}()
+	}
 	// External key actions invalidate snapshots even if the C widget does not
 	// call its input method (for example, dismissing the name dialog).
 	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
@@ -624,13 +636,16 @@ func runtimeInputMethodConstructor(_ *initializationRuntime, _ *jvm.VM, argument
 	}
 	receiver.Fields[inputMethodModeField] = arguments[1]
 	receiver.Fields[inputMethodConstraintField] = arguments[1]
+	receiver.Fields[inputMethodTitleOwnedField] = jvm.IntValue(1)
 	return jvm.VoidValue(), nil
 }
 
 // runtimeInputMethodSetMode records the requested input mode and accepts it.
-// There is no on-device input method to switch: text arrives through the Host
-// keypad, so every mode is equally available.
-func runtimeInputMethodSetMode(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+// There is no on-device input method to switch: text arrives through the Host's
+// text input, so every mode is equally available. A title switches the mode of
+// an open field from a soft key it does not otherwise forward, so the switch
+// is also the field still being open.
+func runtimeInputMethodSetMode(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 2 {
 		return jvm.VoidValue(), fmt.Errorf("InputMethodHandler.setCurrentMode expected receiver and mode, got %d arguments", len(arguments))
 	}
@@ -643,6 +658,7 @@ func runtimeInputMethodSetMode(_ *initializationRuntime, _ *jvm.VM, arguments []
 			receiver.Fields = make(map[string]jvm.Value)
 		}
 		receiver.Fields[inputMethodModeField] = arguments[1]
+		runtime.touchInputMethod(receiver, false)
 	}
 	return jvm.IntValue(1), nil
 }

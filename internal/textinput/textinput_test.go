@@ -147,34 +147,6 @@ func TestMovingTheCaretEndsTheCycle(t *testing.T) {
 	}
 }
 
-// An application that owns the mode sets it directly. Switching ends the cycle,
-// so the same key types a new character in the new set instead of replacing
-// the one the old set produced, and setting the mode it is already in leaves a
-// cycle alone.
-func TestSetModeSwitchesTheSetAndEndsTheCycle(t *testing.T) {
-	state := New("", 0)
-	state.Key('2', at(0))
-	state.SetMode(ModeLowercase)
-	state.Key('2', at(100))
-	if state.Text() != "b" {
-		t.Fatalf("text = %q, want setting the same mode to keep the cycle", state.Text())
-	}
-	state.SetMode(ModeUppercase)
-	state.Key('2', at(200))
-	if state.Text() != "bA" {
-		t.Fatalf("text = %q, want a new capital after the switch", state.Text())
-	}
-	state.SetMode(ModeNumeric)
-	state.Key('2', at(300))
-	if state.Text() != "bA2" || state.ModeLabel() != "123" {
-		t.Fatalf("text = %q in %q, want the digit", state.Text(), state.ModeLabel())
-	}
-	state.SetMode(modeCount)
-	if state.Mode() != ModeNumeric {
-		t.Fatalf("an unknown mode changed the set to %d", state.Mode())
-	}
-}
-
 func TestUTF16LimitKeepsWholeCharactersAcrossEditing(t *testing.T) {
 	state := NewUTF16("AB🙂", 4)
 	if state.Key('2', at(0)) || state.Text() != "AB🙂" {

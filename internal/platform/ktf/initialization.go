@@ -285,6 +285,9 @@ type initializationRuntime struct {
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
 	cInput                cInputState
+	// javaInput is the Host's side of a title's own input-method field; the
+	// open field itself is a runtime object. See runtime_input_method.go.
+	javaInput javaInputState
 	// shadowedBlocks and checkedBlocks are how much the detector covered.
 	// They are reported because a clean report otherwise cannot be told apart
 	// from a detector that never ran.

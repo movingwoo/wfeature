@@ -8329,45 +8329,70 @@ them. Three local titles implement the listener, and their code agrees:
 - Delete cuts `len` characters off the end;
 - Replace does nothing.
 
-So the handler sends an array holding exactly the edit's characters, and a
-multi-tap cycle — which on a keypad replaces the letter it just typed — goes
-out as a Delete of that letter followed by an Insert of the next. A Replace
-would have left these titles showing the first letter of every key.
-[`native-text-input.md`](../native-text-input.md#lifecycle-whole-field-replacement-and-ime-callbacks)
-had left an installed listener unsupported for want of exactly this; it still
-is for a Host-composed string, which is a different question.
+So the handler only inserts and deletes, and an insertion's array holds
+exactly the inserted characters.
+
+**The text is the Host's, as it is for every other field here.** A handset
+composed letters and Hangul in this automaton; here the browser or the
+operating system composes them, and the page's text input hands the completed
+text over. It reaches the listener one character per key the title forwards:
+the Host presses a carrier key — `0`, the key the C input method's Host text
+travels on — the title hands it to `notifyKeyInput`, and the handler answers it
+with an insertion of the next character instead of the key's own meaning. The
+title's own handling of each key runs as it would for a character typed on the
+handset, which is what keeps each title's limit its own: the first title shows
+its "no more than four characters" message on a fifth, the second keeps the
+first six of what it is given. An insertion is the only edit the Host sends,
+because the field cannot be read and the page edits nothing but the text it
+appends. The keypad keeps what the C input method keeps: a digit in the digit
+mode, and clear, which the first title forwards only while its field has text
+and which goes out as a deletion. Star, hash, the directions, fire and the soft
+keys come back unprocessed; the first title switches modes on its left soft key
+and labels `#` with a command of its own.
 
 **The modes are numbered by the titles too, and not as the C input method
 numbers them.** One title draws its own indicator — 가, A, a, 1 — opens the
 field under 가 with `setCurrentMode(3)`, and its left soft key steps the
 indicator through A, a and 1 while setting 1, 0 and 2. So 0 is small letters,
 1 capitals, 2 digits and 3 Hangul, where the C table's list starts with the
-capitals and puts Hangul third. Letters and digits are the shared multi-tap
-keypad, `internal/textinput`. Hangul types nothing: a handset composes it from
-jamo in a layout no local evidence fixes, and the C input method leaves it to
-the Host for the same reason, so the field takes letters and digits once the
-player switches to them.
+capitals and puts Hangul third. Only the digit mode changes what a key does
+here; the Host's text is taken in any mode, as the C input method takes it.
 
-**What the handler takes is the digits and the clear key.** The first title
-switches modes on its left soft key and labels `#` with a command of its own on
-the same screen, so star and hash stay the title's rather than becoming the
-mode key and backspace a text component's keypad makes of them; so do the
-directions, fire and the soft keys, which come back unprocessed. Clear takes
-back only what the handler typed — anything else in the field is the title's —
-and a different listener starts the record again. The record is a
-`textinput.State` on the handler's `Native`, so a quick save taken between two
-presses of one key keeps the cycle.
+**The text input has to be there whenever the field is, and the keys say when
+that is.** The first title builds a handler and registers its listener when the
+field opens, hands that handler every key of the pad while the field is open —
+the soft keys and call included — and switches its mode with a soft key it does
+not forward. Fire confirms the field and closes it, and clear on an empty field
+cancels it, and neither key reaches the handler. So a field opens when a
+listener is registered on a handler the title built itself, stays open while
+the presses the card receives reach it — a mode switch counts — and closes on
+the first press that does not. A handler a text component carries is the
+component's and opens nothing here. One case needs the rule's exception: when a
+fifth character overflows the first title's four, the title builds the field
+again while handling that key and puts its message over the new one, and the
+fire that dismisses the message never reaches the field that is on the screen
+behind it. A field opened while another field is taking a key is that field
+reset, and it stays open through presses it does not see until it has taken a
+key of its own. A field opened any other way and confirmed at once still
+closes on the confirmation. The open field and its card are runtime objects,
+so a quick save taken with the field open loads with it open, before any key
+has been pressed. A title that runs its own event loop is left out, as the C
+input method leaves it, because when it consumes a carrier is its own business.
 
-A cycle sent as two edits has one way to go wrong: a title that drops the
-letter that overflowed its field would, on the next press of the same key, see
-the deletion take its last real letter instead. The first title does not get
-there — its "no more than four characters" message takes the next key, and
-dismissing it builds the field again with a new handler.
+The first form of this change went the other way: it typed letters with the
+multi-tap keypad and left the Host out, on the belief that a field a title
+draws gives no sign of being open. The sign is the keys themselves, and the
+letters are the Host's here as everywhere else, so that is what was kept.
 
-**What it moved.** All three titles run the 3,000 ticks of the same key
-script. Driven to the first title's field by a scripted route, a key under 가
-types nothing; under A, a and 1 it types `A`, then `a` cycled to `b`, then `2`;
-clear takes the `2` back; and fire makes `Ab` the candidate's name.
+**What it moved.** All three titles run the 3,000 ticks of the same key script.
+Driven to the first title's field by a scripted route on a manual clock, the
+text input is offered the moment the field opens; `홍길동` committed through it
+appears in the field and becomes the candidate's name on fire, after which
+nothing is offered. Six characters bring up the title's own message after the
+fifth and refuse the sixth; once the message is dismissed the rebuilt field
+takes `김철수`. The second title's store name takes `닭집`, and eight characters
+are kept to its six. A quick save taken with the first title's field open loads
+with the text input offered before any key, and `이순신` reaches the field.
 
 <a id="implementation-deliberately-incomplete"></a>
 
@@ -8419,13 +8444,10 @@ clear takes the `2` back; and fire makes `Ab` the candidate's name.
   "The transparency a title brings with it")
 - in-game progression is verified by the user playing, not by automated
   probes; probes only surface missing API surfaces to implement
-- **Hangul in a title's own input-method handler, and Host text for it.** The
-  handler types letters and digits and nothing under Hangul, because a handset
-  composed Hangul from jamo in a layout no local evidence fixes. The page's
-  keyboard could deliver Hangul as one insertion, which the titles' listeners
-  would take, but a title-drawn field gives no sign of being on the screen, and
-  a Host that guessed would type into a field the player has left — see "Three
-  members a sweep that held keys down reached"
+- **Host text into a title's own field when the title runs its own event
+  loop.** Left out as the C input method leaves it: a carrier is consumed in
+  the title's own time, so whether it reached the field is unknown — see
+  "Three members a sweep that held keys down reached"
 
 
 <a id="followup-ktf-compatibility-follow-up"></a>

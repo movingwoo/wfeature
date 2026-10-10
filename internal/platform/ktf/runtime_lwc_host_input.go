@@ -39,6 +39,11 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	if client.runtime == nil || client.workersStopped {
 		return nil, backend.ErrNoTextInput
 	}
+	// A title's own field takes the keys the title is handing it right now,
+	// which is stronger evidence of the field on screen than any focus record.
+	if edit, err := client.inputMethodTextInputLocked(); err == nil {
+		return edit, nil
+	}
 	focus := client.runtime.runtimeObjects["lwc:focus"]
 	component := focus
 	shellState := client.shellTextInput()

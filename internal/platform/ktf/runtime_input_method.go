@@ -1,48 +1,69 @@
 package ktf
 
 import (
+	"context"
 	"fmt"
+	"unicode"
 	"unicode/utf16"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
-	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
 // A title that draws its own text field builds an InputMethodHandler, gives it
-// a listener of its own, and hands it every key the field's card receives. The
-// handler is the automaton: it turns keys into characters and tells the
-// listener what each key did to the text. **The listener holds the text and
-// the handler never reads it**, so what crosses between them is an edit, not a
-// value.
+// a listener of its own, and hands it the keys the field's card receives while
+// the field is open. The handler is the automaton: it turns keys into
+// characters and tells the listener what each one did to the text. **The
+// listener holds the text and the handler never reads it**, so what crosses
+// between them is an edit, not a value.
 //
 // Which edits a listener expects is settled by three local titles rather than
 // by the specification, which names the three modes of notifyTextChanged and
 // nothing about how a listener applies them. All three implement it the same
 // way: an insertion (-1) appends `new String(chText)` — the whole array, not
 // its first `len` characters — a deletion (1) cuts `len` characters off the
-// end, and a replacement (0) is ignored. So a multi-tap cycle, which on a
-// keypad replaces the letter it just typed, reaches the listener as a deletion
-// of that letter followed by an insertion of the next one; a replacement
-// would leave those titles showing the first letter of every key.
+// end, and a replacement (0) is ignored. So the handler only ever inserts and
+// deletes, and an insertion's array holds exactly the inserted characters.
 //
-// The keys are the handset's multi-tap keypad, internal/textinput, which is
-// the automaton every other text field here types through. Only the digits and
-// the clear key are the handler's: these titles switch modes on a soft key of
-// their own and one labels `#` with a command on the same screen, so the star
-// and hash keys stay theirs rather than becoming the mode key and backspace a
-// text component makes of them, and so does everything that moves around the
-// screen.
+// The text itself comes from the Host's text input, as it does for every other
+// field here. The handset composed letters and Hangul in its automaton; here
+// the browser or the operating system composes them, and the completed text is
+// handed to the listener one character per key the title forwards, so the
+// title's own handling of each key — its length check, its redraw — runs as it
+// would for a character typed on the handset. The keypad keeps what the WIPI C
+// input method keeps: a digit in the digit mode, and the clear key.
 
 const (
 	// Edits as notifyTextChanged names them.
 	inputMethodInsert int32 = -1
 	inputMethodDelete int32 = 1
 
+	inputMethodModeField = "mode:I"
 	// inputMethodConstraintField is the constraint the handler was built with,
 	// which decides the characters a numeric field can take whatever mode a
 	// title later sets.
 	inputMethodConstraintField = "host:input-constraint"
-	inputMethodModeField       = "mode:I"
+	// inputMethodTitleOwnedField marks a handler the title constructed itself.
+	// Only such a handler is a field of the title's own; the one a text
+	// component carries is reached through the component.
+	inputMethodTitleOwnedField = "host:input-title-owned"
+	// inputMethodResetField marks a field the title opened while handling a
+	// key another of its fields took, and that has not taken a key itself
+	// since; see touchInputMethod.
+	inputMethodResetField = "host:input-reset"
+
+	// The open field, and the card it was opened on, are runtime objects so
+	// that a checkpoint taken while the field is open restores it open.
+	inputMethodOpenObject = "input-method:open"
+	inputMethodCardObject = "input-method:card"
+
+	// inputMethodCarrier is the key a Host character travels on. The titles
+	// forward every key of the pad to their open field, and a digit is the key
+	// the WIPI C input method's Host text travels on too.
+	inputMethodCarrier = KeyNum0
+	// maxInputMethodHostUnits bounds one Host composition, in Java chars. The
+	// field's own limit is the title's, and it applies it one key at a time.
+	maxInputMethodHostUnits = 64
 )
 
 // Modes as a title sets them on its handler. The specification names the
@@ -50,15 +71,28 @@ const (
 // indicator — 가, A, a, 1 — opens its field under 가 with setCurrentMode(3),
 // and its mode key steps the indicator through A, a and 1 with 1, 0 and 2.
 // These are not the WIPI C input method's numbers, whose list starts with the
-// capitals. Hangul is composed from jamo the keypad carries in a layout no
-// local evidence fixes, so a handler in that mode types nothing until the
-// title switches, which is where the C input method leaves Hangul too.
+// capitals. Only the digit mode changes what a key does here.
 const (
 	inputMethodModeLowercase int32 = 0
 	inputMethodModeUppercase int32 = 1
 	inputMethodModeNumeric   int32 = 2
 	inputMethodModeHangul    int32 = 3
 )
+
+// javaInputState is the Host's side of a title's own field: whether the press
+// being delivered reached the open handler, and whether a field took it as a
+// key; the revision a Host composition was taken at; and the character in
+// flight to the listener.
+type javaInputState struct {
+	touched, keyTaken bool
+	revision          uint64
+	pending           *javaInputCharacter
+}
+
+type javaInputCharacter struct {
+	handler *jvm.Object
+	units   []uint16
+}
 
 // runtimeInputMethodNotifyKeyInput is `notifyKeyInput(int keyCode, int type)`.
 // It answers whether the handler processed the key, which is what the
@@ -77,47 +111,37 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	var listener *jvm.Object
-	if value, ok := receiver.Fields[inputMethodListenerField]; ok {
-		if listener, err = value.Reference(); err != nil {
+	listener, err := inputMethodListener(receiver)
+	if err != nil || listener == nil {
+		return jvm.IntValue(0), err
+	}
+	// The character in flight is delivered to the handler it was composed for,
+	// whatever key carried it; a carrier forwarded anywhere else is left for
+	// the Host to find undelivered.
+	if pending := runtime.javaInput.pending; pending != nil && pending.handler == receiver {
+		runtime.javaInput.pending = nil
+		runtime.touchInputMethod(receiver, true)
+		if err := notifyInputMethodListener(vm, listener, pending.units, inputMethodInsert); err != nil {
 			return jvm.VoidValue(), err
 		}
+		return jvm.IntValue(1), nil
 	}
-	// A press types; a release and a repeat do not, for the reason a text
-	// component gives: multi-tap counts presses.
-	if listener == nil || eventType != KeyPressed {
+	// The title hands its field's keys here, so the field is open.
+	runtime.touchInputMethod(receiver, true)
+	// A press types; a release and a repeat do not.
+	if eventType != KeyPressed {
 		return jvm.IntValue(0), nil
 	}
-	editor := inputMethodEditorFor(receiver)
 	switch {
 	case key == KeyClear:
-		deleted := inputMethodLastCharacter(editor)
-		if !editor.Backspace() {
-			// Nothing this handler typed is left to take back. What the
-			// listener holds beyond that is the title's own, and the key is
-			// answered as unprocessed so the title can act on it.
-			return jvm.IntValue(0), nil
-		}
-		if err := notifyInputMethodListener(vm, listener, deleted, inputMethodDelete); err != nil {
+		// The title forwards clear while its field has text — the first title
+		// takes it as cancel when the field is empty — and a deletion is the
+		// edit its listener applies to its own text.
+		if err := notifyInputMethodListener(vm, listener, nil, inputMethodDelete); err != nil {
 			return jvm.VoidValue(), err
 		}
-	case key >= KeyNum0 && key <= KeyNum9:
-		mode, ok := inputMethodKeypadMode(receiver)
-		if !ok {
-			return jvm.IntValue(0), nil
-		}
-		editor.SetMode(mode)
-		before := inputMethodLastCharacter(editor)
-		length := len([]rune(editor.Text()))
-		if !editor.Key(rune(key), runtime.client.now()) {
-			return jvm.IntValue(0), nil
-		}
-		if len([]rune(editor.Text())) == length {
-			if err := notifyInputMethodListener(vm, listener, before, inputMethodDelete); err != nil {
-				return jvm.VoidValue(), err
-			}
-		}
-		if err := notifyInputMethodListener(vm, listener, inputMethodLastCharacter(editor), inputMethodInsert); err != nil {
+	case key >= KeyNum0 && key <= KeyNum9 && inputMethodTypesDigits(receiver):
+		if err := notifyInputMethodListener(vm, listener, []uint16{uint16(key)}, inputMethodInsert); err != nil {
 			return jvm.VoidValue(), err
 		}
 	default:
@@ -126,63 +150,33 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 	return jvm.IntValue(1), nil
 }
 
-// inputMethodKeypadMode answers the character set the handler's mode types,
-// and false for a mode the keypad here has none for.
-func inputMethodKeypadMode(receiver *jvm.Object) (textinput.Mode, bool) {
-	if constraint, _ := receiver.Fields[inputMethodConstraintField].Int32(); constraint == textConstraintNumber ||
-		constraint == textConstraintPassword || constraint == textConstraintPhoneNumber {
-		return textinput.ModeNumeric, true
+// inputMethodTypesDigits answers whether a digit key types its digit: in the
+// digit mode, or whatever the mode on a field built for numbers.
+func inputMethodTypesDigits(receiver *jvm.Object) bool {
+	switch constraint, _ := receiver.Fields[inputMethodConstraintField].Int32(); constraint {
+	case textConstraintNumber, textConstraintPassword, textConstraintPhoneNumber:
+		return true
 	}
 	mode, err := receiver.Fields[inputMethodModeField].Int32()
-	if err != nil {
-		return 0, false
-	}
-	switch mode {
-	case inputMethodModeLowercase:
-		return textinput.ModeLowercase, true
-	case inputMethodModeUppercase:
-		return textinput.ModeUppercase, true
-	case inputMethodModeNumeric:
-		return textinput.ModeNumeric, true
-	case inputMethodModeHangul:
-		return 0, false
-	}
-	// A mode no title has been seen to set, such as the symbol card the
-	// specification mentions, has no keypad layout here either.
-	return 0, false
+	return err == nil && mode == inputMethodModeNumeric
 }
 
-// inputMethodEditorFor answers the automaton's own record of what it typed,
-// which is what a multi-tap cycle and the clear key work against. It lives on
-// the handler for the reason a text component's editor lives on the component:
-// a table keyed by the object would keep every handler a title ever built
-// alive, and the checkpoint already carries an editor wherever it sits.
-func inputMethodEditorFor(receiver *jvm.Object) *textinput.State {
-	if editor, ok := receiver.Native.(*textinput.State); ok {
-		return editor
+func inputMethodListener(receiver *jvm.Object) (*jvm.Object, error) {
+	value, ok := receiver.Fields[inputMethodListenerField]
+	if !ok {
+		return nil, nil
 	}
-	editor := textinput.New("", 0)
-	receiver.Native = editor
-	return editor
+	return value.Reference()
 }
 
-// inputMethodLastCharacter is the character a deletion or a cycle takes back.
-// The handler's caret only ever moves forward through what it typed, so that is
-// the last one.
-func inputMethodLastCharacter(editor *textinput.State) rune {
-	text := []rune(editor.Text())
-	if len(text) == 0 {
-		return 0
+// notifyInputMethodListener hands one edit to the listener: the characters,
+// how many there are, and which edit it is. A deletion's array is empty,
+// because the listeners that settled the contract read only its count.
+func notifyInputMethodListener(vm *jvm.VM, listener *jvm.Object, units []uint16, edit int32) error {
+	length := len(units)
+	if edit == inputMethodDelete {
+		length = 1
 	}
-	return text[len(text)-1]
-}
-
-// notifyInputMethodListener hands one edit to the listener: the character, how
-// many characters the edit covers, and which edit it is. The array holds
-// exactly the edit's characters, because the titles that settled the contract
-// build their insertion from the whole array.
-func notifyInputMethodListener(vm *jvm.VM, listener *jvm.Object, character rune, edit int32) error {
-	units := utf16.Encode([]rune{character})
 	array, err := vm.NewArray(jvm.Type{Kind: jvm.TypeChar}, int32(len(units)))
 	if err != nil {
 		return err
@@ -195,29 +189,194 @@ func notifyInputMethodListener(vm *jvm.VM, listener *jvm.Object, character rune,
 		return err
 	}
 	if _, err := vm.InvokeVirtual(listener, "notifyTextChanged", "([CII)V",
-		jvm.ReferenceValue(array), jvm.IntValue(1), jvm.IntValue(edit)); err != nil {
+		jvm.ReferenceValue(array), jvm.IntValue(int32(length)), jvm.IntValue(edit)); err != nil {
 		return fmt.Errorf("notify KTF input method listener %s: %w", listener.ClassName, err)
 	}
 	return nil
 }
 
-// runtimeInputMethodSetListener keeps the listener the handler's edits go to. A
-// different listener keeps text of its own, so what the handler typed for the
-// previous one is no longer anything the new one holds.
-func runtimeInputMethodSetListener(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	var previous jvm.Value
-	if len(arguments) == 2 {
-		if receiver, err := arguments[0].Reference(); err == nil && receiver != nil {
-			previous = receiver.Fields[inputMethodListenerField]
-		}
+// touchInputMethod records that the title used one of its own handlers while
+// that handler has a listener, which is what an open field looks like from
+// here: the first title builds a handler and registers its listener when the
+// field opens, hands that handler every key of the pad while it is open, and
+// sets its mode from a soft key. It marks the press being delivered as one the
+// field saw; see dispatchKeyToCards. took says the handler was handed a key.
+//
+// A field that opens while another field is taking a key is that field reset.
+// The first title does it when a fifth character overflows its four: it builds
+// the field again and puts its "no more than four characters" message over
+// it. The press that dismisses the message never reaches the new field, which
+// is on the screen all the same, so a reset field stays open through presses
+// it does not see until it has taken a key of its own.
+func (runtime *initializationRuntime) touchInputMethod(handler *jvm.Object, took bool) {
+	if owned, _ := handler.Fields[inputMethodTitleOwnedField].Int32(); owned == 0 {
+		return
 	}
+	if listener, err := inputMethodListener(handler); err != nil || listener == nil {
+		return
+	}
+	runtime.javaInput.touched = true
+	if took {
+		runtime.javaInput.keyTaken = true
+		delete(handler.Fields, inputMethodResetField)
+	}
+	card := runtime.topCard()
+	open := runtime.runtimeObjects[inputMethodOpenObject]
+	if open == handler && runtime.runtimeObjects[inputMethodCardObject] == card {
+		return
+	}
+	if open != handler && !took && runtime.javaInput.keyTaken {
+		handler.Fields[inputMethodResetField] = jvm.IntValue(1)
+	}
+	runtime.runtimeObjects[inputMethodOpenObject] = handler
+	if card != nil {
+		runtime.runtimeObjects[inputMethodCardObject] = card
+	} else {
+		delete(runtime.runtimeObjects, inputMethodCardObject)
+	}
+	runtime.javaInput.revision++
+}
+
+// closeInputMethod forgets the open field.
+func (runtime *initializationRuntime) closeInputMethod() {
+	if runtime.runtimeObjects[inputMethodOpenObject] == nil {
+		return
+	}
+	delete(runtime.runtimeObjects, inputMethodOpenObject)
+	delete(runtime.runtimeObjects, inputMethodCardObject)
+	runtime.javaInput.revision++
+}
+
+// unseenPress closes the open field after a press it did not see. That is the
+// sign the title closed it: the first title closes its field on fire, and on
+// clear when the field is empty, and neither key reaches the handler. A reset
+// field that has not taken a key yet is the exception; see touchInputMethod.
+func (runtime *initializationRuntime) unseenPress() {
+	open := runtime.runtimeObjects[inputMethodOpenObject]
+	if open == nil {
+		return
+	}
+	if reset, _ := open.Fields[inputMethodResetField].Int32(); reset != 0 {
+		return
+	}
+	runtime.closeInputMethod()
+}
+
+// runtimeInputMethodSetListener keeps the listener the handler's edits go to.
+// Registering one on a handler the title built is the field opening; removing
+// it is the field closing.
+func runtimeInputMethodSetListener(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	result, err := runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)(runtime, vm, arguments)
 	if err != nil {
 		return result, err
 	}
 	receiver, _ := arguments[0].Reference()
-	if _, ok := receiver.Native.(*textinput.State); ok && previous != arguments[1] {
-		receiver.Native = nil
+	if listener, _ := arguments[1].Reference(); listener != nil {
+		runtime.touchInputMethod(receiver, false)
+	} else if runtime.runtimeObjects[inputMethodOpenObject] == receiver {
+		runtime.closeInputMethod()
 	}
 	return result, nil
+}
+
+// inputMethodTextInputLocked offers the open field of a title's own handler to
+// a Host that composes text. The field cannot be read, so the Host appends.
+// The caller holds client.run.
+func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
+	runtime := client.runtime
+	handler := runtime.runtimeObjects[inputMethodOpenObject]
+	card := runtime.runtimeObjects[inputMethodCardObject]
+	// A title that runs its own event loop takes keys from its queue in its
+	// own time, so whether a carrier was consumed is unknown; the C input
+	// method leaves such a title out for the same reason.
+	if handler == nil || card == nil || runtime.guestEventLoop || runtime.topCard() != card {
+		return nil, backend.ErrNoTextInput
+	}
+	listenerValue := handler.Fields[inputMethodListenerField]
+	if listener, err := listenerValue.Reference(); err != nil || listener == nil {
+		return nil, backend.ErrNoTextInput
+	}
+	constraint, err := handler.Fields[inputMethodConstraintField].Int32()
+	if err != nil {
+		constraint = textConstraintAny
+	}
+	inputMode, password := lwcTextInputHints(constraint)
+	revision := runtime.javaInput.revision
+	return &backend.TextInput{Append: true, MaxLength: maxInputMethodHostUnits, InputMode: inputMode, Password: password,
+		Commit: func(ctx context.Context, text string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			client.run.Lock()
+			defer client.run.Unlock()
+			unchanged := func() bool {
+				return client.runtime == runtime && !client.workersStopped && !runtime.guestEventLoop &&
+					runtime.runtimeObjects[inputMethodOpenObject] == handler && runtime.topCard() == card &&
+					runtime.javaInput.revision == revision && handler.Fields[inputMethodListenerField] == listenerValue
+			}
+			if !unchanged() {
+				return backend.ErrTextInputChanged
+			}
+			if err := validateInputMethodText(text, constraint); err != nil {
+				return err
+			}
+			if text == "" {
+				return nil
+			}
+			delivered := false
+			defer func() {
+				runtime.javaInput.pending = nil
+				// A used composition is spent, as the C input method's is.
+				if delivered {
+					runtime.javaInput.revision++
+				}
+			}()
+			defer client.beginHostService(ctx)()
+			previousThread, previousContext := runtime.currentThread, runtime.currentContext
+			runtime.currentThread, runtime.currentContext = client.thread, ctx
+			defer func() { runtime.currentThread, runtime.currentContext = previousThread, previousContext }()
+			for _, character := range text {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if !unchanged() {
+					return backend.ErrTextInputChanged
+				}
+				runtime.javaInput.pending = &javaInputCharacter{handler: handler, units: utf16.Encode([]rune{character})}
+				runtime.javaInput.keyTaken = false
+				err := runtime.dispatchKeyToCards(KeyPressed, inputMethodCarrier)
+				consumed := runtime.javaInput.pending == nil
+				runtime.javaInput.pending, runtime.javaInput.keyTaken = nil, false
+				if err == nil {
+					err = runtime.dispatchKeyToCards(KeyReleased, inputMethodCarrier)
+				}
+				if err != nil {
+					return err
+				}
+				if !consumed {
+					// The title did not hand the carrier to this field, which is
+					// a press the field did not see.
+					runtime.unseenPress()
+					return backend.ErrTextInputChanged
+				}
+				delivered = true
+			}
+			return nil
+		},
+	}, nil
+}
+
+// validateInputMethodText applies the field's constraint the way a Java text
+// field's Host input does, and refuses the control characters no keypad could
+// have typed.
+func validateInputMethodText(text string, constraint int32) error {
+	if err := validateLWCTextInput(text, constraint, maxInputMethodHostUnits, false); err != nil {
+		return err
+	}
+	for _, character := range text {
+		if unicode.IsControl(character) {
+			return backend.ErrInvalidTextInput
+		}
+	}
+	return nil
 }
