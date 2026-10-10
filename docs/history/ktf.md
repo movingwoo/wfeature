@@ -8282,6 +8282,134 @@ delay loop terminates in the trace, which now runs on into the rest of the
 callback. Under a wall clock, where it always worked, it still answers a key:
 `fire` takes it off the logo, through a menu and into a character screen.
 
+<a id="implementation-three-members-a-sweep-that-held-keys-down-reached"></a>
+
+### Three members a sweep that held keys down reached
+
+A sweep that ran every local KTF archive for 3,000 ticks at four times speed,
+pressing a key every twelve ticks — fire, the four directions, 2, 5 and 8 —
+ended three titles on a platform lookup rather than on anything they did:
+
+```
+KTF AOT method notifyKeyInput(II)Z was not found from class org/kwis/msp/lcdui/InputMethodHandler
+KTF AOT method <init>(C)V was not found from class java/lang/Character
+```
+
+two management titles on the first, the moment a key reached their name field,
+and a shooter's guest thread on the second, well into play. With both answered,
+one of the management titles got past its name field, played on, and stopped at
+tick 1,654 on a third:
+
+```
+KTF AOT method <init>(Ljava/lang/StringBuffer;)V was not found from class java/lang/String
+```
+
+**Two of the three are the same omission, and it is not the core library's.**
+The JVM carries `Character` whole and `String(StringBuffer)` too; what a KTF
+title can reach is what the platform's class table publishes, and the table
+had `Character` with `isDigit` alone — the one member a title had been seen to
+call when the class was connected — and every `String` constructor but this
+one. `Character` is published whole now and the constructor beside the others.
+Publishing a member the JVM has a body for is a declaration and nothing else;
+`TestDelegatingRuntimeMethodsHaveAJVMBody` already holds every such
+declaration to a body.
+
+The same count over the whole table — the core library's members less the
+table's, class by class — finds 47 more CLDC members with a body and no
+declaration, which [`jvm.md`](../jvm.md) keeps for a title nobody has run and
+which such a title would still stop on here. Searching every local image's
+name pool for their signatures, the ones specific enough to read say two
+things. `Thread`'s `join`, `getPriority` and `activeCount` sit in some 85
+images beside private names of the original runtime's own `Thread`, such as
+`interrupt0` and `setPriority0`, which no title calls — that is the platform
+class's layout, not a call. `StringBuffer.deleteCharAt` sits in two images and
+no others, and no run had reached it; it is published now with
+`StringBuffer.getChars`, the buffer's other missing member. The other 45 — the
+radix forms, the boxed equalities, `Math`'s floating-point functions and a
+handful of stream, thread and calendar members — carry a signature no local
+image has, or one so common it says nothing (`equals`, `hashCode`, `close`),
+and nothing in the sweep reaches one, so they are a follow-up of their own
+rather than part of this.
+
+**The third is a contract, and the titles that call it settle it.** A title
+that draws its own text field builds an `InputMethodHandler`, registers a
+listener of its own, and hands the handler the keys its card receives — in
+one of them the whole of it is `if (type == 1) handler.notifyKeyInput(key, 1)`,
+with the return value ignored. The specification says the handler composes
+characters by mode and calls the listener's
+`notifyTextChanged(char[] chText, int len, int pMode)` with Insert (-1),
+Replace (0) or Delete (1), and says nothing about what a listener does with
+them. Three local titles implement the listener, and their code agrees:
+
+- Insert appends `new String(chText)` — the whole array, with `len` unread;
+- Delete cuts `len` characters off the end;
+- Replace does nothing.
+
+So the handler only inserts and deletes, and an insertion's array holds
+exactly the inserted characters.
+
+**The text is the Host's, as it is for every other field here.** A handset
+composed letters and Hangul in this automaton; here the browser or the
+operating system composes them, and the page's text input hands the completed
+text over. It reaches the listener one character per key the title forwards:
+the Host presses a carrier key — `0`, the key the C input method's Host text
+travels on — the title hands it to `notifyKeyInput`, and the handler answers it
+with an insertion of the next character instead of the key's own meaning. The
+title's own handling of each key runs as it would for a character typed on the
+handset, which is what keeps each title's limit its own: the first title shows
+its "no more than four characters" message on a fifth, the second keeps the
+first six of what it is given. An insertion is the only edit the Host sends,
+because the field cannot be read and the page edits nothing but the text it
+appends. The keypad keeps what the C input method keeps: a digit in the digit
+mode, and clear, which the first title forwards only while its field has text
+and which goes out as a deletion. Star, hash, the directions, fire and the soft
+keys come back unprocessed; the first title switches modes on its left soft key
+and labels `#` with a command of its own.
+
+**The modes are numbered by the titles too, and not as the C input method
+numbers them.** One title draws its own indicator — 가, A, a, 1 — opens the
+field under 가 with `setCurrentMode(3)`, and its left soft key steps the
+indicator through A, a and 1 while setting 1, 0 and 2. So 0 is small letters,
+1 capitals, 2 digits and 3 Hangul, where the C table's list starts with the
+capitals and puts Hangul third. Only the digit mode changes what a key does
+here; the Host's text is taken in any mode, as the C input method takes it.
+
+**The text input has to be there whenever the field is, and the keys say when
+that is.** The first title builds a handler and registers its listener when the
+field opens, hands that handler every key of the pad while the field is open —
+the soft keys and call included — and switches its mode with a soft key it does
+not forward. Fire confirms the field and closes it, and clear on an empty field
+cancels it, and neither key reaches the handler. So a field opens when a
+listener is registered on a handler the title built itself, stays open while
+the presses the card receives reach it — a mode switch counts — and closes on
+the first press that does not. A handler a text component carries is the
+component's and opens nothing here. One case needs the rule's exception: when a
+fifth character overflows the first title's four, the title builds the field
+again while handling that key and puts its message over the new one, and the
+fire that dismisses the message never reaches the field that is on the screen
+behind it. A field opened while another field is taking a key is that field
+reset, and it stays open through presses it does not see until it has taken a
+key of its own. A field opened any other way and confirmed at once still
+closes on the confirmation. The open field and its card are runtime objects,
+so a quick save taken with the field open loads with it open, before any key
+has been pressed. A title that runs its own event loop is left out, as the C
+input method leaves it, because when it consumes a carrier is its own business.
+
+The first form of this change went the other way: it typed letters with the
+multi-tap keypad and left the Host out, on the belief that a field a title
+draws gives no sign of being open. The sign is the keys themselves, and the
+letters are the Host's here as everywhere else, so that is what was kept.
+
+**What it moved.** All three titles run the 3,000 ticks of the same key script.
+Driven to the first title's field by a scripted route on a manual clock, the
+text input is offered the moment the field opens; `홍길동` committed through it
+appears in the field and becomes the candidate's name on fire, after which
+nothing is offered. Six characters bring up the title's own message after the
+fifth and refuse the sixth; once the message is dismissed the rebuilt field
+takes `김철수`. The second title's store name takes `닭집`, and eight characters
+are kept to its six. A quick save taken with the first title's field open loads
+with the text input offered before any key, and `이순신` reaches the field.
+
 <a id="implementation-deliberately-incomplete"></a>
 
 ### Deliberately incomplete
@@ -8332,6 +8460,10 @@ callback. Under a wall clock, where it always worked, it still answers a key:
   "The transparency a title brings with it")
 - in-game progression is verified by the user playing, not by automated
   probes; probes only surface missing API surfaces to implement
+- **Host text into a title's own field when the title runs its own event
+  loop.** Left out as the C input method leaves it: a carrier is consumed in
+  the title's own time, so whether it reached the field is unknown — see
+  "Three members a sweep that held keys down reached"
 
 
 <a id="followup-ktf-compatibility-follow-up"></a>
