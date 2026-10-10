@@ -74,6 +74,10 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 				}
 			}()
 			state.pendingValid = unchanged
+			// Only the guest runs between here and the deferred reset, so an
+			// input-method call it makes is part of delivering this text.
+			state.delivering = true
+			defer func() { state.delivering = false }()
 			defer client.beginHostService(ctx)()
 			previousThread, previousContext := runtime.currentThread, runtime.currentContext
 			runtime.currentThread, runtime.currentContext = client.thread, ctx

@@ -82,6 +82,12 @@ func (session *Session) javaTextInput() (*backend.TextInput, error) {
 			}
 			state.text = replacement
 			state.revision++
+			// A card paints only when asked, and no key reached the title to
+			// make it ask: the committed text stayed off screen until the
+			// next press. Request the frame a changed component would.
+			if runtime.card != 0 {
+				runtime.cardDirty = true
+			}
 			return nil
 		},
 	}, nil
@@ -126,9 +132,13 @@ func (session *Session) cTextInput() *backend.TextInput {
 
 			calls := state.calls
 			state.pending = encoded
+			// Only the guest runs until the deferred reset, so an input-method
+			// call it makes is part of delivering this text.
+			state.delivering = true
 			delivered := false
 			defer func() {
 				state.pending = nil
+				state.delivering = false
 				if delivered {
 					state.revision++
 				}
@@ -138,7 +148,8 @@ func (session *Session) cTextInput() *backend.TextInput {
 				err = client.callClet(ctx, "handleCletEvent", handler,
 					[]uint32{EventKeyPressed, hostTextInputCarrier, 0})
 				delivered = delivered || len(state.pending) < before
-				if err != nil || len(state.pending) >= before || state.revision != revision {
+				if err != nil || len(state.pending) >= before || state.revision != revision ||
+					client.inputMode != mode || client.clet.HandleEvent != handler {
 					break
 				}
 			}
@@ -146,11 +157,11 @@ func (session *Session) cTextInput() *backend.TextInput {
 			if err != nil {
 				return err
 			}
-			if state.revision != revision {
-				return backend.ErrTextInputChanged
-			}
 			if consumed {
 				return nil
+			}
+			if state.revision != revision || client.inputMode != mode || client.clet.HandleEvent != handler {
+				return backend.ErrTextInputChanged
 			}
 			if state.calls == calls {
 				return backend.ErrTextInputChanged

@@ -149,6 +149,58 @@ keypad editor; supplementary characters consume two units. Keypad caret movement
 backspace and truncation keep complete characters. Native entry does not infer
 fields drawn by game code.
 
+## What a title sees after a commit
+
+A handset only ever changed a field through keys, so a title's own code after
+a key is often what puts the new text on screen. A Host commit has no key, and
+three consequences of that were reported as "the name appears only after I
+press another button" and "only the first letter appeared until I deleted it
+and typed it again".
+
+**Whole-value fields ask for a frame.** A KTF LWC or KFC commit sets
+`repaintPending` (and posts the repaint event to a guest event loop); an LGT
+Java commit marks the pushed card dirty. That is the request a component makes
+when its contents change. Without it, a KTF card whose worker owns its frame
+cadence, and every LGT Java card, kept the old text until the next key.
+
+**Title-owned SKT fields get one key.** After a commit to an `XTextField` or a
+title's `TextComponent`, the runtime delivers a press and release of key code
+0 to the current Canvas. Two local titles draw such a field only in their own
+key handling, after passing the key to the field: one title's
+`TextComponent.repaint` is empty and its game thread redraws after it takes a
+queued key; another's `paint` draws the field only on the pass its key
+handler requested. Repainting the Canvas therefore was not enough. Code 0 is
+no handset key, neither vendor input method edits with it, `getGameAction(0)`
+answers 0, and the key travels the title's own path, so a title that queues
+keys for a game thread redraws when that thread takes it. One title clears its
+name field on the first key after the name prompt appears; a commit made
+before that key is cleared by the redraw key exactly as it would be by the
+player's next key, and a commit made after it is kept and shown.
+
+**A widget's own input-method calls are part of the delivery.** KTF and LGT
+WIPI-C commits hand text to the widget through a carrier key. A widget may call
+the input method again while handling that key — one LGT name widget flushes
+the automaton and routes the same key a second time. Each of those calls used
+to advance the snapshot revision, which is how a player's key is detected.
+On KTF, where text goes one character per carrier, delivery stopped after the
+first character and the page reported the field as changed. On LGT the whole
+string reached the widget and the page still reported failure; a widget fed in
+four-byte batches would have stopped after its first batch. Calls made while
+the Host's own carrier is being processed no longer move the revision. A key
+between snapshot and commit, a mode change or a different event handler still
+makes the edit stale. A checkpoint is refused while a carrier is in flight.
+
+Two findings of the same survey remain open. Some titles draw a vendor
+field's text through `XTextField.paint`, which this runtime draws in black. On
+a dark field the committed text is present (it reads back) but cannot be seen.
+The colour a title leaves set before the call is white over one title's black
+input bar and a dark outline colour over another's dark background, both left
+over from the title's own drawing, so neither says what the vendor field did.
+Separately, LGT WIPI-C input stays available once any input-method call has
+been made: eleven local archives that route every key through the automaton
+offer input on their splash screen, and a commit there delivers one stray `0` key
+before it is reported as stale.
+
 ## Validation
 
 The [2026-09-23 exception audit](text-input-audit-2026-09-23.md) records five

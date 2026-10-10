@@ -107,6 +107,11 @@ type cTextInputState struct {
 	revision uint64
 	calls    uint64
 	pending  []byte
+	// delivering covers the Host's own carrier events. Input-method calls
+	// the widget makes while processing one — a flush after taking the
+	// completed string, or the same key routed again — belong to that
+	// delivery and are not a key the player pressed.
+	delivering bool
 }
 
 type inputBuffer struct {
@@ -170,7 +175,7 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	hostCommit := key == hostTextInputCarrier && len(client.cTextInput.pending) != 0
 	client.cTextInput.active = true
 	client.cTextInput.calls++
-	if !hostCommit {
+	if !hostCommit && !client.cTextInput.delivering {
 		client.cTextInput.revision++
 	}
 

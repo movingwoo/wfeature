@@ -624,6 +624,9 @@ func (client *Client) captureClientState() (clientState, error) {
 		}
 		saved.Files = append(saved.Files, record)
 	}
+	if client.cTextInput.delivering {
+		return clientState{}, ErrCheckpointBusy
+	}
 	saved.TextInput = textInputState{client.cTextInput.active, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
 	names := slices.Sorted(maps.Keys(client.resourceIDs))
 	for _, name := range names {
@@ -1062,7 +1065,8 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 		}
 	}
 	client.inputMode, client.inputModeTableAddress = saved.InputMode, saved.InputModeTable
-	client.cTextInput = cTextInputState{saved.TextInput.Active, saved.TextInput.Revision, saved.TextInput.Calls, bytes.Clone(saved.TextInput.Pending)}
+	client.cTextInput = cTextInputState{active: saved.TextInput.Active, revision: saved.TextInput.Revision,
+		calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending)}
 	client.applicationIDAddress, client.javaApplication = saved.ApplicationID, saved.JavaApplication
 	if len(saved.Resources) != 0 {
 		client.resourceIDs = make(map[string]uint32, len(saved.Resources))

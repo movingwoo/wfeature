@@ -105,3 +105,40 @@ func TestKnownCEncodingLimits(t *testing.T) {
 		})
 	}
 }
+
+// A native widget can flush its automaton after taking the completed string,
+// a second input-method call inside the Host's own carrier event. That call
+// is part of delivering the text, not a key the player pressed: counting it
+// reported the field as changed after the whole name had reached the widget,
+// and on a widget fed in batches it stopped delivery after the first one.
+func TestLGTDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
+	s := cTextInputFixture(t, 3)
+	c := s.client
+	if err := c.writeWord(fixtureFlushAfterInput, 1); err != nil {
+		t.Fatal(err)
+	}
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "abc"); err != nil {
+		t.Fatalf("commit through a flushing widget: %v", err)
+	}
+	if got, err := c.readCString(fixtureInputCompleted); err != nil || got != "abc" {
+		t.Fatalf("delivered %q %v", got, err)
+	}
+	if err := edit.Commit(t.Context(), "abc"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("delivered edit could be repeated: %v", err)
+	}
+	// A key the player presses between snapshot and commit is still a change.
+	edit, err = s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.callClet(t.Context(), "handleCletEvent", c.clet.HandleEvent, []uint32{EventKeyPressed, '5', 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "abc"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit after a player key: %v", err)
+	}
+}

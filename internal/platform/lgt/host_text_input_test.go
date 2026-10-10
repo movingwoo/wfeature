@@ -654,3 +654,22 @@ func TestAddChildRejectsShellsAndCyclesBeforeMutation(t *testing.T) {
 		t.Fatalf("rejected cycle added %d children", got)
 	}
 }
+
+// A card only paints when it has asked to, and a Host commit reaches the field
+// without a key that would have made the title ask. The committed text stayed
+// off screen until the next press.
+func TestTextInputCommitAsksThePushedCardToPaint(t *testing.T) {
+	session, _, _ := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "old")
+	runtime := session.client.javaRun
+	runtime.card, runtime.cardDirty = 0x1000, false
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Commit(context.Background(), "new"); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.cardDirty {
+		t.Fatal("commit left the pushed card without a paint request")
+	}
+}

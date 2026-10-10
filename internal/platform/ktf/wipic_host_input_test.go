@@ -369,3 +369,75 @@ func TestCInputCompositionStopsWhenGuestChangesMode(t *testing.T) {
 		t.Fatalf("retrying consumed prefix: %v", err)
 	}
 }
+
+// A widget can flush its automaton after taking each completed character,
+// which is a second input-method call inside the Host's own carrier event.
+// Counting that call as a key the player pressed stopped delivery after the
+// first character: a name entered at its full length showed only its first
+// letter, and the page reported the field as changed.
+func TestCInputHostDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	completed, _ := runtime.allocateBytes(make([]byte, 6))
+	composing, _ := runtime.allocateBytes(make([]byte, 8))
+	size1, _ := runtime.allocateWords([]uint32{6})
+	size2, _ := runtime.allocateWords([]uint32{8})
+	text := []byte{}
+	if err := client.vm.RegisterNative("test/FlushingCInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
+		kind, _ := args[1].Int32()
+		key, _ := args[2].Int32()
+		if kind != KeyPressed {
+			return jvm.IntValue(0), nil
+		}
+		writeWord(t, runtime, size1, 6)
+		writeWord(t, runtime, size2, 8)
+		result, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		if result != 0 {
+			words, err := runtime.readAOTWords(size1, 1, "test length")
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+			b := make([]byte, words[0])
+			if err := client.core.Memory().Read(completed, b); err != nil {
+				return jvm.VoidValue(), err
+			}
+			text = append(text, b...)
+		}
+		_, err = cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, completed, size1, composing, size2)
+		return jvm.IntValue(0), err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = append(runtime.displayCards, newWidget("test/FlushingCInputCard"))
+	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 2); err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Client: client}
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "가나다라"); err != nil {
+		t.Fatalf("commit through a flushing widget: %v (guest bytes %x)", err, text)
+	}
+	want, _ := korean.EUCKR.NewEncoder().Bytes([]byte("가나다라"))
+	if !bytes.Equal(text, want) {
+		t.Fatalf("guest bytes=%x want=%x", text, want)
+	}
+	if err := edit.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("reused edit: %v", err)
+	}
+	// A key the player presses between snapshot and commit is still a change.
+	edit, err = s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.dispatchKeyToCards(KeyPressed, KeyClear); err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit after a player key: %v", err)
+	}
+}

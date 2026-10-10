@@ -34,6 +34,9 @@ const (
 	fixtureInputCompleted = fixtureDataBase + 0xd0 // 16 bytes
 	fixtureInputComposing = fixtureDataBase + 0xe0 // 16 bytes
 	fixtureInputSizes     = fixtureDataBase + 0xf0 // two words
+	// fixtureFlushAfterInput, when nonzero, makes the widget flush the
+	// automaton after each key, the way a native widget finishes a character.
+	fixtureFlushAfterInput = fixtureDataBase + 0xf8
 )
 
 const (
@@ -242,6 +245,23 @@ func fixtureModule() (code []byte, entry, initFunction, startClet, handleEvent, 
 	a.emit(armLdr(7, 7, 0))
 	a.call(7)
 	a.emit(armAddImm(13, 13, 8))
+	// A second input-method call inside the same event: the flush key, with
+	// no buffers to fill.
+	a.literal(7, fixtureFlushAfterInput)
+	a.emit(armLdr(7, 7, 0))
+	a.emit(armCmpImm(7, 0))
+	skipFlush := len(a.words)
+	a.emit(0) // beq past the flush, patched below
+	a.emit(armSubImm(13, 13, 8))
+	a.emit(armMovImm(7, 0))
+	a.emit(armStr(7, 13, 0), armStr(7, 13, 4))
+	a.emit(armMovImm(0, imaFlushKey), armMovReg(1, 4))
+	a.emit(armMovImm(2, 0), armMovImm(3, 0))
+	a.literal(7, fixtureGlobals+globalHandleInput*4)
+	a.emit(armLdr(7, 7, 0))
+	a.call(7)
+	a.emit(armAddImm(13, 13, 8))
+	a.words[skipFlush] = armBranchEq(int32(len(a.words) - skipFlush - 2))
 	a.literal(4, fixtureLastEvent)
 	a.emit(armStr(5, 4, 0))
 	a.literal(4, fixtureFrameBuffer)

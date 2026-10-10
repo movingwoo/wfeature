@@ -2351,3 +2351,45 @@ reads the device level, sets a clip level before load and after, and clamps.
 plays a clip under a muted source and bounds the sources a guest can name. The
 control-state round trip carries mute state and clip volume through a quick
 save, and two malformed records are refused.
+
+### Host text commits a title can see
+
+The behaviour is in [native text input](native-text-input.md#what-a-title-sees-after-a-commit).
+The survey that found it drove real archives through `internal/session`, the
+path the page uses, with a temporary probe kept out of the tree: tick with a
+manual KTF clock, press a fixed cycle of keys every 12 ticks for 3,000 ticks
+(restarting a title that exits, up to four runs), and whenever `TextInput`
+opens, commit Korean text at the field's limit (four characters for append
+targets), then record the frame before the commit, 30 ticks after it, and
+after one more key, and read the field back where the route allows. It ran on
+the 89 archives under `var/games/{ktf,lgt,skt}` and on the 72 archives whose
+packages name a text-entry class (`TextFieldComponent`, `TextBoxComponent`,
+`GTextField`, `InputMethodHandler`, `XTextField`, `TextComponentHandler`,
+`lcdui/TextField`), plus the documented C-editor archives.
+
+The sweeps reached 16 editors in 14 archives, and two manual routes added a
+KTF C and an LGT C name editor. Eleven LGT archives also offered input on their
+splash screen and refused the commit (open, see the page above). Two SKT
+titles showed the committed text only after another key on the
+`TextComponent` route (one field of one title, two of three fields of the
+other), and one on `XTextField`. With the redraw key all four fields show the
+text within 30 ticks and none gains a character. The LGT name widget reported
+every commit as changed although the name reached it; with the delivery fix
+the same commit succeeds. Three titles keep the text off screen whatever key
+follows: two draw black `XTextField` text over a dark field (open), and a KTF
+title's name box stays empty with the frame request in place (cause not
+established). No KTF C editor reached flushes inside its key, so the
+first-character stop is reproduced by
+`TestCInputHostDeliveryToleratesAFlushInsideTheCarrier`, which delivers `b0a1`
+(one character) and reports the field changed before the fix.
+
+`TestTextInputCommitRequestsAFrameForTheShownCard` (KTF) and
+`TestTextInputCommitAsksThePushedCardToPaint` (LGT) fail without the frame
+request. `TestLGTDeliveryToleratesAFlushInsideTheCarrier` uses the C fixture's
+optional flush after each key and still requires a player key between
+snapshot and commit to stale the edit; the KTF test does the same.
+`TestHostCommitRedrawsATitleTextComponent` and
+`TestHostCommitRedrawsATitleXTextField` define a Canvas that redraws only after
+passing a key to its field, and require exactly one redraw after the commit and
+no extra character. Package tests, `-race` on the KTF, LGT, SKT, session and
+webhost packages, and `go vet` pass.
