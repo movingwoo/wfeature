@@ -117,9 +117,17 @@ type File struct {
 // Parse reads a SMAF file. A chunk that does not parse ends the chunk list
 // rather than failing the file: these come out of game archives, the tail of a
 // file is often padding, and the tracks already read are still playable.
+// Resource limits instead reject the whole file with ErrResourceLimit.
 func Parse(data []byte) (*File, error) {
+	return parseWithBudget(data, newDecodeBudget())
+}
+
+func parseWithBudget(data []byte, budget *decodeBudget) (*File, error) {
 	if len(data) < 8 || string(data[:4]) != "MMMD" {
 		return nil, ErrNotSMAF
+	}
+	if err := budget.charge(&budget.used.inputBytes, len(data), budget.limits.inputBytes, "input bytes"); err != nil {
+		return nil, err
 	}
 	// The length field covers the chunks; the trailing two bytes are a CRC.
 	body := data[8:]
@@ -130,7 +138,13 @@ func Parse(data []byte) (*File, error) {
 		if !ok {
 			break
 		}
-		chunk, err := parseTopChunk(tag, payload)
+		if err := budget.chunk(); err != nil {
+			return nil, err
+		}
+		chunk, err := parseTopChunk(tag, payload, budget)
+		if budget.err != nil {
+			return nil, budget.err
+		}
 		if err != nil {
 			break
 		}
@@ -156,7 +170,7 @@ func splitChunk(data []byte) (tag [4]byte, payload, rest []byte, ok bool) {
 	return tag, data[8 : 8+length], data[8+length:], true
 }
 
-func parseTopChunk(tag [4]byte, payload []byte) (Chunk, error) {
+func parseTopChunk(tag [4]byte, payload []byte, budget *decodeBudget) (Chunk, error) {
 	chunk := Chunk{Tag: tag, Data: payload}
 	switch {
 	case string(tag[:]) == "CNTI":
@@ -164,19 +178,22 @@ func parseTopChunk(tag [4]byte, payload []byte) (Chunk, error) {
 	case string(tag[:]) == "OPDA":
 		chunk.Kind = ChunkOptionalData
 	case string(tag[:3]) == "MTR":
-		track, err := parseScoreTrack(payload)
+		track, err := parseScoreTrack(payload, budget)
 		if err != nil {
 			return chunk, err
 		}
 		chunk.Kind, chunk.ScoreTrack = ChunkScoreTrack, track
 	case string(tag[:3]) == "ATR":
-		track, err := parsePCMAudioTrack(payload)
+		track, err := parsePCMAudioTrack(payload, budget)
 		if err != nil {
 			return chunk, err
 		}
 		chunk.Kind, chunk.PCMAudioTrack = ChunkPCMAudioTrack, track
 	case string(tag[:]) == "SEQU":
-		events, err := parseSequenceHandyLike(payload, true)
+		if err := budget.sequence(uint64(len(payload))); err != nil {
+			return chunk, err
+		}
+		events, err := parseSequenceHandyLike(payload, true, budget)
 		if err != nil {
 			return chunk, err
 		}
@@ -249,6 +266,9 @@ func (r *reader) variableNumber() (uint32, bool) {
 	for {
 		next, ok := r.byte()
 		if !ok {
+			return 0, false
+		}
+		if result > ^uint32(0)>>7 {
 			return 0, false
 		}
 		result = result<<7 | uint32(next&0x7f)

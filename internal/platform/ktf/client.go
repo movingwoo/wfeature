@@ -217,12 +217,21 @@ type Client struct {
 // serviceAudio moves audio playback to where the guest's clock now is. It runs
 // at the end of a tick, after the guest has had its slice, so a sound started
 // this tick is not also advanced by it.
-func (client *Client) serviceAudio() {
-	if client == nil || client.audio == nil || client.runtime == nil {
-		return
+func (client *Client) serviceAudio() error {
+	if client == nil {
+		return nil
 	}
-	client.audio.Advance(client.runtime.guestElapsed())
+	client.run.Lock()
+	defer client.run.Unlock()
+	if client.audio == nil || client.runtime == nil {
+		return nil
+	}
+	now := client.runtime.guestElapsed()
+	if err := client.runtime.syncClipCompletions(now); err != nil {
+		return err
+	}
 	client.runtime.collectHostResources()
+	return nil
 }
 
 // SetDiagnostics configures how much boundary history the client retains and
@@ -577,7 +586,7 @@ func (client *Client) ServiceEvents(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("KTF client initialization has not completed")
 	}
 	runtime := client.runtime
-	if runtime.guestEventLoop || len(runtime.events) == 0 {
+	if len(runtime.mediaEvents) == 0 && (runtime.guestEventLoop || len(runtime.events) == 0) {
 		return 0, nil
 	}
 	defer client.beginHostService(ctx)()
@@ -587,13 +596,30 @@ func (client *Client) ServiceEvents(ctx context.Context) (int, error) {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
 	delivered := 0
-	for waiting := len(runtime.events); waiting > 0; waiting-- {
-		event, ok := runtime.nextGuestEvent()
-		if !ok {
-			break
+	waitingMedia := len(runtime.mediaEvents)
+	// Drain the existing generic prefix first. Media callbacks can fill that
+	// queue and drop its oldest entries; counting it before media delivery
+	// alone would then let newly posted events enter this same round. Keep
+	// media queued until this succeeds: the session absorbs guest exceptions
+	// from generic handlers and must not lose its waiting notifications.
+	if !runtime.guestEventLoop {
+		for waiting := len(runtime.events); waiting > 0; waiting-- {
+			event, ok := runtime.nextGuestEvent()
+			if !ok {
+				break
+			}
+			delivered++
+			if err := runtime.dispatchGuestEvent(client.vm, event); err != nil {
+				return delivered, err
+			}
 		}
+	}
+	media := runtime.mediaEvents[:waitingMedia]
+	// Copy only the new suffix, leaving the delivered prefix collectible.
+	runtime.mediaEvents = append([]clipEvent(nil), runtime.mediaEvents[waitingMedia:]...)
+	for _, event := range media {
 		delivered++
-		if err := runtime.dispatchGuestEvent(client.vm, event); err != nil {
+		if err := runtime.deliverClipEvent(event); err != nil {
 			return delivered, err
 		}
 	}

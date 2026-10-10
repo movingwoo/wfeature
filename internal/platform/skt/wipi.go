@@ -3,6 +3,8 @@ package skt
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/wipi"
@@ -137,14 +139,15 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.ClipClass, "<init>", "(" + text + "[B)V", runtime.wipiClipInit},
 		{wipi.ClipClass, "<init>", "(" + text + text + ")V", runtime.wipiClipInitResource},
 		{wipi.ClipClass, "setListener", "(Lorg/kwis/msp/media/PlayListener;)V", runtime.wipiClipSetListener},
-		{wipi.ClipClass, "setVolume", "(I)V", runtime.ignoreVoid},
+		{wipi.ClipClass, "setVolume", "(I)V", runtime.wipiClipSetVolumeVoid},
+		{wipi.ClipClass, "setVolume", "(I)Z", runtime.wipiClipSetVolume},
 		{wipi.ClipClass, "getVolume", "()I", runtime.wipiClipVolume},
 		{wipi.ClipClass, "getType", "()" + text, runtime.wipiClipType},
 
 		{wipi.PlayerClass, "play", "(Lorg/kwis/msp/media/Clip;Z)Z", runtime.wipiPlayerPlay},
 		{wipi.PlayerClass, "stop", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerStop},
-		{wipi.PlayerClass, "pause", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerStop},
-		{wipi.PlayerClass, "resume", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerPlayAgain},
+		{wipi.PlayerClass, "pause", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerPause},
+		{wipi.PlayerClass, "resume", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerResume},
 	}
 }
 
@@ -716,7 +719,9 @@ func (runtime *Runtime) wipiFileDataOutputStream(vm *jvm.VM, arguments []jvm.Val
 // started and stopped many times, which is why the Player is built here and
 // kept rather than made for each play.
 type wipiClipData struct {
+	mu          sync.Mutex
 	contentType string
+	volume      int32
 	player      *jvm.Object
 	listener    *jvm.Object
 	object      *jvm.Object
@@ -766,7 +771,7 @@ func (runtime *Runtime) wipiClipInitResource(vm *jvm.VM, arguments []jvm.Value) 
 }
 
 func (runtime *Runtime) buildWIPIClip(vm *jvm.VM, object *jvm.Object, contentType string, data []byte) error {
-	clip := &wipiClipData{contentType: contentType, object: object}
+	clip := &wipiClipData{contentType: contentType, volume: 100, object: object}
 	object.Native = clip
 	if len(data) == 0 {
 		return nil
@@ -785,6 +790,10 @@ func (runtime *Runtime) buildWIPIClip(vm *jvm.VM, object *jvm.Object, contentTyp
 		return err
 	}
 	clip.player = reference
+	owner := reference.Native.(*playerData)
+	owner.mu.Lock()
+	owner.wipiOwner = weak.Make(object)
+	owner.mu.Unlock()
 	return nil
 }
 
@@ -817,7 +826,7 @@ func wipiClipArgument(arguments []jvm.Value, index int) (*wipiClipData, error) {
 	return clip, nil
 }
 
-func (runtime *Runtime) wipiClipSetListener(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func (runtime *Runtime) wipiClipSetListener(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	clip, err := wipiClipArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -826,12 +835,75 @@ func (runtime *Runtime) wipiClipSetListener(_ *jvm.VM, arguments []jvm.Value) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	if listener != nil && !vm.IsInstance(listener, wipi.PlayListenerClass) {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "listener is not a WIPI PlayListener")
+	}
+	if clip.player == nil {
+		clip.mu.Lock()
+		defer clip.mu.Unlock()
+	} else {
+		_, player, err := playerArgument([]jvm.Value{jvm.ReferenceValue(clip.player)}, 0)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		runtime.lockPlayerAudio(player)
+		defer runtime.unlockPlayerAudio(player)
+		// Another owner's query can already have completed this score. Observe
+		// that end with its original recipient before replacing the listener.
+		if err := runtime.syncPlayerLocked(clip.player, player); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
 	clip.listener = listener
 	return jvm.VoidValue(), nil
 }
 
-func (runtime *Runtime) wipiClipVolume(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(100), nil
+func (runtime *Runtime) wipiClipVolume(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	clip, err := wipiClipArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	clip.mu.Lock()
+	defer clip.mu.Unlock()
+	return jvm.IntValue(clip.volume), nil
+}
+
+func (runtime *Runtime) wipiClipSetVolume(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	clip, err := wipiClipArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	level, err := intArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	clip.mu.Lock()
+	defer clip.mu.Unlock()
+	clip.volume = min(max(level, 0), 100)
+	if clip.player != nil {
+		_, player, err := playerArgument([]jvm.Value{jvm.ReferenceValue(clip.player)}, 0)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		runtime.lockPlayerAudio(player)
+		defer runtime.unlockPlayerAudio(player)
+		if player.handle != 0 {
+			if err := runtime.syncPlayerLocked(clip.player, player); err != nil {
+				return jvm.VoidValue(), err
+			}
+			if err := runtime.audioTimeline().SetSoundVolume(player.handle, int(clip.volume)); err != nil {
+				return jvm.IntValue(0), nil
+			}
+		}
+	}
+	return jvm.IntValue(1), nil
+}
+
+// Keep the void extension used by existing archives alongside WIPI's boolean
+// signature. Both mutate the same clip and audio owner.
+func (runtime *Runtime) wipiClipSetVolumeVoid(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, err := runtime.wipiClipSetVolume(vm, arguments)
+	return jvm.VoidValue(), err
 }
 
 func (runtime *Runtime) wipiClipType(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -842,7 +914,7 @@ func (runtime *Runtime) wipiClipType(vm *jvm.VM, arguments []jvm.Value) (jvm.Val
 	return jvm.ReferenceValue(vm.NewString(clip.contentType)), nil
 }
 
-func (runtime *Runtime) wipiPlayerPlay(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func (runtime *Runtime) wipiPlayerPlay(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	clip, err := wipiClipArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -854,24 +926,38 @@ func (runtime *Runtime) wipiPlayerPlay(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	count := int32(1)
+	object, player, err := playerArgument([]jvm.Value{jvm.ReferenceValue(clip.player)}, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	audio := runtime.audioTimeline()
+	if player.handle == 0 || player.state == playerClosed {
+		return jvm.IntValue(0), nil
+	}
+	now := runtime.audioNow()
+	if err := runtime.syncPlayerAtLocked(object, player, now); err != nil {
+		return jvm.VoidValue(), err
+	}
+	// WIPI play starts a new pass; only its explicit resume operation uses
+	// the retained cursor. The underlying MIDP stop/start pair is different.
+	if err := audio.Play(player.handle, now, loop != 0); err != nil {
+		return jvm.IntValue(0), nil
+	}
+	player.loops = 1
 	if loop != 0 {
-		count = -1
+		player.loops = -1
 	}
-	if _, err := runtime.setPlayerLoopCount(vm, []jvm.Value{jvm.ReferenceValue(clip.player), jvm.IntValue(count)}); err != nil {
-		return jvm.VoidValue(), err
+	player.state, player.completed, player.mediaTime = playerStarted, 0, 0
+	player.wipiClip = clip.object
+	if err := runtime.queuePlayerTimeLocked(object, player, midp.PlayerEventStarted, 0); err != nil {
+		return jvm.IntValue(1), err
 	}
-	if _, err := runtime.playerStart(vm, []jvm.Value{jvm.ReferenceValue(clip.player)}); err != nil {
-		return jvm.VoidValue(), err
-	}
-	return jvm.IntValue(1), nil
+	return jvm.IntValue(1), runtime.queueWIPIEventLocked(object, player, wipi.PlayEventStart)
 }
 
-func (runtime *Runtime) wipiPlayerPlayAgain(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	return runtime.wipiPlayerPlay(vm, append(arguments[:1:1], jvm.IntValue(0)))
-}
-
-func (runtime *Runtime) wipiPlayerStop(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func (runtime *Runtime) wipiPlayerStop(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	clip, err := wipiClipArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -879,10 +965,93 @@ func (runtime *Runtime) wipiPlayerStop(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 	if clip.player == nil {
 		return jvm.IntValue(0), nil
 	}
-	if _, err := runtime.playerStop(vm, []jvm.Value{jvm.ReferenceValue(clip.player)}); err != nil {
+	object, player, err := playerArgument([]jvm.Value{jvm.ReferenceValue(clip.player)}, 0)
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
+	started, position := player.state == playerStarted, player.mediaTime
+	wasActive := started || runtime.audioTimeline().Paused(player.handle)
+	if player.handle != 0 {
+		runtime.audioTimeline().Stop(player.handle)
+	}
+	if player.state > playerPrefetched {
+		player.state = playerPrefetched
+	}
+	player.mediaTime = 0
+	// The queued event owns its Clip until delivery. The idle registration
+	// keeps only a weak link, so an unreachable listener graph can be freed.
+	defer func() { player.wipiClip = nil }()
+	if started {
+		if err := runtime.queuePlayerTimeLocked(object, player, midp.PlayerEventStopped, position); err != nil {
+			return jvm.IntValue(1), err
+		}
+	}
+	if wasActive {
+		return jvm.IntValue(1), runtime.queueWIPIEventLocked(object, player, wipi.PlayEventStop)
+	}
 	return jvm.IntValue(1), nil
+}
+
+func (runtime *Runtime) wipiPlayerPause(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.wipiPlayerPauseTransition(vm, arguments, true)
+}
+
+func (runtime *Runtime) wipiPlayerResume(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.wipiPlayerPauseTransition(vm, arguments, false)
+}
+
+func (runtime *Runtime) wipiPlayerPauseTransition(_ *jvm.VM, arguments []jvm.Value, pause bool) (jvm.Value, error) {
+	clip, err := wipiClipArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if clip.player == nil {
+		return jvm.IntValue(0), nil
+	}
+	object, player, err := playerArgument([]jvm.Value{jvm.ReferenceValue(clip.player)}, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	audio := runtime.audioTimeline()
+	if player.handle == 0 {
+		return jvm.IntValue(0), nil
+	}
+	now := runtime.audioNow()
+	if err := runtime.syncPlayerAtLocked(object, player, now); err != nil {
+		return jvm.VoidValue(), err
+	}
+	if pause && !audio.Playing(player.handle) || !pause && !audio.Paused(player.handle) {
+		return jvm.IntValue(0), nil
+	}
+	event := midp.PlayerEventStarted
+	clipEvent := wipi.PlayEventResume
+	if pause {
+		err = audio.Pause(player.handle, now)
+		if err == nil {
+			player.state = playerPrefetched
+		}
+		event = midp.PlayerEventStopped
+		clipEvent = wipi.PlayEventPause
+	} else {
+		err = audio.Resume(player.handle, now)
+		if err == nil {
+			player.state = playerStarted
+		}
+	}
+	if err != nil {
+		return jvm.IntValue(0), nil
+	}
+	if err := runtime.queuePlayerTimeLocked(object, player, event, player.mediaTime); err != nil {
+		return jvm.IntValue(1), err
+	}
+	return jvm.IntValue(1), runtime.queueWIPIEventLocked(object, player, clipEvent)
 }
 
 // showCard puts a card on the screen, and it does so **before the call

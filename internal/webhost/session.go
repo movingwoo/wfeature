@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/session"
@@ -129,6 +130,12 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		writerDone:   make(chan struct{}),
 	}
 	runner.webp = negotiatedWebP(runner.protocol, request.URL.Query().Get("pictures"))
+	runner.soundOwnership = request.URL.Query().Get("sound") == "owned"
+	runner.soundResume = request.URL.Query().Get("sound") == "resume"
+	runner.soundOwnership = runner.soundOwnership || runner.soundResume
+	runner.soundTiming = request.URL.Query().Get("timing") == "1" && runner.soundResume
+	runner.soundPCM = negotiatedPCM(request.URL.Query().Get("pcm"), runner.soundOwnership)
+	runner.soundWavePhase = negotiatedWavePhase(request.URL.Query().Get("phase"), runner.soundOwnership)
 	runner.run(request.Context())
 }
 
@@ -168,6 +175,14 @@ type sessionRunner struct {
 	// protocol is what the page asked for when it connected; an older page
 	// keeps receiving complete PNGs and JSON sound. See frame_patch.go.
 	protocol int
+	// soundOwnership enables independent clip events in either audio protocol.
+	soundOwnership  bool
+	soundResume     bool // Envelope ages require a newer page than ownership alone.
+	soundTiming     bool // Presentation timestamps are negotiated independently.
+	soundPCM        bool // PCM channel controls require an explicitly capable page.
+	soundWavePhase  bool // Fractional PCM offsets require an explicitly capable page.
+	legacyAudio     legacyAudioState
+	audioNeedsReset bool
 	// webp is whether the page asked for its pictures as lossless WebP.
 	webp bool
 	// encoding is set while the encoder holds a picture, and frameSettled is
@@ -601,6 +616,11 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 		r.quickSave(ctx, message)
 	case clientQuickLoad:
 		r.quickLoad(ctx, message)
+	case clientAudioResume:
+		if r.soundTiming && r.game != nil {
+			r.audioNeedsReset = true
+			r.audioDefinitions.dropped()
+		}
 	case clientPark:
 		if r.game != nil {
 			r.park()
@@ -774,7 +794,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	}
 	r.saveDirectory = directory
 
-	r.audio = &audioCollector{}
+	r.audio = &audioCollector{legacyReplay: !r.soundOwnership, pcmChannels: r.soundPCM}
 	// The game's context keeps the request's values and drops its
 	// cancellation: what ends this game is closing it, not the page that
 	// happened to start it going away.
@@ -1017,6 +1037,12 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	r.label = parked.label
 	r.platform = parked.platform
 	r.audio = parked.audio
+	if r.audio != nil {
+		r.audio.mutex.Lock()
+		r.audio.legacyReplay = !r.soundOwnership
+		r.audio.pcmChannels = r.soundPCM
+		r.audio.mutex.Unlock()
+	}
 	r.started = parked.started
 	r.postMortem = parked.postMortem
 	r.presented = parked.presented
@@ -1051,6 +1077,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	// picture to show — the page has nothing on its canvas after reconnecting.
 	r.forceFrame = true
 	r.pushFrame()
+	r.audioNeedsReset = true
 	r.flushAudio()
 }
 
@@ -1144,11 +1171,34 @@ func (r *sessionRunner) flushAudio() {
 	if r.audio == nil {
 		return
 	}
-	events := r.audio.take()
-	if len(events) == 0 {
+	events, overflow := r.audio.takeBatch()
+	if overflow {
+		r.server.logger.Debug("audio collector overflow; output recovery pending")
+	}
+	r.audioNeedsReset = r.audioNeedsReset || overflow
+	if r.audioNeedsReset {
+		// Wait for queue capacity before copying a whole output snapshot. Guest
+		// execution continues; the next tick retries even without new events.
+		if len(r.outText) == cap(r.outText) {
+			if len(events) != 0 {
+				r.shed.Add(1)
+				r.shedTotal.Add(1)
+			}
+			return
+		}
+		if r.game != nil {
+			events, overflow = r.audio.collectReplay(r.game.ResumeCheckpointOutput)
+		}
+		events = append([]audioEvent{{Kind: audioAllOff}}, events...)
+		r.audioNeedsReset = !r.sendAudio(events, true) || overflow
+		if !r.audioNeedsReset {
+			r.server.logger.Debug("audio output reconstructed", "events", len(events))
+		}
 		return
 	}
-	r.sendAudio(events, true)
+	if len(events) != 0 {
+		r.sendAudio(events, true)
+	}
 }
 
 func (r *sessionRunner) reportStats() {
@@ -1641,14 +1691,14 @@ func (r *sessionRunner) sendDroppable(message serverMessage) {
 	r.queue(message, true)
 }
 
-func (r *sessionRunner) queue(message serverMessage, droppable bool) {
+func (r *sessionRunner) queue(message serverMessage, droppable bool) bool {
 	message.Epoch = r.outputEpoch.Load()
 	encoded, err := encodeMessage(message)
 	if err != nil {
 		r.server.logger.Warn("session message could not be encoded", "error", err)
-		return
+		return false
 	}
-	r.enqueue(outboundMessage{text: string(encoded), audio: message.Kind == serverAudio,
+	return r.enqueue(outboundMessage{text: string(encoded), audio: message.Kind == serverAudio,
 		epoch: message.Epoch, timeline: message.Kind == serverAudio || message.Kind == serverVibrate || message.Kind == serverStats}, droppable)
 }
 
@@ -1675,17 +1725,64 @@ func (r *sessionRunner) enqueue(outgoing outboundMessage, droppable bool) bool {
 }
 
 // sendAudio queues one batch of sound in the protocol the page asked for.
-func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) {
+func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) bool {
+	if !r.soundTiming {
+		plain := events[:0]
+		for _, event := range events {
+			if event.Kind != audioClock {
+				event.At = nil
+				plain = append(plain, event)
+			}
+		}
+		events = plain
+	}
+	if !r.soundResume {
+		for i := range events {
+			if events[i].Kind == audioNoteResume {
+				events[i].Kind, events[i].Age = audioNoteOn, 0
+			}
+		}
+	}
+	if !r.soundWavePhase {
+		for i := range events {
+			events[i].FramePhase = 0
+		}
+	}
+	if !r.soundPCM {
+		compatible := events[:0]
+		for _, event := range events {
+			if event.Kind == audioPCMControl {
+				continue
+			}
+			event.PCMChannel = 0
+			compatible = append(compatible, event)
+		}
+		events = compatible
+	}
+	if !r.soundOwnership {
+		events = r.legacyAudio.flatten(events)
+	}
+	if len(events) == 0 {
+		return true
+	}
 	if r.protocol != protocolStream {
 		message := serverMessage{Kind: serverAudio, Audio: textAudio(events)}
-		r.queue(message, droppable)
-		return
+		sent := r.queue(message, droppable)
+		if !sent {
+			r.audioNeedsReset = true
+			r.server.logger.Debug("audio batch dropped; output recovery pending", "events", len(events))
+		}
+		return sent
 	}
 	outgoing := outboundMessage{binary: r.audioDefinitions.encode(events), audio: true, epoch: r.outputEpoch.Load(), timeline: true}
-	if !r.enqueue(outgoing, droppable) {
+	sent := r.enqueue(outgoing, droppable)
+	if !sent {
+		r.audioNeedsReset = true
+		r.server.logger.Debug("audio batch dropped; output recovery pending", "events", len(events))
 		// Whatever the lost message defined never reached the page.
 		r.audioDefinitions.dropped()
 	}
+	return sent
 }
 
 // readGameArchive resolves the archive path the picker offered and reads it.
@@ -1735,8 +1832,13 @@ func (s *Server) saveStoreIn(directory string) backend.SaveStore {
 // message: the page's synthesiser takes the same calls it always did, so
 // moving emulation to the server changed nothing about how sound is made.
 type audioCollector struct {
-	mutex  sync.Mutex
-	events []audioEvent
+	mutex        sync.Mutex
+	events       []audioEvent
+	overflowed   bool
+	replaying    bool
+	legacyReplay bool
+	pcmChannels  bool
+	at           *float64
 }
 
 // maxPendingAudio bounds what one tick may queue. A game that floods the sink
@@ -1746,61 +1848,111 @@ const maxPendingAudio = 4096
 func (a *audioCollector) append(event audioEvent) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	if len(a.events) >= maxPendingAudio {
-		return
+	if event.Kind != audioAllOff {
+		event.At = a.at
+	}
+	limit := maxPendingAudio
+	if a.replaying {
+		limit = maxReplayAudio
+	}
+	if len(a.events) >= limit {
+		a.overflowed = true
+		// The dropped batch may contain a note-off or clip cancellation. Clear
+		// the device before retaining the new event, including an overflowing
+		// stop, rather than letting old sources play indefinitely.
+		clear(a.events)
+		a.events = append(a.events[:0], audioEvent{Kind: audioAllOff})
 	}
 	a.events = append(a.events, event)
 }
 
 func (a *audioCollector) take() []audioEvent {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-	if len(a.events) == 0 {
-		return nil
-	}
-	events := a.events
-	a.events = nil
+	events, _ := a.takeBatch()
 	return events
 }
 
 func (a *audioCollector) PlayWave(channels uint8, samplingRate uint32, samples []int16) {
-	if len(samples) == 0 {
-		return
-	}
-	// The samples are borrowed for the call, so they are copied here; how
-	// they travel is decided when the batch is sent.
-	raw := make([]byte, len(samples)*2)
-	for index, sample := range samples {
-		binary.LittleEndian.PutUint16(raw[index*2:], uint16(sample))
-	}
-	a.append(audioEvent{Kind: audioPlayWave, Channels: channels, Rate: samplingRate, pcm: raw})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventWave, WaveChannels: channels, SamplingRate: samplingRate, Wave: samples})
 }
 
 func (a *audioCollector) MIDINoteOn(channel, note, velocity uint8) {
-	a.append(audioEvent{Kind: audioNoteOn, Channel: channel, Note: note, Velocity: velocity})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventNoteOn, Channel: channel, Note: note, Velocity: velocity})
 }
 
 func (a *audioCollector) MIDINoteOff(channel, note, velocity uint8) {
-	a.append(audioEvent{Kind: audioNoteOff, Channel: channel, Note: note, Velocity: velocity})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventNoteOff, Channel: channel, Note: note, Velocity: velocity})
 }
 
 func (a *audioCollector) MIDIProgramChange(channel, program uint8) {
-	a.append(audioEvent{Kind: audioProgramChange, Channel: channel, Program: program})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventProgramChange, Channel: channel, Program: program})
 }
 
 func (a *audioCollector) MIDIControlChange(channel, control, value uint8) {
-	a.append(audioEvent{Kind: audioControlChange, Channel: channel, Control: control, Value: uint16(value)})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventControlChange, Channel: channel, Control: control, Value: value})
 }
 
 func (a *audioCollector) MIDIPitchBend(channel uint8, value uint16) {
-	a.append(audioEvent{Kind: audioPitchBend, Channel: channel, Value: value})
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventPitchBend, Channel: channel, Bend: value})
 }
 
 func (a *audioCollector) MIDISysEx(data []byte) {
-	if len(data) == 0 {
+	a.AudioEvent(0, smaf.Event{Type: smaf.EventSysEx, SysEx: data})
+}
+
+// AudioEvent preserves the clip that owns each output operation. PCM and SysEx
+// storage is borrowed from the timeline and must be copied before queueing.
+func (a *audioCollector) AudioEvent(sound backend.AudioHandle, event smaf.Event) {
+	a.queueAudioEvent(sound, event, 0)
+}
+
+func (a *audioCollector) queueAudioEvent(sound backend.AudioHandle, event smaf.Event, framePhase uint32) {
+	queued := audioEvent{Sound: uint32(sound), Channel: event.Channel}
+	switch event.Type {
+	case smaf.EventWave:
+		if len(event.Wave) == 0 {
+			return
+		}
+		queued.Kind, queued.Channels, queued.Rate = audioPlayWave, event.WaveChannels, event.SamplingRate
+		queued.PCMChannel = event.PCMChannel
+		queued.FramePhase = framePhase
+		queued.pcm = make([]byte, len(event.Wave)*2)
+		for index, sample := range event.Wave {
+			binary.LittleEndian.PutUint16(queued.pcm[index*2:], uint16(sample))
+		}
+	case smaf.EventNoteOn:
+		queued.Kind, queued.Note, queued.Velocity = audioNoteOn, event.Note, event.Velocity
+	case smaf.EventNoteOff:
+		queued.Kind, queued.Note, queued.Velocity = audioNoteOff, event.Note, event.Velocity
+	case smaf.EventProgramChange:
+		queued.Kind, queued.Program = audioProgramChange, event.Program
+	case smaf.EventControlChange:
+		queued.Kind, queued.Control, queued.Value = audioControlChange, event.Control, uint16(event.Value)
+	case smaf.EventPCMControl:
+		queued.Kind, queued.PCMChannel, queued.Control, queued.Value = audioPCMControl, event.PCMChannel, event.Control, uint16(event.Value)
+	case smaf.EventPitchBend:
+		queued.Kind, queued.Value = audioPitchBend, event.Bend
+	case smaf.EventSysEx:
+		if len(event.SysEx) == 0 {
+			return
+		}
+		queued.Kind, queued.raw = audioSysEx, bytes.Clone(event.SysEx)
+	default:
 		return
 	}
-	a.append(audioEvent{Kind: audioSysEx, raw: bytes.Clone(data)})
+	a.append(queued)
+}
+
+func (a *audioCollector) StopSound(sound backend.AudioHandle) {
+	a.append(audioEvent{Kind: audioStopSound, Sound: uint32(sound)})
+}
+
+func (a *audioCollector) SoundGain(sound backend.AudioHandle, gain uint16) {
+	a.append(audioEvent{Kind: audioSoundGain, Sound: uint32(sound), Value: gain})
+}
+
+func (a *audioCollector) ResumeNote(sound backend.AudioHandle, channel, note, velocity uint8, age time.Duration) {
+	milliseconds := uint32(min(max(age.Milliseconds(), 0), int64(1<<32-1)))
+	a.append(audioEvent{Kind: audioNoteResume, Sound: uint32(sound), Channel: channel, Note: note, Velocity: velocity, Age: milliseconds})
 }
 
 // Handoffs run between guest calls, never concurrently with a tick or input.

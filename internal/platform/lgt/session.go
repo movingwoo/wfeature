@@ -145,6 +145,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 		return nil, err
 	}
 	var embeddedCertificate *authenticationCertificate100Store
+	_ = client.audio.SetPlaybackRate(client.clock.now(), options.Speed)
 	authentication := backend.AuthenticationOff
 	if !options.DisableAuthentication {
 		authentication = backend.AuthenticationUnsupported
@@ -337,7 +338,9 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 	if err := client.PaintJava(ctx); err != nil {
 		return span, err
 	}
-	client.serviceAudio()
+	if err := client.serviceAudio(); err != nil {
+		return span, err
+	}
 	if err := client.serviceMediaCallbacks(ctx); err != nil {
 		return span, err
 	}
@@ -383,6 +386,9 @@ func (session *Session) tickSpan() time.Duration {
 	if threadWait, sleeping := session.client.nextJavaThreadDue(); sleeping &&
 		(!pending || threadWait < wait) {
 		wait, pending = threadWait, true
+	}
+	if mediaWait, queued := session.client.nextJavaMediaDue(); queued && (!pending || mediaWait < wait) {
+		wait, pending = mediaWait, true
 	}
 	if !pending || wait > session.tick {
 		return session.tick
@@ -460,6 +466,26 @@ func (session *Session) speedOrDefault() float64 {
 // tick, so what moves is how often a tick is bought. See backend.ClampSpeed.
 func (session *Session) SetSpeed(multiplier float64) {
 	if session == nil {
+		return
+	}
+	if session.client == nil {
+		session.speed = backend.ClampSpeed(multiplier)
+		return
+	}
+	client := session.client
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	now := client.clock.now()
+	if err := client.syncJavaMedia(now); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT speed change could not service audio", "error", err)
+		}
+		return
+	}
+	if err := client.audio.SetPlaybackRate(now, multiplier); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT speed change could not update audio rate", "error", err)
+		}
 		return
 	}
 	session.speed = backend.ClampSpeed(multiplier)

@@ -1039,10 +1039,14 @@ func (runtime *Runtime) setAudioVolume(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	runtime.audioTimelineMu.Lock()
+	defer runtime.audioTimelineMu.Unlock()
+	runtime.audioTimeline().Advance(runtime.audioNow())
 	state := runtime.skvm()
 	state.mu.Lock()
+	defer state.mu.Unlock()
 	state.audioVolume = min(max(volume, 0), 100)
-	state.mu.Unlock()
+	runtime.audioTimeline().SetVolume(int(state.audioVolume))
 	return jvm.VoidValue(), nil
 }
 
@@ -1079,13 +1083,18 @@ func (runtime *Runtime) audioClipOpen(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 	if loadErr != nil {
 		return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, loadErr.Error())
 	}
+	runtime.audioTimelineMu.Lock()
+	defer runtime.audioTimelineMu.Unlock()
 	clip.mu.Lock()
+	defer clip.mu.Unlock()
 	previous := clip.handle
-	clip.handle = handle
-	clip.mu.Unlock()
 	if previous != 0 {
+		audio.Advance(runtime.audioNow())
 		_ = audio.Close(previous)
 	}
+	runtime.endPlaying(clip)
+	clip.loop, clip.paused = false, false
+	clip.handle = handle
 	return jvm.VoidValue(), nil
 }
 
@@ -1130,32 +1139,43 @@ func (runtime *Runtime) audioClipStart(call *jvm.Invocation, arguments []jvm.Val
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	token, wait, err := runtime.startAudioClipPlayback(clip, repeat)
+	if err != nil || token == nil {
+		return jvm.VoidValue(), err
+	}
+	return token.ResumeCheckpointWait(call, !repeat, wait)
+}
+
+// startAudioClipPlayback registers the complete playback generation before
+// releasing either lock. Its caller can then block without excluding a stop
+// or the Host pass that advances the raw audio timeline.
+func (runtime *Runtime) startAudioClipPlayback(clip *audioClipData, repeat bool) (*audioCheckpointWait, time.Duration, error) {
+	runtime.audioTimelineMu.Lock()
+	defer runtime.audioTimelineMu.Unlock()
 	audio := runtime.audioTimeline()
 	clip.mu.Lock()
+	defer clip.mu.Unlock()
 	clip.loop, clip.paused = repeat, false
 	handle := clip.handle
-	clip.mu.Unlock()
 	if audio == nil || handle == 0 {
-		return jvm.VoidValue(), nil
+		return nil, 0, nil
 	}
 	if err := audio.Play(handle, runtime.audioNow(), repeat); err != nil {
-		return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
+		return nil, 0, newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
 	}
 	// A loop has no length of its own to wait out; only a stop ends it. A
 	// clip whose length is unknown or nothing is over as soon as it started.
-	wait := time.Duration(-1)
+	wait := time.Duration(0)
 	if !repeat {
 		length, known := audio.Length(handle)
 		if !known || length <= 0 {
-			return jvm.VoidValue(), nil
+			return nil, 0, nil
 		}
 		wait = runtime.realDuration(length)
 	}
-	clip.mu.Lock()
 	runtime.startPlaying(clip)
 	token := &audioCheckpointWait{runtime: runtime, clip: clip, generation: clip.generation, repeat: repeat}
-	clip.mu.Unlock()
-	return token.ResumeCheckpointWait(call, !repeat, max(wait, 0))
+	return token, max(wait, 0), nil
 }
 
 // realDuration converts a length on the MIDlet's own clock — which is what the
@@ -1174,40 +1194,41 @@ func (runtime *Runtime) audioClipAction(action string) jvm.NativeMethod {
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
+		runtime.audioTimelineMu.Lock()
+		defer runtime.audioTimelineMu.Unlock()
 		audio := runtime.audioTimeline()
 		clip.mu.Lock()
 		handle := clip.handle
-		switch action {
-		case "pause":
-			clip.paused = true
-		case "resume":
-			clip.paused = false
-		case "stop":
-			clip.paused = false
-		}
-		if action != "resume" {
-			runtime.endPlaying(clip)
-		}
-		loop := clip.loop
-		clip.mu.Unlock()
+		defer clip.mu.Unlock()
 		if audio == nil || handle == 0 {
+			if action != "resume" {
+				runtime.endPlaying(clip)
+			}
 			return jvm.VoidValue(), nil
 		}
 		switch action {
 		case "resume":
-			// Resume restarts rather than continuing: the timeline tracks a
-			// start instant, not a paused offset, and pretending otherwise
-			// would report a position the sink is not at.
-			if err := audio.Play(handle, runtime.audioNow(), loop); err != nil {
+			if err := audio.Resume(handle, runtime.audioNow()); err != nil {
 				return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
 			}
-		case "pause", "stop":
+			clip.paused = false
+		case "pause":
+			if err := audio.Pause(handle, runtime.audioNow()); err != nil {
+				return jvm.VoidValue(), newGuestException(skvm.UnsupportedFormatExceptionClass, err.Error())
+			}
+			clip.paused = true
+		case "stop":
+			audio.Advance(runtime.audioNow())
 			audio.Stop(handle)
+			clip.paused = false
 		case "close":
+			audio.Advance(runtime.audioNow())
 			_ = audio.Close(handle)
-			clip.mu.Lock()
 			clip.handle = 0
-			clip.mu.Unlock()
+			clip.paused = false
+		}
+		if action != "resume" {
+			runtime.endPlaying(clip)
 		}
 		return jvm.VoidValue(), nil
 	}

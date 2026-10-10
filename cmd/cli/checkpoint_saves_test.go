@@ -162,7 +162,7 @@ func TestCheckpointCLIRefusesAnEarlierBuildsSlot(t *testing.T) {
 		}
 	}
 	unchanged("a new quick save")
-	if _, err := os.Stat(filepath.Join(fixture.slots, fmt.Sprintf("%x.v2.wfq", identity))); err != nil {
+	if _, err := os.Stat(filepath.Join(fixture.slots, fmt.Sprintf("%x.v3.wfq", identity))); err != nil {
 		t.Fatalf("the new quick save is not beside the earlier one: %v", err)
 	}
 	if data, err := os.ReadFile(fixture.file); err != nil || !bytes.Equal(data, testfixture.KTFSaveContent(0)) {

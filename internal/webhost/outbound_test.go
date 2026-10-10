@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/wsproto"
@@ -180,20 +181,29 @@ func TestQueuedMessagesLeaveInOneWrite(t *testing.T) {
 }
 
 func TestSoundWaitsBrieflyForThePictureOfItsTick(t *testing.T) {
-	runner, transport, start := writingRunner(t)
-	runner.encoding.Store(true)
-	runner.outText <- outboundMessage{binary: []byte("WFA2\x06"), audio: true}
-	start()
-	time.Sleep(2 * time.Millisecond)
-	runner.outFrames <- outboundMessage{binary: []byte("picture")}
-	_, wire := waitForWrites(t, transport, 1)
-	time.Sleep(20 * time.Millisecond)
-	if writes, _ := transport.snapshot(); writes != 1 {
-		t.Fatalf("sound and its picture took %d writes", writes)
-	}
-	if got := readWire(t, wire); len(got) != 2 {
-		t.Fatalf("the write held %d messages, want the sound and the picture", len(got))
-	}
+	// A real 2 ms sleep can outlast the 10 ms linger under scheduler load.
+	// Virtual time also proves the writer is actually waiting for the frame.
+	synctest.Test(t, func(t *testing.T) {
+		runner, transport, start := writingRunner(t)
+		runner.encoding.Store(true)
+		runner.outText <- outboundMessage{binary: []byte("WFA2\x06"), audio: true}
+		start()
+		synctest.Wait()
+		if writes, _ := transport.snapshot(); writes != 0 {
+			t.Fatal("sound did not wait for the picture being encoded")
+		}
+		time.Sleep(2 * time.Millisecond)
+		runner.outFrames <- outboundMessage{binary: []byte("picture")}
+		synctest.Wait()
+		time.Sleep(2 * frameLinger)
+		writes, wire := transport.snapshot()
+		if writes != 1 {
+			t.Fatalf("sound and its picture took %d writes", writes)
+		}
+		if got := readWire(t, wire); len(got) != 2 {
+			t.Fatalf("the write held %d messages, want the sound and the picture", len(got))
+		}
+	})
 }
 
 func TestSoundDoesNotWaitWhenNoPictureIsComing(t *testing.T) {

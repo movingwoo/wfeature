@@ -77,6 +77,9 @@ func huffmanDecode(decodedLength int, source []byte) ([]byte, error) {
 	if decodedLength < 0 {
 		return nil, fmt.Errorf("negative Huffman decoded length %d", decodedLength)
 	}
+	if decodedLength > maxDecodedSequenceBytes {
+		return nil, fmt.Errorf("%w: Huffman decoded bytes exceeds %d", ErrResourceLimit, maxDecodedSequenceBytes)
+	}
 	reader := &bitReader{data: source}
 	tree := &huffmanTree{next: huffmanLeafCount}
 	root, ok := tree.read(reader)

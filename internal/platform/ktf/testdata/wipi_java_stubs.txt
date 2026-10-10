@@ -37,15 +37,12 @@ org/kwis/msp/handset/BackLight on (III)V noop
 
 # Sound. Clips decode and play for real; what is left here has nothing behind
 # it. Recording is refused outright because no microphone can be offered, the
-# play listener has no completion event to fire yet, and device volume is the
-# Host's setting rather than the game's.
+# numeric source mappings for extended mute/default-volume calls remain
+# unverified. Playback listeners use the deferred callback queue.
 org/kwis/msp/media/BaseClip <init> ()V noop
-org/kwis/msp/media/Clip setListener (Lorg/kwis/msp/media/PlayListener;)V noop
 org/kwis/msp/media/Player record (Lorg/kwis/msp/media/BaseClip;)Z zero
-org/kwis/msp/media/Volume get ()I zero
 org/kwis/msp/media/Volume getDefaultVolume (I)I zero
 org/kwis/msp/media/Volume getMute (I)Z zero
-org/kwis/msp/media/Volume set (I)V noop
 org/kwis/msp/media/Volume setDefaultVolume (II)Z zero
 org/kwis/msp/media/Volume setMute (IZ)V noop
 

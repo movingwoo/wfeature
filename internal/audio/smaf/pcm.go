@@ -49,7 +49,7 @@ type PCMAudioTrack struct {
 // samplingFrequencies indexes the four-bit rate field in a track's wave type.
 var samplingFrequencies = [5]uint32{4000, 8000, 11000, 22050, 44100}
 
-func parsePCMAudioTrack(data []byte) (*PCMAudioTrack, error) {
+func parsePCMAudioTrack(data []byte, budget *decodeBudget) (*PCMAudioTrack, error) {
 	if len(data) < 6 {
 		return nil, fmt.Errorf("PCM audio track is %d bytes", len(data))
 	}
@@ -81,10 +81,19 @@ func parsePCMAudioTrack(data []byte) (*PCMAudioTrack, error) {
 		if !ok {
 			break
 		}
+		if err := budget.chunk(); err != nil {
+			return nil, err
+		}
 		switch {
 		case string(tag[:]) == "Atsq":
-			events, err := parsePCMSequence(payload)
+			if err := budget.sequence(uint64(len(payload))); err != nil {
+				return nil, err
+			}
+			events, err := parsePCMSequence(payload, budget)
 			if err != nil {
+				if budget.err != nil {
+					return nil, budget.err
+				}
 				return track, nil
 			}
 			track.Sequence = events
@@ -99,7 +108,7 @@ func parsePCMAudioTrack(data []byte) (*PCMAudioTrack, error) {
 // The PCM dialect abbreviates the same two controllers the score dialect does.
 var shortPitchBendValues = [15]uint8{0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70}
 
-func parsePCMSequence(data []byte) ([]PCMEvent, error) {
+func parsePCMSequence(data []byte, budget *decodeBudget) ([]PCMEvent, error) {
 	r := &reader{data: data}
 	var events []PCMEvent
 	for {
@@ -107,6 +116,9 @@ func parsePCMSequence(data []byte) ([]PCMEvent, error) {
 		if r.remaining() == 4 {
 			tail := r.data[r.offset:]
 			if tail[0] == 0 && tail[1] == 0 && tail[2] == 0 && tail[3] == 0 {
+				if err := budget.sequenceEvent(); err != nil {
+					return nil, err
+				}
 				return append(events, PCMEvent{Kind: PCMEventNop}), nil
 			}
 		}
@@ -117,6 +129,9 @@ func parsePCMSequence(data []byte) ([]PCMEvent, error) {
 		first, ok := r.byte()
 		if !ok {
 			return events, nil
+		}
+		if err := budget.sequenceEvent(); err != nil {
+			return nil, err
 		}
 		event := PCMEvent{Duration: duration}
 		switch {

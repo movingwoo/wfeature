@@ -458,6 +458,10 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	if err != nil {
 		return nil, err
 	}
+	platform.audio.SetLogger(options.Logger)
+	if err := platform.audio.RebasePlaybackClock(saved.Elapsed, saved.Speed); err != nil {
+		return nil, err
+	}
 	platform.clip, platform.sounding = saved.Clip, saved.Sounding
 	return &NativeSession{Archive: archive, Client: client, platform: platform, clock: platform.clock, source: platform.source,
 		started: now.Add(-saved.SessionElapsed), logger: options.Logger, options: options}, nil

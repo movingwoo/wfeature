@@ -1028,7 +1028,11 @@ func javaRandomConstructor(
 func javaSetVolume(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return 0, err
+	}
 	client.volume = clampVolume(int32(arguments[0]))
+	client.audio.SetVolume(int(client.volume))
 	return 0, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
@@ -29,14 +30,18 @@ const maxMediaBytes = 8 << 20
 // start() hands the decoded sequence to the same backend.Audio timeline every
 // other sound in this runtime plays on.
 type playerData struct {
-	mu          sync.Mutex
-	state       int32
-	contentType string
-	handle      backend.AudioHandle
-	duration    time.Duration
-	loops       int32
-	mediaTime   int64
-	listeners   []*jvm.Object
+	mu            sync.Mutex
+	state         int32
+	contentType   string
+	handle        backend.AudioHandle
+	duration      time.Duration
+	loops         int32
+	mediaTime     int64
+	completed     uint64
+	listeners     []*jvm.Object
+	volumeControl *jvm.Object
+	wipiClip      *jvm.Object
+	wipiOwner     weak.Pointer[jvm.Object]
 }
 
 // AttachAudioSink supplies the Host audio sink MIDP players play through.
@@ -70,9 +75,41 @@ func (runtime *Runtime) AttachAudioSink(sink backend.AudioSink) {
 // on either Host. The other two WIPI runtimes advance from their own guest
 // clock and always did.
 func (runtime *Runtime) AdvanceAudio() {
-	if audio := runtime.audioTimeline(); audio != nil {
-		audio.Advance(runtime.GuestElapsed())
+	if runtime == nil {
+		return
 	}
+	runtime.dispatchMu.Lock()
+	defer runtime.dispatchMu.Unlock()
+	// Merge Players, raw clips and tones at one common boundary. Release the
+	// timeline before taking any Player lock; guest transitions take those
+	// locks in the opposite order and reconcile any newer progress themselves.
+	runtime.audioTimelineMu.Lock()
+	runtime.audioTimeline().Advance(runtime.GuestElapsed())
+	runtime.audioTimelineMu.Unlock()
+	for _, object := range runtime.mediaPlayerSnapshot() {
+		player := object.Native.(*playerData)
+		runtime.lockPlayerAudio(player)
+		err := runtime.observePlayerLocked(object, player)
+		runtime.unlockPlayerAudio(player)
+		if err != nil {
+			_ = runtime.fail("advance Player", err)
+			return
+		}
+	}
+}
+
+// Player state and its clock-dependent backend operations form one transition.
+// Global score advancement may finish a different owner, so serialize the whole
+// query-and-mutate interval across Players and raw clips. Never hold mediaMu or
+// audioTimelineMu while acquiring a Player lock.
+func (runtime *Runtime) lockPlayerAudio(player *playerData) {
+	player.mu.Lock()
+	runtime.audioTimelineMu.Lock()
+}
+
+func (runtime *Runtime) unlockPlayerAudio(player *playerData) {
+	runtime.audioTimelineMu.Unlock()
+	player.mu.Unlock()
 }
 
 func (runtime *Runtime) audioTimeline() *backend.Audio {
@@ -83,6 +120,10 @@ func (runtime *Runtime) audioTimeline() *backend.Audio {
 	defer runtime.audioMu.Unlock()
 	if runtime.audio == nil {
 		runtime.audio = backend.NewAudio(nil)
+		runtime.audio.SetLogger(runtime.logger)
+		_ = runtime.audio.SetPlaybackRate(0, runtime.Speed())
+		// Match the handset level exposed by the existing SKVM getter.
+		runtime.audio.SetVolume(50)
 	}
 	return runtime.audio
 }
@@ -111,7 +152,7 @@ func (runtime *Runtime) createPlayerFromStream(vm *jvm.VM, arguments []jvm.Value
 		return jvm.VoidValue(), err
 	}
 	if stream == nil {
-		return jvm.VoidValue(), newGuestException("java/lang/NullPointerException", "media stream is null")
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "media stream is null")
 	}
 	contentType, err := optionalStringArgument(arguments, 1)
 	if err != nil {
@@ -128,13 +169,20 @@ func (runtime *Runtime) createPlayerFromStream(vm *jvm.VM, arguments []jvm.Value
 // network locator is refused rather than accepted and left silent, because a
 // game told a player exists waits for events that will never come.
 func (runtime *Runtime) createPlayerFromLocator(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	reference, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if reference == nil {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "media locator is null")
+	}
 	locator, err := stringArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	switch {
 	case locator == midp.ToneDeviceLocator:
-		return runtime.newPlayer(vm, nil, "audio/x-tone-seq")
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, "tone sequence playback is not supported")
 	case strings.HasPrefix(locator, "resource:") || strings.HasPrefix(locator, "/"):
 		name := strings.TrimPrefix(strings.TrimPrefix(locator, "resource:"), "/")
 		data, ok := runtime.Archive.Resource(name)
@@ -150,6 +198,12 @@ func (runtime *Runtime) createPlayerFromLocator(vm *jvm.VM, arguments []jvm.Valu
 // createPlayer, where MIDP says the failure belongs, instead of silently at
 // start().
 func (runtime *Runtime) newPlayer(_ *jvm.VM, data []byte, contentType string) (jvm.Value, error) {
+	if strings.EqualFold(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]), "audio/x-tone-seq") {
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, "tone sequence playback is not supported")
+	}
+	if len(data) == 0 {
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, "media content is empty")
+	}
 	player := &playerData{state: playerUnrealized, contentType: contentType, loops: 1}
 	if len(data) > 0 {
 		audio := runtime.audioTimeline()
@@ -172,11 +226,16 @@ func (runtime *Runtime) newPlayer(_ *jvm.VM, data []byte, contentType string) (j
 			player.contentType = "application/vnd.smaf"
 		}
 	}
-	return jvm.ReferenceValue(&jvm.Object{
+	object := &jvm.Object{
 		ClassName: midp.PlayerClass,
 		Fields:    make(map[string]jvm.Value),
 		Native:    player,
-	}), nil
+	}
+	if err := runtime.registerMediaPlayer(player.handle, object); err != nil {
+		_ = runtime.audioTimeline().Close(player.handle)
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+	}
+	return jvm.ReferenceValue(object), nil
 }
 
 // readGuestStream drains a guest InputStream through its own read method, so
@@ -233,8 +292,8 @@ func (runtime *Runtime) playerTransition(arguments []jvm.Value, target int32) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
 	if player.state == playerClosed {
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
 	}
@@ -249,28 +308,32 @@ func (runtime *Runtime) playerStart(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
 	if player.state == playerClosed {
-		player.mu.Unlock()
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
 	}
+	now := runtime.audioNow()
+	if err := runtime.syncPlayerAtLocked(object, player, now); err != nil {
+		return jvm.VoidValue(), err
+	}
 	if player.state == playerStarted {
-		player.mu.Unlock()
 		return jvm.VoidValue(), nil
 	}
-	player.state = playerStarted
-	handle := player.handle
-	// A negative loop count is JSR-135's "loop forever"; any count above one
-	// is the same repeat to a timeline that only knows repeat or not.
-	repeat := player.loops < 0 || player.loops > 1
-	player.mu.Unlock()
-
-	if audio := runtime.audioTimeline(); audio != nil && handle != 0 {
-		if err := audio.Play(handle, runtime.audioNow(), repeat); err != nil {
-			return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+	audio := runtime.audioTimeline()
+	if audio.Paused(player.handle) {
+		err = audio.Resume(player.handle, now)
+	} else {
+		err = audio.PlayCount(player.handle, now, player.loops)
+		if err == nil {
+			player.completed, player.mediaTime = 0, 0
 		}
 	}
-	return jvm.VoidValue(), runtime.notifyPlayerListeners(object, player, midp.PlayerEventStarted)
+	if err != nil {
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+	}
+	player.state = playerStarted
+	return jvm.VoidValue(), runtime.queuePlayerTimeLocked(object, player, midp.PlayerEventStarted, player.mediaTime)
 }
 
 // audioNow is the timeline reading a sound starts at, and it is the same clock
@@ -282,37 +345,38 @@ func (runtime *Runtime) audioNow() time.Duration {
 }
 
 func (runtime *Runtime) playerStop(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.stopPlayer(arguments, playerPrefetched)
+}
+
+func (runtime *Runtime) playerDeallocate(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	return runtime.stopPlayer(arguments, playerRealized)
+}
+
+func (runtime *Runtime) stopPlayer(arguments []jvm.Value, target int32) (jvm.Value, error) {
 	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	if player.state != playerStarted {
-		player.mu.Unlock()
-		return jvm.VoidValue(), nil
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
 	}
-	player.state = playerPrefetched
-	handle := player.handle
-	player.mu.Unlock()
-	if audio := runtime.audioTimeline(); audio != nil && handle != 0 {
-		audio.Stop(handle)
-	}
-	return jvm.VoidValue(), runtime.notifyPlayerListeners(object, player, midp.PlayerEventStopped)
-}
-
-func (runtime *Runtime) playerDeallocate(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
-	if err != nil {
+	now := runtime.audioNow()
+	if err := runtime.syncPlayerAtLocked(object, player, now); err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	handle := player.handle
-	if player.state > playerRealized {
-		player.state = playerRealized
+	started := player.state == playerStarted
+	if started {
+		if err := runtime.audioTimeline().Pause(player.handle, now); err != nil {
+			return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+		}
 	}
-	player.mu.Unlock()
-	if audio := runtime.audioTimeline(); audio != nil && handle != 0 {
-		audio.Stop(handle)
+	if player.state > target {
+		player.state = target
+	}
+	if started {
+		return jvm.VoidValue(), runtime.queuePlayerTimeLocked(object, player, midp.PlayerEventStopped, player.mediaTime)
 	}
 	return jvm.VoidValue(), nil
 }
@@ -322,28 +386,33 @@ func (runtime *Runtime) playerClose(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
 	if player.state == playerClosed {
-		player.mu.Unlock()
 		return jvm.VoidValue(), nil
 	}
-	player.state = playerClosed
-	handle := player.handle
-	player.handle = 0
-	player.mu.Unlock()
-	if audio := runtime.audioTimeline(); audio != nil && handle != 0 {
-		_ = audio.Close(handle)
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
 	}
-	return jvm.VoidValue(), runtime.notifyPlayerListeners(object, player, midp.PlayerEventClosed)
+	if err := runtime.audioTimeline().Close(player.handle); err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.unregisterMediaPlayer(player.handle)
+	player.state, player.handle = playerClosed, 0
+	player.wipiClip = nil
+	return jvm.VoidValue(), runtime.queuePlayerEventLocked(object, player, midp.PlayerEventClosed, nil)
 }
 
 func (runtime *Runtime) playerState(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
 	return jvm.IntValue(player.state), nil
 }
 
@@ -352,57 +421,62 @@ func (runtime *Runtime) playerDuration(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
-	if player.duration == 0 {
-		// JSR-135's TIME_UNKNOWN, which is the honest answer for a player
-		// whose content the runtime never measured.
-		return jvm.LongValue(-1), nil
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
 	}
 	return jvm.LongValue(player.duration.Microseconds()), nil
 }
 
 func (runtime *Runtime) playerMediaTime(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
+	}
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
 	return jvm.LongValue(player.mediaTime), nil
 }
 
 func (runtime *Runtime) setPlayerMediaTime(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	now, err := arguments[1].Int64()
+	position, err := arguments[1].Int64()
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	// Only the start of the media is a position this timeline can seek to;
-	// answering anything else would report a time the sink is not at.
-	if now != 0 {
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state < playerRealized {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is not realized")
+	}
+	// Negative positions clamp to zero. Other seeks remain unsupported;
+	// reporting success would claim a position the output has not reached.
+	if position > 0 {
 		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, "only media time 0 can be set")
 	}
-	player.mu.Lock()
-	player.mediaTime = 0
-	handle, started := player.handle, player.state == playerStarted
-	repeat := player.loops < 0 || player.loops > 1
-	player.mu.Unlock()
-	if started {
-		if audio := runtime.audioTimeline(); audio != nil && handle != 0 {
-			if err := audio.Play(handle, runtime.audioNow(), repeat); err != nil {
-				return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
-			}
-		}
+	now := runtime.audioNow()
+	if err := runtime.syncPlayerAtLocked(object, player, now); err != nil {
+		return jvm.VoidValue(), err
 	}
+	if err := runtime.audioTimeline().Rewind(player.handle, now); err != nil {
+		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+	}
+	player.mediaTime = 0
 	return jvm.LongValue(0), nil
 }
 
 func (runtime *Runtime) setPlayerLoopCount(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -410,13 +484,21 @@ func (runtime *Runtime) setPlayerLoopCount(_ *jvm.VM, arguments []jvm.Value) (jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if count == 0 {
-		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "loop count 0")
+	if count == 0 || count < -1 {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", "invalid loop count")
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
-	if player.state == playerStarted {
-		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is started")
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
+	if player.state == playerStarted || player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is started or closed")
+	}
+	if audio := runtime.audioTimeline(); audio.Paused(player.handle) {
+		if err := audio.SetLoopCount(player.handle, count); err != nil {
+			return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
+		}
 	}
 	player.loops = count
 	return jvm.VoidValue(), nil
@@ -427,8 +509,8 @@ func (runtime *Runtime) playerContentType(vm *jvm.VM, arguments []jvm.Value) (jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
 	if player.state < playerRealized {
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is not realized")
 	}
@@ -436,36 +518,54 @@ func (runtime *Runtime) playerContentType(vm *jvm.VM, arguments []jvm.Value) (jv
 }
 
 func (runtime *Runtime) addPlayerListener(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	listener, err := referenceArgument(arguments, 1)
-	if err != nil || listener == nil {
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
+	}
+	if listener == nil {
+		return jvm.VoidValue(), nil
+	}
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
 	for _, existing := range player.listeners {
 		if existing == listener {
 			return jvm.VoidValue(), nil
 		}
+	}
+	if len(player.listeners) >= maxPlayerListeners {
+		return jvm.VoidValue(), fmt.Errorf("media player listener count exceeds %d", maxPlayerListeners)
 	}
 	player.listeners = append(player.listeners, listener)
 	return jvm.VoidValue(), nil
 }
 
 func (runtime *Runtime) removePlayerListener(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, player, err := playerArgument(arguments, 0)
+	object, player, err := playerArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	listener, err := referenceArgument(arguments, 1)
-	if err != nil || listener == nil {
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	player.mu.Lock()
-	defer player.mu.Unlock()
+	runtime.lockPlayerAudio(player)
+	defer runtime.unlockPlayerAudio(player)
+	if player.state == playerClosed {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalStateException", "Player is closed")
+	}
+	if err := runtime.syncPlayerLocked(object, player); err != nil {
+		return jvm.VoidValue(), err
+	}
 	remaining := player.listeners[:0]
 	for _, existing := range player.listeners {
 		if existing != listener {
@@ -474,23 +574,6 @@ func (runtime *Runtime) removePlayerListener(_ *jvm.VM, arguments []jvm.Value) (
 	}
 	player.listeners = remaining
 	return jvm.VoidValue(), nil
-}
-
-func (runtime *Runtime) notifyPlayerListeners(object *jvm.Object, player *playerData, event string) error {
-	player.mu.Lock()
-	listeners := append([]*jvm.Object(nil), player.listeners...)
-	player.mu.Unlock()
-	for _, listener := range listeners {
-		if _, err := runtime.VM.InvokeVirtual(listener, "playerUpdate",
-			"(Ljavax/microedition/media/Player;Ljava/lang/String;Ljava/lang/Object;)V",
-			jvm.ReferenceValue(object), jvm.ReferenceValue(runtime.VM.NewString(event)),
-			jvm.ReferenceValue(nil)); err != nil {
-			if absorbed := runtime.absorbUncaughtCallback("playerUpdate "+listener.ClassName, err); absorbed != nil {
-				return fmt.Errorf("deliver playerUpdate %s: %w", event, absorbed)
-			}
-		}
-	}
-	return nil
 }
 
 // playTone plays one note. The Host sink speaks the same note events the SMAF
@@ -509,23 +592,22 @@ func (runtime *Runtime) playTone(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, e
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if note < 0 || note > 127 || duration < 0 {
+	if note < 0 || note > 127 || duration <= 0 {
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 			fmt.Sprintf("tone note %d duration %d", note, duration))
 	}
+	runtime.audioTimelineMu.Lock()
+	defer runtime.audioTimelineMu.Unlock()
 	audio := runtime.audioTimeline()
 	if audio == nil {
 		return jvm.VoidValue(), nil
 	}
-	handle, err := audio.LoadEvents([]smaf.Event{
+	err = audio.PlayTransient([]smaf.Event{
 		{Time: 0, Type: smaf.EventNoteOn, Channel: 0, Note: uint8(note), Velocity: clampVolume(volume)},
 		{Time: uint32(duration), Type: smaf.EventNoteOff, Channel: 0, Note: uint8(note)},
 		{Time: uint32(duration), Type: smaf.EventEnd},
-	})
+	}, runtime.audioNow())
 	if err != nil {
-		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
-	}
-	if err := audio.Play(handle, runtime.audioNow(), false); err != nil {
 		return jvm.VoidValue(), newGuestException(midp.MediaExceptionClass, err.Error())
 	}
 	return jvm.VoidValue(), nil
@@ -544,12 +626,38 @@ func clampVolume(volume int32) uint8 {
 // supportedContentTypes and supportedProtocols report exactly what this
 // runtime can open, so a game that checks before creating a Player gets the
 // same answer createPlayer would give it.
-func (runtime *Runtime) supportedContentTypes(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return stringArray(vm, []string{"application/vnd.smaf", "audio/x-tone-seq"})
+func (runtime *Runtime) supportedContentTypes(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	protocol, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if protocol != nil {
+		name, err := stringArgument(arguments, 0)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		if !strings.EqualFold(name, "resource") {
+			return stringArray(vm, nil)
+		}
+	}
+	return stringArray(vm, []string{"application/vnd.smaf"})
 }
 
-func (runtime *Runtime) supportedProtocols(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return stringArray(vm, []string{"device", "resource"})
+func (runtime *Runtime) supportedProtocols(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	contentType, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if contentType != nil {
+		name, err := stringArgument(arguments, 0)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		if !strings.EqualFold(name, "application/vnd.smaf") {
+			return stringArray(vm, nil)
+		}
+	}
+	return stringArray(vm, []string{"resource"})
 }
 
 func stringArray(vm *jvm.VM, values []string) (jvm.Value, error) {

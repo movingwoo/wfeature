@@ -53,10 +53,13 @@ func (store *DirectorySaveStore) checkpointDirectory(create bool) (string, bool,
 	return paths.directory, true, nil
 }
 
-func checkpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.v2.wfq", identity) }
+func checkpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.v3.wfq", identity) }
 
-// legacyCheckpointSlotName is the name envelope version 1 was stored under.
-func legacyCheckpointSlotName(identity [32]byte) string { return fmt.Sprintf("%x.wfq", identity) }
+// legacyCheckpointSlotNames are the names earlier envelope versions were stored
+// under, newest first: version 2, which 0.5.2 wrote, and version 1.
+func legacyCheckpointSlotNames(identity [32]byte) []string {
+	return []string{fmt.Sprintf("%x.v2.wfq", identity), fmt.Sprintf("%x.wfq", identity)}
+}
 
 func checkpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
 	info, err := directory.Lstat(checkpointSlotName(identity))
@@ -72,18 +75,28 @@ func checkpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
 	return true, nil
 }
 
-// legacyCheckpointSlotInfo reports a regular file under the earlier name. Its
+// legacyCheckpointSlot names the newest regular file under an earlier name. Its
 // size is not judged and its bytes are not read: an earlier format had its own
 // limits, and nothing here will decode it.
+func legacyCheckpointSlot(directory *os.Root, identity [32]byte) (string, bool, error) {
+	for _, name := range legacyCheckpointSlotNames(identity) {
+		info, err := directory.Lstat(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if info.Mode().IsRegular() {
+			return name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func legacyCheckpointSlotInfo(directory *os.Root, identity [32]byte) (bool, error) {
-	info, err := directory.Lstat(legacyCheckpointSlotName(identity))
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return info.Mode().IsRegular(), nil
+	_, found, err := legacyCheckpointSlot(directory, identity)
+	return found, err
 }
 
 // openCheckpointDirectory takes the tree lock, settles an interrupted
@@ -159,11 +172,11 @@ func (store *DirectorySaveStore) LoadCheckpoint(identity [32]byte) ([]byte, bool
 		return nil, false, err
 	}
 	if !exists {
-		legacy, err := legacyCheckpointSlotInfo(directory, identity)
+		name, legacy, err := legacyCheckpointSlot(directory, identity)
 		if err != nil || !legacy {
 			return nil, false, err
 		}
-		return nil, true, fmt.Errorf("%w: %s was left in place", ErrCheckpointLegacy, legacyCheckpointSlotName(identity))
+		return nil, true, fmt.Errorf("%w: %s was left in place", ErrCheckpointLegacy, name)
 	}
 	file, err := directory.Open(checkpointSlotName(identity))
 	if err != nil {

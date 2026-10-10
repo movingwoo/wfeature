@@ -42,6 +42,7 @@ type SequenceEvent struct {
 	Value       uint8
 	// BendValue is the 14-bit pitch bend; Value carries the 7-bit payloads.
 	BendValue uint16
+	// Exclusive retains the declared payload, including any final 0xf7.
 	Exclusive []byte
 }
 
@@ -78,7 +79,7 @@ type ScoreTrack struct {
 	Waves map[uint8]WaveData
 }
 
-func parseScoreTrack(data []byte) (*ScoreTrack, error) {
+func parseScoreTrack(data []byte, budget *decodeBudget) (*ScoreTrack, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("score track is %d bytes", len(data))
 	}
@@ -118,7 +119,13 @@ func parseScoreTrack(data []byte) (*ScoreTrack, error) {
 		if !ok {
 			break
 		}
-		if err := track.readChunk(tag, payload); err != nil {
+		if err := budget.chunk(); err != nil {
+			return nil, err
+		}
+		if err := track.readChunk(tag, payload, budget); err != nil {
+			if budget.err != nil {
+				return nil, budget.err
+			}
 			break
 		}
 		rest = next
@@ -126,51 +133,66 @@ func parseScoreTrack(data []byte) (*ScoreTrack, error) {
 	return track, nil
 }
 
-func (track *ScoreTrack) readChunk(tag [4]byte, payload []byte) error {
+func (track *ScoreTrack) readChunk(tag [4]byte, payload []byte, budget *decodeBudget) error {
 	switch {
 	case string(tag[:]) == "Mtsu":
 		track.SetupData = append(track.SetupData, payload)
 	case string(tag[:]) == "Mtsq":
-		events, err := track.parseSequence(payload)
+		events, err := track.parseSequence(payload, budget)
 		if err != nil {
 			return err
 		}
 		track.Sequences = append(track.Sequences, events)
 	case string(tag[:]) == "SEQU":
-		events, err := parseSequenceHandyLike(payload, true)
+		if err := budget.sequence(uint64(len(payload))); err != nil {
+			return err
+		}
+		events, err := parseSequenceHandyLike(payload, true, budget)
 		if err != nil {
 			return err
 		}
 		track.Sequences = append(track.Sequences, events)
 	case string(tag[:]) == "Mtsp":
-		return track.readPCMChunks(payload)
+		return track.readPCMChunks(payload, budget)
 	}
 	return nil
 }
 
-func (track *ScoreTrack) parseSequence(payload []byte) ([]SequenceEvent, error) {
+func (track *ScoreTrack) parseSequence(payload []byte, budget *decodeBudget) ([]SequenceEvent, error) {
+	if track.FormatType != MobileStandardCompress {
+		if err := budget.sequence(uint64(len(payload))); err != nil {
+			return nil, err
+		}
+	}
 	switch track.FormatType {
 	case MobileStandardNoCompress:
-		return parseSequenceMobile(payload)
+		return parseSequenceMobile(payload, budget)
 	case MobileStandardCompress:
 		if len(payload) < 4 {
 			return nil, fmt.Errorf("compressed sequence is %d bytes", len(payload))
 		}
-		decoded, err := huffmanDecode(int(binary.BigEndian.Uint32(payload)), payload[4:])
+		length := binary.BigEndian.Uint32(payload)
+		if err := budget.sequence(uint64(length)); err != nil {
+			return nil, err
+		}
+		decoded, err := huffmanDecode(int(length), payload[4:])
 		if err != nil {
 			return nil, err
 		}
-		return parseSequenceMobile(decoded)
+		return parseSequenceMobile(decoded, budget)
 	default:
-		return parseSequenceHandyLike(payload, false)
+		return parseSequenceHandyLike(payload, false, budget)
 	}
 }
 
-func (track *ScoreTrack) readPCMChunks(payload []byte) error {
+func (track *ScoreTrack) readPCMChunks(payload []byte, budget *decodeBudget) error {
 	for len(payload) >= 8 {
 		tag, data, next, ok := splitChunk(payload)
 		if !ok {
 			return fmt.Errorf("truncated score track PCM chunk")
+		}
+		if err := budget.chunk(); err != nil {
+			return err
 		}
 		if string(tag[:3]) != "Mwa" {
 			return fmt.Errorf("unexpected score track PCM chunk %q", tag)
@@ -234,7 +256,7 @@ var (
 
 // parseSequenceMobile reads the MIDI-shaped dialect, where the status byte is
 // a MIDI status byte and durations are MIDI variable length quantities.
-func parseSequenceMobile(data []byte) ([]SequenceEvent, error) {
+func parseSequenceMobile(data []byte, budget *decodeBudget) ([]SequenceEvent, error) {
 	r := &reader{data: data}
 	var events []SequenceEvent
 	for {
@@ -245,6 +267,9 @@ func parseSequenceMobile(data []byte) ([]SequenceEvent, error) {
 		status, ok := r.byte()
 		if !ok {
 			return events, nil
+		}
+		if err := budget.sequenceEvent(); err != nil {
+			return nil, err
 		}
 		event := SequenceEvent{Duration: duration, Channel: status & 0x0f}
 		switch {
@@ -322,9 +347,9 @@ func parseSequenceMobile(data []byte) ([]SequenceEvent, error) {
 }
 
 // parseSequenceHandyLike reads the handset dialect, and Softbank's variant of
-// it. They differ only in how an exclusive message is delimited: Softbank
-// length-prefixes it, the handset format terminates it with 0xf7.
-func parseSequenceHandyLike(data []byte, softbank bool) ([]SequenceEvent, error) {
+// it. Both size exclusive messages with one byte; the handset format includes
+// a final 0xf7 inside that size. Payload bytes may also contain 0xf7.
+func parseSequenceHandyLike(data []byte, softbank bool, budget *decodeBudget) ([]SequenceEvent, error) {
 	r := &reader{data: data}
 	var events []SequenceEvent
 	for {
@@ -345,6 +370,9 @@ func parseSequenceHandyLike(data []byte, softbank bool) ([]SequenceEvent, error)
 		status, ok := r.byte()
 		if !ok {
 			return events, nil
+		}
+		if err := budget.sequenceEvent(); err != nil {
+			return nil, err
 		}
 		event := SequenceEvent{Duration: duration}
 		switch {
@@ -438,32 +466,20 @@ func decodeHandyControlEvent(r *reader, event *SequenceEvent, eventType uint8) b
 }
 
 func readHandyExclusive(r *reader, softbank bool) ([]byte, bool) {
-	if softbank {
-		length, ok := r.byte()
-		if !ok {
+	length, ok := r.byte()
+	if !ok {
+		return nil, false
+	}
+	payload, ok := r.take(int(length))
+	if !ok {
+		return nil, false
+	}
+	if !softbank {
+		if len(payload) == 0 || payload[len(payload)-1] != 0xf7 {
 			return nil, false
 		}
-		payload, ok := r.take(int(length))
-		if !ok {
-			return nil, false
-		}
-		return append([]byte(nil), payload...), true
 	}
-	rest := r.data[r.offset:]
-	end := len(rest)
-	for index, value := range rest {
-		if value == 0xf7 {
-			end = index
-			break
-		}
-	}
-	payload := append([]byte(nil), rest[:end]...)
-	if end < len(rest) {
-		r.offset += end + 1
-	} else {
-		r.offset += end
-	}
-	return payload, true
+	return append([]byte(nil), payload...), true
 }
 
 // pitchBendByteToMIDI recentres the handset format's byte-sized bend onto

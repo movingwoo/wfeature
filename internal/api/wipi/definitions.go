@@ -535,6 +535,7 @@ func clipDefinition() jvm.ClassDefinition {
 			{Name: "<init>", Descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", Access: publicNative},
 			{Name: "setListener", Descriptor: "(Lorg/kwis/msp/media/PlayListener;)V", Access: publicNative},
 			{Name: "setVolume", Descriptor: "(I)V", Access: publicNative},
+			{Name: "setVolume", Descriptor: "(I)Z", Access: publicNative},
 			{Name: "getVolume", Descriptor: "()I", Access: publicNative},
 			{Name: "getType", Descriptor: "()Ljava/lang/String;", Access: publicNative},
 		},
@@ -546,8 +547,18 @@ func playListenerDefinition() jvm.ClassDefinition {
 		Name:      PlayListenerClass,
 		SuperName: "java/lang/Object",
 		Access:    jvm.AccessPublic | jvm.AccessInterface | jvm.AccessAbstract,
+		Fields: []jvm.FieldDefinition{
+			{Name: "ERROR", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventError)},
+			{Name: "END_OF_DATA", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventEndOfData)},
+			{Name: "START", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventStart)},
+			{Name: "STOP", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventStop)},
+			{Name: "PAUSE", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventPause)},
+			{Name: "RESUME", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventResume)},
+			{Name: "RECORD", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventRecord)},
+			{Name: "FULL_OF_DATA", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PlayEventFullOfData)},
+		},
 		Methods: []jvm.MethodDefinition{
-			{Name: "playDone", Descriptor: "(Lorg/kwis/msp/media/Clip;)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
+			{Name: "playUpdate", Descriptor: "(Lorg/kwis/msp/media/Clip;II)V", Access: jvm.AccessPublic | jvm.AccessAbstract},
 		},
 	}
 }

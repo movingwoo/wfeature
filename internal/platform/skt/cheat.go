@@ -74,6 +74,40 @@ func (runtime *Runtime) platformRoots() []*jvm.Object {
 	}
 	roots = append(roots, runtime.pendingSerial...)
 	runtime.displayMu.RUnlock()
+	runtime.mediaMu.Lock()
+	players := make([]*jvm.Object, 0, len(runtime.mediaPlayers))
+	for _, object := range runtime.mediaPlayers {
+		roots = append(roots, object)
+		players = append(players, object)
+	}
+	for _, event := range runtime.mediaEvents {
+		roots = append(roots, event.Player)
+		if event.Data != nil {
+			roots = append(roots, event.Data)
+		}
+		roots = append(roots, event.Listeners...)
+	}
+	runtime.mediaMu.Unlock()
+	// Native payloads are not Java fields. Expose active Clip/listener roots
+	// without holding mediaMu while acquiring the producer's Player lock.
+	for _, object := range players {
+		player, ok := object.Native.(*playerData)
+		if !ok || player == nil {
+			continue
+		}
+		player.mu.Lock()
+		roots = append(roots, player.listeners...)
+		if player.volumeControl != nil {
+			roots = append(roots, player.volumeControl)
+		}
+		if player.wipiClip != nil {
+			roots = append(roots, player.wipiClip)
+			if listener := player.wipiListenerLocked(); listener != nil {
+				roots = append(roots, listener)
+			}
+		}
+		player.mu.Unlock()
+	}
 
 	runtime.renderMu.Lock()
 	if runtime.paintCanvas != nil {

@@ -306,6 +306,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 	}
 	// The repeat clock takes the speed the same way SetSpeed gives it to it: a
 	// session started at a multiplier is a guest already running at that pace.
+	options.Speed = backend.ClampSpeed(options.Speed)
 	session := &Session{platform: platform, summary: summary, options: options, speed: options.Speed, archiveIdentity: backend.SaveIdentity(archive)}
 	if options.Clock != nil {
 		session.now = options.Clock.Now
@@ -1177,21 +1178,24 @@ func (s *Session) magnify(frame []byte, width, height int) ([]byte, int, int, bo
 func (s *Session) SetSpeed(multiplier float64) {
 	// The repeat clock is scaled by hand because it is this layer's own; every
 	// platform below scales its clock for itself.
-	s.speed = multiplier
+	s.speed = backend.ClampSpeed(multiplier)
 	if s.ktf != nil {
-		s.ktf.SetSpeed(multiplier)
+		s.ktf.SetSpeed(s.speed)
+		// A KTF origin outside the duration range cannot be rebased. Keep
+		// input repeat and checkpoint metadata at the accepted guest rate.
+		s.speed = s.ktf.Speed()
 	}
 	if s.ktfNative != nil {
-		s.ktfNative.SetSpeed(multiplier)
+		s.ktfNative.SetSpeed(s.speed)
 	}
 	if s.lgt != nil {
-		s.lgt.SetSpeed(multiplier)
+		s.lgt.SetSpeed(s.speed)
 	}
 	if s.runtime != nil {
-		s.runtime.SetSpeed(multiplier)
+		s.runtime.SetSpeed(s.speed)
 	}
 	if s.script != nil {
-		s.script.SetSpeed(multiplier)
+		s.script.SetSpeed(s.speed)
 	}
 }
 

@@ -14,10 +14,10 @@ import (
 //
 // **The function numbers are read off callers, not off the specification's
 // print order.** The specification lists twenty-one `MC_mda*` functions and
-// this block does not follow that list — the entries below sit at 0, 4, 8, 11,
-// 15, 16 and 17, where the printed order would put them at 0, 3, 11, 14, 17,
-// 18 and 19. What settles each one is the argument shape and the sequence a
-// title calls them in:
+// this block does not follow that list — the entries below sit at 0, 4, 8, 9,
+// 10, 11, 15, 16, 17 and 18, where the printed order would put them at 0, 3,
+// 11, 12, 13, 14, 17, 18, 19 and 20. What settles each one is the argument
+// shape and the sequence a title calls them in:
 //
 //	0  (mType, bufSize, cb)  r0 is "Yamaha_MA2" or "Yamaha_MA3" and r1 is the
 //	                         byte count of the sound about to be loaded, which
@@ -26,6 +26,13 @@ import (
 //	                         the size the create asked for: MC_mdaClipPutData.
 //	8  (clip, repeat)        called immediately after 4, once per clip, with
 //	                         r1 alternating 0 and 1: MC_mdaPlay(clip, repeat).
+//	9  (clip)                reached only from inside a title's pauseApp, with
+//	                         the clip its last 8 played and has not stopped:
+//	                         MC_mdaPause.
+//	10 (clip)                reached only from inside the matching resumeApp,
+//	                         with that same clip: MC_mdaResume. Two titles in
+//	                         a lifecycle sweep of the local KTF set make the
+//	                         pair, and no title reaches either anywhere else.
 //	11 (clip)                the first of the three calls that end a clip, and
 //	                         in four other titles the run is 11, then 7, then 3
 //	                         on the same clip before the next one is created.
@@ -40,16 +47,34 @@ import (
 //	16 (level, timeout)      (20, 50) and (100, 50) during a fight, and (0, 0)
 //	                         from a title that wants it off: MC_mdaVibrator.
 //	17 (source, bmute)       (3, 1) once at startup: MC_mdaSetMuteState.
+//	18 (source)              (3) beside 17, from the same titles, and with
+//	                         nothing in r1 they set: MC_mdaGetMuteState.
 //
-// One more is left alone deliberately. **26 takes (clip, 45) or (clip, 60)
-// between a putData and its play**, which is either a per-clip volume or the
-// water mark a streaming clip raises its callback at. Nothing here has a
-// per-sound gain and nothing here streams, so both readings come out as the
-// same accepted no-op, and choosing between them on this evidence would only
-// put a guess in the record. Everything else in the block stays an accepted
-// no-op too, because nothing has shown what it is. That is the same rule the rest of the WIPI C tables follow:
-// a number answered from the specification's ordering alone is a value a game
-// will believe.
+// **The clip volume pair sits past the vibrator, at 25 and 26**, and the device
+// getter at 14 in front of the setter:
+//
+//	14 ()                    r0 holds the same platform stub address in every
+//	                         title, which is what a call with no arguments
+//	                         leaves there: MC_mdaGetVolume.
+//	25 (clip)                once, on a clip just filled: MC_mdaClipGetVolume.
+//	26 (clip, level)         on every clip between its putData and its play,
+//	                         with a level from 0 to 100: MC_mdaClipSetVolume.
+//
+// The three were tied together by answering 14 and 25 with marker values: in
+// seven of the eight local titles that call either, the level 26 then receives
+// is exactly what 14 answered, or what 25 answered where 14 is not called, and
+// the eighth passes a constant of its own. So 14 and 25 read a volume and 26 is
+// handed one, and the reading of 26 as the water mark a streaming clip raises
+// its callback at — the other contract with a clip and a percentage — is out.
+// Answering zero from both getters, as this block did while they were unnamed,
+// put a zero in front of every clip of those titles: silence, had 26 not been
+// discarded as well. One title's own volume option arrives as that level in
+// steps of twenty, which is what discarding 26 had taken away.
+//
+// Every function a local title reaches is now named by its callers, and a
+// number none of them reaches is refused rather than answered from the
+// specification's ordering alone, which is the rule the rest of the WIPI C
+// tables follow: a number answered that way is a value a game will believe.
 //
 // A clip is a guest record so the handle is an address the game can hold. The
 // bytes stay on the Host — the guest never reads them back, and a megabyte of
@@ -61,11 +86,22 @@ const (
 	wipicMediaClipPutData   = 4
 	wipicMediaClipClearData = 7
 	wipicMediaPlay          = 8
+	wipicMediaPause         = 9
+	wipicMediaResume        = 10
 	wipicMediaStop          = 11
+	wipicMediaGetVolume     = 14
 	wipicMediaSetVolume     = 15
 	wipicMediaVibrator      = 16
 	wipicMediaSetMuteState  = 17
+	wipicMediaGetMuteState  = 18
+	wipicMediaClipGetVolume = 25
+	wipicMediaClipSetVolume = 26
 )
+
+// maxWIPICMutedSources bounds how many sources keep a mute state. The
+// specification names three; the guest chooses the number, so one past the
+// bound is refused rather than remembered.
+const maxWIPICMutedSources = 16
 
 // wipicMediaClipRecordSize is the guest record a clip handle points at.
 // Nothing here reads it — the fields live on the Host — but a game that treats
@@ -89,10 +125,27 @@ type wipicMediaClip struct {
 	// would say a new codec is wanted.
 	mediaType string
 	state     clipState
+	// volume is the clip's own level from 0 to 100, set before or after the
+	// clip is loaded and applied to its sound beside the device level. A new
+	// clip starts at 100, as a Java Clip does.
+	volume int32
 }
+
+// wipicClipFullVolume is the level a clip starts at.
+const wipicClipFullVolume = 100
 
 // handleWIPICMediaCall services the media table.
 func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Thread, function uint32) (uint32, error) {
+	// These calls can change existing output, including clip eviction during
+	// creation. Reconcile every Java owner before a C command mutates the shared
+	// timeline; callbacks retain the recipient that owned the elapsed pass.
+	switch function {
+	case wipicMediaClipCreate, wipicMediaClipPutData, wipicMediaStop,
+		wipicMediaClipClearData, wipicMediaClipFree, wipicMediaSetVolume:
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return 0, err
+		}
+	}
 	switch function {
 	case wipicMediaClipCreate:
 		return runtime.wipicCreateClip(thread)
@@ -102,6 +155,12 @@ func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Threa
 
 	case wipicMediaPlay:
 		return runtime.wipicPlayClip(thread)
+
+	case wipicMediaPause:
+		return runtime.wipicPauseClip(thread)
+
+	case wipicMediaResume:
+		return runtime.wipicResumeClip(thread)
 
 	case wipicMediaStop:
 		clip, err := runtime.wipicClipArgument(thread)
@@ -168,23 +227,82 @@ func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Threa
 		runtime.client.vibrator.Vibrate(int(int32(level)), int(int32(timeout)))
 		return 0, nil
 
-	case wipicMediaSetMuteState:
-		// Accepted and not applied. The argument is a *source* — one of the
-		// handset's audio sources — and nothing here says which source a
-		// number names. Reading a per-source mute as a global one silences
-		// every clip in the game, which is a worse answer than carrying on:
-		// the one local caller mutes source 3 once at startup and never asks
-		// again, so what it wanted cannot be read back from its behaviour
-		// either. A title that turns its sound off through this and is still
-		// heard is what would settle it.
-		runtime.countDiagnostic("wipic media set mute state accepted")
+	case wipicMediaGetVolume:
+		return uint32(runtime.client.audio.Volume()), nil
+
+	case wipicMediaClipGetVolume:
+		clip, err := runtime.wipicClipArgument(thread)
+		if err != nil {
+			return 0, err
+		}
+		if clip == nil {
+			return wipiErrorCode, nil
+		}
+		return uint32(clip.volume), nil
+
+	case wipicMediaClipSetVolume:
+		clip, err := runtime.wipicClipArgument(thread)
+		if err != nil {
+			return 0, err
+		}
+		level, err := thread.Register(1)
+		if err != nil {
+			return 0, err
+		}
+		if clip == nil {
+			// The function returns nothing to fail with, and one title sets
+			// the level of a clip it never created.
+			return 0, nil
+		}
+		clip.volume = min(max(int32(level), 0), wipicClipFullVolume)
+		if clip.state.loaded && runtime.client.audio != nil {
+			if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+				return 0, err
+			}
+			if err := runtime.client.audio.SetSoundVolume(clip.state.handle, int(clip.volume)); err != nil {
+				runtime.countDiagnostic(fmt.Sprintf("wipic media clip volume failed: %v", err))
+			}
+		}
 		return 0, nil
 
-	case 9, 10, 14, 18, 25, 26:
-		// The rest of what the local titles reach: accepted and discarded,
-		// because the argument shapes seen so far do not name them. See the
-		// block comment for why a number is not enough to act on.
-		runtime.countDiagnostic(fmt.Sprintf("wipic media function %d accepted", function))
+	case wipicMediaSetMuteState:
+		// Remembered and not applied to any sound. The argument is a
+		// *source* — the specification's tone, sound and recorder — and the
+		// local callers settle which one 3 is not: nineteen titles mute source
+		// 3 at startup and then play their own music and effects through
+		// MC_mdaPlay for the whole run, so on the handset those were audible
+		// and source 3 is not the source a clip plays through. The tone a
+		// handset makes on a key press fits, and this platform makes none to
+		// silence. Reading the call as a global mute would have silenced all
+		// nineteen.
+		source, err := thread.Register(0)
+		if err != nil {
+			return 0, err
+		}
+		state, err := thread.Register(1)
+		if err != nil {
+			return 0, err
+		}
+		if _, known := runtime.wipicMutedSources[source]; !known && len(runtime.wipicMutedSources) >= maxWIPICMutedSources {
+			return wipiErrorCode, nil
+		}
+		if runtime.wipicMutedSources == nil {
+			runtime.wipicMutedSources = map[uint32]bool{}
+		}
+		runtime.wipicMutedSources[source] = state != 0
+		return 0, nil
+
+	case wipicMediaGetMuteState:
+		// The titles that mute source 3 read it first, which is how a title
+		// puts the handset's own setting back on the way out; the answer is
+		// what they last set.
+		source, err := thread.Register(0)
+		if err != nil {
+			return 0, err
+		}
+		if runtime.wipicMutedSources[source] {
+			return 1, nil
+		}
 		return 0, nil
 
 	default:
@@ -221,7 +339,7 @@ func (runtime *initializationRuntime) wipicCreateClip(thread *armcore.Thread) (u
 	if runtime.wipicClips == nil {
 		runtime.wipicClips = map[uint32]*wipicMediaClip{}
 	}
-	runtime.wipicClips[address] = &wipicMediaClip{mediaType: mediaType}
+	runtime.wipicClips[address] = &wipicMediaClip{mediaType: mediaType, volume: wipicClipFullVolume}
 	runtime.wipicClipOrder = append(runtime.wipicClipOrder, address)
 	runtime.trimWIPICClips()
 	return address, nil
@@ -328,16 +446,73 @@ func (runtime *initializationRuntime) wipicPlayClip(thread *armcore.Thread) (uin
 	if runtime.client.audio == nil || len(clip.state.data) == 0 {
 		return wipiErrorCode, nil
 	}
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return 0, err
+	}
 	if !clip.state.loaded {
 		handle, loadErr := runtime.client.audio.Load(clip.state.data)
 		if loadErr != nil {
 			runtime.countDiagnostic(fmt.Sprintf("wipic media clip %q cannot be decoded: %v", clip.mediaType, loadErr))
 			return wipiErrorCode, nil
 		}
+		if err := runtime.client.audio.SetSoundVolume(handle, int(clip.volume)); err != nil {
+			_ = runtime.client.audio.Close(handle)
+			runtime.countDiagnostic(fmt.Sprintf("wipic media clip volume failed: %v", err))
+			return wipiErrorCode, nil
+		}
 		clip.state.handle, clip.state.loaded = handle, true
 	}
-	if err := runtime.client.audio.Play(clip.state.handle, runtime.guestElapsed(), repeat != 0); err != nil {
+	if err := runtime.client.audio.Play(clip.state.handle, now, repeat != 0); err != nil {
 		runtime.countDiagnostic(fmt.Sprintf("wipic media clip cannot be played: %v", err))
+		return wipiErrorCode, nil
+	}
+	return 0, nil
+}
+
+// wipicPauseClip serves MC_mdaPause(clip): the clip stops where it is and keeps
+// its place, and a clip that is not playing — already paused, stopped, ended,
+// or a handle nobody created — answers M_E_ERROR, as the specification lists.
+// The callback a handset would tell is not told, for the reason
+// wipicCreateClip gives.
+func (runtime *initializationRuntime) wipicPauseClip(thread *armcore.Thread) (uint32, error) {
+	clip, err := runtime.wipicClipArgument(thread)
+	if err != nil {
+		return 0, err
+	}
+	if clip == nil || !clip.state.loaded || runtime.client.audio == nil {
+		return wipiErrorCode, nil
+	}
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return 0, err
+	}
+	if !runtime.client.audio.Playing(clip.state.handle) {
+		return wipiErrorCode, nil
+	}
+	if err := runtime.client.audio.Pause(clip.state.handle, now); err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("wipic media clip cannot be paused: %v", err))
+		return wipiErrorCode, nil
+	}
+	return 0, nil
+}
+
+// wipicResumeClip serves MC_mdaResume(clip): a paused clip continues from where
+// it stopped, and anything else answers M_E_ERROR.
+func (runtime *initializationRuntime) wipicResumeClip(thread *armcore.Thread) (uint32, error) {
+	clip, err := runtime.wipicClipArgument(thread)
+	if err != nil {
+		return 0, err
+	}
+	if clip == nil || !clip.state.loaded || runtime.client.audio == nil || !runtime.client.audio.Paused(clip.state.handle) {
+		return wipiErrorCode, nil
+	}
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return 0, err
+	}
+	if err := runtime.client.audio.Resume(clip.state.handle, now); err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("wipic media clip cannot be resumed: %v", err))
 		return wipiErrorCode, nil
 	}
 	return 0, nil
