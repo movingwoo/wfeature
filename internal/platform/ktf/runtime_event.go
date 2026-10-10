@@ -108,16 +108,18 @@ func runtimeInputMethodHandlerClassDefinition() runtimeJavaClass {
 		accessFlags: 0x0021,
 		methods: []runtimeJavaMethod{
 			{class: class, name: "<init>", descriptor: "(I)V", accessFlags: 0x0001, implementation: runtimeInputMethodConstructor},
-			{class: class, name: "getCurrentMode", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentField("mode:I")},
+			{class: class, name: "getCurrentMode", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentField(inputMethodModeField)},
 			{class: class, name: "setCurrentMode", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeInputMethodSetMode},
-			// The listener the handler hands its characters to. There is no
-			// automaton behind this to hand any over — text reaches a
-			// component through the Host keypad, not through a key the title
-			// forwards — so the listener is kept and not fired. Keeping it is
-			// what the caller needs: the specification says a handler with no
-			// listener refuses every key, so a title that could not register
-			// one has been told its own input will never work.
-			{class: class, name: "setInputMethodListener", descriptor: "(Lorg/kwis/msp/lcdui/InputMethodListener;)V", accessFlags: 0x0001, implementation: runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)},
+			// The listener the handler hands its characters to, and the key
+			// that makes it hand one over. A title that draws its own field
+			// forwards its keys here; see runtime_input_method.go. A text
+			// component's own keys do not come this way — its card hands them
+			// to keyNotify, which edits the component's string — and the
+			// specification says a handler with no listener refuses every key,
+			// so a title that could not register one has been told its own
+			// input will never work.
+			{class: class, name: "setInputMethodListener", descriptor: "(Lorg/kwis/msp/lcdui/InputMethodListener;)V", accessFlags: 0x0001, implementation: runtimeInputMethodSetListener},
+			{class: class, name: "notifyKeyInput", descriptor: "(II)Z", accessFlags: 0x0011, implementation: runtimeInputMethodNotifyKeyInput},
 		},
 	}
 }
@@ -620,7 +622,8 @@ func runtimeInputMethodConstructor(_ *initializationRuntime, _ *jvm.VM, argument
 	if receiver.Fields == nil {
 		receiver.Fields = make(map[string]jvm.Value)
 	}
-	receiver.Fields["mode:I"] = arguments[1]
+	receiver.Fields[inputMethodModeField] = arguments[1]
+	receiver.Fields[inputMethodConstraintField] = arguments[1]
 	return jvm.VoidValue(), nil
 }
 
@@ -639,7 +642,7 @@ func runtimeInputMethodSetMode(_ *initializationRuntime, _ *jvm.VM, arguments []
 		if receiver.Fields == nil {
 			receiver.Fields = make(map[string]jvm.Value)
 		}
-		receiver.Fields["mode:I"] = arguments[1]
+		receiver.Fields[inputMethodModeField] = arguments[1]
 	}
 	return jvm.IntValue(1), nil
 }

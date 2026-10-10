@@ -320,6 +320,17 @@ that unsupported target is a limitation, not evidence that custom listeners work
 The KTF and LGT adapters follow this distinction: they refuse installed delta
 listeners and use the component string-setting contract for supported fields.
 
+Per-key keypad edits are that separate contract, and on KTF three titles that
+own their handler settle it: an insertion appends the whole array, a deletion
+cuts `len` characters off the end, and a replacement is ignored. KTF
+`InputMethodHandler.notifyKeyInput` sends those edits for the letter and digit
+modes — a multi-tap cycle as a deletion followed by an insertion — and types
+nothing in Hangul, which has no keypad layout here
+([history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached)).
+Host text for such a handler would have to arrive as one insertion, and it
+would also need a way to tell that the title's own field is on the screen,
+which a title-drawn field does not expose; that route is not implemented.
+
 <a id="lifecycle-separate-native-input-method-callers"></a>
 
 ### Separate native input-method callers

@@ -426,10 +426,25 @@ func init() {
 				{class: "java/lang/Math", name: "max", descriptor: "(JJ)J", accessFlags: 0x0009},
 			},
 		},
+		// java/lang/Character is published whole. It had only isDigit, the one
+		// member a title had been seen to call, while the core library carried
+		// every member CLDC names; a shooter's guest thread that boxes a char
+		// with `new Character(c)` then died on the constructor well into play,
+		// which is far from where a missing member is usually found.
 		"java/lang/Character": {
 			name: "java/lang/Character", superName: "java/lang/Object", accessFlags: 0x0031,
 			methods: []runtimeJavaMethod{
+				{class: "java/lang/Character", name: "<init>", descriptor: "(C)V", accessFlags: 0x0001},
+				{class: "java/lang/Character", name: "charValue", descriptor: "()C", accessFlags: 0x0001},
+				{class: "java/lang/Character", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/lang/Character", name: "hashCode", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/Character", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 				{class: "java/lang/Character", name: "isDigit", descriptor: "(C)Z", accessFlags: 0x0009},
+				{class: "java/lang/Character", name: "isLowerCase", descriptor: "(C)Z", accessFlags: 0x0009},
+				{class: "java/lang/Character", name: "isUpperCase", descriptor: "(C)Z", accessFlags: 0x0009},
+				{class: "java/lang/Character", name: "toLowerCase", descriptor: "(C)C", accessFlags: 0x0009},
+				{class: "java/lang/Character", name: "toUpperCase", descriptor: "(C)C", accessFlags: 0x0009},
+				{class: "java/lang/Character", name: "digit", descriptor: "(CI)I", accessFlags: 0x0009},
 			},
 		},
 		// java/lang/Integer exposes the JVM-owned CLDC implementation. A class
@@ -563,6 +578,11 @@ func init() {
 				{class: "java/lang/String", name: "<init>", descriptor: "([BIILjava/lang/String;)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "<init>", descriptor: "([C)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "<init>", descriptor: "([CII)V", accessFlags: 0x0001},
+				// The copy of a buffer's contents. Most titles reach the same
+				// string through StringBuffer.toString, which is why this one
+				// went unasked for until a title's guest thread called it well
+				// into play.
+				{class: "java/lang/String", name: "<init>", descriptor: "(Ljava/lang/StringBuffer;)V", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "length", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "charAt", descriptor: "(I)C", accessFlags: 0x0001},
 				{class: "java/lang/String", name: "equals", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
@@ -624,6 +644,11 @@ func init() {
 				{class: "java/lang/StringBuffer", name: "length", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "setLength", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// The two members the core library had and this table did not.
+				// Two local titles name deleteCharAt in their images, and no
+				// run had reached the call yet.
+				{class: "java/lang/StringBuffer", name: "deleteCharAt", descriptor: "(I)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "getChars", descriptor: "(II[CI)V", accessFlags: 0x0001},
 			},
 		},
 		// java/util/TimeZone is what a title asks for before it builds a

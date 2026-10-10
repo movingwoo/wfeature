@@ -889,6 +889,34 @@ Two quick load tests that refused a load over a directory where the save file
 had been now require the load to take it as a save that is not there: the
 object over it is empty and the tree is unchanged.
 
+Members a sustained key sweep reached (2026-10-10).
+`runtime_input_method_test.go` holds KTF `InputMethodHandler.notifyKeyInput` to
+the edits three titles' own listeners apply: an insertion of exactly the typed
+character, a multi-tap cycle as a deletion followed by an insertion, and clear
+as a deletion of only what the handler typed, in the modes those titles number 0
+to 2. Hangul, releases and repeats, star, hash and the navigation keys come back
+unprocessed; a removed or replaced listener is handed nothing; a numeric
+constraint types digits in any mode; and a cycle in progress survives a heap
+checkpoint. The same file resolves `Character.<init>(C)V`,
+`String.<init>(Ljava/lang/StringBuffer;)V`, `notifyKeyInput` and the two
+`StringBuffer` members through the guest's class record and runs them. On real
+archives the sweep that found the three — every local KTF archive for 3,000
+ticks at four times speed with a key every twelve ticks — was run again: 270
+archives ran to the end of the script, 13 ended with an error — seven of them
+the title's own `System.exit` — and 17 were still running at the 180-second
+limit, where the run that found the three had 254, 20 and 26. The three titles
+run all 3,000 ticks, and no run stops on a method lookup; the one lookup still
+failing is the field `TextComponent.m_cPos:I` in one title, a failure [recorded
+before](ktf-qa-2026-09-21.md#comparison-and-current-gates). The four titles
+whose outcome got worse — an exit or a timeout where the first run finished, or
+the reverse — ran twice more each on `main` and on this change with the same
+result on both, so the differences are the run-to-run variation of a `-play`
+session and the load of eight workers on eight cores. One title that ended on an
+uncaught `StringIndexOutOfBoundsException` after typing into an LWC text box in
+the first run did not reach that box in this one, which leaves its cause open.
+See [the KTF
+history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
+
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.
 Its bridge declaration is compile-time only; the test installs the ARM body.

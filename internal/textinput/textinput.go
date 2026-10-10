@@ -212,6 +212,18 @@ func (state *State) applyMode(character rune) rune {
 	return state.mode.Apply(character)
 }
 
+// SetMode switches the character set the way the mode key would, ending any
+// cycle in progress. It is for an input method whose mode belongs to the
+// application rather than to the keypad, where the application says which set
+// the next key types in. A mode this package does not have is ignored.
+func (state *State) SetMode(mode Mode) {
+	if mode >= modeCount || mode == state.mode {
+		return
+	}
+	state.mode = mode
+	state.commit()
+}
+
 // Next cycles to the character set the mode key moves to.
 func (mode Mode) Next() Mode { return (mode + 1) % modeCount }
 

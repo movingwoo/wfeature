@@ -275,7 +275,7 @@ func runtimeTextComponentConstructor(_ *initializationRuntime, _ *jvm.VM, argume
 func attachInputMethodHandler(receiver *jvm.Object, constraint jvm.Value) {
 	receiver.Fields[componentInputHandlerField] = jvm.ReferenceValue(&jvm.Object{
 		ClassName: runtimeInputMethodHandlerClass,
-		Fields:    map[string]jvm.Value{"mode:I": constraint},
+		Fields:    map[string]jvm.Value{inputMethodModeField: constraint, inputMethodConstraintField: constraint},
 	})
 }
 

@@ -8266,6 +8266,109 @@ delay loop terminates in the trace, which now runs on into the rest of the
 callback. Under a wall clock, where it always worked, it still answers a key:
 `fire` takes it off the logo, through a menu and into a character screen.
 
+<a id="implementation-three-members-a-sweep-that-held-keys-down-reached"></a>
+
+### Three members a sweep that held keys down reached
+
+A sweep that ran every local KTF archive for 3,000 ticks at four times speed,
+pressing a key every twelve ticks — fire, the four directions, 2, 5 and 8 —
+ended three titles on a platform lookup rather than on anything they did:
+
+```
+KTF AOT method notifyKeyInput(II)Z was not found from class org/kwis/msp/lcdui/InputMethodHandler
+KTF AOT method <init>(C)V was not found from class java/lang/Character
+```
+
+two management titles on the first, the moment a key reached their name field,
+and a shooter's guest thread on the second, well into play. With both answered,
+one of the management titles got past its name field, played on, and stopped at
+tick 1,654 on a third:
+
+```
+KTF AOT method <init>(Ljava/lang/StringBuffer;)V was not found from class java/lang/String
+```
+
+**Two of the three are the same omission, and it is not the core library's.**
+The JVM carries `Character` whole and `String(StringBuffer)` too; what a KTF
+title can reach is what the platform's class table publishes, and the table
+had `Character` with `isDigit` alone — the one member a title had been seen to
+call when the class was connected — and every `String` constructor but this
+one. `Character` is published whole now and the constructor beside the others.
+Publishing a member the JVM has a body for is a declaration and nothing else;
+`TestDelegatingRuntimeMethodsHaveAJVMBody` already holds every such
+declaration to a body.
+
+The same count over the whole table — the core library's members less the
+table's, class by class — finds 47 more CLDC members with a body and no
+declaration, which [`jvm.md`](../jvm.md) keeps for a title nobody has run and
+which such a title would still stop on here. Searching every local image's
+name pool for their signatures, the ones specific enough to read say two
+things. `Thread`'s `join`, `getPriority` and `activeCount` sit in some 85
+images beside private names of the original runtime's own `Thread`, such as
+`interrupt0` and `setPriority0`, which no title calls — that is the platform
+class's layout, not a call. `StringBuffer.deleteCharAt` sits in two images and
+no others, and no run had reached it; it is published now with
+`StringBuffer.getChars`, the buffer's other missing member. The other 45 — the
+radix forms, the boxed equalities, `Math`'s floating-point functions and a
+handful of stream, thread and calendar members — carry a signature no local
+image has, or one so common it says nothing (`equals`, `hashCode`, `close`),
+and nothing in the sweep reaches one, so they are a follow-up of their own
+rather than part of this.
+
+**The third is a contract, and the titles that call it settle it.** A title
+that draws its own text field builds an `InputMethodHandler`, registers a
+listener of its own, and hands the handler the keys its card receives — in
+one of them the whole of it is `if (type == 1) handler.notifyKeyInput(key, 1)`,
+with the return value ignored. The specification says the handler composes
+characters by mode and calls the listener's
+`notifyTextChanged(char[] chText, int len, int pMode)` with Insert (-1),
+Replace (0) or Delete (1), and says nothing about what a listener does with
+them. Three local titles implement the listener, and their code agrees:
+
+- Insert appends `new String(chText)` — the whole array, with `len` unread;
+- Delete cuts `len` characters off the end;
+- Replace does nothing.
+
+So the handler sends an array holding exactly the edit's characters, and a
+multi-tap cycle — which on a keypad replaces the letter it just typed — goes
+out as a Delete of that letter followed by an Insert of the next. A Replace
+would have left these titles showing the first letter of every key.
+[`native-text-input.md`](../native-text-input.md#lifecycle-whole-field-replacement-and-ime-callbacks)
+had left an installed listener unsupported for want of exactly this; it still
+is for a Host-composed string, which is a different question.
+
+**The modes are numbered by the titles too, and not as the C input method
+numbers them.** One title draws its own indicator — 가, A, a, 1 — opens the
+field under 가 with `setCurrentMode(3)`, and its left soft key steps the
+indicator through A, a and 1 while setting 1, 0 and 2. So 0 is small letters,
+1 capitals, 2 digits and 3 Hangul, where the C table's list starts with the
+capitals and puts Hangul third. Letters and digits are the shared multi-tap
+keypad, `internal/textinput`. Hangul types nothing: a handset composes it from
+jamo in a layout no local evidence fixes, and the C input method leaves it to
+the Host for the same reason, so the field takes letters and digits once the
+player switches to them.
+
+**What the handler takes is the digits and the clear key.** The first title
+switches modes on its left soft key and labels `#` with a command of its own on
+the same screen, so star and hash stay the title's rather than becoming the
+mode key and backspace a text component's keypad makes of them; so do the
+directions, fire and the soft keys, which come back unprocessed. Clear takes
+back only what the handler typed — anything else in the field is the title's —
+and a different listener starts the record again. The record is a
+`textinput.State` on the handler's `Native`, so a quick save taken between two
+presses of one key keeps the cycle.
+
+A cycle sent as two edits has one way to go wrong: a title that drops the
+letter that overflowed its field would, on the next press of the same key, see
+the deletion take its last real letter instead. The first title does not get
+there — its "no more than four characters" message takes the next key, and
+dismissing it builds the field again with a new handler.
+
+**What it moved.** All three titles run the 3,000 ticks of the same key
+script. Driven to the first title's field by a scripted route, a key under 가
+types nothing; under A, a and 1 it types `A`, then `a` cycled to `b`, then `2`;
+clear takes the `2` back; and fire makes `Ab` the candidate's name.
+
 <a id="implementation-deliberately-incomplete"></a>
 
 ### Deliberately incomplete
@@ -8316,6 +8419,13 @@ callback. Under a wall clock, where it always worked, it still answers a key:
   "The transparency a title brings with it")
 - in-game progression is verified by the user playing, not by automated
   probes; probes only surface missing API surfaces to implement
+- **Hangul in a title's own input-method handler, and Host text for it.** The
+  handler types letters and digits and nothing under Hangul, because a handset
+  composed Hangul from jamo in a layout no local evidence fixes. The page's
+  keyboard could deliver Hangul as one insertion, which the titles' listeners
+  would take, but a title-drawn field gives no sign of being on the screen, and
+  a Host that guessed would type into a field the player has left — see "Three
+  members a sweep that held keys down reached"
 
 
 <a id="followup-ktf-compatibility-follow-up"></a>
