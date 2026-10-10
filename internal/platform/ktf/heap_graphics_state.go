@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/textinput"
 )
@@ -39,6 +40,7 @@ const heapFilePayloadKind = "ktf-file-v2"
 // both views exactly as it does before capture.
 type heapNativeContext struct {
 	runtime      *initializationRuntime
+	audioState   *backend.AudioState
 	opacityIDs   map[*imageOpacity]uint32
 	opacities    []opacityState
 	opacityBytes uint64
@@ -134,6 +136,9 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 	if err := validateRelayHeap(saved); err != nil {
 		return nil, err
 	}
+	if err := validateMediaHeap(saved, context.audioState); err != nil {
+		return nil, err
+	}
 	for _, surface := range saved.Roots.ImageSurfaces {
 		if err := runtime.client.core.Memory().ValidateRange(surface.Handle, 4, armcore.PermissionRead); err != nil {
 			return nil, err
@@ -193,9 +198,14 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 	if context.unheldDatabase() {
 		return nil, fmt.Errorf("KTF heap database is held by nothing")
 	}
+	media, err := runtime.prepareMediaRoots(saved.Roots, roots, context.audioState)
+	if err != nil {
+		return nil, err
+	}
 	runtime.framebufferOpacity = framebuffers
 	runtime.databases = databases
 	runtime.adoptPlatformRoots(saved.Roots, roots, context)
+	runtime.adoptMediaRoots(media)
 	control.adopt(runtime, context.now)
 	storage.adopt(runtime)
 	runtime.restoredStorage.databases, runtime.restoredStorage.files = context.distinctDBs, context.restoredFiles
@@ -233,6 +243,8 @@ func (context *heapNativeContext) captureOpacity(mask *imageOpacity) (uint32, er
 
 func (context *heapNativeContext) captureNative(native any) (jvm.HeapExternalPayload, error) {
 	switch value := native.(type) {
+	case *heapMediaPayload:
+		return captureHeapMedia(value)
 	case *relaySocket:
 		return captureHeapRelay(value)
 	case *textinput.State:
@@ -272,6 +284,9 @@ func (context *heapNativeContext) captureNative(native any) (jvm.HeapExternalPay
 }
 
 func (context *heapNativeContext) restoreNative(payload jvm.HeapExternalPayload) (any, error) {
+	if payload.Kind == heapMediaKind {
+		return restoreHeapMedia(payload)
+	}
 	if payload.Kind == "ktf-relay-v1" {
 		return restoreHeapRelay(payload)
 	}

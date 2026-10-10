@@ -990,6 +990,7 @@ func (vm *VM) registerMathBuiltins() {
 }
 
 func (vm *VM) registerStringBuiltins() {
+	vm.builtin(StringClass, "intern", "()Ljava/lang/String;", stringIntern)
 	vm.builtin(StringClass, "<init>", "()V", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err == nil {
@@ -1693,7 +1694,10 @@ func stringBufferArgument(arguments []Value) (*Object, *stringBufferData, error)
 }
 
 func nativeStringValue(value string) *Object {
-	return &Object{ClassName: StringClass, Native: value}
+	// A view such as strings.TrimSpace may retain a much larger backing
+	// allocation. Each new payload owns only its visible text, including when
+	// the object is later kept alive by String.intern.
+	return &Object{ClassName: StringClass, Native: strings.Clone(value)}
 }
 
 func booleanValue(value bool) Value {

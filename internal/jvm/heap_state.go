@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	heapStateVersion = 1
+	heapStateVersion = 2
 	heapStateBudget  = 128 << 20
 	heapStateObjects = 1 << 18
 )
@@ -26,6 +26,7 @@ type HeapState struct {
 	Objects            []HeapObjectState
 	Payloads           []HeapPayloadState
 	Statics            []HeapStaticState
+	InternedStrings    []uint32
 	Initialized        []string
 	ClassMonitors      []HeapClassMonitorState
 	MainThread         uint32
@@ -203,6 +204,15 @@ func (vm *VM) captureHeapState(roots []*Object, codec HeapCodec, recordMonitor f
 	}
 	slices.Sort(capture.saved.Initialized)
 	vm.mu.RLock()
+	capture.charge(len(vm.internedStrings), 8)
+	texts := make([]string, 0, len(vm.internedStrings))
+	for text := range vm.internedStrings {
+		texts = append(texts, text)
+	}
+	slices.Sort(texts)
+	for _, text := range texts {
+		capture.saved.InternedStrings = append(capture.saved.InternedStrings, capture.ref(vm.internedStrings[text]))
+	}
 	capture.charge(len(vm.statics)+len(vm.classMonitors), 128)
 	if capture.err == nil {
 		for key := range vm.statics {

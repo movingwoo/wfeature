@@ -30,12 +30,16 @@ const recordingSynth = () => {
   return {
     calls,
     noteOn: (...args) => calls.push(["noteOn", ...args]),
+    noteResume: (...args) => calls.push(["noteResume", ...args]),
     noteOff: (...args) => calls.push(["noteOff", ...args]),
     programChange: (...args) => calls.push(["programChange", ...args]),
     controlChange: (...args) => calls.push(["controlChange", ...args]),
+    pcmControl: (...args) => calls.push(["pcmControl", ...args]),
     pitchBend: (...args) => calls.push(["pitchBend", ...args]),
-    sysex: data => calls.push(["sysex", [...data]]),
-    playWave: (channels, rate, samples) => calls.push(["playWave", channels, rate, samples.length]),
+    sysex: (data, ...ownership) => calls.push(["sysex", [...data], ...ownership]),
+    playWave: (channels, rate, samples, ...ownership) => calls.push(["playWave", channels, rate, samples.length, ...ownership]),
+    stopSound: sound => calls.push(["stopSound", sound]),
+    setSoundGain: (sound, value) => calls.push(["soundGain", sound, value]),
     stopAll: () => calls.push(["stopAll"]),
   };
 };
@@ -142,10 +146,69 @@ const openFakeSession = async (handlers = {}) => {
 test("the page asks for protocol 2 and reads binary messages as bytes", async () => {
   const { session, socket } = await openFakeSession();
   assert.equal(new URL(socket.url).searchParams.get("protocol"), "2");
+  assert.equal(new URL(socket.url).searchParams.get("sound"), "resume");
+  assert.equal(new URL(socket.url).searchParams.get("timing"), "1");
+  assert.equal(new URL(socket.url).searchParams.get("pcm"), "1");
+  assert.equal(new URL(socket.url).searchParams.get("phase"), "1");
   assert.equal(socket.binaryType, "arraybuffer");
   // Node decodes no WebP, so this page takes PNG.
   assert.equal(new URL(socket.url).searchParams.get("pictures"), null);
   session.close();
+});
+
+test("timed recovery requests once and suppresses stale batches until reconstruction", async t => {
+  const batches = [];
+  let refuse = true;
+  const { session, socket } = await openFakeSession({ onAudio: events => {
+    batches.push(events);
+    if (refuse && events.some(event => event.kind === "clock")) return false;
+  } });
+  t.after(() => session.close());
+  socket.deliver({ kind: "audio", audio: [{ kind: "clock", at: 0 }] });
+  assert.deepEqual(socket.sent, [{ kind: "audioResume" }]);
+  const count = batches.length;
+  socket.deliver({ kind: "audio", audio: [{ kind: "clock", at: .1 }] });
+  assert.equal(batches.length, count);
+  assert.equal(socket.sent.length, 1);
+  refuse = false;
+  socket.deliver({ kind: "audio", audio: [{ kind: "allOff" }, { kind: "noteResume", at: .1, age: 100 }, { kind: "clock", at: .1 }] });
+  socket.deliver({ kind: "audio", audio: [{ kind: "clock", at: .2 }] });
+  assert.equal(batches.length, count + 2);
+  assert.equal(session.audioResetPending, false);
+});
+
+test("quick load releases pending audio recovery before acknowledging its new epoch", async t => {
+  let refuse = true;
+  const batches = [];
+  const { session, socket } = await openFakeSession({ onAudio: events => {
+    batches.push(events);
+    if (refuse && events.some(event => event.kind === "clock")) return false;
+  } });
+  t.after(() => session.close());
+  socket.deliver({ kind: "audio", audio: [{ kind: "clock", at: 10 }] });
+  assert.equal(session.audioResetPending, true);
+  const loading = session.quickLoad();
+  const request = socket.sent.at(-1);
+  refuse = false;
+  socket.deliver({ kind: "restored", id: request.id, epoch: 1, started: { restored: true } });
+  await loading;
+  const count = batches.length;
+  socket.deliver({ kind: "audio", epoch: 1, audio: [{ kind: "noteResume", at: 0, age: 100 }, { kind: "clock", at: 0 }] });
+  assert.equal(batches.length, count + 1);
+  assert.equal(session.audioResetPending, false);
+});
+
+test("a malformed first timed batch defers recovery until timing is confirmed", async t => {
+  t.mock.method(console, "warn", () => {});
+  const { session, socket } = await openFakeSession();
+  t.after(() => session.close());
+  socket.deliverFrame(soundMessage([0x0b, 1, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 60, 100], [0x0c]));
+  assert.equal(socket.sent.length, 0, "an older server must not receive an unsupported command");
+  socket.deliver({ kind: "audio", audio: [{ kind: "clock", at: .1 }] });
+  assert.deepEqual(socket.sent, [{ kind: "audioResume" }]);
+  socket.deliver({ kind: "audio", audio: [{ kind: "allOff" }, { kind: "clock", at: .2 }] });
+  assert.equal(session.audioDecodeLost, false);
+  assert.equal(session.audioResetPending, false);
 });
 
 test("a page whose browser decodes lossless WebP asks for its pictures that way", async t => {
@@ -165,6 +228,7 @@ test("a page whose browser decodes lossless WebP asks for its pictures that way"
   const url = new URL(socket.url);
   assert.equal(url.protocol, "wss:");
   assert.equal(url.searchParams.get("protocol"), "2");
+  assert.equal(url.searchParams.get("sound"), "resume");
   assert.equal(url.searchParams.get("pictures"), "webp");
   session.close();
 });
@@ -175,6 +239,68 @@ const soundMessage = (...operations) => {
   return bytes.buffer;
 };
 const word = value => [value >>> 24, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+
+for (const protocol of ["JSON", "binary"]) {
+  test(`${protocol} sound dispatch preserves clip ownership and global all-off`, async t => {
+    const synth = recordingSynth();
+    const { session, socket } = await openFakeSession({ onAudio: events => playAudioEvents(synth, events) });
+    t.after(() => session.close());
+    const sound = 0xfffffffe;
+    const pcm = [0x00, 0x40, 0x00, 0xc0];
+    if (protocol === "JSON") {
+      socket.deliver({ kind: "audio", audio: [
+        { kind: "soundGain", sound, value: 2500 },
+        { kind: "programChange", channel: 1, program: 42, sound },
+        { kind: "noteOn", channel: 1, note: 60, velocity: 100, sound },
+        { kind: "noteResume", channel: 2, note: 64, velocity: 90, age: 0xfedcba98, sound },
+        { kind: "controlChange", channel: 1, control: 7, value: 90, sound },
+        { kind: "pitchBend", channel: 1, value: 9000, sound },
+        { kind: "noteOff", channel: 1, note: 60, velocity: 0, sound },
+        { kind: "sysex", data: Buffer.from([0xf0, 0x7e, 0xf7]).toString("base64"), sound },
+        { kind: "playWave", channels: 1, rate: 8000, samples: Buffer.from(pcm).toString("base64"), sound: 23 },
+        { kind: "pcmControl", pcmChannel: 65535, control: 7, sound: 23 },
+        { kind: "pcmControl", pcmChannel: 65535, control: 10, value: 127, sound: 23 },
+        { kind: "playWave", channels: 1, rate: 8000, samples: Buffer.from(pcm).toString("base64"), sound: 23, pcmChannel: 65535 },
+        { kind: "stopSound", sound },
+        { kind: "allOff", sound },
+      ] });
+      socket.deliver({ kind: "audio", audio: [{ kind: "noteOn", note: 67, velocity: 80 }, { kind: "stopSound" }] });
+    } else {
+      socket.deliverFrame(soundMessage(
+        [0x07, ...word(sound)],
+        [0x09, 0x09, 0xc4],
+        [0x03, 1, 42], [0x01, 1, 60, 100], [0x0a, 2, 64, 90, ...word(0xfedcba98)],
+        [0x04, 1, 7, 90], [0x05, 1, 0x23, 0x28], [0x02, 1, 60, 0],
+        [0x10, ...word(8), ...word(3), 0xf0, 0x7e, 0xf7], [0x12, ...word(8)],
+        [0x07, ...word(23)],
+        [0x10, ...word(7), ...word(pcm.length), ...pcm], [0x11, ...word(7), 1, ...word(8000)],
+        [0x15, 0xff, 0xff, 7, 0], [0x15, 0xff, 0xff, 10, 127],
+        [0x14, ...word(7), 1, ...word(8000), 0xff, 0xff],
+        [0x07, ...word(sound)], [0x08], [0x06],
+      ));
+      // Selection cannot leak into the next batch, including a legacy batch.
+      socket.deliverFrame(soundMessage([0x01, 0, 67, 80], [0x08]));
+    }
+    assert.deepEqual(synth.calls, [
+      ["soundGain", sound, 2500],
+      ["programChange", 1, 42, sound],
+      ["noteOn", 1, 60, 100, sound],
+      ["noteResume", 2, 64, 90, 0xfedcba98, sound],
+      ["controlChange", 1, 7, 90, sound],
+      ["pitchBend", 1, 9000, sound],
+      ["noteOff", 1, 60, 0, sound],
+      ["sysex", [0xf0, 0x7e, 0xf7], sound],
+      ["playWave", 1, 8000, 2, 23, ...(protocol === "binary" ? [true] : [])],
+      ["pcmControl", 65535, 7, 0, 23],
+      ["pcmControl", 65535, 10, 127, 23],
+      ["playWave", 1, 8000, 2, 23, protocol === "binary", 65535],
+      ["stopSound", sound],
+      ["stopAll"],
+      ["noteOn", 0, 67, 80],
+      ["stopSound", 0],
+    ]);
+  });
+}
 
 test("binary sound plays in order and each sample is carried once", async t => {
   const batches = [];
@@ -200,9 +326,9 @@ test("binary sound plays in order and each sample is carried once", async t => {
     ["noteOn", 1, 60, 100],
     ["controlChange", 1, 7, 90],
     ["pitchBend", 1, 9000],
-    ["playWave", 1, 8000, 2],
+    ["playWave", 1, 8000, 2, 0, true],
     ["sysex", [0xf0, 0x7e, 0xf7]],
-    ["playWave", 1, 8000, 2],
+    ["playWave", 1, 8000, 2, 0, true],
     ["noteOff", 1, 60, 0],
     ["stopAll"],
   ]);

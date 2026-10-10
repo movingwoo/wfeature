@@ -24,6 +24,8 @@ type checkpointHeap struct {
 	stores    []*recordStore
 	rmsCaches map[string]*recordStore
 	editors   []*textinput.State
+	players   []*playerData
+	audio     map[backend.AudioHandle]backend.AudioSoundState
 }
 
 func newCheckpointHeap(runtime *Runtime, now time.Time) *checkpointHeap {
@@ -200,9 +202,13 @@ type checkpointPlayer struct {
 	Duration    time.Duration
 	Loops       int32
 	MediaTime   int64
+	Completed   uint64
 	Listeners   int
 }
-type checkpointWIPIClip struct{ ContentType string }
+type checkpointWIPIClip struct {
+	ContentType string
+	Volume      int32
+}
 type checkpointRMS struct {
 	Name      string
 	Version   int32
@@ -276,9 +282,24 @@ func (heap *checkpointHeap) captureNative(native any) (jvm.HeapExternalPayload, 
 	case *gameCanvasData:
 		return nativeCheckpoint("game-canvas", checkpointGameCanvas{n.suppressKeys, n.keyStates}, heap.wrap(n.buffer), n.graphics)
 	case *playerData:
-		return nativeCheckpoint("player", checkpointPlayer{n.state, n.contentType, n.handle, n.duration, n.loops, n.mediaTime, len(n.listeners)}, n.listeners...)
+		saved := checkpointPlayer{State: n.state, ContentType: n.contentType, Handle: n.handle, Duration: n.duration,
+			Loops: n.loops, MediaTime: n.mediaTime, Completed: n.completed, Listeners: len(n.listeners)}
+		refs := append([]*jvm.Object{n.volumeControl}, n.listeners...)
+		if n.wipiClip != nil {
+			clip, err := checkpointNative[wipiClipData](n.wipiClip)
+			if err != nil || clip == nil || clip.player == nil || clip.player.Native != n {
+				return jvm.HeapExternalPayload{}, fmt.Errorf("SKT checkpoint WIPI Player owner is invalid")
+			}
+			return nativeCheckpoint("wipi-player", saved, append(refs, n.wipiClip)...)
+		}
+		return nativeCheckpoint("player", saved, refs...)
+	case *volumeControlData:
+		return nativeCheckpoint("volume-control", struct{}{}, n.player)
 	case *wipiClipData:
-		return nativeCheckpoint("wipi-clip", checkpointWIPIClip{n.contentType}, n.player, n.listener, n.object)
+		if err := heap.runtime.validateCheckpointWIPIClip(n); err != nil {
+			return jvm.HeapExternalPayload{}, err
+		}
+		return nativeCheckpoint("wipi-clip", checkpointWIPIClip{n.contentType, n.volume}, n.player, n.listener, n.object)
 	case *recordStore:
 		heap.stores = append(heap.stores, n)
 		return nativeCheckpoint("rms", checkpointRMS{n.name, n.version, n.modified, n.open, len(n.listeners)}, n.listeners...)

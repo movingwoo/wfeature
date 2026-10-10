@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"unicode/utf8"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -348,12 +349,19 @@ func (heap *checkpointHeap) restoreNative(p jvm.HeapExternalPayload) (any, error
 			return err
 		})
 		return n, nil
-	case "skt.player":
+	case "skt.player", "skt.wipi-player":
 		var s checkpointPlayer
 		if err := backend.DecodeCheckpointRecord(p.Data, &s); err != nil {
 			return nil, err
 		}
-		if s.Listeners != len(refs) || len(refs) > checkpointListLimit || s.Duration < 0 || s.MediaTime < 0 {
+		hasClip := p.Kind == "skt.wipi-player"
+		expected := s.Listeners + 1
+		if hasClip {
+			expected++
+		}
+		if s.Listeners < 0 || s.Listeners > maxPlayerListeners || len(refs) != expected || s.Duration < 0 ||
+			s.MediaTime < 0 || s.MediaTime > s.Duration.Microseconds() || s.Loops == 0 || s.Loops < -1 ||
+			s.Completed > uint64((1<<63-1)/1000000)+1 || (s.State == playerClosed) != (s.Handle == 0) {
 			return invalid()
 		}
 		switch s.State {
@@ -362,17 +370,95 @@ func (heap *checkpointHeap) restoreNative(p jvm.HeapExternalPayload) (any, error
 			return invalid()
 		}
 		if s.Handle != 0 {
-			if _, ok := heap.runtime.audioTimeline().Length(s.Handle); !ok {
+			if length, ok := heap.runtime.audioTimeline().Length(s.Handle); !ok || length != s.Duration {
 				return invalid()
 			}
+			if heap.audio != nil {
+				sound, ok := heap.audio[s.Handle]
+				if !ok || sound.Transient || s.Completed > sound.Completed ||
+					s.State == playerStarted && sound.Paused || s.State != playerStarted && sound.Playing && !sound.Paused {
+					return invalid()
+				}
+			}
 		}
-		return &playerData{state: s.State, contentType: s.ContentType, handle: s.Handle, duration: s.Duration, loops: s.Loops, mediaTime: s.MediaTime, listeners: slices.Clone(refs)}, nil
+		n := &playerData{state: s.State, contentType: s.ContentType, handle: s.Handle, duration: s.Duration, loops: s.Loops, mediaTime: s.MediaTime,
+			completed: s.Completed, listeners: slices.Clone(refs[1 : 1+s.Listeners]), volumeControl: refs[0]}
+		if hasClip {
+			n.wipiClip = refs[len(refs)-1]
+			if n.wipiClip == nil {
+				return invalid()
+			}
+			n.wipiOwner = weak.Make(n.wipiClip)
+		}
+		heap.players = append(heap.players, n)
+		heap.checks = append(heap.checks, func() error {
+			if hasClip {
+				clip, err := checkpointNative[wipiClipData](n.wipiClip)
+				if err != nil || clip == nil || clip.player == nil || clip.player.Native != n {
+					return fmt.Errorf("SKT checkpoint WIPI Player has a different Clip owner")
+				}
+			}
+			seen := make(map[*jvm.Object]bool, len(n.listeners))
+			for _, listener := range n.listeners {
+				if listener == nil || seen[listener] || !heap.runtime.VM.IsInstance(listener, midp.PlayerListenerClass) {
+					return fmt.Errorf("SKT checkpoint Player listener is invalid")
+				}
+				seen[listener] = true
+			}
+			if n.volumeControl == nil {
+				return nil
+			}
+			control, err := checkpointNative[volumeControlData](n.volumeControl)
+			if err != nil || n.volumeControl.ClassName != midp.RuntimeVolumeControlClass || control.player == nil || control.player.ClassName != midp.PlayerClass || control.player.Native != n {
+				return fmt.Errorf("SKT checkpoint Player control has a different owner")
+			}
+			return nil
+		})
+		return n, nil
+	case "skt.volume-control":
+		if err := decodeNativeCheckpoint(p, &struct{}{}, 1); err != nil {
+			return nil, err
+		}
+		n := &volumeControlData{player: refs[0]}
+		heap.checks = append(heap.checks, func() error {
+			owner, err := checkpointNative[playerData](n.player)
+			if err != nil || owner == nil || n.player.ClassName != midp.PlayerClass || owner.volumeControl == nil || owner.volumeControl.Native != n {
+				return fmt.Errorf("SKT checkpoint VolumeControl has no matching Player")
+			}
+			return nil
+		})
+		return n, nil
 	case "skt.wipi-clip":
 		var s checkpointWIPIClip
 		if err := decodeNativeCheckpoint(p, &s, 3); err != nil {
 			return nil, err
 		}
-		return &wipiClipData{contentType: s.ContentType, player: refs[0], listener: refs[1], object: refs[2]}, nil
+		if s.Volume < 0 || s.Volume > 100 {
+			return invalid()
+		}
+		n := &wipiClipData{contentType: s.ContentType, volume: s.Volume, player: refs[0], listener: refs[1], object: refs[2]}
+		heap.fixups = append(heap.fixups, func() error {
+			if n.player == nil {
+				return nil
+			}
+			owner, err := checkpointNative[playerData](n.player)
+			if err != nil || owner == nil || n.object == nil {
+				return fmt.Errorf("SKT checkpoint WIPI Clip owner is invalid")
+			}
+			if previous := owner.wipiClipObjectLocked(); previous != nil && previous != n.object {
+				return fmt.Errorf("SKT checkpoint WIPI Player has multiple Clip owners")
+			}
+			// Older payloads have only the forward Clip -> Player link. Bind
+			// it before any reciprocal checks, independent of payload order.
+			owner.wipiOwner = weak.Make(n.object)
+			audio := heap.runtime.audioTimeline()
+			if audio.Playing(owner.handle) || audio.Paused(owner.handle) {
+				owner.wipiClip = n.object
+			}
+			return nil
+		})
+		heap.checks = append(heap.checks, func() error { return heap.runtime.validateCheckpointWIPIClip(n) })
+		return n, nil
 	case "skt.rms":
 		var s checkpointRMS
 		if err := backend.DecodeCheckpointRecord(p.Data, &s); err != nil {

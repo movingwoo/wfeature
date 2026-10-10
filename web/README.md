@@ -137,6 +137,27 @@ the token, so the restart button still starts a game over.
   answer is no.
 - **Sound** — the engine's MIDI and PCM events are synthesised in the page from
   oscillators rather than a soundfont; see the head of `audio.js` for why.
+  The page negotiates `sound=resume&timing=1&pcm=1&phase=1`: MIDI channels and PCM belong to individual
+  clips, and stopping one cancels its voices and tails independently. Queue
+  recovery, reconnect and quick load reconstruct current output and held-note
+  envelope ages and fractional PCM positions within the first remaining frame.
+  MIDI volume/expression/pan changes affect sounding notes and
+  release tails through independent channel controls. Sustain, pitch-bend range
+  and controller reset preserve their per-clip state through reconstruction.
+  Presentation timestamps preserve intervals inside one server batch; a late
+  batch requests fresh output. Scheduled clip stops keep earlier audio connected
+  until its deadline and isolate the next restart's output nodes. Immutable PCM
+  definitions reuse a bounded buffer cache while each trigger keeps its own
+  source, gain and cursor. A complete batch must fit 512 retained sources and
+  128 MiB of PCM float payload per live reference, including scheduled and
+  retired sources; pressure invokes the existing output recovery. ATR groups
+  also preserve live squared volume/expression
+  and cosine/sine pan independently of MIDI. Group nodes are reclaimed after
+  their final source; control state remains for subsequent waves until stop/reset.
+  See [PCM controls](../docs/audio.md#live-pcm-track-controls),
+  [source bounds](../docs/audio.md#live-source-bounds),
+  [buffer retention](../docs/audio.md#decoded-pcm-buffer-reuse) and
+  [the audio contract](../docs/audio-ownership.md).
 - **What is remembered, and where** — every setting the page keeps goes through
   `storage.js`, which is `localStorage` and `sessionStorage` behind a boundary
   that cannot throw. The boundary is not tidiness: a browser told to block site
@@ -270,7 +291,7 @@ is retained as `wfeature:keypadGridV2Backup`; a failed backup keeps the edit onl
 in memory. A damaged old-slot source needs no copy because migration never writes
 that slot. Future versions and oversized records are not overwritten. Failed
 writes retain a working layout for the current tab and show an inline notice.
-The service worker carries all three grid modules in `wfeature-pwa-v42`.
+The service worker carries all three grid modules in `wfeature-pwa-v43`.
 
 ## Server
 
@@ -322,7 +343,7 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
-Shell version 40 uses `wfeature-pwa-v40`. The prefix introduced in version 35 prevents already-installed
+Shell version 47 uses `wfeature-pwa-v47`. The prefix introduced in version 35 prevents already-installed
 workers from deleting it through their broad `wfeature-shell-*` cleanup.
 Activation removes legacy shell caches and strictly older `wfeature-pwa-vN`
 versions, preserving future versions and unrelated caches. A controlled navigation

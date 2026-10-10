@@ -191,7 +191,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브를 저장했습니다.");
     assert.equal(await load.isDisabled(), false);
     const identity = digest(join(games, "library", `${kind}.zip`));
-    const slots = files(saves).filter(file => file.endsWith(`/${identity}.v2.wfq`));
+    const slots = files(saves).filter(file => file.endsWith(`/${identity}.v3.wfq`));
     assert.equal(slots.length, 1);
     const slot = readFileSync(slots[0]);
     result.fixtures[kind] = { identity, slotBytes: slot.length, savedFrame };

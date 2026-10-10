@@ -29,7 +29,7 @@ see [execution state](architecture.md#where-a-stopped-game-keeps-its-state).
 
 `HeapState` is a separate, bounded object graph component. It retains aliases,
 cycles, exact primitive bits, statics, completed class initialization, AOT metadata
-and binding strength, identity counters, and cooperative Thread flags with fresh
+and binding strength, interned string roots, identity counters, and cooperative Thread flags with fresh
 notification channels. Platform roots must be supplied explicitly. Native payloads
 and arrays outside the core library require platform codecs. Held monitors,
 active or failed initializers, independently scheduled threads, overlapping list
@@ -43,6 +43,20 @@ The generated internal TZif has an empty recurrence footer: Go extends its final
 explicit zone indefinitely. It is not an exported timezone file. No host timezone
 files are needed when restoring, and no timezone assets are bundled. A recurring
 rule is refused instead of being replaced with a finite approximation.
+
+String literals, class-file `ConstantValue` strings, native string constants and
+CLDC 1.1 `String.intern()` share a bounded pool inside each VM. `intern()` adopts
+its receiver when no equal string is present; Java constructors and the Host's
+`NewString` remain fresh objects. Native constants can use `InternString`.
+This follows [JVMS 5.1](https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-5.html#jvms-5.1)
+and the [CLDC String contract](https://docs.oracle.com/javame/config/cldc/ref-impl/cldc1.1/jsr139/java/lang/String.html#intern--).
+The pool retains at most 65,536 objects and 16 MiB of text; a new entry exceeding
+either budget raises guest `OutOfMemoryError`, while existing entries remain
+available. Heap component version 2 preserves canonical objects, including
+strings retained only by the pool. It validates unique, ordered String roots
+before replacing the destination pool. Earlier heap records are refused because
+they cannot distinguish literals from separately constructed strings. Ordinary
+game save files are unchanged.
 
 - class-file versions 45–70 and modified UTF-8 constant pools
 - JAR-backed lazy class loading and class-name validation
@@ -59,7 +73,14 @@ rule is refused instead of being replaced with a finite approximation.
   their constructors resolve through, because the code that raises one is
   runtime-owned library code as often as it is the game — `Vector.elementAt`
   raising `ArrayIndexOutOfBoundsException` was the case that found it
-- `checkcast`, `instanceof`, synchronized methods, and monitor instructions
+- `checkcast`, `instanceof`, synchronized methods, and monitor instructions.
+  Class/interface checks follow transitive superinterfaces and interfaces
+  inherited through a superclass, including diamonds. A visited worklist
+  bounds each query to `MaxFrames` distinct type loads (1,024 by default)
+  and 65,536 inheritance edges, preventing cycles and repeated branches from
+  creating unbounded work. An exhausted query returns false. These relations
+  follow the [JVM assignment rules](https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-6.html#jvms-6.5.instanceof);
+  they also govern native listener checks and checkpoint validation.
 - instruction, frame, and array-size limits applied across nested calls
 - Go native-method registration boundary
 - direct construction of runtime-owned `Object`, UTF-16-aware `String` and
@@ -159,6 +180,10 @@ rule is refused instead of being replaced with a finite approximation.
   capabilities, full-screen state, and repaint on a visible mode change
 - bounded FIFO delivery of Host pointer press, release, and drag callbacks to
   the current active Canvas
+- MIDP `Controllable`, `Control` and `VolumeControl` interfaces, backed by
+  per-player level/mute state and stable control identity across checkpoints;
+  finite playback loops, guest-clock media time and ordered deferred
+  PlayerListener callbacks; see [audio lifecycle](audio.md#midp-playback-lifecycle)
 
 The default native hooks provide an initial subset of `Object`,
 `System.currentTimeMillis`, `System.arraycopy`, `Math.abs/min/max`, and
@@ -398,7 +423,7 @@ and past `maxToStringDepth` it gets the identity it would have had before.
   annunciator, display, cards — has grown from a constructor probe's minimum to
   what a played game needs, and [`ktf.md`](ktf.md) is where it is described
 - the complete verifier and access control
-- complete assignability checks for interface inheritance and array covariance
+- array covariance in assignability checks
 - complete guest thread lifecycle (daemon and timed join) and full interruption
   semantics outside `Thread.sleep` and `Thread.join()`. Untimed join supports
   multiple waiters, interruption and `VM.Close`; a live thread owned by a

@@ -6,7 +6,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -97,52 +96,15 @@ func (saved javaCheckpointState) validate() error {
 	return saved.Vibration.Validate()
 }
 
-// Audio advances each elapsed repeat cycle. A checksum-valid slot must also
-// bound the work its first tick can cause, for both Java and SGS sessions.
+// Both Java and SGS retain the shared Audio cursor and catch-up limits.
 func validateCheckpointAudio(audio backend.AudioState, elapsed time.Duration) error {
-	const maxPendingAudioEvents = 1 << 20
-	const maxPendingAudioBytes = 128 << 20
-	var work, pendingBytes, noteWork uint64
 	for _, sound := range audio.Sounds {
-		if sound.StartedAt < 0 || sound.StartedAt > elapsed || sound.Length < 0 {
+		if sound.StartedAt > elapsed {
 			return fmt.Errorf("SKT checkpoint sound clock is invalid")
 		}
-		if !sound.Playing {
-			continue
-		}
-		cycles := uint64(1)
-		if sound.Repeat && sound.Length > 0 {
-			cycles += uint64((elapsed - sound.StartedAt) / sound.Length)
-		}
-		if cycles > maxPendingAudioEvents || uint64(len(sound.Events)) > (maxPendingAudioEvents-work)/cycles {
-			return fmt.Errorf("SKT checkpoint audio catchup exceeds limit")
-		}
-		work += cycles * uint64(len(sound.Events))
-		var noteOns, noteOffs uint64
-		for _, event := range sound.Events {
-			// Repeated samples can be volume-scaled and copied for each
-			// emission, even when the event count itself is small.
-			size := 2*uint64(len(event.Wave)) + uint64(len(event.SysEx))
-			if size > (maxPendingAudioBytes-pendingBytes)/cycles {
-				return fmt.Errorf("SKT checkpoint audio catchup exceeds data limit")
-			}
-			pendingBytes += cycles * size
-			switch event.Type {
-			case smaf.EventNoteOn:
-				noteOns++
-			case smaf.EventNoteOff:
-				noteOffs++
-			}
-		}
-		// Each note-off scans the active-note slice. Bound its worst case,
-		// including note-ons accumulated by the pending repeats and one final
-		// pass that may silence those notes when a one-shot ends.
-		notes := uint64(len(sound.ActiveNotes)) + cycles*noteOns
-		visits := 1 + cycles*noteOffs
-		if notes > (maxPendingAudioEvents-noteWork)/visits {
-			return fmt.Errorf("SKT checkpoint audio catchup exceeds note work limit")
-		}
-		noteWork += notes * visits
+	}
+	if err := backend.ValidateAudioCatchup(audio, elapsed); err != nil {
+		return fmt.Errorf("SKT checkpoint: %w", err)
 	}
 	return nil
 }
@@ -259,8 +221,16 @@ func PrepareJavaCheckpoint(archive []byte, checkpoint backend.Checkpoint, option
 	if runtime.audio, err = backend.NewAudioFromState(saved.Audio, nil); err != nil {
 		return nil, err
 	}
+	runtime.audio.SetLogger(runtime.logger)
+	if err = runtime.audio.RebasePlaybackClock(saved.Elapsed, saved.Speed); err != nil {
+		return nil, err
+	}
 	heap := newCheckpointHeap(runtime, time.Now())
 	heap.guestNow = instant
+	heap.audio = make(map[backend.AudioHandle]backend.AudioSoundState, len(saved.Audio.Sounds))
+	for _, sound := range saved.Audio.Sounds {
+		heap.audio[sound.Handle] = sound
+	}
 	p.heap = heap
 	var roots []*jvm.Object
 	if p.threads, roots, err = runtime.VM.PrepareThreadCheckpoint(saved.Threads, heap.codec()); err != nil {
@@ -271,6 +241,14 @@ func PrepareJavaCheckpoint(archive []byte, checkpoint backend.Checkpoint, option
 	}
 	if err = runtime.restorePlatformState(saved.Platform, roots, heap); err != nil {
 		return nil, err
+	}
+	for _, player := range heap.players {
+		if player.state != playerClosed {
+			object := runtime.mediaPlayers[player.handle]
+			if object == nil || object.Native != player {
+				return nil, fmt.Errorf("SKT checkpoint open Player is missing from its registry")
+			}
+		}
 	}
 	if runtime.rmsState == nil && len(heap.stores) != 0 {
 		return nil, fmt.Errorf("SKT checkpoint RMS handles have no platform cache")

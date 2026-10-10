@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -21,6 +22,9 @@ type runtimeControlState struct {
 	Network                                               []runtimeNetCallbackState
 	Clips                                                 []runtimeCClipState
 	ClipOrder                                             []uint32
+	// MutedSources lists, in increasing order, the WIPI C media sources whose
+	// mute state was last set on.
+	MutedSources []uint32
 }
 type runtimeCInputState struct {
 	OwnerAddress, OwnerValue, Mode       uint32
@@ -35,6 +39,8 @@ type runtimeCClipState struct {
 	MediaType, Data []byte
 	Handle          backend.AudioHandle
 	Loaded, Played  bool
+	// Volume is the clip's own level from 0 to 100.
+	Volume int32
 }
 type restoredRuntimeControl struct {
 	saved     runtimeControlState
@@ -42,6 +48,7 @@ type restoredRuntimeControl struct {
 	network   []wipicNetCallback
 	clips     map[uint32]*wipicMediaClip
 	clipOrder []uint32
+	muted     map[uint32]bool
 }
 
 func (runtime *initializationRuntime) captureControlState(now time.Time) (runtimeControlState, error) {
@@ -66,6 +73,11 @@ func (runtime *initializationRuntime) captureControlState(now time.Time) (runtim
 	for _, callback := range runtime.pendingNetCallbacks {
 		saved.Network = append(saved.Network, runtimeNetCallbackState{Callback: callback.callback, Param: callback.param})
 	}
+	for _, source := range slices.Sorted(maps.Keys(runtime.wipicMutedSources)) {
+		if runtime.wipicMutedSources[source] {
+			saved.MutedSources = append(saved.MutedSources, source)
+		}
+	}
 	seen := make(map[*wipicMediaClip]bool)
 	for _, address := range metadataKeys(runtime.wipicClips) {
 		clip := runtime.wipicClips[address]
@@ -74,7 +86,7 @@ func (runtime *initializationRuntime) captureControlState(now time.Time) (runtim
 		}
 		seen[clip] = true
 		saved.Clips = append(saved.Clips, runtimeCClipState{Address: address, MediaType: []byte(clip.mediaType), Data: bytes.Clone(clip.state.data),
-			Handle: clip.state.handle, Loaded: clip.state.loaded, Played: clip.state.played})
+			Handle: clip.state.handle, Loaded: clip.state.loaded, Played: clip.state.played, Volume: clip.volume})
 	}
 	if _, err := runtime.decodeControlState(saved); err != nil {
 		return runtimeControlState{}, err
@@ -89,7 +101,7 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 	if saved.ClockAge == time.Duration(math.MinInt64) || saved.RoundsSinceGuestPaint < 0 || uint64(saved.RoundsSinceGuestPaint) > uint64(^uint(0)>>1) {
 		return invalid("control clock or paint counter is invalid")
 	}
-	if saved.CInput.Mode >= uint32(len(inputModes)) || len(saved.CInput.Pending) > 2 || len(saved.Network) > maxPendingNetCallbacks || len(saved.Clips) > maxWIPICMediaClips || len(saved.ClipOrder) != len(saved.Clips) {
+	if saved.CInput.Mode >= uint32(len(inputModes)) || len(saved.CInput.Pending) > 2 || len(saved.Network) > maxPendingNetCallbacks || len(saved.Clips) > maxWIPICMediaClips || len(saved.ClipOrder) != len(saved.Clips) || len(saved.MutedSources) > maxWIPICMutedSources {
 		return invalid("control state exceeds queue limits")
 	}
 	memory := runtime.client.core.Memory()
@@ -128,10 +140,14 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 		if clip.Address == 0 || clip.Address&3 != 0 || i > 0 && saved.Clips[i-1].Address >= clip.Address || len(clip.MediaType) > 64 || bytes.IndexByte(clip.MediaType, 0) >= 0 || len(clip.Data) > maxClipBufferBytes || clip.Loaded && clip.Handle == 0 {
 			return invalid("C clip has invalid address, handle or data")
 		}
+		if clip.Volume < 0 || clip.Volume > wipicClipFullVolume {
+			return invalid("C clip volume is out of range")
+		}
 		if err := memory.ValidateRange(clip.Address, wipicMediaClipRecordSize, armcore.PermissionReadWrite); err != nil {
 			return restoredRuntimeControl{}, err
 		}
-		result.clips[clip.Address] = &wipicMediaClip{mediaType: string(clip.MediaType), state: clipState{data: bytes.Clone(clip.Data), handle: clip.Handle, loaded: clip.Loaded, played: clip.Played}}
+		result.clips[clip.Address] = &wipicMediaClip{mediaType: string(clip.MediaType), volume: clip.Volume,
+			state: clipState{data: bytes.Clone(clip.Data), handle: clip.Handle, loaded: clip.Loaded, played: clip.Played}}
 	}
 	seen := make(map[uint32]bool, len(saved.ClipOrder))
 	for _, address := range saved.ClipOrder {
@@ -139,6 +155,15 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 			return invalid("C clip eviction order is invalid")
 		}
 		seen[address] = true
+	}
+	for index, source := range saved.MutedSources {
+		if index > 0 && saved.MutedSources[index-1] >= source {
+			return invalid("C media muted sources are not in increasing order")
+		}
+		if result.muted == nil {
+			result.muted = make(map[uint32]bool, len(saved.MutedSources))
+		}
+		result.muted[source] = true
 	}
 	return result, nil
 }
@@ -153,4 +178,5 @@ func (restored restoredRuntimeControl) adopt(runtime *initializationRuntime, now
 	runtime.cInput = restored.input
 	runtime.pendingNetCallbacks = restored.network
 	runtime.wipicClips, runtime.wipicClipOrder = restored.clips, restored.clipOrder
+	runtime.wipicMutedSources = restored.muted
 }

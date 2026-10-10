@@ -62,6 +62,12 @@ func (saved HeapState) validateThreads(options Options, threads bool) error {
 	if err := checkRefs(saved.Roots); err != nil {
 		return err
 	}
+	if err := checkRefs(saved.InternedStrings); err != nil {
+		return err
+	}
+	if err := saved.validateInternedStrings(); err != nil {
+		return err
+	}
 	if !refOK(saved.MainThread) {
 		return fmt.Errorf("JVM main thread reference is out of range")
 	}
@@ -353,6 +359,14 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 		}
 	}
 	statics := make(map[fieldKey]Value, len(saved.Statics))
+	interned := make(map[string]*Object, len(saved.InternedStrings))
+	internedBytes := 0
+	for _, ref := range saved.InternedStrings {
+		object := objects[ref]
+		text := object.Native.(string)
+		interned[text] = object
+		internedBytes += len(text)
+	}
 	for _, field := range saved.Statics {
 		statics[fieldKey{class: field.Class, name: field.Name, descriptor: field.Descriptor}] = restoreHeapValue(field.Value, objects)
 	}
@@ -389,6 +403,7 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 	vm.mu.Lock()
 	vm.aotMu.Lock()
 	vm.statics, vm.classMonitors, vm.declaringFields = statics, monitors, make(map[fieldKey]fieldResolution)
+	vm.internedStrings, vm.internedStringBytes = interned, internedBytes
 	vm.aotClasses, vm.aotAddresses, vm.aotObjects = classes, aliases, bindings
 	vm.threads, vm.mainThread = threads, objects[saved.MainThread]
 	vm.initialized, vm.initErrors = initialized, make(map[string]error)

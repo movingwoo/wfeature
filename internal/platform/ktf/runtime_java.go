@@ -1183,11 +1183,11 @@ func init() {
 				{class: "org/kwis/msp/media/Clip", name: "<init>", descriptor: "(Ljava/lang/String;[B)V", accessFlags: 0x0001, implementation: runtimeClipConstructor},
 				{class: "org/kwis/msp/media/Clip", name: "<init>", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0001, implementation: runtimeClipConstructor},
 				{class: "org/kwis/msp/media/Clip", name: "setVolume", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeClipSetVolume},
-				{class: "org/kwis/msp/media/Clip", name: "getVolume", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("volume:I", 0)},
+				{class: "org/kwis/msp/media/Clip", name: "getVolume", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("volume:I", 100)},
 				{class: "org/kwis/msp/media/Clip", name: "setBuffer", descriptor: "([BI)V", accessFlags: 0x0001, implementation: runtimeClipSetBuffer},
 				{class: "org/kwis/msp/media/Clip", name: "setPosition", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeClipSetPosition},
 				{class: "org/kwis/msp/media/Clip", name: "getPosition", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeCardIntField("position:I", 0)},
-				{class: "org/kwis/msp/media/Clip", name: "setListener", descriptor: "(Lorg/kwis/msp/media/PlayListener;)V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
+				{class: "org/kwis/msp/media/Clip", name: "setListener", descriptor: "(Lorg/kwis/msp/media/PlayListener;)V", accessFlags: 0x0001, implementation: runtimeClipSetListener},
 				{class: "org/kwis/msp/media/Clip", name: "<init>", descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeClipConstructor},
 				{class: "org/kwis/msp/media/Clip", name: "getType", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001, implementation: runtimeClipGetType},
 				{class: "org/kwis/msp/media/Clip", name: "setStopTime", descriptor: "(I)Z", accessFlags: 0x0001, implementation: runtimeClipSetStopTime},
@@ -1222,8 +1222,8 @@ func init() {
 			superName:   "java/lang/Object",
 			accessFlags: 0x0021,
 			methods: []runtimeJavaMethod{
-				{class: "org/kwis/msp/media/Volume", name: "set", descriptor: "(I)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
-				{class: "org/kwis/msp/media/Volume", name: "get", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeComponentZero},
+				{class: "org/kwis/msp/media/Volume", name: "set", descriptor: "(I)V", accessFlags: 0x0009, implementation: runtimeVolumeSet},
+				{class: "org/kwis/msp/media/Volume", name: "get", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeVolumeGet},
 				{class: "org/kwis/msp/media/Volume", name: "setMute", descriptor: "(IZ)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
 				{class: "org/kwis/msp/media/Volume", name: "getMute", descriptor: "(I)Z", accessFlags: 0x0009, implementation: runtimeComponentZero},
 				{class: "org/kwis/msp/media/Volume", name: "getDefaultVolume", descriptor: "(I)I", accessFlags: 0x0009, implementation: runtimeComponentZero},
@@ -1414,7 +1414,7 @@ func init() {
 			runtimeJavaMethod{name: "compare", descriptor: "([B[B)I"}),
 		runtimeDataFilterClass: runtimeInterfaceClass(runtimeDataFilterClass,
 			runtimeJavaMethod{name: "filter", descriptor: "([B)Z"}),
-		runtimePlayListenerClass: runtimeInterfaceClass(runtimePlayListenerClass),
+		runtimePlayListenerClass: runtimePlayListenerDefinition(),
 		// A Hashtable's two views are handed back as this interface, so a
 		// title that walks one has to be able to resolve it.
 		"java/util/Enumeration": runtimeInterfaceClass("java/util/Enumeration",

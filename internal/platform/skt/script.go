@@ -57,6 +57,8 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	source := rand.NewPCG(1, 2)
 	s := &ScriptSession{archive: archive, graphics: graphics, options: options, last: time.Now(), random: rand.New(source), randomSource: source}
 	s.audio = backend.NewAudio(options.AudioSink)
+	s.audio.SetLogger(options.Logger)
+	_ = s.audio.SetPlaybackRate(0, options.Speed)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
 	s.vm = sgsvm.New(archive.Script, s)
 	if len(s.vm.Variables) < 16 {
@@ -147,9 +149,12 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 	}
 	return time.Duration(float64(16*time.Millisecond) / speed), nil
 }
-func (s *ScriptSession) SetSpeed(speed float64) { s.options.Speed = speed; s.last = time.Now() }
-func (s *ScriptSession) Pause()                 { s.paused = true }
-func (s *ScriptSession) Resume()                { s.paused = false; s.last = time.Now() }
+func (s *ScriptSession) SetSpeed(speed float64) {
+	_ = s.audio.SetPlaybackRate(s.clock, speed)
+	s.options.Speed, s.last = backend.ClampSpeed(speed), time.Now()
+}
+func (s *ScriptSession) Pause()  { s.paused = true }
+func (s *ScriptSession) Resume() { s.paused = false; s.last = time.Now() }
 func (s *ScriptSession) Close() error {
 	if s.closed {
 		return nil
@@ -283,6 +288,7 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 			return fmt.Errorf("SGS audio wrapper is truncated")
 		}
 		if s.sound != 0 {
+			s.audio.Advance(s.clock)
 			_ = s.audio.Close(s.sound)
 			s.sound = 0
 		}
@@ -293,6 +299,7 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		s.sound = handle
 		return s.audio.Play(handle, s.clock, false)
 	case 0x91:
+		s.audio.Advance(s.clock)
 		s.audio.StopAll()
 	case 0x92:
 		vm.Resource(int(vm.Pop()))

@@ -114,7 +114,7 @@ func newSaveHost(t *testing.T, title saveHostTitle) *saveHost {
 // slot is where the host keeps the title's quick save, under the current
 // format's name or under the name an earlier build used.
 func (host *saveHost) slot(legacy bool) string {
-	name := fmt.Sprintf("%x.v2.wfq", backend.SaveIdentity(host.archive))
+	name := fmt.Sprintf("%x.v3.wfq", backend.SaveIdentity(host.archive))
 	if legacy {
 		name = fmt.Sprintf("%x.wfq", backend.SaveIdentity(host.archive))
 	}
@@ -518,66 +518,76 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 // A quick save an earlier build wrote cannot be loaded, and it is never
 // converted, rewritten or removed. The page still offers the load, so that the
 // person who asks is told why; a new quick save is written beside the old file
-// and loads.
+// and loads. Envelope version 2 is what 0.5.2 wrote, version 1 came before it.
 func TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason(t *testing.T) {
 	const sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요."
-	for _, title := range saveHostTitles {
-		t.Run(title.name, func(t *testing.T) {
-			host := newSaveHost(t, title)
-			// What an earlier build left: its envelope under its own file name.
-			// Nothing here reads it, so the bytes only have to be recognisable.
-			earlier := append([]byte("WFSTATE\x00\x01\x00"), bytes.Repeat([]byte{0xa5}, 4096)...)
-			if err := os.MkdirAll(filepath.Dir(host.slot(true)), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(host.slot(true), earlier, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			unchanged := func(when string) {
-				t.Helper()
-				if data, err := os.ReadFile(host.slot(true)); err != nil || !bytes.Equal(data, earlier) {
-					t.Fatalf("%s: the earlier build's quick save was touched (%v)", when, err)
-				}
-			}
-
-			// A start from it is refused before anything is started.
-			if reply := host.start(true); reply.Kind != serverError || reply.Message != sentence || host.r.game != nil {
-				t.Fatalf("a start from the earlier build's quick save: %+v", reply)
-			}
-			unchanged("a refused start")
-
-			host.mustStart()
-			if !host.r.started.HasCheckpoint {
-				t.Fatal("the page is not offered the load, so nobody would be told why it cannot be done")
-			}
-			if !strings.Contains(host.log.String(), "an earlier build left files") || !strings.Contains(host.log.String(), "earlier_quick_save=true") {
-				t.Fatalf("the start did not say that an earlier build's quick save is there:\n%s", host.log.String())
-			}
-			host.act(0x11110001, title.save)
-			before, running := saveTree(t, host.saves()), host.r.game
-			if reply := host.quickLoad(); reply.Kind != serverError || reply.Message != sentence {
-				t.Fatalf("a load of the earlier build's quick save: %+v", reply)
-			}
-			if host.r.game != running || !running.Running() {
-				t.Fatal("the refused load displaced or stopped the running game")
-			}
-			wantSaveTree(t, host.saves(), before, "the refused load", nil)
-			if !strings.Contains(host.log.String(), filepath.Base(host.slot(true))) {
-				t.Fatalf("the log does not name the file that was left in place:\n%s", host.log.String())
-			}
-
-			// A new quick save goes beside it under the current name.
-			host.mustQuickSave()
-			unchanged("a new quick save")
-			if _, err := os.Stat(host.slot(false)); err != nil {
-				t.Fatalf("the new quick save: %v", err)
-			}
-			host.act(0x22220002, title.save)
-			host.mustQuickLoad()
-			unchanged("a load of the new quick save")
-			host.wantStored(title.parts(0x22220002, 0x22220002), "the save after the load")
-		})
+	for _, earlierFormat := range []struct {
+		name    string
+		version byte
+	}{{"%x.v2.wfq", 2}, {"%x.wfq", 1}} {
+		for _, title := range saveHostTitles {
+			t.Run(fmt.Sprintf("%s/v%d", title.name, earlierFormat.version), func(t *testing.T) {
+				checkEarlierBuildsSlot(t, title, earlierFormat.name, earlierFormat.version, sentence)
+			})
+		}
 	}
+}
+
+func checkEarlierBuildsSlot(t *testing.T, title saveHostTitle, format string, version byte, sentence string) {
+	host := newSaveHost(t, title)
+	// What an earlier build left: its envelope under its own file name.
+	// Nothing here reads it, so the bytes only have to be recognisable.
+	earlierSlot := filepath.Join(filepath.Dir(host.slot(false)), fmt.Sprintf(format, backend.SaveIdentity(host.archive)))
+	earlier := append([]byte{'W', 'F', 'S', 'T', 'A', 'T', 'E', 0, version, 0}, bytes.Repeat([]byte{0xa5}, 4096)...)
+	if err := os.MkdirAll(filepath.Dir(earlierSlot), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(earlierSlot, earlier, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unchanged := func(when string) {
+		t.Helper()
+		if data, err := os.ReadFile(earlierSlot); err != nil || !bytes.Equal(data, earlier) {
+			t.Fatalf("%s: the earlier build's quick save was touched (%v)", when, err)
+		}
+	}
+
+	// A start from it is refused before anything is started.
+	if reply := host.start(true); reply.Kind != serverError || reply.Message != sentence || host.r.game != nil {
+		t.Fatalf("a start from the earlier build's quick save: %+v", reply)
+	}
+	unchanged("a refused start")
+
+	host.mustStart()
+	if !host.r.started.HasCheckpoint {
+		t.Fatal("the page is not offered the load, so nobody would be told why it cannot be done")
+	}
+	if !strings.Contains(host.log.String(), "an earlier build left files") || !strings.Contains(host.log.String(), "earlier_quick_save=true") {
+		t.Fatalf("the start did not say that an earlier build's quick save is there:\n%s", host.log.String())
+	}
+	host.act(0x11110001, title.save)
+	before, running := saveTree(t, host.saves()), host.r.game
+	if reply := host.quickLoad(); reply.Kind != serverError || reply.Message != sentence {
+		t.Fatalf("a load of the earlier build's quick save: %+v", reply)
+	}
+	if host.r.game != running || !running.Running() {
+		t.Fatal("the refused load displaced or stopped the running game")
+	}
+	wantSaveTree(t, host.saves(), before, "the refused load", nil)
+	if !strings.Contains(host.log.String(), filepath.Base(earlierSlot)) {
+		t.Fatalf("the log does not name the file that was left in place:\n%s", host.log.String())
+	}
+
+	// A new quick save goes beside it under the current name.
+	host.mustQuickSave()
+	unchanged("a new quick save")
+	if _, err := os.Stat(host.slot(false)); err != nil {
+		t.Fatalf("the new quick save: %v", err)
+	}
+	host.act(0x22220002, title.save)
+	host.mustQuickLoad()
+	unchanged("a load of the new quick save")
+	host.wantStored(title.parts(0x22220002, 0x22220002), "the save after the load")
 }
 
 // An earlier build's quick load set the saves it replaced aside, in a

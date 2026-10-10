@@ -418,6 +418,9 @@ unknown native remainders. Workers resume through the ordinary completion path.
 
 The separate JVM heap component captures explicit roots, object sharing, core
 native payloads, statics, AOT metadata/bindings, and cooperative Thread records.
+Version 2 also preserves the bounded interned-string pool, so restored literals,
+native constants and `String.intern()` retain reference identity. Version 1
+records are refused; ordinary game saves keep their existing format.
 KTF can restore its allocator and array views over saved ARM memory without
 copying elements through their ordinary adapters. Unknown payloads and held
 monitors are refused. `Memory.ValidateRange` checks an adapter's mapped range and
@@ -585,22 +588,42 @@ These operations use the same single-owner discipline as Tick and SendKey.
 The shared record and platform clock are captured before heap copies or file I/O.
 
 Directory stores offer one Host checkpoint slot per exact archive at
-`.wfeature-quicksave/owners/<owner>/<archive SHA-256>.v2.wfq`, beside the
+`.wfeature-quicksave/owners/<owner>/<archive SHA-256>.v3.wfq`, beside the
 guest owner directory. Reads are bounded and confined to the reserved directory;
 links and nonregular files are refused. Writes validate the envelope and use the
 ordinary synced temporary-file replacement. Slots stay outside ordinary save
 exports. The file name carries the envelope version, so no build writes over
-another format's slot: a file under the version 1 name, `<archive SHA-256>.wfq`,
-is reported as present, refused with `ErrCheckpointLegacy` when it is loaded,
-and never read, renamed or removed. Future incompatible state/ABI changes must
-bump the relevant checkpoint version; debug and release use the same schema. A
-slot is outside what an upgrade promises to keep working: an incompatible one
-is refused with its reason and left in place.
+another format's slot: a file under an earlier name, `<archive SHA-256>.v2.wfq`
+(version 2, written by 0.5.2) or `<archive SHA-256>.wfq` (version 1), is
+reported as present, refused with `ErrCheckpointLegacy` when it is loaded, and
+never read, renamed or removed. Version 3 keeps version 2's layout; it exists
+because the audio, JVM heap and media-listener records inside changed, and a
+0.5.2 slot read as version 2 would otherwise be refused as damaged. Future
+incompatible state/ABI changes must bump the checkpoint version the same way;
+debug and release use the same schema. A slot is outside what an upgrade
+promises to keep working: an incompatible one is refused with its reason and
+left in place.
 
-Portable audio output now retains the page synthesizer's bounded voice set,
-note-on channel settings and emitted volume, current channels and remaining PCM
-samples. PCM position uses an unscaled Host clock; detached staging time is
-excluded. Reconstructed notes restart their envelopes. Physical oscillator phase,
+Portable audio output retains the page synthesizer's bounded voice set,
+and [loaded-sound admission](audio.md#loaded-sound-resources) bounds the retained
+event/PCM/SysEx payload and reserves possible held keys before accepting handles.
+The output record preserves
+original note programs, raw velocities and samples, current per-clip channels and
+independent guest gain. Audio component version 9 records paused cursors, frozen output, note envelope
+ages, finite remaining passes, completion counts, media position, pitch sensitivity,
+RPN/NRPN selectors, released keys retained by sustain and independent PCM group
+controls, original wave byte charges and fractional sample-frame positions.
+Genuine version-6/7/8 audio records remain readable at their saved whole frames;
+v6/v7 derive charges from available tails, and v6 does not invent PCM routing.
+Earlier versions and mixed shapes are refused.
+New captures write v9 in both profiles; rollback needs a pre-upgrade checkpoint or normal
+startup. See [PCM state compatibility](audio.md#live-pcm-track-controls).
+SKT Java checkpoints also retain the bounded Player
+registry and queued listener events as heap roots, without callback closures. The
+[ownership repair](audio-ownership.md) also reconstructs output after reconnect
+and dropped audio batches. PCM position uses an unscaled Host clock; detached staging time is
+excluded. Paused clips freeze their output clock, and capable pages reconstruct
+notes at their elapsed envelope age. Physical oscillator phase,
 release tails and network/device latency are not saved. Host reset stops all
 old sources before replay and clears audio definitions and frame decoder state.
 
@@ -661,6 +684,17 @@ goroutines parked inside platform calls. Both are recorded between two ticks,
 which is the one place where nothing of the guest's is in flight on the Host's
 own goroutine. Capture runs no guest code and does not call `pauseClet`; a load
 runs neither the module's entry, its initializer nor `startClet`.
+
+Java media adds an explicit version-3 runtime envelope containing the unchanged
+strict version-2 session/client record and a media ownership/notification record.
+The latter preserves Clip identities, exact completion watermarks and queued
+PlayListener recipients. Validation occurs after guest bindings are restored
+and before workers start. The version-2 reader remains strict and reconstructs
+issued Clip ownership without inventing prior events; sessions with no Java
+media still write that shape. Earlier readers refuse the new envelope, so
+rollback requires a supported older checkpoint or ordinary startup. See
+[Java WIPI listeners](audio.md#java-wipi-playback-listeners) for delivery and GC
+rules. Ordinary save contents do not change.
 
 **The guest clock needs no rebasing.** It is virtual: elapsed guest time plus
 the work since an instruction baseline, and the instruction count travels with
@@ -941,12 +975,17 @@ writes, reads and removes none of them:
 
 - `<archive SHA-256>.wfq`, a version 1 slot. It is reported as present so that
   the load is offered, and loading it is refused with the reason. A new quick
-  save is written beside it under the version 2 name.
+  save is written beside it under the current name.
 - `previous/`, the saves a version 1 load set aside. They can be the newest
   saves a person made before that load, and nothing knows whether they are
   newer than the saves in use, so no code restores or removes them.
 - `next/`, the staging directory of a replacement that never recorded its
   intent.
+
+0.5.2 itself wrote version 2 slots, `<archive SHA-256>.v2.wfq`. They hold no
+saves, and this build treats them like a version 1 slot: present, refused with
+the reason when loaded, and never written, renamed or removed; a new quick save
+goes beside them under the version 3 name.
 
 The server writes one Info line per start that names the save folder when the
 first or the second is there. To put a `previous` tree back by hand: stop the

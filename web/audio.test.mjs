@@ -70,6 +70,15 @@ test("a running clock is left alone even with both sources muted", async t => {
   assert.equal(audio.context.resumes, 0);
 });
 
+test("a context state change discards the old scheduling anchor", t => {
+  const { audio } = setup(t);
+  audio.ensure();
+  audio.scheduleAnchor = { audio: 10, wall: 10 };
+  audio.context.state = "suspended";
+  audio.context.onstatechange();
+  assert.equal(audio.scheduleAnchor, null);
+});
+
 test("foreground return resumes interruption without creating audio in the library", t => {
   const { audio, created } = setup(t);
   audio.foreground();
@@ -177,7 +186,9 @@ test("timeline reset stops PCM, percussion and released notes and resets channel
     assert.equal(source.disconnected, true);
     source.onended();
   }
-  assert.deepEqual(audio.channels[0], { program: 0, volume: 100, expression: 127, pan: 64, bend: 8192 });
+  assert.deepEqual(audio.channels[0], { program: 0, volume: 100, expression: 127, pan: 64, bend: 8192,
+    sustain: 0, bendRange: 2, bendRangeCents: 0, rpnMSB: 127, rpnLSB: 127,
+    nrpnMSB: 127, nrpnLSB: 127, parameterKind: null });
   assert.equal(audio.midiVolume, 0.3, "the person's output volume survives timeline replacement");
   audio.stopAll();
 });

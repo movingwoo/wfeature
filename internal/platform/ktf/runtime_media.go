@@ -6,6 +6,7 @@ import (
 	"strings"
 	"weak"
 
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -37,6 +38,10 @@ type clipState struct {
 	// longer in the buffer for the next fill to append to. See
 	// runtimeClipPutData.
 	played bool
+	// Only active/paused playback keeps the Clip alive. The listener is a
+	// field on the Clip, so idle listener-to-Clip cycles remain collectible.
+	owner     *jvm.Object
+	completed uint64
 }
 
 func (runtime *initializationRuntime) clip(receiver *jvm.Object) *clipState {
@@ -58,6 +63,7 @@ func (runtime *initializationRuntime) invalidateClip(state *clipState) {
 		_ = runtime.client.audio.Close(state.handle)
 	}
 	state.loaded = false
+	state.owner, state.completed = nil, 0
 }
 
 func clipReceiver(arguments []jvm.Value, method string) (*jvm.Object, error) {
@@ -85,15 +91,20 @@ func runtimeClipConstructor(runtime *initializationRuntime, vm *jvm.VM, argument
 	if len(arguments) < 2 {
 		return jvm.VoidValue(), fmt.Errorf("Clip constructor expected a media type")
 	}
+	state := runtime.clip(receiver)
+	if state.loaded {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
 	if receiver.Fields == nil {
 		receiver.Fields = make(map[string]jvm.Value)
 	}
 	receiver.Fields["type:Ljava/lang/String;"] = arguments[1]
 	receiver.Fields["position:I"] = jvm.IntValue(0)
 	receiver.Fields["stopTime:I"] = jvm.IntValue(0)
-	receiver.Fields["volume:I"] = jvm.IntValue(0)
+	receiver.Fields["volume:I"] = jvm.IntValue(100)
 
-	state := runtime.clip(receiver)
 	state.data = nil
 	state.played = false
 	runtime.invalidateClip(state)
@@ -198,6 +209,11 @@ func runtimeClipPutData(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 	}
 
 	state := runtime.clip(receiver)
+	if state.loaded {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
 	// **A fill after a play starts a new sound, not a longer one.** The
 	// specification has a clip's contents shrink as the player plays them and
 	// grow again through this call, so once the player has taken what the clip
@@ -257,6 +273,11 @@ func setClipBuffer(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.V
 		return 0, err
 	}
 	state := runtime.clip(receiver)
+	if state.loaded {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return 0, err
+		}
+	}
 	state.data = nil
 	state.played = false
 	runtime.invalidateClip(state)
@@ -285,6 +306,11 @@ func runtimeClipClearData(runtime *initializationRuntime, _ *jvm.VM, arguments [
 		return jvm.VoidValue(), err
 	}
 	state := runtime.clip(receiver)
+	if state.loaded {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return jvm.VoidValue(), err
+		}
+	}
 	state.data = nil
 	runtime.invalidateClip(state)
 	return jvm.VoidValue(), nil
@@ -308,9 +334,9 @@ func runtimeClipSetPosition(_ *initializationRuntime, _ *jvm.VM, arguments []jvm
 	return jvm.IntValue(1), nil
 }
 
-// runtimeClipSetVolume takes a percentage. Out of range is refused rather than
-// clamped, because the guest checks the answer.
-func runtimeClipSetVolume(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+// runtimeClipSetVolume remembers a clamped percentage and applies it to an
+// already loaded clip without changing the device or Host volume.
+func runtimeClipSetVolume(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	receiver, err := clipReceiver(arguments, "Clip.setVolume")
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -322,14 +348,44 @@ func runtimeClipSetVolume(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if level < 0 || level > 100 {
-		return jvm.IntValue(0), nil
+	level = min(max(level, 0), 100)
+	state := runtime.clip(receiver)
+	if state.loaded && runtime.client.audio != nil {
+		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+			return jvm.VoidValue(), err
+		}
+		if err := runtime.client.audio.SetSoundVolume(state.handle, int(level)); err != nil {
+			runtime.countDiagnostic(fmt.Sprintf("clip volume failed: %v", err))
+			return jvm.IntValue(0), nil
+		}
 	}
 	if receiver.Fields == nil {
 		receiver.Fields = make(map[string]jvm.Value)
 	}
 	receiver.Fields["volume:I"] = jvm.IntValue(level)
 	return jvm.IntValue(1), nil
+}
+
+func runtimeVolumeSet(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 1 {
+		return jvm.VoidValue(), fmt.Errorf("Volume.set expected a level")
+	}
+	level, err := arguments[0].Int32()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+		return jvm.VoidValue(), err
+	}
+	runtime.client.audio.SetVolume(int(level))
+	return jvm.VoidValue(), nil
+}
+
+func runtimeVolumeGet(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) != 0 {
+		return jvm.VoidValue(), fmt.Errorf("Volume.get expected no arguments")
+	}
+	return jvm.IntValue(int32(runtime.client.audio.Volume())), nil
 }
 
 // playerClipState resolves the Clip a Player call names. Player's methods are
@@ -359,6 +415,11 @@ func runtimePlayerPlay(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 	if state == nil || len(state.data) == 0 || runtime.client.audio == nil {
 		return jvm.IntValue(0), nil
 	}
+	receiver, _ := arguments[0].Reference()
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return jvm.VoidValue(), err
+	}
 	repeat := false
 	if len(arguments) >= 2 {
 		value, err := arguments[1].Int32()
@@ -369,21 +430,35 @@ func runtimePlayerPlay(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 	}
 
 	if !state.loaded {
+		receiver, _ := arguments[0].Reference() // Validated by playerClipState.
+		level := int32(100)
+		if saved, ok := receiver.Fields["volume:I"]; ok {
+			level, err = saved.Int32()
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+		}
 		handle, loadErr := runtime.client.audio.Load(state.data)
 		if loadErr != nil {
 			runtime.countDiagnostic(fmt.Sprintf("clip load failed: %v", loadErr))
 			return jvm.IntValue(0), nil
 		}
+		if err := runtime.client.audio.SetSoundVolume(handle, int(level)); err != nil {
+			_ = runtime.client.audio.Close(handle)
+			runtime.countDiagnostic(fmt.Sprintf("clip volume failed: %v", err))
+			return jvm.IntValue(0), nil
+		}
 		state.handle, state.loaded = handle, true
 	}
-	if err := runtime.client.audio.Play(state.handle, runtime.guestElapsed(), repeat); err != nil {
+	if err := runtime.client.audio.Play(state.handle, now, repeat); err != nil {
 		runtime.countDiagnostic(fmt.Sprintf("clip play failed: %v", err))
 		return jvm.IntValue(0), nil
 	}
 	// The player has the bytes now. The clip keeps them so that playing it
 	// again needs no refill, but a refill starts over; see runtimeClipPutData.
 	state.played = true
-	return jvm.IntValue(1), nil
+	state.owner, state.completed = receiver, 0
+	return jvm.IntValue(1), runtime.queueClipEvent(receiver, wipi.PlayEventStart)
 }
 
 func runtimePlayerStop(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -394,19 +469,62 @@ func runtimePlayerStop(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 	if state == nil || !state.loaded || runtime.client.audio == nil {
 		return jvm.IntValue(0), nil
 	}
+	receiver, _ := arguments[0].Reference()
+	if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+		return jvm.VoidValue(), err
+	}
+	active := runtime.client.audio.Playing(state.handle) || runtime.client.audio.Paused(state.handle)
 	runtime.client.audio.Stop(state.handle)
+	state.owner = nil
+	if active {
+		return jvm.IntValue(1), runtime.queueClipEvent(receiver, wipi.PlayEventStop)
+	}
 	return jvm.IntValue(1), nil
 }
 
-// runtimePlayerPause stops without forgetting the clip. Resuming restarts it
-// from the beginning: this runtime tracks playback by clock position, and the
-// games here pause only to stop, never to continue mid-phrase.
-func runtimePlayerPause(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	return runtimePlayerStop(runtime, vm, arguments)
+func runtimePlayerPause(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	state, err := playerClipState(runtime, arguments, "Player.pause")
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if state == nil || !state.loaded || runtime.client.audio == nil {
+		return jvm.IntValue(0), nil
+	}
+	receiver, _ := arguments[0].Reference()
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return jvm.VoidValue(), err
+	}
+	if !runtime.client.audio.Playing(state.handle) {
+		return jvm.IntValue(0), nil
+	}
+	if err := runtime.client.audio.Pause(state.handle, now); err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("clip pause failed: %v", err))
+		return jvm.IntValue(0), nil
+	}
+	state.owner = receiver
+	return jvm.IntValue(1), runtime.queueClipEvent(receiver, wipi.PlayEventPause)
 }
 
-func runtimePlayerResume(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	return runtimePlayerPlay(runtime, vm, append(append([]jvm.Value(nil), arguments...), jvm.IntValue(0)))
+func runtimePlayerResume(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	state, err := playerClipState(runtime, arguments, "Player.resume")
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if state == nil || !state.loaded || runtime.client.audio == nil || !runtime.client.audio.Paused(state.handle) {
+		return jvm.IntValue(0), nil
+	}
+	now := runtime.guestElapsed()
+	if err := runtime.syncClipCompletions(now); err != nil {
+		return jvm.VoidValue(), err
+	}
+	if err := runtime.client.audio.Resume(state.handle, now); err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("clip resume failed: %v", err))
+		return jvm.IntValue(0), nil
+	}
+	receiver, _ := arguments[0].Reference()
+	state.owner = receiver
+	return jvm.IntValue(1), runtime.queueClipEvent(receiver, wipi.PlayEventResume)
 }
 
 // byteArrayBytes reads a guest byte array into Host bytes.

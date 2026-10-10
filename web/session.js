@@ -29,7 +29,7 @@ const probingWebP = decodesLosslessWebP().then(decodes => { losslessWebP = decod
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   const pictures = losslessWebP ? "&pictures=webp" : "";
-  return `${scheme}//${location.host}/api/session?protocol=2${pictures}`;
+  return `${scheme}//${location.host}/api/session?protocol=2&sound=resume&timing=1&pcm=1&phase=1${pictures}`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -51,6 +51,9 @@ export class GameSession {
     this.closed = false;
     this.epoch = 0;
     this.resetting = false;
+    this.audioResetPending = false;
+    this.timedAudio = false;
+    this.audioDecodeLost = false;
     // The sounds this connection's server has defined; a new connection
     // starts with none, and so does the server's record of them.
     this.audio = new AudioStream();
@@ -144,9 +147,11 @@ export class GameSession {
     if (message.kind === "restored") {
       if (!Number.isSafeInteger(message.epoch) || message.epoch <= this.epoch) return;
       this.epoch = message.epoch;
+      this.audioResetPending = false;
       this.frames.close();
       this.frames = this.#frameReceiver();
       this.audio = new AudioStream();
+      this.audioDecodeLost = false;
       for (const [id, pending] of this.pending) {
         if (id !== message.id && ["cheat", "text", "quickSave", "quickLoad"].includes(pending.kind)) {
           this.pending.delete(id);
@@ -164,6 +169,7 @@ export class GameSession {
     } else if (message.kind === "started") {
       // Epochs belong to the connection; a reconnected page starts at zero.
       this.epoch = message.epoch ?? 0;
+      this.audioResetPending = false;
     }
     // An answer to something that was asked goes to whoever asked it, and
     // nowhere else: a cheat command's reply is not a session-wide event.
@@ -194,7 +200,7 @@ export class GameSession {
         this.handlers.onExited?.(message.message ?? "");
         break;
       case "audio":
-        this.handlers.onAudio?.(message.audio ?? []);
+        this.#deliverAudio(message.audio ?? []);
         break;
       case "stats":
         this.handlers.onStats?.(message.stats);
@@ -221,9 +227,31 @@ export class GameSession {
     } catch (error) {
       // One malformed batch is one lost moment of sound, not a lost session.
       console.warn("wfeature sound could not be decoded", error);
+      this.audioDecodeLost = true;
+      this.#recoverAudio();
       return;
     }
-    if (events.length) this.handlers.onAudio?.(events);
+    if (events.length) this.#deliverAudio(events);
+  }
+
+  #recoverAudio() {
+    if (!this.timedAudio) return;
+    if (this.audioResetPending) return;
+    this.audioResetPending = this.#send({ kind: "audioResume" });
+    this.handlers.onAudio?.([{ kind: "allOff" }]);
+  }
+
+  #deliverAudio(events) {
+    if (events.some(event => event.kind === "clock")) this.timedAudio = true;
+    const reset = events.some(event => event.kind === "allOff");
+    if (reset) this.audioDecodeLost = false;
+    if (this.audioDecodeLost && this.timedAudio) {
+      this.#recoverAudio();
+      return;
+    }
+    if (this.audioResetPending && !reset) return;
+    if (reset) this.audioResetPending = false;
+    if (this.handlers.onAudio?.(events) === false) this.#recoverAudio();
   }
 
   #send(message) {
@@ -355,40 +383,77 @@ const decodeBytes = encoded => {
 // moving emulation to the server: the calls simply arrive over a socket.
 export const playAudioEvents = (audio, events) => {
   if (!audio) return;
-  for (const event of events) {
-    switch (event.kind) {
-      case "noteOn":
-        audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0);
-        break;
-      case "noteOff":
-        audio.noteOff(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0);
-        break;
-      case "programChange":
-        audio.programChange(event.channel ?? 0, event.program ?? 0);
-        break;
-      case "controlChange":
-        audio.controlChange(event.channel ?? 0, event.control ?? 0, event.value ?? 0);
-        break;
-      case "pitchBend":
-        audio.pitchBend(event.channel ?? 0, event.value ?? 0);
-        break;
-      // The first protocol carries bytes as base64 text; the second has
-      // already decoded them.
-      case "sysex":
-        if (event.data) audio.sysex(typeof event.data === "string" ? decodeBytes(event.data) : event.data);
-        break;
-      case "playWave":
-        if (event.samples) {
-          const samples = typeof event.samples === "string" ? decodeSamples(event.samples) : event.samples;
-          audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples);
-        }
-        break;
-      case "allOff":
-        // The game ended; nothing is left to release the notes it was holding.
-        audio.stopAll();
-        break;
-      default:
-        break;
+  if (!Array.isArray(events)) return false;
+  if (audio.prepareBatch) {
+    const reset = events.findLastIndex(event => event?.kind === "allOff");
+    if (reset >= 0) {
+      events = events.slice(reset + 1);
     }
+    const ready = audio.prepareBatch(events, { reset: reset >= 0 });
+    if (ready !== true) return ready === false ? false : undefined;
   }
+  for (const event of events) {
+    if (event.kind === "clock") continue;
+    const play = () => {
+      const ownership = event.sound === undefined ? [] : [event.sound];
+      switch (event.kind) {
+        case "noteOn":
+          audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, ...ownership);
+          break;
+        case "noteResume":
+          audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0, ...ownership);
+          break;
+        case "noteOff":
+          audio.noteOff(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, ...ownership);
+          break;
+        case "programChange":
+          audio.programChange(event.channel ?? 0, event.program ?? 0, ...ownership);
+          break;
+        case "controlChange":
+          audio.controlChange(event.channel ?? 0, event.control ?? 0, event.value ?? 0, ...ownership);
+          break;
+        case "pcmControl":
+          audio.pcmControl(event.pcmChannel, event.control, event.value ?? 0, ...ownership);
+          break;
+        case "pitchBend":
+          audio.pitchBend(event.channel ?? 0, event.value ?? 0, ...ownership);
+          break;
+        // The first protocol carries bytes as base64 text; the second has
+        // already decoded them.
+        case "sysex":
+          if (event.data) audio.sysex(typeof event.data === "string" ? decodeBytes(event.data) : event.data, ...ownership);
+          break;
+        case "playWave":
+          if (event.samples) {
+            const samples = typeof event.samples === "string" ? decodeSamples(event.samples) : event.samples;
+            const cacheable = event.cacheable === true && samples === event.samples;
+            if (event.framePhase !== undefined) {
+              audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, cacheable, event.pcmChannel ?? 0, event.framePhase);
+            } else if (event.pcmChannel) {
+              audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, cacheable, event.pcmChannel);
+            } else if (cacheable) {
+              audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, true);
+            } else {
+              audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, ...ownership);
+            }
+          }
+          break;
+        case "stopSound":
+          audio.stopSound(event.sound ?? 0);
+          break;
+        case "soundGain":
+          audio.setSoundGain(event.sound ?? 0, event.value ?? 0);
+          break;
+        case "allOff":
+          // The game ended; nothing is left to release the notes it was holding.
+          audio.stopAll();
+          break;
+        default:
+          break;
+      }
+    };
+    if (event.at !== undefined && audio.playTimed) audio.playTimed(event.at, play);
+    else play();
+  }
+  return true;
 };

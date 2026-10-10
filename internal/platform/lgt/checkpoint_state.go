@@ -877,32 +877,11 @@ func validPrintable(text []byte) bool {
 	return true
 }
 
-// validateGuestAudio refuses a playback origin the guest clock could not have
-// produced. A sound starts at the clock's own reading, so one that starts
-// after now, or so long before it that catching a repeat up would replay it
-// more times than a session could have, is a record that was written by hand:
-// advancing the mixer over it would spend that long before the first tick.
+// validateGuestAudio bounds the first restored tick using the shared cursor,
+// frozen pause clock, pending payload and active-key work limits.
 func validateGuestAudio(saved backend.AudioState, elapsed time.Duration) error {
-	const maxPendingAudioEvents = 1 << 20
-	if len(saved.Sounds) > 256 {
-		return fmt.Errorf("LGT checkpoint audio has too many sounds")
-	}
-	work := uint64(0)
-	for _, sound := range saved.Sounds {
-		if !sound.Playing {
-			continue
-		}
-		if sound.StartedAt < 0 || sound.Length < 0 {
-			return fmt.Errorf("LGT checkpoint audio has a negative playback origin or length")
-		}
-		cycles := uint64(1)
-		if sound.Repeat && sound.Length > 0 && elapsed > sound.StartedAt {
-			cycles += uint64((elapsed - sound.StartedAt) / sound.Length)
-		}
-		if cycles > maxPendingAudioEvents || uint64(len(sound.Events)) > (maxPendingAudioEvents-work)/cycles {
-			return fmt.Errorf("LGT checkpoint audio catch-up exceeds its event limit")
-		}
-		work += cycles * uint64(len(sound.Events))
+	if err := backend.ValidateAudioCatchup(saved, elapsed); err != nil {
+		return fmt.Errorf("LGT checkpoint: %w", err)
 	}
 	return nil
 }
@@ -1038,6 +1017,7 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 	if client.audio, err = backend.NewAudioFromState(saved.Audio, nil); err != nil {
 		return nil, err
 	}
+	client.audio.SetLogger(client.logger)
 	client.volume = saved.Volume
 	client.clips = make(map[uint32]*mediaClip, len(saved.Clips))
 	for _, clip := range saved.Clips {

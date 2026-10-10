@@ -5,6 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // audioOperation is one operation read back from a protocol 2 sound message.
@@ -36,9 +40,13 @@ func readAudio(t *testing.T, message []byte) []audioOperation {
 		switch operation.op {
 		case audioOpNoteOn, audioOpNoteOff, audioOpControlChange, audioOpPitchBend:
 			operation.operands = take(3)
-		case audioOpProgramChange:
+		case audioOpProgramChange, audioOpSoundGain:
 			operation.operands = take(2)
-		case audioOpAllOff, audioOpForget:
+		case audioOpNoteResume:
+			operation.operands = take(7)
+		case audioOpAllOff, audioOpForget, audioOpStopSound:
+		case audioOpSelectSound:
+			operation.id = binary.BigEndian.Uint32(take(4))
 		case audioOpDefine:
 			operation.id = binary.BigEndian.Uint32(take(4))
 			operation.data = take(int(binary.BigEndian.Uint32(take(4))))
@@ -145,8 +153,8 @@ func TestStreamAudioStartsOverAfterADroppedMessage(t *testing.T) {
 	runner.audio.PlayWave(1, 8000, effect)
 	runner.flushAudio()
 	next := readAudio(t, (<-runner.outText).binary)
-	if len(next) != 3 || next[0].op != audioOpForget || next[1].op != audioOpDefine || next[2].op != audioOpPlayWave {
-		t.Fatalf("after a drop %+v, want forget, define, play", next)
+	if len(next) != 4 || next[0].op != audioOpForget || next[1].op != audioOpAllOff || next[2].op != audioOpDefine || next[3].op != audioOpPlayWave {
+		t.Fatalf("after a drop %+v, want forget, all off, define, play", next)
 	}
 }
 
@@ -188,5 +196,190 @@ func TestAStoppedGameSilencesThePageInItsProtocol(t *testing.T) {
 		} else if message.text != `{"kind":"audio","audio":[{"kind":"allOff"}]}` {
 			t.Fatalf("stop sent %s", message.text)
 		}
+	}
+}
+
+func TestStreamAudioOwnershipIsLocalToEachMessage(t *testing.T) {
+	var definitions audioDefinitions
+	const sound uint32 = 0x89abcdef
+	message := definitions.encode([]audioEvent{
+		{Kind: audioNoteOn, Sound: sound, Channel: 1, Note: 60, Velocity: 100},
+		{Kind: audioStopSound, Sound: sound},
+		{Kind: audioAllOff},
+		{Kind: audioNoteOff, Channel: 1, Note: 60},
+	})
+	want := append(bytes.Clone(audioMagic),
+		audioOpSelectSound, 0x89, 0xab, 0xcd, 0xef,
+		audioOpNoteOn, 1, 60, 100,
+		audioOpStopSound, audioOpAllOff,
+		audioOpSelectSound, 0, 0, 0, 0,
+		audioOpNoteOff, 1, 60, 0)
+	if !bytes.Equal(message, want) {
+		t.Fatalf("owned message % x, want % x", message, want)
+	}
+	for round := 0; round < 2; round++ {
+		operations := readAudio(t, definitions.encode([]audioEvent{{Kind: audioStopSound, Sound: sound}}))
+		if len(operations) != 2 || operations[0].op != audioOpSelectSound || operations[0].id != sound || operations[1].op != audioOpStopSound {
+			t.Fatalf("message %d inherited another message's selection: %+v", round, operations)
+		}
+	}
+	zero := readAudio(t, definitions.encode([]audioEvent{{Kind: audioStopSound}}))
+	if len(zero) != 1 || zero[0].op != audioOpStopSound {
+		t.Fatalf("default sound should need no selection: %+v", zero)
+	}
+}
+
+func TestStreamAudioSharesDefinitionsAcrossSoundOwners(t *testing.T) {
+	var definitions audioDefinitions
+	pcm := []byte{0, 0x40, 0, 0xc0}
+	message := definitions.encode([]audioEvent{
+		{Kind: audioPlayWave, Sound: 7, Channels: 1, Rate: 8000, pcm: pcm},
+		{Kind: audioStopSound, Sound: 7},
+		{Kind: audioPlayWave, Sound: 9, Channels: 1, Rate: 8000, pcm: bytes.Clone(pcm)},
+	})
+	operations := readAudio(t, message)
+	wantOps := []byte{audioOpSelectSound, audioOpDefine, audioOpPlayWave, audioOpStopSound, audioOpSelectSound, audioOpPlayWave}
+	var gotOps []byte
+	for _, operation := range operations {
+		gotOps = append(gotOps, operation.op)
+	}
+	if !bytes.Equal(gotOps, wantOps) || operations[0].id != 7 || operations[4].id != 9 ||
+		operations[1].id != operations[2].id || operations[2].id != operations[5].id {
+		t.Fatalf("owners did not share the same definition: %+v", operations)
+	}
+	firstID := operations[1].id
+	definitions.dropped()
+	operations = readAudio(t, definitions.encode([]audioEvent{
+		{Kind: audioPlayWave, Sound: 9, Channels: 1, Rate: 8000, pcm: pcm},
+		{Kind: audioStopSound, Sound: 9},
+	}))
+	if len(operations) != 5 || operations[0].op != audioOpForget || operations[1].op != audioOpSelectSound || operations[1].id != 9 ||
+		operations[2].op != audioOpDefine || operations[2].id == firstID || operations[3].id != operations[2].id || operations[4].op != audioOpStopSound {
+		t.Fatalf("dropped message did not reset definitions independently of ownership: %+v", operations)
+	}
+}
+
+func TestSessionNegotiatesSoundOwnershipForBothProtocols(t *testing.T) {
+	for _, test := range []struct {
+		query  string
+		owned  bool
+		stream bool
+		resume bool
+		timing bool
+	}{
+		{"", false, false, false, false},
+		{"sound=owned", true, false, false, false},
+		{"sound=resume", true, false, true, false},
+		{"protocol=2", false, true, false, false},
+		{"protocol=2&sound=owned", true, true, false, false},
+		{"protocol=2&sound=resume", true, true, true, false},
+		{"protocol=2&sound=unknown", false, true, false, false},
+		{"sound=resume&timing=1", true, false, true, true},
+		{"protocol=2&sound=resume&timing=1", true, true, true, true},
+		{"protocol=2&sound=owned&timing=1", true, true, false, false},
+		{"protocol=2&sound=resume&timing=unknown", true, true, true, false},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			server, url := resumeFixture(t)
+			connection := dialSession(t, url+"?"+test.query)
+			if err := connection.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			expectMessage(t, connection, serverReady)
+			send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+			started := expectMessage(t, connection, serverStarted)
+			if started.Started == nil {
+				t.Fatal("session did not start")
+			}
+			server.parkedMu.Lock()
+			attached := server.attached[started.Started.Token]
+			var owned, resume, timing bool
+			var protocol int
+			if attached != nil {
+				owned, protocol = attached.soundOwnership, attached.protocol
+				resume = attached.soundResume
+				timing = attached.soundTiming
+			}
+			server.parkedMu.Unlock()
+			if attached == nil || owned != test.owned || resume != test.resume || timing != test.timing || (protocol == protocolStream) != test.stream {
+				t.Fatalf("negotiated ownership=%t protocol=%d for %q", owned, protocol, test.query)
+			}
+
+			// Use the handler's negotiated capabilities with an isolated runner;
+			// touching a live guest's collector would race its frame loop.
+			runner := stalledRunner(t, 1)
+			runner.protocol, runner.soundOwnership = protocol, owned
+			runner.soundResume = resume
+			runner.audio = &audioCollector{}
+			const sound backend.AudioHandle = 0x89abcdef
+			runner.audio.AudioEvent(sound, smaf.Event{Type: smaf.EventNoteOn, Channel: 1, Note: 60, Velocity: 100})
+			runner.audio.AudioEvent(9, smaf.Event{Type: smaf.EventWave, WaveChannels: 1, SamplingRate: 8000, Wave: []int16{16384, -16384}})
+			runner.audio.StopSound(sound)
+			runner.flushAudio()
+			message := <-runner.outText
+			if !message.audio || (message.binary != nil) != test.stream {
+				t.Fatalf("wrong audio message shape: %+v", message)
+			}
+			if test.stream {
+				operations := readAudio(t, message.binary)
+				var selected uint32
+				var notes, waves, stops int
+				for _, operation := range operations {
+					if !owned && (operation.op == audioOpSelectSound || operation.op == audioOpStopSound) {
+						t.Fatalf("legacy client received unsupported operation %#x", operation.op)
+					}
+					switch operation.op {
+					case audioOpSelectSound:
+						selected = operation.id
+					case audioOpNoteOn:
+						notes++
+						if owned && selected != uint32(sound) || !bytes.Equal(operation.operands, []byte{1, 60, 100}) {
+							t.Fatalf("note lost its owner or data: owner=%d operation=%+v", selected, operation)
+						}
+					case audioOpPlayWave:
+						waves++
+						if owned && selected != 9 {
+							t.Fatalf("PCM owner=%d, want 9", selected)
+						}
+					case audioOpStopSound:
+						stops++
+						if selected != uint32(sound) {
+							t.Fatalf("stopped owner=%d, want %d", selected, sound)
+						}
+					}
+				}
+				if notes != 1 || waves != 1 || owned && stops != 1 || !owned && stops != 0 {
+					t.Fatalf("note/wave/stop counts=%d/%d/%d", notes, waves, stops)
+				}
+			} else {
+				var decoded struct {
+					Kind  string           `json:"kind"`
+					Audio []map[string]any `json:"audio"`
+				}
+				if err := json.Unmarshal([]byte(message.text), &decoded); err != nil {
+					t.Fatal(err)
+				}
+				wantCount := 2
+				if owned {
+					wantCount++
+				}
+				if decoded.Kind != serverAudio || len(decoded.Audio) != wantCount || decoded.Audio[0]["kind"] != audioNoteOn ||
+					decoded.Audio[1]["kind"] != audioPlayWave || decoded.Audio[1]["samples"] != "AEAAwA==" {
+					t.Fatalf("unexpected collector JSON: %s", message.text)
+				}
+				if owned {
+					if decoded.Audio[0]["sound"] != float64(sound) || decoded.Audio[1]["sound"] != 9.0 ||
+						decoded.Audio[2]["kind"] != audioStopSound || decoded.Audio[2]["sound"] != float64(sound) {
+						t.Fatalf("JSON lost sound ownership: %s", message.text)
+					}
+				} else {
+					for _, event := range decoded.Audio {
+						if _, present := event["sound"]; present {
+							t.Fatalf("legacy JSON contains sound ownership: %s", message.text)
+						}
+					}
+				}
+			}
+		})
 	}
 }

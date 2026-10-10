@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
 
@@ -34,7 +35,7 @@ func javaClipConstructor(
 	if client.clips == nil {
 		client.clips = map[uint32]*mediaClip{}
 	}
-	client.clips[object] = &mediaClip{mediaType: mediaType, data: data, volume: mediaMaxVolume}
+	client.clips[object] = &mediaClip{java: true, mediaType: mediaType, data: data, volume: mediaMaxVolume}
 	if client.logger != nil {
 		client.logger.Debug("LGT java clip built", "type", mediaType, "bytes", len(data))
 	}
@@ -65,27 +66,28 @@ func javaClipFromFile(
 	if client.clips == nil {
 		client.clips = map[uint32]*mediaClip{}
 	}
-	client.clips[object] = &mediaClip{mediaType: mediaType, data: data, volume: mediaMaxVolume}
+	client.clips[object] = &mediaClip{java: true, mediaType: mediaType, data: data, volume: mediaMaxVolume}
 	return 0, nil
 }
 
-// javaClipSetListener is `Clip.setListener(PlayListener)`, the object a clip
-// tells its state changes to. **The listener is recorded and nothing is
-// delivered to it**, which is a gap rather than an answer, and it is worth
-// being clear about which parts are which.
-//
-// C media callbacks now report playback transitions using the shared mixer.
-// Java PlayListener invocation still needs its own guest object dispatch; a
-// Java title waiting on that listener can still stall.
-//
-// Registering is not nothing, either: the object has to be kept, because the
-// specification lets a title read it back and because the next thing to
-// implement here is the delivery, which needs to know where to send.
+// javaClipSetListener replaces the sole recipient of future transitions. Null
+// removes it; already queued transitions keep their captured recipient.
 func javaClipSetListener(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	clip, err := client.javaClip(arguments[0])
 	if err != nil {
+		return 0, err
+	}
+	if err := client.validateJavaMediaClip(arguments[0]); err != nil {
+		return 0, err
+	}
+	if arguments[1] != 0 {
+		if _, err := client.javaMediaListenerBody(arguments[1]); err != nil {
+			return 0, err
+		}
+	}
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
 		return 0, err
 	}
 	clip.listener = arguments[1]
@@ -119,8 +121,11 @@ func javaClipPutData(
 		return 0, fmt.Errorf("%d bytes from %d is past the end of a %d-byte array",
 			length, offset, len(data))
 	}
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return 0, err
+	}
 	clip.data = append(clip.data, data[offset:offset+length]...)
-	clip.loaded = false
+	client.releaseClipSound(clip)
 	if client.logger != nil {
 		client.logger.Debug("LGT java clip filled",
 			"type", clip.mediaType, "added", length, "bytes", len(clip.data))
@@ -164,7 +169,7 @@ func javaClipSetBuffer(
 	// The bytes are copied rather than aliased: the array is the title's and it
 	// reuses one buffer for every sound it loads.
 	clip.data = append([]byte(nil), data[:size]...)
-	clip.loaded = false
+	client.releaseClipSound(clip)
 	if client.logger != nil {
 		client.logger.Debug("LGT java clip buffer set", "type", clip.mediaType, "bytes", len(clip.data))
 	}
@@ -180,7 +185,11 @@ func javaClipClearData(
 	if err != nil {
 		return 0, err
 	}
-	clip.data, clip.loaded = nil, false
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return 0, err
+	}
+	client.releaseClipSound(clip)
+	clip.data = nil
 	return 0, nil
 }
 
@@ -189,11 +198,16 @@ func javaClipClearData(
 func javaClipSetVolume(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return 0, err
+	}
 	clip, err := client.javaClip(arguments[0])
 	if err != nil {
 		return 0, err
 	}
-	clip.volume = clampVolume(int32(arguments[1]))
+	if err := client.setClipVolume(clip, int32(arguments[1])); err != nil {
+		return javaFalse, nil
+	}
 	return javaTrue, nil
 }
 
@@ -213,6 +227,10 @@ func javaPlayerPlay(
 	if client.audio == nil || len(clip.data) == 0 {
 		return javaFalse, nil
 	}
+	now := client.clock.now()
+	if err := client.syncJavaMedia(now); err != nil {
+		return 0, err
+	}
 	if clip.loaded && client.audio.Playing(clip.handle) {
 		return javaFalse, nil
 	}
@@ -227,13 +245,20 @@ func javaPlayerPlay(
 		}
 		clip.handle, clip.loaded = handle, true
 	}
-	if err := client.audio.Play(clip.handle, client.clock.now(), arguments[1] != 0); err != nil {
+	if err := client.setClipVolume(clip, clip.volume); err != nil {
+		return javaFalse, nil
+	}
+	if err := client.audio.Play(clip.handle, now, arguments[1] != 0); err != nil {
 		if client.logger != nil {
 			client.logger.Debug("LGT java clip cannot be played", "error", err)
 		}
 		return javaFalse, nil
 	}
 	clip.javaPaused, clip.javaRepeat = false, arguments[1] != 0
+	clip.completed = 0
+	if err := client.queueJavaMediaEvent(arguments[0], clip, wipi.PlayEventStart); err != nil {
+		return 0, err
+	}
 	return javaTrue, nil
 }
 
@@ -250,8 +275,17 @@ func javaPlayerStop(
 	if client.audio == nil || !clip.loaded {
 		return javaFalse, nil
 	}
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return 0, err
+	}
+	active := client.audio.Playing(clip.handle) || client.audio.Paused(clip.handle)
 	client.audio.Stop(clip.handle)
 	clip.javaPaused = false
+	if active {
+		if err := client.queueJavaMediaEvent(arguments[0], clip, wipi.PlayEventStop); err != nil {
+			return 0, err
+		}
+	}
 	return javaTrue, nil
 }
 
@@ -263,17 +297,31 @@ func javaPlayerPause(client *Client, _ context.Context, _ *armcore.Thread, argum
 	if err != nil {
 		return 0, err
 	}
-	if client.audio == nil || !clip.loaded || !client.audio.Playing(clip.handle) {
+	if client.audio == nil || !clip.loaded {
 		return javaFalse, nil
 	}
-	client.audio.Stop(clip.handle)
+	now := client.clock.now()
+	if err := client.syncJavaMedia(now); err != nil {
+		return 0, err
+	}
+	if !client.audio.Playing(clip.handle) {
+		return javaFalse, nil
+	}
+	if err := client.audio.Pause(clip.handle, now); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT java clip cannot be paused", "error", err)
+		}
+		return javaFalse, nil
+	}
 	clip.javaPaused = true
+	if err := client.queueJavaMediaEvent(arguments[0], clip, wipi.PlayEventPause); err != nil {
+		return 0, err
+	}
 	return javaTrue, nil
 }
 
-// The mixer has no playback cursor, so resume restarts with the saved repeat mode.
 func javaPlayerResume(
-	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	if !javaPlayerHasClip(client, arguments[0]) {
 		return javaFalse, nil
@@ -282,14 +330,24 @@ func javaPlayerResume(
 	if err != nil {
 		return 0, err
 	}
-	if !clip.javaPaused {
+	if client.audio == nil || !clip.loaded || !client.audio.Paused(clip.handle) {
 		return javaFalse, nil
 	}
-	repeat := uint32(0)
-	if clip.javaRepeat {
-		repeat = 1
+	now := client.clock.now()
+	if err := client.syncJavaMedia(now); err != nil {
+		return 0, err
 	}
-	return javaPlayerPlay(client, ctx, thread, []uint32{arguments[0], repeat})
+	if err := client.audio.Resume(clip.handle, now); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT java clip cannot be resumed", "error", err)
+		}
+		return javaFalse, nil
+	}
+	clip.javaPaused = false
+	if err := client.queueJavaMediaEvent(arguments[0], clip, wipi.PlayEventResume); err != nil {
+		return 0, err
+	}
+	return javaTrue, nil
 }
 
 // javaPlayerHasClip reports whether a `Player` call was handed a clip at all.
@@ -339,7 +397,7 @@ func javaClipEmpty(
 	if client.clips == nil {
 		client.clips = map[uint32]*mediaClip{}
 	}
-	client.clips[object] = &mediaClip{mediaType: mediaType, volume: mediaMaxVolume}
+	client.clips[object] = &mediaClip{java: true, mediaType: mediaType, volume: mediaMaxVolume}
 	if client.logger != nil {
 		client.logger.Debug("LGT java empty clip built", "type", mediaType)
 	}

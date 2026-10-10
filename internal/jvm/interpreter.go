@@ -217,7 +217,7 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		if err != nil {
 			return stepResult{}, err
 		}
-		value, err := constantValue(frame.class.ConstantPool, uint16(index), false)
+		value, err := vm.constantValue(frame.class.ConstantPool, uint16(index), false)
 		if err != nil {
 			return stepResult{}, err
 		}
@@ -227,7 +227,7 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 		if err != nil {
 			return stepResult{}, err
 		}
-		value, err := constantValue(frame.class.ConstantPool, index, opcode == 0x14)
+		value, err := vm.constantValue(frame.class.ConstantPool, index, opcode == 0x14)
 		if err != nil {
 			return stepResult{}, err
 		}
@@ -704,7 +704,7 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 	}
 }
 
-func constantValue(pool classfile.ConstantPool, index uint16, wide bool) (Value, error) {
+func (vm *VM) constantValue(pool classfile.ConstantPool, index uint16, wide bool) (Value, error) {
 	constant, err := pool.At(index)
 	if err != nil {
 		return VoidValue(), err
@@ -729,7 +729,8 @@ func constantValue(pool classfile.ConstantPool, index uint16, wide bool) (Value,
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(&Object{ClassName: "java/lang/String", Native: value}), nil
+		object, err := vm.InternString(value)
+		return ReferenceValue(object), err
 	case classfile.ConstantClass:
 		name, err := pool.ClassName(index)
 		if err != nil {

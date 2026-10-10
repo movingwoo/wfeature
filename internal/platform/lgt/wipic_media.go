@@ -112,11 +112,8 @@ var systemVolumeCategories = map[string]bool{
 	"ALARM": true, "ALERT": true, "MMEDIA": true, "GAME": true, "OEM": true,
 }
 
-// mediaMaxVolume is the loudest a WIPI volume goes; zero is silent. One title
-// sets a clip to 50, which is what settles the scale as a percentage rather
-// than a handful of steps. Nothing here attenuates by it — the synthesiser's
-// own velocities carry the mix — so what the number has to do is come back out
-// the way it went in, because a game saves the level it found and restores it.
+// mediaMaxVolume is the loudest a WIPI volume goes; zero is silent. Device and
+// clip levels reach the shared audio output independently of MIDI velocity.
 const mediaMaxVolume = 100
 
 // mediaClipRecordSize is the guest record a clip handle points at. Nothing
@@ -151,17 +148,22 @@ type mediaClip struct {
 	loaded     bool
 	javaPaused bool
 	javaRepeat bool
+	java       bool
+	completed  uint64
 
-	// listener is the `PlayListener` a Java title registered for this clip's
-	// state changes, or zero. Nothing is delivered to it yet; see
-	// javaClipSetListener for what it would take and why an invented event is
-	// worse than the gap.
+	// listener is a guest GC edge, separate from the C callback address.
 	listener uint32
 }
 
 // handleMedia services the media block. It is split out of handleWIPICSVC
 // because the block is a surface of its own; the caller holds client.mu.
 func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
+	switch slot {
+	case slotClipFree, slotClipPutData, slotClipClearData, slotClipSetVolume, slotClipStop, slotSetVolume:
+		if err := client.syncJavaMedia(client.clock.now()); err != nil {
+			return err
+		}
+	}
 	argument := func(index int) (uint32, error) { return thread.Register(index) }
 	answer := func(value uint32) error { return thread.SetRegister(0, value) }
 	answerInt := func(value int32) error { return thread.SetRegister(0, uint32(value)) }
@@ -214,16 +216,36 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		if err != nil {
 			return err
 		}
-		clip.volume = clampVolume(int32(level))
+		if err := client.setClipVolume(clip, int32(level)); err != nil {
+			return answerInt(wipiError)
+		}
 		return answerInt(wipiSuccess)
 
 	case slotClipPlay:
 		return client.playClip(thread)
 
-	case slotClipPause, slotClipStop:
-		// Pause and stop are the same here. Playback is tracked by clock
-		// position rather than by a paused cursor, so resuming restarts the
-		// clip; the alternative is a pause that silently keeps playing.
+	case slotClipPause:
+		clip, err := client.clipArgument(thread)
+		if err != nil || clip == nil {
+			return answerIfMissing(thread, err)
+		}
+		if client.audio == nil || !clip.loaded || !client.audio.Playing(clip.handle) {
+			return answerInt(wipiError)
+		}
+		now := client.clock.now()
+		if err := client.syncJavaMedia(now); err != nil {
+			return err
+		}
+		if err := client.audio.Pause(clip.handle, now); err != nil {
+			return answerInt(wipiError)
+		}
+		clip.javaPaused = true
+		if err := clip.notify(mediaPaused); err != nil {
+			return err
+		}
+		return answerInt(wipiSuccess)
+
+	case slotClipStop:
 		clip, err := client.clipArgument(thread)
 		if err != nil || clip == nil {
 			return answerIfMissing(thread, err)
@@ -231,17 +253,32 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		if clip.loaded && client.audio != nil {
 			client.audio.Stop(clip.handle)
 		}
-		status := mediaStopped
-		if slot == slotClipPause {
-			status = mediaPaused
-		}
-		if err := clip.notify(status); err != nil {
+		clip.javaPaused = false
+		if err := clip.notify(mediaStopped); err != nil {
 			return err
 		}
 		return answerInt(wipiSuccess)
 
 	case slotClipResume:
-		return client.startClip(thread, mediaResumed)
+		clip, err := client.clipArgument(thread)
+		if err != nil || clip == nil {
+			return answerIfMissing(thread, err)
+		}
+		if client.audio == nil || !clip.loaded || !client.audio.Paused(clip.handle) {
+			return answerInt(wipiError)
+		}
+		now := client.clock.now()
+		if err := client.syncJavaMedia(now); err != nil {
+			return err
+		}
+		if err := client.audio.Resume(clip.handle, now); err != nil {
+			return answerInt(wipiError)
+		}
+		clip.javaPaused = false
+		if err := clip.notify(mediaResumed); err != nil {
+			return err
+		}
+		return answerInt(wipiSuccess)
 
 	case slotGetVolume:
 		return answerInt(client.volume)
@@ -269,6 +306,9 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 			return err
 		}
 		client.volume = clampVolume(int32(level))
+		if client.audio != nil {
+			client.audio.SetVolume(int(client.volume))
+		}
 		return answerInt(wipiSuccess)
 
 	case slotVibrator:
@@ -460,6 +500,9 @@ func (client *Client) playClip(thread *armcore.Thread) error {
 }
 
 func (client *Client) startClip(thread *armcore.Thread, status uint32) error {
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		return err
+	}
 	clip, err := client.clipArgument(thread)
 	if err != nil || clip == nil {
 		return answerIfMissing(thread, err)
@@ -484,12 +527,16 @@ func (client *Client) startClip(thread *armcore.Thread, status uint32) error {
 		}
 		clip.handle, clip.loaded = handle, true
 	}
+	if err := client.setClipVolume(clip, clip.volume); err != nil {
+		return answerCode(thread, wipiError)
+	}
 	if err := client.audio.Play(clip.handle, client.clock.now(), repeat != 0); err != nil {
 		if client.logger != nil {
 			client.logger.Debug("LGT clip cannot be played", "error", err)
 		}
 		return answerCode(thread, wipiError)
 	}
+	clip.javaPaused, clip.javaRepeat = false, repeat != 0
 	if err := clip.notify(status); err != nil {
 		return err
 	}
@@ -518,8 +565,18 @@ func (client *Client) releaseClipSound(clip *mediaClip) {
 		_ = client.audio.Close(clip.handle)
 	}
 	clip.loaded = false
+	clip.javaPaused, clip.javaRepeat = false, false
+	clip.completed = 0
 	clip.status = 0
 	clip.pending = nil
+}
+
+func (client *Client) setClipVolume(clip *mediaClip, level int32) error {
+	clip.volume = clampVolume(level)
+	if clip.loaded && client.audio != nil {
+		return client.audio.SetSoundVolume(clip.handle, int(clip.volume))
+	}
+	return nil
 }
 
 func clampVolume(level int32) int32 {
@@ -536,11 +593,14 @@ func clampVolume(level int32) int32 {
 // a tick rather than inside the media calls, because a game starts a sound and
 // then does nothing about it: without this nothing after the first event would
 // ever sound.
-func (client *Client) serviceAudio() {
+func (client *Client) serviceAudio() error {
 	if client == nil || client.audio == nil {
-		return
+		return nil
 	}
-	client.audio.Advance(client.clock.now())
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	now := client.clock.now()
+	return client.syncJavaMedia(now)
 }
 
 // notify records a transition, never reentering a guest's media call. Bound
@@ -563,6 +623,10 @@ func (clip *mediaClip) notify(status uint32) error {
 // may stop or free its own clip; resulting events wait until the next tick.
 func (client *Client) serviceMediaCallbacks(ctx context.Context) error {
 	client.mu.Lock()
+	if err := client.syncJavaMedia(client.clock.now()); err != nil {
+		client.mu.Unlock()
+		return err
+	}
 	type delivery struct {
 		handle uint32
 		clip   *mediaClip
@@ -587,7 +651,13 @@ func (client *Client) serviceMediaCallbacks(ctx context.Context) error {
 		}
 		clip.pending = nil
 	}
+	javaDue, pinMark := client.takeJavaMediaEvents()
 	client.mu.Unlock()
+	defer func() {
+		client.mu.Lock()
+		client.releaseJavaPins(pinMark)
+		client.mu.Unlock()
+	}()
 	for _, event := range due {
 		client.mu.Lock()
 		valid := client.clips[event.handle] == event.clip
@@ -599,5 +669,5 @@ func (client *Client) serviceMediaCallbacks(ctx context.Context) error {
 			return fmt.Errorf("run LGT media callback: %w", err)
 		}
 	}
-	return nil
+	return client.deliverJavaMediaEvents(ctx, javaDue)
 }

@@ -47,10 +47,14 @@ const (
 	TickerClass              = "javax/microedition/lcdui/Ticker"
 	GameCanvasClass          = "javax/microedition/lcdui/game/GameCanvas"
 
-	ManagerClass        = "javax/microedition/media/Manager"
-	PlayerClass         = "javax/microedition/media/Player"
-	PlayerListenerClass = "javax/microedition/media/PlayerListener"
-	MediaExceptionClass = "javax/microedition/media/MediaException"
+	ManagerClass              = "javax/microedition/media/Manager"
+	PlayerClass               = "javax/microedition/media/Player"
+	PlayerListenerClass       = "javax/microedition/media/PlayerListener"
+	MediaExceptionClass       = "javax/microedition/media/MediaException"
+	ControlClass              = "javax/microedition/media/Control"
+	ControllableClass         = "javax/microedition/media/Controllable"
+	VolumeControlClass        = "javax/microedition/media/control/VolumeControl"
+	RuntimeVolumeControlClass = "net/wfeature/RuntimeVolumeControl"
 
 	// The Generic Connection Framework. Nothing behind it connects: the
 	// factory refuses every name and the interfaces exist so a game that
@@ -86,9 +90,11 @@ const ToneDeviceLocator = "device://tone"
 
 // The PlayerListener event names this runtime reports.
 const (
-	PlayerEventStarted = "started"
-	PlayerEventStopped = "stopped"
-	PlayerEventClosed  = "closed"
+	PlayerEventStarted       = "started"
+	PlayerEventStopped       = "stopped"
+	PlayerEventClosed        = "closed"
+	PlayerEventEndOfMedia    = "endOfMedia"
+	PlayerEventVolumeChanged = "volumeChanged"
 )
 
 // Define installs the runtime-owned MIDP surface on a VM. The classes are

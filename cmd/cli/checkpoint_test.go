@@ -110,7 +110,7 @@ func TestCheckpointSKTCLILiveCommandsSurviveInvalidLoad(t *testing.T) {
 			}
 			seed.Close()
 			data[len(data)-1] ^= 1
-			if err := os.WriteFile(filepath.Join(fixture.slots, fmt.Sprintf("%x.v2.wfq", identity)), data, 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(fixture.slots, fmt.Sprintf("%x.v3.wfq", identity)), data, 0600); err != nil {
 				t.Fatal(err)
 			}
 			commands := `{"cmd":"quickload"}

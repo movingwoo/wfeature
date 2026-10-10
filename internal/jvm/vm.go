@@ -194,8 +194,10 @@ type VM struct {
 	builtinNatives map[methodKey]bool
 	// definedConstants holds the static finals of classes declared in Go,
 	// which have no constant pool for the class initializer to read them from.
-	definedConstants map[string][]definedConstant
-	statics          map[fieldKey]Value
+	definedConstants    map[string][]definedConstant
+	statics             map[fieldKey]Value
+	internedStrings     map[string]*Object
+	internedStringBytes int
 	// declaringFields caches field resolution: which class in a reference's
 	// chain actually declares the field it names. It is cleared whenever a
 	// class is defined, because a class that arrives later can be the answer.
@@ -291,6 +293,7 @@ func New(source ClassSource, options Options) *VM {
 		natives:         make(map[methodKey]nativeEntry),
 		builtinNatives:  make(map[methodKey]bool),
 		statics:         make(map[fieldKey]Value),
+		internedStrings: make(map[string]*Object),
 		declaringFields: make(map[fieldKey]fieldResolution),
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
@@ -1113,12 +1116,15 @@ func (vm *VM) newMultiArray(arrayType Type, lengths []int32) (*Object, error) {
 }
 
 // IsInstance answers `instanceof` for a native method holding a reference it
-// was handed. Unlike IsSubclassOf it reads the interfaces a class declares,
-// which is what a platform surface needs when the parameter's type is an
-// interface such as java/lang/Runnable.
+// was handed. It follows both superclass and superinterface relationships,
+// including interfaces inherited through another interface.
 func (vm *VM) IsInstance(object *Object, target string) bool {
 	return vm.isInstance(object, target)
 }
+
+// Bound broad interface graphs as well as the distinct type loads limited by
+// MaxFrames. Repeated edges still cost work even when their type was visited.
+const maxInstanceRelations = 1 << 16
 
 func (vm *VM) isInstance(object *Object, target string) bool {
 	if object == nil {
@@ -1130,20 +1136,37 @@ func (vm *VM) isInstance(object *Object, target string) bool {
 	if len(object.ClassName) > 0 && object.ClassName[0] == '[' {
 		return target == "java/lang/Cloneable" || target == "java/io/Serializable"
 	}
-	for current := object.ClassName; current != ""; {
-		class, err := vm.loader.Load(current)
-		if err != nil {
+	pending := []string{object.ClassName}
+	seen := map[string]bool{object.ClassName: true}
+	relations := 0
+	for next := 0; next < len(pending); next++ {
+		if next >= vm.config.MaxFrames {
 			return false
 		}
-		for _, interfaceName := range class.Interfaces {
-			if interfaceName == target {
+		class, err := vm.loader.Load(pending[next])
+		if err != nil {
+			continue
+		}
+		for index := -1; index < len(class.Interfaces); index++ {
+			parent := class.SuperName
+			if index >= 0 {
+				parent = class.Interfaces[index]
+			}
+			if relations >= maxInstanceRelations {
+				return false
+			}
+			relations++
+			if parent == "" {
+				continue
+			}
+			if parent == target {
 				return true
 			}
+			if parent != ObjectClass && !seen[parent] {
+				seen[parent] = true
+				pending = append(pending, parent)
+			}
 		}
-		if class.SuperName == target {
-			return true
-		}
-		current = class.SuperName
 	}
 	return false
 }
@@ -1219,7 +1242,9 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 	if err := vm.initializeStaticFields(class); err != nil {
 		return err
 	}
-	vm.seedDefinedConstants(className)
+	if err := vm.seedDefinedConstants(className); err != nil {
+		return err
+	}
 	initializer := class.FindMethod("<clinit>", "()V")
 	if initializer == nil {
 		return nil
@@ -1259,7 +1284,7 @@ func (vm *VM) initializeStaticFields(class *classfile.Class) error {
 				return fmt.Errorf("invalid ConstantValue on %s.%s", class.Name, field.Name)
 			}
 			index := uint16(attribute.Info[0])<<8 | uint16(attribute.Info[1])
-			value, err = constantValue(class.ConstantPool, index, typeInfo.Slots() == 2)
+			value, err = vm.constantValue(class.ConstantPool, index, typeInfo.Slots() == 2)
 			if err != nil {
 				return err
 			}

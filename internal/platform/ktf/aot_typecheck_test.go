@@ -143,3 +143,96 @@ func TestCheckTypeAnswersInterfaceTargetsFromTheDeclaredList(t *testing.T) {
 		t.Errorf("game/Plain instanceof game/IDerived = %d, want 0", result)
 	}
 }
+
+// writeModuleNameTable makes the runtime an older relocatable module whose
+// name table holds names in order, so moduleCell(index) names names[index]
+// the way the module's own reference cells do.
+func writeModuleNameTable(t *testing.T, runtime *initializationRuntime, names ...string) {
+	t.Helper()
+	pointers := make([]uint32, len(names))
+	for index, name := range names {
+		address, err := runtime.allocateBytes(append([]byte(name), 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pointers[index] = address
+	}
+	table, err := runtime.allocateWords(pointers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment := make([]uint32, moduleNameTableOffset/4+1)
+	segment[moduleNameTableOffset/4] = table
+	if runtime.client.moduleSegment, err = runtime.allocateWords(segment); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// moduleCell is the reference cell a module leaves for name-table index: the
+// index shifted up by one with the unresolved bit in its place.
+func moduleCell(index uint32) uint32 {
+	return index<<1 | moduleUnresolved
+}
+
+// An older relocatable module leaves its implements list as reference cells
+// that name an interface, and nothing in the module resolves them. The check
+// answers from the name: a cell naming the target is a yes, a cell naming an
+// interface that extends the target is a yes through that interface's record,
+// and a cell naming an unrelated one is a definite no. All three used to reach
+// the registry fallback, which walks superclass names only and so answered no
+// to every interface target — including the one the class names outright.
+func TestCheckTypeReadsAModuleImplementsCellByName(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	// 0x0200 is ACC_INTERFACE.
+	target := writeGuestClass(t, runtime, "game/IListener", 0, nil, 0x601)
+	derived := writeGuestClass(t, runtime, "game/IDerived", 0, []uint32{target}, 0x601)
+	other := writeGuestClass(t, runtime, "game/IOther", 0, nil, 0x601)
+	writeModuleNameTable(t, runtime, "game/IDerived", "game/IOther", "game/IListener", "game/INowhere")
+	runtime.moduleClassByName = map[string]uint32{"game/IDerived": derived, "game/IOther": other}
+
+	for _, test := range []struct {
+		name string
+		cell uint32
+		want uint32
+	}{
+		{name: "game/Direct", cell: moduleCell(2), want: 1},
+		{name: "game/Through", cell: moduleCell(0), want: 1},
+		{name: "game/Unrelated", cell: moduleCell(1), want: 0},
+		// A name that is neither the module's nor registered could still
+		// extend the target, so it stays undecided and permissive.
+		{name: "game/Nowhere", cell: moduleCell(3), want: 1},
+	} {
+		class := writeGuestClass(t, runtime, test.name, 0, []uint32{test.cell}, 0x21)
+		object, _, err := runtime.allocateAOTInstance(class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := checkGuestType(t, runtime, target, object); result != test.want {
+			t.Errorf("%s instanceof game/IListener = %d, want %d", test.name, result, test.want)
+		}
+	}
+}
+
+// The registry knows superclass names and nothing about interfaces, so when
+// the guest's own records cannot settle an interface target it has nothing to
+// say no with. It used to say no anyway, which is the one answer the check
+// promises to give only for a hierarchy it has read whole.
+func TestCheckTypeRegistryFallbackLeavesAnInterfaceTargetOpen(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	target := writeGuestClass(t, runtime, "game/IListener", 0, nil, 0x601)
+	// An implements entry that is no class record and no cell this runtime can
+	// read: the current generation never leaves one, so nothing names it.
+	class := writeGuestClass(t, runtime, "game/Opaque", 0, []uint32{0x10}, 0x21)
+	object, _, err := runtime.allocateAOTInstance(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := checkGuestType(t, runtime, target, object); result != 1 {
+		t.Errorf("game/Opaque instanceof game/IListener = %d, want the permissive 1", result)
+	}
+	// A class target is still answered from the superclass chain.
+	plain := writeGuestClass(t, runtime, "game/Plain", 0, nil, 0x21)
+	if result := checkGuestType(t, runtime, plain, object); result != 0 {
+		t.Errorf("game/Opaque instanceof game/Plain = %d, want 0", result)
+	}
+}

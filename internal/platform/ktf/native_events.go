@@ -460,7 +460,10 @@ func (platform *NativePlatform) SetSpeed(multiplier float64) {
 	if platform == nil || platform.pace == nil {
 		return
 	}
-	platform.pace.SetSpeed(multiplier)
+	instant := platform.pace.SetSpeed(multiplier)
+	if platform.audio != nil {
+		_ = platform.audio.SetPlaybackRate(instant.Sub(platform.started), multiplier)
+	}
 }
 
 // Speed reports the multiplier in force.

@@ -31,39 +31,85 @@ export class AudioStream {
     const view = new DataView(buffer);
     const events = [];
     let at = 4;
+    // Selections start over for every message; a dropped batch cannot leave
+    // later events attached to a different sound or time.
+    let sound = 0;
+    let presentationTime = null;
+    const emit = event => {
+      if (sound !== 0) event.sound = sound;
+      if (presentationTime !== null) event.at = presentationTime;
+      events.push(event);
+    };
     const need = count => {
       if (at + count > bytes.length) throw new Error("sound message ends inside an operation");
+    };
+    const readTime = () => {
+      need(8);
+      const seconds = view.getFloat64(at);
+      at += 8;
+      if (!Number.isFinite(seconds)) throw new Error("sound message has a nonfinite time");
+      return seconds;
     };
     while (at < bytes.length) {
       const operation = bytes[at++];
       switch (operation) {
         case 0x01:
           need(3);
-          events.push({ kind: "noteOn", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2] });
+          emit({ kind: "noteOn", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2] });
           at += 3;
           break;
         case 0x02:
           need(3);
-          events.push({ kind: "noteOff", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2] });
+          emit({ kind: "noteOff", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2] });
           at += 3;
           break;
         case 0x03:
           need(2);
-          events.push({ kind: "programChange", channel: bytes[at], program: bytes[at + 1] });
+          emit({ kind: "programChange", channel: bytes[at], program: bytes[at + 1] });
           at += 2;
           break;
         case 0x04:
           need(3);
-          events.push({ kind: "controlChange", channel: bytes[at], control: bytes[at + 1], value: bytes[at + 2] });
+          emit({ kind: "controlChange", channel: bytes[at], control: bytes[at + 1], value: bytes[at + 2] });
           at += 3;
           break;
         case 0x05:
           need(3);
-          events.push({ kind: "pitchBend", channel: bytes[at], value: view.getUint16(at + 1) });
+          emit({ kind: "pitchBend", channel: bytes[at], value: view.getUint16(at + 1) });
           at += 3;
           break;
         case 0x06:
           events.push({ kind: "allOff" });
+          presentationTime = null;
+          break;
+        case 0x07:
+          need(4);
+          sound = view.getUint32(at);
+          at += 4;
+          break;
+        case 0x08:
+          emit({ kind: "stopSound" });
+          break;
+        case 0x09:
+          need(2);
+          emit({ kind: "soundGain", value: view.getUint16(at) });
+          at += 2;
+          break;
+        case 0x0a:
+          need(7);
+          emit({ kind: "noteResume", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2], age: view.getUint32(at + 3) });
+          at += 7;
+          break;
+        case 0x0b: {
+          need(1);
+          const present = bytes[at++];
+          if (present === 0) presentationTime = null;
+          else if (present === 1) presentationTime = readTime();
+          else throw new Error("sound message has an invalid time selection");
+          break;
+        }
+        case 0x0c:
+          events.push({ kind: "clock", at: readTime() });
           break;
         case 0x10: {
           need(8);
@@ -74,15 +120,28 @@ export class AudioStream {
           at += length;
           break;
         }
-        case 0x11: {
-          need(9);
+        case 0x11:
+        case 0x14:
+        case 0x16: {
+          const routed = operation === 0x14;
+          const resumed = operation === 0x16;
+          need(resumed ? 15 : routed ? 11 : 9);
           const definition = this.definitions.get(view.getUint32(at));
           const channels = bytes[at + 4], rate = view.getUint32(at + 5);
-          at += 9;
+          const pcmChannel = routed || resumed ? view.getUint16(at + 9) : 0;
+          const framePhase = resumed ? view.getUint32(at + 11) : 0;
+          at += resumed ? 15 : routed ? 11 : 9;
+          if (routed && (pcmChannel === 0 || channels !== 1)) throw new Error("sound message has an invalid PCM route");
+          if (resumed && (framePhase >= 1e9 || pcmChannel !== 0 && channels !== 1)) throw new Error("sound message has an invalid PCM phase or route");
           // A sound whose definition never arrived is skipped, not guessed.
           if (definition) {
             definition.samples ??= toSamples(definition.bytes);
-            events.push({ kind: "playWave", channels, rate, samples: definition.samples });
+            // Definition samples stay immutable across triggers. A new
+            // definition or forget creates a new identity even if an ID repeats.
+            const event = { kind: "playWave", channels, rate, samples: definition.samples, cacheable: true };
+            if (routed || pcmChannel !== 0) event.pcmChannel = pcmChannel;
+            if (resumed) event.framePhase = framePhase;
+            emit(event);
           }
           break;
         }
@@ -90,12 +149,20 @@ export class AudioStream {
           need(4);
           const definition = this.definitions.get(view.getUint32(at));
           at += 4;
-          if (definition) events.push({ kind: "sysex", data: definition.bytes });
+          if (definition) emit({ kind: "sysex", data: definition.bytes });
           break;
         }
         case 0x13:
           this.definitions.clear();
           break;
+        case 0x15: {
+          need(4);
+          const pcmChannel = view.getUint16(at), control = bytes[at + 2], value = bytes[at + 3];
+          at += 4;
+          if (pcmChannel === 0 || ![7, 10, 11].includes(control) || value > 127) throw new Error("sound message has an invalid PCM control");
+          emit({ kind: "pcmControl", pcmChannel, control, value });
+          break;
+        }
         default:
           throw new Error(`unknown sound operation ${operation}`);
       }

@@ -162,11 +162,19 @@ type Runtime struct {
 
 	audioMu sync.Mutex
 	audio   *backend.Audio
+	// audioTimelineMu serializes guest clock reads and audio transitions across
+	// MIDP Players, WIPI Clips, SKVM clips, tones and the Host advancement pass.
+	audioTimelineMu sync.Mutex
 	// audioWaits are the channels a sounding clip's waiters are parked on.
 	// A guest thread blocked in play or loop is waiting for the sound to be
 	// over, and the session ending is one way for it to be over — otherwise
 	// the thread outlives the program it belongs to. See audioClipPlay.
 	audioWaits map[chan struct{}]struct{}
+	// Media ownership and pending listener records are separate from the
+	// audio sink. The Host pass drains their queue after guest calls return.
+	mediaMu      sync.Mutex
+	mediaPlayers map[backend.AudioHandle]*jvm.Object
+	mediaEvents  []playerEvent
 
 	saveMu        sync.RWMutex
 	saveStore     backend.SaveStore
@@ -197,7 +205,15 @@ func (runtime *Runtime) SetSpeed(multiplier float64) {
 	}
 	runtime.dispatchMu.Lock()
 	defer runtime.dispatchMu.Unlock()
-	runtime.pace.SetSpeed(multiplier)
+	runtime.audioTimelineMu.Lock()
+	defer runtime.audioTimelineMu.Unlock()
+	instant := runtime.pace.SetSpeed(multiplier)
+	runtime.audioMu.Lock()
+	audio := runtime.audio
+	runtime.audioMu.Unlock()
+	if audio != nil {
+		_ = audio.SetPlaybackRate(instant.Sub(runtime.paceStart), multiplier)
+	}
 }
 
 // Speed reports the multiplier in force.
@@ -528,6 +544,9 @@ func (runtime *Runtime) RunPending() error {
 	if err := runtime.postDeferredPaint(); err != nil {
 		return err
 	}
+	if err := runtime.drainPlayerEvents(); err != nil {
+		return runtime.fail("deliver Player events", err)
+	}
 	if err := runtime.postNextSerialRunnable(); err != nil {
 		return err
 	}
@@ -835,9 +854,11 @@ func (runtime *Runtime) getDisplay(vm *jvm.VM, arguments []jvm.Value) (jvm.Value
 		return jvm.VoidValue(), fmt.Errorf("Display belongs to another MIDlet instance")
 	}
 	if runtime.display == nil {
-		runtime.displayOwner = owner
 		runtime.display = &jvm.Object{ClassName: midp.DisplayClass, Fields: make(map[string]jvm.Value)}
 	}
+	// The WIPI factory can create the shared display before MIDP requests it.
+	// Its first MIDP lookup still establishes ownership for later lookups.
+	runtime.displayOwner = owner
 	return jvm.ReferenceValue(runtime.display), nil
 }
 

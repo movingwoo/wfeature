@@ -12,7 +12,7 @@ import (
 
 func timelineCommand(kind string) bool {
 	switch kind {
-	case clientKey, clientPointer, clientText, clientCheat, clientSpeed, clientScale, clientQuickSave, clientQuickLoad:
+	case clientKey, clientPointer, clientText, clientCheat, clientSpeed, clientScale, clientQuickSave, clientQuickLoad, clientAudioResume:
 		return true
 	}
 	return false
@@ -216,8 +216,8 @@ func (r *sessionRunner) finishCheckpointLoad(message clientMessage) {
 		}
 		return
 	}
-	r.game.ResumeCheckpointOutput()
-	r.sendAudio(r.audio.take(), false)
+	events, overflow := r.audio.collectReplay(r.game.ResumeCheckpointOutput)
+	r.audioNeedsReset = !r.sendAudio(events, false) || overflow
 	r.presented = r.game.Flushes()
 	r.forceFrame = true
 	r.pushFrame()

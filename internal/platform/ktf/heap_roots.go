@@ -180,11 +180,21 @@ func (runtime *initializationRuntime) capturePlatformRoots(callers []*jvm.Object
 		return runtimeHeapRoots{}, nil, err
 	}
 	for name, object := range runtime.runtimeObjects {
+		if name == heapMediaRoot {
+			return runtimeHeapRoots{}, nil, fmt.Errorf("KTF runtime object uses the reserved media root")
+		}
 		cost += uint64(len(name))
 		if len(name) > 65535 || cost > maxHeapStorageBytes {
 			return runtimeHeapRoots{}, nil, fmt.Errorf("KTF runtime object name exceeds limit")
 		}
 		saved.Objects = append(saved.Objects, heapNamedRoot{Name: []byte(name), Root: roots.add(object)})
+	}
+	media, err := runtime.captureMediaRoots()
+	if err != nil {
+		return runtimeHeapRoots{}, nil, err
+	}
+	if media != nil {
+		saved.Objects = append(saved.Objects, heapNamedRoot{Name: []byte(heapMediaRoot), Root: roots.add(media)})
 	}
 	for key, object := range runtime.grabbedKeys {
 		saved.GrabbedKeys = append(saved.GrabbedKeys, heapKeyRoot{Key: key, Root: roots.add(object)})
@@ -392,6 +402,9 @@ func (runtime *initializationRuntime) adoptPlatformRoots(saved runtimeHeapRoots,
 	runtime.serialDueAt = saved.SerialDue.restore(now)
 	runtime.runtimeObjects = make(map[string]*jvm.Object, len(saved.Objects))
 	for _, binding := range saved.Objects {
+		if string(binding.Name) == heapMediaRoot {
+			continue
+		}
 		runtime.runtimeObjects[string(binding.Name)] = object(binding.Root)
 	}
 	runtime.grabbedKeys = make(map[int32]*jvm.Object, len(saved.GrabbedKeys))

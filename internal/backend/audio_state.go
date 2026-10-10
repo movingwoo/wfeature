@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"maps"
 	"math"
@@ -23,10 +24,18 @@ type AudioState struct {
 }
 type AudioSoundState struct {
 	Handle       AudioHandle
+	Volume       int
+	Muted        bool
+	Transient    bool
 	Events       []smaf.Event
 	Length       time.Duration
 	Playing      bool
 	Repeat       bool
+	Paused       bool
+	PausedAt     time.Duration
+	Remaining    int32
+	Completed    uint64
+	Position     time.Duration
 	StartedAt    time.Duration
 	Cursor       int
 	ActiveNotes  []AudioNoteState
@@ -35,48 +44,96 @@ type AudioSoundState struct {
 type AudioNoteState struct{ Channel, Note uint8 }
 
 const (
+	// Version 9 preserves PCM subframe position through tail trimming. Versions
+	// 6 through 8 remain readable at their saved whole-frame positions.
+	audioStateVersion    = 9
 	maxAudioStateEntries = 1 << 20
 	maxAudioStateBytes   = 128 << 20
 )
 
 func validateAudioState(saved AudioState) error {
-	if saved.Version != 1 || saved.MaxSounds < 0 || saved.MaxSounds > defaultMaxSounds || len(saved.Sounds) > saved.MaxSounds || saved.Volume < 0 || saved.Volume > maxAudioVolume {
+	if saved.Version < 6 || saved.Version > audioStateVersion || saved.MaxSounds < 0 || saved.MaxSounds > defaultMaxSounds || len(saved.Sounds) > saved.MaxSounds || saved.Volume < 0 || saved.Volume > maxAudioVolume {
 		return fmt.Errorf("audio state version, sound limit or volume is invalid")
 	}
-	if err := saved.Output.validate(); err != nil {
+	if err := saved.Output.validate(saved.Version); err != nil {
 		return err
 	}
-	used := uint64(len(saved.Sounds)) * 128
-	var entries uint64
-	charge := func(count int, width uint64) bool {
-		if uint64(count) > (maxAudioStateBytes-used)/width {
-			return false
-		}
-		used += uint64(count) * width
-		return true
+	var used audioResourceUsage
+	reservedPCM := make(map[audioPCMKey]bool)
+	if saved.Version == 6 && len(saved.Output.PCMChannels) != 0 {
+		return fmt.Errorf("legacy audio state contains PCM channel controls")
 	}
 	for index, current := range saved.Sounds {
-		entries += uint64(len(current.Events)) + uint64(len(current.ActiveNotes))
-		if entries > maxAudioStateEntries || !charge(len(current.Events), 64) || !charge(len(current.ActiveNotes), 8) {
-			return fmt.Errorf("audio state exceeds its event or data limit")
+		resources, err := soundResourceUsage(current.Events, current.ActiveNotes)
+		if err != nil {
+			return err
 		}
-		if current.Handle == 0 || current.Handle > saved.Next || index > 0 && saved.Sounds[index-1].Handle >= current.Handle || len(current.Events) == 0 || current.Cursor < 0 || current.Cursor > len(current.Events) || current.Playing && current.Cursor == len(current.Events) || !current.Playing && len(current.ActiveNotes) != 0 {
+		if err := used.add(resources, defaultAudioResourceLimits()); err != nil {
+			return err
+		}
+		for _, event := range current.Events {
+			if event.PCMChannel != 0 {
+				if saved.Version == 6 {
+					return fmt.Errorf("legacy audio state contains PCM channel events")
+				}
+				reservedPCM[audioPCMKey{current.Handle, event.PCMChannel}] = true
+			}
+		}
+		if current.Volume < 0 || current.Volume > maxAudioVolume || current.Handle == 0 || current.Handle > saved.Next || index > 0 && saved.Sounds[index-1].Handle >= current.Handle || len(current.Events) == 0 || current.Cursor < 0 || current.Cursor > len(current.Events) || current.Playing && current.Cursor == len(current.Events) || !current.Playing && len(current.ActiveNotes) != 0 {
 			return fmt.Errorf("audio state handle or playback cursor is invalid")
+		}
+		if current.Transient && (!current.Playing || current.Repeat || current.Paused) {
+			return fmt.Errorf("audio transient state must be a playing one-shot")
+		}
+		if current.Remaining < 0 || current.Remaining > math.MaxInt32-1 || current.Repeat && current.Remaining != 0 || current.Transient && current.Remaining != 0 || current.Position < 0 || current.Position > current.Length || current.Completed > uint64(math.MaxInt64/int64(time.Millisecond))+1 {
+			return fmt.Errorf("audio loop accounting or media position is invalid")
+		}
+		if !current.Paused && current.PausedAt != 0 || current.Paused && (current.StartedAt < 0 || current.PausedAt < 0 || current.PausedAt < current.StartedAt || current.Cursor > 0 && current.PausedAt-current.StartedAt < time.Duration(current.Events[current.Cursor-1].Time)*time.Millisecond) {
+			return fmt.Errorf("audio state has a pause clock without a paused cursor")
+		}
+		if current.Paused {
+			position := min(current.PausedAt-current.StartedAt, current.Length)
+			// Explicit stop resets position, including after natural completion.
+			// Pausing that idle clip retains zero rather than advancing its clock.
+			if !current.Playing && current.Position == 0 {
+				position = 0
+			}
+			if current.Position != position {
+				return fmt.Errorf("audio media position differs from its pause clock")
+			}
 		}
 		length := time.Duration(current.Events[len(current.Events)-1].Time) * time.Millisecond
 		if current.Length != length || current.StartedAt > time.Duration(math.MaxInt64)-length {
 			return fmt.Errorf("audio state length or playback origin is invalid")
 		}
-		for i, event := range current.Events {
-			if event.Type > smaf.EventEnd || i > 0 && current.Events[i-1].Time > event.Time {
-				return fmt.Errorf("audio state events have an unsupported type or order")
-			}
-			if !charge(len(event.Wave), 2) || !charge(len(event.SysEx), 1) {
-				return fmt.Errorf("audio state sample or SysEx data exceeds limit")
-			}
-			if event.Type == smaf.EventWave && len(event.Wave) != 0 && (event.WaveChannels == 0 || event.SamplingRate == 0) {
-				return fmt.Errorf("audio state wave has no channel or sample rate")
-			}
+	}
+	for _, state := range saved.Output.PCMChannels {
+		if !reservedPCM[audioPCMKey{state.Sound, state.Channel}] {
+			return fmt.Errorf("audio output refers to an unreserved PCM channel")
+		}
+	}
+	paused := make(map[AudioHandle]bool)
+	for _, owner := range saved.Output.Sounds {
+		index, ok := slices.BinarySearchFunc(saved.Sounds, owner.Sound, func(sound AudioSoundState, handle AudioHandle) int { return cmp.Compare(sound.Handle, handle) })
+		if !ok || saved.Sounds[index].Handle != owner.Sound {
+			return fmt.Errorf("audio output refers to an unloaded sound")
+		}
+		current := saved.Sounds[index]
+		paused[owner.Sound] = owner.Paused
+		if owner.Paused != current.Paused {
+			return fmt.Errorf("audio output and timeline pause states differ")
+		}
+		gain := uint16(saved.Volume * current.Volume)
+		if current.Muted {
+			gain = 0
+		}
+		if owner.Gain != gain {
+			return fmt.Errorf("audio output gain differs from its device or clip level")
+		}
+	}
+	for _, current := range saved.Sounds {
+		if current.Paused != paused[current.Handle] {
+			return fmt.Errorf("audio paused cursor has no frozen output state")
 		}
 	}
 	return nil
@@ -99,7 +156,7 @@ func (audio *Audio) CaptureState() (AudioState, error) {
 	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	return audio.captureStateAt(audio.sink.now())
+	return audio.captureStateAt(audio.sink.currentTime())
 }
 
 // CaptureStateAt uses the owner's whole-session capture instant, from the
@@ -110,14 +167,14 @@ func (audio *Audio) CaptureStateAt(now time.Time) (AudioState, error) {
 	}
 	audio.mutex.Lock()
 	defer audio.mutex.Unlock()
-	return audio.captureStateAt(now)
+	return audio.captureStateAt(audio.sink.timeAt(now))
 }
 
 func (audio *Audio) captureStateAt(now time.Time) (AudioState, error) {
 	if len(audio.sounds) > defaultMaxSounds {
 		return AudioState{}, fmt.Errorf("audio state exceeds its sound limit")
 	}
-	saved := AudioState{Version: 1, Next: audio.next, MaxSounds: audio.maxSounds, Volume: audio.volume}
+	saved := AudioState{Version: audioStateVersion, Next: audio.next, MaxSounds: audio.maxSounds, Volume: audio.volume}
 	var err error
 	saved.Output, err = audio.sink.capture(now)
 	if err != nil {
@@ -133,8 +190,8 @@ func (audio *Audio) captureStateAt(now time.Time) (AudioState, error) {
 		if entries > maxAudioStateEntries {
 			return AudioState{}, fmt.Errorf("audio state exceeds its event limit")
 		}
-		record := AudioSoundState{Handle: handle, Events: current.events, Length: current.length, Playing: current.playing,
-			Repeat: current.repeat, StartedAt: current.startedAt, Cursor: current.cursor, UsedChannels: current.usedChannels}
+		record := AudioSoundState{Handle: handle, Volume: current.volume, Muted: current.muted, Transient: current.transient, Events: current.events, Length: current.length, Playing: current.playing,
+			Repeat: current.repeat, Paused: current.paused, PausedAt: current.pausedAt, Remaining: current.remaining, Completed: current.completed, Position: current.position, StartedAt: current.startedAt, Cursor: current.cursor, UsedChannels: current.usedChannels}
 		for _, note := range current.activeNotes {
 			record.ActiveNotes = append(record.ActiveNotes, AudioNoteState{Channel: note.channel, Note: note.note})
 		}
@@ -161,11 +218,15 @@ func NewAudioFromStateWithClock(saved AudioState, sink AudioSink, now func() tim
 	if err := validateAudioState(saved); err != nil {
 		return nil, err
 	}
-	audio := &Audio{sink: newAudioOutput(sink, now), sounds: make(map[AudioHandle]*sound, len(saved.Sounds)), next: saved.Next, maxSounds: saved.MaxSounds, volume: saved.Volume}
+	audio := &Audio{sink: newAudioOutput(sink, now), sounds: make(map[AudioHandle]*sound, len(saved.Sounds)), next: saved.Next, maxSounds: saved.MaxSounds, resourceLimits: defaultAudioResourceLimits(), volume: saved.Volume}
 	audio.sink.restore(saved.Output)
 	for _, record := range saved.Sounds {
-		current := &sound{events: cloneAudioEvents(record.Events), length: record.Length, playing: record.Playing,
-			repeat: record.Repeat, startedAt: record.StartedAt, cursor: record.Cursor, usedChannels: record.UsedChannels}
+		resources, err := soundResourceUsage(record.Events, record.ActiveNotes)
+		if err != nil {
+			return nil, err
+		}
+		current := &sound{handle: record.Handle, volume: record.Volume, muted: record.Muted, transient: record.Transient, events: cloneAudioEvents(record.Events), resources: resources, length: record.Length, playing: record.Playing,
+			repeat: record.Repeat, paused: record.Paused, pausedAt: record.PausedAt, remaining: record.Remaining, completed: record.Completed, position: record.Position, startedAt: record.StartedAt, cursor: record.Cursor, usedChannels: record.UsedChannels}
 		for _, note := range record.ActiveNotes {
 			current.activeNotes = append(current.activeNotes, activeNote{channel: note.Channel, note: note.Note})
 		}

@@ -1,5 +1,23 @@
 # JVM fixtures
 
+`InterfaceIdentity.java` and its seven nested types verify inherited and
+diamond interfaces through interpreted `instanceof`, `checkcast` and
+`invokeinterface`, including nulls and an unrelated cast. Native metadata tests
+separately cover cyclic and over-budget graphs. Rebuild all eight classes with:
+
+```sh
+LC_ALL=C javac -source 1.8 -target 1.8 -nowarn -g:none internal/jvm/testdata/InterfaceIdentity.java
+```
+
+`StringIdentity.java` and its nested `Peer` verify literal sharing across calls
+and classes, `ConstantValue`, explicitly interned receivers and distinct String
+construction. Retained strings keep those relationships through heap restore.
+Rebuild both class files with:
+
+```sh
+LC_ALL=C javac -source 1.8 -target 1.8 -nowarn -g:none internal/jvm/testdata/StringIdentity.java
+```
+
 `NativeCheckpointProbe.java` verifies that a native-only execution record refuses
 an active bytecode caller and leaves that caller able to finish. Compile it with:
 

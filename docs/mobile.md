@@ -39,6 +39,10 @@ Neither app is a port of the page. The keypad, the touch handling, the audio
 synthesiser, the cheat panel and the save API are the same files a desktop
 serves, carried inside the binary.
 
+Large WebView audio buffers need scheduling ahead of the render clock to keep
+short notes distinct. See [APK audio timing](history/audio.md#apk-audio-timing) for the 0.5.0 report,
+reproduced timing/envelope defects, repair and physical-device validation limits.
+
 Both apps serve the page from `http://127.0.0.1:11541` on every launch. The
 port is part of the page's browser origin, so keeping it stable is what lets
 WebView storage retain volume, vibration, speed and keypad settings across a

@@ -130,6 +130,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	platform.SetScreen(options.Width, options.Height)
 	platform.AttachSaves(options.SaveStore)
 	platform.AttachAudio(options.AudioSink)
+	platform.audio.SetLogger(options.Logger)
 	if err := platform.Boot(ctx); err != nil {
 		return nil, err
 	}

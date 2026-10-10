@@ -31,6 +31,9 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	runtime.roundsSinceGuestPaint, runtime.guestEventLoop = 3, true
 	clip := mediaCall(t, runtime, wipicMediaClipCreate, 0, 0, 0)
 	runtime.wipicClips[clip].state.data = oneNoteSMAF()
+	mediaCall(t, runtime, wipicMediaSetMuteState, 3, 1)
+	mediaCall(t, runtime, wipicMediaSetMuteState, 0, 0)
+	mediaCall(t, runtime, wipicMediaClipSetVolume, clip, 45)
 	clock.Advance(123456789 * time.Nanosecond)
 	heap, err := runtime.captureHeapState(nil)
 	if err != nil {
@@ -80,6 +83,12 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	}
 	if !fresh.repaintPending || !fresh.guestFlushedOwnFrame || !fresh.guestHasPainted || fresh.roundsSinceGuestPaint != 3 || !fresh.guestEventLoop {
 		t.Fatal("guest painting or event ownership differs")
+	}
+	if mediaCall(t, fresh, wipicMediaGetMuteState, 3) != 1 || mediaCall(t, fresh, wipicMediaGetMuteState, 0) != 0 || len(fresh.wipicMutedSources) != 1 {
+		t.Fatalf("restored C media mute state = %v, want source 3 alone", fresh.wipicMutedSources)
+	}
+	if level := mediaCall(t, fresh, wipicMediaClipGetVolume, clip); level != 45 {
+		t.Fatalf("restored C clip volume = %d, want 45", level)
 	}
 	buffer, err := fresh.allocate(4)
 	if err != nil {
@@ -146,6 +155,17 @@ func TestRuntimeControlRefusesHostRemaindersAndMalformedState(t *testing.T) {
 		func(s *runtimeHeapState) { s.Control.RoundsSinceGuestPaint = -1 },
 		func(s *runtimeHeapState) { s.Control.Network = []runtimeNetCallbackState{{Callback: 0}} },
 		func(s *runtimeHeapState) { s.Control.ClipOrder = []uint32{1} },
+		func(s *runtimeHeapState) { s.Control.MutedSources = []uint32{3, 3} },
+		func(s *runtimeHeapState) {
+			s.Control.Clips = []runtimeCClipState{{Address: 0x1000, Volume: wipicClipFullVolume + 1}}
+			s.Control.ClipOrder = []uint32{0x1000}
+		},
+		func(s *runtimeHeapState) {
+			s.Control.MutedSources = nil
+			for source := uint32(0); source <= maxWIPICMutedSources; source++ {
+				s.Control.MutedSources = append(s.Control.MutedSources, source)
+			}
+		},
 	} {
 		bad := saved
 		damage(&bad)
