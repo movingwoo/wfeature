@@ -60,10 +60,17 @@ func TestTextInputCommitsAWholeHostCompositionToAVisibleFocusedField(t *testing.
 	if input.Text != "old" || input.MaxLength != 4 || input.Multiline || input.Password || input.InputMode != "text" {
 		t.Fatalf("TextInput() = %+v", input)
 	}
-	if err := input.Commit(context.Background(), "한글🙂"); err != nil {
+	// Text the handset's encoding has no code for is refused: a title's own
+	// font indexes its glyphs by the bytes of the text.
+	for _, refused := range []string{"\U0001F642", "\uB620"} {
+		if err := input.Commit(context.Background(), refused); !errors.Is(err, backend.ErrInvalidTextInput) {
+			t.Fatalf("commit %q error = %v, want a refusal", refused, err)
+		}
+	}
+	if err := input.Commit(context.Background(), "한글AB"); err != nil {
 		t.Fatal(err)
 	}
-	if state.text != "한글🙂" {
+	if state.text != "한글AB" {
 		t.Fatalf("field text = %q, want committed composition", state.text)
 	}
 

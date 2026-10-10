@@ -867,7 +867,9 @@ func (client *Client) SendKey(ctx context.Context, eventType, key int32) error {
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
-	return runtime.dispatchKeyToCards(eventType, key)
+	// A key is a callback like a paint: what the title's keyNotify throws and
+	// does not catch ends that call, not the game. See uncaught.go.
+	return client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(eventType, key))
 }
 
 // ImageBytes reads back the client image as it now stands in guest memory.
@@ -932,7 +934,7 @@ func (client *Client) SendPointer(ctx context.Context, eventType, x, y int32) er
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
-	return runtime.dispatchPointerToCards(eventType, x, y)
+	return client.absorbUncaughtCallback("pointer", runtime.dispatchPointerToCards(eventType, x, y))
 }
 
 // HasPointer reports whether a touch would reach code the title wrote, which is

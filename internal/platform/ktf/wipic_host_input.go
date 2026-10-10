@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
-	"golang.org/x/text/encoding/korean"
 )
 
 const maxCInputLength = 64
@@ -178,8 +177,8 @@ func validateCInput(text string) ([]byte, error) {
 			return nil, backend.ErrInvalidTextInput
 		}
 	}
-	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
-	if err != nil {
+	encoded, ok := backend.EncodeKSC5601(text)
+	if !ok {
 		return nil, backend.ErrInvalidTextInput
 	}
 	return encoded, nil

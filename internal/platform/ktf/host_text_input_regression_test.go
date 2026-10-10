@@ -174,7 +174,7 @@ func TestKTFHiddenExplicitFocus(t *testing.T) {
 		t.Fatalf("hidden focused field offered: edit=%v err=%v", edit != nil, err)
 	}
 }
-func TestKTFHostThenKeypadUTF16Limit(t *testing.T) {
+func TestKTFHostThenKeypadLimit(t *testing.T) {
 	for _, route := range []string{"guest keyNotify", "host keypad"} {
 		t.Run(route, func(t *testing.T) {
 			s, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
@@ -194,16 +194,16 @@ func TestKTFHostThenKeypadUTF16Limit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := edit.Commit(t.Context(), "AB🙂"); err != nil {
+			if err := edit.Commit(t.Context(), "ABCD"); err != nil {
 				t.Fatal(err)
 			}
 			key('2')
-			if text := componentText(field); text != "AB🙂" || len(utf16.Encode([]rune(text))) > 4 {
-				t.Fatalf("keypad changed a full UTF-16 field: %q", text)
+			if text := componentText(field); text != "ABCD" || len(utf16.Encode([]rune(text))) > 4 {
+				t.Fatalf("keypad changed a full field: %q", text)
 			}
 			key('#')
 			key('2')
-			if text := componentText(field); text != "ABa" {
+			if text := componentText(field); text != "ABCa" {
 				t.Fatalf("delete then insert: %q", text)
 			}
 		})
@@ -218,6 +218,8 @@ func TestKnownCEncodingLimits(t *testing.T) {
 		{"precomposed Korean", "한글", true},
 		{"decomposed Korean", "한", false},
 		{"supplementary Unicode", "🙂", false},
+		{"Hangul outside KSC5601", "\uB620", false},
+		{"Latin-1 letter", "\u00E9", false},
 		{"newline", "first\nsecond", false},
 		{"empty", "", true},
 	} {

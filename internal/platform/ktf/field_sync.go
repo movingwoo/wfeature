@@ -81,14 +81,16 @@ var fieldSyncs = map[string]fieldSync{
 		adopt:    adoptGuestByteSinkBuffer,
 		reserved: byteArrayOutputStreamFieldsSize,
 	},
-	// A text component publishes the handler it owns, because a title takes
-	// the automaton off the component rather than asking for one — it is a
-	// protected field on the handset and the code was written against that.
-	// The constructors are the only mutators: the handler a component is built
-	// with is the one it keeps, and nothing here replaces it.
+	// A text component publishes the handler it owns and the rest of the
+	// protected fields the specification declares on it, because a title
+	// building its own field reads them off the component rather than asking:
+	// the handler, the characters and their count, the caret, the input mode,
+	// the limit, the constraint, the font and the display. Every call that can
+	// change one of them is a mutator. Host text and the keypad edit outside a
+	// call, and publish through publishTextComponent.
 	runtimeTextComponentClass: {
-		mutators: []string{"<init>"},
-		publish:  publishGuestInputHandler,
+		mutators: []string{"<init>", "setString", "insert", "delete", "keyNotify", "setMaxLength", "setFont"},
+		publish:  publishGuestTextComponent,
 		adopt:    adoptGuestInputHandler,
 		reserved: textComponentFieldsSize,
 	},
@@ -441,6 +443,15 @@ func (runtime *initializationRuntime) readGuestStringUnits(value, offset, count 
 	return units, true, nil
 }
 
+// guestArrayLength reads a guest array's length word.
+func (runtime *initializationRuntime) guestArrayLength(array uint32) (uint32, error) {
+	lengths, err := runtime.readAOTWords(array+javaInstanceSize+javaInstanceHeader, 1, "array length")
+	if err != nil {
+		return 0, err
+	}
+	return lengths[0], nil
+}
+
 // publishGuestString gives a string's characters a guest character array and
 // points the payload words at it. A guest that constructs a string itself gets
 // the instance allocated before its constructor runs, so without this the words
@@ -614,11 +625,149 @@ func adoptGuestCardBounds(runtime *initializationRuntime, address uint32, object
 	return !slices.Equal(current, cardBoundsValues(object)), nil
 }
 
-// publishGuestInputHandler points a text component's payload word at the input
-// method handler it owns, which is the field a title reads instead of asking.
-func publishGuestInputHandler(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
-	return publishGuestReferenceWord(runtime, address, object, runtimeTextComponentClass,
-		"imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;")
+// publishGuestTextComponent writes the words textComponentFields describe.
+//
+// Most of them follow the component: the handler, the characters as an array
+// exactly as long as the text — one title takes m_td.length as the length of
+// the text — and their count, the limit (-1 for none, as the specification
+// gives it), the constraint, the font and the display. Two are also the
+// title's to write, and follow an edit rather than the component. m_cPos is
+// written where the runtime's last edit left the caret (setComponentCursor),
+// and iMode when the component is built or its handler is given a mode;
+// between those a title's own value stands, since titles move the caret to
+// draw it and set the mode word before handing it to the handler.
+//
+// Only the words inside the instance size the class was registered with are
+// written. A component allocated under a smaller layout — one restored from a
+// checkpoint taken by an earlier build — has no room for the rest, and its
+// payload ends where its record says it does.
+func publishGuestTextComponent(runtime *initializationRuntime, address uint32, object *jvm.Object) (bool, error) {
+	class, ok := runtime.client.vm.AOTClass(runtimeTextComponentClass)
+	if !ok {
+		return false, nil
+	}
+	words := min(uint32(class.InstanceSize), textComponentFieldsSize) / 4
+	if words == 0 {
+		return false, nil
+	}
+	base := address + javaInstanceSize + javaInstanceHeader
+	current, err := runtime.readAOTWords(base, words, "text component fields")
+	if err != nil {
+		return false, err
+	}
+	wanted := slices.Clone(current)
+	set := func(word int, value uint32) {
+		if uint32(word) < words {
+			wanted[word] = value
+		}
+	}
+	bound := func(target *jvm.Object) (uint32, error) {
+		if target == nil {
+			return 0, nil
+		}
+		if err := runtime.ensureResultBound(target); err != nil {
+			return 0, err
+		}
+		guest, ok := runtime.client.vm.AOTAddress(target)
+		if !ok {
+			return 0, fmt.Errorf("KTF %s has no guest address", target.ClassName)
+		}
+		return guest, nil
+	}
+	handler, _ := object.Fields[componentInputHandlerField].Reference()
+	handlerAddress, err := bound(handler)
+	if err != nil {
+		return false, fmt.Errorf("bind KTF text component handler: %w", err)
+	}
+	set(textComponentHandlerWord, handlerAddress)
+	units := utf16.Encode([]rune(runtimeComponentText(object)))
+	if uint64(len(units)) > uint64(maxJavaStringUnits) {
+		return false, fmt.Errorf("KTF text component content %d units exceeds %d", len(units), maxJavaStringUnits)
+	}
+	if uint32(textComponentDataWord) < words {
+		array := current[textComponentDataWord]
+		same := false
+		if array != 0 {
+			held, valid, readErr := runtime.readGuestStringUnits(array, 0, uint32(len(units)))
+			if readErr == nil && valid && slices.Equal(held, units) {
+				if length, lengthErr := runtime.guestArrayLength(array); lengthErr == nil && length == uint32(len(units)) {
+					same = true
+				}
+			}
+		}
+		if !same {
+			if array, err = runtime.allocateGuestCharArray(units); err != nil {
+				return false, fmt.Errorf("allocate KTF text component characters: %w", err)
+			}
+		}
+		set(textComponentDataWord, array)
+	}
+	set(textComponentCountWord, uint32(len(units)))
+	if cursor, ok := object.Fields[componentCursorField]; ok {
+		position, _ := cursor.Int32()
+		set(textComponentCursorWord, uint32(position))
+		delete(object.Fields, componentCursorField)
+	}
+	if _, ok := object.Fields[componentModeChangedField]; ok {
+		mode := int32(0)
+		if handler != nil {
+			mode, _ = handler.Fields[inputMethodModeField].Int32()
+		}
+		set(textComponentModeWord, uint32(mode))
+		delete(object.Fields, componentModeChangedField)
+	}
+	set(textComponentMaxLengthWord, uint32(publishedMaxLength(object)))
+	constraint, _ := object.Fields[componentConstraintField].Int32()
+	set(textComponentConstraintWord, uint32(constraint))
+	if uint32(textComponentFontWord) < words {
+		fontAddress, err := bound(runtime.textComponentFont(object))
+		if err != nil {
+			return false, fmt.Errorf("bind KTF text component font: %w", err)
+		}
+		set(textComponentFontWord, fontAddress)
+	}
+	if uint32(textComponentDisplayWord) < words {
+		displayAddress, err := bound(runtime.defaultDisplay())
+		if err != nil {
+			return false, fmt.Errorf("bind KTF text component display: %w", err)
+		}
+		set(textComponentDisplayWord, displayAddress)
+	}
+	if slices.Equal(current, wanted) {
+		return false, nil
+	}
+	payload := make([]byte, len(wanted)*4)
+	for index, word := range wanted {
+		binary.LittleEndian.PutUint32(payload[index*4:], word)
+	}
+	if err := runtime.client.core.Memory().Write(base, payload); err != nil {
+		return false, fmt.Errorf("write KTF text component fields at %#x: %w", address, err)
+	}
+	return true, nil
+}
+
+// publishTextComponent publishes a text component the runtime edited outside
+// one of its methods — Host text, the keypad's focused component, a handler
+// given a mode — where no call ends to do it.
+func (runtime *initializationRuntime) publishTextComponent(component *jvm.Object) error {
+	if runtime == nil || component == nil {
+		return nil
+	}
+	address, bound := runtime.client.vm.AOTAddress(component)
+	if !bound {
+		return nil
+	}
+	if !runtime.guestReservesRuntimeBlock(component, runtimeTextComponentClass, textComponentFieldsSize) {
+		return nil
+	}
+	written, err := publishGuestTextComponent(runtime, address, component)
+	if err != nil {
+		return fmt.Errorf("publish KTF %s fields at %#x: %w", component.ClassName, address, err)
+	}
+	if written {
+		runtime.countDiagnostic("field publish " + component.ClassName)
+	}
+	return nil
 }
 
 // adoptGuestInputHandler reports a component whose payload word has stopped

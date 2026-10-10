@@ -35,11 +35,41 @@ func TestTextInputCommitsAWholeHostCompositionToTheFocusedLWCField(t *testing.T)
 	if input.Text != "old" || input.MaxLength != 4 || input.Multiline || input.Password || input.InputMode != "text" {
 		t.Fatalf("TextInput() = %+v", input)
 	}
-	if err := input.Commit(context.Background(), "한글🙂"); err != nil {
+	if err := input.Commit(context.Background(), "한글A1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := runtimeComponentText(field); got != "한글🙂" {
+	if got := runtimeComponentText(field); got != "한글A1" {
 		t.Fatalf("component text = %q, want committed composition", got)
+	}
+}
+
+// The platform's Hangul encoding is KSC5601, so text with no code in it is
+// refused before it reaches a field: a title's own font is laid out for
+// KSC5601, and one title saved such a name and could not draw its slot screen
+// again. The Microsoft extension the Go encoder implements gives codes to the
+// Hangul syllables KSC5601 lacks; those are refused as well.
+func TestTextInputRefusesTextThePlatformEncodingLacks(t *testing.T) {
+	session, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	for _, text := range []string{"\U0001F642", "\uB620\uBC29", "caf\u00E9", "\u1112\u1161\u11AB"} {
+		input, err := session.TextInput(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := input.Commit(context.Background(), text); !errors.Is(err, backend.ErrInvalidTextInput) {
+			t.Fatalf("commit %q error = %v, want a refusal", text, err)
+		}
+		if got := runtimeComponentText(field); got != "old" {
+			t.Fatalf("a refused commit changed the field to %q", got)
+		}
+	}
+	for _, text := range []string{"\uD64D\uAE38\uB3D9", "ABC 123", "\u3131\u3134"} {
+		input, err := session.TextInput(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := input.Commit(context.Background(), text); err != nil {
+			t.Fatalf("commit %q: %v", text, err)
+		}
 	}
 }
 
@@ -257,7 +287,7 @@ func TestTextInputAppliesLWCConstraintsWithoutTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := input.Commit(context.Background(), "한🙂"); !errors.Is(err, backend.ErrInvalidTextInput) {
+	if err := input.Commit(context.Background(), "한글자"); !errors.Is(err, backend.ErrInvalidTextInput) {
 		t.Fatalf("over-limit commit error = %v", err)
 	}
 	if err := input.Commit(context.Background(), "한글"); err != nil {
@@ -373,5 +403,144 @@ func TestTextInputCommitRequestsAFrameForTheShownCard(t *testing.T) {
 	}
 	if painted != 1 {
 		t.Fatalf("paints after commit = %d, want 1", painted)
+	}
+}
+
+// drawnFieldCard pushes a card of a class of its own whose paint reads the
+// text of the fields it is given, the way a title that draws its own name
+// field does, and answers a function that paints it once.
+func drawnFieldCard(t *testing.T, session *Session, class string, fail *bool, fields ...*jvm.Object) func() {
+	t.Helper()
+	client, runtime := session.Client, session.Client.runtime
+	if err := client.JVM().RegisterNative(class, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V",
+		func(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+			for _, field := range fields {
+				if _, err := runtimeTextComponentGetString(runtime, vm, []jvm.Value{jvm.ReferenceValue(field)}); err != nil {
+					return jvm.VoidValue(), err
+				}
+			}
+			if fail != nil && *fail {
+				return jvm.VoidValue(), fmt.Errorf("paint failed")
+			}
+			return jvm.VoidValue(), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = append(runtime.displayCards, &jvm.Object{ClassName: class, Fields: make(map[string]jvm.Value)})
+	return func() {
+		t.Helper()
+		runtime.repaintPending = true
+		if _, err := runtime.paintTopCard(); err != nil && (fail == nil || !*fail) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// unfocusedLWCField builds a text field the way a title that draws its own
+// does: constructed, never given focus through setFocus, never added to a
+// container.
+func unfocusedLWCField(t *testing.T, session *Session, text string) *jvm.Object {
+	t.Helper()
+	field := newWidget(runtimeTextFieldComponentClass)
+	if _, err := runtimeTextComponentConstructorWithText(session.Client.runtime, session.Client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(field), jvm.ReferenceValue(session.Client.JVM().NewString(text)), jvm.IntValue(0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return field
+}
+
+// A title that told its own field it has focus and reads it on every paint is
+// drawing that field: the Host offers it, the commit lands in it, and a paint
+// that stops reading it takes the offer away.
+func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
+	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
+	runtime := session.Client.runtime
+	runtime.runtimeObjects["lwc:focus"] = nil
+	field := unfocusedLWCField(t, session, "")
+	field.Fields[componentMaxLengthField] = jvm.IntValue(7)
+	if _, err := runtimeComponentBooleanField(componentFocusedField)(runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(field), jvm.IntValue(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field nothing has drawn was offered: %v", err)
+	}
+	// A read outside a paint is not drawing.
+	if _, err := runtimeTextComponentGetString(runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(field)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a read outside a paint offered the field: %v", err)
+	}
+
+	paint := drawnFieldCard(t, session, "test/NameCard", nil, field)
+	paint()
+	input, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.MaxLength != 7 || input.Multiline || input.Append {
+		t.Fatalf("TextInput() = %+v", input)
+	}
+	if err := input.Commit(context.Background(), "홍길동"); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtimeComponentText(field); got != "홍길동" {
+		t.Fatalf("field text = %q after a commit", got)
+	}
+
+	stale, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = runtime.displayCards[:0]
+	other := drawnFieldCard(t, session, "test/OtherCard", nil)
+	other()
+	if err := stale.Commit(context.Background(), "새"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("a commit after the card stopped drawing the field: %v", err)
+	}
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a screen that does not draw the field offered it: %v", err)
+	}
+}
+
+// Only one focused field drawn by the card is evidence of which one the player
+// is typing into. An unfocused field, two focused ones, and a paint that failed
+// are not.
+func TestTextInputDoesNotGuessBetweenDrawnFields(t *testing.T) {
+	setFocused := func(session *Session, field *jvm.Object, focused int32) {
+		t.Helper()
+		if _, err := runtimeComponentBooleanField(componentFocusedField)(session.Client.runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(field), jvm.IntValue(focused)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name    string
+		focused []int32
+		fail    bool
+		offered bool
+	}{
+		{"one focused", []int32{1}, false, true},
+		{"one told it lost focus", []int32{0}, false, false},
+		{"two focused", []int32{1, 1}, false, false},
+		{"one focused of two", []int32{0, 1}, false, true},
+		{"failed paint", []int32{1}, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
+			session.Client.runtime.runtimeObjects["lwc:focus"] = nil
+			var fields []*jvm.Object
+			for _, focused := range test.focused {
+				field := unfocusedLWCField(t, session, "")
+				setFocused(session, field, focused)
+				fields = append(fields, field)
+			}
+			fail := test.fail
+			drawnFieldCard(t, session, "test/NameCard", &fail, fields...)()
+			_, err := session.TextInput(context.Background())
+			if test.offered && err != nil || !test.offered && !errors.Is(err, backend.ErrNoTextInput) {
+				t.Fatalf("offered=%v, error %v", test.offered, err)
+			}
+		})
 	}
 }

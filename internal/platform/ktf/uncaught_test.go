@@ -66,3 +66,37 @@ func TestOnlyAGuestExceptionIsAbsorbed(t *testing.T) {
 		t.Fatal("a nil error came back as an error")
 	}
 }
+
+// A key is a callback like any other: a title's keyNotify that throws and
+// catches nothing ends that call. Two titles ended whole sessions this way —
+// one parses the keys it collects as a number and a fire key is not a digit —
+// because the key path was the one callback the rule had never reached.
+func TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	presses := 0
+	if err := client.JVM().RegisterNative("test/ParsingCard", "keyNotify", "(II)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		presses++
+		if key, _ := arguments[2].Int32(); key == KeyFire {
+			return jvm.VoidValue(), &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: "java/lang/NumberFormatException"},
+				Message: "not a digit",
+			}
+		}
+		return jvm.IntValue(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.displayCards = []*jvm.Object{{ClassName: "test/ParsingCard"}}
+	if err := client.SendKey(t.Context(), KeyPressed, KeyFire); err != nil {
+		t.Fatalf("an uncaught exception in keyNotify ended the session: %v", err)
+	}
+	if count, first := client.UncaughtCallbacks(); count != 1 || !strings.HasPrefix(first, "key: ") || !strings.Contains(first, "NumberFormatException") {
+		t.Fatalf("uncaught callbacks = %d, first = %q", count, first)
+	}
+	if err := client.SendKey(t.Context(), KeyPressed, KeyNum0+5); err != nil {
+		t.Fatal(err)
+	}
+	if presses != 2 {
+		t.Fatalf("keyNotify ran %d times, want the next key delivered as well", presses)
+	}
+}

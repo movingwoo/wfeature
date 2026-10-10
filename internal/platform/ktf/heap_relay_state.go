@@ -14,8 +14,10 @@ const heapRelayHeaderSize = 20
 
 func validateHeapRelay(socket *relaySocket) error {
 	service := &socket.service
-	if service.phase > 5 || len(service.identity) > 127 || len(service.label) > 255 || service.slot > 127 ||
-		(service.phase >= 2) != (len(service.identity) > 0) || (service.phase == 5) != (len(service.label) > 0) || service.phase < 3 && service.slot != 0 ||
+	// A receipt (phase 5) has a label only when an earlier build gave one; a
+	// registered name (phase 6) always has one.
+	if service.phase > 6 || len(service.identity) > 127 || len(service.label) > 255 || service.slot > 127 ||
+		(service.phase >= 2) != (len(service.identity) > 0) || service.phase < 5 && len(service.label) > 0 || service.phase == 6 && len(service.label) == 0 || service.phase < 3 && service.slot != 0 ||
 		len(socket.pending) > maxRelayFrameSize || len(socket.incoming) > maxRelayFrameSize {
 		return fmt.Errorf("KTF relay state has invalid phase or data bounds")
 	}

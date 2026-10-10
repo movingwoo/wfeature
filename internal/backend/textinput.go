@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"unicode/utf8"
+
+	"golang.org/x/text/encoding/korean"
 )
 
 var (
@@ -46,4 +48,34 @@ func ValidateTextInput(text string) error {
 		return ErrInvalidTextInput
 	}
 	return nil
+}
+
+// EncodeKSC5601 encodes text a person typed for a title and reports whether
+// every character has a code in the handsets' string encoding. The WIPI
+// specification names it — a String becomes a C string as ISO8859 for English
+// and KSC5601 for Hangul — and all three carriers' handsets were EUC-KR.
+//
+// The Go encoder is the Microsoft extension of KSC5601, which also gives codes
+// to the 8,822 Hangul syllables KSC5601 has none for: a lead byte below 0xA1, or
+// a trail byte below 0xA1. Titles draw text with fonts of their own laid out
+// for KSC5601 and index the glyph table by the bytes they are given. One title
+// that saved a name holding such a syllable overran that table drawing its
+// slot screen, and the slot stayed blank for as long as the save held the name,
+// so text like that is refused before it reaches a title rather than handed
+// over.
+func EncodeKSC5601(text string) ([]byte, bool) {
+	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
+	if err != nil {
+		return nil, false
+	}
+	for index := 0; index < len(encoded); index++ {
+		if encoded[index] < 0x80 {
+			continue
+		}
+		if index+1 == len(encoded) || encoded[index] < 0xa1 || encoded[index+1] < 0xa1 {
+			return nil, false
+		}
+		index++
+	}
+	return encoded, true
 }

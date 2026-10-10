@@ -25,7 +25,9 @@ const (
 // its native keyboard or IME. LWC fields use explicit guest focus or a shown
 // shell's sole direct text child when the guest has not assigned focus. The
 // verified vendor path instead uses the sole listened GTextField in the shown
-// non-modal GForm. Guest execution and this snapshot share the client run lock.
+// non-modal GForm. With none of those, a field the title draws itself is used
+// (see drawnTextComponent). Guest execution and this snapshot share the
+// client run lock.
 func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, error) {
 	if session == nil || session.Client == nil {
 		return nil, backend.ErrNoTextInput
@@ -53,6 +55,11 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	vendorState, vendorActive := client.runtime.activeVendorTextInput()
 	if vendorActive {
 		component = vendorState.field
+	}
+	drawn := (*jvm.Object)(nil)
+	if component == nil {
+		drawn = client.runtime.drawnTextComponent()
+		component = drawn
 	}
 	multiline, vendor, ok := client.lwcTextInputKind(component)
 	if vendor && !vendorActive {
@@ -116,6 +123,7 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			currentVendorState, currentVendorActive := client.runtime.activeVendorTextInput()
 			if client.runtime.runtimeObjects["lwc:focus"] != focus || component.Fields[componentFocusRevisionField] != focusRevision ||
 				client.shellTextInput() != shellState ||
+				(drawn != nil && client.runtime.drawnTextComponent() != drawn) ||
 				vendorActive != currentVendorActive ||
 				(vendorActive && !sameVendorTextInputState(currentVendorState, vendorState)) ||
 				!listenerStateOK || !sameLWCTextInputListenerState(currentListenerState, listenerState) ||
@@ -131,6 +139,10 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 				return nil
 			}
 			component.Fields[componentTextField] = jvm.ReferenceValue(client.vm.NewString(replacement))
+			setComponentCursor(component, len([]rune(replacement)))
+			if err := client.runtime.publishTextComponent(component); err != nil {
+				return err
+			}
 			// Keep the two keypad adapters in step if either is used after a
 			// Host composition. Their next key starts a fresh composition.
 			textEditorFor(component).SetText(replacement)
@@ -148,6 +160,71 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			return nil
 		},
 	}, nil
+}
+
+// A field a title draws itself.
+//
+// One title's character-name screen keeps a `TextFieldComponent` subclass it
+// built at start-up and told it had focus through `focusNotify(true)`, never
+// `setFocus`, and never adds it to a container. Its card draws the box and the
+// name, reading `getString` on every paint, and forwards keys to the field's
+// own `keyNotify`. With no explicit focus and no shell there was nothing for
+// the Host to offer, so the only way to give the character a name was the
+// multi-tap keypad.
+//
+// The evidence that such a field is on screen is the read, not the focus:
+// that title's field is focused from start-up, through every menu and the
+// game itself, and its card reads the text only while the name screen is
+// drawn. So the Host offers a field the top card read during its last paint
+// and that was told it has focus, when that is exactly one field. Two focused
+// fields drawn together are ambiguous and offer nothing.
+
+// maxPaintTextReads bounds how many distinct text components one paint is
+// tracked for. A paint that reads more is not a name screen anyone could
+// type into, and the rule declines rather than tracking the rest.
+const maxPaintTextReads = 16
+
+// beginTextReads starts collecting the text components a card paint reads.
+func (runtime *initializationRuntime) beginTextReads() {
+	runtime.paintTextReads, runtime.paintTextOverflow = nil, false
+}
+
+// endTextReads publishes what the paint read once it returned. A paint that
+// failed published nothing a Host could rely on.
+func (runtime *initializationRuntime) endTextReads(painted bool) {
+	runtime.paintedText = nil
+	if painted && !runtime.paintTextOverflow {
+		runtime.paintedText = runtime.paintTextReads
+	}
+	runtime.paintTextReads, runtime.paintTextOverflow = nil, false
+}
+
+// noteTextRead records a text component read while a card paints.
+func (runtime *initializationRuntime) noteTextRead(component *jvm.Object) {
+	if runtime == nil || !runtime.repaintServicing || runtime.paintTextOverflow || slices.Contains(runtime.paintTextReads, component) {
+		return
+	}
+	if len(runtime.paintTextReads) == maxPaintTextReads {
+		runtime.paintTextOverflow = true
+		return
+	}
+	runtime.paintTextReads = append(runtime.paintTextReads, component)
+}
+
+// drawnTextComponent answers the one focused text component the top card read
+// during its last paint, or nil.
+func (runtime *initializationRuntime) drawnTextComponent() *jvm.Object {
+	var found *jvm.Object
+	for _, component := range runtime.paintedText {
+		if focused, err := component.Fields[componentFocusedField].Int32(); err != nil || focused == 0 {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = component
+	}
+	return found
 }
 
 // lwcTextInputKind follows a guest subclass to the runtime LWC field or box it
@@ -255,6 +332,9 @@ func lwcTextInputHints(constraint int32) (inputMode string, password bool) {
 func validateLWCTextInput(text string, constraint int32, maxLength int, multiline bool) error {
 	if err := backend.ValidateTextInput(text); err != nil {
 		return err
+	}
+	if _, ok := backend.EncodeKSC5601(text); !ok {
+		return backend.ErrInvalidTextInput
 	}
 	// WIPI counts Java char values. A supplementary Unicode code point is a
 	// surrogate pair and consumes two positions in the guest field.

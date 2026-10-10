@@ -1223,12 +1223,11 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	if serveSession {
 		driver := &serve.Driver{
 			Advance: func(ctx context.Context) (bool, error) {
-				progressed, err := session.Tick(ctx)
+				progressed, err := stepKTF(ctx, session, probeClock, false)
 				if err != nil {
 					return progressed, err
 				}
 				ran++
-				pace(ctx, session, probeClock, false)
 				return progressed, nil
 			},
 			Frame: func() ([]byte, int, int) {
@@ -1401,12 +1400,11 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
-		progressed, err := session.Tick(ctx)
+		progressed, err := stepKTF(ctx, session, probeClock, cheatConsole)
 		if err != nil {
 			tickError = err
 			break
 		}
-		pace(ctx, session, probeClock, cheatConsole)
 		if !progressed && !cheatConsole {
 			// A round that did nothing is not an idle session while something
 			// is still due: a title whose whole loop is one repeating timer
@@ -1668,12 +1666,7 @@ func runRoute(ctx context.Context, session *ktf.Session, script *route.Route, op
 			return !pending
 		},
 		Advance: func(ctx context.Context) (bool, error) {
-			progressed, err := session.Tick(ctx)
-			if err != nil {
-				return progressed, err
-			}
-			pace(ctx, session, options.probeClock, false)
-			return progressed, nil
+			return stepKTF(ctx, session, options.probeClock, false)
 		},
 		Checkpoint: func(label string, tick int, reset bool) error {
 			// A mark says the route arrived somewhere worth measuring, so the
@@ -1770,23 +1763,52 @@ func shootFrame(path string, frame []byte, width, height int) error {
 	return writePNG(path, frame, width, height)
 }
 
-// pace holds a tick loop to the game's own speed. Whatever the game is waiting
-// for, the loop must not busy-poll it. A probe jumps its clock to the end of
-// the wait, so its tick budget buys guest work rather than repeats; an
-// interactive run waits it out, which is what holds the game to the speed it
-// was written for. The ceiling keeps an interrupt or a typed cheat command from
-// waiting out a long guest sleep, and stands in as the poll interval when the
-// guest declared no wait at all — the cheat console still has to read stdin.
-func pace(ctx context.Context, session *ktf.Session, probeClock *ktf.ManualClock, cheatConsole bool) {
+// ktfStepper is what stepKTF needs of a session.
+type ktfStepper interface {
+	Tick(context.Context) (bool, error)
+	TickFor(context.Context, time.Duration) (bool, time.Duration, error)
+	SkipToNextDeadline() bool
+	NextDeadline() (time.Time, bool)
+}
+
+// playEntryBudget is how much guest execution one wall-clock tick covers. It
+// is the server's own entry (tickBudget in internal/webhost), so a terminal and
+// a page hand a title the same rounds.
+const playEntryBudget = 32 * time.Millisecond
+
+// stepKTF advances a session by one tick and holds the loop to the game's own
+// speed. Whatever the game is waiting for, the loop must not busy-poll it.
+//
+// A probe runs one round and jumps its clock to the end of the wait, so its
+// tick budget buys guest work rather than repeats. An interactive run enters
+// the session the way the server does — rounds until the guest parks or the
+// entry's budget is spent — and then waits out what the guest asked for.
+//
+// **A round is the wrong unit on the wall clock.** A title whose network
+// thread sits in a blocking read yields every round and is due again at once,
+// so a round cost microseconds: a route's `wait 1500` was over in ten
+// milliseconds, before the title's own next frame came due, and the run stood
+// on a connecting screen the page got through. The ceiling keeps an interrupt
+// or a typed cheat command from waiting out a long guest sleep, and stands in
+// as the poll interval when the guest declared no wait at all — the cheat
+// console still has to read stdin.
+func stepKTF(ctx context.Context, session ktfStepper, probeClock *ktf.ManualClock, cheatConsole bool) (bool, error) {
 	if probeClock != nil {
-		session.SkipToNextDeadline()
-		return
+		progressed, err := session.Tick(ctx)
+		if err == nil {
+			session.SkipToNextDeadline()
+		}
+		return progressed, err
 	}
-	wait := idlePollCeiling
-	if deadline, pending := session.NextDeadline(); pending {
-		wait = min(time.Until(deadline), idlePollCeiling)
-	} else if !cheatConsole {
-		wait = 0
+	progressed, wait, err := session.TickFor(ctx, playEntryBudget)
+	if err != nil {
+		return progressed, err
+	}
+	wait = min(wait, idlePollCeiling)
+	if wait <= 0 && cheatConsole {
+		if _, pending := session.NextDeadline(); !pending {
+			wait = idlePollCeiling
+		}
 	}
 	if wait > 0 {
 		select {
@@ -1794,6 +1816,7 @@ func pace(ctx context.Context, session *ktf.Session, probeClock *ktf.ManualClock
 		case <-time.After(wait):
 		}
 	}
+	return progressed, nil
 }
 
 // parseParkEvent reads "<tick>" or "<tick>:<ms>" — the tick a park happens at

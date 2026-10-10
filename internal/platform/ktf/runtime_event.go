@@ -608,7 +608,10 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err := runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
+	runtime.beginTextReads()
+	_, err = runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
+	runtime.endTextReads(err == nil)
+	if err != nil {
 		return true, fmt.Errorf("paint KTF card %s: %w", card.ClassName, err)
 	}
 	return true, finish()
@@ -659,6 +662,12 @@ func runtimeInputMethodSetMode(runtime *initializationRuntime, _ *jvm.VM, argume
 		}
 		receiver.Fields[inputMethodModeField] = arguments[1]
 		runtime.touchInputMethod(receiver, false)
+		if owner, _ := receiver.Fields[inputMethodOwnerField].Reference(); owner != nil {
+			owner.Fields[componentModeChangedField] = jvm.IntValue(1)
+			if err := runtime.publishTextComponent(owner); err != nil {
+				return jvm.VoidValue(), err
+			}
+		}
 	}
 	return jvm.IntValue(1), nil
 }

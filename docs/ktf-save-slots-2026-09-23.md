@@ -36,6 +36,11 @@ bytes remain invalid. This is an observed application protocol, not a WIPI API
 contract. The provider remains restricted to its existing dependency and
 endpoint checks; it does not contact an external service.
 
+Since 2026-10-10 the creation receipt asks the title for a name instead of
+supplying one, and the title registers the name the player gives it — see
+[A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for).
+Slots created before that keep the names they were saved with.
+
 ## Evidence and scope
 
 The original 18-file debug save was copied under ignored

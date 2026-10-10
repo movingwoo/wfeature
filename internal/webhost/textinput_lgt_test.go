@@ -55,7 +55,15 @@ func TestLGTTextInputWebSocketRoundTripAndLimitRetry(t *testing.T) {
 		t.Fatalf("over-limit reply = %+v", reply)
 	}
 
-	const composition = "한글 이름 😀"
+	send(t, connection, clientMessage{
+		Kind: clientText, Action: "commit", Edit: edit.Edit,
+		Text: "\U0001F600", ID: 30,
+	})
+	if reply := expectMessage(t, connection, serverError); reply.ID != 30 || reply.Message != backend.ErrInvalidTextInput.Error() {
+		t.Fatalf("a commit outside the handset's encoding = %+v", reply)
+	}
+
+	const composition = "한글 이름 ABC"
 	send(t, connection, clientMessage{
 		Kind: clientText, Action: "commit", Edit: edit.Edit,
 		Text: composition, ID: 4,

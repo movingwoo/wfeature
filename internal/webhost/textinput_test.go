@@ -327,10 +327,10 @@ func TestTextInputSessionRoundTripAndResume(t *testing.T) {
 	if first.Text != "" || first.MaxLength != 16 {
 		t.Fatalf("initial editor = %+v", first)
 	}
-	send(t, connection, clientMessage{Kind: clientText, Action: "commit", Edit: first.Edit, Text: "한글 이름 😀", ID: 4})
+	send(t, connection, clientMessage{Kind: clientText, Action: "commit", Edit: first.Edit, Text: "한글 이름 ABC", ID: 4})
 	expectMessage(t, connection, serverResult)
 	second := open(5)
-	if second.Text != "한글 이름 😀" {
+	if second.Text != "한글 이름 ABC" {
 		t.Fatalf("guest text = %q", second.Text)
 	}
 	send(t, connection, clientMessage{Kind: clientText, Action: "commit", Edit: second.Edit, Text: strings.Repeat("한", 17), ID: 6})
@@ -346,7 +346,7 @@ func TestTextInputSessionRoundTripAndResume(t *testing.T) {
 		t.Fatalf("stale reply = %+v", reply)
 	}
 	resumed := open(10)
-	if resumed.Text != "한글 이름 😀" {
+	if resumed.Text != "한글 이름 ABC" {
 		t.Fatalf("resumed guest text = %q", resumed.Text)
 	}
 	send(t, connection, clientMessage{Kind: clientStop, ID: 11})

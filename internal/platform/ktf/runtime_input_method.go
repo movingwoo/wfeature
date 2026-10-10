@@ -43,6 +43,10 @@ const (
 	// which decides the characters a numeric field can take whatever mode a
 	// title later sets.
 	inputMethodConstraintField = "host:input-constraint"
+	// inputMethodOwnerField is the text component a handler was built for,
+	// absent on one a title constructed itself. A mode the handler is given
+	// is that component's iMode.
+	inputMethodOwnerField = "host:input-owner"
 	// inputMethodTitleOwnedField marks a handler the title constructed itself.
 	// Only such a handler is a field of the title's own; the one a text
 	// component carries is reached through the component.

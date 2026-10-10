@@ -58,6 +58,7 @@ func runtimeTextComponentKeyNotify(runtime *initializationRuntime, vm *jvm.VM, a
 	}
 	if changed {
 		receiver.Fields[componentTextField] = jvm.ReferenceValue(vm.NewString(editor.Text()))
+		setComponentCursor(receiver, len([]rune(editor.Text())))
 	}
 	// The mode key changes nothing and is still the component's key: a title
 	// that got it back would move its own menu on it.

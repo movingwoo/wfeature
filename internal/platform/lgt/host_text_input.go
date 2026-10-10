@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
-	"golang.org/x/text/encoding/korean"
 )
 
 const (
@@ -233,8 +232,8 @@ func validateCTextInput(text string) ([]byte, error) {
 			return nil, backend.ErrInvalidTextInput
 		}
 	}
-	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
-	if err != nil {
+	encoded, ok := backend.EncodeKSC5601(text)
+	if !ok {
 		return nil, backend.ErrInvalidTextInput
 	}
 	return encoded, nil
@@ -278,6 +277,9 @@ func javaTextInputHints(constraint int32) (inputMode string, password, valid boo
 func validateJavaTextInput(text string, constraint int32, maxLength int, multiline bool) error {
 	if err := backend.ValidateTextInput(text); err != nil {
 		return err
+	}
+	if _, ok := backend.EncodeKSC5601(text); !ok {
+		return backend.ErrInvalidTextInput
 	}
 	if maxLength > 0 && len(utf16Units(text)) > maxLength {
 		return backend.ErrInvalidTextInput

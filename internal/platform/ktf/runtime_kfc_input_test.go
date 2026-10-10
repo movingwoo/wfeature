@@ -60,10 +60,10 @@ func TestShownVendorFormOffersItsUniqueListenedTextField(t *testing.T) {
 	if input.Text != "old" || input.MaxLength != 12 || input.Multiline || input.InputMode != "text" {
 		t.Fatalf("TextInput() = %+v", input)
 	}
-	if err := input.Commit(context.Background(), "한글🙂"); err != nil {
+	if err := input.Commit(context.Background(), "한글 이름"); err != nil {
 		t.Fatal(err)
 	}
-	if got := runtimeComponentText(field); got != "한글🙂" {
+	if got := runtimeComponentText(field); got != "한글 이름" {
 		t.Fatalf("component text = %q, want complete Host composition", got)
 	}
 	if got := widgetInt(t, form, componentShownField); got != 1 {
@@ -245,7 +245,7 @@ func TestVendorFieldListenerAcceptsCommittedTextAndOwnsTrailingRelease(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := input.Commit(context.Background(), "새 이름🙂"); err != nil {
+	if err := input.Commit(context.Background(), "새 이름"); err != nil {
 		t.Fatal(err)
 	}
 	for _, eventType := range []int32{KeyPressed, KeyReleased} {
@@ -253,7 +253,7 @@ func TestVendorFieldListenerAcceptsCommittedTextAndOwnsTrailingRelease(t *testin
 			t.Fatal(err)
 		}
 	}
-	if accepted != "새 이름🙂" {
+	if accepted != "새 이름" {
 		t.Fatalf("guest accepted %q", accepted)
 	}
 	if len(listenerEvents) != 1 || listenerEvents[0] != [4]int32{3, KeyPressed, KeyFire, 0} {

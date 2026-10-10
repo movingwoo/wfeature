@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSlotRelayConversationAndDisplayName(t *testing.T) {
+func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
 	var service slotRelay
 	exchange := func(kind, command uint32, body []byte) []byte {
 		t.Helper()
@@ -38,38 +38,58 @@ func TestSlotRelayConversationAndDisplayName(t *testing.T) {
 	if int(quote[0]) != len(quote)-1 || quote[0] > 127 {
 		t.Fatalf("invalid quote %x", quote)
 	}
-	receipt := exchange(5, 1430, nil)
-	if receipt[0] != 1 || int(receipt[1]) != len(receipt)-10 || binary.BigEndian.Uint64(receipt[len(receipt)-8:]) != 0 {
-		t.Fatalf("invalid local receipt %x", receipt)
+	// The receipt says the slot holds no character, which is what opens the
+	// guest's name screen; asking again does not change it.
+	if receipt := exchange(5, 1430, nil); !bytes.Equal(receipt, []byte{0}) {
+		t.Fatalf("receipt before a name = %x, want status zero alone", receipt)
 	}
-	name := receipt[2 : len(receipt)-8]
-	if got := decodeEUCKR(name); got != " \uB85C\uCEEC2" {
-		t.Fatalf("creation must return a displayable EUC-KR name, got %x", name)
-	}
-	if !bytes.Equal(encodeEUCKR(decodeEUCKR(name)), name) {
-		t.Fatal("display name contains invalid EUC-KR bytes")
-	}
-	if got := exchange(5, 1430, nil); !bytes.Equal(got, receipt) {
-		t.Fatal("repeated commit changed receipt")
+	if receipt := exchange(5, 1430, nil); !bytes.Equal(receipt, []byte{0}) {
+		t.Fatalf("repeated receipt before a name = %x", receipt)
 	}
 	if got := exchange(0, 10, nil); len(got) != 0 {
 		t.Fatal("heartbeat changed payload")
+	}
+	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	if got := exchange(5, 1440, append([]byte{byte(len(name))}, name...)); !bytes.Equal(got, make([]byte, 8)) {
+		t.Fatalf("registration reply = %x, want the eight-byte field alone", got)
+	}
+	if service.phase != 6 || !bytes.Equal(service.label, name) {
+		t.Fatalf("registration left phase %d label %x", service.phase, service.label)
+	}
+	receipt := exchange(5, 1430, nil)
+	if receipt[0] != 1 || int(receipt[1]) != len(receipt)-10 || !bytes.Equal(receipt[2:len(receipt)-8], name) || binary.BigEndian.Uint64(receipt[len(receipt)-8:]) != 0 {
+		t.Fatalf("receipt after a name = %x, want the registered name", receipt)
 	}
 	identity[1] = 99
 	if service.identity[0] != 1 {
 		t.Fatal("retained caller-owned identity")
 	}
-	second := slotRelay{phase: 4, identity: []byte{1, 2, 3}, slot: 2}
-	reply, err := second.respond(slotMessage(5, 1430, nil))
+}
+
+// A conversation an earlier build answered with its own display name stays on
+// that name: it was never asked for one, and the guest has the label already.
+func TestSlotRelayKeepsAnEarlierBuildsDisplayName(t *testing.T) {
+	label := encodeEUCKR(" \uB85C\uCEEC3")
+	service := slotRelay{phase: 5, identity: []byte{1, 2, 3}, slot: 2, label: label}
+	reply, err := service.respond(slotMessage(5, 1430, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(reply[14:len(reply)-8], receipt[2:len(receipt)-8]) {
-		t.Fatal("different slots share a display name")
+	if reply[12] != 1 || !bytes.Equal(reply[14:len(reply)-8], label) {
+		t.Fatalf("receipt = %x, want the earlier label", reply[12:])
+	}
+	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	if _, err := service.respond(slotMessage(5, 1440, append([]byte{byte(len(name))}, name...))); err == nil {
+		t.Fatal("a slot that already has a name took another")
+	}
+	if service.phase != 5 || !bytes.Equal(service.label, label) {
+		t.Fatal("a refused registration changed the slot")
 	}
 }
 
 func TestSlotRelayRejectsMalformedOrOutOfOrderRequests(t *testing.T) {
+	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	register := func(name []byte) []byte { return slotMessage(5, 1440, append([]byte{byte(len(name))}, name...)) }
 	for _, test := range []struct {
 		name    string
 		phase   uint8
@@ -86,17 +106,28 @@ func TestSlotRelayRejectsMalformedOrOutOfOrderRequests(t *testing.T) {
 		{"signed slot overflow", 2, slotMessage(5, 1410, []byte{128})},
 		{"commit before confirmation", 3, slotMessage(5, 1430, nil)},
 		{"commit with extra data", 4, slotMessage(5, 1430, []byte{0})},
-		{"unimplemented renewal", 5, slotMessage(5, 1440, nil)},
+		{"name before the receipt", 4, register(name)},
+		{"empty name", 5, slotMessage(5, 1440, []byte{0})},
+		{"no name at all", 5, slotMessage(5, 1440, nil)},
+		{"name length mismatch", 5, slotMessage(5, 1440, append([]byte{byte(len(name) + 1)}, name...))},
+		{"signed name length overflow", 5, register(bytes.Repeat([]byte{'A'}, 128))},
+		{"name the guest font cannot draw", 5, register([]byte{0x8c, 0x63})},
+		{"name with a control byte", 5, register([]byte{'A', 0x0a})},
+		{"half a KSC5601 pair", 5, register(name[:len(name)-1])},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := slotRelay{phase: test.phase}
 			if _, err := service.respond(test.request); err == nil {
 				t.Fatal("accepted invalid request")
 			}
-			if service.phase != test.phase {
+			if service.phase != test.phase || len(service.label) != 0 {
 				t.Fatal("failed request advanced state")
 			}
 		})
+	}
+	named := slotRelay{phase: 6, identity: []byte{1}, label: name}
+	if _, err := named.respond(register(name)); err == nil || named.phase != 6 {
+		t.Fatal("a second registration was accepted")
 	}
 }
 
@@ -104,28 +135,21 @@ func TestSlotRelayCreatesZeroBasedSlots(t *testing.T) {
 	for _, slot := range []byte{0, 1, 2, 3, 4, 5} {
 		t.Run(fmt.Sprint(slot), func(t *testing.T) {
 			var service slotRelay
+			name := encodeEUCKR(fmt.Sprintf("NAME%d", slot))
 			requests := [][]byte{
 				slotMessage(1, 1000, []byte{30}),
 				slotMessage(5, 1400, []byte{3, 1, 2, 3}),
 				slotMessage(5, 1410, []byte{slot}),
 				slotMessage(5, 1420, nil),
 				slotMessage(5, 1430, nil),
+				slotMessage(5, 1440, append([]byte{byte(len(name))}, name...)),
 			}
-			var receipt []byte
 			for _, request := range requests {
-				var err error
-				receipt, err = service.respond(request)
-				if err != nil {
+				if _, err := service.respond(request); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if len(receipt) < 22 || int(receipt[13]) != len(receipt)-22 {
-				t.Fatalf("invalid receipt %x", receipt)
-			}
-			if name := decodeEUCKR(receipt[14 : len(receipt)-8]); name != fmt.Sprintf(" \uB85C\uCEEC%d", int(slot)+1) {
-				t.Fatalf("slot %d label = %q", slot, name)
-			}
-			if service.phase != 5 || service.slot != slot {
+			if service.phase != 6 || service.slot != slot || !bytes.Equal(service.label, name) {
 				t.Fatalf("slot not committed: %+v", service)
 			}
 		})
