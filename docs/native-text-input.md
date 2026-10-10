@@ -282,6 +282,70 @@ the extension syllables (`똠`, `햏`), Latin-1 letters and conjoining jamo are
 refused; KSC5601's 2,350 syllables, its jamo and symbols, and printable ASCII
 pass. The rule is `backend.EncodeKSC5601`, shared by every platform.
 
+## What a title sees after a commit
+
+A handset only ever changed a field through keys, so a title's own code after
+a key is often what puts the new text on screen. A Host commit has no key, and
+three consequences of that were reported as "the name appears only after I
+press another button" and "only the first letter appeared until I deleted it
+and typed it again".
+
+**Whole-value fields ask for a frame.** A KTF LWC or KFC commit sets
+`repaintPending` (and posts the repaint event to a guest event loop); an LGT
+Java commit marks the pushed card dirty. That is the request a component makes
+when its contents change. Without it, a KTF card whose worker owns its frame
+cadence, and every LGT Java card, kept the old text until the next key.
+
+**Title-owned SKT fields get one key.** After a commit to an `XTextField` or a
+title's `TextComponent`, the runtime delivers a press and release of key code
+0 to the current Canvas. Two local titles draw such a field only in their own
+key handling, after passing the key to the field: one title's
+`TextComponent.repaint` is empty and its game thread redraws after it takes a
+queued key; another's `paint` draws the field only on the pass its key
+handler requested. Repainting the Canvas therefore was not enough. Code 0 is
+no handset key, neither vendor input method edits with it, `getGameAction(0)`
+answers 0, and the key travels the title's own path, so a title that queues
+keys for a game thread redraws when that thread takes it. One title clears its
+name field on the first key after the name prompt appears; a commit made
+before that key is cleared by the redraw key exactly as it would be by the
+player's next key, and a commit made after it is kept and shown.
+
+**A widget's own input-method calls are part of the delivery.** KTF and LGT
+WIPI-C commits hand text to the widget through a carrier key. A widget may call
+the input method again while handling that key — one LGT name widget flushes
+the automaton and routes the same key a second time, another selects its mode
+again after every key. Each of those calls used to advance the snapshot
+revision, which is how a player's key is detected. On KTF, where text goes one
+character per carrier, delivery stopped after the first character and the page
+reported the field as changed. On LGT the first widget had the whole string
+and the page still reported failure; the second is fed four bytes per carrier
+and kept only its first two Korean characters. Calls made while
+the Host's own carrier is being processed no longer move the revision. A key
+between snapshot and commit, a mode change or a different event handler still
+makes the edit stale. A checkpoint is refused while a carrier is in flight.
+
+**A vendor field draws in the title's colour.** `XTextField.paint` draws
+with the colour the title set on its Graphics, as every other drawing call
+does. It used to draw black whatever the title chose: two titles that draw a
+black or dark input bar and then the field over it showed nothing, and with
+the title's colour both show the name in white. A third leaves a dark outline
+colour set from its own lettering and its name stays hard to read; no evidence
+says what the vendor field drew instead.
+
+**LGT C input follows the widget.** LGT WIPI-C input used to become available
+at the first input-method call and stay so. Several titles select a mode while
+starting and on every screen change, so eleven local archives offered input on
+splash, menu and gameplay screens, and a commit there delivered a stray `0`
+key. Availability now follows the rules in [Supported editors](#supported-editors).
+One title's ranking name widget reads its keys in a timer and holds eight
+bytes per call; it refused every commit before and now takes the whole name.
+
+Not a text-input defect: one KTF title draws its name field as an LWC
+component the platform is expected to paint (`ShellComponent` with a
+`TextBoxComponent` and foreground and background colours). This runtime does
+not paint LWC components, so the field stays empty whether the name arrives
+from the Host or from the keypad; the value is there and reads back.
+
 ## Validation
 
 The [2026-09-23 exception audit](text-input-audit-2026-09-23.md) records five
