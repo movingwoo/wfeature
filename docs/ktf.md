@@ -96,6 +96,9 @@ A saved file can share its name with a packaged resource directory. A lookup
 below that saved file falls through to the archive without recording a storage
 failure. The bounded local slot service also accepts the first, zero-based
 slot. See [slot creation and save overlay evidence](ktf-save-slots-2026-09-23.md).
+The service answers the creation receipt with "no character yet", so the title
+asks the player for a name and registers it with one more request; see
+[A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for).
 
 ## Quick save and quick load
 

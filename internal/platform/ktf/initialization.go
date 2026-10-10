@@ -345,6 +345,13 @@ type initializationRuntime struct {
 	activeSerialPaint *serialPaintOwner
 	repaintPending    bool
 	repaintServicing  bool
+	// paintTextReads collects the text components the card being painted
+	// reads, and paintedText is that set from the last paint that returned.
+	// A title that draws its own name field reads it there; see
+	// drawnTextComponent.
+	paintTextReads    []*jvm.Object
+	paintTextOverflow bool
+	paintedText       []*jvm.Object
 	// guestFlushedOwnFrame records that the guest put a frame on the screen
 	// from its own code rather than from inside the card paint this platform
 	// drives. See paintTopCard: a title that draws its frame and flushes it

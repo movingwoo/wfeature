@@ -234,7 +234,7 @@ func TestSKTAppendStopsOnCallbackChange(t *testing.T) {
 	}
 }
 
-func TestSKTHostThenKeypadUTF16Limit(t *testing.T) {
+func TestSKTHostThenKeypadLimit(t *testing.T) {
 	for _, route := range []string{"TextBox", "XTextField"} {
 		t.Run(route, func(t *testing.T) {
 			r := startUIFixture(t)
@@ -271,16 +271,19 @@ func TestSKTHostThenKeypadUTF16Limit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := edit.Commit(t.Context(), "AB🙂"); err != nil {
+			if err := edit.Commit(t.Context(), "AB\U0001F642"); !errors.Is(err, backend.ErrInvalidTextInput) {
+				t.Fatalf("a commit the handset's encoding cannot hold: %v", err)
+			}
+			if err := edit.Commit(t.Context(), "ABCD"); err != nil {
 				t.Fatal(err)
 			}
 			key('2')
-			if text := value(); text != "AB🙂" {
-				t.Fatalf("keypad changed a full UTF-16 field: %q", text)
+			if text := value(); text != "ABCD" {
+				t.Fatalf("keypad changed a full field: %q", text)
 			}
 			key('#')
 			key('2')
-			if text := value(); text != "ABa" {
+			if text := value(); text != "ABCa" {
 				t.Fatalf("delete then insert: %q", text)
 			}
 		})

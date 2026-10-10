@@ -608,7 +608,10 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err := runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
+	runtime.beginTextReads()
+	_, err = runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
+	runtime.endTextReads(err == nil)
+	if err != nil {
 		return true, fmt.Errorf("paint KTF card %s: %w", card.ClassName, err)
 	}
 	return true, finish()

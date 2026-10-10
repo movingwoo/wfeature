@@ -64,6 +64,7 @@ This consolidation adds no execution or acceptance evidence.
 - [A text component's protected fields](#implementation-a-text-components-protected-fields)
 - [A key is a callback](#implementation-a-key-is-a-callback)
 - [A packaged save that holds the address of the phone that wrote it](#implementation-a-packaged-save-that-holds-the-address-of-the-phone-that-wrote-it)
+- [A name the title asks for](#implementation-a-name-the-title-asks-for)
 - [Deliberately incomplete](#implementation-deliberately-incomplete)
 - [Compatibility follow-up (2026-09-12)](#followup-ktf-compatibility-follow-up)
 - [Native loading stall](#followup-native-loading-stall)
@@ -8576,6 +8577,89 @@ either, so this is named here and left off the list of walls, like the other
 causes that live in an archive (see "What a sweep of a 262-archive set asked
 for").
 
+<a id="implementation-a-name-the-title-asks-for"></a>
+
+### A name the title asks for
+
+A player reported that one title used to let them name the character in a new
+save slot, and that here every slot was named for them — a space, the Korean
+word for "local" and the slot number. That name came from this runtime: the
+local slot service that stands in for the carrier's slot server (see
+[`startup-compatibility-2026-09-19.md`](../startup-compatibility-2026-09-19.md))
+put it in the creation receipt, command 1430.
+
+**The receipt has a status byte, and zero is the name screen.** The title's
+reply parser is one switch over the command number (1400 to 1440); its 1430
+case reads a status byte first. Nonzero, it reads a length-prefixed name and an
+eight-byte field, stores both and moves to its next state. Zero, it reads
+nothing more and opens its own name screen. The service now answers zero — a
+slot with no character in it — and the screen the player remembered is there:
+a field for at most five characters, "no special characters", and "a created
+name cannot be changed".
+
+**The name goes back in one more request.** Once the title accepts a name it
+sends command 1440 with the name as length-prefixed EUC-KR bytes. The parser's
+1440 case reads nothing but an eight-byte value, which it stores where the
+receipt's eight-byte field goes, and moves to the same state a named receipt
+leads to. A one-byte or empty reply overran that read and left the title on
+TRANSMITTING; eight zero bytes — the value the receipt's field has always
+carried here — take it into the opening, where the dialogue already uses the
+name, and a restart lists the slot under it with its class and level. The name
+the title stores is its own copy; the service keeps it only to answer a repeated
+receipt with it.
+
+**The title has its own rule for a name, and a refusal is not a fault.** It
+accepts digits, `A`–`Z`, the space and complete Hangul syllables, and calls
+anything else a special character — lowercase letters included, which is what
+the keypad's letter mode types first. A name from the keypad has to be in
+capitals or digits; the keypad has no Hangul.
+
+**Its field is one the Host had no way to find.** The field is a
+`TextFieldComponent` subclass the title builds at start-up and tells it has
+focus with `focusNotify(true)`. It never calls `setFocus` and never adds the
+field to a container, so neither explicit focus nor a shown shell pointed at
+it; the card draws the box and reads `getString` on every paint while the name
+screen is up. The Host now offers a focused field the top card read during its
+last paint — [`native-text-input.md`](../native-text-input.md#supported-editors)
+has the rule and its limits.
+
+**A name the page could send broke the slot it named.** The page offered the
+field and took any text, and Go's EUC-KR encoder takes any Hangul syllable,
+including the 8,822 KSC5601 has no code for. The title drew such a name on its
+name screen with the platform's font and saved it; on the next start its slot
+screen drew the name with its own font, which raised
+`ArrayIndexOutOfBoundsException` on the first byte outside KSC5601, and the slot
+showed blank. Host text is now held to KSC5601 on every platform — see
+[the handset's encoding](../native-text-input.md#the-handsets-encoding).
+
+**Slots an earlier build created keep their names.** The title saved those
+names itself, and nothing here rewrites a save. A quick save taken during an
+earlier build's slot conversation restores at the receipt with its label and
+keeps answering with it; a quick save from this build may now hold a seventh
+phase, the registered name, which an earlier build refuses as it refuses any
+state it does not know.
+
+**The terminal could not reach the screen.** `runktf -play` stood on the
+connecting screen this flow passes through, while the page got through it every
+time. The title's network thread waits in a read that yields every round, so a
+round cost a few microseconds and a route's tick-counted wait ended before the
+title's own next frame was due; `-play` now enters the session the way the
+server does — [`cli.md`](../cli.md#runktf).
+
+`TestSlotRelayConversationAndRegisteredName`,
+`TestSlotRelayKeepsAnEarlierBuildsDisplayName`,
+`TestSlotRelayRejectsMalformedOrOutOfOrderRequests` (registration out of order,
+lengths, bytes the guest font cannot draw) and
+`TestRelayHeapCarriesTheRegisteredNamePhase` cover the service;
+`TestTextInputOffersAFocusedFieldTheCardDraws` and
+`TestTextInputDoesNotGuessBetweenDrawnFields` the field;
+`TestEncodeKSC5601TakesOnlyWhatTheHandsetEncodingHolds` and
+`TestTextInputRefusesTextThePlatformEncodingLacks` the encoding; and
+`TestAKTFTickOnTheWallClockIsTheServersEntry` the terminal. On the archive,
+through the session path the page uses: a name outside KSC5601 is refused, a
+Korean name commits, the confirm key registers it (service phase 6, no refusal),
+the opening shows it, and a new process lists the slot under it.
+
 <a id="implementation-deliberately-incomplete"></a>
 
 ### Deliberately incomplete
@@ -8636,6 +8720,11 @@ for").
   that card off the display through it, so a card handed over unshown would
   take the title's own card with it — see "A text component's protected
   fields". Publishing it waits for the platform to show it
+- **painting LWC components.** A title that expects the platform to draw a
+  shell and its text box shows an empty box; the text is there and reads back.
+  Nothing records what the original runtime's components looked like — see
+  [`native-text-input.md`](../native-text-input.md#what-a-title-sees-after-a-commit)
+  for the measurement and what would reopen it
 
 
 <a id="followup-ktf-compatibility-follow-up"></a>

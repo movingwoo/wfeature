@@ -264,7 +264,10 @@ The first implementation returned a binary digest in the slot-name field. The
 guest treated those bytes as a bitmap-font string, so selecting the new slot
 raised `ArrayIndexOutOfBoundsException` from its paint callback. The service now
 returns a short EUC-KR display name, and its regression test checks that the
-field round-trips through the same encoding. A copied save with the corrupted
+field round-trips through the same encoding. Since 2026-10-10 the receipt
+carries no name at all: its status byte says the slot is empty, the title asks
+the player for one and registers it (command 1440) — see
+[A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for). A copied save with the corrupted
 field was repaired for reproduction only; no user save was changed.
 
 After the property, framing and scheduler changes, `make test` (including

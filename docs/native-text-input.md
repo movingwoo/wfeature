@@ -78,6 +78,17 @@ including nested containers and shell subclasses. Detached children and hidden
 ancestors are unavailable. A field that has never belonged to a container remains
 supported for a card that draws it directly. Moving focus away and back through
 either the component or form API invalidates the earlier edit.
+With no explicit focus, shell or vendor form, KTF also offers a field the title
+draws itself: a text component that was told it has focus through
+`focusNotify(true)` and whose text the top card read during its last paint.
+One title's character-name screen keeps such a field from start-up, never calls
+`setFocus` and never adds it to a container; its card reads `getString` on every
+paint while the name screen is up and on no other screen, so the read rather
+than the focus is the evidence. Exactly one focused field must be read: two, an
+unfocused one, or a paint that failed offer nothing, and a paint that stops
+reading the field makes a pending edit stale. One screen is offered that does
+not show the field: that title's network-failure dialog is painted by the same
+card, which still reads the field under it.
 The adapter preserves field constraints and stores the complete value using the
 component string-setting contract. Fields with an explicitly installed
 InputMethodListener remain unsupported: its per-key composition deltas cannot
@@ -109,7 +120,7 @@ not a complete LWC renderer.
 KTF also supports a C-backed card editor that activates the WIPI-C input method.
 Completed Host text is appended through the guest's existing key callback and
 completion buffer. Input-mode selection describes the handset keypad automaton,
-not a Java-style field constraint; Host text must be strict EUC-KR without
+not a Java-style field constraint; Host text must be KSC5601 without
 controls. A Host submission is delivered as complete EUC-KR characters through
 successive guest callbacks, so a small completion buffer does not restrict the
 whole field to one or two characters. The guest retains its field-length policy.
@@ -141,7 +152,7 @@ title's digit mode. Titles that run their own event loop remain unsupported. See
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value
 nor a stable component identity. It accepts up to 64 completed characters per
-submission and rejects controls and text outside strict EUC-KR. Input-mode
+submission and rejects controls and text outside KSC5601. Input-mode
 selection describes the handset keypad automaton, not a field constraint, so
 Host composition accepts Korean even when the widget selected `N123`. Numeric
 keypad events still produce digits in that mode. The widget still enforces
@@ -169,9 +180,11 @@ its keys to the automaton or at least selects its mode again for them, and the
 key that moves focus off a field is the one that does neither.
 
 Java field limits count UTF-16 units in both Host composition and the shared
-keypad editor; supplementary characters consume two units. Keypad caret movement,
-backspace and truncation keep complete characters. Native entry does not infer
-fields drawn by game code.
+keypad editor. Host text never holds a supplementary character (see
+[the handset's encoding](#the-handsets-encoding)), but a title's own text can,
+and one consumes two units. Keypad caret movement, backspace and truncation keep
+complete characters. Beyond the KTF field a card reads while painting, native
+entry does not infer fields drawn by game code.
 
 ## What a title sees after a commit
 
@@ -231,11 +244,43 @@ key. Availability now follows the rules in [Supported editors](#supported-editor
 One title's ranking name widget reads its keys in a timer and holds eight
 bytes per call; it refused every commit before and now takes the whole name.
 
-Not a text-input defect: one KTF title draws its name field as an LWC
-component the platform is expected to paint (`ShellComponent` with a
-`TextBoxComponent` and foreground and background colours). This runtime does
-not paint LWC components, so the field stays empty whether the name arrives
-from the Host or from the keypad; the value is there and reads back.
+Not a text-input defect, and deliberately not built: one KTF title draws its
+name field as an LWC component the platform is expected to paint
+(`ShellComponent` with a `TextBoxComponent` and foreground and background
+colours). This runtime does not paint LWC components, so the field stays empty
+whether the name arrives from the Host or from the keypad; the value is there
+and reads back. A renderer would be a widget toolkit whose look nothing here
+records — no capture of the original runtime's components exists — for a
+surface few titles reach: four titles showed a shell in a 3,000-tick sweep of
+the local corpus, and about twenty-six name `ShellComponent.show` at all. What
+it drew would be a guess presented as the original. Reopen this when a capture
+of the original runtime's LWC components turns up.
+
+## The handset's encoding
+
+Host text reaches a title only if every character has a code in KSC5601. That
+holds on all three platforms and every route: KTF's LWC, vendor and
+input-method fields and its C input method, SKT's fields, and LGT's Java fields
+and C widgets. The page shows a refusal as 입력 불가능 and keeps the dialog
+open, so the text can be changed and submitted again.
+
+The WIPI specification names the encoding — a String becomes a C string as
+ISO8859 for English and KSC5601 for Hangul — and the handsets of all three
+carriers were EUC-KR. What this runtime encodes with, Go's `korean.EUCKR`, is
+the Microsoft extension of it (code page 949), which also gives codes to the
+8,822 modern Hangul syllables KSC5601 lacks. A title that draws text with a font
+of its own indexes the glyph table by those bytes. One KTF title saved a
+character name holding such a syllable and then drew it on its slot screen: the
+font raised `ArrayIndexOutOfBoundsException` from the paint and the slot showed
+blank, and with the name in the save it would have stayed so. The same name
+drew correctly on the name screen, which uses the platform's font, so nothing at
+entry time showed the problem.
+
+So text the handset could not have typed is refused before it reaches a title,
+rather than handed over in an encoding the title was not written for. Emoji,
+the extension syllables (`똠`, `햏`), Latin-1 letters and conjoining jamo are
+refused; KSC5601's 2,350 syllables, its jamo and symbols, and printable ASCII
+pass. The rule is `backend.EncodeKSC5601`, shared by every platform.
 
 ## Validation
 

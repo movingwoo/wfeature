@@ -2502,3 +2502,32 @@ change from no visible name to white text, one sets black itself and is
 unchanged, one keeps its dark leftover colour, and one shows no field on the
 screen reached. `TestXTextFieldPaintsInTheTitlesColour` paints a black bar,
 sets white and paints the field, and fails on the earlier code.
+
+The KTF field a player reported was out of reach of both sweeps for a reason of
+its own: the title's slot service answered every new slot with a name, so its
+name screen never opened. With the receipt answering "no character yet"
+([A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for)),
+a scripted route through `internal/session` on the wall clock reaches the
+screen in about 1,520 ticks. There the Host offers the field (limit seven),
+refuses `똠방` as outside KSC5601, commits `홍길동`, and the confirm key
+registers the name: the service reaches its last phase with nothing refused,
+the opening uses the name, and a second process over the same save lists the
+slot under it. The same route under `runktf -play` stood on the connecting
+screen in 6 of 6 runs before `-play` took the server's entry, and got through
+in 3 of 3 after. The title's own name rule refuses lowercase letters, so a
+keypad name there has to be capitals or digits; that is the title, not the
+field.
+
+Whether the drawn-field rule offers input anywhere it should not was measured
+the same way as the first survey: the 33 KTF archives whose packages name both
+a text component's `getString` and `focusNotify`, 3,000 ticks each on a manual
+clock with a key every 12 ticks. The rule offered nothing in any of them,
+including the reported title, whose name screen needs its route.
+
+`TestTextInputOffersAFocusedFieldTheCardDraws` and
+`TestTextInputDoesNotGuessBetweenDrawnFields` paint a test card that reads its
+fields' text and require exactly one focused, read field to be offered, and a
+commit to go stale once a paint stops reading it; both fail before the change.
+`TestEncodeKSC5601TakesOnlyWhatTheHandsetEncodingHolds` pins the shared rule,
+and the KTF, SKT, LGT, session and webhost tests that used to commit emoji now
+commit KSC5601 text and expect emoji and extension syllables to be refused.

@@ -173,6 +173,9 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 	if err := backend.ValidateTextInput(text); err != nil {
 		return err
 	}
+	if _, ok := backend.EncodeKSC5601(text); !ok {
+		return backend.ErrInvalidTextInput
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -1023,7 +1023,7 @@ func init() {
 				{class: runtimeComponentClass, name: "getHeight", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentZero},
 				{class: runtimeComponentClass, name: "getWidth", descriptor: "()I", accessFlags: 0x0001, implementation: runtimeComponentZero},
 				{class: runtimeComponentClass, name: "keyNotify", descriptor: "(II)Z", accessFlags: 0x0001, implementation: runtimeComponentKeyNotify},
-				{class: runtimeComponentClass, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("focused:Z")},
+				{class: runtimeComponentClass, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField(componentFocusedField)},
 				{class: runtimeComponentClass, name: "showNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("shown:Z")},
 				{class: runtimeComponentClass, name: "configure", descriptor: "(IIIII)V", accessFlags: 0x0001, implementation: runtimeComponentConfigure},
 				{class: runtimeComponentClass, name: "setFocus", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentSetFocus},
@@ -3281,7 +3281,10 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if _, err := vm.InvokeVirtual(receiver, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics)); err != nil {
+	runtime.beginTextReads()
+	_, err = vm.InvokeVirtual(receiver, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
+	runtime.endTextReads(err == nil)
+	if err != nil {
 		return jvm.VoidValue(), fmt.Errorf("service repaint of %s: %w", receiver.ClassName, err)
 	}
 	// The guest painted a frame of its own. While it keeps doing that the Host

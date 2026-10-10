@@ -23,6 +23,8 @@ const (
 
 	componentTextField      = "text:Ljava/lang/String;"
 	componentMaxLengthField = "maxLength:I"
+	// componentFocusedField is what `focusNotify` last told the component.
+	componentFocusedField = "focused:Z"
 	// componentImageField is the picture a button was built with.
 	componentImageField = "image:Lorg/kwis/msp/lcdui/Image;"
 	// componentInputHandlerField is the automaton a text component owns. The
@@ -192,7 +194,7 @@ func runtimeTextBoxComponentClassDefinition() runtimeJavaClass {
 			{class: class, name: "setString", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001, implementation: runtimeTextComponentSetString},
 			{class: class, name: "insert", descriptor: "([CIII)V", accessFlags: 0x0001, implementation: runtimeTextComponentInsert},
 			{class: class, name: "delete", descriptor: "(II)V", accessFlags: 0x0001, implementation: runtimeTextComponentDelete},
-			{class: class, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField("focused:Z")},
+			{class: class, name: "focusNotify", descriptor: "(Z)V", accessFlags: 0x0001, implementation: runtimeComponentBooleanField(componentFocusedField)},
 		},
 	}
 }
@@ -452,11 +454,12 @@ func runtimeTextComponentSetMaxLength(_ *initializationRuntime, _ *jvm.VM, argum
 
 // runtimeTextComponentGetString answers the component's own text, or the empty
 // string when it was never given one.
-func runtimeTextComponentGetString(_ *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+func runtimeTextComponentGetString(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	receiver, err := runtimeComponentReceiver("TextComponent.getString", arguments, 1)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	runtime.noteTextRead(receiver)
 	if value, ok := receiver.Fields[componentTextField]; ok {
 		if text, err := value.Reference(); err == nil && text != nil {
 			return value, nil

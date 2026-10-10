@@ -241,6 +241,16 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 `-speed`, `-key` and `-cheat` each turn `-play` on, because none of them means
 anything to a run that is stepping ticks by hand.
 
+**Under `-play` a tick is the server's entry, not a round.** The descriptor
+package enters its session the way the server does — rounds until the guest
+parks, or 32 ms of them — and then waits out what the guest asked for, so
+`-ticks`, `-key` and a route's `wait` count those entries. Without `-play` a
+tick is still one round followed by a jump of the manual clock. A round is the
+wrong unit on the wall clock: a title whose network thread sits in a blocking
+read yields every round and is due again at once, a round then cost a few
+microseconds, and a route's `wait 1500` was over before the title's own next
+frame came due — the run stood on a connecting screen the page got through.
+
 **`-screen` changes what the game is told, not how big the picture is drawn.**
 That is `-scale`. Every local archive here was packaged for the 240x320 handset
 this carrier standardised on, so the default is the answer for all of them and

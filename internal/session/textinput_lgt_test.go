@@ -29,7 +29,7 @@ func TestLGTTextInputRoundTripThroughPlatformNeutralSession(t *testing.T) {
 	if input.Text != "" || input.MaxLength != 16 || input.Multiline || input.Password || input.InputMode != "text" {
 		t.Fatalf("initial LGT text input = %+v", input)
 	}
-	const committed = "한글 이름 😀"
+	const committed = "한글 이름 ABC"
 	if err := input.Commit(t.Context(), committed); err != nil {
 		t.Fatal(err)
 	}
