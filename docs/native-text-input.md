@@ -127,6 +127,17 @@ editor, permits a fresh edit on return, and blocks input after acceptance.
 Unknown callers keep the conservative input-method-activity requirement. See
 the [controller lifetime regression](ktf-input-lifetime-2026-09-23.md).
 
+KTF also supports a Java title's own field: an `InputMethodHandler` the title
+constructs, gives its own listener, and hands the keys its card receives. The
+Host appends up to 64 Java chars per submission, one character per carrier key
+the title forwards, so the title's own length limit and redraw apply to each;
+the field's constraint is applied and controls are rejected. The field is
+available from the listener's registration until a press does not reach the
+handler, with an exception for a field the title rebuilds while handling a
+key; it survives a quick load. The keypad itself types digits only in the
+title's digit mode. Titles that run their own event loop remain unsupported. See
+[whole-field replacement and IME callbacks](#lifecycle-whole-field-replacement-and-ime-callbacks).
+
 LGT also supports game-owned WIPI-C widgets that use `MC_imHandleInput`. This
 path appends at the guest cursor because WIPI-C exposes neither the field value
 nor a stable component identity. It accepts up to 64 completed characters per
@@ -396,6 +407,20 @@ installed application listener needs a separately established contract; refusing
 that unsupported target is a limitation, not evidence that custom listeners work.
 The KTF and LGT adapters follow this distinction: they refuse installed delta
 listeners and use the component string-setting contract for supported fields.
+
+Per-key edits are that separate contract, and on KTF three titles that build
+their own handler settle it: an insertion appends the whole array, a deletion
+cuts `len` characters off the end, and a replacement is ignored. That makes a
+title's own field a Host target. While the field is open — a listener
+registered on a handler the title built, with the presses the card receives
+reaching it — the Host offers an append-only edit, and a commit reaches the
+listener as one insertion per character, each carried by a key press the title
+forwards, so the title applies its own limit and redraw to each. A field closes
+on a press it does not see, except a field the title rebuilt while handling a
+key, which stays open until it takes a key itself; the open field is a runtime
+object, so it survives a quick load. A text component whose handler the title
+gave its own listener stays unsupported, as above. See
+[the KTF history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
 
 <a id="lifecycle-separate-native-input-method-callers"></a>
 

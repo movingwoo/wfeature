@@ -52,7 +52,7 @@ type restoredRuntimeControl struct {
 }
 
 func (runtime *initializationRuntime) captureControlState(now time.Time) (runtimeControlState, error) {
-	if runtime.cInput.pendingValid != nil || runtime.cInput.delivering || runtime.repaintServicing || runtime.resultBindingDepth != 0 {
+	if runtime.cInput.pendingValid != nil || runtime.cInput.delivering || runtime.javaInput.pending != nil || runtime.repaintServicing || runtime.resultBindingDepth != 0 {
 		return runtimeControlState{}, fmt.Errorf("KTF control capture has an active Host input, paint or binding operation")
 	}
 	if len(runtime.pendingNetCallbacks) > maxPendingNetCallbacks || len(runtime.wipicClips) > maxWIPICMediaClips || len(runtime.wipicClipOrder) > maxWIPICMediaClips || len(runtime.cInput.pending) > 2 {
