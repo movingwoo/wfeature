@@ -889,6 +889,51 @@ Two quick load tests that refused a load over a directory where the save file
 had been now require the load to take it as a save that is not there: the
 object over it is empty and the tree is unchanged.
 
+Members a sustained key sweep reached (2026-10-10).
+`runtime_input_method_test.go` holds a title's own `InputMethodHandler` field to
+the edits three titles' listeners apply. The keypad types a digit only in the
+digit mode and sends clear as a deletion; letters, Hangul, releases, star, hash
+and the navigation keys come back unprocessed, and a handler without a listener
+processes nothing. A test card that hands its field every press but fire and its
+mode key shows the Host text input offered from the listener's registration,
+kept through the presses the field takes and the mode switch, and withdrawn
+after fire, under another card and for a title with its own event loop. A commit
+of three Hangul syllables reaches the listener as three single-character
+insertions over three carrier presses, a spent edit is refused, a field that
+closes partway keeps what it was handed and refuses the rest, and an edit taken
+before the field closed sends no key. A field rebuilt while handling a key, with
+a message over it, stays open through the press that dismisses the message and
+closes after taking a key; one opened outside a key closes on its confirmation.
+A numeric constraint takes Host digits and refuses letters, a text component's
+handler opens nothing, and the open field survives a heap checkpoint with the
+text input offered before any key. The same file resolves
+`Character.<init>(C)V`, `String.<init>(Ljava/lang/StringBuffer;)V`,
+`notifyKeyInput` and the two `StringBuffer` members through the guest's class
+record and runs them. On real archives a probe drove the first title's field
+open on a manual clock and committed through `Session.TextInput`: the text
+appears in the field and becomes the candidate's name on fire, six characters
+bring up the title's own message after the fifth and the rebuilt field takes the
+next commit, and a checkpoint taken with the field open and loaded into a new
+session offers the text input before any key; the second title's store-name
+field takes a commit and keeps six of eight characters. The sweep that found the
+three — every local KTF archive for 3,000 ticks at four times speed with a key
+every twelve ticks — was run again on the final change: 267 archives ran to the
+end of the script, 15 ended with an error — seven of them the title's own
+`System.exit` — and 18 were still running at the 180-second limit, where the run
+that found the three had 254, 20 and 26. The three titles run all 3,000 ticks,
+and no run stops on a method lookup; the one lookup still failing is the field
+`TextComponent.m_cPos:I` in one title, a failure [recorded
+before](ktf-qa-2026-09-21.md#comparison-and-current-gates). Every title whose
+outcome differs between runs had already flipped the same way across the earlier
+runs of this sweep, and the four that looked worse on the first rerun gave the
+same result twice each on `main` and on this change, so the differences are the
+run-to-run variation of a `-play` session and the load of eight workers on eight
+cores. Two titles end some runs on an uncaught guest exception — a
+`StringIndexOutOfBoundsException` after typing into an LWC text box and a
+`NumberFormatException` — in the run that found the three as well, which leaves
+their cause open. See [the KTF
+history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
+
 Compile the authored `ReentryProbe.java` with Java 8 target settings into a
 temporary directory and copy only `ReentryProbe.class` into KTF testdata.
 Its bridge declaration is compile-time only; the test installs the ARM body.
