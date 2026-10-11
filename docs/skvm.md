@@ -73,7 +73,8 @@ universal MIDP Call constant.
 The runtime has Canvas pointer handlers, but the shared SKT session does not
 offer browser pointer input. Host keyboard/IME entry supports known active
 editors, including an append-only vendor component whose API cannot return its
-existing value. Constraints and UTF-16 limits remain authoritative. See
+existing value. Constraints and UTF-16 limits remain authoritative, and Host
+text must be encodable in KSC5601; other characters are refused. See
 [native text input](native-text-input.md) for the supported targets and limits.
 
 Display selection follows supported descriptor/resource evidence. Supplying
@@ -92,6 +93,15 @@ and sampled-audio buffers prove software delivery, not audible playback on a
 phone. One recorded MIDlet route proves an in-game save, fresh-runtime reload,
 and restoration to the same map checkpoint. That result does not cover every
 archive or the Jlet path.
+
+## Quick save and quick load
+
+SKT Java/MIDP/WIPI sessions, and GNEX/GVM SGS sessions, are recorded between
+rounds and restored through the shared checkpoint envelope, the CLI `run`
+command and the page's keypad controls, without replaying startup. A load
+leaves ordinary saves where they are, per
+[the shared rule](architecture.md#quick-load-and-ordinary-saves). The state
+recorded, the refusals and the limits are in [SKT checkpoints](skt-checkpoints.md).
 
 ## Validation and limits
 

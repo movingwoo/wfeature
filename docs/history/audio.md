@@ -33,8 +33,10 @@ and restoration after zero volume. SKT MIDP VolumeControl now exposes independen
 level/mute state, stable control identity and change notifications, including
 after a checkpoint. The [pause repair](../audio-ownership.md#clip-pause-and-resume)
 retains cursors, repeat mode, note envelope ages and PCM positions across the
-implemented Java/MIDP/SKVM and LGT C paths. Unknown source mappings and KTF C
-pause bindings remain open. Per-file decoder budgets now bound allocation and
+implemented Java/MIDP/SKVM and LGT C paths. Source mappings and the KTF C
+pause, resume and volume slots, open at this point, were later read from their
+callers; see [below](#source-mutes-and-the-ktf-c-media-slots-read-from-callers).
+Per-file decoder budgets now bound allocation and
 expansion, as described below. Sustain, RPN pitch sensitivity
 and controller reset now follow the [MIDI state contract](../audio.md#midi-sustain-pitch-range-and-reset).
 The [MIDP lifecycle repair](../audio.md#midp-playback-lifecycle)

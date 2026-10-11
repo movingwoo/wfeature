@@ -1,6 +1,6 @@
 # PWA release acceptance
 
-This is the bounded acceptance path for the 0.5.1 release. The browser PWA
+This is the bounded acceptance path for a release. The browser PWA
 remains the primary distribution target. A release candidate must distinguish
 browser automation, physical-device observations, and untested routes. An
 installed shell does not run the emulator offline: the server owns execution
@@ -18,8 +18,9 @@ library or saves. Files live under a unique hidden directory in `var/games`,
 `var/ext`, and `var/savedata`. Logs, screenshots, browser storage and JSON results
 remain under ignored `var/acceptance/pwa-<engine>-<timestamp>/`.
 
-The current candidate uses `wfeature-pwa-v42`, outside the cleanup prefix of
-already-installed legacy workers. It retires legacy caches and strictly older
+The candidate's cache is named `wfeature-pwa-v<N>` in `web/service-worker.js`
+(`v55` on 2026-10-11), outside the cleanup prefix of already-installed legacy
+workers. It retires legacy caches and strictly older
 versions in the new prefix. The runner reads the candidate's cache name from its
 embedded worker. It waits for cache retirement after navigation, including the
 worker's asynchronous work after the response completes. The
@@ -67,12 +68,12 @@ and its ignored data out of that snapshot. For example, from the repository root
 
 ```sh
 mkdir -p build/pwa-acceptance/baseline-source
-git archive v0.5.0 | tar -x -C build/pwa-acceptance/baseline-source
+git archive v0.5.2 | tar -x -C build/pwa-acceptance/baseline-source
 (cd build/pwa-acceptance/baseline-source && \
-  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.5.0' \
+  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.5.2' \
   -o ../baseline-server ./cmd/server)
 CGO_ENABLED=0 go build -trimpath \
-  -ldflags='-s -w -X main.version=0.5.1' \
+  -ldflags='-s -w -X main.version=0.6.0' \
   -o build/pwa-acceptance/candidate-server ./cmd/server
 ```
 

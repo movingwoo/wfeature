@@ -20,6 +20,7 @@ This consolidation adds no execution or acceptance evidence.
 - [Quick save and quick load](#state-quick-save-and-quick-load)
 - [Common authentication bypass](#state-common-authentication-bypass)
 - [Research validation](#state-research-validation)
+- [Quick save implementation measurements (2026-10-01 to 2026-10-02)](#quick-save-implementation-measurements)
 - [Earlier snapshot feasibility record](#snapshot-feasibility)
 
 <a id="implementation-maintenance-review-2026-09-10"></a>
@@ -618,13 +619,100 @@ gameplay, saves, or audible playback. Missing archives and human observations
 remained unresolved. The platform and testing histories preserve the outcomes.
 Temporary worker assignments and publication sequencing are retired.
 
+<a id="quick-save-implementation-measurements"></a>
+
+## Quick save implementation measurements (2026-10-01 to 2026-10-02)
+
+The KTF checkpoint was built in component steps against source `49bacd0`, and
+LGT followed on 2026-10-02. [Testing](../testing.md) keeps the route-level
+acceptance and the final loading-route cost of the whole feature (0.00%, 0.22%
+and 1.77% over three routes). The component measurements below were taken on
+the way and are kept here because their raw samples lived in temporary
+directories that no longer exist.
+
+### Design constraints that held
+
+- Capture never goes through `Session.Pause`. That path runs guest lifecycle
+  callbacks — MIDP lets `pauseApp` release resources, and a paused application
+  still receives asynchronous events — so it changes the state being captured.
+  Capture waits for a boundary between whole rounds instead and runs no guest
+  code.
+- Records are explicit codecs, never an automatic encoding of the runtime's
+  structs. `encoding/gob` drops function and channel fields and does not keep a
+  cyclic object graph, and Go locks, channels, goroutines and Host bindings are
+  rebuilt from records rather than stored. A continuation or payload kind
+  without a codec refuses the capture by name.
+- A load prepares a detached runtime and validates it before the running
+  session is touched, and the displaced session is not closed, because closing
+  runs guest exit code that may write a save.
+
+### Component costs
+
+Each figure is the median of six serial A/B pairs that alternated order, at one
+Go CPU, with identical benchmark source on both sides and no other build or
+test running. They measure single operations, not frame rates.
+
+| Fixed work | Before | After | Change |
+| --- | ---: | ---: | --- |
+| Two short nested ARM calls | 550.55 ns | 558.25 ns | +1.40%; 456 B to 520 B per pair |
+| Supervisor crossing, four filler instructions | 212.60 ns | 213.15 ns | +0.26% |
+| Supervisor crossing, 32 filler instructions | 348.95 ns | 348.65 ns | -0.09% |
+| Native return-scope bookkeeping alone | 152.90 ns | 179.55 ns | +17.43% (+26.65 ns); 24 B to 32 B, one allocation |
+| JVM bytecode static call | 336.30 ns | 341.00 ns | +1.40% |
+| JVM static native call | 280.50 ns | 291.15 ns | +3.80% |
+| JVM instance native call | 339.65 ns | 345.10 ns | +1.60% |
+| Java `Math.abs` crossing | 357.00 ns | 361.65 ns | +1.30%; 172 B and four allocations on both sides |
+
+The JVM rows are per call, 1,000 guest calls per operation, and measure the
+native-depth counter; their allocation counts and bytes did not change. The
+nested-call pair's extra 64 bytes is a real allocation cost even though its
+time barely moved.
+
+Real archives with continuation bookkeeping enabled, against unchanged
+`49bacd0`, with saves in memory. Instruction counts and guest time were
+identical within each archive:
+
+| Archive SHA-256 prefix | Ticks | Guest instructions | Before, ns/step | After, ns/step | Change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `23919eb33365` | 300 | 1,258,355,092 | 7.650 | 7.710 | +0.78% |
+| `902466ac7e9e` | 300 | 7,153,206 | 75.910 | 76.755 | +1.11% |
+| `e40b5b8196d2` | 300 | 89,485,668 | 4.420 | 4.445 | +0.57% |
+| `cc2c96d671cd` | 2,000 | 38,697,351 | 33.200 | 33.175 | -0.08% |
+| `aa3fcba4598b` | 2,000 | 6,929,494 | 41.680 | 41.695 | +0.04% |
+
+The first three are loading routes with no parked worker at the sampled points;
+the last two contain parked workers in the continuation inventory. None of them
+is browser frame rate or restored gameplay, and none showed a sustained
+regression.
+
+### Review findings left open
+
+The 2026-10-02 review of the LGT restore path left one finding as accepted:
+handles inside the Java tables — a Graphics' surface, a widget's parent, a
+thread's runnable — are not cross-checked against the objects they name. Every
+consumer was read and answers a wrong handle with an error or a contained
+panic, so it is a refusal question rather than a hang or an allocation. The
+same review held the LGT display a record may carry to 1,024 a side and noted
+that the KTF native record still accepted 4,096 without checking whether that
+size reached a Host buffer. It did: a restored native session takes the
+record's screen as its own size. The pre-release check of 2026-10-11 held it
+to 1,024 as well; see [KTF](../ktf.md#quick-save-and-quick-load).
+
+The quick load of that period also replaced the whole save folder from a copy
+in the slot. That writer, the staged re-read added to it after review, and the
+timings taken of both were removed once a load stopped putting saves back;
+[testing](../testing.md#checkpoint-adoption-blocker) records the defect that
+the replacement exposed and what of its locking remains.
+
 
 <a id="snapshot-feasibility"></a>
 
 ## Earlier snapshot feasibility record
 
 This record predates the latest pause and is retained for its measurements.
-Quick save/load remains paused; this is not an active implementation plan.
+Quick save/load was built afterwards for KTF, LGT and SKT; the maintained
+contract is in [architecture](../architecture.md#quick-load-and-ordinary-saves),
+and this is not an implementation plan.
 
 ### Where a stopped game keeps its state
 

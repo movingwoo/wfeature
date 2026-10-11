@@ -32,7 +32,8 @@ the page reads as well.
 | `key` / `pointer` | Deliver supported input in guest coordinates. |
 | `speed` / `scale` | Change execution rate or presentation scaling. |
 | `text` | Open, commit, or cancel a supported native text edit. |
-| `quickSave` / `quickLoad` | Save the running KTF or LGT game's execution state to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
+| `quickSave` / `quickLoad` | Save the running game's execution state (KTF, LGT or SKT) to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
+| `audioResume` | Ask, within the current epoch, for an `allOff` followed by the reconstructed current audio output. |
 | `cheat` / `report` | Operate diagnostics or write a session report. |
 | `ping` | Check connection liveness independently of guest execution. |
 
@@ -75,8 +76,9 @@ moment after starting the game.
 ## Checkpoints
 
 The shared session supports KTF Java/AOT, older descriptor modules and native
-packages, and LGT Clets and AOT Java titles. SKT sessions report
-`can_checkpoint: false`. The `started` description reports `can_checkpoint`, `has_checkpoint`,
+packages, LGT Clets and AOT Java titles, and SKT Java/MIDP/WIPI and GNEX/GVM
+SGS titles ([SKT checkpoints](skt-checkpoints.md)). Each reports
+`can_checkpoint: true` when the game has a save directory. The `started` description reports `can_checkpoint`, `has_checkpoint`,
 `restored` and `speed`. A `start` request with `quick_load: true` constructs from
 the archive's slot without running guest startup. The ordinary `resume` command
 still means reconnecting to a retained in-memory session.
@@ -95,8 +97,8 @@ neither command replaces, reverts or removes an ordinary save. See
 [Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
 
 `quickSave` runs between complete rounds. It first stores any write the game
-has issued and the host still holds (an open file's buffer on LGT, a written
-name not yet stored in a native KTF package), then captures, then writes one
+has issued and the host still holds (an open file's buffer on LGT or SKT, a
+written name not yet stored in a native KTF package), then captures, then writes one
 slot per exact archive. The slot holds no save.
 
 `quickLoad` reads the archive and the slot, validates the record into a
@@ -113,8 +115,8 @@ or a save the load needs cannot be read. Three refusals reach the page as a
 sentence in its own language, with the cause in the server log: a slot written
 in an earlier format (which is left in place), pending writes that could not be
 stored, and saves that could not be read. "Could not be stored" covers a store
-that refused the write and, on LGT, a buffer the host declined to store because
-its file had changed behind it; "could not be read" covers a read that failed
+that refused the write and, on LGT and SKT, a buffer the host declined to store
+because its file had changed behind it; "could not be read" covers a read that failed
 and saves larger than a load reads. Every other refusal is passed through as
 the error's own text.
 
@@ -334,7 +336,11 @@ quick-load epoch clears recovery state before acknowledging the load.
 A dropped audio batch or collector overflow requests current-output
 reconstruction on the next tick with queue capacity, even without fresh events.
 The reset and reconstructed notes/remaining PCM travel together; the guest never
-waits for the socket. Reconnect and quick load also reconstruct owned output.
+waits for the socket. Reconnect and quick load also reconstruct owned output; a
+reconnect does so after the resumed game's first tick, because a parked game's
+guest clock kept time and a rebuild sent before a tick would anchor the page
+at the pre-park clock, get the next batch refused as early and cut every voice
+a second time.
 Normal collection is bounded to 4,096 operations and full reconstruction to
 65,536, including pitch sensitivity, both parameter selectors and at most three
 controls for each of 2,048 PCM groups. PCM controls precede remaining wave tails.

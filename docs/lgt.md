@@ -97,7 +97,8 @@ mutation checks, and validation.
 Keys and repeats use the platform's lifecycle and clock boundaries. Native
 Clets do not expose a general pointer-event contract. Host text entry supports
 focused LWC fields and the bounded WIPI-C input-method append path; it does not
-infer arbitrary game-owned fields. See [native text input](native-text-input.md).
+infer arbitrary game-owned fields. Host text must be encodable in KSC5601;
+other characters are refused. See [native text input](native-text-input.md).
 
 ## Storage, audio, and offline services
 
@@ -113,8 +114,8 @@ binding and primitive readers. Closing a file input stream releases its binding
 and advances the file position once, allowing another stream to open there.
 
 Java Player distinguishes pause from stop, preserves repeat across pause/resume,
-and rejects duplicate play/resume. Resume restarts the score because the mixer
-does not retain a playback cursor. [Audio](audio.md) and
+and rejects duplicate play/resume. Resume continues from the paused position;
+clip volume and `PlayListener` events are applied. [Audio](audio.md) and
 [shared service contracts](architecture.md#shared-runtime-services) describe
 sound formats, timeline ownership, and callbacks.
 

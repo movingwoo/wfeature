@@ -8,7 +8,7 @@ control or notice. Old stored preferences and the obsolete incoming
 `Options.DisableAuthentication` retain an explicit diagnostic comparison path.
 The old `-auth` flag remains accepted by the CLI for existing scripts. A resumed
 session retains its original runtime.
-This is separate from the server access key and never contacts a license server.
+It never contacts a license server.
 
 ## Implemented mechanisms
 
@@ -24,6 +24,8 @@ This is separate from the server access key and never contacts a license server.
 | `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
 | `lgt-offline-notification` | Connected Thumb or ARM notification contracts match. Acknowledge the explicit choice locally; the Thumb variant also supports its empty remote-save query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
+| `lgt-save-subscriber` | A recognized native revision's save reader matches. Accept a saved subscriber identity from another handset; the original length and checksum checks still run and no file changes. |
+| `lgt-certificate-message` | A recognized native revision's two-stage certificate exchange matches. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
 
 Selection is not evidence that a game reached playable input. Unknown certificate
@@ -411,8 +413,10 @@ the real server. Concurrent clients with opposing choices/identities and a
 disabled client are isolated in the race-tested notification suite.
 
 This establishes those seven adapters within the validation scope above. The
-eighth binary-handshake adapter has a fresh-start route through character input;
-ordinary save and fresh-release restart remain outside its current acceptance.
+binary-handshake adapter (`lgt-offline-authentication`) has a fresh-start route
+through character input; ordinary save and fresh-release restart remain outside
+its current acceptance. `lgt-save-subscriber` and `lgt-certificate-message` are
+accepted on the evidence linked from [LGT](lgt.md).
 Unknown schemes, cloud saves, purchases, missing resources, later campaign
 behavior and quick saves are not implied by this acceptance. Native keyboard
 and Hangul input have their own boundary in

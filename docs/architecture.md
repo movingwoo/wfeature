@@ -141,7 +141,7 @@ needs of a session — advance a tick, fingerprint the screen, send a key, say
 whether a stalled guest can still resume — arrives as functions and a key
 table, because the platform sessions spell those differently (a key event type
 on one, a pressed flag on the other) while a route reads the same either way.
-KTF and LGT both take `-route`; see [`cli.md`](cli.md).
+KTF, LGT and SKT all take `-route`; see [`cli.md`](cli.md).
 
 <a id="phase-1-startup-path"></a>
 
@@ -356,8 +356,9 @@ framing:
   gdb stub, and SMAF decoder rather than take a dependency for each.
 - The codec works on any `io.ReadWriter`, and both ends exist in Go. A test
   drives a real client against a real server over an in-memory transport, so
-  the framing is covered without a browser or a port. `wsproto.Accept` is the
-  only part that knows about `net/http`; `wsproto.Dial` is a client for tests.
+  the framing is covered without a browser or a port. Only the handshake —
+  `Upgrader`/`Accept`, and `wsproto.Dial`, a client for tests — knows about
+  `net/http`; the frame codec does not.
 - Every frame is untrusted input. Lengths are refused against a bound before
   anything is allocated — a ten-byte header may claim four gigabytes — reserved
   bits and malformed fragmentation are rejected rather than ignored, and a
@@ -627,7 +628,7 @@ notes at their elapsed envelope age. Physical oscillator phase,
 release tails and network/device latency are not saved. Host reset stops all
 old sources before replay and clears audio definitions and frame decoder state.
 
-The worktree contains server and page checkpoint controls. Commands run between
+The server and page provide checkpoint controls. Commands run between
 whole rounds; successful load advances a connection epoch, discards old queued
 frames/sound and input commands, resets compression, releases held input and
 reconstructs output. Protocol callers can explicitly restore a disk slot at
@@ -842,7 +843,10 @@ unwinding through one client's bookkeeping at once.
 
 Limits: active cheat freezes and patches refuse capture, as on KTF. Diagnostic
 counters — uncaught-callback counts, collection time, the platform-call trace —
-restart at a load. A pending calendar field assignment is restored in the
+restart at a load. Handles inside the Java tables — a Graphics' surface, a
+widget's parent, a thread's runnable — are not checked against the objects
+they name; every consumer answers a wrong one with an error or a contained
+panic. A pending calendar field assignment is restored in the
 Host's zone, which is the only zone the runtime sets. The subscriber identity a
 title was started with is restored with it, so a title that compares the number
 against one it stored sees the one it stored.

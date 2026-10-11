@@ -14,11 +14,13 @@ client is a PWA and does not care which OS serves it.
 
 The Go code cross-compiles and vets clean for `linux/amd64`, `linux/arm64`,
 `windows/amd64`, and — since the phone builds — `android/arm64` and
-`ios/arm64`. It has no `syscall` use, no hardcoded `/tmp` and no hand-built
-path separators — every path goes through `filepath.Join`, and the save keys
+`ios/arm64`. Its `syscall` use is confined to file locks behind per-OS build
+files (`save_lock_unix.go`, `save_lock_windows.go`), error classification and
+`SIGTERM`; it has no hardcoded `/tmp` and no hand-built path separators — every path goes through `filepath.Join`, and the save keys
 that cross the Host boundary are slash-separated names normalized on both
-sides. The one `exec.Command` is `internal/launcher`'s, which opens a browser
-and is a desktop launcher's job by definition.
+sides. The one `exec.Command` in a shipped binary is `internal/launcher`'s,
+which opens a browser and is a desktop launcher's job by definition; the
+developer tools under `internal/tools` also run subprocesses.
 
 A phone runs the same server rather than a port of it; what each app does with
 it, and what iOS forbids that Android allows, is [`mobile.md`](mobile.md).
@@ -28,8 +30,8 @@ the binary, so nothing about it is shell- or runtime-specific. Every setting is
 a flag, which behaves the same in PowerShell, where a `VAR=value command` prefix
 does not exist.
 
-**The `Makefile` is the one part that is not portable** — it is a POSIX shell
-script in disguise. Windows does not need it: every target is one or two
+**The `Makefile` and the `*.sh` helpers are the parts that are not portable** —
+the `Makefile` is a POSIX shell script in disguise. Windows does not need it: every target is one or two
 commands, listed below.
 
 ## The local server
@@ -73,11 +75,13 @@ server carries the page and runs the emulator itself.
 | `-saves` | `var/savedata/<profile>/ktf` | this profile's KTF save tree |
 | `-logs` | `var/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number |
+| `-open` | off | open the page in a browser once the server is listening |
+| `-version` | — | print the version and build profile, then exit |
 
 Each flag also reads an environment variable when it is not given —
 `WFEATURE_ADDR`, `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`,
 `WFEATURE_ADDED_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`,
-`WFEATURE_PHONE_NUMBER` — and
+`WFEATURE_PHONE_NUMBER`, `WFEATURE_OPEN` (any non-empty value) — and
 `WFEATURE_HOST` with `WFEATURE_PORT` still compose an address.
 
 `-number` is the odd one, because it is the only setting that changes what a
@@ -245,6 +249,12 @@ machine may use it** — the server binds every interface so a phone can play, a
 a stop anyone on that network could send is a way to end somebody's game from
 the next room. A request from anywhere else is refused with 403.
 
+A reverse proxy on the same machine forwards every visitor from here — over
+the [Unix socket](#behind-a-reverse-proxy-on-a-unix-socket) or over loopback —
+so a request carrying `Forwarded`, `X-Forwarded-For` or `X-Real-IP` is refused
+as well, whatever peer handed it over. That holds only if the proxy sets one of
+them: Caddy does by default, and the nginx block below sets it explicitly.
+
 It exists because the alternative is finding the process behind a port from
 outside, which took a different tool on every operating system (`lsof`, `ss`,
 `fuser`, `netstat`) and still could not tell this server from a stranger. With
@@ -278,6 +288,7 @@ and never starts a game. nginx needs it spelled out; Caddy does it by default.
 location / {
     proxy_pass http://unix:/run/wfeature/wfeature.sock;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # keeps /api/shutdown local
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;      # the session is a WebSocket
     proxy_set_header Connection "upgrade";
@@ -494,9 +505,14 @@ flag is in [`cli.md`](cli.md).
 
 ```
 var/games/<platform>/          game archives
+var/ext/                       archives added from the page (the only ones it may remove)
 var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
 ```
+
+One game's saves leave and return as a `.wfs` container through
+`GET`/`POST /api/savepack?game=<picker path>`, which the page's save export and
+import use; an import writes the saves it carries over the ones on disk.
 
 A per-game save folder may be a symbolic link to a directory kept elsewhere;
 saves are read and written through it, and quick save and quick load work as
@@ -515,8 +531,8 @@ the ones sitting in it directly, which the page groups as `기타`. The director
 name is a label and nothing else — the platform comes from the archive's bytes
 — and nothing deeper than one level is scanned.
 
-`<owner>` is the game's PID for KTF and LGT and its `MIDlet-Name` for
-SKT. The browser reaches the same tree through the save API:
+`<owner>` is the game's PID for KTF and LGT and its program number
+(`DD-ProgName`) for SKT, or the MIDlet name for a bare JAR that has none. The browser reaches the same tree through the save API:
 `/api/saves/<owner>` is KTF (the form the page has always used) and
 `/api/saves/<platform>/<owner>` is any other platform.
 
@@ -527,17 +543,17 @@ the source and build trees.
 
 | | Ubuntu | macOS | Windows |
 |---|---|---|---|
-| `go build ./...` | cross-compiled ✔ | **run ✔** | cross-compiled ✔ |
-| `go vet ./...` | cross-compiled ✔ | **run ✔** | cross-compiled ✔ |
-| `go test ./...` | — | **run ✔** | — |
-| `node --test web/*.test.mjs` | — | **run ✔** | — |
+| `go build ./...` | CI ✔ | **run ✔** | CI ✔ |
+| `go vet ./...` | CI ✔ | **run ✔** | cross-compiled ✔ |
+| `make test`, `make test-debug`, `go test -race ./internal/...` | CI ✔ | **run ✔** | — |
 | Go server serves index, `games.json`, save API | — | **run ✔** | — |
 | a real game over a session at ~19fps, 13KB frames | — | **run ✔** | — |
-| single release binary serving its embedded client | — | **run ✔** | — |
+| single release binary serving its embedded client | CI ✔ (smoke) | **run ✔** | CI ✔ (smoke) |
 | a `make dist` archive extracted and launched | cross-compiled ✔ | **run ✔** | cross-compiled ✔ |
 
 Only macOS was executed *here*: this repository is developed on one machine, and
-cross-compiling proves a build, not a run. What the table does show is that
+cross-compiling proves a build, not a run. The CI rows are the `test` job on
+Ubuntu and the `smoke` job on all three runners in `.github/workflows/checks.yml`. What the table does show is that
 nothing in the Go tree is platform-specific enough to fail to compile or to trip
 `vet`, and that the paths and process handling the server depends on were
 written for all three.
@@ -595,10 +611,9 @@ is a real run on each OS rather than a compile. `verify.yml` calls it on every
 push and pull request, and `release.yml` calls it before it publishes, so no
 tag can ship a binary this never started.
 
-**Until that workflow has run on a push, Ubuntu and Windows remain unverified by
-execution** — the job was written and its assertions were checked against a
-local macOS run of the same steps, but no CI run has happened yet. The first
-push is what turns the Ubuntu and Windows columns into "run".
+Because the job runs on every push and before a release publishes, Ubuntu and
+Windows are verified by execution for what it checks — starting, serving,
+reporting and stopping — not for playing a game.
 
 To close the gap by hand instead, run this on each OS and compare:
 

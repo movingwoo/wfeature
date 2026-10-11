@@ -40,6 +40,7 @@ wfeature checkgames [-games dir]                find titles that share a save di
 wfeature provision <game.zip> [flags]           write the certificate one title asks for
 wfeature contactsheet <framedir> <out.png>      tile a run's frames into one page
 wfeature framediff <dirA> <dirB> [-limit N]     name the frames two runs disagree on
+wfeature framestats <framedir|frame.png> [-limit N]  count colours and lit pixels; nonzero when every frame is one colour
 wfeature zoom <frame.png> <out.png> [flags]     magnify a corner of one frame
 wfeature licenses                               print the project and third-party notices
 ```
@@ -67,7 +68,7 @@ failed inside the guest prints its summary first — a failed run is exactly the
 one worth reading, and its `tick_error` says what stopped it — and a run the
 tool could not finish stops before it, having written the reason to stderr.
 
-Four things deliberately exit **zero**:
+Five things deliberately exit **zero**:
 
 - **a guest that exited on its own.** A title closing itself is what the Jlet
   or the Clet asked for, and the whole point of some runs is to reach it. It is
@@ -146,8 +147,8 @@ wfeature run var/games/ktf/game.zip -serve
 ```
 
 `run` calls the same `internal/session` API as the server. Its checkpoint
-support covers supported KTF Java, older module and native package states, and
-LGT Clets and AOT Java titles. Unsupported
+support covers supported KTF Java, older module and native package states, LGT
+Clets and AOT Java titles, and SKT Java/MIDP/WIPI and SGS titles. Unsupported
 runtime state is refused explicitly. The specialized `runktf`, `runlgt` and
 `runskt` commands retain their profiling, routes and platform diagnostics.
 
@@ -437,6 +438,7 @@ answer unchanged, so a caller that pipelines can pair them up.
 | `diag` | `path` | write the diagnostics report `-diag` writes |
 | `shot` | `path` | write the frame `-frame` writes, through the same encoder |
 | `route` | `path` | replay a route script from where the run is now |
+| `quicksave` / `quickload` | — | store the archive's checkpoint, or restore it (`run -serve` only) |
 | `quit` | — | answer, then end the session |
 
 Every answer carries `ok`, `total_ticks` (what the serve session has spent
@@ -787,8 +789,8 @@ paced at one every 16ms, the same interval the server session drives the same
 runtime with, and a run of 1,800 ticks takes about half a minute of real time.
 
 Key names are the table `runktf` uses, translated to the MIDP key codes a MIDlet
-compares against — the direction pad, `fire`, `soft1`, `soft2`, `call`, and the
-twelve phone keys. The names a MIDlet has no code for are refused rather than
+compares against — the direction pad, `fire`, `soft1`, `soft2`, `call`, `clear`
+(`clr`, `back`), and the twelve phone keys. The names a MIDlet has no code for are refused rather than
 guessed at.
 
 ## runlgt
@@ -1122,9 +1124,10 @@ The old `-auth` flag remains accepted for existing scripts. After startup, stder
 `authentication: unsupported` leaves ordinary behavior in place, including for
 earlier native KTF packages. A recognized LGT cached-result layout reports
 `authentication: lgt-cached-authentication`, `authentication: lgt-certificate-58`, `authentication: lgt-certificate-100`,
-`authentication: lgt-offline-notification`, or `authentication: lgt-offline-authentication`.
-The last two handle an exact notification/remote-save exchange or binary authentication
-exchange locally; they send nothing outside the emulator.
+`authentication: lgt-offline-notification`, `authentication: lgt-offline-authentication`,
+`authentication: lgt-save-subscriber`, or `authentication: lgt-certificate-message`.
+The notification, binary authentication and certificate-message statuses answer an
+exact exchange locally; they send nothing outside the emulator.
 Certificate data and adapted class files stay in memory; ordinary progress uses
 `-save`. This differs from `provision`, which writes a persistent replacement.
 See [mechanisms, recognition and limitations](authentication.md).

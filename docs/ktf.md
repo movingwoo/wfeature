@@ -49,12 +49,17 @@ prevent termination; repeated close does not call it twice.
 Keys reach cards or the guest event queue according to the active path. User
 events at or above `0x5000` retain their type and two arguments. Unknown reserved
 event kinds below that boundary remain errors. WIPI Java supports Host pointer
-events; earlier native packages do not gain pointer support from that fact.
+events; earlier native packages do not gain pointer support from that fact. An
+uncaught guest exception in a key or pointer callback ends that call, as in a
+paint or timer task, rather than the session.
 
-Host keyboard/IME entry supports active LWC fields, the sole direct text child
-of a shown Shell when explicit focus is absent, and the observed non-modal
-KFC form containing one listened text field. The guest owns acceptance and
-persistence. Synchronous `doModal` remains unsupported. See
+Host keyboard/IME entry supports a title's own `InputMethodHandler` field
+(append-only, identified by the keys reaching the handler the title built),
+active LWC fields, the sole direct text child of a shown Shell when explicit
+focus is absent, the observed non-modal KFC form containing one listened text
+field, the one focused text component the top card read during its last paint,
+and the WIPI-C input-method editor. Every route refuses text outside KSC5601.
+The guest owns acceptance and persistence. Synchronous `doModal` remains unsupported. See
 [native text input](native-text-input.md) for target ownership and validation.
 
 ## Graphics and sound
@@ -81,7 +86,10 @@ Mutable Image surfaces and Clip state use weak object ownership. Graphics keeps
 its Image reachable. Collection releases orphan surfaces and stopped audio;
 playing orphans remain until playback finishes, including repeating playback.
 Shared audio timing and borrowed-buffer rules are in
-[architecture.md](architecture.md#shared-runtime-services).
+[architecture.md](architecture.md#shared-runtime-services). Java and WIPI-C clip
+pause/resume, device and clip volume, and Java `PlayListener` events are applied
+(see [audio](audio.md)); a per-source mute is remembered and read back but
+silences no clip, and the Java `Volume` mute extensions remain stubs.
 
 ## Files and records
 
@@ -147,6 +155,16 @@ What is particular to this platform:
   refused by the store and never saved. Both use the same key now.
 - When two package entries share a lower-cased base name, a native open takes
   the one whose entry name sorts first, on every run.
+- A quick save can be refused with "KTF media Clip owner is invalid or
+  requires collection" when the title has dropped a Clip whose host record the
+  next tick's collection has not pruned yet; a playing orphan is kept until it
+  ends. The game carries on, and a later quick save succeeds once the record
+  is gone. 0.5.2 refused the same moments.
+- A native record names the screen its session ran at, and the restored
+  session takes that size, which the Host then sizes its frame and scaling
+  buffers from. The record's screen is therefore held to 1,024 a side, the
+  largest either Host starts a session at, as on LGT; an image the title
+  decoded keeps the wider 4,096 bound.
 
 ## Diagnostics and limits
 
@@ -160,7 +178,8 @@ for registered Java surface gaps and fixed-value stubs:
 A registration or static reference is not proof that a real caller executes it.
 
 Known limits include animated image callbacks, unapplied graphics alpha,
-partial widget rendering, synchronous modal input, unconfirmed native return
+unpainted LWC components (deliberately: no record of the original runtime's
+components exists), synchronous modal input, unconfirmed native return
 slots, and missing archive evidence for automatic landscape selection and the
 native loading stall. Published instance-field divergence is diagnosed rather
 than repaired using an invented precedence rule. Corpus startup counts do not

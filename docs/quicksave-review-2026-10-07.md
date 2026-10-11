@@ -9,7 +9,9 @@ A load restores execution, retains current saves and deletions, and rebuilds
 host storage objects from current data. A quick step may persist writes the
 game has already issued, but must not overwrite a newer save with a stale host
 buffer. A refused step must preserve the running game and its pending writes.
-The older whole-save replacement design in local `QUICK.md` is historical.
+The older design, in which a quick load replaced the whole save folder, is
+historical; see [testing](testing.md#checkpoint-adoption-blocker) and
+[the implementation record](history/maintenance.md#quick-save-implementation-measurements).
 
 **All eight findings are repaired and verified in the follow-up change.**
 The original review reproduced one P1, six P2 and one P3 despite passing normal

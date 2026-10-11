@@ -1085,7 +1085,8 @@ separates completed browser checks from the pending physical-phone and real-game
 play observations. It retains the initial Chromium update cache failure
 and the subsequent fix. Service-worker regression tests reproduce a late legacy
 navigation and overlapping future workers; both failed before the repair and pass
-afterward. Both engines pass the version-34 and version-35 updates to version 41.
+afterward. Both engines passed the version-34 and version-35 updates to the
+then-current version 41 on 2026-10-08.
 The route waits for cache retirement after navigation, because the worker's
 fetch lifetime can extend beyond the completed response.
 
@@ -2046,7 +2047,9 @@ and phone listening remain unverified in this sandbox.
 callback. The baseline fails because no timing aggregate exists. Ten authored
 regressions cover exact histogram boundaries, accepted lateness within 5 ms,
 every event after a batch's first window refusal, distinct late/future/range
-refusals, invalid mapped times and silent clock-only refusals. First/reset
+refusals, invalid mapped times, late frontier-only re-anchoring and re-anchoring
+of a batch with events up to 200 ms late (and refusal past it or past the
+horizon). First/reset
 anchors stay separate from continuing anchors. Recovery and `stopAll` preserve
 pending measurements; flushing and log clear discard them without changing
 live sources or their anchor. Disabled/default diagnostics retain no aggregate,
@@ -2318,10 +2321,11 @@ each moved the anchor instead; the remaining requests all follow batches that
 carried events.
 
 The first KTF title stopped in both engines partway through its run: its guest
-thread called `new Character(char)`, which the KTF class table does not declare
-although the JVM implements it. The CLI sweep found the same in one title and
-`InputMethodHandler.notifyKeyInput(II)Z` missing in two. Neither is a sound
-defect; both are tracked as follow-ups. Results and the probe's patch are
+thread called `new Character(char)`, which the KTF class table then did not
+declare although the JVM implements it. The CLI sweep found the same in one
+title and `InputMethodHandler.notifyKeyInput(II)Z` missing in two. Neither is a
+sound defect; both were fixed afterwards (see
+[runtime boundary regressions](#runtime-boundary-regressions)). Results and the probe's patch are
 under `build/sound-load/`.
 
 ### Quick saves from 0.5.2
@@ -2388,6 +2392,78 @@ Two archives got worse and none got better:
 
 Every other archive reached the same rung, with the same outcome at every
 stage.
+
+<a id="pre-release-check-for-060"></a>
+
+### Pre-release check for 0.6.0
+
+On 2026-10-11 the same seven corpora ran again on `main` at `9946468`, from a
+separate worktree with the same absolute paths and timeout as the 0.5.2 run
+above, so `-compare` took the two records as they were. The KTF interactive
+rung again stopped at 126 archives on its timeout. Against 0.5.2, the older
+module that regressed above passes every rung, and one archive got worse: an
+SKT title whose screen was still changing at the interactive rung. Run alone,
+twice on each tree, 0.5.2 and `main` stop at that rung for the same reason, so
+the batch pass was load timing again. No archive regressed. The repaired tree
+described below then ran the same corpora under the same settings, and every
+archive reached the rung it reached on `main`.
+
+Three read-only reviews of the changes since 0.5.2 — audio and its protocol,
+saves and quick saves, the platform runtimes — found five defects, each
+reproduced by a test that failed before its repair:
+
+- A looping clip or Player with a listener, left playing across a long park,
+  came back owing more completions than the event queue holds; the first tick
+  after resume ended a KTF game and put an SKT MIDlet in its error state. A
+  backlog now collapses into one end
+  ([audio](audio.md#midp-playback-lifecycle)).
+  `TestKTFParkedLoopingClipSurvivesALongPark`,
+  `TestMIDPLoopingPlayerSurvivesALongPark` and the LGT queue-bound case.
+- A reconnect rebuilt sound before a tick had moved the audio timeline, so the
+  page anchored at the pre-park clock, refused the next batch as early and
+  asked for a second rebuild. A live probe through the real page reproduced
+  the extra `audioResume` and its refusal on an SKT and a KTF title in Chromium
+  (CPU slowed four times) and on the SKT title in WebKit; after the repair
+  there was none. `TestAudioReplayUsesLiveGuestStateAfterDropsQuickLoadAndReconnect`
+  now requires the rebuild to wait for the first tick.
+- A batch with events more than 5 ms late always asked for a rebuild; one
+  review measured fourteen in nine seconds on a slowed page, where 0.5.2 had
+  none (that machine was also running other tests). Batches up to 200 ms late now move the anchor
+  ([presentation timestamps](audio.md#presentation-timestamps-and-recovery));
+  `web/audio-lateness.test.mjs` covers both sides of the bound and the horizon
+  check. The probes above did not reach that lateness at the time they ran,
+  so this one rests on the page tests.
+- `/api/shutdown` behind a reverse proxy on the same machine accepted every
+  visitor, because each arrives over the socket or loopback. A request with a
+  forwarding header is now refused (`TestShutdownIsLocalOnlyAndAsksTheHost`).
+- A KTF Host text commit passed an uncaught exception from the title's
+  `keyNotify` to the page instead of ending that key
+  (`TestHostTextSurvivesAnUncaughtExceptionInKeyNotify`).
+
+The review also showed every SKT Java title playing at half the loudness of
+0.5.2, because the handset's default device level of 50 had started to reach
+the output as half gain. By the user's decision the default plays at full
+output again and a lower level scales down from it
+(`TestSKTDeviceLevelPlaysRelativeToTheHandsetDefault`). The two SKT corpora ran
+again after that change, and every archive reached the rung it reached before.
+
+The review of saves found no change to an ordinary save key, path or format
+since 0.5.2. An upgrade rehearsal made saves and a quick save with the 0.5.2
+CLI for two KTF Java titles, an older KTF module, two LGT Clets, an LGT Java
+title and two SKT titles, then ran `main` over them: each read its saves as
+before, the 0.5.2 slot was refused with the earlier-format message and stayed
+byte-identical, and a new quick save wrote `.v3.wfq` beside it. About 200
+checkpoints over 25 titles, many with sound playing, paused, at speeds from
+0.1x to 16x, loaded again in the running session, a fresh session and a fresh
+process.
+
+The release route in [PWA acceptance](pwa-acceptance.md), from a 0.5.2 server
+to the candidate, passed all ten checks in Chromium and WebKit. The five
+`make dist` archives passed `make dist-check`, and the darwin/arm64 one,
+extracted and started, served its embedded page at shell `v55`, answered
+`/api/status` with its version, refused a forwarded shutdown and stopped on
+`stop`. The ordinary, debug and race suites, `go vet` and the 431 Node tests
+passed on the repaired tree.
 
 ### Older module implements cells
 
