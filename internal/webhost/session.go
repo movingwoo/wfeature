@@ -183,6 +183,9 @@ type sessionRunner struct {
 	soundWavePhase  bool // Fractional PCM offsets require an explicitly capable page.
 	legacyAudio     legacyAudioState
 	audioNeedsReset bool
+	// audioSentAt is when the last sound message was queued. A batch that
+	// holds only its frontier waits for clockOnlyInterval after it.
+	audioSentAt time.Time
 	// webp is whether the page asked for its pictures as lossless WebP.
 	webp bool
 	// encoding is set while the encoder holds a picture, and frameSettled is
@@ -1202,10 +1205,29 @@ func (r *sessionRunner) flushAudio() {
 		}
 		return
 	}
-	if len(events) != 0 {
-		r.sendAudio(events, true)
+	if len(events) == 0 {
+		return
 	}
+	if len(events) == 1 && events[0].Kind == audioClock &&
+		(time.Since(r.audioSentAt) < clockOnlyInterval || len(r.outText) == cap(r.outText)) {
+		return
+	}
+	r.sendAudio(events, true)
 }
+
+// clockOnlyInterval is how often a silent stretch tells the page that the
+// clock has moved on. A timed page used to be told at every tick, so most of
+// the sound messages it handled said only that. Skipping one loses nothing,
+// because the next batch carries a later frontier, and a tick after a gap at
+// least this long still sends at once, so a page whose server stalled moves
+// its anchor on that frontier as before. Between the two, a page that has
+// fallen behind learns it from its next batch, and audio.js moves the anchor
+// for an event batch up to 200 ms late without asking for the output again.
+//
+// A full queue skips the frontier too. Queued and then shed, it would ask for
+// a reconstruction, which cuts every sounding voice for a message that lost
+// nothing.
+const clockOnlyInterval = 100 * time.Millisecond
 
 func (r *sessionRunner) reportStats() {
 	elapsed := time.Since(r.statsSince)
@@ -1777,6 +1799,8 @@ func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) bool {
 		if !sent {
 			r.audioNeedsReset = true
 			r.server.logger.Debug("audio batch dropped; output recovery pending", "events", len(events))
+		} else {
+			r.audioSentAt = time.Now()
 		}
 		return sent
 	}
@@ -1787,6 +1811,8 @@ func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) bool {
 		r.server.logger.Debug("audio batch dropped; output recovery pending", "events", len(events))
 		// Whatever the lost message defined never reached the page.
 		r.audioDefinitions.dropped()
+	} else {
+		r.audioSentAt = time.Now()
 	}
 	return sent
 }

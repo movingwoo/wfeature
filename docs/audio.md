@@ -316,8 +316,15 @@ fine or coarse servicing, while a slow guest cannot make expired output young
 again. Detached checkpoint validation remains excluded at activation.
 
 The page separately negotiates `timing=1` alongside `sound=resume`. Each batch
-carries timed operations and a final authoritative clock, including silent
-ticks. Cached pages keep their previous wire operations. The page schedules
+carries timed operations and a final authoritative clock. A silent tick sends
+its clock alone at most every 100 ms after the last sound message, and at once
+after a longer gap, so the first frontier after a server stall still moves the
+anchor as described below. Sending one at every tick made frontiers most of
+the messages a page handled: 34 of 59 a second on a sound-heavy KTF title and
+all 22 on an LGT title playing nothing, against 25 and 8 a second with the
+interval. A frontier that finds the send queue full is skipped rather than
+shed, because a shed batch asks for a reconstruction and this one lost
+nothing. Cached pages keep their previous wire operations. The page schedules
 accepted batches on Web Audio with a 100–250 ms lead (using reported latency),
 a 350 ms maximum future horizon and 5 ms late tolerance. It validates the whole
 batch before scheduling any source. These are playout bounds, not a claim about
