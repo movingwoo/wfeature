@@ -1441,6 +1441,41 @@ without a save the routes it is given replay from a fresh boot and it profiles
 a title screen, which is the mistake the paragraph above warns about in the
 form the tooling made easy to commit.
 
+**Re-taken on 2026-10-11 with SKT and the server's own work in it.** The
+committed profile still dated from August 2026. Since then the picture encoder
+the server runs on every frame had been written, and SKT, whose titles run on
+`internal/jvm` rather than on this engine, had never been in a profile at all.
+`TestSessionCostProbe` in `internal/webhost` plays a title through the shared
+session with a fixed cycle of keys and encodes each picture and sound batch as
+the server does; `make pgo` now takes a KTF and an SKT title through it in
+place of the KTF load probe, beside the two LGT routes. The development machine
+is macOS, where the same runs had put 50–90% of their samples on
+`runtime.pthread_cond_signal`; on one P (`GOMAXPROCS=1`) that disappears and the
+KTF run shows `Engine.Run` at 82% of the profile, as the Linux profile above
+does, so every run is taken that way.
+
+Against the August profile, `go test -pgo=<file>` builds of the same source,
+two alternating repetitions each on one machine (Apple silicon), every
+repetition within 1% of its sibling and the same retired instruction count or
+the same frames on both sides. A profile taken earlier the same day by the same
+recipe, run three times, gave −3.3%, −4.8% and −3.4% on the three routes and
+−2% to −8% on the interpreter benchmarks:
+
+| Fixed work | August profile | New profile | Change |
+| --- | ---: | ---: | ---: |
+| LGT Clet field route, ns per step | 4.735 | 4.560 | −3.7% |
+| LGT AOT Java in-game route, ns per step | 30.15 | 28.61 | −5.1% |
+| KTF title through the session probe, 600 ticks | 15.84 s | 15.28 s | −3.5% |
+| `BenchmarkGuestLoop` (`internal/jvm`) | 8,223 ns | 7,470 ns | −9.2% |
+| `BenchmarkGuestCallLoopInstance` | 413,268 ns | 384,676 ns | −6.9% |
+| `BenchmarkEngineGameShapedLoop` | 4.85 ns | 4.78 ns | −1.3% |
+| `BenchmarkFramePatchBandwidth`, protocol 2 | 206,969 ns | 207,450 ns | +0.2% |
+
+Nothing got slower beyond noise. The encoder did not move: it is in the profile
+now, and what PGO changes there is within noise. The SKT title chosen is one
+whose run is 93% the interpreter, so the profile has the interpreter's
+dispatch rather than a title screen waiting on its clock.
+
 <a id="implementation-why-a-translator-is-not-the-answer-even-with-unlimited-effort"></a>
 
 #### Why a translator is not the answer even with unlimited effort
