@@ -664,6 +664,43 @@ try {
     check(
       "two browser touch contacts share one guest hold across merged buttons",
     );
+    // The pressed state is drawn with paint-only properties, so holding and
+    // releasing a key never lays the page out again.
+    await devtools.send("Performance.enable");
+    const layouts = async () =>
+      (await devtools.send("Performance.getMetrics")).metrics.find(
+        (metric) => metric.name === "LayoutCount",
+      ).value;
+    // A focused cell already shows the highlight, which would hide a press
+    // that changes geometry.
+    await page.evaluate(
+      () =>
+        new Promise((done) => {
+          document.activeElement?.blur();
+          requestAnimationFrame(() => requestAnimationFrame(done));
+        }),
+    );
+    const layoutsBefore = await layouts();
+    await page.evaluate(async () => {
+      const cell = document.querySelector(
+        '#keypad-grid button[data-key="5"]',
+      );
+      const frame = () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done)),
+        );
+      for (let i = 0; i < 20; i++) {
+        cell.classList.add("pressed");
+        await frame();
+        cell.classList.remove("pressed");
+        await frame();
+      }
+    });
+    assert.ok(
+      (await layouts()) - layoutsBefore <= 1,
+      "pressing a keypad key laid the page out again",
+    );
+    check("a pressed key only repaints");
     await devtools.detach();
   }
   await openEditor();

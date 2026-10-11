@@ -240,7 +240,12 @@ the device observations listed in [testing](../docs/testing.md#grid-keypad).
 
 `keypad-editor.js` renders one native button per group and preserves one accessible
 name and focus target. `keypad-geometry.js` computes one union of cell rectangles
-for both clipping and the visible outline. Shared seams are filled; missing
+for both clipping and the visible outline. The outline is two paths along that union:
+the edge, and a highlight shown for pressed, picked and focused buttons. The
+two trade places through `stroke-opacity` alone, because Chromium lays an SVG
+out again when its stroke width or its opacity changes — a press that thickened
+the edge cost two layouts, one on press and one on release, which
+`web/acceptance/keypad-grid.mjs` now rules out. Shared seams are filled; missing
 corners and holes stay outside the hit target. The label occupies the largest
 filled rectangle, so it cannot float inside a hole. Labels stay on one line;
 the renderer measures the actual text with a DOM range and reduces the font size
@@ -357,7 +362,7 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
-The shell cache is `wfeature-pwa-v55` (the constant in `service-worker.js`). The prefix introduced in version 35 prevents already-installed
+The shell cache is `wfeature-pwa-v56` (the constant in `service-worker.js`). The prefix introduced in version 35 prevents already-installed
 workers from deleting it through their broad `wfeature-shell-*` cleanup.
 Activation removes legacy shell caches and strictly older `wfeature-pwa-vN`
 versions, preserving future versions and unrelated caches. A controlled navigation

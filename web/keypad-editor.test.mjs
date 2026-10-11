@@ -168,6 +168,20 @@ test("merging returns to assignment with the new button selected", () => {
   assert.equal(f.stored().keyAt("r3c3"), "5");
 });
 
+test("the press highlight follows the same outline as the edge", () => {
+  const f = fixture({ width: 240, height: 400 });
+  f.control("multiple").click();
+  for (const id of ["r3c3", "r3c2", "r2c2"]) f.pick(id);
+  f.control("merge").click();
+  f.resize(260, 420);
+  const outline = f.cell("r2c2").children.find((child) => child.tag === "svg");
+  const [edge, highlight] = outline.children;
+  assert.equal(edge.getAttribute("class"), "keypad-edge");
+  assert.equal(highlight.getAttribute("class"), "keypad-highlight");
+  assert.match(edge.getAttribute("d"), /^M/);
+  assert.equal(highlight.getAttribute("d"), edge.getAttribute("d"));
+});
+
 test("a conflicting merge keeps its selection until a key is chosen", () => {
   const f = fixture();
   f.pick("r2c2");
