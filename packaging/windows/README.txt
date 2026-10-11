@@ -58,7 +58,7 @@ W-Feature — 피처폰 게임 에뮬레이터 (Windows)
    games\                       게임을 넣는 곳
    ext\                         화면의 "＋ 게임 추가"로 넣은 게임 (그 버튼으로 지울 수 있다)
    savedata\                    세이브 (처음 저장할 때 생긴다)
-   logs\                        디버그 기록 (설정에서 저장을 눌렀을 때만)
+   logs\                        디버그 기록 (디버그 빌드에서만 생긴다)
 
    서버를 업데이트할 때는 wfeature-server.exe 만 새 것으로 바꾸면 된다.
    games\ 와 ext\ 와 savedata\ 는 그대로 두면 그대로 이어서 쓴다.
@@ -67,7 +67,7 @@ W-Feature — 피처폰 게임 에뮬레이터 (Windows)
 6. 자주 막히는 곳
 
    - 방향키가 안 먹는 경우: 
-     - 키패드 위 Type1 버튼을 눌러 Type2 배치로 바꿔본다.
+     - 설정 → 🎮 키패드 타입에서 Type2로 바꿔본다.
    - 포트가 이미 쓰이는 경우: 
      - status.bat 으로 wfeature 서버인지 다른 프로그램인지 본다. 
      - 예전 서버면 stop.bat 으로 멈추고, 다른 프로그램이면 wfeature-server.exe -addr :11542 처럼 포트를 바꿔 띄운다.

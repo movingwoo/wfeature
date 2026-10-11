@@ -7,9 +7,9 @@ the JSR.
 
 ## Where the records live
 
-Record data lives on the Go side (`internal/platform/skt/rms.go`); the Java
-classes in `internal/api/midp/java/javax/microedition/rms` are the guest's
-view. One store is a list of records addressed by id.
+Record data lives on the Go side (`internal/platform/skt/rms.go`); the classes
+declared in Go in `internal/api/midp` (`definitions.go`, with bodies in
+`rms.go`) are the guest's view. One store is a list of records addressed by id.
 
 **Ids never shift.** MIDP hands a record id to the game and the game keeps it,
 so deleting record 2 of 3 must not renumber record 3. The list is therefore
@@ -169,11 +169,11 @@ launch. So `rms/.index` lists the stores that exist, `listRecordStores` reads
 it, and `deleteRecordStore` removes the name from it. Every write this runtime
 makes updates both, so the two never disagree.
 
-**The enumeration is written in Java, not Go.** `RecordFilter` and
-`RecordComparator` are application objects. Implementing `RecordEnumeration`
-as a native service would mean the Host calling back into the interpreter for
-every comparison of a sort; implementing it as a runtime-owned Java class
-(`RecordSet`) makes those ordinary guest calls. `RecordSet` also implements
+**The enumeration calls the application's own objects.** `RecordFilter` and
+`RecordComparator` are application objects. `RecordEnumeration` is a
+runtime-owned class, `RecordSet`, whose Go bodies call the filter's `matches`
+and the comparator's `compare` through the VM, so each is an ordinary guest
+call. `RecordSet` also implements
 `RecordListener`, which is how `keepUpdated(true)` works: it registers itself
 with the store and rebuilds on each notification.
 

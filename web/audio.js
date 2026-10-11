@@ -29,6 +29,10 @@ const MAX_WAVE_BUFFERS = 256;
 const MAX_WAVE_BUFFER_BYTES = 16 << 20;
 const DRUM_CHANNEL = 9;
 const CONTROL_RAMP = 0.005;
+// How late a batch carrying events may arrive and still be played by moving
+// the anchor rather than by rebuilding the whole output. A slow page delivers
+// batches 15–100 ms late; a rebuild cuts every sounding voice to replay it.
+const MAX_REANCHOR_LATE = 0.2;
 const voiceKey = (sound, channel, note) => sound ? `${sound}:${channel}:${note}` : `${channel}:${note}`;
 const channelDefaults = () => ({
   program: 0, volume: 100, expression: 127, pan: 64, bend: 8192, sustain: 0,
@@ -582,28 +586,46 @@ export class PageAudio {
     const current = context.currentTime;
     const latency = Number.isFinite(context.baseLatency) ? context.baseLatency : 0;
     const lead = Math.min(0.25, Math.max(0.1, latency));
-    const anchor = (!reset && this.presentationAnchor) || { audio: current + lead, presentation: clock.at };
+    let anchor = (!reset && this.presentationAnchor) || { audio: current + lead, presentation: clock.at };
     let refused = null;
+    let lateBy = 0;
     for (const event of events) {
       const at = anchor.audio + (event.at - anchor.presentation);
       if (!Number.isFinite(at) || at < 0) refused = "range";
-      else if (at < current - 0.005) refused = "late";
-      else if (at > current + 0.35) refused = "future";
+      else if (at < current - 0.005) {
+        refused = "late";
+        lateBy = current - at;
+      } else if (at > current + 0.35) refused = "future";
       if (refused) break;
     }
-    // A batch that holds nothing but its frontier loses nothing by arriving
-    // late: the server fell behind the render clock and has caught up. The
-    // anchor moves to that frontier, a lead ahead, rather than asking for the
-    // current output, which would cut every sounding voice to replay it. A
-    // late batch with events is still refused, because it would otherwise
-    // have to play them late. Everything already scheduled is in the past by
-    // then, so the move cannot reorder it.
-    const reanchor = refused === "late" && events.length === 1 && !reset && this.presentationAnchor !== null;
-    this.recordTiming(events, anchor, current, reset || !this.presentationAnchor, refused, reanchor);
-    if (reanchor) {
-      this.presentationAnchor = { audio: current + lead, presentation: clock.at };
+    // A late batch means the server or this page fell behind the render
+    // clock and has caught up. Asking for the current output instead cuts
+    // every sounding voice to replay it, so the anchor moves a lead ahead:
+    // to the frontier for a batch that holds nothing else, which loses
+    // nothing, and to the first event for a batch a little late, whose
+    // events then keep their spacing and play that much later. Events are in
+    // order, so the late one is the first, and everything already scheduled
+    // is in the past by then: the move cannot reorder it. A batch later than
+    // MAX_REANCHOR_LATE, or one that would not fit the window after the move,
+    // still asks for the current output, which is then closer to the truth.
+    let moved = null;
+    if (refused === "late" && !reset && this.presentationAnchor !== null) {
+      if (events.length === 1) {
+        moved = { audio: current + lead, presentation: clock.at };
+      } else if (lateBy <= MAX_REANCHOR_LATE) {
+        const candidate = { audio: current + lead, presentation: events[0].at };
+        if (events.every(event => candidate.audio + (event.at - candidate.presentation) <= current + 0.35)) moved = candidate;
+      }
+    }
+    this.recordTiming(events, anchor, current, reset || !this.presentationAnchor, refused, moved !== null);
+    if (moved && events.length === 1) {
+      this.presentationAnchor = moved;
       this.presentationFrontier = clock.at;
       return true;
+    }
+    if (moved) {
+      anchor = moved;
+      refused = null;
     }
     if (refused) return false;
     // Validate a reset before cancelling the old timeline, then install its

@@ -331,7 +331,16 @@ render clock and playback continues without a reconstruction, which would cut
 every sounding voice to replay it. Everything already scheduled is behind the
 render clock by then, so the move cannot reorder it. Live sessions found two
 thirds of late refusals were such batches, mostly from a title whose server
-ticks stall ([measurements](testing.md#sustained-sound-load-in-real-titles)). The request is negotiated and output-epoch checked. Definitions are
+ticks stall ([measurements](testing.md#sustained-sound-load-in-real-titles)).
+A batch with events that is at most 200 ms late moves the anchor the same way,
+to its first event one lead ahead, as long as its last event still fits the
+350 ms horizon; its events keep their spacing and play that much later. A page
+on a slowed processor (Chromium at a quarter speed on a busy machine, standing
+in for a slower phone) delivered batches 15–100 ms late and was rebuilt fourteen times in
+nine seconds when every one of them asked for the current output; 0.5.2,
+which had no lateness check, played them late and rebuilt nothing. A batch
+later than that still asks, because by then the output it would continue is
+further from the truth than a rebuild. The request is negotiated and output-epoch checked. Definitions are
 invalidated too, so a malformed first definition cannot lose subsequent PCM.
 Interruption waits for a running context before requesting fresh output;
 quick load clears an outstanding recovery request with the old epoch.
@@ -358,8 +367,8 @@ sampled when the complete batch reaches the scheduling-window check. The
 anchor. Keeping them separate prevents the new anchor's intentional lead from
 being mistaken for measured initial delivery latency.
 
-Each group counts checked/admitted batches, clock-only batches, late
-clock-only batches that moved the anchor (`reanchored`) and the first
+Each group counts checked/admitted batches, clock-only batches, late batches
+that moved the anchor (`reanchored`, clock-only or a little late) and the first
 window-refusal reason (`late`, `future`, or negative/nonfinite time `range`).
 All non-clock events in a checked batch contribute, including events after
 the first refusal: not late, positive lateness up to 5 ms, over 5 through 20 ms,
@@ -531,10 +540,10 @@ describes the negotiated protocol, checkpoint version and queue/reconnect repair
 ## The two Hosts
 
 **Browser** (`web/audio.js`) synthesises the MIDI itself, from oscillators.
-The Rust build takes the obvious route instead — a worklet plus a 10.5MB sound
-bank fetched at page load — which on iOS pushes the tab past its memory ceiling
-and gets skipped entirely, leaving those users with no sound at all. This is a
-real trade: a soundfont piano sounds like a piano and an oscillator does not.
+The obvious alternative — an audio worklet plus a sound bank of about ten
+megabytes fetched at page load — costs every phone that download and the
+memory, and an iOS tab that heavy can be pushed past its memory ceiling, which
+leaves its user with no sound at all. This is a real trade: a soundfont piano sounds like a piano and an oscillator does not.
 But this music was written for an FM chip with a handful of operators, so an
 envelope over a waveform picked by program family lands closer to the original
 than it would for most music, costs nothing to ship, and works everywhere.
@@ -543,7 +552,7 @@ Drums are a filtered noise burst. Sampled sounds go straight into an
 nodes so the page's music and effects sliders can trade against each other.
 
 **CLI** (`backend.RecordingSink`) writes rather than plays. There is no audio
-device this project is willing to depend on — Rust's side reaches a system MIDI
+device this project is willing to depend on — playing would mean a system MIDI
 port and an ALSA or CoreAudio backend, neither of which has a cgo-free Go
 equivalent — and "did the sound come out right" is a question a recording
 answers better than a speaker. `runktf <game> -audio out` and `runlgt` the same
@@ -588,7 +597,7 @@ timeline the Java classes use. Its function numbers are read off the callers
 rather than off the specification's print order, which this vendor's table does
 not follow — the table and the argument shapes it was recovered from are in
 [the KTF history](history/ktf.md#implementation-sound-in-c-and-the-table-that-was-accepted-and-thrown-away),
-and the five read later from a lifecycle sweep and from answering two getters
+and the six read later from a lifecycle sweep and from answering two getters
 with marker values are in
 [the audio history](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers).
 
@@ -902,7 +911,7 @@ are saved separately. Diagnostic sinks and older cached pages retain future-even
 scaling and MIDI release at zero; they cannot adjust active PCM.
 
 KTF Java/C and LGT Java/C device controls, SKVM device controls and the three
-platforms' Java Clip levels now reach this path. LGT C clip volume does too.
+platforms' Java Clip levels now reach this path. KTF C and LGT C clip volume do too.
 The [gain contract and verification](audio-ownership.md#guest-volume) describes
 defaults, checkpoint compatibility and the unverified vendor source controls.
 
@@ -1041,7 +1050,13 @@ next Host pass, so a listener can restart playback without recursively
 entering itself. The registry, undelivered events, payload objects, listener
 identity, finite remaining count and observed completions survive checkpoints.
 Limits are 256 loaded players, 256 listeners per player and 4,096 pending events;
-exceeding a delivery limit is an explicit runtime error.
+a transition the guest makes past a delivery limit is an explicit runtime error.
+Natural ends are the exception: a parked game's guest clock keeps time, so a
+Player left looping across a long park comes back owing more passes than the
+queue holds, and those collapse into the last pass's end and, if it goes on
+playing, its next start. Failing there put the MIDlet in its error state on
+the first pass after resume. KTF and LGT collapse a completion backlog the
+same way.
 
 Host advancement and guest transitions share the same synchronization for
 each registered Player. Raw SKVM clips have a separate clock/transition lock;
@@ -1157,7 +1172,7 @@ records keep their allocated layout: concrete callbacks work, but restoration
 does not add constant or interface-method slots to that old class. New starts
 provide the full declaration. Earlier binaries reject the new native kind;
 rollback uses a supported old checkpoint or an ordinary start. LGT Java
-delivery remains separate work; LGT C callbacks are unchanged.
+delivery is described above; LGT C callbacks are unchanged.
 
 ## Transient tones and capability queries
 

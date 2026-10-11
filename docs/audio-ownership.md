@@ -24,8 +24,8 @@ or final browser output. Use the browser renderer for those comparisons.
 
 Output checkpoints carry owner identity for voices and remaining PCM, and a
 bounded, sorted channel table for each owner. Validation rejects missing,
-duplicate and unloaded owners before emitting anything. Audio component version
-6 stores raw output separately from device and clip gain, plus paused cursors,
+duplicate and unloaded owners before emitting anything. Since audio component
+version 6 (the current one is 9), checkpoints store raw output separately from device and clip gain, plus paused cursors,
 note envelope ages, finite remaining passes, completion counts and media
 position, pitch sensitivity and RPN/NRPN selectors. Pedal-held notes retain
 their released-key flag independently of sounding notes whose keys remain down.
@@ -65,8 +65,11 @@ volume.
 SKT MIDP `VolumeControl` uses the same per-clip level and mute state.
 They clamp to 0..100 and read back their stored setting. SKT accepts WIPI's
 boolean `Clip.setVolume` signature and retains the existing void extension.
-KTF and LGT use device default 100; SKT Java applies the existing SKVM reported
-default of 50 to actual output. Clips default to 100. Ordinary reload and restart
+KTF and LGT use device default 100. SKT Java reports the handset's default
+level, 50, and reads a device level relative to it: the default and anything
+above play at full output, lower levels scale down to silence at zero
+(`sktOutputVolume`). Applying 50 as half gain made every SKT title half as loud
+as in 0.5.2, where device levels did not reach the output. Clips default to 100. Ordinary reload and restart
 retain the clip level. LGT Java data replacement also closes the previous
 decoded handle; merely clearing its loaded flag left active sound orphaned.
 
@@ -92,7 +95,7 @@ gain and note envelope ages with either JSON or binary protocol 2. The earlier
 note-on events when output is reconstructed. Without either, the server sends
 the legacy event format, preserving compatibility with an older cached page.
 An older server can ignore the query and still drive the new page's owner-zero
-stream. The PWA shell version is 47.
+stream. The PWA shell version is 55 (`wfeature-pwa-v55`).
 
 JSON events add `sound`, a 32-bit handle, and `stopSound`. Omitted `sound` is
 owner zero. Binary `WFA2` adds:
@@ -166,12 +169,15 @@ Contracts: [WIPI Player](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis
 Ordinary audio, including stop operations, never waits for a full socket queue.
 A dropped batch marks output as needing reconstruction. The next tick with
 queue capacity sends `allOff` followed by the current backend output, even if
-that tick produced no new audio event. Lost PCM definitions are sent again.
+that tick produced no new audio event. Lost PCM definitions are sent again. A
+reconnect to a parked game is rebuilt the same way, after the first tick that
+brings the audio timeline to the resumed guest clock.
 
 Collector overflow follows the same path. Normal batches remain bounded to
 4,096 operations. Reconstruction temporarily permits 65,536 operations, enough
-for the 58,176-operation maximum owned reconstruction: all 256 owners plus
-owner zero, fourteen operations per channel, gains, voices and tracked samples. It then
+for the largest owned reconstruction: 58,176 operations for all 256 owners plus
+owner zero, fourteen operations per channel, gains, voices and tracked samples,
+and up to three controls for each of 2,048 PCM groups (6,144 more). It then
 restores the ordinary bound. Debug logs distinguish collector overflow, dropped
 audio batches and successful reconstruction. This prevents a missed note-off
 or stop from leaving a voice stuck once delivery resumes. It does not reproduce

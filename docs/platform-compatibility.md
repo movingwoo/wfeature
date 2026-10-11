@@ -29,11 +29,19 @@ Any added, removed or changed class changes the fingerprint. Archive filenames,
 display names, ZIP metadata and resources do not select compatibility. Identical
 code repackaged with different resources receives the same exception.
 
+Every entry names its evidence in the registry's `evidence` field, which is the
+index of what each fix is for. The registered fixes on 2026-10-11 are:
+
+| Platform | Fixes |
+| --- | --- |
+| SKT | `skt.inclusive_set_clip` (two entries), `skt.resume_without_start` (two entries), `skt.tutorial_name_cache` |
+| LGT | `lgt.visible_framebuffer_origin`, `lgt.wide_graphics_context` (four entries), `lgt.wide_exclusive_clip`, `lgt.direct_framebuffer_origin`, `lgt.image_framebuffer_origin`, `lgt.color_key_sample_origin`, `lgt.save_subscriber_identity`, `lgt.certificate_message` |
+
 `skt.inclusive_set_clip` enables the existing
 MIDP clip-extent correction for the recognized session. Unrecognized code keeps
 normal clipping. The original archive is never rewritten. The
 [rendering investigation](#skt-skt-original-specific-clip-compatibility)
-records the current entry's evidence and rendering tests.
+records the first entry's evidence and rendering tests.
 
 `skt.tutorial_name_cache` clears an item-name cache when one verified code
 revision returns from its tutorial equipment menu to combat. It replaces a
@@ -108,7 +116,7 @@ reported SKT original is in scope.
 
 The exception is registered in the embedded
 [`registry.json`](../internal/platform/compatibility/registry.json); see the
-[registry maintenance guide](). Authentication adaptation
+[registry maintenance guide](#adding-or-removing-an-exception). Authentication adaptation
 remains separate.
 
 Compatibility requires an exact SHA-256 fingerprint of all original Java

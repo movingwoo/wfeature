@@ -188,13 +188,17 @@ the same file again comes back to the same progress.
   should hold on any recent phone; **the second says an SKT title needs a fast
   one**, and a mid-range phone will not hold it at speed. That ratio does not
   change with the device — improving it means the MIDP path, not the hardware.
-- **The emulator's own frames.** On a phone the server encodes a PNG per frame
-  and the web view decodes it, on the same processor. Over a network that trade
+- **The emulator's own frames.** On a phone the server encodes lossless picture
+  updates (WebP where the web view decodes it) and the web view decodes them,
+  on the same processor. Over a network that trade
   bought a phone that did not have to emulate; in-process it buys nothing, and
   handing the frame over as raw pixels is the obvious next thing to measure.
-- **Whether either app runs at all beyond a first launch.** Both builds are
-  verified as far as their contents: signed, correct architecture, the server
-  and the page inside. That is not the same as playing a game on a phone.
+- **How far each app has been played.** Both builds are verified as far as
+  their contents: signed, correct architecture, the server and the page inside.
+  The Android app has run KTF titles in an emulator and for users, which is how
+  its audio timing defect was found
+  ([APK audio timing](history/audio.md#apk-audio-timing)); playing on iOS and
+  physical-phone acceptance remain unverified.
 
 
 ### Release version and build number

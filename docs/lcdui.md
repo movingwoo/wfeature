@@ -10,8 +10,8 @@ The application never draws a `Screen`; it describes one, and the platform
 renders it and reads the keys. That division is the whole design of this part
 of the runtime.
 
-- The Java classes in `internal/api/midp/java/javax/microedition/lcdui` are the
-  guest's view.
+- The classes declared in Go in `internal/api/midp` (`definitions.go`, with
+  bodies in `lcdui.go`) are the guest's view.
 - `internal/platform/skt/lcdui.go` holds the state and the natives.
 - `internal/platform/skt/lcdui_render.go` draws a `Screen` into the Host
   framebuffer.
@@ -113,19 +113,22 @@ positive counter-clockwise, the second angle an extent rather than an end, and
 the arc centred in the rectangle it was given. `arcWidth` and `arcHeight` are
 corner **diameters**, so one equal to the side it rounds makes the shape an
 ellipse rather than overflowing it. The other two platforms draw these through
-the same geometry; see `ktf.md`, "The same geometry, on five surfaces".
+the same geometry; see
+[the same geometry, on five surfaces](history/ktf.md#implementation-the-same-geometry-on-five-surfaces).
 
 ## Deliberately incomplete
 
-- **Text entry is Latin and digits, not Hangul.** A `TextBox` types through
+- **Keypad text entry is Latin and digits, not Hangul.** Hangul reaches a
+  `TextBox` through the Host text-input dialog (see
+  [native text input](native-text-input.md)); on the keypad a `TextBox` types through
   the shared multi-tap input method
   ([`internal/textinput`](../internal/textinput/textinput.go)), the same one
   KTF's lwc text components and this vendor's own text component use, so a
   game types the same way wherever it asks. What none of them composes is
   Hangul. The pad moves the caret and only the pad: 4 and 6 are a game's left
   and right elsewhere, but in a field they are `ghi` and `mno`, and taking
-  them as caret moves left both untypable — see `skvm.md`, "Two ways a title
-  takes a name".
+  them as caret moves left both untypable — see
+  [two ways a title takes a name](history/skt.md#implementation-two-ways-a-title-takes-a-name).
 - **`Alert` has no timer.** `getTimeout` reports what was set and
   `getDefaultTimeout` answers a fixed value, but no alert dismisses itself —
   the runtime has no timer thread for screens. An alert stays until the

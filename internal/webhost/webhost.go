@@ -267,7 +267,8 @@ func (s *Server) serveShutdown(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if !isLoopbackRequest(request) {
-		s.logger.Warn("refused a shutdown from off this machine", "from", request.RemoteAddr)
+		s.logger.Warn("refused a shutdown from off this machine", "from", request.RemoteAddr,
+			"forwarded_for", request.Header.Get("X-Forwarded-For"))
 		writeError(writer, http.StatusForbidden, "Forbidden")
 		return
 	}
@@ -282,7 +283,19 @@ func (s *Server) serveShutdown(writer http.ResponseWriter, request *http.Request
 // isLoopbackRequest reports whether the peer is on this machine. A Unix socket
 // has no address to read, and being on one is itself the answer: nothing off
 // the machine can open it.
+//
+// Except through a reverse proxy, which is what the socket exists for: the
+// proxy is on this machine, so every visitor it forwards arrives from here,
+// over the socket or over loopback. A request that carries a forwarding header
+// came from somewhere else, whatever peer handed it over. The header is only
+// as good as the proxy that sets it, which is why docs/running.md has the
+// nginx block set one; a visitor can add one but gains nothing by it.
 func isLoopbackRequest(request *http.Request) bool {
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+		if len(request.Header.Values(header)) > 0 {
+			return false
+		}
+	}
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
 		host = request.RemoteAddr

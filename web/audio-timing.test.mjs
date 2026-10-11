@@ -330,7 +330,8 @@ test("a timed stop never postpones a source's earlier natural or released end", 
 });
 
 const invalidBatches = [
-  ["late", () => [attack(0.060, 62), clock(0.060)], 1.3],
+  // Later than MAX_REANCHOR_LATE: a batch a little late moves the anchor.
+  ["late", () => [attack(0.060, 62), clock(0.060)], 1.5],
   ["too far ahead", () => [attack(0.300, 62), clock(0.300)]],
   ["backward frontier", () => [clock(0.040)]],
   ["backward event between batches", () => [attack(0.040, 62), clock(0.060)]],

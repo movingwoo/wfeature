@@ -45,7 +45,8 @@ Acceptance is still open:
 - Observe a physical phone using L-shaped buttons, two fingers, rotation and
   reload. Automated touch contacts do not replace this observation.
 
-Both browsers pass the version-34 and version-35 updates to shell version 41,
+Both browsers passed the version-34 and version-35 updates to the then-current
+shell version 41 on 2026-10-08,
 including retained assignments, save bytes and offline shell loading. The new
 prefix protects the current cache from late legacy-worker cleanup, and cleanup
 only removes predecessors. The runner waits for asynchronous cache retirement
@@ -56,11 +57,24 @@ dependencies remain outside this request.
 
 ## Execution and acceptance follow-up
 
-PWA acceptance still needs an explicit scope for installation, service-worker
-updates, audio activation/recovery, touch, and save restoration. Existing local
-Chromium/WebKit session checks cover only part of that path; see [testing](testing.md).
+[PWA acceptance](pwa-acceptance.md) defines the release route across a service
+worker upgrade — saves, settings, audio activation, touch and text input — in
+Chromium and WebKit, and the physical-device table it cannot fill itself.
 Real-phone suspension, long pauses, active soundtrack recovery, and operating-system
 IME behavior require human/device observations.
+
+Three questions were left open only in dated records and have not been
+rechecked since:
+
+- An LGT title's page report at medium speed showed temporary drops to 0.67x
+  guest speed (4.4 fps, 57.1 ms per tick) before recovering; two attempts did
+  not reproduce it ([gameplay QA](gameplay-qa-2026-09-20.md#outstanding-investigation)).
+- A KTF C title advances gameplay faster than expected; extra card paints were
+  excluded as the cause and its timer and update loop were not investigated
+  ([KTF QA](ktf-qa-2026-09-21.md)).
+- A guest callback that blocks has no out-of-band way to export a report; the
+  one evidenced key-callback wait was fixed on its own
+  ([LGT key callback hang](lgt-key-callback-hang-2026-09-23.md)).
 
 The KTF native loading stall needs a matching `.mif`/`.mod` archive. A folder
 label is not sufficient. Automatic landscape selection needs a package or handset
@@ -74,6 +88,56 @@ The KTF environment return slot needs address, width, initialization, and validi
 rules. Neither is a reproduced defect with a known repair. See [KTF](ktf.md),
 [LGT](lgt.md), and [runtime validation](testing.md#runtime-boundary-regressions).
 
+## Sound: what needs a handset or an ear
+
+The playback contracts in [audio](audio.md) and
+[audio ownership](audio-ownership.md) are implemented and tested in Go, in Node
+and in rendered Chromium/WebKit output. What is left cannot be settled there:
+
+- **The original APK report.** A KTF title on the Android app (probably 0.5.0;
+  phone, WebView version and output route unknown) sounded different. The
+  coarse-clock scheduling defect found for it is repaired in the shared page
+  ([APK audio timing](history/audio.md#apk-audio-timing)); the reporter's scene
+  has not been compared on a physical phone, and LGT/SKT have not been listened
+  to on the app. Compare one playback at a time with the same archive, scene,
+  version, speed, BGM/effects settings and physical output:
+
+  | Route | Server | Client | What the pair separates |
+  | --- | --- | --- | --- |
+  | A | PC | Chrome on the phone | the browser baseline |
+  | B | the phone (the app's own server) | Chrome on the phone, `http://127.0.0.1:11541` | A/B: local emulation and delivery load |
+  | C | the phone | the app's WebView | B/C: WebView, settings, lifecycle and output |
+
+  For B, keep the app's server alive and check that switching apps does not end
+  or pause the session; the app and the browser keep separate settings. Record
+  the mixed output with event arrivals, clock steps, sample rate, latency, tick
+  cost and drops, and tell rhythm, pitch/timbre, clipping and silence after
+  returning to the foreground apart.
+- **Handset decisions on PCM.** Whether a stream wave stops at its gate or plays
+  out, same-channel retrigger, and a short fade for the waves that end loud
+  (25 KTF and 62 LGT decoded waves end above a quarter of full scale) are
+  listening decisions; the census is in
+  [PCM contract evidence](history/audio.md#pcm-contract-evidence).
+- **Lateness tolerance.** A late batch re-anchors when it holds only the clock
+  frontier or is at most 200 ms late; a later one is refused and current
+  output is reconstructed. The 200 ms bound comes from a slowed desktop
+  browser, not a phone; tuning it needs lateness distributions from devices;
+  [the live sessions](testing.md#live-audio-session-acceptance) show the two
+  cases seen so far.
+- **Silent files.** 23 files whose stream notes select waves they do not carry
+  and twelve HPS files that hold only device commands need original runtime
+  evidence, not a guessed mapping
+  ([sounds without audible events](history/audio.md#sounds-without-audible-events)).
+
+Measured-work candidates for timbre, none started: the page maps 128 programs
+onto 16 oscillator families and plays drums as a short filtered-noise burst, so
+distinct attack/decay/sustain/release shapes per family and a small procedural
+drum model could separate instruments without importing a sample bank. Measure
+clipping of the actual mixed MIDI/PCM output at the supported slider settings
+before adding headroom or a limiter, and measure native CPU and memory of the
+retained sources before tuning the source budgets. No vendor sound bank is
+guessed from SysEx, and the synthesis engine is not to be replaced wholesale.
+
 ## Performance and optional features
 
 Remeasure before changing ownership, scheduling, or interpreter strategy:
@@ -86,21 +150,25 @@ Remeasure before changing ownership, scheduling, or interpreter strategy:
 - A native-code backend needs conformance, interpreter fallback, pure-Go core
   compatibility, and a demonstrated improvement; see [ARM execution](armcore.md).
 - Keypad JSON preset sharing and external-access add-ons need a product scope.
-  Local keypad storage and a server access key already exist.
+  Local keypad storage exists. The server has no access key or other
+  authentication, so external access needs one before it is offered.
 
 Detailed historical counts, benchmark names, and rejected approaches remain in
 [the maintenance record](history/maintenance.md). They are not current measurements.
 
 ## Paused work and provenance
 
-KTF quick save/load resumed at the user's request and now runs through the shared
-session, CLI and browser hosts. [Architecture](architecture.md) defines its state
-and ownership contracts; [testing](testing.md) records supported variants,
-restart/gameplay evidence and remaining device limitations. Unknown runtime
-states are refused, and real native package validation still needs a matching
-`.mif`/`.mod` archive. Other platforms remain outside this implementation's scope.
-Earlier snapshot attempts remain in the history. SGS development remains paused;
-existing SGS specifications and acceptance records are preserved.
+Quick save/load runs on KTF (Java/AOT, older modules and native packages), LGT
+(Clets and AOT Java) and SKT (Java and SGS) through the shared session, CLI and
+browser hosts. [Architecture](architecture.md#quick-load-and-ordinary-saves)
+defines the state and save-ownership contracts; [testing](testing.md) records
+supported variants, restart/gameplay evidence and remaining device limitations.
+Unknown runtime states are refused, and real native package validation still
+needs a matching `.mif`/`.mod` archive. Earlier snapshot attempts and the
+implementation's component costs remain in
+[the history](history/maintenance.md#quick-save-implementation-measurements).
+SGS feature development remains paused; existing SGS specifications and
+acceptance records are preserved.
 
 Do not import assets, fixtures, or notices with unclear provenance. The recorded
 SMAF test provenance question needs evidence before changing attribution.

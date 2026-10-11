@@ -56,8 +56,12 @@ func (runtime *Runtime) recordPlayerProgressLocked(object *jvm.Object, player *p
 		if wipiListener {
 			perPass++
 		}
+		// A Host pause does not stop the guest clock, so a Player looping
+		// across a long park comes back owing more passes than the queues
+		// hold. The MIDlet was not running to hear them one by one; it hears
+		// the last pass end, and the next start if the Player goes on.
 		if count > maxPlayerEvents/perPass {
-			return fmt.Errorf("media player completion notifications exceed limit")
+			count = 1
 		}
 		for i := uint64(0); i < count; i++ {
 			if err := runtime.queueWIPIEventLocked(object, player, wipi.PlayEventEndOfData); err != nil {

@@ -20,7 +20,7 @@ KTF·LGT·SKT 게임을 지원합니다. SKT의 GNEX/GVM `.SGS` 실행 경로도
 
 [**Releases**](https://github.com/movingwoo/wfeature/releases)에서 운영체제에 맞는 파일을 받습니다.  
 압축을 풀고, 안에 있는 `games/` 폴더에 게임을 넣고 실행합니다.  
-폰에서는 폴더에 넣을 수 없으니 화면의 **＋ 게임 추가** 버튼으로 넣습니다(지울 때도 같은 화면의 **게임 삭제**를 씁니다).  
+폰에서는 화면의 **＋ 게임 추가** 버튼으로 넣습니다(지울 때도 같은 화면의 **게임 삭제**를 씁니다). iOS 앱은 파일 앱의 wfeature 폴더에 직접 넣을 수도 있습니다.  
 
 | | 실행 | 처음 한 번 |
 |---|---|---|
@@ -99,8 +99,8 @@ make serve
 Windows에서 `make` 없이 실행하는 방법은 [`docs/running.md`](docs/running.md) 문서를 참조해주세요.
 
 주소나 폴더는 플래그로 바꿉니다.  
-`-addr`, `-port`, `-games`, `-saves`, `-logs`, `-web`, `-number`, `-open`, `-version`  
-환경 변수(`WFEATURE_ADDR`, `WFEATURE_PORT`, `WFEATURE_HOST`, `WFEATURE_GAME_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_WEB_ROOT`, `WFEATURE_PHONE_NUMBER`, `WFEATURE_OPEN`)  
+`-addr`, `-games`, `-ext`, `-saves`, `-logs`, `-web`, `-number`, `-open`, `-version` (`-port`는 `status`·`stop`에서만 씁니다)  
+환경 변수(`WFEATURE_ADDR`, `WFEATURE_PORT`, `WFEATURE_HOST`, `WFEATURE_GAME_ROOT`, `WFEATURE_ADDED_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_WEB_ROOT`, `WFEATURE_PHONE_NUMBER`, `WFEATURE_OPEN`)  
 
 `-number`는 게임에게 알려줄 가입자 번호입니다. 요금제를 확인하는 게임이 있어 짧게 주면 그 화면을 넘어갑니다.
 
@@ -194,6 +194,7 @@ PC 웹 브라우저와 같은 넓은 화면 + 디버그 빌드에서는 화면 �
 설정 버튼은 항상 하나 남습니다. 다른 칸에 **설정**을 지정하면 옮겨집니다.
 Type1~Type4는 각각 배치를 기억하며, 기존 배치도 새 격자로 옮겨집니다.
 Type1~Type3의 기본 윗줄은 1~2칸 **설정**, 13~14칸 **취소**가 합쳐져 있고 3~12칸은 한 칸씩 나뉩니다. 5~10칸은 순서대로 **퀵세이브·퀵로드·연사·메뉴·통화·우상단**, 3·4·11·12칸은 빈 칸입니다.
+**연사**는 누를 때마다 끔 → 수동 → 자동으로 바뀝니다. 수동은 `5`·`OK`를 누르고 있는 동안 초당 10번 반복하고, 자동은 `5`나 `OK`를 한 번 누르면 다시 누를 때까지 반복합니다. 자세한 동작은 [`docs/rapid-fire.md`](docs/rapid-fire.md)에 있습니다.
 저장된 배치에서 새 기본배치를 쓰려면 해당 타입의 **기본값으로 되돌리기**를 누릅니다.
 기존 버튼은 가로 두 칸으로 유지됩니다. 반 칸만 쓰려면 **나누기**로 나눈 뒤 원하는 칸에 키를 지정합니다.
 버튼 이름은 한 줄로 표시되며, 두 글자 이름도 칸 너비에 맞춰 자동으로 작아집니다. 글자가 너무 작으면 여러 칸을 합쳐 버튼을 키울 수 있습니다.
@@ -244,7 +245,7 @@ Type1~Type3은 기본 윗줄 5·6칸에 퀵세이브·퀵로드가 있습니다.
 퀵세이브 형식은 debug와 release가 같으며, 같은 저장 경로를 지정하면 서로 불러올 수 있습니다.
 버전이 올라가 형식이 달라지면 이전 퀵세이브를 불러오지 못할 수 있습니다(파일은 지우지 않습니다). 게임 내 세이브는 영향받지 않습니다.
 일부 지원하지 않는 실행 상태와 활성 치트 고정·패치가 있으면 퀵세이브를 거절합니다.
-소리는 복원하지만 음의 시작 부분이 다시 들릴 수 있습니다.
+소리는 멈춘 자리부터 이어서 재생합니다. 다만 소리를 처음부터 다시 그리는 것이라 음색의 위상이나 이미 놓은 음의 잔향은 새로 시작될 수 있습니다.
 
 ## 치트
 
@@ -323,8 +324,6 @@ make acceptance    # 손에 있는 게임을 전부 돌려 보고서를 남김
 ## 문서
 
 전체 기술 문서는 [문서 목차](docs/README.md)에서 찾을 수 있습니다. 현재 사용법·구현 개요와 과거 조사·검증 기록을 구분했습니다.
-
-작업 규칙은 [`AGENTS.md`](AGENTS.md)에 있습니다.
 
 ## 라이선스
 

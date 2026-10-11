@@ -1324,7 +1324,7 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 		t.Fatalf("the stream on the open File came back as %+v", held)
 	}
 	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{stream}); err != nil || value != 'F' {
-		t.Fatalf("the stream reads %q on from where it was, %v", value, err)
+		t.Fatalf("the stream reads %d on from where it was, %v", value, err)
 	}
 	if held := copied.javaRun.streams[orphan]; string(held.Data) != "efghij" || held.Read != 1 {
 		t.Fatalf("the stream whose File was closed came back as %+v", held)

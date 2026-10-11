@@ -11,8 +11,9 @@ emulator itself once, in WebAssembly; a phone could not run it fast enough to
 play, and that engine is gone.
 
 **A game survives the page going away.** Switching to another app suspends this
-page and the browser drops the socket; the server holds the game for five
-minutes under a token the page keeps in `sessionStorage`, and the page
+page and the browser drops the socket; the server keeps the game, with no time
+limit, under a token the page keeps in `sessionStorage` — until it is stopped,
+replaced, pushed out by the four-game limit, or the server shuts down — and the page
 reconnects and asks for it back when it is looked at again. Restarting clears
 the token, so the restart button still starts a game over.
 
@@ -118,8 +119,9 @@ the token, so the restart button still starts a game over.
   These are the lines a saved report carries, so what is on screen during a run
   and what is read back afterwards cannot disagree. Wide windows and debug
   builds only.
-- **Settings (`설정`)** — MIDI and effect volume, magnification, speed, keypad
-  type and grid editing, keyboard bindings, cheats, debug reports, and restart.
+- **Settings (`설정`)** — MIDI and effect volume, magnification, screen size,
+  speed, vibration, text input (`🔤 문자 입력`), keypad type and grid editing,
+  keyboard bindings, cheats, debug reports, and restart.
   Both type lists select the same stored type and show whether it was edited.
   The keyboard binding panel appears after a physical keyboard key is used.
   The dark-red settings button starts at the first grid cell and can move or
@@ -145,11 +147,12 @@ the token, so the restart button still starts a game over.
   release tails through independent channel controls. Sustain, pitch-bend range
   and controller reset preserve their per-clip state through reconstruction.
   Presentation timestamps preserve intervals inside one server batch; a late
-  batch requests fresh output. Scheduled clip stops keep earlier audio connected
+  batch re-anchors a lead ahead when it holds only the clock frontier or is at
+  most 200 ms late, and a later one requests fresh output. Scheduled clip stops keep earlier audio connected
   until its deadline and isolate the next restart's output nodes. Immutable PCM
   definitions reuse a bounded buffer cache while each trigger keeps its own
   source, gain and cursor. A complete batch must fit 512 retained sources and
-  128 MiB of PCM float payload per live reference, including scheduled and
+  128 MiB of PCM float payload in total over every live reference, including scheduled and
   retired sources; pressure invokes the existing output recovery. ATR groups
   also preserve live squared volume/expression
   and cosine/sine pan independently of MIDI. Group nodes are reclaimed after
@@ -291,7 +294,7 @@ is retained as `wfeature:keypadGridV2Backup`; a failed backup keeps the edit onl
 in memory. A damaged old-slot source needs no copy because migration never writes
 that slot. Future versions and oversized records are not overwritten. Failed
 writes retain a working layout for the current tab and show an inline notice.
-The service worker carries all three grid modules in `wfeature-pwa-v43`.
+The service worker's shell cache carries all three grid modules.
 
 ## Server
 
@@ -311,7 +314,18 @@ built per profile like every other binary here.
   the page's own files it carries a validator and is revalidated rather than
   re-sent, and it is gzip-compressed where the browser accepts that.
 - `GET /games/<group>/<archive>` — the archive itself, revalidated with an
-  `ETag` rather than re-sent, since these are tens of megabytes.
+  `ETag` rather than re-sent, since these are tens of megabytes. Archives added
+  from the page live under `-ext` (`var/ext`) and are served as `/ext/<archive>`;
+  their `games.json` entries carry `added: true`.
+- `POST /api/games?name=<file>` / `DELETE /api/games?game=<picker path>` — add an
+  archive from the page, or remove one the page added. Nothing under `-games`
+  can be removed this way.
+- `GET` / `POST /api/savepack?game=<path>` — export one game's saves as a `.wfs`
+  container, or import one over them.
+- `GET /api/status` — what this server is (`server`, `profile`, `version`,
+  `pid`); `POST /api/shutdown` stops it, from this machine only. See
+  `../docs/running.md`.
+- `GET /licenses` — this project's licence and the bundled notices.
 - `GET /api/saves/<owner>` — `{ saves: { "<key>": "<base64>" } }` read from
   `-saves` (`var/savedata/<profile>/ktf` by default), in the same layout the
   native CLI's `DirectorySaveStore` writes, so both Hosts boot from one set of
@@ -343,7 +357,7 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
-Shell version 47 uses `wfeature-pwa-v47`. The prefix introduced in version 35 prevents already-installed
+The shell cache is `wfeature-pwa-v55` (the constant in `service-worker.js`). The prefix introduced in version 35 prevents already-installed
 workers from deleting it through their broad `wfeature-shell-*` cleanup.
 Activation removes legacy shell caches and strictly older `wfeature-pwa-vN`
 versions, preserving future versions and unrelated caches. A controlled navigation

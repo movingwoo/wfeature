@@ -128,7 +128,7 @@ func TestWIPIDisplayCheckpointWithoutMIDPOwnerPreservesAudio(t *testing.T) {
 				freshSink.notes != 2 || freshSink.gains[firstHandle] != 2500 || freshSink.gains[secondHandle] != 10000 {
 				t.Fatalf("restore changed clip roots or audio: notes=%d, gains=%v", freshSink.notes, freshSink.gains)
 			}
-			if _, err := restored.VM.InvokeStatic("AudioGainMIDlet", "setDeviceLevel", "(I)I", jvm.IntValue(50)); err != nil || freshSink.gains[firstHandle] != 1250 || freshSink.gains[secondHandle] != 5000 || freshSink.notes != 2 {
+			if _, err := restored.VM.InvokeStatic("AudioGainMIDlet", "setDeviceLevel", "(I)I", jvm.IntValue(25)); err != nil || freshSink.gains[firstHandle] != 1250 || freshSink.gains[secondHandle] != 5000 || freshSink.notes != 2 {
 				t.Fatalf("restored live gain changed playback: gains=%v, notes=%d, err=%v", freshSink.gains, freshSink.notes, err)
 			}
 			if _, err := restored.CaptureCheckpointWithSession(t.Context(), nil); err != nil {

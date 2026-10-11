@@ -199,7 +199,7 @@ Which of the three a class belongs to is the profile it came from rather than
 its package name. `java.util.Timer` and `java.util.TimerTask` are the case:
 they are in `java.util` and they are not in CLDC, so they are declared in
 `internal/api/midp` and only a VM that installs that profile answers them —
-see `skvm.md`, "A timer runs on a thread, because the title keeps drawing".
+see [a timer runs on a thread](history/skt.md#implementation-a-timer-runs-on-a-thread-because-the-title-keeps-drawing).
 
 A definition carries what a class file carried: the name, the superclass and
 interfaces a game's `instanceof` reads, the fields and methods it links
@@ -441,7 +441,7 @@ and past `maxToStringDepth` it gets the identity it would have had before.
 - ~~an object appended to a `StringBuffer` is named, not asked~~ — **the
   title that hands one something other than a string has arrived**, and both
   forms call `toString` now. See "An object handed to valueOf is asked, not
-  named" below
+  named" above
 - execution semantics for `invokedynamic`, method handles, and module constants
 - the LCDUI presentation for uncaught exceptions already retained in host
   diagnostics
@@ -456,12 +456,12 @@ Commands, the high-level LCDUI widgets, `GameCanvas` and RMS `RecordStore` were
 on this list and are not any more — they are what an SKT title turned out to be
 made of. [`lcdui.md`](lcdui.md) and [`rms.md`](rms.md) describe them. Text is no
 longer ASCII-only either: two pixel fonts are embedded and shared by every
-platform through `internal/glyph`, and [`ktf.md`](ktf.md) has how a face is
-chosen per screen size.
+platform through `internal/glyph`, and [the KTF history](history/ktf.md) has how
+a face is chosen from the screen size a descriptor declares.
 
 **How much of CLDC is missing is a measurable number, and measuring it is one
 pass.** The specification site publishes every CLDC class page in one file
-(`llms-full.txt`, see `AGENTS.md`), and each page carries its field, constructor
+(<https://mirusu400.github.io/wipi-wiki/llms-full.txt>), and each page carries its field, constructor
 and method summaries in a fixed shape; turning those into descriptors and
 subtracting `jvm.CoreLibraryDefinitions` reports what the classes this runtime
 already publishes still do not answer. It was 153 members when this was first

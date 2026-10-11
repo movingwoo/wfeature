@@ -5,9 +5,10 @@ platforms, and this document is where the decision and its whole surface live;
 each platform document links back to it rather than restating it.
 
 On 2026-09-11 the user requested a common offline authentication-bypass feature.
-Recognized certificate, identity and license adapters are implemented. One recognized
-LGT contract also has a local notification/empty-save responder; external networking
-remains disabled.
+Recognized certificate, identity and license adapters are implemented. Three
+recognized exchanges are answered in process — an LGT notification/empty-save
+responder, an LGT two-stage certificate message and a KTF slot service — and
+external networking remains disabled.
 [authentication.md](authentication.md) separates the recognized schemes and
 records their implementation boundaries.
 [authentication case history](history/authentication.md#cases-authentication-case-inventory) records the subsequent corpus
@@ -16,8 +17,11 @@ inventory, current controlled experiments, and unresolved case distinctions.
 ## The decision
 
 By default, every connection a game asks for is **refused**, through a return
-value, guest exception, or deferred callback. With automatic authentication compatibility, one recognized LGT contract uses the bounded in-process responder
-described below. All other connections still reach the guest failure path.
+value, guest exception, or deferred callback. With automatic authentication
+compatibility, the recognized LGT notification and certificate-message contracts
+use the bounded in-process responder described below. A KTF title built on the
+recognized relay middleware reaches the local slot service, whatever that
+switch says. All other connections still reach the guest failure path.
 
 An unconditional success response is worse than it looks. A game told a connection opened waits
 for bytes, and it waits inside the screen it only leaves when a read
@@ -35,8 +39,9 @@ something the game handles.
 
 | Platform | Entry point | Answer |
 | --- | --- | --- |
-| KTF | `org.kwis.msf.io.Network.connect` | `-1` |
-| KTF | `org.kwis.msf.io.Network.disconnect` | accepted no-op |
+| KTF | `org.kwis.msf.io.Network.connect` | `-1`; `0` for a title with the recognized relay middleware |
+| KTF | `org.kwis.msf.io.Network.disconnect` | accepted no-op; closes the local slot socket if one is open |
+| KTF | `org.kwis.msf.io.URL.find` | the in-process slot socket for the recognized relay endpoint once connected; otherwise `SchemeNotFoundException` |
 | KTF | WIPI C net table, `close` | success — closing what never opened is not a failure |
 | KTF | WIPI C net table, `connect` | accepts a bounded callback request, then reports failure; without a callback or with a full queue, refuses immediately |
 | KTF | WIPI C net table, everything else | `0xffffffff` |
@@ -152,8 +157,9 @@ reaches either here, and not by luck: the call site is behind a check on the
 `m.SK_VM` property, and this runtime answers the value that skips it. Declaring
 the two classes would put a `Socket` in front of a title that cannot have one,
 so what is written down instead is the gate. If that property's answer ever
-changes, these become reachable in the same session; `docs/skvm.md`, "The two
-entries the scan still lists", is where the scan's view of them lives.
+changes, these become reachable in the same session;
+[the two entries the scan still lists](history/skt.md#implementation-the-two-entries-the-scan-still-lists-and-why-neither-is-work)
+is where the scan's view of them lives.
 
 ## System properties are not part of the refusal
 
@@ -189,7 +195,7 @@ The first title's predicate is the **length** and nothing else — `911` passes
 and `01000` does not, so it is not the value, not a prefix and not a match
 against anything it stores. Five digits or more is a subscriber it can bill; it
 then checks a receipt issued to the handset that paid, which is not this one.
-The sweep is in [`ktf.md`](ktf.md), "A second download gate".
+The sweep is in [a second download gate](history/ktf.md#implementation-a-second-download-gate-and-the-answer-that-opened-it).
 
 The second title compares the number against the one sealed into the
 certificate `wfeature provision` writes, and refuses a short one outright.
@@ -270,8 +276,8 @@ Its save-backup routine puts a notice up, calls `Network.connect`, and on `-1`
 **returns without taking the notice back down** — the branch jumps past its own
 teardown call to the epilogue. The notice being up is what makes its card's
 `paint` draw the notice instead of the card, which is what leaves the flag its
-Jlet loop waits on set for ever ([`lgt.md`](lgt.md), "What that wait is
-actually testing"). Nothing reports anything: the screen holds one line of text
+Jlet loop waits on set for ever
+([what that wait is actually testing](history/lgt.md#implementation-what-that-wait-is-actually-testing)). Nothing reports anything: the screen holds one line of text
 and the game is gone.
 
 Its other path works. Patching `connect` to look like a success in a running
@@ -351,8 +357,7 @@ reaches them and a stub would be a contract invented for no caller:
 - `CommConnection` — the serial bit of `MC_knlGetAccessLevel` is clear for the
   same reason the network bit is
 - `ServerSocketConnection` and `UDPDatagramConnection`
-- `DatagramConnection` and `Datagram`, which would also need `java.io.DataInput`
-  and `java.io.DataOutput` in the core library
+- `DatagramConnection` and `Datagram`
 - `PushRegistry` — inbound push is a different feature from the outbound path
   this document covers
 

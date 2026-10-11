@@ -236,8 +236,12 @@ func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *
 	}
 	if listener != nil {
 		count := progress.Completed - state.completed
-		if count > uint64(maxClipEvents-len(runtime.mediaEvents)) {
-			return fmt.Errorf("KTF Clip completion notifications exceed limit")
+		// A Host pause does not stop the guest clock, so a looping clip a
+		// title leaves playing across a long park comes back owing more
+		// passes than the queue holds. The title was not running to hear
+		// them one by one; it hears that its clip ended, once.
+		if room := uint64(maxClipEvents - len(runtime.mediaEvents)); count > room {
+			count = min(room, 1)
 		}
 		for range count {
 			runtime.mediaEvents = append(runtime.mediaEvents, clipEvent{clip, listener, wipi.PlayEventEndOfData})

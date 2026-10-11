@@ -1120,7 +1120,7 @@ func TestCheckpointRecordsTheJavaRuntimesTables(t *testing.T) {
 	// The resource stream reads on from where it was, out of the archive's
 	// own bytes rather than a copy of them.
 	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{stream}); err != nil || value != 'a' {
-		t.Fatalf("the resource stream reads %q, %v", value, err)
+		t.Fatalf("the resource stream reads %d, %v", value, err)
 	}
 	packaged, _ := copied.archive.Resource("data/hello.txt")
 	if held := copied.javaRun.streams[stream].Data; &held[0] != &packaged[0] {
