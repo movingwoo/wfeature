@@ -340,6 +340,9 @@ func TestAudioWavePhaseReconnectUsesNewPageCapability(t *testing.T) {
 				if resumed.game == nil || resumed.audio != collector {
 					t.Fatal("reconnect did not retain the running audio collector")
 				}
+				// The rebuild a reconnect owes is sent by the loop after its
+				// first tick; take it out of the way like the loop would.
+				resumed.flushAudio()
 				for len(resumed.outText) > 0 {
 					<-resumed.outText
 				}

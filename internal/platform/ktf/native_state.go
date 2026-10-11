@@ -96,11 +96,26 @@ func captureNativePixels(frame *image.RGBA) (nativePixelsState, error) {
 	return saved, saved.validate()
 }
 
+// maxNativeStateScreen is the largest side a restored screen may have. The
+// record names the screen the restored session runs at, and the Host sizes its
+// frame and scaling buffers from it, so it is held to what either Host starts
+// a session at rather than to the bound on an image a title decodes.
+const maxNativeStateScreen = 1024
+
 func (saved nativePixelsState) validate() error {
 	if saved.Width <= 0 || saved.Height <= 0 || saved.Width > 4096 || saved.Height > 4096 || len(saved.Pixels) != saved.Width*saved.Height*4 {
 		return fmt.Errorf("KTF native checkpoint has invalid pixel dimensions")
 	}
 	return nil
+}
+
+// validateScreen is validate for the record's screen, which a restored
+// session takes as its own size.
+func (saved nativePixelsState) validateScreen() error {
+	if saved.Width > maxNativeStateScreen || saved.Height > maxNativeStateScreen {
+		return fmt.Errorf("KTF native checkpoint screen %dx%d is larger than %d a side", saved.Width, saved.Height, maxNativeStateScreen)
+	}
+	return saved.validate()
 }
 
 func (saved nativePixelsState) restore() *image.RGBA {
@@ -282,7 +297,7 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return err
 		}
 	}
-	if err := saved.Screen.validate(); err != nil {
+	if err := saved.Screen.validateScreen(); err != nil {
 		return err
 	}
 	for i, value := range saved.Images {
@@ -372,7 +387,7 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 }
 
 func restoreNativeState(archive *NativeArchive, saved nativeState, options NativeSessionOptions) (*NativeSession, error) {
-	if err := saved.Screen.validate(); err != nil {
+	if err := saved.Screen.validateScreen(); err != nil {
 		return nil, err
 	}
 	steps := options.MaxSteps

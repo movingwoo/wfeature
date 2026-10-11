@@ -171,7 +171,7 @@ func (runtime *Runtime) skvm() *skvmState {
 	runtime.skvmOnce.Do(func() {
 		// A handset arrives with its backlight and key tone on, which is what
 		// a title that reads them before setting them expects to find.
-		runtime.skvmState = &skvmState{backlightColor: 0xffffff, audioVolume: 50, backlightOn: true, keyToneOn: true}
+		runtime.skvmState = &skvmState{backlightColor: 0xffffff, audioVolume: sktDefaultDeviceVolume, backlightOn: true, keyToneOn: true}
 	})
 	return runtime.skvmState
 }
@@ -1046,8 +1046,22 @@ func (runtime *Runtime) setAudioVolume(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.audioVolume = min(max(volume, 0), 100)
-	runtime.audioTimeline().SetVolume(int(state.audioVolume))
+	runtime.audioTimeline().SetVolume(sktOutputVolume(state.audioVolume))
 	return jvm.VoidValue(), nil
+}
+
+// sktDefaultDeviceVolume is the level AudioSystem.getVolume answers before a
+// title sets one: the handset's own default.
+const sktDefaultDeviceVolume = 50
+
+// sktOutputVolume turns the device level a title sets into the device gain the
+// audio timeline applies. The handset's default level is the loudness the
+// sounds were written for, so it plays at full output, as every SKT title did
+// before device levels reached the output and as KTF and LGT do at theirs;
+// lower levels scale down from it to silence at zero. Levels above the
+// default stay at full output rather than amplify past what a source holds.
+func sktOutputVolume(level int32) int {
+	return int(min(max(level, 0)*100/sktDefaultDeviceVolume, 100))
 }
 
 func audioClipArgument(arguments []jvm.Value) (*audioClipData, error) {

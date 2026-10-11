@@ -122,8 +122,9 @@ func (runtime *Runtime) audioTimeline() *backend.Audio {
 		runtime.audio = backend.NewAudio(nil)
 		runtime.audio.SetLogger(runtime.logger)
 		_ = runtime.audio.SetPlaybackRate(0, runtime.Speed())
-		// Match the handset level exposed by the existing SKVM getter.
-		runtime.audio.SetVolume(50)
+		// The SKVM getter reports the handset's default level, 50, and that
+		// level plays at full output; see sktOutputVolume.
+		runtime.audio.SetVolume(sktOutputVolume(sktDefaultDeviceVolume))
 	}
 	return runtime.audio
 }

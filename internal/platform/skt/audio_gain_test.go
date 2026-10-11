@@ -51,7 +51,7 @@ func TestConcurrentSKTGuestLevelsAgreeWithAudio(t *testing.T) {
 	deviceLevel, _ := device.Int32()
 	level, _ := runtime.wipiClipVolume(nil, []jvm.Value{jvm.ReferenceValue(clip)})
 	clipLevel, _ := level.Int32()
-	if saved.Volume != int(deviceLevel) || len(saved.Sounds) != 1 || saved.Sounds[0].Volume != int(clipLevel) {
+	if saved.Volume != sktOutputVolume(deviceLevel) || len(saved.Sounds) != 1 || saved.Sounds[0].Volume != int(clipLevel) {
 		t.Fatalf("guest/audio levels diverged: device=%d clip=%d saved=%+v", deviceLevel, clipLevel, saved)
 	}
 }
@@ -83,8 +83,10 @@ func TestJavaAudioGainFixtureAndCheckpoint(t *testing.T) {
 	sink := &sktGainSink{}
 	runtime.AttachAudioSink(sink)
 	volume, err := runtime.VM.InvokeStatic(skvm.AudioSystemClass, "getVolume", "()I")
-	if got, _ := volume.Int32(); err != nil || got != 50 || runtime.audioTimeline().Volume() != 50 {
-		t.Fatalf("default reported/output volume differ: %v, %v", volume, err)
+	// The handset's default level is reported to the title and plays at full
+	// output, the loudness every SKT title had before device levels applied.
+	if got, _ := volume.Int32(); err != nil || got != 50 || runtime.audioTimeline().Volume() != 100 {
+		t.Fatalf("default reported/output volume = %v (%v), output %d", volume, err, runtime.audioTimeline().Volume())
 	}
 	call := func(method, descriptor string, arguments ...jvm.Value) jvm.Value {
 		t.Helper()
@@ -121,7 +123,7 @@ func TestJavaAudioGainFixtureAndCheckpoint(t *testing.T) {
 		first, second uint16
 	}{
 		{"setClipLevel", -1, 0, 0, 10000},
-		{"setDeviceLevel", 50, 50, 0, 5000},
+		{"setDeviceLevel", 25, 25, 0, 5000},
 		{"setClipLevel", 40, 40, 2000, 5000},
 		{"setDeviceLevel", 500, 100, 4000, 10000},
 		{"setClipLevel", 500, 100, 10000, 10000},
@@ -161,5 +163,26 @@ func TestJavaAudioGainFixtureAndCheckpoint(t *testing.T) {
 	call("setDeviceLevel", "(I)I", jvm.IntValue(0))
 	if sink.gains[first] != 0 || sink.gains[second] != 0 {
 		t.Fatal("restored device setter did not mute active clips")
+	}
+}
+
+// A device level is read relative to the handset's default: the default and
+// everything above it play at full output, lower levels scale down to silence.
+func TestSKTDeviceLevelPlaysRelativeToTheHandsetDefault(t *testing.T) {
+	for _, step := range []struct{ level, output int32 }{{-5, 0}, {0, 0}, {10, 20}, {25, 50}, {49, 98}, {50, 100}, {75, 100}, {100, 100}} {
+		if got := sktOutputVolume(step.level); got != int(step.output) {
+			t.Errorf("device level %d plays at %d, want %d", step.level, got, step.output)
+		}
+	}
+	runtime := wipiStreamRuntime(t, nil)
+	if got := runtime.audioTimeline().Volume(); got != 100 {
+		t.Fatalf("a title that never sets a level plays at %d, want full output", got)
+	}
+	if _, err := runtime.setAudioVolume(nil, []jvm.Value{jvm.IntValue(25)}); err != nil {
+		t.Fatal(err)
+	}
+	reported, _ := runtime.audioVolume(nil, nil)
+	if level, _ := reported.Int32(); level != 25 || runtime.audioTimeline().Volume() != 50 {
+		t.Fatalf("device level 25 reports %d and plays at %d, want 25 and 50", level, runtime.audioTimeline().Volume())
 	}
 }

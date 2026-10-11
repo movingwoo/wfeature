@@ -747,15 +747,36 @@ func TestShutdownIsLocalOnlyAndAsksTheHost(t *testing.T) {
 	default:
 	}
 
-	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000"} {
+	// A reverse proxy on this machine — over loopback or the Unix socket that
+	// exists for one — makes every visitor's request arrive from here. The
+	// header the proxy adds is what says the request came from elsewhere.
+	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000", "", "@"} {
+		for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/shutdown", nil)
+			request.RemoteAddr = remote
+			request.Header.Set(header, "203.0.113.7")
+			server.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusForbidden {
+				t.Errorf("a shutdown from %q forwarded with %s answered %d, want 403", remote, header, recorder.Code)
+			}
+		}
+	}
+	select {
+	case <-asked:
+		t.Fatal("a forwarded shutdown reached the host")
+	default:
+	}
+
+	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000", "", "@"} {
 		recorder := post(server, remote)
 		if recorder.Code != http.StatusAccepted {
-			t.Fatalf("a shutdown from %s answered %d, want 202", remote, recorder.Code)
+			t.Fatalf("a shutdown from %q answered %d, want 202", remote, recorder.Code)
 		}
 		select {
 		case <-asked:
 		case <-time.After(2 * time.Second):
-			t.Fatalf("a shutdown from %s never reached the host", remote)
+			t.Fatalf("a shutdown from %q never reached the host", remote)
 		}
 	}
 }

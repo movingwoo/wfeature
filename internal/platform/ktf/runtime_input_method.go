@@ -348,11 +348,13 @@ func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
 				}
 				runtime.javaInput.pending = &javaInputCharacter{handler: handler, units: utf16.Encode([]rune{character})}
 				runtime.javaInput.keyTaken = false
-				err := runtime.dispatchKeyToCards(KeyPressed, inputMethodCarrier)
+				// The carrier is a key, and what keyNotify throws and does not
+				// catch ends that key here as it does for SendKey.
+				err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyPressed, inputMethodCarrier))
 				consumed := runtime.javaInput.pending == nil
 				runtime.javaInput.pending, runtime.javaInput.keyTaken = nil, false
 				if err == nil {
-					err = runtime.dispatchKeyToCards(KeyReleased, inputMethodCarrier)
+					err = client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyReleased, inputMethodCarrier))
 				}
 				if err != nil {
 					return err

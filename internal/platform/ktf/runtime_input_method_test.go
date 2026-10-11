@@ -606,3 +606,46 @@ func TestTheMembersGuestCodeReachesResolveAndWork(t *testing.T) {
 		t.Fatalf("deleteCharAt left %q/%v", text, ok)
 	}
 }
+
+// A title whose keyNotify throws after handing a press to its field survives
+// that key when a person presses it, so it survives the same press when the
+// Host text input sends it: the exception ends the call, the character the
+// field took stays taken, and the rest of the text goes on.
+func TestHostTextSurvivesAnUncaughtExceptionInKeyNotify(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	session := &Session{Client: client}
+	listener, edits := recordingInputMethodListener(t, client, "test/ThrowingNameListener")
+	var handler *jvm.Object
+	if err := client.JVM().RegisterNative("test/ThrowingNameCard", "keyNotify", "(II)Z", func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		eventType, _ := arguments[1].Int32()
+		key, _ := arguments[2].Int32()
+		if eventType != KeyPressed {
+			return jvm.IntValue(0), nil
+		}
+		if _, err := vm.InvokeVirtual(handler, "notifyKeyInput", "(II)Z", jvm.IntValue(key), jvm.IntValue(eventType)); err != nil {
+			return jvm.VoidValue(), err
+		}
+		return jvm.VoidValue(), &jvm.GuestException{Object: &jvm.Object{ClassName: "java/lang/NullPointerException"}, Message: "after the field took the key"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The field belongs to the card on top when the title gives it a listener.
+	runtime.displayCards = append(runtime.displayCards, &jvm.Object{ClassName: "test/ThrowingNameCard"})
+	handler = newGuestInputMethodHandler(t, client, runtime, textConstraintAny, listener)
+	setGuestInputMethodMode(t, client, handler, inputMethodModeHangul)
+
+	edit, err := session.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(t.Context(), "홍길"); err != nil {
+		t.Fatalf("a commit through a keyNotify that throws answered %v", err)
+	}
+	want := []inputMethodEdit{{"홍", 1, inputMethodInsert}, {"길", 1, inputMethodInsert}}
+	if !reflect.DeepEqual(*edits, want) {
+		t.Fatalf("edits = %+v, want %+v", *edits, want)
+	}
+	if count, first := client.UncaughtCallbacks(); count != 2 || !strings.HasPrefix(first, "key: ") {
+		t.Fatalf("uncaught callbacks = %d, first = %q", count, first)
+	}
+}

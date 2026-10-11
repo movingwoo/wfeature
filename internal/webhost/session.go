@@ -1077,8 +1077,14 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 	// picture to show — the page has nothing on its canvas after reconnecting.
 	r.forceFrame = true
 	r.pushFrame()
+	// The sound is rebuilt after the loop's next tick, not here. The guest
+	// clock kept time while the game was parked, and until a tick advances
+	// the audio timeline its presentation clock is the one from before the
+	// park: a rebuild sent now anchors the page there, the first tick then
+	// jumps by the whole park, the page refuses that batch as early and asks
+	// for a second rebuild, and every voice is cut twice. The reset path
+	// throws away that tick's catch-up events and replays at the new clock.
 	r.audioNeedsReset = true
-	r.flushAudio()
 }
 
 func (r *sessionRunner) stopGame() {

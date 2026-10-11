@@ -44,8 +44,10 @@ func (client *Client) syncJavaMediaClip(object uint32, clip *mediaClip) error {
 	}
 	if clip.listener != 0 {
 		count := progress.Completed - clip.completed
-		if count > uint64(maxJavaMediaEvents-len(client.javaMediaEvents)) {
-			return fmt.Errorf("LGT Java media completions exceed the event queue")
+		// More passes than the queue holds collapse into one notification,
+		// as on KTF and SKT: what a title can act on is that its clip ended.
+		if room := uint64(maxJavaMediaEvents - len(client.javaMediaEvents)); count > room {
+			count = min(room, 1)
 		}
 		for ; count > 0; count-- {
 			client.javaMediaEvents = append(client.javaMediaEvents, javaMediaEvent{object, clip.listener, wipi.PlayEventEndOfData})

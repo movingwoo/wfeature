@@ -112,8 +112,10 @@ test("first window failure determines the reason while invalid and future events
 // the server fell behind the render clock and has caught up. Live sessions
 // showed two thirds of all late refusals were such batches, each answered by
 // asking for the current output, which cuts every sounding voice to replay it.
-// The anchor moves to the frontier instead; a late batch with events is still
-// refused, since it would otherwise have to play them late.
+// The anchor moves to the frontier instead. A batch with events that is a
+// little late moves it to its first event and keeps its spacing, because a
+// slow page delivers batches 15-100 ms late and a rebuild for each one cut
+// every voice several times a second; a batch much later still asks.
 test("a late frontier without events moves the anchor and keeps playing", t => {
   const { audio, reports, sources } = setup(t);
   assert.equal(audio.prepareBatch([clock(0)]), true);
@@ -132,23 +134,43 @@ test("a late frontier without events moves the anchor and keeps playing", t => {
   snapshot = flush(audio, reports);
   group(snapshot.continuing, { ...empty(), batches: 1, admitted: 1, events: 1, not_late: 1 });
 
-  audio.context.currentTime = 1.7;
-  assert.equal(audio.prepareBatch([control(.2), clock(.2)]), false, "a late batch with events still asks for the current output");
+  audio.context.currentTime = 1.6;
+  assert.equal(audio.prepareBatch([control(.2), control(.25), clock(.25)]), true, "a batch a little late moves the anchor");
+  close(audio.presentationAnchor.audio, 1.7);
+  assert.equal(audio.presentationAnchor.presentation, .2);
+  assert.equal(audio.presentationFrontier, .25);
+  snapshot = flush(audio, reports);
+  group(snapshot.continuing, { ...empty(), batches: 1, reanchored: 1, events: 2, late_le_100ms: 2,
+    max_event_late_ms: 100, max_frontier_late_ms: 50 });
+
+  audio.context.currentTime = 2.2;
+  assert.equal(audio.prepareBatch([control(.3), clock(.3)]), false, "a batch much later still asks for the current output");
+  close(audio.presentationAnchor.audio, 1.7);
   snapshot = flush(audio, reports);
   group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
-    events: 1, late_gt_100ms: 1, max_event_late_ms: 200, max_frontier_late_ms: 200 });
+    events: 1, late_gt_100ms: 1, max_event_late_ms: 400, max_frontier_late_ms: 400 });
+});
+
+test("a batch a little late that would not fit the window after the move is still refused", t => {
+  const { audio } = setup(t);
+  assert.equal(audio.prepareBatch([clock(0)]), true);
+  audio.context.currentTime = 1.15;
+  // Fifty milliseconds late, but its last event would land 0.45 s ahead.
+  assert.equal(audio.prepareBatch([control(0), control(.35), clock(.35)]), false);
+  close(audio.presentationAnchor.audio, 1.1);
+  assert.equal(audio.presentationFrontier, 0);
 });
 
 test("a reset anchor after a refusal is counted apart from continuing batches", t => {
   const { audio, reports } = setup(t);
   assert.equal(audio.prepareBatch([clock(0)]), true);
-  audio.context.currentTime = 1.3;
+  audio.context.currentTime = 1.5;
   assert.equal(audio.prepareBatch([control(.1), clock(.1)]), false);
   assert.equal(playAudioEvents(audio, [{ kind: "allOff" }, control(.1), clock(.1)]), true);
   let snapshot = flush(audio, reports);
   group(snapshot.anchored, { ...empty(), batches: 2, admitted: 2, clock_only_batches: 1, events: 1, not_late: 1 });
   group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
-    events: 1, late_le_100ms: 1, max_event_late_ms: 100, max_frontier_late_ms: 100 });
+    events: 1, late_gt_100ms: 1, max_event_late_ms: 300, max_frontier_late_ms: 300 });
   assert.equal(audio.prepareBatch([clock(.15)]), true);
   snapshot = flush(audio, reports);
   group(snapshot.anchored, empty());
@@ -275,7 +297,7 @@ for (const format of ["JSON", "WFA2"]) {
     const note = at => ({ kind: "noteOn", sound: 7, channel: 0, note: 60, velocity: 100, at });
     send([note(0), clock(0)]);
     assert.equal(sources.length, 1);
-    audio.context.currentTime = 1.3;
+    audio.context.currentTime = 1.5;
     const late = [note(.01), control(.02), clock(.02)];
     send(late);
     assert.deepEqual(socket.sent, [{ kind: "audioResume", epoch: 7 }]);
@@ -288,10 +310,30 @@ for (const format of ["JSON", "WFA2"]) {
     send([{ kind: "allOff" }, note(.02), clock(.02)]);
     assert.equal(session.audioResetPending, false);
     assert.equal(sources.length, 2);
-    close(sources[1].starts[0][0], 1.4);
+    close(sources[1].starts[0][0], 1.6);
     const snapshot = flush(audio, reports);
     group(snapshot.anchored, { ...empty(), batches: 2, admitted: 2, events: 2, not_late: 2 });
     group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
-      events: 2, late_gt_100ms: 2, max_event_late_ms: 190, max_frontier_late_ms: 180 });
+      events: 2, late_gt_100ms: 2, max_event_late_ms: 390, max_frontier_late_ms: 380 });
+  });
+}
+
+for (const format of ["JSON", "WFA2"]) {
+  test(`${format} a batch a little late plays a lead ahead without asking for the current output`, async t => {
+    const { audio, reports, sources } = setup(t);
+    const { socket } = await openSession(t, audio);
+    const send = events => socket.deliver(format === "WFA2" ? wire(events) : { kind: "audio", epoch: 7, audio: events });
+    const note = (at, pitch = 60) => ({ kind: "noteOn", sound: 7, channel: 0, note: pitch, velocity: 100, at });
+    send([note(0), clock(0)]);
+    audio.context.currentTime = 1.15;
+    send([note(.01, 62), note(.03, 64), clock(.03)]);
+    assert.deepEqual(socket.sent, [], "a little lateness must not cut every voice to rebuild them");
+    assert.equal(sources.length, 3);
+    assert.deepEqual(sources[0].stops, [], "the voice already sounding keeps sounding");
+    close(sources[1].starts[0][0], 1.25);
+    close(sources[2].starts[0][0], 1.27);
+    const snapshot = flush(audio, reports);
+    group(snapshot.continuing, { ...empty(), batches: 1, reanchored: 1, events: 2, late_le_100ms: 1, late_le_20ms: 1,
+      max_event_late_ms: 40, max_frontier_late_ms: 20 });
   });
 }

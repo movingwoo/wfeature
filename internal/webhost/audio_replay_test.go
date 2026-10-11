@@ -514,6 +514,15 @@ func TestAudioReplayUsesLiveGuestStateAfterDropsQuickLoadAndReconnect(t *testing
 			if resumed.game == nil || resumed.token != token {
 				t.Fatalf("parked guest did not reconnect: %+v", readCheckpointReplies(t, resumed))
 			}
+			// Nothing is rebuilt before a tick has brought the audio timeline
+			// to the resumed guest clock; the loop's first tick does it.
+			if events := drainReplaySignals(t, resumed); len(events) != 0 {
+				t.Fatalf("resume rebuilt sound before a tick moved its clock: %+v", events)
+			}
+			if _, err := resumed.game.Tick(t.Context(), 0); err != nil {
+				t.Fatal(err)
+			}
+			resumed.flushAudio()
 			wantOwnedNote(drainReplaySignals(t, resumed), true)
 		})
 	}

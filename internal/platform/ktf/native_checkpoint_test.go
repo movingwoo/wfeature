@@ -270,6 +270,9 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"surface", func(s *nativeState) { s.Surfaces[0] = "unknown" }},
 		{"interface", func(s *nativeState) { s.Interfaces[0].Address = 3 }},
 		{"screen overflow", func(s *nativeState) { s.Screen.Width = math.MaxInt }},
+		{"screen wider than a Host starts", func(s *nativeState) {
+			s.Screen.Width, s.Screen.Height, s.Screen.Pixels = maxNativeStateScreen+1, 1, make([]byte, (maxNativeStateScreen+1)*4)
+		}},
 		{"deadline overflow", func(s *nativeState) { s.Frame.Remaining = math.MinInt64 }},
 		{"callback", func(s *nativeState) { s.Frame.Function = 0xdeadbeef }},
 		{"file key of another name", func(s *nativeState) { s.Files[0].Key = []byte("other.dat") }},

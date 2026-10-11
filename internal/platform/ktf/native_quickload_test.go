@@ -810,7 +810,7 @@ func TestNativeReopenFilesChargesEveryObjectAgainstOneLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(buffers[0x10]) != "aaaaaa" || string(buffers[0x14]) != "aaaaaa" || string(buffers[0x18]) != "bbbbbb" || &buffers[0x10][0] == &buffers[0x14][0] {
-		t.Fatalf("the objects were read as %q", buffers)
+		t.Fatalf("the objects were read as %v", buffers)
 	}
 	for _, refusal := range []struct {
 		name    string
@@ -836,7 +836,7 @@ func TestNativeReopenFilesChargesEveryObjectAgainstOneLimit(t *testing.T) {
 		file(0x14, "b.dat"),
 	}, 12)
 	if err != nil || string(kept[0x10]) != "aa" || string(kept[0x14]) != "bbbbbb" {
-		t.Fatalf("an emptied object beside another = %q, %v", kept, err)
+		t.Fatalf("an emptied object beside another = %v, %v", kept, err)
 	}
 	// A slot can name one file many times over, under names that differ and
 	// under an emptied object that keeps none of it. The file is read once,
@@ -858,13 +858,13 @@ func TestNativeReopenFilesChargesEveryObjectAgainstOneLimit(t *testing.T) {
 	// entry.
 	shipped := []nativeFileState{file(0x10, "Other\\Shipped.DAT")}
 	if found, err := platform.reopenFiles(store, shipped, 64); err != nil || string(found[0x10]) != "shipped!" {
-		t.Fatalf("a shipped file with no save = %q, %v", found, err)
+		t.Fatalf("a shipped file with no save = %v, %v", found, err)
 	}
 	if err := store.StoreSave("fs/shipped.dat", []byte("saved")); err != nil {
 		t.Fatal(err)
 	}
 	if found, err := platform.reopenFiles(store, shipped, 64); err != nil || string(found[0x10]) != "saved" {
-		t.Fatalf("a shipped file with a save over it = %q, %v", found, err)
+		t.Fatalf("a shipped file with a save over it = %v, %v", found, err)
 	}
 	if len(platform.written) != 0 || len(platform.unsaved) != 0 {
 		t.Fatal("reading the files changed the platform")

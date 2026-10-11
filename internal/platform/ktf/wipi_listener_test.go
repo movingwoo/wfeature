@@ -592,18 +592,45 @@ func TestKTFWIPIListenerQueueBoundAndAudioServiceError(t *testing.T) {
 			t.Fatalf("overflowed queue left %d extra callbacks", got)
 		}
 	})
+	// More passes than the queue holds collapse into one end: the title was
+	// not running to hear them one by one, and failing here ended the game.
 	t.Run("completion batch", func(t *testing.T) {
 		fixture := newKTFWIPIListenerFixture(t)
 		fixture.setListener(fixture.listeners[0])
 		fixture.call("play", true, true)
 		fixture.drain()
 		fixture.clock.Advance(4097 * fixture.duration())
-		if err := fixture.client.serviceAudio(); err == nil {
-			t.Fatal("audio service hid a completion notification overflow")
+		if err := fixture.client.serviceAudio(); err != nil {
+			t.Fatalf("audio service refused a completion backlog: %v", err)
 		}
-		if got := fixture.drain(); got != 0 {
-			t.Fatalf("refused completion batch emitted %d partial callbacks", got)
+		if got := fixture.drain(); got != 1 {
+			t.Fatalf("a completion backlog delivered %d callbacks, want one", got)
 		}
-		fixture.wantHistory(fixture.event(0, 2))
+		fixture.wantHistory(fixture.event(0, 2), fixture.event(0, 1))
+		// The clip goes on looping, and the next pass is heard as usual.
+		fixture.advance(fixture.duration())
+		if got := fixture.drain(); got != 1 {
+			t.Fatalf("the pass after a backlog delivered %d callbacks, want one", got)
+		}
 	})
+}
+
+// A page that goes away parks its game, and a parked game's guest clock keeps
+// time. A looping clip the title left playing then comes back owing every pass
+// the park held; the first tick after resume used to end the game over it.
+func TestKTFParkedLoopingClipSurvivesALongPark(t *testing.T) {
+	fixture := newKTFWIPIListenerFixture(t)
+	fixture.setListener(fixture.listeners[0])
+	fixture.call("play", true, true)
+	fixture.drain()
+	if err := fixture.session.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(4097 * fixture.duration())
+	if err := fixture.session.Resume(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.session.Tick(t.Context()); err != nil {
+		t.Fatalf("the first tick after a long park failed: %v", err)
+	}
 }

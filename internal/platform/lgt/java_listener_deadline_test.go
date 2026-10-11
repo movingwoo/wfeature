@@ -79,17 +79,21 @@ func TestLGTWIPIListenerQueuesAreBounded(t *testing.T) {
 			t.Fatal("overflow changed the pending queue")
 		}
 	})
+	// More passes than the queue holds collapse into one end rather than
+	// ending the session, as on KTF and SKT.
 	t.Run("natural completions", func(t *testing.T) {
 		f := newLGTWIPIListenerFixture(t)
 		f.setListener(f.listeners[0])
 		f.call("play", true, true)
 		f.client.clock.advance(maxJavaMediaEvents * f.duration())
-		if err := f.client.serviceAudio(); err == nil {
-			t.Fatal("natural completions exceeded the queue limit")
+		if err := f.client.serviceAudio(); err != nil {
+			t.Fatalf("natural completions past the queue ended the session: %v", err)
 		}
-		if len(f.client.javaMediaEvents) != 1 {
-			t.Fatal("overflow partially appended completion history")
+		if len(f.client.javaMediaEvents) != 2 {
+			t.Fatalf("a completion backlog queued %d events beside the start, want one end", len(f.client.javaMediaEvents)-1)
 		}
+		f.drain()
+		f.wantHistory(f.event(0, 2), f.event(0, 1))
 	})
 }
 

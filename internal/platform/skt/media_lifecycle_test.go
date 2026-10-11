@@ -426,3 +426,26 @@ func TestMIDPLifecycleClosedGuardsAndDuplicateTransitions(t *testing.T) {
 	fixture.drain()
 	fixture.wantHistory(mediaLifecycleEvent{1, 0}, mediaLifecycleEvent{2, 0}, mediaLifecycleEvent{4, -1})
 }
+
+// A parked game's guest clock keeps time, so a Player a MIDlet leaves looping
+// across a long park comes back owing more passes than the queues hold. They
+// collapse into the last pass's end and the next start; failing here put the
+// MIDlet in its error state on the first pass after resume.
+func TestMIDPLoopingPlayerSurvivesALongPark(t *testing.T) {
+	fixture := newMediaLifecycleFixture(t, -1)
+	fixture.tick(0)
+	fixture.wantHistory(mediaLifecycleEvent{1, 0})
+	if err := fixture.runtime.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.advance(2049 * fixture.player().Native.(*playerData).duration)
+	if err := fixture.runtime.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtime.AdvanceAudio()
+	if state := fixture.runtime.State(); state != StateActive {
+		t.Fatalf("MIDlet state after a long park = %s (%v), want active", state, fixture.runtime.Summary().Error)
+	}
+	fixture.drain()
+	fixture.wantHistory(mediaLifecycleEvent{1, 0}, mediaLifecycleEvent{3, 400000}, mediaLifecycleEvent{1, 0})
+}

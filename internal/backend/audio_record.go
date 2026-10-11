@@ -11,7 +11,7 @@ import (
 // RecordingSink writes what a game plays to disk instead of to a speaker.
 //
 // It exists because the native CLI has no audio device this project is willing
-// to take a dependency on — Rust's side reaches a system MIDI port and an ALSA
+// to take a dependency on — playing would mean a system MIDI port and an ALSA
 // or CoreAudio backend, neither of which has a cgo-free Go equivalent — and
 // because "did the sound come out right" is a question a recording answers
 // better than a speaker does. The MIDI file can be played by anything; the WAV

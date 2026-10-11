@@ -102,7 +102,9 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 					}
 				}
 				state.pending = encoded[offset : offset+size]
-				err := runtime.dispatchKeyToCards(KeyPressed, cInputCarrier)
+				// A carrier is a key: an uncaught guest exception ends that
+				// key, as it does for SendKey, and consumption decides the rest.
+				err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyPressed, cInputCarrier))
 				if err == nil && state.calls == calls && state.revision == revision && len(state.pending) != 0 && state.timerCallback != 0 {
 					_, err = client.serviceTimersLocked(ctx, maxPendingTimers)
 				}
