@@ -171,8 +171,10 @@ try {
     await page.locator("#keypad-arrange-keys").getByRole("button", { name: label, exact: true }).click();
   }
   await page.locator("#keypad-arrange-close").click();
-  const save = page.locator('button[data-key="QUICK_SAVE"]');
-  const load = page.locator('button[data-key="QUICK_LOAD"]');
+  // The default layout already has both keys in its top row, so the copies
+  // placed here are named by their cells.
+  const save = page.locator('[data-cell="r2c1"]');
+  const load = page.locator('[data-cell="r6c1"]');
   assert.equal(await save.isDisabled(), true);
   assert.equal(await load.isDisabled(), true);
   check("checkpoint keys assigned through the keypad editor and disabled without a session");
@@ -181,7 +183,7 @@ try {
     await page.locator("#game-select").selectOption(`games/library/${kind}.zip`);
     await page.locator("#game-start").click();
     await color(initial);
-    await page.waitForFunction(() => !document.querySelector('button[data-key="QUICK_SAVE"]').disabled);
+    await page.waitForFunction(() => !document.querySelector('[data-cell="r2c1"]').disabled);
     const started = (await events()).findLast(message => message.kind === "started");
     assert.equal(started.started.can_checkpoint, true);
     assert.equal(started.started.has_checkpoint ?? false, false);
@@ -218,7 +220,7 @@ try {
     const savesBeforeLoad = ordinarySaves(), beforeLoad = (await events()).length;
     assert.ok(Object.keys(savesBeforeLoad).length, "fixture did not persist ordinary save data");
     await load.click();
-    await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브 시점으로 돌아갔습니다. 세이브는 되돌리지 않았습니다.");
+    await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브 시점으로 돌아갔습니다.");
     await waitForFrame(savedFrame);
     assert.deepEqual(await snapshot(), savedFrame);
     assert.deepEqual(ordinarySaves(), savesBeforeLoad);
@@ -266,7 +268,7 @@ try {
     await page.reload();
     await page.waitForFunction(path => checkpointProbe.events.some(message =>
       message.kind === "started" && message.started?.game === path) &&
-      !document.querySelector('button[data-key="QUICK_SAVE"]').disabled, path);
+      !document.querySelector('[data-cell="r2c1"]').disabled, path);
     await waitForFrame(frameBeforeReconnect);
     const resumed = (await events()).slice(beforeReconnect).find(message => message.kind === "started");
     assert.equal(resumed?.started.token, restored.started.token);

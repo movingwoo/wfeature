@@ -41,8 +41,7 @@ func loadCheckpointSlot(directory string, identity [32]byte) ([]byte, error) {
 }
 
 // checkpointStep is where a refusal reaches the person. One cause is worded
-// for the step that was asked for, and a start from the quick save has no
-// running game to say anything about.
+// for the step that was asked for, and the log names the step.
 type checkpointStep int
 
 const (
@@ -67,7 +66,7 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 	var sentence string
 	switch {
 	case errors.Is(err, backend.ErrCheckpointLegacy):
-		sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요."
+		sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."
 	case errors.Is(err, backend.ErrCheckpointSaveWrite) && step == checkpointSaving:
 		sentence = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다."
 	case errors.Is(err, backend.ErrCheckpointSaveWrite):
@@ -78,11 +77,6 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 		return err.Error()
 	}
 	r.server.logger.Warn("checkpoint refused", "game", game, "step", step.String(), "error", err)
-	// Only a step taken over a running game has a game to reassure about, and
-	// an earlier build's slot says what was kept in its own words.
-	if step != checkpointStarting && !errors.Is(err, backend.ErrCheckpointLegacy) {
-		sentence += " 게임은 그대로입니다."
-	}
 	return sentence
 }
 

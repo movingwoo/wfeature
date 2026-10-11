@@ -434,10 +434,9 @@ func TestQuickSaveAndLoadOnALinkedSaveFolder(t *testing.T) {
 // nothing on disk has changed, and the same press works once the cause is gone.
 func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 	const (
-		saveWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다. 게임은 그대로입니다."
-		loadWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵로드를 중단했습니다. 게임은 그대로입니다."
-		loadRead  = "세이브를 읽지 못해 퀵로드를 중단했습니다. 게임은 그대로입니다."
-		startRead = "세이브를 읽지 못해 퀵로드를 중단했습니다."
+		saveWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다."
+		loadWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵로드를 중단했습니다."
+		loadRead  = "세이브를 읽지 못해 퀵로드를 중단했습니다."
 	)
 	// refused checks one refusal: the reply, the log, the disk and the game.
 	refused := func(t *testing.T, host *saveHost, reply serverMessage, sentence string, before map[string]string, running *session.Session) {
@@ -498,10 +497,11 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 			before, running := saveTree(t, host.saves()), host.r.game
 			refused(t, host, host.quickLoad(), loadRead, before, running)
 
-			// A start from the slot meets the same save, with no game to keep.
+			// A start from the slot meets the same save, with no game to keep,
+			// and is refused with the same sentence.
 			host.r.stopGame()
 			before = saveTree(t, host.saves())
-			refused(t, host, host.start(true), startRead, before, nil)
+			refused(t, host, host.start(true), loadRead, before, nil)
 			if host.r.game != nil {
 				t.Fatal("a refused start left a game")
 			}
@@ -520,7 +520,7 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 // person who asks is told why; a new quick save is written beside the old file
 // and loads. Envelope version 2 is what 0.5.2 wrote, version 1 came before it.
 func TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason(t *testing.T) {
-	const sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요."
+	const sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."
 	for _, earlierFormat := range []struct {
 		name    string
 		version byte
@@ -658,7 +658,7 @@ func TestStartFromAQuickSaveIsRefusedBeforeTheRunningGameIsStopped(t *testing.T)
 			if err := os.Rename(host.slot(false), host.slot(true)); err != nil {
 				t.Fatal(err)
 			}
-		}, "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요."},
+		}, "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."},
 		{"a damaged quick save", func(t *testing.T, host *saveHost, valid []byte) {
 			damaged := bytes.Clone(valid)
 			damaged[len(damaged)-1] ^= 1
