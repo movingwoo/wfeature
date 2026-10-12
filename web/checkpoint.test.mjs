@@ -63,8 +63,8 @@ test("keypad actions run immediately and report inline without a modal", async (
   assert.equal(ui.note.textContent, "퀵로드 중…");
   await loading;
   assert.deepEqual(ui.loaded, [{ restored: true }]);
-  // A load brings the game back and leaves its saves alone, and says both.
-  assert.equal(ui.note.textContent, "퀵세이브 시점으로 돌아갔습니다. 세이브는 되돌리지 않았습니다.");
+  // A load says the game is back at the quick save, not that something loaded.
+  assert.equal(ui.note.textContent, "퀵세이브 시점으로 돌아갔습니다.");
   assert.doesNotMatch(ui.note.textContent, /불러왔습니다/);
   assert.deepEqual([...ui.timers.values()].map(timer => timer.ms), [3000]);
 });
@@ -73,7 +73,7 @@ test("a refused load shows the server's reason and keeps the slot offered", asyn
   const ui = setup();
   ui.state("playing");
   ui.controls.started({ can_checkpoint: true, has_checkpoint: true });
-  const reason = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 파일은 그대로 두었으니 새로 퀵세이브해 주세요.";
+  const reason = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요.";
   ui.socket.quickLoad = async () => { throw new Error(reason); };
   await ui.load.click();
   assert.equal(ui.note.textContent, `퀵로드 실패: ${reason}`);

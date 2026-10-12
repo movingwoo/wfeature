@@ -165,7 +165,8 @@ export const initKeypadEditor = ({
         "viewBox",
         `0 0 ${geometry.width} ${geometry.height}`,
       );
-      outline.firstChild.setAttribute("d", geometry.outline);
+      for (const path of outline.children)
+        path.setAttribute("d", geometry.outline);
       Object.assign(label.style, {
         left: `${geometry.label.x + 2}px`,
         top: `${geometry.label.y + geometry.label.height / 2}px`,
@@ -216,7 +217,13 @@ export const initKeypadEditor = ({
         preserveAspectRatio: "none",
       });
       outline.classList.add("keypad-outline");
-      outline.append(svg("path"));
+      // The highlight is drawn up front and only made visible. A press that
+      // changed the stroke width instead would lay the outline out again on
+      // every press and every release.
+      outline.append(
+        svg("path", { class: "keypad-edge" }),
+        svg("path", { class: "keypad-highlight" }),
+      );
       const label = document.createElement("span");
       label.className = "keypad-label";
       label.textContent = group.key ? keyFace(group.key) : "+";

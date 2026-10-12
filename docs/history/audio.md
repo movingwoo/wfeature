@@ -825,3 +825,37 @@ before transport. Events already collected into one server batch, network
 stalls, dropped audio batches and actual device underruns remain separate limits.
 The scheduling lead also increases response latency, particularly on an output
 with a large buffer. Richer instrument synthesis remains separate work.
+
+## Frontier cadence
+
+On 2026-10-11 a brief comparison of 0.5.1, 0.5.2 and the then main branch,
+each driven through its own release server and page in headless Chromium for
+30 seconds of key presses, found the server's CPU unchanged and the page's up
+by 11–36%. Part of the rise was sound messages: a timed page was sent its
+frontier at every tick, so most of the messages it decoded and checked said
+only that the clock had moved. The runner now sends a frontier alone at most
+every 100 ms after the last sound message, at once after a longer gap, and not
+at all while its send queue is full. A shed frontier had asked for a whole
+reconstruction although it carried nothing to lose.
+
+| Title | Sound messages a second, 0.5.1 / before / after | Browser CPU, 0.5.1 / before / after (cores) |
+| --- | --- | --- |
+| KTF, sound-heavy | 25 / 59 / 25 | 0.098 / 0.114 / 0.106 |
+| SKT | 10 / 57 / 14 | 0.121 / 0.166 / 0.133 |
+| LGT, playing nothing | 0.5 / 22 / 8 | 0.042 / 0.057 / 0.050 |
+
+The browser figures include the keypad change in `web/README.md` that removed a
+layout per press, so they are the two together. `web/acceptance/audio-live.mjs`
+on the same three archives, 45 seconds each with keys mashed, debug servers
+before and after:
+
+| Title | Batches | Re-anchored | Events over 100 ms late | Recovery requests |
+| --- | --- | --- | --- | --- |
+| KTF, sound-heavy | 2,727 → 1,116 | 0 → 1 | 0 → 0 | 0 → 0 |
+| SKT | 2,615 → 630 | 0 → 0 | 0 → 0 | 0 → 0 |
+| LGT, server ticks stall | 1,365 → 401 | 13 → 9 | 56 → 19 | 1 → 1 |
+
+Each cell is one run, and runs of one build differ by about a tenth on the
+browser figures. The KTF title's one re-anchor is a batch with one event that
+arrived 14 ms late; the page moved the anchor and played it that much later,
+as it does for any batch up to 200 ms late.

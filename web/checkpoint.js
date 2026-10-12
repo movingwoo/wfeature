@@ -44,10 +44,8 @@ export const initCheckpoints = ({ document, session, state, editing,
         const response = await session().quickLoad();
         onLoaded(response.started);
       }
-      // A load brings back the moment and leaves the game's own saves alone,
-      // which is not what the word "load" promises on its own.
       if (saving) feedback("퀵세이브를 저장했습니다.", false, 2000);
-      else feedback("퀵세이브 시점으로 돌아갔습니다. 세이브는 되돌리지 않았습니다.", false, 3000);
+      else feedback("퀵세이브 시점으로 돌아갔습니다.", false, 3000);
     } catch (error) {
       feedback(`${saving ? "퀵세이브" : "퀵로드"} 실패: ${error instanceof Error ? error.message : String(error)}`, true, 8000);
       onError(error);

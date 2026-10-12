@@ -317,8 +317,9 @@ servers can ignore the new query. Reconnect adopts the new page's capability.
 
 `timing=1`, negotiated separately with `sound=resume`, preserves presentation
 seconds without removing compatibility with older servers. JSON adds optional
-`at` (zero is meaningful) and a final `{kind:"clock", at:...}` frontier, even
-for an otherwise silent tick. Binary `0x0b` selects time: presence byte zero
+`at` (zero is meaningful) and a final `{kind:"clock", at:...}` frontier. A silent
+tick sends that frontier alone at most every 100 ms after the last sound
+message (`clockOnlyInterval`), and skips it while the send queue is full. Binary `0x0b` selects time: presence byte zero
 clears selection, or one precedes a big-endian IEEE 754 float64. Binary `0x0c`
 is a frontier float64 independent of selection. Time selection resets for each
 message and after `allOff`. Finite signed event times allow overdue restored

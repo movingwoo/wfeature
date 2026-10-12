@@ -67,8 +67,13 @@ Only the interpreter is registered by default. A future backend must agree on
 registers, memory, stop reason, and retired instruction counts at every boundary.
 
 Go uses the committed `cmd/*/default.pgo` profiles automatically. `make pgo`
-regenerates them from explicitly supplied local LGT Clet, LGT Java, and KTF
-archives and routes. See the Makefile's `PGO_*` parameters and
+regenerates them from explicitly supplied local archives: an LGT Clet and an
+LGT AOT Java title driven by routes, and a KTF and an SKT title played through
+`TestSessionCostProbe` in `internal/webhost`, which also encodes every picture
+and sound batch as the server does. SKT is there for `internal/jvm`, which no
+engine run reaches. Each run is profiled with `GOMAXPROCS=1`: on macOS the
+profiling signal otherwise lands on `pthread_cond_signal` for most samples.
+See the Makefile's `PGO_*` parameters and
 [profile regeneration evidence](history/armcore.md). Historical speedups apply
 to their recorded machine and workload; they are not current performance claims.
 

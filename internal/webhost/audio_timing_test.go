@@ -143,3 +143,78 @@ func TestTimedAudioRecoveryIsNegotiatedAndEpochBound(t *testing.T) {
 		t.Fatal("unnegotiated page requested timed replay")
 	}
 }
+
+// A silent tick tells the page the clock moved at most every
+// clockOnlyInterval: the first frontier goes at once, one inside the interval
+// waits for a later one, a sound batch is never held back, and a frontier
+// after the interval goes at once again.
+func TestSilentFrontiersAreSentAtMostEveryInterval(t *testing.T) {
+	for _, protocol := range []int{protocolPictures, protocolStream} {
+		runner := stalledRunner(t, 8)
+		runner.protocol, runner.soundOwnership, runner.soundResume, runner.soundTiming = protocol, true, true, true
+		runner.audio = &audioCollector{}
+		frontier := func(at float64) {
+			t.Helper()
+			if len(runner.outText) != 1 {
+				t.Fatalf("protocol %d: %d messages, want the frontier at %v", protocol, len(runner.outText), at)
+			}
+			message := <-runner.outText
+			if protocol == protocolStream {
+				want := binary.BigEndian.AppendUint64(append(bytes.Clone(audioMagic), audioOpClock), math.Float64bits(at))
+				if !bytes.Equal(message.binary, want) {
+					t.Fatalf("frontier wire = %x, want %x", message.binary, want)
+				}
+				return
+			}
+			var decoded serverMessage
+			if err := json.Unmarshal([]byte(message.text), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded.Audio) != 1 || decoded.Audio[0].Kind != audioClock || *decoded.Audio[0].At != at {
+				t.Fatalf("frontier = %+v, want the clock at %v", decoded.Audio, at)
+			}
+		}
+		silentTick := func(at float64) {
+			runner.audio.AudioTime(at)
+			runner.flushAudio()
+		}
+		silentTick(0)
+		frontier(0)
+		silentTick(.016)
+		silentTick(.033)
+		if len(runner.outText) != 0 {
+			t.Fatalf("protocol %d: a frontier inside the interval was sent", protocol)
+		}
+		runner.audio.AudioTime(.05)
+		runner.audio.MIDINoteOn(0, 60, 100)
+		runner.flushAudio()
+		if len(runner.outText) != 1 {
+			t.Fatalf("protocol %d: a sound batch inside the interval was held back", protocol)
+		}
+		<-runner.outText
+		runner.audioSentAt = time.Now().Add(-clockOnlyInterval)
+		silentTick(.2)
+		frontier(.2)
+	}
+}
+
+// A full queue skips a frontier instead of shedding it. Shed, it would ask
+// for a reconstruction, cutting every sounding voice for a message that lost
+// nothing; the next frontier is a later one anyway.
+func TestAFullQueueSkipsAFrontierWithoutAskingForTheOutput(t *testing.T) {
+	runner := stalledRunner(t, 1)
+	runner.protocol, runner.soundOwnership, runner.soundResume, runner.soundTiming = protocolStream, true, true, true
+	runner.audio = &audioCollector{}
+	runner.outText <- outboundMessage{text: "held"}
+	runner.audio.AudioTime(.5)
+	runner.flushAudio()
+	if runner.audioNeedsReset || runner.shed.Load() != 0 {
+		t.Fatal("a frontier that found the queue full asked for the output again")
+	}
+	// A batch with events still counts as lost when it cannot be queued.
+	runner.audio.MIDINoteOn(0, 60, 100)
+	runner.flushAudio()
+	if !runner.audioNeedsReset || runner.shed.Load() != 1 {
+		t.Fatal("a shed sound batch did not ask for the output again")
+	}
+}

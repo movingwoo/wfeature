@@ -532,9 +532,15 @@ body {
 .button-container .keypad-cell[data-key="SETTINGS"] { background: #6b2328; color: #fbe9ea; }
 .button-container .keypad-cell[data-key="SETTINGS"]:hover { background: #7a2a30; }
 .button-container.arranging .keypad-cell.picked { background: #25455f; }
-.keypad-cell.pressed .keypad-outline,
-.keypad-cell.picked .keypad-outline,
-.keypad-cell:focus-visible .keypad-outline { stroke: #83c4ff; stroke-width: 4; }
+/* A pressed key must only repaint. Chromium lays an SVG outline out again when
+   its stroke width or its opacity changes, and not when its stroke-opacity does. */
+.keypad-highlight { stroke: #83c4ff; stroke-width: 4; stroke-opacity: 0; }
+.keypad-cell.pressed .keypad-edge,
+.keypad-cell.picked .keypad-edge,
+.keypad-cell:focus-visible .keypad-edge { stroke-opacity: 0; }
+.keypad-cell.pressed .keypad-highlight,
+.keypad-cell.picked .keypad-highlight,
+.keypad-cell:focus-visible .keypad-highlight { stroke-opacity: 1; }
 .button-container .keypad-cell:focus-visible { background: #315d80; }
 .button-container button[data-key="QUICK_SAVE"],
 .button-container button[data-key="QUICK_LOAD"],

@@ -44,24 +44,36 @@ server-release:
 #
 # Measured on one machine (Ryzen 5 3600, linux/amd64), same route and save,
 # frames byte-identical: an LGT Clet's in-game busy time fell 14.5% and its
-# tick p90 15.0%; a KTF title fell 7.0%. See docs/armcore.md.
+# tick p90 15.0%; a KTF title fell 7.0%. Re-taken in October 2026 with the SKT
+# and session runs below, it was 3.5–5% faster again than the August profile on
+# every engine route and up to 9% on the bytecode interpreter. See docs/armcore.md.
 #
 # `make pgo` regenerates it. **It needs local archives and routes**, which are
 # under var/ and are not in the repository, so it runs only on a machine that
 # has them — and it is told which ones on the command line rather than here,
 # because the files are one person's copies and their names are the games'.
-# The three runs are not arbitrary: they are the three paths through the same
-# engine — a Clet is 99.8% Thumb, an AOT-compiled LGT Java title is 78.9% ARM,
-# and KTF is a third mix — and a profile of any one of them alone leaves the
-# other two at the compiler's guess. All five have to be given:
+# The four runs are not arbitrary. Three are the paths through the ARM engine —
+# a Clet is 99.8% Thumb, an AOT-compiled LGT Java title is 78.9% ARM, and KTF
+# is a third mix — and the fourth is SKT, whose titles run on the bytecode
+# interpreter in internal/jvm and never reach the engine. The KTF and SKT runs
+# go through the session probe in internal/webhost, which presses a fixed cycle
+# of keys to get a title past its menus and encodes every picture and sound
+# batch the way the server does, so the encoder is in the profile as well. A
+# profile of any one path leaves the others at the compiler's guess, so all of
+# them have to be given:
 #
 #   make pgo PGO_LGT_CLET=var/games/lgt/<clet>.zip \
 #            PGO_LGT_CLET_ROUTE=var/routes/<clet-in-game>.route \
-#            PGO_LGT_CLET_SAVE=var/savedata/release/lgt/<PID> \
+#            PGO_LGT_CLET_SAVE=<a copy of the Clet's save directory> \
 #            PGO_LGT_JAVA=var/games/lgt/<aot-title>.zip \
 #            PGO_LGT_JAVA_ROUTE=var/routes/<aot-title-in-game>.route \
-#            PGO_LGT_JAVA_SAVE=var/savedata/release/lgt/<PID> \
-#            PGO_KTF=var/games/ktf/<title>.zip PGO_KTF_TICKS=2000
+#            PGO_LGT_JAVA_SAVE=<a copy of the AOT title's save directory> \
+#            PGO_KTF=var/games/ktf/<title>.zip PGO_SKT=var/games/skt/<title>.zip
+#
+# Every run is profiled on one P. On macOS the profiling signal lands on
+# whichever thread is inside pthread_cond_signal, and a session that hands work
+# between goroutines spent 50–90% of its samples there; on one P there is no
+# thread to wake, and the profile shows the engine the way Linux does.
 #
 # See docs/armcore.md for what each run is for and what the committed profile
 # was taken from.
@@ -70,6 +82,7 @@ PGO_LGT_CLET_ROUTE ?=
 PGO_LGT_JAVA       ?=
 PGO_LGT_JAVA_ROUTE ?=
 PGO_KTF            ?=
+PGO_SKT            ?=
 # The two save trees are optional and are the difference between profiling a
 # game and profiling a title screen. The scene worth compiling for is inside a
 # save — a field, a battle — and the same route replayed from a fresh boot
@@ -79,17 +92,19 @@ PGO_KTF            ?=
 # save it is changing is a different profile every time.
 PGO_LGT_CLET_SAVE  ?=
 PGO_LGT_JAVA_SAVE  ?=
-# How long each run is profiled for. The defaults suit a title that spends most
-# of a run idle; a heavy one reaches the same amount of profile in far fewer
-# ticks, and profiling it for 40,000 would take an hour.
+# How long each run is profiled for. The LGT defaults suit a title that spends
+# most of a run idle. A busy KTF title fills its profile in far fewer ticks, so
+# a light one wants more than the default. An SKT title keeps its own clock,
+# which makes its ticks real time: 3,000 is about a minute.
 PGO_LGT_TICKS      ?= 20000
-PGO_KTF_TICKS      ?= 40000
+PGO_KTF_TICKS      ?= 1500
+PGO_SKT_TICKS      ?= 3000
 PGO_WORK := build/pgo
 
 pgo:
 	@for pair in "PGO_LGT_CLET=$(PGO_LGT_CLET)" "PGO_LGT_CLET_ROUTE=$(PGO_LGT_CLET_ROUTE)" \
 		"PGO_LGT_JAVA=$(PGO_LGT_JAVA)" "PGO_LGT_JAVA_ROUTE=$(PGO_LGT_JAVA_ROUTE)" \
-		"PGO_KTF=$(PGO_KTF)"; do \
+		"PGO_KTF=$(PGO_KTF)" "PGO_SKT=$(PGO_SKT)"; do \
 		name=$${pair%%=*}; file=$${pair#*=}; \
 		[ -n "$$file" ] || { echo "make pgo: $$name is not set; see docs/armcore.md" >&2; exit 1; }; \
 		[ -f "$$file" ] || { echo "make pgo: $$file ($$name) is missing; see docs/armcore.md" >&2; exit 1; }; \
@@ -98,26 +113,34 @@ pgo:
 	mkdir -p $(PGO_WORK)/save1 $(PGO_WORK)/save2
 	@if [ -n "$(PGO_LGT_CLET_SAVE)" ]; then cp -R "$(PGO_LGT_CLET_SAVE)/." $(PGO_WORK)/save1/; fi
 	@if [ -n "$(PGO_LGT_JAVA_SAVE)" ]; then cp -R "$(PGO_LGT_JAVA_SAVE)/." $(PGO_WORK)/save2/; fi
-	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_CLET)" \
+	go test -c -o $(PGO_WORK)/lgt.test ./internal/platform/lgt
+	go test -c -o $(PGO_WORK)/webhost.test ./internal/webhost
+	GOMAXPROCS=1 WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_CLET)" \
 	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_CLET_ROUTE)" \
 	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save1" WFEATURE_LOAD_TICKS=$(PGO_LGT_TICKS) \
-		go test ./internal/platform/lgt -run LGTLoadCost \
-			-cpuprofile $(PGO_WORK)/lgt-clet.prof -o $(PGO_WORK)/lgt.test -timeout 30m
-	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_JAVA)" \
+		$(PGO_WORK)/lgt.test -test.run LGTLoadCost -test.timeout 30m \
+			-test.cpuprofile $(PGO_WORK)/lgt-clet.prof
+	GOMAXPROCS=1 WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_LGT_JAVA)" \
 	WFEATURE_PERF_ROUTE="$(CURDIR)/$(PGO_LGT_JAVA_ROUTE)" \
 	WFEATURE_SAVE_ROOT="$(CURDIR)/$(PGO_WORK)/save2" WFEATURE_LOAD_TICKS=$(PGO_LGT_TICKS) \
-		go test ./internal/platform/lgt -run LGTLoadCost \
-			-cpuprofile $(PGO_WORK)/lgt-java.prof -timeout 30m
-	WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_KTF)" WFEATURE_LOAD_TICKS=$(PGO_KTF_TICKS) \
-		go test ./internal/platform/ktf -run TestLoadCostProbe \
-			-cpuprofile $(PGO_WORK)/ktf.prof -o $(PGO_WORK)/ktf.test -timeout 30m
+		$(PGO_WORK)/lgt.test -test.run LGTLoadCost -test.timeout 30m \
+			-test.cpuprofile $(PGO_WORK)/lgt-java.prof
+	GOMAXPROCS=1 WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_KTF)" WFEATURE_PERF_KEYS=mash \
+	WFEATURE_LOAD_TICKS=$(PGO_KTF_TICKS) \
+		$(PGO_WORK)/webhost.test -test.run SessionCostProbe -test.timeout 30m \
+			-test.cpuprofile $(PGO_WORK)/ktf.prof
+	GOMAXPROCS=1 WFEATURE_PERF_ARCHIVE="$(CURDIR)/$(PGO_SKT)" WFEATURE_PERF_KEYS=mash \
+	WFEATURE_LOAD_TICKS=$(PGO_SKT_TICKS) \
+		$(PGO_WORK)/webhost.test -test.run SessionCostProbe -test.timeout 30m \
+			-test.cpuprofile $(PGO_WORK)/skt.prof
 	@# Each profile is symbolised against the binary that produced it before the
-	@# three are merged, because a merge cannot symbolise two different binaries.
+	@# four are merged, because a merge cannot symbolise two different binaries.
 	go tool pprof -proto $(PGO_WORK)/lgt.test $(PGO_WORK)/lgt-clet.prof > $(PGO_WORK)/clet.pb.gz
 	go tool pprof -proto $(PGO_WORK)/lgt.test $(PGO_WORK)/lgt-java.prof > $(PGO_WORK)/java.pb.gz
-	go tool pprof -proto $(PGO_WORK)/ktf.test $(PGO_WORK)/ktf.prof      > $(PGO_WORK)/ktf.pb.gz
+	go tool pprof -proto $(PGO_WORK)/webhost.test $(PGO_WORK)/ktf.prof  > $(PGO_WORK)/ktf.pb.gz
+	go tool pprof -proto $(PGO_WORK)/webhost.test $(PGO_WORK)/skt.prof  > $(PGO_WORK)/skt.pb.gz
 	go tool pprof -proto $(PGO_WORK)/clet.pb.gz $(PGO_WORK)/java.pb.gz $(PGO_WORK)/ktf.pb.gz \
-		> $(PGO_WORK)/default.pgo
+		$(PGO_WORK)/skt.pb.gz > $(PGO_WORK)/default.pgo
 	cp $(PGO_WORK)/default.pgo cmd/server/default.pgo
 	cp $(PGO_WORK)/default.pgo cmd/cli/default.pgo
 	@echo
