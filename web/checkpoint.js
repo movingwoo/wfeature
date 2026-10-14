@@ -59,6 +59,9 @@ export const initCheckpoints = ({ document, session, state, editing,
   refresh();
   return {
     refresh,
+    // run is the same action for a control that is not a cell — a game
+    // controller's button — and keeps every rule a cell's click has.
+    run,
     started(info) {
       capable = info?.can_checkpoint === true;
       available = info?.has_checkpoint === true;

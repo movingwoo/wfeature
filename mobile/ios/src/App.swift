@@ -113,6 +113,15 @@ final class PlayViewController: UIViewController {
         message.removeFromSuperview()
 
         webView.load(URLRequest(url: url))
+        takeControllers()
+    }
+
+    // A game controller reaches the page only through the responder chain:
+    // WebKit hands the controllers to a web view that is the first responder.
+    // Nothing else here wants that role, so the web view takes it when it
+    // first loads and again whenever a picker has been over it.
+    private func takeControllers() {
+        _ = webView?.becomeFirstResponder()
     }
 
     fileprivate func clearStagedExport() {
@@ -169,9 +178,11 @@ extension PlayViewController: UIDocumentPickerDelegate {
     func documentPicker(_ controller: UIDocumentPickerViewController,
                         didPickDocumentsAt urls: [URL]) {
         clearStagedExport()
+        takeControllers()
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         clearStagedExport()
+        takeControllers()
     }
 }

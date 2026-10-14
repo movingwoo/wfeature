@@ -95,7 +95,7 @@ gain and note envelope ages with either JSON or binary protocol 2. The earlier
 note-on events when output is reconstructed. Without either, the server sends
 the legacy event format, preserving compatibility with an older cached page.
 An older server can ignore the query and still drive the new page's owner-zero
-stream. The PWA shell version is 56 (`wfeature-pwa-v56`).
+stream. The PWA shell version is 57 (`wfeature-pwa-v57`).
 
 JSON events add `sound`, a 32-bit handle, and `stopSound`. Omitted `sound` is
 owner zero. Binary `WFA2` adds:

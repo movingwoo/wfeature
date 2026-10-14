@@ -13,7 +13,7 @@ shipped key tables are exchanged. Saved custom tables, size settings and the
 selected type keep their existing storage keys and are not migrated.
 
 Each activation cycles `off`, `manual`, `auto`, then `off`. Manual repeats only
-held `5` and `OK`, including their keyboard bindings. Both may repeat together.
+held `5` and `OK`, including their keyboard and game controller bindings. Both may repeat together.
 Auto initially waits for a key. Pressing `5` or `OK` toggles that key's
 continuous repetition; releasing it does not stop repetition. Pressing the same
 key again stops it. Pressing the other target releases the old target first,

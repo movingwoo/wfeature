@@ -153,3 +153,17 @@ test("unavailable cells remain editable without invoking checkpoint actions", as
   assert.equal(ui.load.disabled, true);
   assert.equal(ui.note.hidden, true);
 });
+
+test("a control that is not a cell runs the same action under the same rules", async () => {
+  const f = setup();
+  f.state("playing");
+  f.controls.started({ can_checkpoint: true, has_checkpoint: false });
+  await f.controls.run(QUICK_LOAD);
+  assert.deepEqual(f.calls, [], "no slot, no load — as for the cell");
+  await f.controls.run(QUICK_SAVE);
+  await f.controls.run(QUICK_LOAD);
+  assert.deepEqual(f.calls, ["save", "load"]);
+  f.edit(true);
+  await f.controls.run(QUICK_SAVE);
+  assert.deepEqual(f.calls, ["save", "load"], "editing the pad blocks it too");
+});

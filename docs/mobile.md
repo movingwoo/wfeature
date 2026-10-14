@@ -180,7 +180,29 @@ worth knowing when the data directory is read over USB. The saves are not
 touched by a removal — they are keyed by what is inside the archive, so adding
 the same file again comes back to the same progress.
 
+## Game controllers
+
+The page reads controllers itself (see [`web/README.md`](../web/README.md)),
+and both web views can hand it one, each on a condition of its own:
+
+- **Android** delivers a controller's buttons to the activity as key events
+  first. One the activity does not consume is given a *fallback* by the system
+  — B becomes BACK, A the centre of the direction pad — and BACK walks the
+  page's history or leaves the app, which is not what a player pressing 취소 on
+  a controller means. `MainActivity.dispatchKeyEvent` hands every controller
+  button to the web view and then reports it handled, so the page still reads
+  it and no fallback is made from it. Back stays on the phone's own gesture.
+- **iOS** exposes controllers to a `WKWebView` only while it is the first
+  responder. The app makes it so when the page loads and again after the save
+  export picker closes, since a picker that was over the web view leaves the
+  responder chain elsewhere.
+
 ## What is not answered yet
+
+- **A physical controller in either app.** Whether Android's web view exposes
+  controllers to the page at all, and whether the first-responder hand-off is
+  enough on iOS, waits on a device. The page's own handling is checked in a
+  desktop browser; see [`testing.md`](testing.md#game-controllers).
 
 - **Performance on a real handset.** A desktop measurement is what there is:
   on an M1, KTF titles take about 15% of a core and the MIDP path about 77%,

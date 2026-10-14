@@ -1096,6 +1096,34 @@ fetch lifetime can extend beyond the completed response.
 input tests, real WebSocket route, Chromium/WebKit checks, and the separate
 server CPU probe. Its authored fixture does not establish all-game input cost.
 
+## Game controllers
+
+`gamepad.test.mjs` drives the controller reader with pictures of a controller
+and the page's real key holds: button and trigger thresholds, stick sectors and
+their edge margin, the direction pad and the left stick sharing one key, sliding
+between the right stick's number keys, page controls acting on the press, input
+held back by the page, a control held across a reset staying dead, unrecognised
+controllers and their resting axes, two controllers on one key, disconnection,
+and the motor's strength and refusals. `vibrate.test.mjs` checks that the motor
+takes the same requests under the same switch and can never cost the phone its
+own vibration.
+
+The browser route hands the page a stand-in for `navigator.getGamepads` and the
+connection events, then checks the real page against a server: key messages on
+the socket, the lit keypad button and settings row, rebinding while a button is
+held, the settings toggle, rapid fire, focus loss, the narrow-screen modal, an
+unrecognised controller's own table, disconnection, and storage across reload:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/gamepad.mjs build/release/wfeature-server chromium
+```
+
+It passed on 2026-10-14 in Chromium and WebKit with the release server and in
+Chromium with the debug server. It is not evidence about a physical controller,
+an operating system's mapping of one, or either phone app's web view; those
+wait on a device ([phone builds](mobile.md#game-controllers)).
+
 ## Frame delivery
 
 `internal/webhost/frame_encoding_test.go` checks pixel changes, dimensions,

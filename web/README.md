@@ -102,6 +102,49 @@ the token, so the restart button still starts a game over.
   no browser menu: the long-press offer to translate or search the word under
   the finger is refused everywhere outside the panels, where selecting text is
   the point.
+- **Game controller** — one more way to hold a phone key. Its presses go
+  through the same holds as the keypad and the keyboard (`key-holds.js`), so a
+  key held two ways is one press, a held key lights its button, rapid fire
+  repeats it and focus loss lets go of it. The server is sent phone keys and
+  never learns a controller exists, which is why every platform takes it alike.
+  A browser sends no controller events — it answers what a controller looks
+  like when asked — so the page reads `navigator.getGamepads()` once an
+  animation frame while one is connected and not otherwise (`gamepad.js`).
+  The default layout is positional, because the browser's standard mapping
+  numbers buttons by where they sit (the bottom face button is A on one make,
+  ✕ on another, B on a third): the direction pad and the left stick are the
+  direction key, the stick one way at a time like the handset's; the right
+  stick is the number block around 5 in eight sectors, up-left `1` to
+  down-right `9`; the bottom face button is `확인` and the right one `취소`,
+  since titles draw `BACK:CLR` on every screen that can be left; the left and
+  top ones are `5` and `0`; the shoulders are `메뉴` and `우상단`, which help
+  screens name by corner; the triggers are `*` and `#`, the outer keys of the
+  handset's bottom row; View is `통화`, Menu opens and closes `설정`, and
+  pressing the left stick cycles rapid fire. R3 is free, the home button is the
+  operating system's, and quick save and quick load start unbound because
+  either is one stray press from putting the game back.
+  A button is pressed at 0.5 and released below 0.3, so a trigger under a
+  resting finger does not chatter; a stick engages at half its travel, lets go
+  below 0.35, and keeps its sector until the thumb is 10° past the edge. A
+  control held across a reset — focus loss, a hidden page, a session change —
+  stays dead until it is let go, and nothing presses by itself when input comes
+  back. While the keypad editor, a confirmation, the text input dialog, or a
+  panel drawn over the game on a narrow screen is up, controller keys do not
+  reach the game; the button on `설정` still closes the settings.
+  `🕹️ 게임패드 매핑 변경` appears in the settings once a controller has been
+  used here — a browser shows a page no controller until one of its buttons is
+  pressed — and lists a row per control with a menu of phone keys and page
+  controls. Several controls may send one key, and a row lights while its
+  control is held, which is how a person finds the row under their thumb. A
+  controller the browser does not recognise (an empty `mapping`) is listed as
+  numbered buttons and axis directions and keeps a table of its own, starting
+  empty, under the name the browser gives it; an axis already at an end when
+  first seen is its rest rather than a press. The controller's motor takes the
+  guest's vibration under the same `📳 진동` switch, with the guest's level as
+  its strength (`dual-rumble`), and the switch shows once such a controller is
+  connected even where the browser has no vibrator of its own. Browsers offer
+  controllers only to a secure context: `localhost`, `127.0.0.1`, the phone
+  apps and an HTTPS proxy, not `http://192.168.x.x`.
 - **Status** — session and settings messages: a session that
   would not open, a game that exited, an error the server sent, a report that
   was written. It is a popup over the screen with a `확인` to dismiss it, and it
@@ -121,9 +164,10 @@ the token, so the restart button still starts a game over.
   builds only.
 - **Settings (`설정`)** — MIDI and effect volume, magnification, screen size,
   speed, vibration, text input (`🔤 문자 입력`), keypad type and grid editing,
-  keyboard bindings, cheats, debug reports, and restart.
+  keyboard and game controller bindings, cheats, debug reports, and restart.
   Both type lists select the same stored type and show whether it was edited.
-  The keyboard binding panel appears after a physical keyboard key is used.
+  The keyboard binding panel appears after a physical keyboard key is used,
+  and the controller one after a controller button is pressed.
   The dark-red settings button starts at the first grid cell and can move or
   merge, but exactly one group always retains it, including in Type4.
   Debug reports join the server's runtime evidence with the page's own log.
@@ -173,7 +217,9 @@ the token, so the restart button still starts a game over.
   page, so the control still works and only its memory is lost, and the run log
   says so once at load. `localStorage` holds the last game, the per-game screen
   size and speed, the magnification, music and effects volume, vibration, the
-  keypad type, grid arrangements and key bindings;
+  keypad type, grid arrangements, key bindings and controller bindings
+  (`wfeature:padBindings`, and `wfeature:padBindingsRaw` for controllers the
+  browser does not recognise);
   `sessionStorage` holds the resume token, which belongs to one tab.
 
 The run log and the report button are the developer's half of the page, and a
@@ -362,7 +408,7 @@ offline, where it comes up and then fails on an import — so
 `service-worker.test.mjs` compares the list against what `index.html` names and
 what the module graph from `app.js` reaches. Two modules had already drifted out
 of it. A change to the list wants the cache name bumped with it.
-The shell cache is `wfeature-pwa-v56` (the constant in `service-worker.js`). The prefix introduced in version 35 prevents already-installed
+The shell cache is `wfeature-pwa-v57` (the constant in `service-worker.js`). The prefix introduced in version 35 prevents already-installed
 workers from deleting it through their broad `wfeature-shell-*` cleanup.
 Activation removes legacy shell caches and strictly older `wfeature-pwa-vN`
 versions, preserving future versions and unrelated caches. A controlled navigation
@@ -384,6 +430,10 @@ PWA checklist are in [PWA acceptance](../docs/pwa-acceptance.md).
   memory; the MIDP runtime searches a synthetic address space over its object
   graph, where the region labels are class names and the write watch is not
   offered.
+- Game controllers are checked against a stand-in for `navigator.getGamepads`
+  in Chromium and WebKit, not against a physical controller; whether the
+  Android app's web view exposes one, and whether the iOS app's first-responder
+  hand-off is enough, wait on a device (see `docs/mobile.md`).
 - The keypad carries two soft keys, `메뉴` for the handset's left one (`-6`)
   and `우상단` for its right one (`-7`). The third (`EZ`) is on no button and
   no shortcut, and stays reachable only from the CLI's `key soft3`.

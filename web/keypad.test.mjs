@@ -185,6 +185,16 @@ test("the key settings the page draws are the keys the panel offers", () => {
   assert.match(page, /id="key-bindings"[^>]*class="[^"]*\bhidden\b/);
 });
 
+test("the controller settings the page draws are in the panel and start hidden", () => {
+  // The same rule as the keyboard's: built in script against markup that has
+  // to be there, and hidden until a controller has been used here.
+  for (const id of ["pad-bindings", "pad-bindings-list", "pad-bindings-status", "pad-bindings-reset"]) {
+    assert.ok(page.includes(`id="${id}"`), `the settings panel has no ${id}`);
+    assert.ok(app.includes(`"${id}"`), `app.js never looks up ${id}`);
+  }
+  assert.match(page, /id="pad-bindings"[^>]*class="[^"]*\bhidden\b/);
+});
+
 test("no two keys share a code", () => {
   // A collision would send one key where the other was pressed, and nothing at
   // runtime would say so.

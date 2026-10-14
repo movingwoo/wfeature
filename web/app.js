@@ -18,6 +18,21 @@ import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
 import {
+  PAD_BINDINGS_KEY,
+  RAW_PAD_BINDINGS_KEY,
+  assignPad,
+  createPadInput,
+  createPadRumble,
+  inputLabel,
+  loadPadBindings,
+  loadRawPadBindings,
+  padActions,
+  rawInputs,
+  standardInputs,
+  storeRawTable,
+  targetLabel,
+} from "./gamepad.js";
+import {
   assign,
   bindable,
   clear as clearBinding,
@@ -111,6 +126,25 @@ const storedBindings = () => {
 let keyBindings = loadBindings(storedBindings());
 let keyboardMap = codeLookup(keyBindings);
 
+// Which phone key each control of a game controller sends. A controller the
+// browser recognises — nearly all of them — is read in one standard layout and
+// shares one table; one it does not is read button by button and keeps a table
+// of its own under the name the browser gives it. See gamepad.js.
+const storedRecord = key => {
+  try {
+    return JSON.parse(localStore.getItem(key) ?? "null");
+  } catch {
+    return null;
+  }
+};
+
+let padBindings = loadPadBindings(storedRecord(PAD_BINDINGS_KEY));
+let rawPadBindings = loadRawPadBindings(storedRecord(RAW_PAD_BINDINGS_KEY));
+const padTable = pad => (pad.standard ? padBindings : rawPadBindings[pad.id] ?? {});
+
+// Assigned by initPadBindings, which is what the panel's rows listen through.
+let showPadActivity = () => {};
+
 // Set while the settings panel is waiting for a key to bind. It takes the press
 // instead of the game, which is the whole of the difference between changing a
 // key and pressing it.
@@ -202,8 +236,22 @@ const chosenGame = () => gameRunning ? currentGamePath : document.getElementById
 // The handset's motor. The guest asks, the server passes the request on, and
 // this is where it is decided whether anything happens — including on a
 // browser that has no vibrator and for a person who switched it off. It is
-// built once because the setting outlives any one game.
-const vibration = createVibration({ navigator: globalThis.navigator, storage: localStore });
+// built once because the setting outlives any one game. A connected game
+// controller's motor takes the same requests.
+const gamepads = () => {
+  try {
+    return globalThis.navigator?.getGamepads?.() ?? [];
+  } catch {
+    // A page embedded where controllers are not allowed is refused outright.
+    return [];
+  }
+};
+const vibration = createVibration({
+  navigator: globalThis.navigator,
+  storage: localStore,
+  rumble: createPadRumble({ gamepads }),
+});
+let vibrationSetting = { refresh() {} };
 
 const rememberGame = path => localStore.setItem(LAST_GAME_KEY, path);
 
@@ -279,6 +327,27 @@ const drawRapidFire = () => {
   }
 };
 const rapidFire = createRapidFire({ send: sendKey, changed: drawRapidFire });
+
+// The switch's own press, from its cell or from a game controller's button.
+const cycleRapidFire = () => {
+  if (keypadArranging || !gameRunning || document.hidden) return;
+  pageAudio?.activate();
+  rapidFire.cycle();
+};
+
+// The settings key, likewise. While the pad is being edited, a press on the
+// key picks its cell instead.
+const toggleSettings = () => {
+  if (!keypadArranging) document.getElementById("settings-panel")?.classList.toggle("visible");
+};
+
+// What a game controller's button does when it is bound to one of the page's
+// own controls rather than to a phone key.
+const padAction = name => {
+  if (name === SETTINGS) toggleSettings();
+  else if (name === RAPID_FIRE) cycleRapidFire();
+  else if (isCheckpointKey(name)) void checkpointControls?.run(name);
+};
 
 const initInput = () => {
   // A key can be printed on more than one button — the shipped type3 puts 1 and
@@ -411,10 +480,7 @@ const initInput = () => {
   });
 
   document.addEventListener("click", event => {
-    const button = event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`);
-    if (!button || keypadArranging || !gameRunning || document.hidden) return;
-    pageAudio?.activate();
-    rapidFire.cycle();
+    if (event.target?.closest?.(`button[data-key="${RAPID_FIRE}"]`)) cycleRapidFire();
   });
 
   // Capture also means the event no longer says what is under the finger — it
@@ -511,14 +577,67 @@ const initInput = () => {
     holds.lift(`keyboard:${event.code}`);
   });
 
+  // A game controller is a third hand on the same keys: its buttons latch the
+  // way keyboard keys do and its sticks slide the way a finger does, through
+  // the same holds, so a key held two ways is one press. The browser does not
+  // send a controller's presses as events — it answers what the controller
+  // looks like now — so it is read once a frame while one is connected, and
+  // not at all otherwise. gamepad.js holds what counts as a press.
+  const shown = id => document.getElementById(id)?.classList.contains("visible") === true;
+  // A dialog takes every control. A panel drawn over the game — the settings
+  // or the cheats on a narrow screen — takes the game's keys and leaves the
+  // controller the button that closes it.
+  const dialogOpen = () => shown("confirm-dialog") || document.getElementById("text-input-dialog")?.open === true;
+  const overGame = id => !dockedPanels.matches && shown(id);
+  const pads = createPadInput({
+    latch: holds.latch,
+    lift: holds.lift,
+    moveTo: holds.moveTo,
+    act: padAction,
+    bindingsFor: padTable,
+    game: () => !keypadArranging && !dialogOpen() && !overGame("settings-panel") && !overGame("cheat-panel"),
+    allows: name => !keypadArranging && !dialogOpen() && !overGame("cheat-panel") &&
+      (name === SETTINGS || !overGame("settings-panel")),
+    activity: info => showPadActivity(info),
+  });
+  let reading = false;
+  const readPads = () => {
+    reading = false;
+    if (pads.poll(gamepads()) > 0 && !document.hidden) watchPads();
+  };
+  const watchPads = () => {
+    if (reading) return;
+    reading = true;
+    requestAnimationFrame(readPads);
+  };
+  // A controller is announced the first time one of its buttons is pressed on
+  // this page rather than when it is plugged in: browsers keep controllers out
+  // of sight until then, so that a page cannot list a visitor's hardware.
+  window.addEventListener("gamepadconnected", () => {
+    noticePad();
+    vibrationSetting.refresh();
+    watchPads();
+  });
+  window.addEventListener("gamepaddisconnected", () => {
+    vibrationSetting.refresh();
+    watchPads();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) watchPads();
+  });
+  watchPads();
+
   // A window that loses focus stops being told about keyup, so a key held
   // across the switch would stay down in the game and lit on the keypad for
   // the rest of the run. Letting go on the way out is what actually happened.
+  // A controller's button still held when input comes back stays dead until
+  // it is let go, the way a repeated keydown is ignored.
   releaseInput = () => {
     rapidFire.reset();
     holds.clear();
     touch.cancel();
     keysDown.clear();
+    pads.reset();
   };
   window.addEventListener("blur", releaseInput);
 };
@@ -920,7 +1039,7 @@ const initSettings = () => {
   document.addEventListener("click", event => {
     if (isSettingsKey(event.target)) {
       // While the pad is being edited, a press on the key picked its cell.
-      if (!keypadArranging) panel?.classList.toggle("visible");
+      toggleSettings();
       return;
     }
     if (dockedPanels.matches) return;
@@ -1135,6 +1254,133 @@ const initKeyBindings = () => {
   });
   document.addEventListener("pointerdown", event => {
     if (capturing && !section.contains(event.target)) stopCapture();
+  });
+
+  render();
+};
+
+// Whether a game controller has ever been used on this page, which is what
+// puts its settings in the panel — the same evidence the keyboard's need, for
+// the same reason: on a phone with no controller the rows would be a list of
+// buttons nobody has. It is remembered, so a later visit can set a controller
+// up before pressing anything on it.
+const PAD_SEEN_KEY = "wfeature:padSeen";
+
+// Assigned by initPadBindings; a page without the section still reads pads.
+let revealPadBindings = () => {};
+
+const noticePad = () => {
+  localStore.setItem(PAD_SEEN_KEY, "1");
+  revealPadBindings();
+};
+
+// initPadBindings draws a controller's controls and what each one sends.
+// Unlike the keyboard's list, a row per phone key waiting for a press, this is
+// a row per control with its choice beside it: a controller has a fixed set of
+// controls, several may send the same key, and a row lights while its control
+// is held — which is how a person finds out which row is under their thumb.
+const initPadBindings = () => {
+  const section = document.getElementById("pad-bindings");
+  const list = document.getElementById("pad-bindings-list");
+  const status = document.getElementById("pad-bindings-status");
+  if (!section || !list) return;
+
+  revealPadBindings = () => section.classList.remove("hidden");
+  if (localStore.getItem(PAD_SEEN_KEY) === "1") revealPadBindings();
+
+  // The controller the rows are about: the one last pressed, since that is the
+  // one in the hand of whoever is reading. Before any is, the rows are the
+  // standard layout's, which nearly every controller is read as.
+  let shown = null;
+  let lit = new Set();
+  const rows = new Map();
+
+  const raw = () => shown !== null && !shown.standard;
+  const table = () => (raw() ? rawPadBindings[shown.id] ?? {} : padBindings);
+
+  const store = () => {
+    if (raw()) localStore.setItem(RAW_PAD_BINDINGS_KEY, JSON.stringify(rawPadBindings));
+    else localStore.setItem(PAD_BINDINGS_KEY, JSON.stringify(padBindings));
+  };
+
+  const choose = (input, name) => {
+    if (raw()) rawPadBindings = storeRawTable(rawPadBindings, shown.id, assignPad(table(), input, name));
+    else padBindings = assignPad(padBindings, input, name);
+    store();
+  };
+
+  const group = (label, names) => {
+    const options = document.createElement("optgroup");
+    options.label = label;
+    for (const name of names) options.append(new Option(targetLabel(name), name));
+    return options;
+  };
+
+  const light = () => {
+    for (const [input, row] of rows) row.classList.toggle("active", lit.has(input));
+  };
+
+  // The rows are rebuilt when the controller or the table changes and only
+  // then: the light follows every press, and rebuilding a list under a thumb
+  // that is opening one of its menus would close the menu.
+  const render = () => {
+    if (status) {
+      status.textContent = shown === null
+        ? "패드 버튼을 아무거나 누르면 연결됩니다."
+        : shown.standard
+          ? `연결됨: ${shown.id}`
+          : `연결됨: ${shown.id} — 표준 배치로 읽히지 않는 패드입니다. 버튼을 눌러 밝아지는 줄에서 직접 정해 주세요.`;
+    }
+    const bound = table();
+    const naming = shown ?? { standard: true, family: "xbox" };
+    rows.clear();
+    list.replaceChildren(...(raw() ? rawInputs(shown) : standardInputs).map(input => {
+      const row = document.createElement("div");
+      row.className = "key-binding pad-binding";
+      row.dataset.input = input;
+      const label = document.createElement("span");
+      label.className = "key-binding-key";
+      label.textContent = inputLabel(input, naming);
+      const select = document.createElement("select");
+      select.className = "pad-binding-target";
+      select.dataset.input = input;
+      select.setAttribute("aria-label", `${label.textContent}에 둘 키`);
+      select.append(new Option(targetLabel(""), ""), group("전화기 키", keyOrder), group("페이지 기능", padActions));
+      select.value = bound[input] ?? "";
+      select.addEventListener("change", () => choose(input, select.value));
+      row.append(label, select);
+      rows.set(input, row);
+      return row;
+    }));
+    light();
+  };
+
+  showPadActivity = info => {
+    if (info.gone) {
+      if (shown?.index !== info.index) return;
+      shown = null;
+      lit = new Set();
+      render();
+      return;
+    }
+    const same = shown !== null && shown.index === info.index && shown.id === info.id &&
+      shown.standard === info.standard;
+    if (!same && (shown === null || info.rose)) {
+      shown = info;
+      lit = info.lit;
+      render();
+      return;
+    }
+    if (!same) return;
+    lit = info.lit;
+    light();
+  };
+
+  document.getElementById("pad-bindings-reset")?.addEventListener("click", () => {
+    if (raw()) rawPadBindings = storeRawTable(rawPadBindings, shown.id, {});
+    else padBindings = loadPadBindings(null);
+    store();
+    render();
   });
 
   render();
@@ -1508,8 +1754,9 @@ const main = async () => {
   initModalBackdrop();
   pageAudio = new PageAudio({ report: recordEvent, diagnostics: capturing });
   initSettings();
-  initVibrationSetting({ document, vibration });
+  vibrationSetting = initVibrationSetting({ document, vibration });
   initKeyBindings();
+  initPadBindings();
 
   let profileWired = false;
   sessionLink = createSessionLink({

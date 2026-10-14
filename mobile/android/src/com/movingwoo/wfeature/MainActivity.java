@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Base64;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -381,6 +382,21 @@ public class MainActivity extends Activity {
             return new Uri[]{data.getData()};
         }
         return null;
+    }
+
+    /**
+     * A game controller's buttons arrive here as key events, and the web view
+     * reads them into the page's Gamepad API. A button the activity does not
+     * consume is given a fallback by the system — B becomes BACK, A the centre
+     * of the direction pad — and BACK walks the page's history or leaves the
+     * app, which is not what a player pressing 취소 on a controller means. So a
+     * controller button goes to the web view first and is then reported as
+     * handled whatever the web view said, and no fallback is made from it.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        boolean handled = super.dispatchKeyEvent(event);
+        return KeyEvent.isGamepadButton(event.getKeyCode()) || handled;
     }
 
     /**
