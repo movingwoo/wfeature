@@ -26,13 +26,14 @@ import { keyOrder } from "./keybindings.js";
 import { keyName, SETTINGS } from "./keypad-layout.js";
 import { RAPID_FIRE } from "./rapid-fire.js";
 import { QUICK_LOAD, QUICK_SAVE } from "./checkpoint.js";
+import { FULLSCREEN } from "./fullscreen.js";
 
 export const PAD_BINDINGS_KEY = "wfeature:padBindings";
 export const RAW_PAD_BINDINGS_KEY = "wfeature:padBindingsRaw";
 
 // The page's own controls a controller can reach, in the order the panel lists
 // them. They act on the press and hold nothing, like their keypad cells.
-export const padActions = [SETTINGS, RAPID_FIRE, QUICK_SAVE, QUICK_LOAD];
+export const padActions = [SETTINGS, RAPID_FIRE, FULLSCREEN, QUICK_SAVE, QUICK_LOAD];
 const knownTarget = new Set([...keyOrder, ...padActions]);
 export const isPadAction = name => padActions.includes(name);
 export const targetLabel = name => (name ? keyName(name) : "없음");
@@ -87,7 +88,8 @@ const standardInput = new Set(standardInputs);
 //   - the left middle button is the send key, and the right one opens the
 //     settings, which is where a controller's start button leads anywhere;
 //   - pressing the left stick switches rapid fire, the one page control a
-//     player changes while playing.
+//     player changes while playing, and pressing the right one switches
+//     전체화면, which puts away the keypad a controller has made useless.
 //
 // Quick save and quick load are left off on purpose. Either is one press of a
 // button that was reached for by mistake, and a load puts the game back to the
@@ -120,7 +122,7 @@ export const defaultPadBindings = {
   b8: "CALL",
   b9: SETTINGS,
   b10: RAPID_FIRE,
-  b11: "",
+  b11: FULLSCREEN,
 };
 
 // A controller the browser does not recognise is read as what it is: numbered

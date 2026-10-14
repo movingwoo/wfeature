@@ -22,6 +22,7 @@ import { keyOrder } from "./keybindings.js";
 import { SETTINGS } from "./keypad-layout.js";
 import { RAPID_FIRE } from "./rapid-fire.js";
 import { QUICK_LOAD, QUICK_SAVE } from "./checkpoint.js";
+import { FULLSCREEN } from "./fullscreen.js";
 
 // A controller as the browser lists one: a picture of every button and axis.
 // The tests change the picture and read the page's holds, which are the real
@@ -89,6 +90,7 @@ test("the default layout reaches every phone key and leaves quick save and load 
   const reached = new Set(Object.values(defaultPadBindings).filter(Boolean));
   for (const name of keyOrder) assert.ok(reached.has(name), `no control sends ${name}`);
   assert.ok(reached.has(SETTINGS) && reached.has(RAPID_FIRE));
+  assert.equal(defaultPadBindings.b11, FULLSCREEN, "the right stick's press puts the keypad away");
   assert.ok(!reached.has(QUICK_SAVE) && !reached.has(QUICK_LOAD));
   // The face and the corners, as the layout's comment explains them.
   assert.equal(defaultPadBindings.b0, "OK");
@@ -177,6 +179,7 @@ test("controls are named the way the controller in hand prints them", () => {
   assert.equal(targetLabel(""), "없음");
   assert.equal(targetLabel("CLR"), "취소");
   assert.equal(targetLabel(RAPID_FIRE), "연사");
+  assert.equal(targetLabel(FULLSCREEN), "전체화면");
   assert.deepEqual(padActions.filter(isPadAction), padActions);
   assert.ok(!isPadAction("OK"));
 });
@@ -335,7 +338,7 @@ test("a stick direction can be a page control", () => {
 });
 
 test("an unbound control does nothing", () => {
-  const h = harness();
+  const h = harness({ bindings: assignPad(loadPadBindings(null), "b11", "") });
   const pad = controller();
   hold(pad, 11);
   h.input.poll([pad]);

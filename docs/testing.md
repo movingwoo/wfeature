@@ -1124,6 +1124,28 @@ Chromium with the debug server. It is not evidence about a physical controller,
 an operating system's mapping of one, or either phone app's web view; those
 wait on a device ([phone builds](mobile.md#game-controllers)).
 
+## Full-screen layout
+
+`fullscreen.test.mjs` covers the stored choice: restored onto the document
+before anything draws, remembered, announced once per change, and kept for the
+page when storage throws. The browser route checks the layout itself at five
+window shapes — the picture's width against the largest 3:4 width that keeps
+the top-right corner clear, centring, and the corner button beside rather than
+on the picture — and every way in and out: the settings button, Escape, the
+corner button, a reload, opening the keypad editor, and a keypad cell assigned
+through the editor, on a wide and a narrow window, with keyboard keys still
+reaching the game:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/fullscreen.mjs build/release/wfeature-server chromium
+```
+
+The controller route adds R3 and the settings reached by Menu in it. Both passed
+on 2026-10-14 in Chromium and WebKit with the release server and in Chromium
+with the debug server. A physical phone's safe areas and rotation in this
+layout wait on a device.
+
 ## Frame delivery
 
 `internal/webhost/frame_encoding_test.go` checks pixel changes, dimensions,

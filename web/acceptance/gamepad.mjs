@@ -243,6 +243,23 @@ try {
   await pause(300);
   result.checks.push("narrow modal settings block game keys and Menu closes them");
 
+  const fullscreenOn = () => page.evaluate(() => document.documentElement.classList.contains("fullscreen"));
+  await button(11, 1); await button(11, 0);
+  assert.equal(await fullscreenOn(), true, "R3 puts the keypad away");
+  assert.equal(await page.locator(".button-container").evaluate(e => getComputedStyle(e).display), "none");
+  await button(9, 1); await button(9, 0);
+  assert.equal(await page.locator("#settings-panel").evaluate(e => getComputedStyle(e).position), "fixed");
+  assert.equal(await page.locator("#modal-backdrop").evaluate(e => getComputedStyle(e).display), "block");
+  await button(0, 1); await button(0, 0);
+  await expectSent([], "the settings over the full screen take the game's keys");
+  await button(9, 1); await button(9, 0);
+  await button(0, 1); await button(0, 0);
+  await expectSent([`+${OK}`, `-${OK}`]);
+  await button(11, 1); await button(11, 0);
+  assert.equal(await fullscreenOn(), false);
+  await expectSent([], "R3 sends no handset key");
+  result.checks.push("R3 toggles 전체화면 and Menu reaches the settings in it");
+
   await page.evaluate(() => window.connectPad(1, "USB Gamepad (Vendor: 0079 Product: 0011)", "", 10, 2));
   await settle();
   await button(3, 1, 1);

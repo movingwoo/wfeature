@@ -45,7 +45,8 @@ const shippedHas = name => Object.values(shipped[shapes[0]]).includes(name);
 
 test("every keypad button sends a key the page knows a code for", () => {
   // Local controls send no handset code.
-  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE" && name !== "SETTINGS" && !isCheckpointKey(name))) {
+  for (const name of buttonKeys.filter(name =>
+    name !== "RAPID_FIRE" && name !== "SETTINGS" && name !== "FULLSCREEN" && !isCheckpointKey(name))) {
     assert.ok(tableKeys.has(name), `the button ${name} has no code`);
   }
   assert.ok(!tableKeys.has("SETTINGS"), "the settings key sends the game a code");

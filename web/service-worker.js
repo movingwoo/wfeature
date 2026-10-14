@@ -13,6 +13,7 @@ const shell = [
   "./app.js",
   "./keybindings.js",
   "./gamepad.js",
+  "./fullscreen.js",
   "./session.js",
   "./frame-stream.js",
   "./audio-stream.js",

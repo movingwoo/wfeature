@@ -17,6 +17,7 @@ import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
+import { FULLSCREEN, createFullscreen } from "./fullscreen.js";
 import {
   PAD_BINDINGS_KEY,
   RAW_PAD_BINDINGS_KEY,
@@ -67,6 +68,16 @@ const statusText = document.getElementById("status-text");
 // asked in one place. The width matches the breakpoint in style.css, where a
 // second margin at 1180px takes the run log as well.
 const dockedPanels = window.matchMedia("(min-width: 900px)");
+
+// 전체화면 puts the keypad away and gives the game screen the window, rails
+// included, so the panels are modals in it whatever the width. Restored before
+// anything else draws; see fullscreen.js.
+const fullscreen = createFullscreen({
+  root: document.documentElement,
+  storage: localStore,
+  changed: on => fullscreenChanged(on),
+});
+const panelsDocked = () => dockedPanels.matches && !fullscreen.on;
 
 // Browser key names to the MIDP-style codes the server translates into WIPI key
 // values. The keypad buttons carry the same names in their data-key attribute.
@@ -316,7 +327,8 @@ const sendKey = (eventType, name) => {
 
 // The cells that hold one of this page's own controls rather than a phone key.
 // They act on clicks, never on a held key or a slide, and send no handset key.
-const localControl = name => name === RAPID_FIRE || name === SETTINGS || isCheckpointKey(name);
+const localControl = name =>
+  name === RAPID_FIRE || name === SETTINGS || name === FULLSCREEN || isCheckpointKey(name);
 
 const drawRapidFire = () => {
   for (const button of document.querySelectorAll(`button[data-key="${RAPID_FIRE}"]`)) {
@@ -341,11 +353,54 @@ const toggleSettings = () => {
   if (!keypadArranging) document.getElementById("settings-panel")?.classList.toggle("visible");
 };
 
+// 전체화면, from its cell, its settings button or a controller. The editor
+// arranges a keypad this would hide, so a press while it is open is the
+// editor's.
+const toggleFullscreen = () => {
+  if (!keypadArranging) fullscreen.toggle();
+};
+
+// The way back from 전체화면 sits against the picture rather than in the
+// window's corner, where on a tall phone it was a hand's width above the game
+// and easy to miss: just above the picture's top-right corner when there is
+// room there, and just beside that corner when the picture takes the whole
+// height. The layout always leaves room on one of the two (`:root.fullscreen`
+// in style.css), and the stylesheet's corner is where it is until this runs.
+const EXIT_GAP = 8;
+const placeFullscreenExit = () => {
+  const button = document.getElementById("fullscreen-exit");
+  const picture = document.querySelector(".canvas-wrapper")?.getBoundingClientRect();
+  if (!fullscreen.on || !button || !picture) return;
+  const size = button.offsetWidth;
+  // The operating system's strip at the top, which the button stays below.
+  const safeTop = parseFloat(getComputedStyle(document.querySelector(".stage-main")).paddingTop) || 0;
+  const above = picture.top - safeTop >= size + EXIT_GAP;
+  button.style.top = `${above ? picture.top - EXIT_GAP - size : picture.top}px`;
+  button.style.left = `${above ? picture.right - size : picture.right + EXIT_GAP}px`;
+  button.style.right = "auto";
+};
+
+// What follows the layout. A panel open beside the game would be a modal over
+// it in the new one, so the panels go back to what the layout opens with: the
+// settings docked on a wide window and nothing over the game.
+const fullscreenChanged = on => {
+  document.getElementById("cheat-panel")?.classList.remove("visible");
+  document.getElementById("settings-panel")?.classList.toggle("visible", panelsDocked());
+  const toggle = document.getElementById("fullscreen-toggle");
+  if (toggle) {
+    toggle.textContent = on ? "⛶ 전체화면 끝내기" : "⛶ 전체화면";
+    toggle.setAttribute("aria-pressed", String(on));
+  }
+  placeFullscreenExit();
+  recordEvent(`fullscreen ${on ? "on" : "off"}`);
+};
+
 // What a game controller's button does when it is bound to one of the page's
 // own controls rather than to a phone key.
 const padAction = name => {
   if (name === SETTINGS) toggleSettings();
   else if (name === RAPID_FIRE) cycleRapidFire();
+  else if (name === FULLSCREEN) toggleFullscreen();
   else if (isCheckpointKey(name)) void checkpointControls?.run(name);
 };
 
@@ -588,7 +643,7 @@ const initInput = () => {
   // or the cheats on a narrow screen — takes the game's keys and leaves the
   // controller the button that closes it.
   const dialogOpen = () => shown("confirm-dialog") || document.getElementById("text-input-dialog")?.open === true;
-  const overGame = id => !dockedPanels.matches && shown(id);
+  const overGame = id => !panelsDocked() && shown(id);
   const pads = createPadInput({
     latch: holds.latch,
     lift: holds.lift,
@@ -917,7 +972,8 @@ let keypadArranging = false;
 let relistKeypadButtons = () => {};
 const initKeypad = () => initKeypadEditor({
   document, releaseInput: () => releaseInput(),
-  onEditing: on => { keypadArranging = on; },
+  // The editor arranges the keypad, so it brings the keypad back.
+  onEditing: on => { keypadArranging = on; if (on) fullscreen.set(false); },
   changed: () => { relistKeypadButtons(); drawRapidFire(); checkpointControls?.refresh(); },
 });
 
@@ -1042,7 +1098,7 @@ const initSettings = () => {
       toggleSettings();
       return;
     }
-    if (dockedPanels.matches) return;
+    if (panelsDocked()) return;
     if (statusMessage.contains(event.target)) return;
     if (!panel?.contains(event.target)) panel?.classList.remove("visible");
   });
@@ -1050,11 +1106,41 @@ const initSettings = () => {
   // The rail has room to hold the settings open, so it starts open there and
   // closes again on the way back to a narrow window, where an open panel would
   // be a modal nobody asked for.
+  // 전체화면 has no rail at any width, so it counts as narrow here.
   const followLayout = wide => panel?.classList.toggle("visible", wide);
-  followLayout(dockedPanels.matches);
-  dockedPanels.addEventListener("change", event => {
-    followLayout(event.matches);
-    if (!event.matches) document.getElementById("cheat-panel")?.classList.remove("visible");
+  followLayout(panelsDocked());
+  dockedPanels.addEventListener("change", () => {
+    followLayout(panelsDocked());
+    if (!panelsDocked()) document.getElementById("cheat-panel")?.classList.remove("visible");
+  });
+
+  // The way into 전체화면 that is always there, and in it the way out that a
+  // controller's settings button reaches. Its own corner button is the other.
+  const fullscreenToggle = document.getElementById("fullscreen-toggle");
+  if (fullscreenToggle) {
+    fullscreenToggle.textContent = fullscreen.on ? "⛶ 전체화면 끝내기" : "⛶ 전체화면";
+    fullscreenToggle.setAttribute("aria-pressed", String(fullscreen.on));
+    fullscreenToggle.addEventListener("click", toggleFullscreen);
+  }
+  document.getElementById("fullscreen-exit")?.addEventListener("click", () => fullscreen.set(false));
+  // The picture moves with the window, so the button follows it; a page that
+  // came back already in 전체화면 places it once the layout has settled.
+  window.addEventListener("resize", placeFullscreenExit);
+  const wrapper = document.querySelector(".canvas-wrapper");
+  if (wrapper && window.ResizeObserver) new ResizeObserver(placeFullscreenExit).observe(wrapper);
+  requestAnimationFrame(placeFullscreenExit);
+  // A keypad cell carrying it can only turn it on: the keypad is what goes.
+  document.addEventListener("click", event => {
+    if (event.target?.closest?.(`button[data-key="${FULLSCREEN}"]`)) toggleFullscreen();
+  });
+  // Escape leaves it, the way it leaves a video player's, unless something
+  // open on top of the game is what the key is for.
+  document.addEventListener("keydown", event => {
+    if (event.code !== "Escape" || !fullscreen.on || keypadArranging) return;
+    const open = id => document.getElementById(id)?.classList.contains("visible");
+    if (open("settings-panel") || open("cheat-panel") || open("confirm-dialog") || statusVisible()) return;
+    if (document.getElementById("text-input-dialog")?.open) return;
+    fullscreen.set(false);
   });
 
   // The sliders trade the music against the sound effects. Their module
@@ -1614,7 +1700,7 @@ const initCheat = () => {
     // The toggle lives inside the settings panel, which as a modal would
     // otherwise stay open on top of the cheat panel. Docked in the rail the two
     // sit one above the other and both stay.
-    if (!dockedPanels.matches) document.getElementById("settings-panel")?.classList.remove("visible");
+    if (!panelsDocked()) document.getElementById("settings-panel")?.classList.remove("visible");
 
     panel.classList.toggle("visible");
     if (panel.classList.contains("visible")) {

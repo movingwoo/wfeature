@@ -1,5 +1,6 @@
 import { RAPID_FIRE } from "./rapid-fire.js";
 import { QUICK_SAVE, QUICK_LOAD } from "./checkpoint.js";
+import { FULLSCREEN } from "./fullscreen.js";
 import { local } from "./storage.js";
 import { keyLabel, keyOrder } from "./keybindings.js";
 
@@ -19,9 +20,10 @@ export const assignable = [
   RAPID_FIRE,
   QUICK_SAVE,
   QUICK_LOAD,
+  FULLSCREEN,
 ];
 const knownKey = new Set([EMPTY, ...assignable]);
-const localKeys = new Set([RAPID_FIRE, QUICK_SAVE, QUICK_LOAD, SETTINGS]);
+const localKeys = new Set([RAPID_FIRE, QUICK_SAVE, QUICK_LOAD, SETTINGS, FULLSCREEN]);
 const directKeys = new Set([...localKeys, "MENU", "CALL", "SOFT2", "CLR"]);
 export const defaultActivation = (key) =>
   directKeys.has(key) ? "press" : "slide";
@@ -30,6 +32,7 @@ const localNames = {
   [QUICK_SAVE]: "퀵세이브",
   [QUICK_LOAD]: "퀵로드",
   [SETTINGS]: "설정",
+  [FULLSCREEN]: "전체화면",
 };
 export const keyName = (key) => localNames[key] ?? keyLabel(key);
 export const keyFace = (key) => (key === "OK" ? "OK" : keyName(key));
