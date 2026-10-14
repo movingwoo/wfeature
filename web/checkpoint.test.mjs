@@ -73,7 +73,7 @@ test("a refused load shows the server's reason and keeps the slot offered", asyn
   const ui = setup();
   ui.state("playing");
   ui.controls.started({ can_checkpoint: true, has_checkpoint: true });
-  const reason = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요.";
+  const reason = "이전 버전의 퀵로드 형식";
   ui.socket.quickLoad = async () => { throw new Error(reason); };
   await ui.load.click();
   assert.equal(ui.note.textContent, `퀵로드 실패: ${reason}`);

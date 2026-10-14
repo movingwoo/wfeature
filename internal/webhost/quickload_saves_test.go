@@ -520,7 +520,7 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 // person who asks is told why; a new quick save is written beside the old file
 // and loads. Envelope version 2 is what 0.5.2 wrote, version 1 came before it.
 func TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason(t *testing.T) {
-	const sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."
+	const sentence = "이전 버전의 퀵로드 형식"
 	for _, earlierFormat := range []struct {
 		name    string
 		version byte
@@ -658,7 +658,7 @@ func TestStartFromAQuickSaveIsRefusedBeforeTheRunningGameIsStopped(t *testing.T)
 			if err := os.Rename(host.slot(false), host.slot(true)); err != nil {
 				t.Fatal(err)
 			}
-		}, "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."},
+		}, "이전 버전의 퀵로드 형식"},
 		{"a damaged quick save", func(t *testing.T, host *saveHost, valid []byte) {
 			damaged := bytes.Clone(valid)
 			damaged[len(damaged)-1] ^= 1

@@ -66,7 +66,7 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 	var sentence string
 	switch {
 	case errors.Is(err, backend.ErrCheckpointLegacy):
-		sentence = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요."
+		sentence = "이전 버전의 퀵로드 형식"
 	case errors.Is(err, backend.ErrCheckpointSaveWrite) && step == checkpointSaving:
 		sentence = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다."
 	case errors.Is(err, backend.ErrCheckpointSaveWrite):
