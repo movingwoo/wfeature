@@ -197,6 +197,11 @@ and both web views can hand it one, each on a condition of its own:
   export picker closes, since a picker that was over the web view leaves the
   responder chain elsewhere.
 
+On Android, vibration reaches the phone's motor only with the `VIBRATE`
+permission. Without it the web view still answers `navigator.vibrate` with
+`true` and nothing moves, which is how the app offered a 📳 진동 switch that did
+nothing. A controller's motor goes through the input system and needs none.
+
 ## What is not answered yet
 
 - **A physical controller in either app.** Whether Android's web view exposes
