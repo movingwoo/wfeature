@@ -807,6 +807,32 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
   cursor: default;
 }
 
+/* A controller's list is two columns: the control, and what it sends. */
+.pad-bindings-list {
+  grid-template-columns: auto 1fr;
+}
+
+.pad-binding-target {
+  min-width: 0;
+  padding: 3px 4px;
+  font: inherit;
+  color: inherit;
+  background: #444;
+  border: 1px solid #666;
+  border-radius: 4px;
+}
+
+/* The row whose control is held right now, in the colour a row waiting for a
+   key uses: it is the answer to "which row is this button". */
+.pad-binding.active .key-binding-key {
+  color: #ffe9a8;
+}
+
+.pad-binding.active .pad-binding-target {
+  background: #6d5a24;
+  border-color: #a08638;
+}
+
 /* A settings note says what a setting will and will not do to the game that is
    running. It sits under its own control rather than in a status line, because
    what it is about is that control. */
@@ -1137,6 +1163,110 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
     min-width: 0;
     height: calc(100dvh - 32px);
   }
+}
+
+/* 전체화면: the keypad put away, the rails with it, and the game screen as
+   large as the window allows. It is the same hole — still 3:4, still centred —
+   given the whole window instead of what the keypad leaves.
+
+   The width is the largest of three that leaves room by the picture's
+   top-right corner: the exit button sits just above it or just beside it,
+   outside the picture, so a picture that would reach both the top edge and the
+   right edge gives up the button's room on one axis. On any window not close
+   to 3:4 that costs nothing, because the margin on the other axis already
+   holds the button. */
+:root.fullscreen {
+  --stage-vertical: 0px;
+  --fullscreen-corner: 48px;
+  --fullscreen-width: max(0px, calc(100vw - var(--safe-left) - var(--safe-right)));
+  --canvas-width: min(
+      var(--fullscreen-width),
+      calc(var(--usable-height) * 0.75),
+      max(calc(var(--fullscreen-width) - 2 * var(--fullscreen-corner)),
+          calc((var(--usable-height) - 2 * var(--fullscreen-corner)) * 0.75)));
+}
+
+:root.fullscreen .button-container,
+:root.fullscreen .rail-left {
+  display: none;
+}
+
+:root.fullscreen .stage {
+  display: block;
+  padding: 0 var(--safe-right) 0 var(--safe-left);
+}
+
+:root.fullscreen .stage-main {
+  justify-content: center;
+}
+
+/* No rail at any width, so the panels are the narrow layout's modals again. */
+:root.fullscreen .rail-right {
+  display: contents;
+}
+
+:root.fullscreen .settings-panel,
+:root.fullscreen .cheat-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-height: 82dvh;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+:root.fullscreen .settings-panel {
+  width: min(92vw, 360px);
+}
+
+:root.fullscreen .cheat-panel {
+  width: min(96vw, 460px);
+}
+
+:root.fullscreen body:has(.settings-panel.visible) .modal-backdrop,
+:root.fullscreen body:has(.cheat-panel.visible) .modal-backdrop {
+  display: block;
+}
+
+/* The way back, drawn only in that layout. Quiet, because it sits beside the
+   game for as long as the game is played. The corner below is only where it
+   starts: app.js moves it against the picture's top-right corner, above it or
+   beside it, whichever the window has room for. */
+.fullscreen-exit {
+  display: none;
+}
+
+:root.fullscreen .fullscreen-exit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  top: calc(var(--safe-top) + 6px);
+  right: calc(var(--safe-right) + 6px);
+  z-index: 120;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #c8c8c8;
+  cursor: pointer;
+}
+
+:root.fullscreen .fullscreen-exit:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.fullscreen-exit svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 #text-input-dialog {

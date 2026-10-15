@@ -1,7 +1,7 @@
 // Increment the version when the shell changes. Legacy workers delete every
 // other wfeature-shell-* cache on a late navigation, even after replacement.
 // A separate prefix protects this shell from that already-installed code.
-const cacheName = "wfeature-pwa-v56";
+const cacheName = "wfeature-pwa-v57";
 const cacheVersion = Number(cacheName.match(/-v(\d+)$/)[1]);
 
 // The shell is what the page needs to come up, which is now only the page: a
@@ -12,6 +12,8 @@ const shell = [
   "./style.css",
   "./app.js",
   "./keybindings.js",
+  "./gamepad.js",
+  "./fullscreen.js",
   "./session.js",
   "./frame-stream.js",
   "./audio-stream.js",

@@ -105,6 +105,9 @@ test("the panels are where the stylesheet and the script expect them", () => {
   // list, which is the one control of the three worth reaching without opening
   // anything.
   under("keypad-arrange-open", "div#settings-panel");
+  // The controller's list sits beside the keyboard's, in the same panel.
+  under("pad-bindings-list", "details#pad-bindings");
+  under("pad-bindings", "div#settings-panel");
   under("keypad-shape-settings", "div#settings-panel");
 });
 

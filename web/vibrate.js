@@ -16,10 +16,15 @@
 // weak buzz is not a short one, and a title asking for a long gentle rumble
 // would get a tap.
 //
+// A connected game controller is a second motor, and it is given the same
+// requests under the same switch (gamepad.js has its half). Its motor does have
+// a strength, so there the level is the strength.
+//
 // Three things make this do nothing at all, and none of them is an error worth
 // telling anyone about: a browser without the API (every desktop Safari and
-// Firefox), a platform whose core does not report vibration (the server sends
-// nothing, so nothing arrives), and the person having switched it off.
+// Firefox) and no controller that can rumble, a platform whose core does not
+// report vibration (the server sends nothing, so nothing arrives), and the
+// person having switched it off.
 
 // The upper bound on one request. An indefinite request has to become a finite
 // call because the API takes a length, and a page that asked for an hour would
@@ -41,9 +46,10 @@ export const vibrationLength = ({ level = 0, ms = 0 } = {}) => {
   return Math.min(Math.round(ms), MAX_VIBRATION_MS);
 };
 
-// createVibration wires the setting and the outgoing calls. `navigator` and
-// `storage` are handed in so the rules above are testable without a browser.
-export const createVibration = ({ navigator: nav, storage } = {}) => {
+// createVibration wires the setting and the outgoing calls. `navigator`,
+// `storage` and the controllers' `rumble` are handed in so the rules above are
+// testable without a browser.
+export const createVibration = ({ navigator: nav, storage, rumble } = {}) => {
   // A browser that has no vibrator is not a browser to nag: the setting is
   // simply not offered, and the calls below are dropped.
   const supported = typeof nav?.vibrate === "function";
@@ -65,8 +71,36 @@ export const createVibration = ({ navigator: nav, storage } = {}) => {
     }
   };
 
+  // The controllers' motors. Each call is the controller module's to make
+  // safely; this only decides that one is made.
+  const pads = (level, length) => {
+    try {
+      rumble?.play(level, length);
+    } catch {
+      // A controller is never a reason for the phone's own motor to miss out.
+    }
+  };
+  const stopPads = () => {
+    try {
+      rumble?.stop();
+    } catch {
+      // As above.
+    }
+  };
+
   return {
     supported,
+    // available answers whether anything on this end can vibrate now: the
+    // phone's own motor, or a controller's. The second changes when a
+    // controller is connected, which is why it is asked rather than stored.
+    get available() {
+      if (supported) return true;
+      try {
+        return Boolean(rumble?.available());
+      } catch {
+        return false;
+      }
+    },
     get enabled() {
       return enabled;
     },
@@ -76,37 +110,45 @@ export const createVibration = ({ navigator: nav, storage } = {}) => {
     // a rumble means by it.
     set(on) {
       enabled = Boolean(on);
-      if (!enabled) call(0);
+      if (!enabled) {
+        call(0);
+        stopPads();
+      }
       return storage?.setItem(VIBRATION_KEY, enabled ? "on" : "off") ?? false;
     },
-    // request handles one message from the server.
+    // request handles one message from the server. What it answers is the
+    // phone's motor; a controller's is not asked to report.
     request(message) {
       if (!enabled) return false;
       const length = vibrationLength(message);
       // A zero-length request is the guest turning the motor off, and it is
       // passed on rather than dropped: an indefinite buzz already started is
       // still running until something says otherwise.
+      pads(message?.level, length);
       return call(length);
     },
     // stop is for the page rather than the guest: a game that ended or a
     // session that went away must not leave a phone buzzing.
     stop() {
+      stopPads();
       return call(0);
     },
   };
 };
 
-// initVibrationSetting wires the checkbox. The row is hidden where the browser
-// has no vibrator, because a switch that cannot do anything is worse than no
-// switch: it reads as a thing that is broken.
+// initVibrationSetting wires the checkbox. The row is hidden where nothing can
+// vibrate, because a switch that cannot do anything is worse than no switch: it
+// reads as a thing that is broken. A controller that can rumble may arrive
+// later, so the switch is wired either way and `refresh` asks again.
 export const initVibrationSetting = ({ document: doc, vibration } = {}) => {
   const input = doc?.getElementById("vibrate-toggle");
   const row = doc?.getElementById("vibrate-row");
-  if (!input) return;
-  if (!vibration?.supported) {
-    if (row) row.hidden = true;
-    return;
-  }
-  input.checked = vibration.enabled;
+  const refresh = () => {
+    if (row) row.hidden = !vibration?.available;
+  };
+  if (!input) return { refresh };
+  refresh();
+  input.checked = Boolean(vibration?.enabled);
   input.addEventListener("change", () => vibration.set(input.checked));
+  return { refresh };
 };

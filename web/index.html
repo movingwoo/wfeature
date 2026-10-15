@@ -256,6 +256,11 @@
                two places, which meant changing one of them meant finding out
                which place it was in. -->
           <button id="keypad-arrange-open" class="panel-button">🎮 키패드 세부 조정</button>
+          <!-- 전체화면 puts the keypad away and gives the game screen the
+               window: for a game controller or a keyboard, the keypad is only
+               what keeps the screen small. The label says which way a press
+               goes; app.js keeps it true. -->
+          <button id="fullscreen-toggle" class="panel-button" aria-pressed="false">⛶ 전체화면</button>
           <!-- Only where there is a keyboard to press: on a phone this is a
                list of keys nobody can reach, in a panel that has to stay short
                enough for a thumb. It starts hidden everywhere and app.js
@@ -270,6 +275,22 @@
               고르면 그 키를 쓰던 자리가 빕니다.
             </p>
             <button id="key-bindings-reset" class="panel-button">기본값으로</button>
+          </details>
+          <!-- The same rule for a game controller: hidden until one has been
+               used here, because a browser does not show a controller to a
+               page before one of its buttons is pressed. A row per control
+               rather than per phone key — a controller has a fixed set of
+               them, and the direction pad and the left stick both send the
+               direction keys. A row lights while its control is held. -->
+          <details id="pad-bindings" class="key-bindings hidden">
+            <summary>🕹️ 게임패드 매핑 변경</summary>
+            <p id="pad-bindings-status" class="key-bindings-hint" role="status"></p>
+            <div id="pad-bindings-list" class="key-bindings-list pad-bindings-list"></div>
+            <p class="key-bindings-hint">
+              줄마다 그 버튼이 보낼 키를 고르세요. 패드 버튼을 누르는 동안 그 줄이 밝아집니다. 왼스틱은 방향키처럼 한
+              번에 한 방향만, 오른스틱은 5를 둘러싼 숫자 1~9입니다. 퀵세이브·퀵로드는 기본으로 비어 있습니다.
+            </p>
+            <button id="pad-bindings-reset" class="panel-button">기본값으로</button>
           </details>
 
           <button id="cheat-toggle" class="panel-button hidden">🎯 치트</button>
@@ -337,7 +358,17 @@
       </aside>
     </div>
 
-    <!-- Only ever drawn behind a modal, which is only ever a narrow screen. -->
+    <!-- The way back from 전체화면, against the picture's top-right corner —
+         just above it, or just beside it when the picture takes the whole
+         height; that layout leaves room for one of the two at every window
+         shape. Drawn only in it, and under any modal. -->
+    <button id="fullscreen-exit" class="fullscreen-exit" type="button" aria-label="전체화면 끝내기" title="전체화면 끝내기">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+      </svg>
+    </button>
+
+    <!-- Only ever drawn behind a modal, which is a narrow screen or 전체화면. -->
     <div id="modal-backdrop" class="modal-backdrop"></div>
   </body>
 </html>

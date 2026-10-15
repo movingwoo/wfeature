@@ -73,7 +73,7 @@ test("a refused load shows the server's reason and keeps the slot offered", asyn
   const ui = setup();
   ui.state("playing");
   ui.controls.started({ can_checkpoint: true, has_checkpoint: true });
-  const reason = "이 퀵세이브는 이전 빌드 형식이라 불러올 수 없습니다. 새로 퀵세이브해 주세요.";
+  const reason = "이전 버전의 퀵로드 형식";
   ui.socket.quickLoad = async () => { throw new Error(reason); };
   await ui.load.click();
   assert.equal(ui.note.textContent, `퀵로드 실패: ${reason}`);
@@ -152,4 +152,18 @@ test("unavailable cells remain editable without invoking checkpoint actions", as
   assert.equal(ui.save.disabled, true);
   assert.equal(ui.load.disabled, true);
   assert.equal(ui.note.hidden, true);
+});
+
+test("a control that is not a cell runs the same action under the same rules", async () => {
+  const f = setup();
+  f.state("playing");
+  f.controls.started({ can_checkpoint: true, has_checkpoint: false });
+  await f.controls.run(QUICK_LOAD);
+  assert.deepEqual(f.calls, [], "no slot, no load — as for the cell");
+  await f.controls.run(QUICK_SAVE);
+  await f.controls.run(QUICK_LOAD);
+  assert.deepEqual(f.calls, ["save", "load"]);
+  f.edit(true);
+  await f.controls.run(QUICK_SAVE);
+  assert.deepEqual(f.calls, ["save", "load"], "editing the pad blocks it too");
 });

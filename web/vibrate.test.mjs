@@ -146,3 +146,62 @@ test("the switch shows the setting and changes it", () => {
   assert.equal(vibration.enabled, false);
   assert.equal(storage.getItem(VIBRATION_KEY), "off");
 });
+
+// A connected controller's motor, as gamepad.js hands it over.
+const rumbleOf = ({ available = true } = {}) => {
+  const calls = [];
+  return {
+    calls,
+    available: () => available,
+    play: (level, length) => calls.push(["play", level, length]),
+    stop: () => calls.push(["stop"]),
+  };
+};
+
+test("a controller's motor gets the same requests under the same switch", () => {
+  const nav = navigatorOf();
+  const rumble = rumbleOf();
+  const vibration = createVibration({ navigator: nav, storage: storageOf(), rumble });
+  vibration.request({ level: 70, ms: 0 });
+  vibration.request({ level: 0, ms: 200 });
+  assert.deepEqual(rumble.calls, [["play", 70, MAX_VIBRATION_MS], ["play", 0, 0]]);
+  assert.deepEqual(nav.calls, [MAX_VIBRATION_MS, 0], "the phone's motor is asked as before");
+  rumble.calls.length = 0;
+  vibration.set(false);
+  assert.deepEqual(rumble.calls, [["stop"]], "switching off stops a rumble already running");
+  vibration.request({ level: 70, ms: 100 });
+  assert.deepEqual(rumble.calls, [["stop"]], "and nothing more is played");
+  vibration.set(true);
+  rumble.calls.length = 0;
+  vibration.stop();
+  assert.deepEqual(rumble.calls, [["stop"]]);
+});
+
+test("a controller that cannot be reached never costs the phone its vibration", () => {
+  const nav = navigatorOf();
+  const rumble = {
+    available: () => { throw new Error("gone"); },
+    play: () => { throw new Error("gone"); },
+    stop: () => { throw new Error("gone"); },
+  };
+  const vibration = createVibration({ navigator: nav, storage: storageOf(), rumble });
+  assert.equal(vibration.request({ level: 50, ms: 100 }), true);
+  assert.equal(vibration.stop(), true);
+  assert.deepEqual(nav.calls, [100, 0]);
+  assert.equal(createVibration({ navigator: {}, storage: storageOf(), rumble }).available, false);
+});
+
+test("the switch appears when a controller that can rumble does", () => {
+  const page = checkboxPage();
+  const rumble = rumbleOf({ available: false });
+  const vibration = createVibration({ navigator: {}, storage: storageOf(), rumble });
+  const setting = initVibrationSetting({ document: page.document, vibration });
+  assert.equal(page.row.hidden, true, "nothing here can vibrate yet");
+  assert.equal(page.input.checked, true);
+  rumble.available = () => true;
+  setting.refresh();
+  assert.equal(page.row.hidden, false);
+  page.input.checked = false;
+  page.fire("change");
+  assert.equal(vibration.enabled, false, "the switch was wired while it was hidden");
+});

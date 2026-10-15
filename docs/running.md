@@ -61,6 +61,9 @@ the same network — the server binds every interface, because being reachable
 from a phone is the point of running it. **It has no authentication: anything
 that can reach the port can read and write the save trees and list the games.**
 Give `-addr 127.0.0.1:11541` to keep it to the machine it runs on.
+A page opened by the machine's address over plain HTTP is not a secure context,
+so the browser gives it no game controller and registers no service worker;
+`127.0.0.1`, the phone apps and an HTTPS proxy are secure contexts.
 
 The game runs **on the server**, and the page draws the frames it sends; see
 [`session.md`](session.md). There is nothing to build for the browser: the

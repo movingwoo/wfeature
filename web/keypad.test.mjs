@@ -45,7 +45,8 @@ const shippedHas = name => Object.values(shipped[shapes[0]]).includes(name);
 
 test("every keypad button sends a key the page knows a code for", () => {
   // Local controls send no handset code.
-  for (const name of buttonKeys.filter(name => name !== "RAPID_FIRE" && name !== "SETTINGS" && !isCheckpointKey(name))) {
+  for (const name of buttonKeys.filter(name =>
+    name !== "RAPID_FIRE" && name !== "SETTINGS" && name !== "FULLSCREEN" && !isCheckpointKey(name))) {
     assert.ok(tableKeys.has(name), `the button ${name} has no code`);
   }
   assert.ok(!tableKeys.has("SETTINGS"), "the settings key sends the game a code");
@@ -183,6 +184,16 @@ test("the key settings the page draws are the keys the panel offers", () => {
   // Hidden in the markup and revealed from script. Shipping it visible would
   // put the list on every phone.
   assert.match(page, /id="key-bindings"[^>]*class="[^"]*\bhidden\b/);
+});
+
+test("the controller settings the page draws are in the panel and start hidden", () => {
+  // The same rule as the keyboard's: built in script against markup that has
+  // to be there, and hidden until a controller has been used here.
+  for (const id of ["pad-bindings", "pad-bindings-list", "pad-bindings-status", "pad-bindings-reset"]) {
+    assert.ok(page.includes(`id="${id}"`), `the settings panel has no ${id}`);
+    assert.ok(app.includes(`"${id}"`), `app.js never looks up ${id}`);
+  }
+  assert.match(page, /id="pad-bindings"[^>]*class="[^"]*\bhidden\b/);
 });
 
 test("no two keys share a code", () => {
