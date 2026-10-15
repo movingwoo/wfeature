@@ -1124,13 +1124,49 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
 
 It passed on 2026-10-15, sixteen checks, in Chromium and WebKit with the
 release server and in Chromium with the debug server. It is not evidence about
-a physical controller, an operating system's mapping of one, or either phone
-app's web view ([phone builds](mobile.md#game-controllers)). How a browser
+a physical controller or an operating system's mapping of one. How a browser
 hands over a controller it does not recognise was read from the browsers'
 sources rather than seen: Chrome numbers a HID axis by its usage less 0x30 on
 macOS and Windows, so a hat switch (0x39) is `axes[9]`, normalised over its
 logical range with nothing pressed past the end, and Firefox on macOS
 normalises a hat the same way; WebKit makes a hat four buttons.
+
+### The Android app on an emulator
+
+The app's own half — the activity, the web view's Gamepad API, the motors — is
+checked on an emulator with a virtual controller. `adb shell hid` registers a
+HID device from a real controller's report descriptor, so the kernel driver and
+Android's key layout make it the same input device a paired controller is, and
+its reports are the controller's own bytes. The script reads the page through
+the web view's DevTools socket and starts nothing with a touch:
+
+```sh
+make mobile-android && adb install -r mobile/android/build/wfeature.apk
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/android-gamepad.mjs microsoft_xboxones_register.json
+```
+
+The register command is the Xbox One S (Bluetooth) one from Android's own
+hardware input tests, `cts/tests/tests/hardware/res/raw/` in the platform
+source; it is not in this repository. `ANDROID_SERIAL` picks the device and
+`ADB` the binary.
+
+It checks that the controller reaches the page with no touch since launch, in
+the standard layout; that B sends 취소 and neither walks the page's history nor
+leaves the app; every face button, shoulder, trigger, the hat's four
+directions and a diagonal, both sticks, View, Menu toggling the settings and
+Home sending nothing; that `playEffect` reaches the controller as an output
+report; and that `navigator.vibrate` reaches the phone's motor
+(`dumpsys vibrator_manager`).
+
+On 2026-10-15, on a Pixel 10 Pro image of Android 37.1 with web view 154, it
+passed with the app built from this tree and failed against the same tree
+without its two Android fixes: on the first press, because the web view had no
+focus in touch mode, and — with focus given by a DevTools click, which is input
+to the view — on the phone's motor, because the app had no `VIBRATE`
+permission. The first press after a page load or a connection never showed the
+controller to the page, in either build; the script presses Home first for
+that reason.
 
 ## Full-screen layout
 
@@ -1151,8 +1187,16 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
 
 The controller route adds R3 and the settings reached by Menu in it. Both passed
 on 2026-10-14 in Chromium and WebKit with the release server and in Chromium
-with the debug server. A physical phone's safe areas and rotation in this
-layout wait on a device.
+with the debug server.
+
+On 2026-10-15 the layout was put up on the Android emulator above and measured
+through DevTools. In the app (portrait only; the iOS app is too), the web view
+reports insets of 52px at the top and 24px at the bottom; the picture took the
+full width and the corner button sat above its top-right corner, below the
+status bar. In the phone's Chrome, portrait put the button above the picture
+the same way, and landscape (900×318 under the address bar) gave the picture
+the height less the 23px gesture inset with the button beside it. An iPhone's
+notch and home indicator wait on a device.
 
 ## Frame delivery
 
