@@ -1105,7 +1105,9 @@ between the right stick's number keys, page controls acting on the press, input
 held back by the page, a control held across a reset staying dead, unrecognised
 controllers and their resting axes, a hat switch handed over as one axis (all
 eight directions and both rests, and one first seen pressed, which is an axis
-until it rests), two controllers on one key, disconnection, and the motor's
+until it rests), a lever that overshoots its range and an axis that reads
+between a hat's steps (both levers), a four-position hat (a lever, never a
+misread eight), two controllers on one key, disconnection, and the motor's
 strength and refusals. `vibrate.test.mjs` checks that the motor
 takes the same requests under the same switch and can never cost the phone its
 own vibration.

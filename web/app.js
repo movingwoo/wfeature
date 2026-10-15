@@ -1453,8 +1453,7 @@ const initPadBindings = () => {
       shown.standard === info.standard;
     // The controller in the rows has turned out to have a hat switch, which
     // shows itself only once it is read: its axis becomes four rows.
-    const reshaped = same && String(shown.hats ?? "") !== String(info.hats ?? "");
-    if (reshaped || (!same && (shown === null || info.rose))) {
+    if ((same && info.reshaped) || (!same && (shown === null || info.rose))) {
       shown = info;
       lit = info.lit;
       render();

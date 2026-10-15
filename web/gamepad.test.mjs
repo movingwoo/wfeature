@@ -517,6 +517,55 @@ test("a hat first seen pressed is an axis until it rests, and a hat from then on
   assert.deepEqual(h.take(), ["-UP"]);
 });
 
+test("a lever that overshoots its range is not taken for a hat", () => {
+  const id = "USB Gamepad (Vendor: 0079 Product: 0011)";
+  const h = harness({ raw: { [id]: { "a0+": "RIGHT", "a0-": "LEFT", "h0-down": "DOWN" } } });
+  const pad = controller({ id, mapping: "", buttons: 10, axes: 2 });
+  // An 8-bit axis centred at 128 rests just off 0.
+  pad.axes[0] = 0.0039;
+  h.input.poll([pad]);
+  pad.axes[0] = 1.02;
+  h.input.poll([pad]);
+  pad.axes[0] = 0.0039;
+  h.input.poll([pad]);
+  pad.axes[0] = -1;
+  h.input.poll([pad]);
+  pad.axes[0] = 0.0039;
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["+RIGHT", "-RIGHT", "+LEFT", "-LEFT"]);
+  assert.ok(h.seen.every(info => info.hats.length === 0 && !info.reshaped));
+});
+
+test("an axis that reads between a hat's steps is a lever after all", () => {
+  const id = "USB Gamepad (Vendor: 0079 Product: 0011)";
+  const h = harness({ raw: { [id]: { "a0+": "RIGHT", "h0-up": "UP" } } });
+  const pad = controller({ id, mapping: "", buttons: 10, axes: 2 });
+  pad.axes[0] = HAT_REST;
+  h.input.poll([pad]);
+  assert.deepEqual(h.seen.at(-1).hats, [0]);
+  pad.axes[0] = 0.6;
+  h.input.poll([pad]);
+  assert.deepEqual(h.seen.at(-1).hats, [], "a hat never reads between its steps");
+  assert.equal(h.seen.at(-1).reshaped, true, "the panel hears that the rows changed");
+  assert.deepEqual(h.take(), ["+RIGHT"], "and the same reading is read as the lever");
+  pad.axes[0] = 0;
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["-RIGHT"]);
+});
+
+test("a hat of four positions is read as a lever rather than misread as eight", () => {
+  const id = "USB Gamepad (Vendor: 0079 Product: 0011)";
+  const h = harness({ raw: { [id]: { "h0-down": "DOWN", "h0-left": "LEFT", "a0+": "#" } } });
+  const pad = controller({ id, mapping: "", buttons: 10, axes: 2 });
+  // Logical 0..3 with 4 for nothing pressed: -1, -1/3, 1/3, 1 and 5/3 at rest.
+  for (const value of [5 / 3, 1 / 3, 5 / 3, 1, 5 / 3]) {
+    pad.axes[0] = value;
+    h.input.poll([pad]);
+  }
+  assert.ok(h.seen.every(info => info.hats.length === 0), "never taken for a hat");
+  assert.ok(!h.take().some(entry => /DOWN|LEFT/.test(entry)), "no direction from a reading on the wrong steps");
+});
+
 test("two controllers holding one key are one press", () => {
   const h = harness();
   const first = controller({ index: 0 });

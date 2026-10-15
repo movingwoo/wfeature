@@ -143,10 +143,13 @@ the token, so the restart button still starts a game over.
   first seen is its rest rather than a press. Its direction pad may be a HID
   hat switch, which Chrome and Firefox hand over as one axis naming one of eight
   directions — -1 up, 2/7 more per 45° clockwise — and resting past its end
-  (1.29, or 3.29): an axis seen past its end is read from then on as four rows,
-  `십자 ↑ (축 10)` and its three siblings, and a diagonal holds two of them. As
-  a lever it held one end at rest and never reached right or down. Safari hands
-  the same pad over as four buttons. The controller's motor takes the
+  (1.29, or 3.29): an axis that rests past its end exactly on one of those
+  steps is read as four rows, `십자 ↑ (축 10)` and its three siblings, and a
+  diagonal holds two of them; it is a lever again the first time it reads
+  between steps, which a hat never does, so a lever overshooting its range is
+  not taken for one. As a lever the hat held one end at rest and never reached
+  right or down. A four-position hat steps differently and stays a lever.
+  Safari hands the same pad over as four buttons. The controller's motor takes the
   guest's vibration under the same `📳 진동` switch, with the guest's level as
   its strength (`dual-rumble`), and the switch shows once such a controller is
   connected even where the browser has no vibrator of its own. Browsers offer
