@@ -12,11 +12,17 @@
   INTERNET is for the WebView to reach loopback. Nothing here talks to the
   network, and the server is told to bind 127.0.0.1 so nothing on the Wi-Fi
   can reach it either.
+
+  VIBRATE is for the page's `navigator.vibrate`, which a game's vibration
+  becomes. The WebView answers the call either way, but without this it never
+  reaches the motor, so the 📳 진동 switch was offered and did nothing. A
+  controller's motor does not need it.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.movingwoo.wfeature">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:label="@string/app_name"

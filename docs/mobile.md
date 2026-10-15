@@ -192,17 +192,39 @@ and both web views can hand it one, each on a condition of its own:
   a controller means. `MainActivity.dispatchKeyEvent` hands every controller
   button to the web view and then reports it handled, so the page still reads
   it and no fallback is made from it. Back stays on the phone's own gesture.
+  Both keys and motion go to the *focused* view, and a phone opened by a touch
+  is in touch mode, where nothing is focused until something is touched — and
+  a controller's buttons do not end touch mode. So the web view takes focus when
+  the page is shown and again whenever a controller is used without it
+  (`takeControllers`). Before that, a run that started without a touch — a
+  game resumed straight into, say — did not see the controller until the screen
+  was touched or the direction pad moved.
 - **iOS** exposes controllers to a `WKWebView` only while it is the first
   responder. The app makes it so when the page loads and again after the save
   export picker closes, since a picker that was over the web view leaves the
   responder chain elsewhere.
 
+On Android, vibration reaches the phone's motor only with the `VIBRATE`
+permission. Without it the web view still answers `navigator.vibrate` with
+`true` and nothing moves, which is how the app offered a 📳 진동 switch that did
+nothing. A controller's motor goes through the input system and needs none.
+
 ## What is not answered yet
 
-- **A physical controller in either app.** Whether Android's web view exposes
-  controllers to the page at all, and whether the first-responder hand-off is
-  enough on iOS, waits on a device. The page's own handling is checked in a
-  desktop browser; see [`testing.md`](testing.md#game-controllers).
+- **A physical controller in either app.** Android's web view does expose a
+  controller, in the standard layout, with its rumble: that is checked on an
+  emulator with a virtual controller made from a real one's HID descriptor
+  ([`testing.md`](testing.md#the-android-app-on-an-emulator)), which goes
+  through the same kernel driver and key layout a paired one does, but not
+  through a radio. There the web view lets the first press after a page load or
+  a connection go by without showing the controller; the second is the first
+  the page sees, and a page cannot change that. The iOS app's half is checked in
+  the simulator with a virtual controller
+  ([`testing.md`](testing.md#the-ios-app-on-a-simulator)). Without first
+  responder, no controller input reaches the page, and taking first responder
+  back brings it all back. WebKit's source says its own file picker and a tap
+  on the page give the role back too. A physical controller's pairing waits on
+  a phone.
 
 - **Performance on a real handset.** A desktop measurement is what there is:
   on an M1, KTF titles take about 15% of a core and the MIDP path about 77%,

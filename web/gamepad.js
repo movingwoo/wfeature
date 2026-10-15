@@ -130,14 +130,54 @@ export const defaultPadBindings = {
 // known about what sits where, so it starts with nothing bound. The bounds are
 // the browser's numbers rather than any controller's, and they keep a table
 // made of them small.
+//
+// One kind of axis is not a lever. A direction pad built as a HID hat switch
+// reaches the page, in Chrome and Firefox, as a single axis naming one of eight
+// directions: -1 is up, each step of 2/7 turns it 45° further clockwise, round
+// to 1 for up-left, and "nothing pressed" is a value past the end of the axis —
+// 1.29, or 3.29 on some devices. Read as a lever, it held one end at rest and
+// never reached right or down at all. So it is read as the four directions it
+// names, two at once on a diagonal. Safari hands the same pad over as four
+// buttons instead.
+//
+// What tells a hat from a lever is that a hat only ever reads on its steps. An
+// axis becomes one when it rests past its end exactly on a step, which a lever
+// that overshoots its range by a little does not do, and goes back to being a
+// lever the first time it reads between steps, which a hat never does. A hat of
+// four positions rather than eight steps differently and stays a lever. A key
+// set on a control the axis no longer has is kept, and does nothing until the
+// axis is read that way again, so a misreading never costs a setting.
 const MAX_BUTTONS = 32;
 const MAX_AXES = 16;
-const rawInput = /^(b([0-9]|[12][0-9]|3[01])|a([0-9]|1[0-5])[+-])$/;
+const rawInput = /^(b([0-9]|[12][0-9]|3[01])|a([0-9]|1[0-5])[+-]|h([0-9]|1[0-5])-(up|right|down|left))$/;
+const hatWays = ["up", "right", "down", "left"];
 
-export const rawInputs = ({ buttons = 0, axes = 0 } = {}) => [
+export const rawInputs = ({ buttons = 0, axes = 0, hats = [] } = {}) => [
   ...Array.from({ length: Math.min(buttons, MAX_BUTTONS) }, (_, n) => `b${n}`),
-  ...Array.from({ length: Math.min(axes, MAX_AXES) }, (_, n) => [`a${n}+`, `a${n}-`]).flat(),
+  ...Array.from({ length: Math.min(axes, MAX_AXES) }, (_, n) =>
+    hats.includes(n) ? hatWays.map(way => `h${n}-${way}`) : [`a${n}+`, `a${n}-`]).flat(),
 ];
+
+// Past the end by more than a reading's rounding.
+const HAT_REST = 1.01;
+// Which of a hat's steps a reading is: 0 for up, 7 for up-left, 8 or 15 (or -1
+// on a device that counts from 1) for nothing pressed. A browser's arithmetic
+// is single precision, so a step is anything within a small fraction of one.
+const hatStep = value => (value + 1) * 3.5;
+const onHatStep = value => Math.abs(hatStep(value) - Math.round(hatStep(value))) < 0.05;
+const restsLikeHat = value => Math.abs(value) > HAT_REST && onHatStep(value);
+// Exactly 0 is between two steps, and is what a browser may report before the
+// controller's first report, so it says nothing about what the axis is.
+const unlikeHat = value => value !== 0 && Math.abs(value) <= 1 && !onHatStep(value);
+// The ways each of a hat's eight directions holds, from up, clockwise.
+const hatDirections = [
+  ["up"], ["up", "right"], ["right"], ["down", "right"],
+  ["down"], ["down", "left"], ["left"], ["up", "left"],
+];
+// What a hat axis holds: a direction on a step within the axis, nothing past
+// its end or at the 0 that is no reading.
+const hatWaysOf = value =>
+  value !== 0 && Math.abs(value) <= 1 && onHatStep(value) ? hatDirections[Math.round(hatStep(value))] : [];
 
 // Which printed names a controller's buttons carry, guessed from the name the
 // browser gives it. The guess only picks labels — the layout is positional —
@@ -145,7 +185,9 @@ export const rawInputs = ({ buttons = 0, axes = 0 } = {}) => [
 // face button sits.
 export const padFamily = id => {
   const name = String(id ?? "").toLowerCase();
-  if (/054c|playstation|dualsense|dualshock/.test(name)) return "playstation";
+  // Android names a controller by its device name alone, which for Sony's is
+  // "Sony Interactive Entertainment Wireless Controller".
+  if (/054c|playstation|dualsense|dualshock|sony/.test(name)) return "playstation";
   if (/057e|nintendo|pro controller|joy-con/.test(name)) return "nintendo";
   return "xbox";
 };
@@ -178,6 +220,8 @@ export const inputLabel = (input, { standard = true, family = "xbox" } = {}) => 
   if (stick) return `${stick[1] === "ls" ? "왼스틱" : "오른스틱"} ${arrows[stick[2]] ?? stick[2]}`;
   const axis = /^a(\d+)([+-])$/.exec(input);
   if (axis) return `축 ${Number(axis[1]) + 1} ${axis[2] === "+" ? "+" : "−"}`;
+  const hat = /^h(\d+)-(\w+)$/.exec(input);
+  if (hat) return `십자 ${arrows[hat[2]] ?? hat[2]} (축 ${Number(hat[1]) + 1})`;
   const button = /^b(\d+)$/.exec(input);
   if (!button) return input;
   const n = Number(button[1]);
@@ -282,6 +326,16 @@ const sectorOf = (stick, axes, previous) => {
   return stick.sectors[Math.round(angle / width) % stick.sectors.length];
 };
 
+// Changes which of a controller's axes are hats. The sorted list the panel is
+// handed is kept with the set and replaced rather than changed, so it costs
+// nothing on the frames in between and a description already handed out stays
+// as it was.
+const reshape = (state, change) => {
+  change();
+  state.hatList = [...state.hats].sort((a, b) => a - b);
+  state.reshaped = true;
+};
+
 // The controls of one controller that are held in this picture.
 const readControls = (gamepad, state) => {
   const held = new Set();
@@ -303,6 +357,12 @@ const readControls = (gamepad, state) => {
   const axisCount = Math.min(axes.length, MAX_AXES);
   for (let n = 0; n < axisCount; n++) {
     const value = Number(axes[n]) || 0;
+    if (!state.hats.has(n) && restsLikeHat(value)) reshape(state, () => state.hats.add(n));
+    else if (state.hats.has(n) && unlikeHat(value)) reshape(state, () => state.hats.delete(n));
+    if (state.hats.has(n)) {
+      for (const way of hatWaysOf(value)) held.add(`h${n}-${way}`);
+      continue;
+    }
     for (const [input, toward] of [[`a${n}+`, value], [`a${n}-`, -value]]) {
       if (state.held.has(input) ? toward > AXIS_RELEASE : toward >= AXIS_PRESS) held.add(input);
     }
@@ -342,6 +402,7 @@ export const createPadInput = ({
     family: state.family,
     buttons: state.buttons,
     axes: state.axes,
+    hats: state.hatList,
     ...extra,
   });
 
@@ -362,6 +423,10 @@ export const createPadInput = ({
 
   const step = (gamepad, state) => {
     const held = readControls(gamepad, state);
+    // A hat shows itself by resting past its end, which can be after the
+    // first reading; the controls a panel lists change when it does.
+    const reshaped = state.reshaped;
+    state.reshaped = false;
     // A control held when the controller is first seen is dead if it is an
     // axis: some controllers rest a trigger at one end of its travel, and that
     // is not somebody pressing it. After a reset everything held is dead.
@@ -416,7 +481,9 @@ export const createPadInput = ({
     const rose = [...lit].some(input => !state.lit.has(input));
     const changed = !sameSet(lit, state.lit);
     state.lit = lit;
-    if (changed || state.unseen) activity(describe(state, { lit, rose: rose || state.unseen, gone: false }));
+    if (changed || state.unseen || reshaped) {
+      activity(describe(state, { lit, rose: rose || state.unseen, gone: false, reshaped }));
+    }
     state.unseen = false;
   };
 
@@ -449,6 +516,9 @@ export const createPadInput = ({
             dead: new Set(),
             lit: new Set(),
             keys: new Set(),
+            hats: new Set(),
+            hatList: [],
+            reshaped: false,
             sectors: { ls: null, rs: null },
             settle: "axes",
             unseen: true,

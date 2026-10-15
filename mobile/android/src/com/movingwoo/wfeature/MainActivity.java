@@ -6,7 +6,10 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Base64;
 import android.util.Log;
+import android.view.InputDevice;
+import android.view.InputEvent;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -271,6 +274,28 @@ public class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(url);
+        takeControllers();
+    }
+
+    /**
+     * A controller's input goes to the focused view, and nothing gives the web
+     * view focus on its own: a phone opened by a touch is in touch mode, where
+     * no view is focused until one is touched, and a controller's buttons do
+     * not take the window out of it. Its presses went nowhere — the page did
+     * not see a controller at all — until the screen was touched or the
+     * direction pad moved. The web view is the only thing here that takes
+     * input, so it takes focus when the page is shown and again whenever a
+     * controller is used without it.
+     */
+    private void takeControllers() {
+        if (webView != null && !webView.hasFocus()) {
+            webView.requestFocus();
+        }
+    }
+
+    private static boolean fromController(InputEvent event) {
+        return event.isFromSource(InputDevice.SOURCE_GAMEPAD)
+                || event.isFromSource(InputDevice.SOURCE_JOYSTICK);
     }
 
     /**
@@ -395,8 +420,23 @@ public class MainActivity extends Activity {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (fromController(event)) {
+            takeControllers();
+        }
         boolean handled = super.dispatchKeyEvent(event);
         return KeyEvent.isGamepadButton(event.getKeyCode()) || handled;
+    }
+
+    /**
+     * A controller's sticks, triggers and — on most — direction pad arrive as
+     * motion events rather than keys, and go to the focused view the same way.
+     */
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (fromController(event)) {
+            takeControllers();
+        }
+        return super.dispatchGenericMotionEvent(event);
     }
 
     /**
