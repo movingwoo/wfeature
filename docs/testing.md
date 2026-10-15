@@ -1170,6 +1170,39 @@ permission. The first press after a page load or a connection never showed the
 controller to the page, in either build; the script presses Home first for
 that reason.
 
+### The iOS app on a simulator
+
+The iOS app's half is checked in the simulator with nothing but Xcode. The
+script builds the app for the simulator the way `mobile/ios/build.sh` builds it
+for a phone, with `mobile/ios/acceptance/` linked in beside the unchanged
+`App.swift`, makes a temporary simulator device, and deletes it afterwards. The
+driver connects a hidden `GCVirtualController` and presses it with the iOS 17
+`setValue(_:forButtonElement:)` and `setPosition(_:forDirectionPadElement:)`.
+To WebKit that is a GameController device like a paired one, since WebKit reads
+controllers through the same framework in the app's process. The script reads
+the keys the page sent:
+
+```sh
+node web/acceptance/ios-gamepad.mjs
+IOS_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5 node web/acceptance/ios-gamepad.mjs
+```
+
+It checks three things:
+
+- after load, the web view's content view is first responder, and the page sees
+  the controller in the standard layout;
+- every face button, shoulder, trigger, the direction pad and both sticks send
+  their keys, from the first press;
+- with first responder taken away, as a view controller presented over the web
+  view leaves it, nothing reaches the page, and `becomeFirstResponder`, which
+  is what the app does, brings the controller back.
+
+On 2026-10-15 it passed on iOS 26.5. On iOS 27 an app built with the 27 SDK
+starts only with the scene life cycle, and the script stops with that message
+without it; with it, the script passed there too. Once, by hand, the app was
+built without its `takeControllers`: the page never saw a controller at all.
+A physical controller's pairing is the part a simulator does not have.
+
 ## Full-screen layout
 
 `fullscreen.test.mjs` covers the stored choice: restored onto the document

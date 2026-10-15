@@ -218,10 +218,13 @@ nothing. A controller's motor goes through the input system and needs none.
   through the same kernel driver and key layout a paired one does, but not
   through a radio. There the web view lets the first press after a page load or
   a connection go by without showing the controller; the second is the first
-  the page sees, and a page cannot change that. iOS waits on a device: WebKit's
-  source says the first-responder hand-off is the whole condition, and that its
-  own file picker and a tap on the page both give the role back to the web
-  view, but nothing has run it.
+  the page sees, and a page cannot change that. The iOS app's half is checked in
+  the simulator with a virtual controller
+  ([`testing.md`](testing.md#the-ios-app-on-a-simulator)). Without first
+  responder, no controller input reaches the page, and taking first responder
+  back brings it all back. WebKit's source says its own file picker and a tap
+  on the page give the role back too. A physical controller's pairing waits on
+  a phone.
 
 - **Performance on a real handset.** A desktop measurement is what there is:
   on an M1, KTF titles take about 15% of a core and the MIDP path about 77%,
