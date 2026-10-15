@@ -140,7 +140,13 @@ the token, so the restart button still starts a game over.
   controller the browser does not recognise (an empty `mapping`) is listed as
   numbered buttons and axis directions and keeps a table of its own, starting
   empty, under the name the browser gives it; an axis already at an end when
-  first seen is its rest rather than a press. The controller's motor takes the
+  first seen is its rest rather than a press. Its direction pad may be a HID
+  hat switch, which Chrome and Firefox hand over as one axis naming one of eight
+  directions — -1 up, 2/7 more per 45° clockwise — and resting past its end
+  (1.29, or 3.29): an axis seen past its end is read from then on as four rows,
+  `십자 ↑ (축 10)` and its three siblings, and a diagonal holds two of them. As
+  a lever it held one end at rest and never reached right or down. Safari hands
+  the same pad over as four buttons. The controller's motor takes the
   guest's vibration under the same `📳 진동` switch, with the guest's level as
   its strength (`dual-rumble`), and the switch shows once such a controller is
   connected even where the browser has no vibrator of its own. Browsers offer

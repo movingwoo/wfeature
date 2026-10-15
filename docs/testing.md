@@ -1103,8 +1103,10 @@ and the page's real key holds: button and trigger thresholds, stick sectors and
 their edge margin, the direction pad and the left stick sharing one key, sliding
 between the right stick's number keys, page controls acting on the press, input
 held back by the page, a control held across a reset staying dead, unrecognised
-controllers and their resting axes, two controllers on one key, disconnection,
-and the motor's strength and refusals. `vibrate.test.mjs` checks that the motor
+controllers and their resting axes, a hat switch handed over as one axis (all
+eight directions and both rests, and one first seen pressed, which is an axis
+until it rests), two controllers on one key, disconnection, and the motor's
+strength and refusals. `vibrate.test.mjs` checks that the motor
 takes the same requests under the same switch and can never cost the phone its
 own vibration.
 
@@ -1112,17 +1114,23 @@ The browser route hands the page a stand-in for `navigator.getGamepads` and the
 connection events, then checks the real page against a server: key messages on
 the socket, the lit keypad button and settings row, rebinding while a button is
 held, the settings toggle, rapid fire, focus loss, the narrow-screen modal, an
-unrecognised controller's own table, disconnection, and storage across reload:
+unrecognised controller's own table, another's hat switch as four direction
+rows, disconnection, and storage across reload:
 
 ```sh
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
   node web/acceptance/gamepad.mjs build/release/wfeature-server chromium
 ```
 
-It passed on 2026-10-14 in Chromium and WebKit with the release server and in
-Chromium with the debug server. It is not evidence about a physical controller,
-an operating system's mapping of one, or either phone app's web view; those
-wait on a device ([phone builds](mobile.md#game-controllers)).
+It passed on 2026-10-15, sixteen checks, in Chromium and WebKit with the
+release server and in Chromium with the debug server. It is not evidence about
+a physical controller, an operating system's mapping of one, or either phone
+app's web view ([phone builds](mobile.md#game-controllers)). How a browser
+hands over a controller it does not recognise was read from the browsers'
+sources rather than seen: Chrome numbers a HID axis by its usage less 0x30 on
+macOS and Windows, so a hat switch (0x39) is `axes[9]`, normalised over its
+logical range with nothing pressed past the end, and Firefox on macOS
+normalises a hat the same way; WebKit makes a hat four buttons.
 
 ## Full-screen layout
 

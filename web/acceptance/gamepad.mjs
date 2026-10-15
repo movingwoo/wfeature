@@ -38,7 +38,10 @@ const pause = ms => new Promise(done => setTimeout(done, ms));
 const result = { engine: engineName, checks: [], errors: [] };
 
 // Handset codes the page sends, as in app.js's table.
-const OK = 148, CLR = 8, UP = 141, STAR = 42, KEY = n => 48 + n;
+const OK = 148, CLR = 8, UP = 141, LEFT = 142, RIGHT = 145, DOWN = 146, STAR = 42, KEY = n => 48 + n;
+// A HID hat switch as Chrome and Firefox hand one over: one axis, -1 for up,
+// 2/7 more for every 45° clockwise, and nothing pressed past the end.
+const hat = n => (2 * n) / 7 - 1;
 
 try {
   for (let i = 0; ; i++) {
@@ -283,7 +286,34 @@ try {
   await expectSent([`+${OK}`, `-${OK}`], "the standard controller keeps its own table");
   result.checks.push("unrecognised controller gets numbered rows and a table of its own");
 
-  await page.evaluate(() => { window.disconnectPad(1); window.disconnectPad(0); });
+  const hatAxes = n => [0, 0, 0, 0, 0, 0, 0, 0, 0, hat(n)];
+  const hatId = "Generic USB Joystick (Vendor: 0079 Product: 0006)";
+  await page.evaluate(([id, rest]) => {
+    window.connectPad(2, id, "", 12, 10);
+    window.setAxes(2, rest);
+  }, [hatId, hatAxes(8)]);
+  await settle();
+  await button(0, 1, 2);
+  await button(0, 0, 2);
+  assert.equal(await page.locator('#pad-bindings-list div[data-input="h9-up"] .key-binding-key').textContent(), "십자 ↑ (축 10)");
+  assert.equal(await page.locator('#pad-bindings-list select[data-input="a9+"]').count(), 0, "the hat's axis is not also a lever");
+  await expectSent([], "a hat at rest presses nothing, though its axis reads past the end");
+  for (const [way, key] of [["up", "UP"], ["right", "RIGHT"], ["down", "DOWN"], ["left", "LEFT"]]) {
+    await page.locator(`#pad-bindings-list select[data-input="h9-${way}"]`).selectOption(key);
+  }
+  await axes(hatAxes(1), 2);
+  assert.equal(await page.locator('#pad-bindings-list div[data-input="h9-right"]').evaluate(e => e.classList.contains("active")), true);
+  await axes(hatAxes(8), 2);
+  await expectSent([`+${UP}`, `+${RIGHT}`, `-${UP}`, `-${RIGHT}`], "a diagonal is two directions, and the rest lets both go");
+  await axes(hatAxes(4), 2);
+  await axes(hatAxes(6), 2);
+  await axes(hatAxes(8), 2);
+  await expectSent([`+${DOWN}`, `-${DOWN}`, `+${LEFT}`, `-${LEFT}`], "down and left, which a lever never reached");
+  const hatTable = JSON.parse(await page.evaluate(() => localStorage.getItem("wfeature:padBindingsRaw")))[hatId];
+  assert.deepEqual(hatTable, { "h9-up": "UP", "h9-right": "RIGHT", "h9-down": "DOWN", "h9-left": "LEFT" });
+  result.checks.push("an unrecognised controller's hat switch is a direction pad of four rows");
+
+  await page.evaluate(() => { window.disconnectPad(2); window.disconnectPad(1); window.disconnectPad(0); });
   await settle();
   assert.match(await page.locator("#pad-bindings-status").textContent(), /아무거나 누르면/);
   result.checks.push("disconnecting returns the panel to its waiting state");

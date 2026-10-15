@@ -157,12 +157,24 @@ test("an unrecognised controller's table is kept under its name, bounded", () =>
 test("an unrecognised controller is read as numbered buttons and two ways per axis", () => {
   assert.deepEqual(rawInputs({ buttons: 3, axes: 2 }), ["b0", "b1", "b2", "a0+", "a0-", "a1+", "a1-"]);
   assert.equal(rawInputs({ buttons: 99, axes: 99 }).length, 32 + 16 * 2);
+  // An axis known to be a hat switch is its four directions instead.
+  assert.deepEqual(
+    rawInputs({ buttons: 1, axes: 2, hats: [1] }),
+    ["b0", "a0+", "a0-", "h1-up", "h1-right", "h1-down", "h1-left"],
+  );
+  assert.deepEqual(
+    loadRawPadBindings({ Hat: { "h9-up": "UP", "h16-up": "UP", "h9-upleft": "1" } }),
+    { Hat: { "h9-up": "UP" } },
+  );
+  assert.deepEqual(assignPad({}, "h9-left", "LEFT"), { "h9-left": "LEFT" });
 });
 
 test("controls are named the way the controller in hand prints them", () => {
   assert.equal(padFamily("Xbox 360 Controller (XInput STANDARD GAMEPAD)"), "xbox");
   assert.equal(padFamily("Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)"), "playstation");
   assert.equal(padFamily("DualSense Wireless Controller"), "playstation");
+  // Android's name for one, with no vendor number in it.
+  assert.equal(padFamily("Sony Interactive Entertainment Wireless Controller"), "playstation");
   assert.equal(padFamily("Pro Controller (STANDARD GAMEPAD Vendor: 057e Product: 2009)"), "nintendo");
   assert.equal(inputLabel("b0", { family: "xbox" }), "A (아래)");
   assert.equal(inputLabel("b0", { family: "playstation" }), "✕ (아래)");
@@ -176,6 +188,7 @@ test("controls are named the way the controller in hand prints them", () => {
   assert.equal(inputLabel("rs-upleft"), "오른스틱 ↖");
   assert.equal(inputLabel("b0", { standard: false }), "버튼 1");
   assert.equal(inputLabel("a2-", { standard: false }), "축 3 −");
+  assert.equal(inputLabel("h9-up", { standard: false }), "십자 ↑ (축 10)");
   assert.equal(targetLabel(""), "없음");
   assert.equal(targetLabel("CLR"), "취소");
   assert.equal(targetLabel(RAPID_FIRE), "연사");
@@ -443,6 +456,65 @@ test("an unrecognised controller reads its own table, and a resting axis is not 
   hold(pad, 0);
   h.input.poll([pad]);
   assert.deepEqual(h.take(), []);
+});
+
+// How Chrome and Firefox hand over a HID hat switch: one axis, -1 for up, a
+// further 2/7 for every 45° clockwise, and nothing pressed past the end — 8 of
+// a 0..7 range here, 15 on some devices.
+const hatAt = n => (2 * n) / 7 - 1;
+const HAT_REST = hatAt(8);
+const hatPad = () => {
+  const pad = controller({ id: "Generic USB Joystick (Vendor: 0079 Product: 0006)", mapping: "", buttons: 12, axes: 10 });
+  pad.axes[9] = HAT_REST;
+  return pad;
+};
+const hatTable = { "h9-up": "UP", "h9-right": "RIGHT", "h9-down": "DOWN", "h9-left": "LEFT" };
+
+test("a direction pad that is one axis is read as the four ways it names", () => {
+  const pad = hatPad();
+  const h = harness({ raw: { [pad.id]: hatTable } });
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), [], "a hat at rest holds nothing, though its axis is past the end");
+  assert.deepEqual(h.seen.at(-1).hats, [9]);
+  const pressed = [["UP"], ["UP", "RIGHT"], ["RIGHT"], ["DOWN", "RIGHT"], ["DOWN"], ["DOWN", "LEFT"], ["LEFT"], ["UP", "LEFT"]];
+  for (const [n, keys] of pressed.entries()) {
+    pad.axes[9] = hatAt(n);
+    h.input.poll([pad]);
+    assert.deepEqual(h.take().sort(), keys.map(key => `+${key}`).sort(), `direction ${n}`);
+    pad.axes[9] = HAT_REST;
+    h.input.poll([pad]);
+    assert.deepEqual(h.take().sort(), keys.map(key => `-${key}`).sort(), `direction ${n} let go`);
+  }
+  // Rolled from up onto the diagonal, up stays held and right joins it.
+  pad.axes[9] = hatAt(0);
+  h.input.poll([pad]);
+  pad.axes[9] = hatAt(1);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["+UP", "+RIGHT"]);
+  pad.axes[9] = (2 * 15) / 7 - 1;
+  h.input.poll([pad]);
+  assert.deepEqual(h.take().sort(), ["-RIGHT", "-UP"], "a rest further past the end is still a rest");
+});
+
+test("a hat first seen pressed is an axis until it rests, and a hat from then on", () => {
+  const pad = hatPad();
+  const h = harness({ raw: { [pad.id]: { ...hatTable, "a9-": "CLR" } } });
+  pad.axes[9] = hatAt(0);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), [], "an axis already at an end when first seen is not a press");
+  assert.deepEqual(h.seen.at(-1).hats, []);
+  pad.axes[9] = HAT_REST;
+  h.input.poll([pad]);
+  assert.deepEqual(h.seen.at(-1).hats, [9], "the panel hears that the axis has four rows now");
+  assert.deepEqual(h.take(), []);
+  pad.axes[9] = hatAt(0);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["+UP"], "read as the hat, not as the lever it was taken for");
+  // Exactly 0 is between two directions rather than one of them, and is what a
+  // browser may report before the controller's first report.
+  pad.axes[9] = 0;
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["-UP"]);
 });
 
 test("two controllers holding one key are one press", () => {
