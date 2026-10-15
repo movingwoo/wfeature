@@ -87,6 +87,13 @@
     </dict>
     <key>UIStatusBarHidden</key>
     <true/>
+    <!-- The window comes from a scene (App.swift), which an app built with the
+         iOS 27 SDK must use to launch at all. One scene: the app is one page. -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
     <!-- The games and saves live in Documents, and these two make that folder
          one the Files app can open. Dropping an archive in from Files is the
          other half of the page's own ＋ 게임 추가 button. -->

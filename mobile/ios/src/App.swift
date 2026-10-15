@@ -14,23 +14,46 @@ import WebKit
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
-    var window: UIWindow?
-
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?)
         -> Bool {
-        let window = UIWindow(frame: UIScreen.main.bounds)
-        window.rootViewController = PlayViewController()
-        window.makeKeyAndVisible()
-        self.window = window
         // A game is watched as much as it is touched, and a screen that dims
         // in the middle of one is the first thing anybody would report.
         application.isIdleTimerDisabled = true
         return true
     }
 
+    // The window belongs to a scene. UIKit refuses to launch an app built with
+    // the iOS 27 SDK that makes its window here instead — it stops with "UIScene
+    // life cycle is required for apps built with this SDK" before anything is
+    // drawn — and an app built with an older SDK only works because UIKit still
+    // excuses it. Scenes exist since iOS 13, below this app's minimum.
+    func application(_ application: UIApplication,
+                     configurationForConnecting session: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: nil, sessionRole: session.role)
+        configuration.delegateClass = PlaySceneDelegate.self
+        return configuration
+    }
+
     func applicationWillTerminate(_ application: UIApplication) {
         WfeatureStop()
+    }
+}
+
+final class PlaySceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    // A scene connected again after the system let it go makes a new play view,
+    // which finds the server already running (WfeatureStart answers with the
+    // one it started) and so the same page and library.
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+               options connectionOptions: UIScene.ConnectionOptions) {
+        guard let scene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = PlayViewController()
+        window.makeKeyAndVisible()
+        self.window = window
     }
 }
 
