@@ -1,5 +1,8 @@
-// Opt-in check of the Android app with a game controller, on an emulator or a
-// phone with no controller attached. The controller is a virtual HID device the
+// Opt-in check of the Android app with a game controller, on an emulator. It
+// force-stops the app, which ends a game in progress, and adds a test game to
+// the library for the run and takes it off again; anything that game saves
+// stays in the app's saves. So it is not for a phone somebody plays on. The
+// controller is a virtual HID device the
 // platform makes from a real controller's report descriptor (`adb shell hid`),
 // so the kernel's driver and Android's key layout turn its reports into the
 // same key and motion events a physical one sends; the page is read through
@@ -46,7 +49,7 @@ if (register.vid !== 0x045e || register.pid !== 0x02fd) {
 const OK = 148, CLR = 8, UP = 141, LEFT = 142, RIGHT = 145, DOWN = 146, CALL = 10, MENU = -6, SOFT2 = -7;
 const STAR = 42, HASH = 35, KEY = n => 48 + n;
 
-let browser, hid;
+let browser, hid, page, port, game;
 try {
   // A phone opened by a touch is in touch mode, where no view has focus until
   // one is touched. The tap is on the status bar, outside the app's window, so
@@ -58,16 +61,18 @@ try {
   const touchMode = /mInTouchMode=true/.test(adb("shell", "dumpsys", "window"));
   result.notes.push(`touch mode at launch: ${touchMode}`);
 
-  let socket;
-  for (let i = 0; i < 60 && !socket; i++) {
-    socket = adb("shell", "cat", "/proc/net/unix").match(/webview_devtools_remote_\d+/)?.[0];
-    if (!socket) await pause(250);
+  // The app's own socket: another debuggable app's web view has one too.
+  const pid = adb("shell", "pidof", app).trim();
+  const socket = `webview_devtools_remote_${pid}`;
+  for (let i = 0; i < 60 && !adb("shell", "cat", "/proc/net/unix").includes(socket); i++) await pause(250);
+  if (!pid || !adb("shell", "cat", "/proc/net/unix").includes(socket)) {
+    throw new Error("the app's web view did not open a DevTools socket");
   }
-  if (!socket) throw new Error("the app's web view did not open a DevTools socket");
-  adb("forward", "tcp:9333", `localabstract:${socket}`);
-  browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
+  // A port adb picks, so no forward somebody else made is moved or removed.
+  port = adb("forward", "tcp:0", `localabstract:${socket}`).trim();
+  browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context = browser.contexts()[0];
-  let page = context.pages()[0];
+  page = context.pages()[0];
   for (let i = 0; i < 40 && !page; i++) {
     await pause(250);
     page = context.pages()[0];
@@ -97,7 +102,7 @@ try {
   assert.equal(status, 200, "the fixture is added");
   await page.reload();
   await page.waitForSelector("#game-start");
-  const game = await page.locator("#game-select option").evaluateAll(list =>
+  game = await page.locator("#game-select option").evaluateAll(list =>
     list.map(option => option.value).find(value => value.includes("android-gamepad-check")));
   await page.locator("#game-select").selectOption(game);
   // Started from inside the page: a DevTools click is input to the web view,
@@ -205,14 +210,19 @@ try {
   assert.ok(vibrations() > vibratedBefore, "navigator.vibrate reached the phone's motor");
   result.checks.push("the phone's motor vibrates");
 
-  await page.evaluate(async path => {
-    await fetch(`api/games?game=${encodeURIComponent(path)}`, { method: "DELETE" });
-  }, game);
   console.log(JSON.stringify(result, null, 2));
 } finally {
   hid?.stdin.end();
+  // The test game comes off whether the checks passed or not.
+  if (game) {
+    const removed = await page.evaluate(async path =>
+      (await fetch(`api/games?game=${encodeURIComponent(path)}`, { method: "DELETE" })).status, game).catch(error => String(error));
+    if (removed !== 200) console.error(`the test game ${game} was not removed (${removed}); take it off from the page`);
+  }
   await pause(500);
   await browser?.close().catch(() => {});
-  try { adb("forward", "--remove", "tcp:9333"); } catch {}
+  if (port) {
+    try { adb("forward", "--remove", `tcp:${port}`); } catch {}
+  }
   writeFileSync(join(output, "result.json"), JSON.stringify(result, null, 2));
 }
