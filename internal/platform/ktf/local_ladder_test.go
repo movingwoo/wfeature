@@ -61,7 +61,7 @@ import (
 // screens is now reported the way a screen that never settles is — as
 // unanswerable rather than as a failure — because "no key changed the screen"
 // is a claim about the title and this is not evidence for it. See
-// `docs/ktf.md`, "Five titles the interactive rung failed".
+// `docs/history/ktf.md`, "Five titles the interactive rung failed".
 //
 // **A title is allowed to end its first launch.** Several here put the
 // handset's own restart notice up before anything else: they write their save,

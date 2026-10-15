@@ -26,21 +26,22 @@ This consolidation adds no execution or acceptance evidence.
 
 ## LGT audit (2026-09-12, 2b56bad)
 
-This is an investigation of revision `2b56bad`, after
-[PR #143](https://github.com/movingwoo/wfeature/pull/143) was merged.
-No runtime implementation changed during this audit. The PR repaired measured
-startup and initial gameplay paths; it did not complete the LGT Java library.
+This investigation covers revision `2b56bad`, after
+[PR #143](https://github.com/movingwoo/wfeature/pull/143) was merged. No runtime
+implementation changed during the audit. The PR repaired measured startup and
+initial gameplay paths; it did not complete the LGT Java library.
 
 <a id="lgt-subsequent-work"></a>
 
 ### Subsequent work
 
-This snapshot predates the managed follow-up. The scanner now uses actual Java
-dispatch coverage, and custom stream mark/reset operations reach guest overrides;
-see the [platform implementation](lgt.md#implementation-the-lgt-platform). Focused Java LWC fields now support
-[native keyboard input](../native-text-input.md), with session, WebSocket, and
-browser proof from an authored AOT archive. These changes do not complete the
-Java library or prove the missing methods below execute in current archives.
+This snapshot predates the managed follow-up. The scanner now uses Java
+dispatch coverage, and custom stream mark/reset operations reach guest
+overrides; see the [platform implementation](lgt.md#implementation-the-lgt-platform).
+Focused Java LWC fields support [native keyboard input](../native-text-input.md),
+with session, WebSocket and browser proof from an authored AOT archive. These
+changes do not complete the Java library or prove that the missing methods below
+execute in current archives.
 
 <a id="lgt-confirmed-missing-java-methods"></a>
 
@@ -72,8 +73,10 @@ above follow the existing declaration-order model and adjacent anchors; this
 audit did not discover native call sites for those missing methods. A new
 vendor layout still needs caller evidence before assigning its slots.
 
-These gaps can stop a title if it reaches them. The first-frame corpus check
+These gaps can stop a title that reaches them. The first-frame corpus check
 below did not reach them, so they are not eleven newly observed game crashes.
+Superseded in part: Vector slot 26 now serves `setElementAt`; see
+[LGT execution and Java](../lgt.md#execution-and-java).
 
 <a id="lgt-partial-behavior-behind-implemented-entries"></a>
 
@@ -81,10 +84,10 @@ below did not reach them, so they are not eleven newly observed game crashes.
 
 - **Custom stream mark/reset forwarding:** `java_stream.go` checks the
   platform's `Markable` flag instead of forwarding these operations to a guest
-  stream. A temporary probe constructed a guest `InputStream` subclass whose
-  slot 18 returns true, wrapped it with `DataInputStream`, and observed
-  `markSupported` return false. The byte-array path added in #143 works, but
-  custom guest overrides still do not. No new real-title blocker was established.
+  stream. A temporary probe built a guest `InputStream` subclass whose slot 18
+  returns true, wrapped it with `DataInputStream`, and observed `markSupported`
+  return false. The byte-array path added in #143 works; custom guest overrides
+  did not. No new real-title blocker was established.
 - **LWC text UI:** `java_widget.go` retains text, children, visibility and input
   mode, but does not lay out or paint the widgets. Text-field, text-box and shell
   `keyNotify` handlers return false; input listeners are stored without being
@@ -125,7 +128,7 @@ limit: `apiscan` records resolved imports at startup, not all future virtual
 dispatches or lazily resolved imports. The separate API-demand probe also
 checks named map entries rather than modeling every inherited baked slot.
 
-The current corpus import scan processed 31 archives and reported five
+The corpus import scan at that revision processed 31 archives and reported five
 unserviced imports, each resolved by four archives: Java auxiliary entries
 `0x1f8/0x17`, `0x1fc/3`, `0x1ff/3`, `0x201/3`, and C-library slot `0x32`.
 It reported no WIPI-C gap at startup. Resolution alone does not establish that
@@ -156,28 +159,28 @@ saves. No full playthrough, new browser run, audible playback check, or
 save/progression route was performed. Repository-wide race, vet and build
 gates were not rerun for this documentation-only investigation.
 
-The next useful work is to correct the scanner's implementation predicate and
-make its coverage boundary explicit, then trace denser menu/save/load routes
-before selecting missing methods to implement. Existing historical counts and
-limitations in `lgt.md` should not be read as a current corpus measurement.
+The audit recommended correcting the scanner's implementation predicate and
+making its coverage boundary explicit, then tracing denser menu/save/load routes
+before selecting missing methods to implement. Historical counts and
+limitations in `lgt.md` are not a current corpus measurement.
 
 
 <a id="ktf-skt-ktf-and-skt-coverage-audit"></a>
 
 ## KTF and SKT audit (2026-09-12, 2b56bad)
 
-This investigation extends the [LGT audit](#lgt-lgt-coverage-audit-after-pr-143) at revision
-`2b56bad`. No runtime code changed. Missing APIs, deliberately limited behavior,
-and unverified gameplay paths are separate findings. SGS development remains
-paused; this audit does not resume it.
+This investigation extends the [LGT audit](#lgt-lgt-coverage-audit-after-pr-143)
+at revision `2b56bad`. No runtime code changed. Missing APIs, deliberately
+limited behavior and unverified gameplay paths are separate findings. SGS
+development was paused, and this audit did not resume it.
 
 <a id="ktf-skt-subsequent-work"></a>
 
 ### Subsequent work
 
-The tables below retain the initial audit findings at `2b56bad`. The managed
-follow-up repairs KTF shutdown and SKT CLDC stream interfaces, adds supported
-[native keyboard input](../native-text-input.md), and records actual save and
+The tables below keep the initial audit findings at `2b56bad`. The managed
+follow-up repaired KTF shutdown and SKT CLDC stream interfaces, added supported
+[native keyboard input](../native-text-input.md), and recorded save and
 stream-call evidence. Current results and limits are in the
 [KTF follow-up](ktf.md#followup-ktf-compatibility-follow-up) and
 [SKT follow-up](skt.md#followup-skt-compatibility-follow-up-2026-09-12). The historical widget description
@@ -198,8 +201,11 @@ input instead.
 | Shutdown lifecycle | `Session.Close` stops audio and guest workers without invoking guest `destroyApp`. Base-class callback declarations do not prove Host shutdown calls a guest override. |
 | Earlier native/BREW packages | The documented loading stall remains unresolved. The local execution probe skipped because the current KTF directory contains no native package; this audit supplies no new reproduction or completion evidence. |
 
+Superseded in part: `Clip.setListener` now delivers playback events; see
+[Java WIPI playback listeners](../audio.md#java-wipi-playback-listeners).
+
 The gap inventory also includes bridge constructors, a class initializer and
-an abstract callback omitted because of the runtime architecture. Those are
+an abstract callback omitted because of the runtime architecture; those are
 not all missing user features. The fixed-value inventory likewise mixes actual
 limitations with truthful constants and valid empty base methods. Existing
 surface and stub-inventory tests passed.
@@ -230,12 +236,12 @@ pages, and CLDC
 and [DataOutput](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataOutput.md).
 Vendor SIS/3D findings come from repository handlers, not a guessed WIPI contract.
 
-**Some old limitation lists are stale.** SKT runtime Canvas pointer events pass
+**Some older limitation lists were stale.** SKT runtime Canvas pointer events pass
 through `Runtime.SendPointer` to the active canvas and have regression tests.
 The shared session still rejects SKT pointer input and advertises pointer support
 only for KTF, so this does not establish browser touch support. Arcs and
 rounded rectangles are registered and covered by curve tests. Vibration requests
-reach the shared Host boundary. These are not wholly unimplemented despite
+reach the shared Host boundary. These were not wholly unimplemented despite
 older statements in `skvm.md` and `jvm.md`.
 
 <a id="ktf-skt-scanner-limits"></a>
@@ -258,8 +264,8 @@ included working device backlight and audio-volume methods. The documented
 
 The remaining four classes are the two core interfaces and two vendor classes
 listed above. Static references alone do not show when those branches execute.
-All fifteen current SKT archives reached a first frame. Neither scanner proves
-complete semantics: a declared no-op is accepted as a method.
+All fifteen SKT archives then in the corpus reached a first frame. Neither
+scanner proves complete semantics: a declared no-op is accepted as a method.
 
 <a id="ktf-skt-validation-and-limits"></a>
 
@@ -295,6 +301,6 @@ are smaller than historical corpora. These Java probes exercised no SGS archive;
 its paused UI/communication, extended-image and real-playback/progression work
 remains as recorded in [sgs-completion.md](../sgs-completion.md#paused-at-user-request).
 
-Prioritize actual save/menu/exit routes and missing class resolution before
-implementing every standard member. The unresolved native KTF loading case
-needs its archive located before it can be remeasured.
+The audit recommended prioritizing save/menu/exit routes and missing class
+resolution over implementing every standard member. The unresolved native KTF
+loading case needed its archive located before it could be remeasured.

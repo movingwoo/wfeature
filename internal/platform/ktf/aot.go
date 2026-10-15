@@ -1296,7 +1296,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 	// "No handler" is the answer that ends a run, and it has two very
 	// different causes — the title has no catch for this, or it has one this
 	// platform did not match — which only the chain itself tells apart. See
-	// docs/ktf.md, "What is left of that family".
+	// docs/history/ktf.md, "What is left of that family".
 	var searched strings.Builder
 	for depth := 0; handlerAddress != 0; depth++ {
 		if depth >= maxExceptionHandlers {

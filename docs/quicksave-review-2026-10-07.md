@@ -13,11 +13,11 @@ The older design, in which a quick load replaced the whole save folder, is
 historical; see [testing](testing.md#checkpoint-adoption-blocker) and
 [the implementation record](history/maintenance.md#quick-save-implementation-measurements).
 
-**All eight findings are repaired and verified in the follow-up change.**
-The original review reproduced one P1, six P2 and one P3 despite passing normal
-gates and bounded local routes. The findings below describe that reviewed
-revision; [the repair record](#repairs-and-verification) describes the resulting
-behavior and new regression coverage. Save and checkpoint formats are unchanged.
+**All eight findings were repaired and verified in the follow-up change.** The
+review reproduced one P1, six P2 and one P3 on a revision that passed the normal
+gates and bounded local routes. The findings describe that revision;
+[the repair record](#repairs-and-verification) describes the resulting behavior
+and regression coverage. Save and checkpoint formats did not change.
 
 ## Repairs and verification
 
@@ -206,12 +206,12 @@ stacks inside that loop, after successful commit. The existing clock-origin
 check does not bound the work required to catch up. KTF and LGT have a separate
 pending-audio-work check that SKT lacks.
 
-This requires a deliberately constructed internally inconsistent state. Random
-file corruption is normally caught by the envelope checksum. The component
-tests construct the record directly; such bytes can also be wrapped in an
-envelope with a recomputed checksum, which is integrity checking rather than
-authentication. No ordinary captured local game was observed producing this
-state, and the timeout proof is at the platform boundary, not in a browser.
+This requires a deliberately constructed, internally inconsistent state;
+random file corruption is normally caught by the envelope checksum. The
+component tests construct the record directly, and such bytes can also be
+wrapped in an envelope with a recomputed checksum, because the checksum is an
+integrity check, not authentication. No ordinary captured local game produced
+this state, and the timeout proof is at the platform boundary, not in a browser.
 
 Reproductions: `TestReviewSKTCheckpointRejectsUnboundedAudioCatchup`,
 `TestReviewSKTCheckpointAudioNextTickJava`, and
@@ -327,7 +327,7 @@ go test -overlay "$review/skt.overlay.json" ./internal/platform/skt \
   -run '^TestReviewSKTCheckpointAudioNextTickSGS$' -count=1 -timeout=3s -v
 ```
 
-The overlays contain absolute paths for this checkout and are diagnostic
-artifacts, not portable fixtures. The trigger sequences and results above
-remain the durable record if ignored artifacts are removed. The repairs above
-turn these cases into maintained regression tests at the responsible layers.
+The overlays contain absolute paths for that checkout and are diagnostic
+artifacts, not portable fixtures; the trigger sequences and results above are
+the durable record if the ignored artifacts are removed. The repairs turned
+these cases into maintained regression tests at the responsible layers.

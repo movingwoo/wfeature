@@ -13,7 +13,7 @@ import (
 // The chain is thirteen mask-and-compare tests deep and the forms games spend
 // their time in — data processing, single transfer — are at the bottom of it.
 // On the one local title that is 100% ARM that was the whole cost of a step
-// after the fetch; see docs/armcore.md.
+// after the fetch; see docs/history/armcore.md.
 type armForm uint8
 
 const (

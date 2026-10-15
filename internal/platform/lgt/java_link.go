@@ -8,7 +8,7 @@ import (
 // Answering the load call: the platform decides where a field sits in an
 // object, which vtable slot a virtual method takes, and what address a static
 // method is entered at, and writes those answers back for the compiled code to
-// index with. See docs/lgt.md, "The Java interface table".
+// index with. See docs/history/lgt.md, "The Java interface table".
 //
 // The numbering is the identity map — entry *n* of a member table is answered
 // with *n* — and that is a decision rather than a shortcut, because it is what
@@ -188,7 +188,7 @@ func (link *javaLink) describeJavaStaticMethod(index uint32) string {
 // unnamedStaticEntryOwner answers the class an unnamed static entry belongs to.
 // Every platform class's run opens with two of them, and what they are is
 // settled by what the module does with the answer: the class itself, which one
-// call site hands straight to the allocator. See docs/lgt.md, "The two entries
+// call site hands straight to the allocator. See docs/history/lgt.md, "The two entries
 // every class's run opens with".
 func (link *javaLink) unnamedStaticEntry(index uint32) (string, uint32, bool) {
 	if link == nil || link.surface == nil || int(index) >= len(link.surface.StaticMethods) {

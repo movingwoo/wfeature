@@ -446,7 +446,7 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 	// and the queue behind it is not held back for a round it will not be in.
 	// A title that starts a thread per sound effect starts them faster than
 	// one a round retires them, and the queue only ever grew — see
-	// "A thread that finished is not a slice" in docs/ktf.md.
+	// "A thread that finished is not a slice" in docs/history/ktf.md.
 	//
 	// What bounds the drain is steps rather than a count: a round grants at
 	// most one slice's worth of execution beyond the grant it was already
@@ -997,7 +997,7 @@ const (
 //
 // **They are entered the way a key is**, and that is the whole design. Guest
 // code cannot be entered on top of a parked worker's nested Go stack — see
-// "Guest workers unwound together" in docs/ktf.md for what that costs — so
+// "Guest workers unwound together" in docs/history/ktf.md for what that costs — so
 // what these needed was a moment when the Host holds no guest stack at all.
 // That moment already existed and already had two callers: SendKey and
 // SendPointer enter guest code from the Host between ticks, taking the run

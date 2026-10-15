@@ -35,7 +35,7 @@ import (
 // asked, which is the same lazily-linked constant pool the current generation
 // carries; see module_link.go for the half of it this side has to link.
 //
-// See docs/ktf.md, "The older modules run under the platform".
+// See docs/history/ktf.md, "The older modules run under the platform".
 const moduleInterfaceName = "MNInterface"
 
 // moduleInterfaceFunctions bounds the table. The highest slot any local module

@@ -56,7 +56,7 @@ another frame count.
 
 For SAF, the internal decoder family is 8, but the metadata parser returns the
 bit depth supplied by the basic header, through `0x424b70` and `0x4215ac`.
-Thus a one-bit SAF returns word 0 equal to 1, not 8. This distinction is verified
+A one-bit SAF therefore returns word 0 equal to 1, not 8. This distinction is verified
 with authored input below and matters when deciding whether to scan objects.
 
 ## SAF nested metadata records
@@ -66,8 +66,8 @@ minimal metadata form that length is 2, and its payload is another big-endian
 two-byte length followed by that many bytes of nested headers. The state
 machine first reads the outer payload (`0x4234c4`), reads its nested length at
 `0x4238ee`, then requests the nested bytes and parses them at `0x4239be`.
-Consequently its total encoded size is `3 + 2 + nestedLength`, not simply the
-outer record length plus three.
+Its total encoded size is therefore `3 + 2 + nestedLength`, not the outer
+record length plus three.
 
 The nested parser `0x424880` dispatches tags 1, 2, 3, 9 and 10. Ordinary nested
 records have a one-byte tag, a one-byte payload length, and that many payload

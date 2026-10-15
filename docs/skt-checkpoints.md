@@ -93,9 +93,9 @@ they are rebuilt on load and do not change the checkpoint or save format.
 WIPI streams retain file provenance. Input streams keep an independent cursor
 and mark; output streams write the original file buffer and flush through the
 save boundary. One input and one output stream may be open per file, following
-[the WIPI File contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/io/File.md).
-The prior output-stream association had no consumer, so its writes never reached
-the file. Stream close leaves the parent file open, and failed flushes remain
+[the WIPI File contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/io/File.md);
+an earlier output-stream association had no consumer and lost its writes.
+Stream close leaves the parent file open, and failed flushes remain
 retryable. XFile seek positions are bounded to the nonnegative signed Java-int
 range reported by the API.
 
@@ -150,17 +150,20 @@ pixels and ordinary save hashes, and checks damaged-slot feedback plus input
 on the new epoch. Browser artifacts remain under ignored `var/acceptance`.
 
 `TestLocalSKTCheckpoint` is opt-in and reads ignored archives only. It runs each
-archive over a private temporary save store, captures, changes a later ordinary
-save, restores, delivers keys, continues execution and captures again. The
-local corpus is acceptance evidence, not distributable test data. Run with:
+archive at speed 4 over a private temporary save store, captures, changes a
+later ordinary save, restores, delivers keys, continues execution and captures
+again. The local corpus is acceptance evidence, not distributable test data.
+Run with:
 
 ```sh
 WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1 go test ./internal/session \
   -run '^TestLocalSKTCheckpoint$' -parallel=3 -count=1 -timeout=90s -v
 ```
 
-`WFEATURE_SKT_CHECKPOINT_DIR`, `WFEATURE_SKT_CHECKPOINT_LIMIT` and
-`WFEATURE_SKT_CHECKPOINT_VARIANT=java|script` select a bounded local route.
+`WFEATURE_SKT_CHECKPOINT_DIR` (default `var/games/skt`),
+`WFEATURE_SKT_CHECKPOINT_LIMIT` (default six archives) and
+`WFEATURE_SKT_CHECKPOINT_VARIANT=java|script` select a bounded local route. An
+archive that fails to start is skipped as an existing startup limitation.
 
 On 2026-10-07, the bounded local route passed for all 15 Java archives in the
 primary SKT directory and three SGS archives selected from the larger local

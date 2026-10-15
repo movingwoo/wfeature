@@ -20,7 +20,7 @@ import (
 // `XO_World` is the part that would need a rasterizer and the two model
 // formats, and it keeps its state and draws nothing — the position
 // `com.skt.m3d.Graphics3D` has been in since it was written, for the same
-// reason (`docs/skvm.md`, "Deliberately incomplete").
+// reason (`docs/history/skt.md`, "Deliberately incomplete").
 //
 // **The fixed point is the title's own arithmetic rather than a guess.** Its
 // perspective is `4096 * sin(fov/2) / cos(fov/2)`, and it divides the product

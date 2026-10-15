@@ -6,7 +6,6 @@ apply to their original revision; later records may supersede them.
 Start with [testing.md](../testing.md) for the maintained overview.
 This consolidation adds no execution or acceptance evidence.
 
-
 ## Contents
 
 - [Keypad grid validation (2026-10-08)](#keypad-grid-validation-2026-10-08)
@@ -310,42 +309,41 @@ is separate from real-game and physical-device acceptance.
 ### The dependencies a game's bytes reach
 
 Every push also runs `govulncheck ./...`, which reports the known
-vulnerabilities that are *reachable* from this code rather than every advisory
-against a module in `go.sum`. It is in the same workflow as the tests, so a
-tag is gated by it too.
+vulnerabilities *reachable* from this code rather than every advisory against a
+module in `go.sum`. It is in the same workflow as the tests, so it gates a tag
+too.
 
 **The workflows build with the newest released Go rather than the one `go.mod`
 names.** The directive there is the floor a checkout has to clear; the
-toolchain CI installs is a decision about what gets shipped, because these are
-the runners that build the release archives. Pinned to the floor, the first run
-of this check reported twenty-seven standard-library vulnerabilities — all of
-them fixed in later patches of the same Go line, all of them in binaries a user
-would have downloaded. That is the check working: the finding was about the
-toolchain, not about this code.
+toolchain CI installs decides what gets shipped, because these runners build
+the release archives. Pinned to the floor, the first run of this check reported
+twenty-seven standard-library vulnerabilities, all fixed in later patches of the
+same Go line and all present in binaries a user would have downloaded. The
+finding was about the toolchain, not this code.
 
-The reason it is worth a step of its own is that a game archive is untrusted
-input and some of what decodes it is not this project's code. The one that
-found this: `golang.org/x/image/bmp` used to decode an 8-bit BMP whose pixels
-name a palette entry that is not there, and then panic on the first read of
-one — `index out of range [5] with length 2`, raised at `At` rather than at
-the decode, so nothing between the archive and the drawing code could have
-caught it by checking the error. In a browser session that panic is in the
-process every other player's session is in as well. It is fixed in v0.41.0
-(GO-2026-5031) and pinned here by
-`TestBitmapWhosePixelsNameAMissingPaletteEntryIsRejected` in
-`internal/wipic`, which passes against either possible upstream answer — a
-refusal or a clamp — and fails on a decoder that hands back an image whose
-pixels cannot be read.
+The step exists because a game archive is untrusted input and some of what
+decodes it is not this project's code. The finding that showed it:
+`golang.org/x/image/bmp` decoded an 8-bit BMP whose pixels name a missing
+palette entry and then panicked on the first read of one
+(`index out of range [5] with length 2`), at `At` rather than at the decode, so
+nothing between the archive and the drawing code could have caught it by
+checking the error. In a browser session that panic is in the process every
+other player's session shares. It is fixed in v0.41.0 (GO-2026-5031) and pinned
+by `TestBitmapWhosePixelsNameAMissingPaletteEntryIsRejected` in
+`internal/wipic`, which passes against either possible upstream answer (a
+refusal or a clamp) and fails on a decoder that returns an image whose pixels
+cannot be read.
 
 <a id="implementation-what-a-hostile-archive-may-not-do"></a>
 
 ### What a hostile archive may not do
 
-An archive is a file somebody downloaded. Everything that reads one before a
-game has proved to be a game is fuzzed, and each fuzz target holds the same two
-rules: it may not panic, and what it accepts has to be usable rather than
-merely non-crashing — an opener that answers no error and a nil module has
-moved the crash into its caller.
+An archive is a downloaded file. Everything that reads one before a game has
+proved to be a game is fuzzed, and each fuzz target holds two rules: it may not
+panic, and what it accepts must be usable, not merely non-crashing (an opener
+that returns no error and a nil module has moved the crash into its caller).
+The maintained list of targets is in
+[testing](../testing.md#fuzz-targets).
 
 | target | what it reads |
 |---|---|
@@ -362,14 +360,14 @@ moved the crash into its caller.
 | `internal/platform/skt.FuzzPackagedRecordStoresNeverPanics` | the whole scan of a container's stores, and what they ask for between them |
 | `internal/platform/skt.FuzzRecordStoreNameSurvivesTheIndex` | a store name, against the key it makes and the index it lands in |
 
-**The last five are there because a review found the same shape of defect nine
+**The last five exist because a review found the same shape of defect nine
 times.** Reading a save an archive carries added two parsers whose every field
-indexes or sizes something, and a rule that a name a game chooses is also a
-save key — and then the same question had to be answered again at each entry
-point that takes a name, on each table, on both platforms. That grid is what
-kept producing findings: not one wrong idea, but one idea applied in one place
-and not the next. Two of the five are therefore **property** targets rather
-than parser ones. They assert what the grid is for:
+indexes or sizes something, and a rule that a name a game chooses is also a save
+key; the same question then had to be answered again at each entry point that
+takes a name, on each table, on both platforms. That grid kept producing
+findings: one idea applied in one place and not the next. Two of the five are
+therefore **property** targets rather than parser ones, asserting what the grid
+is for:
 
 - a name a table accepts must key to a name *under its own scope* — one that
   normalises to the scope itself makes a regular file where the directory
@@ -378,11 +376,11 @@ than parser ones. They assert what the grid is for:
 - and it must come back from that list as itself, beside another name, because
   a name that splits on the list's separator takes its neighbours with it.
 
-Making those properties testable is what turned four copies of the list
-encoding into one (`joinRemovalList`/`splitRemovalList`, and `joinStoreIndex`/
+Making those properties testable turned four copies of the list encoding into
+one (`joinRemovalList`/`splitRemovalList`, and `joinStoreIndex`/
 `splitStoreIndex` on the other platform). The copies had disagreed about
-trimming, which is how deleting `"save "` came to hide `"save"` — a defect
-found once per copy, one review round at a time.
+trimming, which is how deleting `"save "` came to hide `"save"`, a defect found
+once per copy, one review round at a time.
 
 ```sh
 go test ./internal/platform/lgt -run FuzzOpen                      # the seeds, in the usual run
@@ -390,18 +388,17 @@ go test ./internal/platform/lgt -fuzz FuzzOpenNeverPanics -fuzztime 60s
 ```
 
 The seeds matter more than the time. A fuzzer starting from noise spends its
-whole budget discovering that a zip begins with `PK`, so each target seeds one
-archive of every shape its loader has a branch for — a descriptor with no JAR,
-a JAR with no module, a wrapping folder, a zip of zips — and starts inside the
-parser.
+budget discovering that a zip begins with `PK`, so each target seeds one archive
+of every shape its loader branches on (a descriptor with no JAR, a JAR with no
+module, a wrapping folder, a zip of zips) and starts inside the parser.
 
-**Every loader bounds four things**, because bounding one is not bounding any:
-the input it will open at all, how many entries a zip may declare, how large
-one entry may be, and what the whole archive expands to. A per-entry limit
-alone lets a zip declare eight thousand entries just under it. The LGT loader
-had only the per-entry limit until this was written down; it takes its bounds
-as a value now (`archiveLimits`) so `TestAnArchiveIsBoundedFourWays` can reach
-the far side of each one without building half a gigabyte to get there.
+**Every loader bounds four things**, because one bound alone bounds nothing:
+the input it will open, how many entries a zip may declare, how large one entry
+may be, and what the whole archive expands to. A per-entry limit alone lets a
+zip declare eight thousand entries just under it. The LGT loader had only the
+per-entry limit until this was written down; it now takes its bounds as a value
+(`archiveLimits`) so `TestAnArchiveIsBoundedFourWays` can reach the far side of
+each without building half a gigabyte.
 
 <a id="implementation-driving-a-real-title-and-reading-what-it-says"></a>
 
@@ -413,94 +410,87 @@ what follows is how to read a run.
 
 **Play, capture, look.** `runktf`/`runlgt`/`runskt` take `-key tick:name` for a
 key script and `-framedir` for a frame per tick, and `contactsheet` folds those
-into one image. That is what "the title reaches its world" is decided on.
-`framestats` is the same question asked without a person: it counts a frame's
-colours and its lit pixels and exits nonzero when every frame is one colour,
-which is what a sweep needs to stop passing a screen with nothing on it. Two
-habits are worth keeping:
+into one image; "the title reaches its world" is decided on that. `framestats`
+asks the same question without a person: it counts a frame's colours and lit
+pixels and exits nonzero when every frame is one colour, so a sweep stops
+passing a screen with nothing on it. These habits are worth keeping:
 
 - **A stuck screen is not a defect until a key has been pressed at it.** One
-  title was written down as "needs an authentication server" for several
-  sessions; its dialog simply wanted its confirm key, and behind it the game
-  runs to its ending credits.
+  title was recorded as "needs an authentication server" for several sessions;
+  its dialog wanted its confirm key, and behind it the game runs to its ending
+  credits.
 - **A dialog's default answer is not the only answer.** Another was filed as a
   wall for the same reason one step further in: its certificate dialog offers
-  two buttons, the *declining* one starts selected, and pressing confirm on it
-  closes the title — which reads exactly like a title that cannot get past its
-  own gate. One press of the left key moves the selection, and the other answer
-  reaches an error the title handles and a menu behind it. Press what moves a
-  selection before pressing what takes it, and check that the highlight moved.
+  two buttons, the *declining* one starts selected, and confirming it closes the
+  title, which looks exactly like a title that cannot pass its own gate. One
+  press of the left key moves the selection, and the other answer reaches an
+  error the title handles and a menu behind it. Press what moves a selection
+  before pressing what takes it, and check that the highlight moved.
 - **Run every archive twice over one save.** A sweep that starts from an empty
-  directory is measuring first runs only, and titles of this era install
-  themselves on the first run: the screen you get is the notice, and the game is
-  what the second run does. Two rounds over one save directory is what found a
-  guest ending inside `startApp` being reported as a start failure
-  ([`cli.md`](../cli.md)), and three titles whose first run is a notice and whose
-  second is the game ([`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status), [`lgt.md`](lgt.md#implementation-the-lgt-platform)).
+  directory measures first runs only, and titles of this era install themselves
+  on the first run: the first screen is the notice, and the game is what the
+  second run does. One title's "reboot your handset" screen is its own
+  first-run path, and probes that always started from an empty `-save` recorded
+  it as broken. Two rounds over one save directory found a guest ending inside
+  `startApp` being reported as a start failure ([`cli.md`](../cli.md)), and
+  three titles whose first run is a notice and whose second is the game
+  ([`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status),
+  [`lgt.md`](lgt.md#implementation-the-lgt-platform)).
 
-  **What the whole round costs and what it caught**: 261 KTF archives run twice
-  over one save directory at `-play -speed 8 -ticks 600`, about forty minutes
-  six at a time. One row failed and it is an archive rather than a title — a
-  RAR named `.zip`, which the first round refuses too. Two titles exit on their
-  first round and run their six hundred ticks on the second, which is the
-  installer shape this habit is for. Everything else is identical between the
-  rounds. **It is deliberately not part of the standing sweep** — forty minutes
-  and the machine to itself is too much to pay every round for what it now
-  finds. Run it when a change touches anything a save is read by, and after a
-  release-blocking regression that only one run could not explain.
+  **Cost and yield of the full round**: 261 KTF archives run twice over one
+  save directory at `-play -speed 8 -ticks 600` took about forty minutes, six
+  at a time. One row failed, and it is an archive rather than a title (a RAR
+  named `.zip`, which the first round refuses too). Two titles exit on their
+  first round and run their six hundred ticks on the second, the installer
+  shape this habit is for; everything else is identical between rounds. **It is
+  deliberately not part of the standing sweep**: forty minutes with the machine
+  to itself is too much to pay every round for what it now finds. Run it when a
+  change touches anything a save is read by, and after a release-blocking
+  regression that one run could not explain.
 - **A title nobody has driven deeply is a to-do, not a limitation.** Three
   sibling titles once sat at the shallowest depth on a list of how far each had
-  been taken, which looked like one shared platform gap worth
-  investigating — and it was worth
-  investigating, but the answer was that nobody had pressed confirm enough
-  times. All three reach a play screen with nine presses over three thousand
-  ticks and produce no `tick_error`, no `stub table`, no `not implemented`.
-  Read a shallow title as untested rather than as evidence of anything, and
-  **chase a cluster of siblings at the same depth regardless of which way you
-  expect it to go**: either it is one defect explaining several of them, which
-  is the cheapest kind of defect to find, or it clears several at once. Both
-  outcomes are worth the pass.
+  been taken, which looked like one shared platform gap; the cause was that
+  nobody had pressed confirm enough times. All three reach a play screen with
+  nine presses over three thousand ticks and produce no `tick_error`, no
+  `stub table` and no `not implemented`. Read a shallow title as untested, not
+  as evidence, and **chase a cluster of siblings at the same depth whichever way
+  it is expected to go**: either one defect explains several of them, the
+  cheapest kind to find, or the pass clears several at once.
 - **The frame usually names the key, in a corner.** These titles render their
   own soft-key hints: `BACK:CLR` on a slot screen, `#:SKIP` over an opening,
   `END` and `NEXT` on a dialogue box. One pass swept a confirm key twenty times
-  at a load screen and tried three others, while the screen said `BACK:CLR` in
-  its bottom-right corner the whole time. Read the corners of the frame you are
-  stuck on before sweeping anything, and before asking for the archive's help
-  text — it is the same answer, already rendered.
+  at a load screen and tried three others while the screen showed `BACK:CLR` in
+  its bottom-right corner throughout. Read the corners of a stuck frame before
+  sweeping anything or asking for the archive's help text; it is the same
+  answer, already rendered.
 - **A skip prompt means the opening has not ended.** A frame can show a level,
-  a character and scenery and still be a cutscene: if `#:SKIP` is on it, the
-  game is telling you it is still playing something *at* you. A depth of
-  "reached the play screen" needs a frame with no skip prompt on it; anything
-  else has got as far as the opening and no further.
+  a character and scenery and still be a cutscene: `#:SKIP` on it means the game
+  is still playing something to the player. A depth of "reached the play
+  screen" needs a frame with no skip prompt; anything else has reached the
+  opening and no further.
 - **The prompt going away is not the opening ending.** The absence of a skip
   hint is weak evidence: one title drops its `CLR:SKIP` corner partway through a
-  long multi-character cutscene and keeps playing the same dialogue at the
-  player for thousands more ticks. Only the positive evidence promotes a row —
-  a HUD, a health bar, an item row, a menu, or a direction key that visibly
-  moves something. Seventeen confirm presses that only advance dialogue are a
-  cutscene being read, not a play screen being reached, and the honest row is
-  the opening depth.
+  long multi-character cutscene and keeps playing the same dialogue for
+  thousands more ticks. Only positive evidence promotes a row: a HUD, a health
+  bar, an item row, a menu, or a direction key that visibly moves something.
+  Seventeen confirm presses that only advance dialogue are a cutscene being
+  read, and the correct row is the opening depth.
 - **Read the game's own help text before sweeping keys.** Many archives ship
-  their key map as a resource, and pulling it out is a static read that needs no
-  run at all — it names the save key, the menu key and the shortcuts directly.
-  Sweeping keys blind to find a save menu is the expensive half of a pass, and
-  it fails outright on the titles whose save is a key rather than a menu entry.
-  `docs/lgt.md`, "The title's own help screen is the key map", has the file
-  names and the container format. Ask Dev for the extract: the archive read is
-  on their side of the line and costs them minutes.
+  their key map as a resource, and extracting it is a static read that needs no
+  run; it names the save key, the menu key and the shortcuts. Sweeping keys
+  blind for a save menu is the expensive half of a pass, and it fails outright
+  on titles whose save is a key rather than a menu entry. `docs/lgt.md`, "The
+  title's own help screen is the key map", has the file names and the container
+  format. Ask Dev for the extract: the archive read is on their side of the line
+  and costs them minutes.
 - **One key is not "a key has been pressed".** Some openings want a confirm on
-  every screen — a character prompt, then several narration panels, one press
-  each — so a script with two or three keys stops on whichever screen it runs
-  out at and reports the same "held for N ticks" a real hang does. Before
-  filing one, press the confirm key repeatedly through the whole run and see
-  whether the screen count goes up. The cost of being wrong is asymmetric: an
-  extra dozen keypresses cost nothing, and a false hang costs a Dev
-  investigation into a title that was waiting for input.
-- **A first run is not a run.** Titles write state on first start and behave
-  differently on the second. One title's "reboot your handset" screen is its
-  own first-run path, and probes that always start from an empty `-save`
-  recorded it as broken. Run it twice against the same save before calling
-  anything a defect.
+  every screen (a character prompt, then several narration panels, one press
+  each), so a script with two or three keys stops on whichever screen it runs
+  out at and reports the same "held for N ticks" a real hang does. Before filing
+  one, press the confirm key repeatedly through the whole run and see whether
+  the screen count goes up. The cost of being wrong is asymmetric: an extra
+  dozen key presses cost nothing, and a false hang costs a Dev investigation
+  into a title that was waiting for input.
 
 **A corpus is scanned before it is run.** When a batch of archives arrives,
 `internal/tools/apiscan` answers what they link against that this runtime does
@@ -513,10 +503,9 @@ go run ./internal/tools/apiscan -games var/games/ktf
 go run ./internal/tools/apiscan -games var/games/lgt
 ```
 
-Each archive is scanned as the platform it belongs to — detection is the
-archive's own shape, so a mixed directory is one pass — and **what a link is
-differs by vendor**, which is the whole reason the three commands read
-differently:
+Each archive is scanned as the platform its own shape says it belongs to, so a
+mixed directory is one pass. **What a link is differs by vendor**, which is why
+the three commands differ:
 
 - **SKT** titles are Java: every reference is in a constant pool, so the scan
   reads them and nothing runs. `-natives` takes any `runskt -diag` report,
@@ -525,7 +514,7 @@ differently:
   that half.
 - **KTF** titles are compiled: the constant pools are gone, and what is left is
   the name pool inside the client image. It names the platform *classes* a
-  title could ask for — never which class a method belongs to. Nothing runs.
+  title could ask for, never which class a method belongs to. Nothing runs.
   See "What the corpus names, and what it never asks for" in `docs/ktf.md`.
   The vendor's **earlier package** has no client image and so no name pool at
   all, and the scan says `not scanned` for it rather than counting it as a
@@ -536,19 +525,18 @@ differently:
   what it resolved. One boot per archive rather than a read. See "The imports a
   module resolves are its link map" in `docs/lgt.md`.
 
-This is the cheap half of a compatibility pass — one pass instead of the
-fix-run-fix loop a `-diag` report puts you in, and it ranks the work — and it
-is only the half a *link* can answer: a name in an archive is what a title
-*could* ask for, not what it does. Everything below is still how a title that
-starts is made to run.
+This is the cheap half of a compatibility pass: one pass instead of the
+fix-run-fix loop of `-diag` reports, ranked by demand. It answers only what a
+*link* can answer; a name in an archive is what a title *could* ask for, not
+what it does. Everything below is how a title that starts is made to run.
 
 **Find the gap before reading the code.** `runktf -diag` counts what the title
 asked for, and the answer is usually already in it: read the `stub table`,
 `not implemented`, `throw` and `raise` lines first. One title's two-frames-per-
 second problem was a `wipic stub table 5 function 0` line that had been in
-every report for sessions. On LGT the equivalent is `-trace N`, and what
-matters is not where it stopped but what it asked just before, and what it was
-told; an `unnamed` slot in that trace is the next thing to identify.
+every report for sessions. On LGT the equivalent is `-trace N`; what matters is
+what the title asked just before it stopped and what it was told, and an
+`unnamed` slot in that trace is the next thing to identify.
 
 **Rounds per entry is the pacing health number.** A healthy host retires 1.0 to
 1.1 scheduler rounds per entry into the guest. Materially more means the host
@@ -568,7 +556,7 @@ WFEATURE_PERF_ARCHIVE=<zip> go test -run TestPerfProbe ./internal/platform/ktf
 `TestPageSchedulingProbe` and `TestBudgetedSchedulingProbe` compare host loop
 shapes; `TestSlowHostProbe` imitates an overloaded machine through
 `WFEATURE_PERF_SPEED`. `TestLoadCostProbe` measures the one scene the wall
-clock cannot report on — a load, where a title that sleeps through its splash
+clock cannot report on: a load, where a title that sleeps through its splash
 screen makes the emulator look busy for seconds while it is idle. It reports
 host CPU against the guest time that CPU bought, and a ratio over 1 is a load
 the user waits through. `docs/ktf.md` has what it found across the local
@@ -588,11 +576,11 @@ WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
 ```
 
 **A profile ranks addresses; a slow scene is usually a loop.** When the two
-disagree — the profile says a function and the function has five callers — count
-the guest steps between two closings of the same backward branch instead, over
-the whole replay and **including the branches already marked refused**, and rank
-loops by the total. That is a dozen lines of throwaway instrumentation in
-`Engine.Run` and it is what found the ninth shape in `armcore.md`: the busiest
+disagree (the profile names a function and the function has five callers),
+count the guest steps between two closings of the same backward branch instead,
+over the whole replay and **including the branches already marked refused**,
+and rank loops by the total. A dozen lines of throwaway instrumentation in
+`Engine.Run` did this and found the ninth shape in `armcore.md`: the busiest
 loop in one title was 28% of the replay and did not appear in any profile
 ranking, because its cost was attributed to the function it called.
 
@@ -600,22 +588,21 @@ ranking, because its cost was attributed to the function it called.
 count of every tick, which is what says an engine change is invisible to the
 guest: **two runs whose digests agree line for line and whose instruction counts
 agree to the instruction have changed nothing the game can see**, and a `diff`
-of the two files names the first tick where that stops being true. That is how
-the stand-in in `armcore.md`'s "The eighth shape" was judged, and how the
-accounting defect underneath it was found — the digests matched for a hundred
-and thirty-seven ticks while the step counts drifted by a fixed amount per tick,
-which is a shape no frame comparison would have shown.
+of the two files names the first tick where that stops being true. The
+stand-in in `armcore.md`'s "The eighth shape" was judged this way, and the
+accounting defect underneath it was found this way: the digests matched for a
+hundred and thirty-seven ticks while the step counts drifted by a fixed amount
+per tick, which no frame comparison would have shown.
 
 It runs on a manual clock, so **two runs of one binary agree to the tenth of a
-millisecond** and an A/B needs no repetition to be readable — which is what
-makes a 3% change in one stretch of one route a number rather than a hope. Give
-it `-count=1` or `go test` answers from its cache and both arms of an A/B read
-the same. `WFEATURE_PERF_CPU=<file>` starts a Go CPU profile at the route's
+millisecond** and an A/B needs no repetition to be readable; a 3% change in one
+stretch of one route is therefore measurable. Give it `-count=1`, or `go test`
+answers from its cache and both arms of an A/B read the same. `WFEATURE_PERF_CPU=<file>` starts a Go CPU profile at the route's
 first `mark`, so the profile covers the scene rather than the boot; read it with
 the warning further down about what a macOS profile of this engine attributes to
 `pthread_cond_signal`, which here was 73 to 89% of the samples and none of the
-time. Raising the quantum does not fix that reading on this platform — it costs
-the run 21% and changes what it executes — so the ranking to trust is the guest
+time. Raising the quantum does not fix that reading on this platform (it costs
+the run 21% and changes what it executes), so the ranking to trust is the guest
 profiler's.
 
 Where the marks come from matters as much as the probe. A route written for a
@@ -634,15 +621,14 @@ WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_LOAD_TICKS=400 \
 
 That probe takes three knobs the KTF ones do not: `WFEATURE_TICK_MS` sets the
 tick the Host would use, `WFEATURE_PACED` runs the session the way a Host on a
-real clock does rather than as fast as the machine allows — which is the
-difference between measuring throughput and measuring the game's own pace — and
-**`WFEATURE_PERF_ROUTE` drives a route before measuring**.
+real clock does rather than as fast as the machine allows (measuring the game's
+own pace rather than throughput), and **`WFEATURE_PERF_ROUTE` drives a route
+before measuring**.
 
-That last one is what makes the probe measure a game rather than a title
-screen, and it is not a convenience. A profile of a title's first few hundred
-ticks is a profile of a session waiting: the run that found where this
-platform's time actually went — two thirds of it in a framebuffer copy — was
-only possible once `-cpuprofile` could be pointed at a title in play
+The route makes the probe measure a game rather than a title screen. A profile
+of a title's first few hundred ticks is a profile of a session waiting: the run
+that found where this platform's time went (two thirds of it in a framebuffer
+copy) was only possible once `-cpuprofile` could be pointed at a title in play
 (`lgt.md`, "That profile was of the guest, and the host was doing something
 else").
 
@@ -653,40 +639,39 @@ WFEATURE_PERF_ARCHIVE=<zip> WFEATURE_PERF_ROUTE=var/routes/<title>.route \
 ```
 
 **A route usually needs a save to go with it.** The scene worth measuring is
-inside one — a field, a battle — and the same route replayed from a fresh boot
+inside one (a field, a battle), and the same route replayed from a fresh boot
 stops at the title screen having measured nothing. `WFEATURE_SAVE_ROOT` points
 the session at one; **copy the directory before every run, not once for the
 series**, because the run plays and a probe that writes the save it starts from
-measures something different every time. The drift is silent and it does not
-announce itself as drift: a series of runs on one copy went from 788 paints to
-350 and from a 42ms wall gap to 331ms, because the route had begun landing
-somewhere else entirely, and every number in between looked like a result. Two
-runs that agree to the millisecond are what says the save held — that is the
-check, not the copying. Without a save root at all the probe makes a fresh
-directory, which is what a route-less throughput run wants.
+measures something different every time. The drift is silent: a series of runs
+on one copy went from 788 paints to 350 and from a 42ms wall gap to 331ms,
+because the route had begun landing somewhere else, and every number in between
+looked like a result. Two runs that agree to the millisecond show that the save
+held; that is the check, not the copying. Without a save root the probe makes a
+fresh directory, which suits a route-less throughput run.
 
 The probe reports `busy` and `tick_p50/p90/p99` beside the mean, because the
 mean says nothing on either platform: a title computes almost nothing on most
 ticks and a whole frame on a few, so p50 is microseconds while p90 is the
 frame. **p90 against the guest's own tick is the number a "this is slow" report
-is about** — a title whose tick is 44ms of guest time and whose p90 is 35ms has
-a quarter of a tick in hand, and one whose p90 is 41ms has none.
+is about**: a title whose tick is 44ms of guest time and whose p90 is 35ms has a
+quarter of a tick in hand, and one whose p90 is 41ms has none.
 
 `WFEATURE_PROFILE=1` turns on the guest sampling profiler and prints the
 ranking at the end, which is what says *which loop* the time is in
 (`armcore.md`, "What a title spends its instructions on once the stand-ins are
-in"). It is off by default because the stack walk costs about 5% of the run —
+in"). It is off by default because the stack walk costs about 5% of the run,
 enough to move the percentiles the same run reports.
 
-**With `WFEATURE_PACED` it also reports the gap between paints, on both clocks,
-and that pair is the number a "it is not quite smooth" report is about.** The
-wall gap is how long a player waited between frames; the guest gap is how far
-the world moved while they waited. They have to be the same number. When they
-are not, the emulator is either dropping the title's frames or handing it time
-it did not pay for — a run that reported a 44ms wall gap against a 100ms guest
-gap is what found the pacing defect in `lgt.md`, "The wall has to be charged for
-the work, not for the intent". Neither percentile alone shows it: the frame rate
-looked fine and the guest clock looked fine.
+**With `WFEATURE_PACED` it also reports the gap between paints on both clocks,
+and that pair is the number a "not quite smooth" report is about.** The wall gap
+is how long a player waited between frames; the guest gap is how far the world
+moved meanwhile. They must be equal. When they are not, the emulator is either
+dropping the title's frames or handing it time it did not pay for: a run that
+reported a 44ms wall gap against a 100ms guest gap found the pacing defect in
+`lgt.md`, "The wall has to be charged for the work, not for the intent".
+Neither percentile alone shows it; the frame rate and the guest clock both
+looked correct.
 
 **`WFEATURE_GUEST_MIPS` sets the speed of the handset the platform stands in
 for**, for the run only. It is how the number in `guestInstructionsPerMillisecond`
@@ -711,10 +696,10 @@ being held back by its own computation reads 8 to 34% with a p90 well above the
 mode.
 
 **Set the rate very high and the sweep reports what each title *asks* for**,
-because computation then costs it no guest time at all. That is the control the
-comparison needs — a period measured at the rate in force is the title's request
-and the rate's effect mixed together. It runs `-v` or its rows are swallowed;
-`go test` only shows package output when it is asked to. `WFEATURE_LGT_CORPUS`
+because computation then costs it no guest time. That is the control the
+comparison needs, because a period measured at the rate in force mixes the
+title's request with the rate's effect. Run it with `-v`, or `go test` swallows
+the rows; it shows package output only when asked. `WFEATURE_LGT_CORPUS`
 is read from the package's directory like every other `go test` path, so it
 wants an absolute one.
 
@@ -724,58 +709,57 @@ wants an absolute one.
 
 **A row's `ratio` is measured at the title screen, and a title's problem is
 usually not there.** The sweep boots each archive with a fresh save and presses
-nothing, so what it runs is a boot, a vendor splash and whatever attract loop
-the title settles into — never a scene a person plays. Read a row above 1 as
-saying nothing at all about the title.
+nothing, so it runs a boot, a vendor splash and whatever attract loop the title
+settles into, never a scene a person plays. A row above 1 says nothing about
+the title.
 
-How wrong that can be is measured rather than guessed. The title this project's
-throughput work was done against reads
+The size of that error was measured. The title this project's throughput work
+was done against reads
 
     <a Clet>  paints=1500 mode=55ms (100%) guest=1m22.647s host=12.077s ratio=6.85
 
-and the same title, same machine, driven by a route into its field, runs its
-guest clock at **0.51x** — a tick costing 53.8ms against the 27.4ms it stands
-for. **Thirteen times apart, on the row and in the scene.** The mode column
-does not warn either: it reads 55ms at 100%, which is a title settled on one
+and the same title on the same machine, driven by a route into its field, runs
+its guest clock at **0.51x**, a tick costing 53.8ms against the 27.4ms it
+stands for: **thirteen times apart between the row and the scene.** The mode
+column gives no warning either; it reads 55ms at 100%, a title settled on one
 period, because at a title screen it is.
 
-So the sweep answers one question honestly and one not at all:
+So the sweep answers one question and not the other:
 
-- **`ratio` below 1 is real.** A title that cannot keep up while it is doing
-  almost nothing will not keep up later, and the mode's percentage is what says
-  which kind it is — a row at 100% is uniformly slow, and one at 8 to 34% with
-  a p90 well above its mode is being held back by its own computation in bursts.
+- **`ratio` below 1 is real.** A title that cannot keep up while doing almost
+  nothing will not keep up later, and the mode's percentage says which kind it
+  is: a row at 100% is uniformly slow, and one at 8 to 34% with a p90 well above
+  its mode is held back by its own computation in bursts.
 - **`ratio` above 1 is not a pass.** It is "not refused at the title screen".
 
-Over the thirty local LGT archives — twenty-three titles once patch variants are
-merged — four are below 1 at boot and two more sit between 1.0 and 1.3. That is
-a floor of a quarter of the library on the machine it was run on, and the true
-number is unknown, because the titles that fail in a scene are the ones this
-sweep cannot reach. Getting them needs `WFEATURE_PERF_ROUTE` and a route per
-title, which is why the routes under `var/routes/` are worth writing.
+Over the thirty local LGT archives (twenty-three titles once patch variants are
+merged), four are below 1 at boot and two more sit between 1.0 and 1.3: a floor
+of a quarter of the library on that machine. The true number is unknown,
+because the titles that fail in a scene are the ones this sweep cannot reach;
+reaching them needs `WFEATURE_PERF_ROUTE` and a route per title, which is why
+the routes under `var/routes/` are worth writing.
 
-Two rows are not measurements. An archive reporting `paints=2 (too few to
-read)` over three thousand ticks is not slow, it is not running, and belongs in
-a bug rather than in this table; and a ratio in the tens — one local title reads
-89.88, two and a half minutes of guest time for 1.7 seconds of host — is a title
-idling on a screen, not headroom.
+Two kinds of row are not measurements. An archive reporting `paints=2 (too few
+to read)` over three thousand ticks is not running at all and belongs in a bug,
+not in this table; and a ratio in the tens (one local title reads 89.88, two and
+a half minutes of guest time for 1.7 seconds of host) is a title idling on a
+screen, not headroom.
 
 **Do not read a macOS Go CPU profile of one of these runs without raising the
 quantum first.** It attributes 65 to 88% of the run to
 `runtime.pthread_cond_signal` under the `Gosched` the engine makes at the end
-of every quantum, which is not work at all; raise `cletQuantum` a thousandfold
-for the profiling run and the ranking becomes the interpreter's own.
+of every quantum, which is not work; raise `cletQuantum` a thousandfold for the
+profiling run and the ranking becomes the interpreter's own.
 
-That the samples are noise rather than cost is worth re-checking rather than
-assuming, and it is one run: raising the quantum a thousandfold moved a Clet's
-field scene from 20.08s to 19.92s, so the 59% those samples claimed is 0.8% of
-real time.
+That the samples are noise rather than cost was checked with one run: raising
+the quantum a thousandfold moved a Clet's field scene from 20.08s to 19.92s, so
+the 59% those samples claimed is 0.8% of real time.
 
-**On KTF the same trick does not work, and that profiler is simply unusable
-here.** A load probe of the heaviest local KTF archive puts 87% of the run in
+**On KTF the same method does not work, and the macOS profiler is unusable
+there.** A load probe of the heaviest local KTF archive puts 87% of the run in
 `runtime.pthread_cond_signal` and does not show `Engine.Run` *at all*, while
-retiring 2.9 billion guest instructions in 25 seconds — which is to say the
-interpreter is the whole run and none of it was attributed. Raising the quantum
+retiring 2.9 billion guest instructions in 25 seconds: the interpreter is the
+whole run and none of it was attributed. Raising the quantum
 changes neither the ranking nor the wall clock, and neither does `GOMAXPROCS`.
 Answer a KTF throughput question with an interleaved A/B of the probe's
 `ns_per_step` instead, and take the host profile on a machine whose profiler
@@ -788,8 +772,8 @@ works.
 A MIDlet's threads pace themselves against the wall clock, so a fixed number of
 `runskt` ticks is a fixed number of seconds and a faster engine spends them
 doing more work rather than finishing sooner. Wall time is therefore the pacing,
-CPU time is ambiguous — a slower engine burns less of it because it gets less
-done — and **allocation totals rise when the engine improves**. Judge a change
+CPU time is ambiguous (a slower engine burns less of it because it gets less
+done), and **allocation totals rise when the engine improves**. Judge a change
 to this execution core with `go test -bench Guest ./internal/jvm`, where the
 work is fixed, and read a run only for whether its outcome changed. The whole of
 that argument, with the numbers, is in [`jvm.md`](../jvm.md), "Why this could not
@@ -806,23 +790,22 @@ and is picked up because those are main packages; nothing carries it into
 number, and the shipped binary is 8% faster than the probe says on a Clet's
 field scene and 7 to 9% faster on a KTF load.
 
-That does not make the probes wrong — an A/B where both sides are built the same
-way answers the question it is asked — but two things follow. A change is worth
+That does not make the probes wrong, since an A/B where both sides are built the
+same way answers its question, but two things follow. A change is worth
 re-checking through `build/release/wfeature`, which is the thing a player runs.
 And a claim *about* the profile has to be measured either there or with
-`go test -pgo=<file>`, which applies one to the whole build; asked without it,
-"no profile, a freshly taken one, the committed one" answered 5.13, 5.14 and
-5.15 nanoseconds a step, which is three ways of saying none of them was ever in
-force.
+`go test -pgo=<file>`, which applies one to the whole build; without it, "no
+profile, a freshly taken one, the committed one" answered 5.13, 5.14 and 5.15
+nanoseconds a step, because none of them was in force.
 
 **`arm_share` says whether the change under test can move this title at all.**
 Both load probes report it beside `ns_per_step`, because the engine has two
 halves with separate decode caches and separate routed switches, and a title
 runs almost wholly in one of them: the local library is Clets at 0.0–2.8% ARM
 and one title at 100%. A Thumb change measured on the ARM title, or the other
-way round, measures the probe's noise floor. Pick the guard the same way — the
+way round, measures the probe's noise floor. Pick the guard the same way: the
 regression risk of an ARM change is on the titles with the *fewest* ARM steps,
-and they are the ones with the most steps overall.
+which are the ones with the most steps overall.
 
 `decode_cache_tables` and `decode_cache_bytes` beside it are what those caches
 cost, counted per table rather than per page: a page executed in both states
@@ -833,11 +816,12 @@ rather than for its working set.
 `ns_per_step` is what a throughput change has to move, and the loop calls
 `Tick` rather than `TickFor` on purpose: `TickFor` answers how long the Host
 should *wait* before the next tick, so a probe that reads it as a cost measures
-its own idling. Host time per tick is not a throughput measurement either: both platforms advance the guest clock with the work the guest does, so a
-change that alters how much work a tick contains moves the tick time for two
-reasons at once, and the instruction count is what holds the comparison still.
-`-count=1` matters here — a cached `go test` result reports the previous run's
-numbers, which look exactly like a change that did nothing.
+its own idling. Host time per tick is not a throughput measurement either:
+both platforms advance the guest clock with the work the guest does, so a change
+that alters how much work a tick contains moves the tick time for two reasons
+at once, and the instruction count holds the comparison still. `-count=1`
+matters here: a cached `go test` result reports the previous run's numbers,
+which look exactly like a change that did nothing.
 
 The browser's cheat path has a local probe of its own, because a scan against
 a fixture proves the plumbing and not the search:
@@ -847,53 +831,53 @@ WFEATURE_CHEAT_ARCHIVE=<zip> go test -run TestLocalCheatProbe ./internal/webhost
 ```
 
 It starts the real server over a temporary game root, opens the session socket,
-and asks for regions and a scan. Both ends of the protocol change are exercised
-by that: a build that compiles proves neither. It passes on all three platforms
-— point it at an SKT archive and the regions it lists are the game's own
-classes, over the synthetic space `docs/skvm.md` describes. **A probe that does not sleep for the wait it was
-handed measures nothing** — spinning instead makes every entry into the guest
-look free, which is the one result all of these exist to detect.
+and asks for regions and a scan, exercising both ends of the protocol change; a
+build that compiles proves neither. It passes on all three platforms; pointed at
+an SKT archive, the regions it lists are the game's own classes, over the
+synthetic space `docs/skvm.md` describes.
+
+**A probe that does not sleep for the wait it was handed measures nothing**:
+spinning instead makes every entry into the guest look free, which is the one
+result all of these probes exist to detect.
 
 **A run under `-play` is not deterministic**, because it follows the wall
 clock. Comparing two runs with `framediff` is only meaningful against a
 control: run the same binary twice first and see how much differs on its own.
-Two titles once looked like a 200-frame regression that way and were pure
-timing noise.
+Two titles once looked like a 200-frame regression that way and were timing
+noise.
 
 **A batch is part of the wall clock too, and it moves the summary and not only
 the frames.** Six runs at once starve each other, so a `-play` run's flush
 count and lit-pixel count depend on what else was running: one local title
 answered 2,243 lit pixels on one build and 4,024 on the other inside a
-six-way sweep, and run on its own both builds answered **4,252** — the same
-number, twice each. Two more titles behaved the same way. So a `-play` row that
-differs in a sweep is a row to re-run alone before it is a finding, and a title
-the sweep reports as drawing nothing is one of those rows: the last black
-screen on this project's list turned out to be a batch that never got the
-title past its loading phase.
+six-way sweep, and run alone both builds answered **4,252**, twice each. Two
+more titles behaved the same way. So a `-play` row that differs in a sweep is a
+row to re-run alone before it is a finding, and a title the sweep reports as
+drawing nothing is one of those rows: the last black screen on this project's
+list was a batch that never got the title past its loading phase.
 
-The control has been measured across the whole local KTF set, so the number is
-here rather than in the next investigation's head: the same script under the
-same binary, at `-play -speed 20`, differs on **16 of 32 titles and 24 of 128
-captured frames**. A frame hash that changes between two builds is therefore
-not evidence on its own. What is: a route that stops where the other build's
-did not, a `tick_error` that appears or goes away, and a run that ends at a
-different tick *with* one of those. See `docs/ktf.md`, "An A/B sweep of the
+The control was measured across the whole local KTF set: the same script under
+the same binary, at `-play -speed 20`, differs on **16 of 32 titles and 24 of
+128 captured frames**. A frame hash that changes between two builds is
+therefore not evidence on its own. Evidence is a route that stops where the
+other build's did not, a `tick_error` that appears or goes away, or a run that
+ends at a different tick *with* one of those. See `docs/ktf.md`, "An A/B sweep of the
 local set is half noise".
 
 **Do not read 24 of 128 as a per-frame rate.** It is four captured frames per
 title, sparse enough that most shots miss whatever is animating. Diffing every
 frame of a single continuously animating title, same binary twice, differs on
-**1,216 of 2,379** — just over half. On a title that animates, the *number* of
-differing frames says nothing; where the boxes are and how big they are says
-everything, and a difference confined to a spinner or a sprite's idle bob is
-the floor rather than a finding.
+**1,216 of 2,379**, just over half. On a title that animates, the *number* of
+differing frames says nothing; where the boxes are and how big they are is what
+matters, and a difference confined to a spinner or a sprite's idle bob is the
+floor rather than a finding.
 
 **The quietest control is the first frame, and it needs no route at all.**
 Without `-play` a run steps ticks and stops at the first lit frame, so it is
 deterministic in everything except the titles that are not: the same archive,
 the same binary and a fresh save directory land on the same bytes. That makes a
-whole-set sweep cheap — about a second an archive — and it is the right control
-for a change that touches the frame path rather than the game's behaviour.
+whole-set sweep cheap (about a second an archive) and the right control for a
+change that touches the frame path rather than the game's behaviour.
 
 ```sh
 wfeature runktf <archive> -ticks 64 -frame before.png -save <fresh dir>   # each build
@@ -901,28 +885,28 @@ wfeature runktf <archive> -ticks 64 -scale 2 -frame before2x.png -save <fresh di
 ```
 
 **The KTF floor is now zero.** It used to be one title's family, which differed
-*against itself* — three runs of one binary produced three different first
-frames — and that family set the floor for every comparison: a real change
-under about 290 pixels was indistinguishable from the noise. The cause was the
-clock. A probe runs on a `ManualClock` precisely so it repeats, and the clock
-started at the wall, so every timestamp the guest read differed between runs and
-a title seeding itself from the time of day went somewhere else. It starts at a
-fixed date now, and a sweep over all 35 local KTF archives run twice on the same
-binary comes back **byte-identical on every one**. Use a fresh save directory on
-both sides or the second run starts from the first run's save.
+*against itself* (three runs of one binary produced three different first
+frames) and set the floor for every comparison: a real change under about 290
+pixels was indistinguishable from the noise. The cause was the clock. A probe
+runs on a `ManualClock` so that it repeats, but the clock started at the wall,
+so every timestamp the guest read differed between runs and a title seeding
+itself from the time of day diverged. It starts at a fixed date now, and a sweep
+over all 35 local KTF archives run twice on the same binary comes back
+**byte-identical on every one**. Use a fresh save directory on both sides, or
+the second run starts from the first run's save.
 
-Two things follow. A difference anywhere is now a finding, with no family to
-discount — and if a floor ever reappears, measure it before reading anything
-into a diff, because something has gone back to reading the wall.
+A difference anywhere is therefore a finding, with no family to discount; if a
+floor reappears, measure it before reading anything into a diff, because
+something has gone back to reading the wall.
 
 **A route is the cheaper control.** `-route` waits on what the screen is doing
 rather than on tick numbers, so the same script lands on the same screen under
 both builds even though the ticks differ. Both `runktf` and `runlgt` take one.
 
 **`framediff` finds the first divergence.** The screen a person points at is
-not always the screen that is wrong — one investigation was saved by finding
-that the reported frame was byte-identical before and after, and the real
-break was three hundred ticks later.
+not always the screen that is wrong: in one investigation the reported frame
+was byte-identical before and after, and the real break was three hundred ticks
+later.
 
 <a id="implementation-compiling-a-java-fixture"></a>
 
@@ -1117,16 +1101,16 @@ The current tests cover these boundaries:
   listing/renaming/name encoding, `Jlet.getAppProperty` over the descriptor,
   and lwc text components keeping their text
 
-Two tests keep the WIPI Java surface honest without executing a game.
+Two tests check the WIPI Java surface without executing a game.
 `TestRuntimeJavaSurfaceCoversReference` compares the registration table
 against `testdata/wipi_java_surface.txt`, the reference surface extracted from
 the original implementation, and requires every unimplemented entry to be
-listed with its reason in `testdata/wipi_java_gaps.txt` — a new gap and a
+listed with its reason in `testdata/wipi_java_gaps.txt`; a new gap and a
 stale gap both fail. `TestFixedValueStubInventory` does the same for methods
 that answer a fixed value, against `testdata/wipi_java_stubs.txt`, because a
 stub fails silently where an unimplemented method fails loudly. Regenerate the
-reference from a local checkout of the original after pulling it — the
-variable points at that implementation's WIPI Java class sources:
+reference from a local checkout of the original after pulling it; the variable
+points at that implementation's WIPI Java class sources:
 
 ```sh
 WFEATURE_WIPI_REFERENCE_SOURCE=<class source dir> go test -run TestRegenerateWIPISurfaceReference ./internal/platform/ktf
@@ -1161,8 +1145,8 @@ chain, and calls the interface and WIPI initialization functions. All 33 current
 clients return zero from both initializers. The slowest WIPI initializer retires
 8,330,820 instructions; the probe does not start the game lifecycle.
 
-The earlier KTF package — a `.mif` beside a raw `.mod`, with no descriptor and
-no JAR — has acceptance runs of its own. They parse every local archive of that
+The earlier KTF package (a `.mif` beside a raw `.mod`, with no descriptor and
+no JAR) has acceptance runs of its own. They parse every local archive of that
 shape, map its module, plant a trapping platform table below it, perform the
 start-up handshake, run the title's start-up, and then drive 300 of the frames
 the title itself asks to be called back on:
@@ -1171,15 +1155,14 @@ the title itself asks to be called back on:
 WFEATURE_KTF_NATIVE_ACCEPTANCE=1 go test -run TestLocalKTFNativePackage -v ./internal/platform/ktf
 ```
 
-The run asserts what is established — the handshake completes, the title
+The run asserts what is established: the handshake completes, the title
 registers a frame, every frame runs without a fault, the title draws and ends
-frames, **it plays notes**, and then a **key route drives it through its own
-menus into the game**, after which it has loaded five times the images it had.
-It asserts nothing about the slots that are still traps, because that list is
-what the run exists to produce; its table marks each slot `served` or `trap`,
-and on the local title nothing on that route traps any more. Its table marks each slot `served` or
-`trap`, and each row carries the link register of its first call site, which is
-the module code to disassemble. `docs/ktf.md`, "An earlier KTF package", has
+frames, **it plays notes**, and a **key route drives it through its own menus
+into the game**, after which it has loaded five times the images it had. It
+asserts nothing about the slots that are still traps, because that list is what
+the run exists to produce. Its table marks each slot `served` or `trap`, and
+each row carries the link register of its first call site, which is the module
+code to disassemble; on the local title nothing on that route traps any more. `docs/ktf.md`, "An earlier KTF package", has
 what the current list means. **Read its output as well as its exit status.**
 
 What the title actually draws is a picture, and only a picture says whether it
@@ -1197,18 +1180,18 @@ A route step is a key code in hex and how many of the title's own frames to run
 after it; `docs/ktf.md` has what the codes mean.
 
 The Host wiring has its own two runs, both opt-in on the same switch. One
-drives the package through the layer every Host shares
-(`internal/session`) — inspect, start, tick, take the frame, send a key — and
-one drives it **through the browser's own protocol** with a real handshake,
+drives the package through the layer every Host shares (`internal/session`:
+inspect, start, tick, take the frame, send a key), and one drives it
+**through the browser's own protocol** with a real handshake,
 the real archive and real frames (`internal/webhost`,
 `TestSessionRunsTheEarlierKTFPackage`). A package the shared layer does not
 carry is a package no Host can run, so that is where it is checked rather than
 in each entry point.
 
 The platform half has unit tests that need no local archive
-(`native_platform_test.go`): they build a synthetic package around a one
-instruction module and drive the handlers directly — the C library slots, the
-file interface including create-on-write and read-back, the screen's colour
+(`native_platform_test.go`): they build a synthetic package around a
+one-instruction module and drive the handlers directly: the C library slots,
+the file interface including create-on-write and read-back, the screen's colour
 format, and the bitmap factory and blit including the colour that is not
 drawn.
 
@@ -1228,10 +1211,10 @@ WFEATURE_KTF_CONSTRUCT_ACCEPTANCE=1 go test -run TestLocalKTFArchivesConstructMa
 ```
 
 All 33 constructors now return. This probe was written as a diagnostic that
-exited nonzero — eleven of the eighteen archives then present got through it,
-and the rest either spun allocating across the runtime-Java bridge until the
-instruction limit or stopped at an absent runtime API — and it is a pass
-because the work those failures pointed at was done, not because the probe was
+exited nonzero (eleven of the eighteen archives then present got through it;
+the rest either spun allocating across the runtime-Java bridge until the
+instruction limit or stopped at an absent runtime API), and it passes because
+the work those failures pointed at was done, not because the probe was
 relaxed. It still calls no `startApp`, and a constructor returning is not a
 claim that a game has started.
 
@@ -1243,35 +1226,34 @@ WFEATURE_KTF_FRAME_ACCEPTANCE=1 go test -run TestLocalKTFArchivesRenderFirstFram
 ```
 
 All 33 of the JAR-packaged archives start their main class, and **all 34
-present a first frame with something lit in it** — the frame probe's own last
-line reads `34 of 34 JAR-packaged archives (1 earlier-package archives
-skipped)`.
+present a first frame with something lit in it**; the frame probe's last line
+reads `34 of 34 JAR-packaged archives (1 earlier-package archives skipped)`.
 
 That line used to read `33 of 35`, and neither of the two it left out was a
-title that failed. Both were the probe's own doing, and both are fixed:
+failing title. Both were the probe's own defects, and both are fixed:
 
 - the earlier native package carries no JAR and no main class, so there is
   nothing here to start. It was skipped inside the loop *after* being counted
   in the denominator, which made the ratio understate itself by one for every
   archive of that generation added. It is now counted and reported separately;
-  `TestLocalKTFNativePackageRuns` is what exercises that one.
+  `TestLocalKTFNativePackageRuns` exercises it.
 - one title reported `no frame (timers=0 flushes=0 drawn=0)` with no error
   behind it, while the same archive under `runktf` flushed a full 240x320
-  screen on tick 2. What it waits for is a deadline, and the probe's
-  hand-rolled service loop broke out of the first round that ran no timer, no
-  thread and no paint — which is every round before the first one is due.
+  screen on tick 2. It waits for a deadline, and the probe's hand-rolled
+  service loop broke out of the first round that ran no timer, no thread and no
+  paint, which is every round before the first one is due.
 
 **The probe now starts a session and ticks it**, the way `runktf` and every
 other Host does: `StartSession`, then `Session.Tick` on a manual clock jumped
 to each next deadline, stopping when the game draws or when a round did nothing
 with nothing left due. Nothing about the loop is the probe's own any more, so
-what it answers for is the path a Host takes — a paint a round skips, a wait
-the client thread declared, a guest that exits — and the whole corpus runs in
-about five seconds instead of hundreds of hand-driven rounds per archive.
+it answers for the path a Host takes (a paint a round skips, a wait the client
+thread declared, a guest that exits), and the whole corpus runs in about five
+seconds instead of hundreds of hand-driven rounds per archive.
 
 **A ladder has to be monotone**, and this one was not. The four rungs between
-"the archive parses" and "the title paints" walk a client by hand — run its
-entry, initialise it, load the main class, construct it, start it — and they
+"the archive parses" and "the title paints" walk a client by hand (run its
+entry, initialise it, load the main class, construct it, start it), and they
 only ever walked the current generation's route. The earlier relocatable module
 does not take that route: its entry is handed the platform's callback table and
 publishes its own classes, where the current generation relocates itself,
@@ -1279,44 +1261,43 @@ returns an executable descriptor and meets a platform in `Initialize`. So an
 archive of the earlier shape was refused at rungs two to five with a read of
 unmapped guest memory, and then passed at six, seven and eight, which go
 through `StartSession` and take the right branch. The record said `grade:
-interactive` and `stopped: initialize` about the same file — one row
-contradicting itself rather than two facts. The hand-walked rungs now make the
+interactive` and `stopped: initialize` about the same file: one row
+contradicting itself. The hand-walked rungs now make the
 same branch `StartSession` makes, so they measure that generation instead of
 reporting it as a fault; rung two asks it only what it can answer, since it has
 no executable descriptor to read.
 
-The ratio is still not the number that says what plays. Nothing here is: what
-plays is found by driving a title with keys and looking at the frames, one
-title at a time. A first frame is a first frame.
+The ratio still does not say what plays, and nothing here does: what plays is
+found by driving a title with keys and looking at the frames, one title at a
+time. A first frame establishes only a first frame.
 
 <a id="implementation-a-probes-ceiling-is-the-sessions-not-a-second-one-beside-it"></a>
 
 #### A probe's ceiling is the session's, not a second one beside it
 
-Every rung here gives the client an ARM instruction budget, and that budget used
-to be a number of the probe's own: fifty million, which was half of what
-`sessionDefaultMaxSteps` grants a real session. Two local archives spend more
-than that inside a single native call in `startApp`, decompressing what they
-load — one of them needs between 91 and 92 million instructions, the other
-between 62 and 63 — so the probe refused both at `start`, refused them again at
-`frame`, and named the ceiling in the reason. The same two archives ran three
+Every rung gives the client an ARM instruction budget, which used to be the
+probe's own number: fifty million, half of what `sessionDefaultMaxSteps` grants
+a real session. Two local archives spend more than that inside a single native
+call in `startApp`, decompressing what they load (one needs between 91 and 92
+million instructions, the other between 62 and 63), so the probe refused both
+at `start` and again at `frame`, naming the ceiling in the reason. The same two archives ran three
 thousand ticks under `runktf` with no error, because a real session had granted
 them twice what the probe did.
 
 **A rung that fails an archive the emulator would have run is measuring
 itself**, and a report that says so twice makes it look like two defects. The
-constant is now taken rather than restated — `localStartAcceptanceMaxSteps =
-sessionDefaultMaxSteps` — so there is no second number to drift out of step and
-none to re-lower on its own; whatever raises the session's ceiling raises the
-probe's with it, and `session.go` is the one place the reasoning has to live.
+constant is now taken rather than restated
+(`localStartAcceptanceMaxSteps = sessionDefaultMaxSteps`), so there is no second
+number to drift or be lowered on its own; whatever raises the session's ceiling
+raises the probe's, and `session.go` is the one place the reasoning lives.
 `WFEATURE_KTF_MAX_STEPS` still widens it beyond that for an investigation.
 
 <a id="implementation-two-rungs-above-a-first-frame"></a>
 
 #### Two rungs above a first frame
 
-A first frame is a first frame, and two of the questions it leaves open can be
-asked without a person watching:
+Two of the questions a first frame leaves open can be asked without a person
+watching:
 
 ```sh
 WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1   go test -run TestLocalKTFArchivesSustainAFrame -v ./internal/platform/ktf
@@ -1333,12 +1314,12 @@ investigation that follows a rung nobody expected an archive to miss.
 
 **sustained** is the title still running a window past its first frame, with no
 error and without ending itself. It is not the same claim as "it ticked a
-thousand times without failing": that one is true of a loop that has stopped
-doing anything, and it was true of titles this project later found frozen. A
-title that ends itself during the window fails the rung and the reason says so,
-which is how the two SKT titles that paint their opening screen and destroy
-themselves in the same breath became visible — the boot rung passes both,
-because painting and then ending is still painting.
+thousand times without failing", which is true of a loop that has stopped
+doing anything and was true of titles this project later found frozen. A title
+that ends itself during the window fails the rung with that reason, which made
+visible the two SKT titles that paint their opening screen and destroy
+themselves immediately; the boot rung passes both, because painting and then
+ending is still painting.
 
 **interactive** is a key changing what the title draws. The judgment is:
 
@@ -1350,19 +1331,18 @@ because painting and then ending is still painting.
 Step 2 is what makes step 4 mean anything: a change measured against a screen
 that was already animating would have happened anyway, so a title that is still
 changing at the end of the settle window is reported as *unanswerable* rather
-than as a failure. Step 3's hold matters as much — **a press of a single tick
-is missed**, because a title of this era reads the pad on its own schedule
-rather than on the one the event arrived by. Several keys are tried in turn and
+than as a failure. Step 3's hold matters as much: **a press of a single tick is
+missed**, because a title of this era reads the pad on its own schedule rather
+than when the event arrives. Several keys are tried in turn and
 the one that moved the screen is logged, because that is the key a route for
 that archive has to start with.
 
 **A blinking prompt is a screen waiting for input.** Settling was once asked as
 "the same frame eight ticks in a row", and a screen drawing a caret, an arrow
 or a "press any key" line in two phases never answers that however long it is
-waited for. In a sweep of 457 archives it refused the question to 46 of
-them — 21 KTF, 17 LGT, 8 SKT — the largest single cause left in that sweep.
-Measuring those 46 first, and counting the distinct frames each cycled through,
-divided them cleanly: 31 repeat at most four frames and introduce nothing new,
+waited for. In a sweep of 457 archives it refused the question to 46 of them
+(21 KTF, 17 LGT, 8 SKT), the largest single cause left in that sweep. Counting
+the distinct frames each of those 46 cycled through divided them cleanly: 31 repeat at most four frames and introduce nothing new,
 with periods between 2 and 16 ticks, while 15 keep producing frames never seen
 before or cycle through six to thirty-two of them. Nothing fell between four
 and six.
@@ -1372,70 +1352,65 @@ subsequent ticks. A screen settles if all samples are identical, or if it cycles
 through at most four distinct frames with the same frame set in each 32-sample
 half. The old eight-tick shortcut could mistake a held animation phase for a
 still screen; the [settling follow-up](#settling-settling-and-key-response-validation) records that
-regression and the corpus comparison. What the settled screen leaves behind is
-the *set* of frames it cycles through, and step 4 asks whether the key drew something that set never held: a
-blinking screen has no single frame to compare against, since half its ticks
-differ from the other half whether or not a key did anything. A screen still
-producing new content stays *unanswerable* — the point is to shrink "I do not
-know", not to spell it as something else.
+regression and the corpus comparison. The settled screen leaves behind the
+*set* of frames it cycles through, and step 4 asks whether the key drew
+something that set never held: a blinking screen has no single frame to compare
+against, since half its ticks differ from the other half whether or not a key
+did anything. A screen still producing new content stays *unanswerable*; the
+aim is to shrink "unknown", not to relabel it.
 
 **A screen that a key did not move is not always a screen that answers no
 key.** The rung settles a screen and presses; a title whose opening runs longer
-than the press window answers nothing, because at that moment there is nothing
-to answer — the opening is still playing. One title measured here holds its
+than the press window answers nothing, because the opening is still playing. One title measured here holds its
 logo for about twenty-four thousand ticks and then keeps animating, against a
 press window of five keys times sixty-four ticks.
 
 The obvious repair, widening the press window, is the wrong one. A window long
 enough to outlast an opening is a window the opening's own next screen arrives
 inside, and the rung credits it to the key: it would report that `fire` changed
-the screen about a title that ignored `fire` and simply reached the end of its
-logo. That is the error the settle step exists to prevent — a change measured
-against a screen that was already moving — moved from before the press to after
-it. So the screen is **settled again** instead: when no key moved it, the rung
-waits with nothing held for the screen to leave the set it settled on, and if
-it does, that is a title whose opening is still running and what it moved to is
-a new screen to settle and ask. A screen that does not move at all while
-nothing is held is a screen that answers no key. The cost falls where the
-evidence is — a title whose first key answers pays nothing.
+the screen of a title that ignored `fire` and reached the end of its logo. That
+is the error the settle step exists to prevent (a change measured against a
+screen that was already moving), moved from before the press to after it. So
+the screen is **settled again** instead: when no key moved it, the rung waits
+with nothing held for the screen to leave the set it settled on; if it does,
+the opening is still running and the new screen is settled and asked in turn. A
+screen that does not move at all while nothing is held answers no key. The cost
+falls where the evidence is: a title whose first key answers pays nothing.
 
 **A second launch has to be a second run.** The rungs already give an archive
 two launches because the handset's first-run notice ends the first one, and
 that was recognised by the session ending, which is the only thing a rung could
 see. It is not the only shape the notice takes: one title puts the notice up
-and *waits* on it — it settles on a still screen and no key moves it — and
+and *waits* on it (it settles on a still screen and no key moves it), and
 launched a second time against the same save directory it plays and `fire`
 answers. Widening "it ended itself" to "it did not get past its first screen"
 risks a free retry for a title that is legitimately stuck, and what bounds that
 risk is that a rerun which reads the same bytes is not a second run at all: over
 an unchanged save directory the guest takes the same branch on the same input.
 So a title that did not end itself gets its second launch only when the first
-one **wrote something for the second to read**, which is exactly what the notice
-does. That is also what keeps "a third would be a probe hoping" true — a second
-launch over unchanged bytes is already hoping, and this is the test that says
-so. Both judgments live in `internal/ladder` beside the settle rule, for the
+one **wrote something for the second to read**, which is what the notice does.
+The same test is why there is no third launch: a second launch over unchanged
+bytes would already be a retry without new input. Both judgments live in `internal/ladder` beside the settle rule, for the
 same reason it does.
 
 **All three platforms ask it the same way, deliberately.** A grade is only worth
-comparing across platforms if it means the same thing on each of them, so the
-judgment — settle, hold, release, compare, and *unanswerable* rather than failed
-when the screen never settles — now lives in `internal/ladder` and the three
-probes call it, rather than being one design written three times against three
-session APIs. It was the three copies that made this worth moving: one question
-answered in three places drifts into three answers the first time it has to
-change, and this one had to. What each probe still owns is what its platform is
-made of — how a tick is spent, how a key is sent, what a frame is read from —
-and all `internal/ladder` is given is one number per tick, the identity of what
-is on the screen. Where the platforms differ is in what
-they are made of: a KTF or LGT tick moves a virtual clock and costs guest work
+comparing across platforms if it means the same thing on each, so the judgment
+(settle, hold, release, compare, and *unanswerable* rather than failed when the
+screen never settles) lives in `internal/ladder` and the three probes call it,
+rather than one design written three times against three session APIs. The
+three copies were the reason to move it: one question answered in three places
+drifts into three answers the first time it changes, and this one had to. Each
+probe still owns what its platform is made of (how a tick is spent, how a key is
+sent, what a frame is read from), and `internal/ladder` is given one number per
+tick, the identity of what is on the screen. The platforms differ there: a KTF
+or LGT tick moves a virtual clock and costs guest work
 rather than seconds, while an SKT tick is real time because a MIDlet's threads
 sleep against the wall clock, so only the SKT probe runs its archives in
 parallel. LGT's key names are resolved through the same table the CLI's LGT
-route path resolves a route's keys with — `fire` must not mean one thing to a
-route and another to a rung. And LGT titles are allowed to end their first
-launch: the handset's restart notice writes a save, tells the player to start
-the title again and ends, which at this rung looks exactly like a title that
-died. So an LGT archive that ends itself gets the second launch the notice
+route path uses, so `fire` means the same to a route and to a rung. LGT titles
+may end their first launch: the handset's restart notice writes a save, tells
+the player to start the title again and ends, which at this rung looks exactly
+like a title that died. So an LGT archive that ends itself gets the second launch the notice
 asked for against the same save directory, and only an ending on that launch is
 reported ([lgt.md](lgt.md#implementation-the-lgt-platform), "Two rungs above a first frame").
 
@@ -1453,13 +1428,13 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 
 Every archive under `var/games/skt` is started, ticked for 300 ticks and
 required to end somewhere other than the error state with something lit in its
-frame. That directory is the set the probe holds to,
-not the whole local corpus. The earlier ninety-archive sweep is historical;
-its former `var/games/test_skt` directory and local failure report are no longer
-authoritative corpus pointers. Use dated `var/acceptance/` records and current
-archive hashes before comparing membership. A tick here is real time — a MIDlet's threads
-sleep against the wall clock — so the subtests run in parallel and the whole
-probe takes about half a minute. Two of the fifteen finish early and still
+frame. That directory is the set the probe holds to, not the whole local corpus.
+The earlier ninety-archive sweep is historical; its former `var/games/test_skt`
+directory and local failure report are no longer authoritative corpus pointers.
+Use dated `var/acceptance/` records and current archive hashes before comparing
+membership. A tick here is real time (a MIDlet's threads sleep against the wall
+clock), so the subtests run in parallel and the whole probe takes about half a
+minute. Two of the fifteen finish early and still
 pass: they check a licence against the handset's subscriber number, draw the
 refusal and call `System.exit`, which is a title behaving correctly on a
 handset that is not the one it was bought for (`docs/skvm.md`).
@@ -1472,11 +1447,11 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchiveSoundsDecode -v ./inte
 ```
 
 Every SMAF resource in every archive under `var/games/skt` has to decode, carry
-a length, and reach a sink with something in it — 432 sounds, 243 with MIDI and
+a length, and reach a sink with something in it: 432 sounds, 243 with MIDI and
 205 with sampled audio, all passing. It is separate from the boot probe because
 **a sound that will not decode is invisible from a frame**: the title runs, the
-screen is right, and the only difference is silence, which is exactly how this
-platform went its whole life without emitting a note ([`audio.md`](../audio.md)).
+screen is right, and the only difference is silence, which is how this platform
+went without emitting a note until then ([`audio.md`](../audio.md)).
 The same sweep over the ninety-archive diagnostic set reads 1,693 sounds with
 the same result, so a refusal here is a regression rather than a gap.
 
@@ -1488,26 +1463,25 @@ WFEATURE_LGT_ACCEPTANCE=1 go test -run TestLocalLGTArchivesBootAndPaint -v ./int
 ```
 
 Every archive under `var/games/lgt` is started, ticked, and required to present
-a frame with something lit in it. The skip path is still there and still names
-its reason — a Java title that
-stops at something the AOT bridge does not implement yet reports
-`ErrJavaAppUnsupported` — but no local archive takes it any more. It once took
-three: Java titles were the platform's open boundary, and closing it is what
-moved them into this probe rather than around it. See [`lgt.md`](lgt.md#implementation-the-lgt-platform).
+a frame with something lit in it. The skip path still exists and names its
+reason (a Java title that stops at something the AOT bridge does not implement
+reports `ErrJavaAppUnsupported`), but no local archive takes it any more. It
+once took three: Java titles were the platform's open boundary, and closing it
+moved them into this probe. See [`lgt.md`](lgt.md#implementation-the-lgt-platform).
 
 This probe exists because of what the LGT fixture cannot do. Every platform
-contract that turned out to be wrong there — a resource read that answered a
-length where zero meant success, a timer that took its callback from the arming
-call's parameter, a graphics context this platform thought it owned — looked
-correct against a fixture written to the same misunderstanding. Only a real
-module disagreed. The probe is what keeps the corrected ones from drifting back.
+contract found wrong there (a resource read that answered a length where zero
+meant success, a timer that took its callback from the arming call's parameter,
+a graphics context this platform thought it owned) looked correct against a
+fixture written to the same misunderstanding; only a real module disagreed. The
+probe keeps the corrected contracts from drifting back.
 
 **It stops at the title screen, and that is not where the defects are.** Two
-found after it was passing — every line of a title's dialogue rendering as the
-literal `%.*s`, and two titles losing their entire opening sequence to a delete
-that left the file existing — booted, painted, reached the world and saved
-through it. The screens were simply wrong, and nothing that runs unattended
-knows what a game is supposed to show next.
+defects found after it was passing (every line of a title's dialogue rendering
+as the literal `%.*s`, and two titles losing their entire opening sequence to a
+delete that left the file existing) booted, painted, reached the world and saved
+through it. The screens were wrong, and nothing that runs unattended knows what
+a game should show next.
 
 So LGT's third layer is a scripted run driven by `-key`, reviewed as a contact
 sheet of `-framedir` frames, diffed frame-by-frame against the build before the
@@ -1520,20 +1494,20 @@ has it in full, and [`cli.md`](../cli.md) has the flags.
 ### One command, one date
 
 The probes above are fifteen `go test` runs behind fourteen environment
-variables, which is why every count in this document used to be a sentence
-somebody typed after an afternoon of running them. A sentence like that has no
-date on it, and the corpus underneath it changes: "all 28 currently pass" was
-written when `var/games/lgt` held 28 archives.
+variables, so every count in this document used to be a sentence typed after an
+afternoon of running them. Such a sentence has no date, and the corpus under it
+changes: "all 28 currently pass" was written when `var/games/lgt` held 28
+archives.
 
 ```sh
 make acceptance                      # all three platforms
 make acceptance ARGS="-platform ktf" # one of them
 ```
 
-`internal/tools/acceptance` runs each probe with the variable that lets it run,
-reads the results out of `go test -json` rather than out of its printed output —
-which is what keeps a subtest's name and its reason together when several fail
-at once — and writes `var/acceptance/<date>.md`: what was in each corpus
+`internal/tools/acceptance` runs each probe with the variable that enables it,
+reads the results from `go test -json` rather than from printed output (which
+keeps a subtest's name and its reason together when several fail at once), and
+writes `var/acceptance/<date>.md`: what was in each corpus
 directory, a row per stage, and then every archive that did not pass with the
 line that says why.
 
@@ -1546,13 +1520,13 @@ the corpus can carry is the report's date.
 
 #### One archive, one line
 
-The report is prose, and prose does not subtract. Two of them differ in their
-wording everywhere the corpus is unchanged, and the one archive that lost a
-rung is a line somewhere in the middle of that. So the same run also writes
+The report is prose, and two prose reports cannot be subtracted: they differ in
+wording everywhere the corpus is unchanged, and the one archive that lost a rung
+is a line somewhere in the middle. So the same run also writes
 `var/acceptance/<date>.ndjson`: one JSON object per line, a run line and then
-one line per file in every corpus directory — **including the files no probe
-ever picked up**, because a download that did not finish is invisible in a pass
-count and a file no loader claimed is invisible in a failure count.
+one line per file in every corpus directory, **including the files no probe
+picked up**, because a download that did not finish is invisible in a pass count
+and a file no loader claimed is invisible in a failure count.
 
 Every line begins with a `schema` number, and a file written by a newer tool is
 refused rather than half-read. Two rows are the same archive only when they are
@@ -1574,10 +1548,10 @@ regression. An archive line carries:
 | `cached`, `measured_run` | whether this line was carried forward rather than measured, and the run that did measure it |
 
 Three grades are not rungs and mean different things: `none` is a file refused
-at the first rung it was asked, `skipped` is one every rung knowingly declined —
-a package of a shape the ladder does not drive is not a failure — and `unrun` is
-one no ladder stage answered for at all. A comparison must not read any of them
-as a fall from another, and it does not.
+at the first rung it was asked, `skipped` is one every rung knowingly declined
+(a package of a shape the ladder does not drive is not a failure), and `unrun`
+is one no ladder stage answered for. A comparison does not read any of them as a
+fall from another.
 
 The rows are joined to the files through the name `go test` prints rather than
 the name on disk, because a subtest name has its spaces rewritten to
@@ -1590,26 +1564,23 @@ name as a file no probe ever ran.
 
 `why` is the **last line the subtest printed**, and nothing else, because that
 is where a `t.Fatalf` leaves its message and because a report needs one
-sentence per archive rather than a transcript. That makes the order of a
-failure's own parts load-bearing: whatever a probe's message ends with is the
-whole of what a person reading the sweep sees, and the whole of what
-`why_class` groups on.
+sentence per archive rather than a transcript. The order of a failure's parts
+therefore matters: whatever a probe's message ends with is all a person reading
+the sweep sees, and all `why_class` groups on.
 
 These probes print the runtime's diagnostic counts with a failure, dozens of
-lines of them, and a message that ended with that block spent that one line on
-whichever counter happened to sort last. It is not hypothetical: one archive's
-refusal was recorded as `1 getmethod getClipX()I` — the fortieth count line of
-a run whose lookups had every one of them succeeded, naming a member the
-runtime declares — while the error that ended the run never reached the report
-at all. A sweep read that way sends the next reader after a defect that is not
-there.
+lines, and a message that ended with that block spent its one line on whichever
+counter sorted last. One archive's refusal was recorded as
+`1 getmethod getClipX()I`, the fortieth count line of a run whose lookups had
+all succeeded, naming a member the runtime declares, while the error that ended
+the run never reached the report. A sweep read that way sends the next reader
+after a defect that does not exist.
 
-So a probe puts its counts first and its reason last —
-`withDiagnosticCounts` in `local_acceptance_test.go`, which the rungs in
-`local_ladder_test.go` call as well — and
-`TestDiagnosticCountsDoNotDisplaceTheReason` holds it there. Diagnostics are
-still worth printing, because they are usually the next step; what changed is
-only which end of the message they sit at.
+So a probe puts its counts first and its reason last (`withDiagnosticCounts` in
+`local_acceptance_test.go`, which the rungs in `local_ladder_test.go` also
+call), and `TestDiagnosticCountsDoNotDisplaceTheReason` holds it there.
+Diagnostics are still printed, because they are usually the next step; only
+their position in the message changed.
 
 <a id="implementation-what-changed-and-what-they-have-in-common"></a>
 
@@ -1625,8 +1596,8 @@ written into the report:
   used to be done by hand after a sweep.
 - **Since \<the previous run>.** Which archives got further, which got worse,
   which arrived, which left, and which are the same name over different bytes.
-  A run that moved nothing says so in one line, which is the answer a release
-  check asks for most often.
+  A run that moved nothing says so in one line, the answer a release check
+  most often needs.
 
 ```sh
 make acceptance                                   # compares with the newest report already there
@@ -1636,8 +1607,7 @@ go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
 ```
 
 `-compare` runs no probes: it reads two record files and writes the difference
-to standard output, which is what a release check reaches for when both runs
-have already happened.
+to standard output, for a release check whose two runs have already happened.
 
 <a id="implementation-not-measuring-again-what-has-not-changed"></a>
 
@@ -1646,10 +1616,10 @@ have already happened.
 A sweep of a corpus this size is mostly spent re-answering questions whose
 inputs did not move: the same bytes, driven by the same build, produce the same
 answer. So a run may carry an archive's line forward from the run `-since`
-names instead of measuring it again, which is what makes the sweep cheap enough
-to run often.
+names instead of measuring it again, which makes the sweep cheap enough to run
+often.
 
-Two rules keep that from becoming a lie.
+Two rules keep a carried line truthful.
 
 **The identity has to cover everything that decides the answer.** The archive's
 SHA-256 is the input and the build identity is the code that reads it, so a
@@ -1657,27 +1627,26 @@ line is carried only when the file's bytes are the same *and* both runs have
 the same build identity, operating system, architecture and Go version.
 
 A commit alone is not that identity: it names a build only while the tree *is*
-that commit, and a modified tree is precisely the state a person is in while
-changing the thing being measured — which is also when a sweep is most worth
-re-running. So a modified checkout is identified by the commit plus a digest of
-everything differing from it: the diff against `HEAD`, and the content of every
-untracked file the ignore rules do not cover. That digest is a superset of what
-decides an answer, and the over-counting is the direction to err in — editing a
-document costs a needless sweep, whereas ignoring a change because it looked
-unrelated would mean reporting an answer this code never gave. A tree that
-cannot be described at all carries nothing either way.
+that commit, and a modified tree is the state a person is in while changing the
+thing being measured, which is also when a sweep is most worth re-running. So a
+modified checkout is identified by the commit plus a digest of everything
+differing from it: the diff against `HEAD`, and the content of every untracked
+file the ignore rules do not cover. That digest is a superset of what decides an
+answer, and over-counting is the safe direction: editing a document costs a
+needless sweep, whereas ignoring a change that looked unrelated would report an
+answer this code never gave. A tree that cannot be described carries nothing.
 
 The identity is read from the checkout rather than from `debug.ReadBuildInfo`,
-because the command runs under `go run` — which stamps no revision, and which
-compiles the probes out of whatever is in the tree at the moment they run. The
+because the command runs under `go run`, which stamps no revision and compiles
+the probes from whatever is in the tree when they run. The
 build stamp is the fallback for a copy of the tool built elsewhere.
 
 The report says in a line why nothing was carried when nothing was, and
 `ARGS="-cache=false"` measures everything again regardless.
 
 **A carried line has to say that it was carried.** A record that reads like a
-measurement and is a copy of one turns a report into a claim nobody made, so
-every carried line sets `cached` and names the run that actually measured it in
+measurement but is a copy turns a report into a claim nobody made, so every
+carried line sets `cached` and names the run that measured it in
 `measured_run`. That name is carried rather than rewritten, so a line copied a
 second time still points at the run that asked. The run line names the file its
 carried rows came from in `cached_from`, the stage table has a **carried
@@ -1687,25 +1656,23 @@ is carried whole rather than a rung at a time: a line whose earlier run did not
 answer every stage this one intends to ask is measured again, so a line is one
 thing or the other.
 
-The answers come from the most recent run there is — including the current
-day's own file, which the comparison deliberately steps over. Comparing a run
-with itself says nothing, which is why the delta skips it; reusing its answers
-is the whole point, which is why this does not.
+The answers come from the most recent run, including the current day's own
+file, which the comparison deliberately skips: comparing a run with itself says
+nothing, while reusing its answers is the purpose of the cache.
 
 The selection reaches a probe as `go test`'s own subtest filter, because a
 subtest here *is* an archive and the runner already runs a whole test function
-at a time. A flag on the probes would be a second way of saying what `-run`
-already says; what it did need is one guard on the reader — a filter that
-matches no subtest leaves the parent test passing with nothing under it, and
-reading that as "the whole corpus passed" would invent a row out of the absence
-of one.
+at a time. A flag on the probes would duplicate `-run`; what it needed is one
+guard on the reader, because a filter that matches no subtest leaves the parent
+test passing with nothing under it, and reading that as "the whole corpus
+passed" would invent a row from the absence of one.
 
-Two things follow from a report having to be readable per archive. **Each probe
-is one subtest per archive**, including the three that used to loop with
-`t.Errorf` and print a count at the end — a count says a number where a report
-needs a name. And **the KTF frame probe fails the archive that draws nothing**
-rather than logging it: it used to pass as long as *any* archive drew, so a
-title that stopped painting became a line in a log nobody reads. The exit code
+Because a report must be readable per archive, **each probe is one subtest per
+archive**, including the three that used to loop with `t.Errorf` and print a
+count at the end (a count gives a number where a report needs a name), and
+**the KTF frame probe fails the archive that draws nothing** rather than logging
+it: it used to pass as long as *any* archive drew, so a title that stopped
+painting became an unread log line. The exit code
 of `make acceptance` says whether a stage could run at all, not whether every
 archive passed; a report that lists failures is a successful run of it.
 
@@ -1713,11 +1680,11 @@ archive passed; a report that lists failures is a successful run of it.
 
 #### Sweeping a tree this repository does not keep
 
-The three corpus directories above are the ones a Host reads, and what a
-release is checked against is deliberately fixed to them. They are not the only
-archives on a machine: investigating a platform accumulates a much larger
-unsorted tree, filed under group directories somebody named by hand, and the
-counts over *that* tree are what say which defect is worth fixing next.
+The three corpus directories above are the ones a Host reads, and a release is
+deliberately checked against them alone. They are not the only archives on a
+machine: investigating a platform accumulates a much larger unsorted tree, filed
+under hand-named group directories, and the counts over *that* tree say which
+defect is worth fixing next.
 
 ```sh
 make acceptance ARGS="-games 'var/games/one,var/games/two' -exclude deliberately-broken,bundles -out var/acceptance/sweep"
@@ -1725,62 +1692,57 @@ go run ./internal/tools/acceptance -games /some/tree -platform ktf
 ```
 
 `-games` is the same flag `checkgames` has and points the same ladders at
-another root. Three things about it follow from what a sweep is for, and each
-of them is a decision rather than a detail.
+another root. Three design decisions follow from what a sweep is for.
 
 **The platform is what `detect.Classify` says, not what the folder is called.**
-A group directory's name is a note somebody typed; the bytes are the evidence,
-and this project has told these packages apart by content since before it had a
-picker. A sweep that trusted the folder would file an archive under a ladder
-that cannot load it and then report that loader's refusal as a defect of the
-loader. This is also the first caller to spend `detect.Reason` for what it was
-added for.
+A group directory's name is a typed note; the bytes are the evidence, and this
+project has told these packages apart by content since before it had a picker.
+A sweep that trusted the folder would file an archive under a ladder that cannot
+load it and report that loader's refusal as a loader defect. This is also the
+first caller to use `detect.Reason` for its intended purpose.
 
 **A file no platform claimed is a record, not a discard, and the reasons are
-counted apart.** Half of what a sweep of an unsorted tree is for is the pile
-nothing ran, and the pile is the most misleading number in it: only one of the
-reasons behind it is work this project can do. A package locked before it was
-distributed is not reachable by any amount of work on the loaders; a container
-of another format is one unpacking away from being a question at all; a zip of
-whole packages is a choice that belongs to the person holding it. What is left
-— a readable archive carrying no marker any platform recognises — is the number
-worth acting on. The report divides them under **What nothing claimed** and
-names the files behind that last count, so the next investigation starts from a
-list rather than from another sweep.
+counted apart.** Half of a sweep of an unsorted tree is about the pile nothing
+ran, and that pile is its most misleading number: only one of the reasons
+behind it is work this project can do. A package locked before distribution is
+unreachable by any loader work; a container of another format must be unpacked
+before it is a question; a zip of whole packages is its holder's choice. What
+remains (a readable archive carrying no marker any platform recognises) is the
+number worth acting on. The report divides them under **What nothing claimed**
+and names the files behind that last count, so the next investigation starts
+from a list rather than another sweep.
 
 **It recurses, and it keeps the group.** The tree files its archives a level or
-two below the root, so a sweep that stopped at the root would find nothing at
-all. (`checkgames` stops at one level for the opposite reason: it answers what a
-Host can *start*, and an archive filed deeper cannot be started. What this asks
-— what does this build make of these bytes — does not change with a file's
-depth.) Each group directory becomes a corpus of its own, named for the
-directory *and* the platform, and that name is what a row is filed under: two
-groups may hold the same file name, and a row naming only the file would name
-both. The platform is part of the name so that a group gaining its first
+two below the root, so a sweep that stopped at the root would find nothing.
+(`checkgames` stops at one level for the opposite reason: it answers what a Host
+can *start*, and an archive filed deeper cannot be started. What a sweep asks,
+what this build makes of these bytes, does not depend on depth.) Each group
+directory becomes a corpus of its own, named for the directory *and* the
+platform, and rows are filed under that name: two groups may hold the same file
+name, and a row naming only the file would name both. The platform is part of the name so that a group gaining its first
 archive of a second platform does not rename the rows of the first.
 
 **Nothing is excluded by default.** A tree holds deliberately broken files, bags
-of whole packages, and folders on their way out. Which of those is worth
-sweeping is the caller's judgment on the day rather than a list in this tool
-that an edit would be needed to change, so `-exclude` names directories not to
-descend into — by base name, to skip every folder of that name, or by path
-relative to the root being swept, to skip exactly one.
+of whole packages, and folders on their way out. Which are worth sweeping is
+the caller's judgment on the day, not a list in this tool, so `-exclude` names
+directories not to enter: by base name, to skip every folder of that name, or by
+path relative to the swept root, to skip exactly one.
 
-**Point `-out` somewhere else for a one-off sweep.** A report is one run over
-one corpus, and the delta lines two of them up by the corpus a row is in. A
-sweep of another tree written into the usual directory would be read the next
-day as the whole ordinary corpus arriving and the whole swept tree leaving,
-which is true and useless.
+**Point `-out` somewhere else for a one-off sweep.** A report is one run over one
+corpus, and the delta lines two of them up by corpus. A sweep of another tree
+written into the usual directory would be read the next day as the whole
+ordinary corpus arriving and the whole swept tree leaving, which is accurate and
+useless.
 
 <a id="implementation-how-a-probe-is-pointed-at-a-directory-it-does-not-know-about"></a>
 
 ##### How a probe is pointed at a directory it does not know about
 
-Each probe finds its corpus from its own source location — `runtime.Caller`,
-then up to the repository root, then `var/games/<platform>`. That is the right
-thing for a probe to do, and it is worth keeping: a test that took its
-directory from the environment could be run against a corpus nobody recorded,
-and the corpus a release is checked against is not a parameter.
+Each probe finds its corpus from its own source location: `runtime.Caller`,
+then up to the repository root, then `var/games/<platform>`. That is deliberate:
+a test that took its directory from the environment could run against a corpus
+nobody recorded, and the corpus a release is checked against is not a
+parameter.
 
 So a sweep does not tell the probe where to look. It changes what "up to the
 repository root" reaches: a temporary module root whose every top-level entry
@@ -1788,12 +1750,13 @@ is a symbolic link to the checkout's, except `var`, which the sweep owns and
 fills with links to the files it wants asked about. The probes compile from the
 same source and read a corpus this tool assembled.
 
-Two properties are the point of doing it that way rather than by moving files:
+Two properties are the reason for doing it this way rather than by moving
+files:
 
 - **The real corpus is never written to.** Nothing creates, moves or deletes
   anything under the checkout; the only directory written is a temporary one,
-  removed when the run ends. A sweep of a diagnostic tree must not be able to
-  disturb the corpus a release is checked against, and this cannot.
+  removed when the run ends. A sweep of a diagnostic tree cannot disturb the
+  corpus a release is checked against.
 - **The build identity stays the checkout's.** Only `go test`'s working
   directory moves, so the revision, the diff and the untracked files that say
   what code answered are still read from the checkout and a carried row still
@@ -1818,10 +1781,10 @@ files and their checksums verified.
 The opt-in local probes also passed for all 15 SKT archives and all 35 LGT
 archives. The KTF frame probe rendered 43 of the 44 JAR-packaged archives and
 skipped one earlier package; the remaining archive contains a malformed nested
-JAR and fails before execution. **Those counts are this audit's date and no
-later one** — they come from one afternoon in September 2026, and the corpus
-has grown since. `make acceptance` is where a current one comes from now; see
-"One command, one date" above.
+JAR and fails before execution. **Those counts belong to this audit's date
+only**: they come from one afternoon in September 2026, and the corpus has grown
+since. `make acceptance` produces current counts; see "One command, one date"
+above.
 
 The review found the following boundaries that the passing suites do not yet
 cover:
@@ -1829,9 +1792,9 @@ cover:
 - The SKT outer archive and nested JAR readers did not enforce the four
   archive limits the other two loaders do: input size, entry count, per-entry
   expansion, and total expansion. The container bounded one entry and nothing
-  else; the JAR bounded one entry and the total. **Since fixed**, and the four
-  bounds now read the same way in all three loaders — see
-  [architecture.md](../architecture.md), "What an archive may declare".
+  else; the JAR bounded one entry and the total. **Since fixed**: the four
+  bounds now read the same way in all three loaders (see
+  [architecture.md](../architecture.md), "What an archive may declare").
 - Hosts call `os.ReadFile` before any loader sees an archive, so a loader's
   input bound is a bound on what will be parsed rather than on what the
   process allocates. The input is a file the user placed in their own game
@@ -1844,17 +1807,17 @@ cover:
   display name the descriptor parser had already decoded, which corrupted the
   Korean name in the report. **Both since fixed**: the scan and the picker now
   share one boundary in `internal/gameroot`, and each platform's name is
-  printed in the form its own parser left it in. The audit did not notice the
-  third defect the tool had: it checked KTF and LGT and **silently skipped
-  SKT**, whose program number is the same kind of self-declared, copyable id.
-  That is covered now too. See [cli.md](../cli.md), "checkgames".
+  printed in the form its own parser left it in. The audit missed the tool's
+  third defect: it checked KTF and LGT and **silently skipped SKT**, whose
+  program number is the same kind of self-declared, copyable id. That is
+  covered now too. See [cli.md](../cli.md), "checkgames".
 - The release smoke job stages a fresh directory and runs a freshly built
   executable; it did not extract and validate the archives that users
   download, so file presence, modes, line endings, embedded notices, version
   output and traversal-safe extraction were a manual release check. **Since
   fixed**: `make dist-check` reads all five archives back and the release
-  workflow runs it before publishing — see [running.md](../running.md), "What was
-  verified, and where". Reproducibility is not addressed: the archives still
+  workflow runs it before publishing (see [running.md](../running.md), "What was
+  verified, and where"). Reproducibility is not addressed: the archives still
   carry builder owner/group and time metadata, so identical source does not
   produce byte-identical packages.
 - The primary distribution is a PWA, but its automated acceptance stops at Go
@@ -1862,6 +1825,7 @@ cover:
   covers installation, service-worker update behavior, canvas, audio, touch
   input, reconnect, or save restoration. Still open: what a browser in CI would
   cost has to be weighed against what the manual sweep already covers.
+  Superseded: see [PWA release acceptance](../pwa-acceptance.md).
 - At the audit date, the workflows used `checkout@v4`, `setup-go@v5`,
   `setup-node@v4`, and `upload-artifact@v4`, while their official examples had
   moved to major version 7. Actions were tag-pinned rather than full-SHA-pinned,
@@ -1886,8 +1850,8 @@ cover:
   product decision.
 - The release-facing Korean text still needs a publication pass. The README's
   third-party component table omitted `golang.org/x/sys`, although it is linked
-  on amd64 targets and was correctly included in the embedded notices — **since
-  fixed**, and since made to fail: the bundled components are named in three
+  on amd64 targets and was correctly included in the embedded notices. **Since
+  fixed**, and a test now fails on it: the bundled components are named in three
   places (the README's table, the notices' summary table, the notices' own
   sections) and `TestEveryListOfBundledComponentsNamesTheSameOnes` in
   `internal/licenses` compares all three, in both directions. Only the first
@@ -1897,17 +1861,16 @@ cover:
 
 The audit also read the constraint "use the same runtime data and save format
 for both profiles" as requiring one save root, and reported the per-profile
-root as a divergence from it. That is a misreading kept here so it is not made
+root as a divergence from it. That misreading is kept here so it is not made
 twice: the constraint is about the format, both profiles already read the same
-`var/games` and speak the same save API, and the split root is a deliberate
-design with its reason written down — a debug session is where a half-finished
-API is most likely to write a save the game cannot read back. See
+`var/games` and speak the same save API, and the split root is a deliberate,
+documented design, because a debug session is where a half-finished API is most
+likely to write a save the game cannot read back. See
 [architecture.md](../architecture.md#build-profiles).
 
 The audit did not turn the documented semantic gaps in the JVM, widgets, or
 graphics recorder into immediate work without a caller that needs them. Those
 remain evidence-triggered watch items in the local plan.
-
 
 <a id="implementation-browser-session-retention-and-control"></a>
 
@@ -1938,7 +1901,6 @@ server restart followed by automatic picker recovery. These were local browser
 checks, not a new browser dependency or CI job. OS-driven phone suspension,
 process eviction, and hours-long pauses in real titles still require handset
 checks; scripted visibility events do not establish those behaviors.
-
 
 <a id="implementation-destructive-starts-and-pause-observations-2026-09-10"></a>
 
@@ -1986,7 +1948,6 @@ needs a reproducible in-game timer or soundtrack failure and a dedicated core
 change. Real-phone backgrounding, long gameplay pauses, audible recovery, and
 progress made by guest threads outside these sampled scenes remain unverified.
 
-
 <a id="implementation-release-metadata-for-042-2026-09-10"></a>
 
 #### Release metadata for 0.4.2 (2026-09-10)
@@ -2003,7 +1964,6 @@ real `/api/status` returned version 0.4.2 with the release profile, followed by
 not execution on an iPhone. `TestEmbeddedServerReportsItsReleaseVersion` covers
 both a supplied version and the unstamped `dev` fallback. No device install or
 release publication was performed.
-
 
 <a id="runtime-runtime-boundary-follow-up-2026-09-17"></a>
 
@@ -2189,7 +2149,6 @@ changes. `git diff --check` and `gofmt` checks passed. The page's intermediate
 frame test is included in the Node suite. No new real-game playthrough,
 physical-device check or real-browser acceptance run is claimed.
 
-
 <a id="settling-settling-and-key-response-validation"></a>
 
 ## Settling and key-response validation (2026-09-12)
@@ -2253,7 +2212,6 @@ LGT and SKT currently leave before that final watch. No current result changed
 because of that difference in this comparison. This records the difference
 without claiming it can never matter, and does not add unmeasured rounds merely
 to increase a coverage number.
-
 
 <a id="webkit-webkit-frame-decoding-investigation"></a>
 

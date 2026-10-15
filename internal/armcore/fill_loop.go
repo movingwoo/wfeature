@@ -7,7 +7,7 @@ import "encoding/binary"
 // The library hooks answer `memcpy` and `memset` natively because interpreting
 // a byte-at-a-time fill is the worst thing this emulator can be asked to do.
 // A game's own rasteriser is the same shape with no entry point to hook: it is
-// a loop the compiler emitted inline, and `armcore.md` measured that the
+// a loop the compiler emitted inline, and `docs/history/armcore.md` measured that the
 // corpus is full of them — 34 fill-shaped loops against 8 copy-shaped ones —
 // and that they cannot be matched as byte patterns, because two titles doing
 // the same fill share no instruction sequence. What is needed is a recogniser
@@ -17,14 +17,14 @@ import "encoding/binary"
 // through a pointer, advances that pointer by the width of the store, counts a
 // register down by one and branches back while the count has not run out. That
 // is 43.6% of one title's guest instructions in a scene a person reported as
-// slow, and the two halfword fills `armcore.md` profiled in other titles are
+// slow, and the two halfword fills `docs/history/armcore.md` profiled in other titles are
 // the same shape.
 //
 // **The shape is one loop written several ways**, and the ways are the
 // compiler's rather than the program's. A corpus sweep of the loops this hook
 // refuses found the same fill in three more titles at 19%, 29% and 69% of
 // everything they execute, each refused over a detail that changes nothing
-// about what the loop does — see `armcore.md`, "The same fill, written four
+// about what the loop does — see `docs/history/armcore.md`, "The same fill, written four
 // ways". So the analyser reads the parts that vary rather than a fixed
 // sequence:
 //
@@ -65,7 +65,7 @@ import "encoding/binary"
 // instructions, so the answer is read tens of millions of times a minute for
 // code no recogniser will ever help — the whole hook costs 2 to 6% of such a
 // run. Reading the answer out of a word the decode had already loaded returns
-// about half of that on some titles and nothing on others; see `armcore.md`,
+// about half of that on some titles and nothing on others; see `docs/history/armcore.md`,
 // "What the hook costs where it never fires". The reason it is kept either way
 // is that riding on the decode entry drops the answer the moment the page's
 // instructions change, where a map keyed by the loop head never did — so a

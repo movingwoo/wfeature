@@ -11,10 +11,10 @@ the medium in-game speed. Passing one path does not establish the others.
 The character-start report ends in `System.arraycopy` with a null source.
 The caller loads map data from a separate JAR when `getResourceAsStream`
 does not find it in the primary JAR. The outer package contains that data.
-Two runtime defects prevent access: the container loader drops every `.jar`
-beside the primary payload, and the two-string `XFile` constructor treats the
-entry name as a textual file mode. The latter interpretation was inferred by
-the old implementation; the observed caller explicitly passes an archive name
+Two runtime defects prevented access: the container loader dropped every
+`.jar` beside the primary payload, and the two-string `XFile` constructor
+treated the entry name as a textual file mode, an interpretation the old
+implementation had inferred, whereas the observed caller passes an archive name
 and its internal resource path.
 
 The loader now retains secondary JARs as installed files without adding their
@@ -93,11 +93,10 @@ reads the retained item table as ability names. Its lazy loader checks only
 whether the shared table is null. The table is non-null, so the required
 24-entry resource is not loaded.
 
-Inspection of the main loop shows key handlers
-queue input, the guest worker consumes it before updating/drawing, and `paint`
-only supplies the graphics object. A concurrent Host paint replacing the name
-table therefore does not explain this trace. Do not suppress the bounds
-exception or fabricate a larger array.
+In the main loop, key handlers queue input, the guest worker consumes it
+before updating and drawing, and `paint` only supplies the graphics object, so a
+concurrent Host paint replacing the name table does not explain this trace. Do
+not suppress the bounds exception or fabricate a larger array.
 
 An independent OpenJDK 8 replay restores the failing object graph and invokes
 the original drawing method. It throws the same index-9 exception on its first
@@ -155,8 +154,8 @@ injects only this module's routing contract into the existing in-process socket
 service. The same 7,018-tick route then writes 32 bytes, reads a two-byte
 response, and closes the socket normally. The final frame is an empty
 informational dialog with an OK button, rather than the baseline's communication
-error. A second
-fresh-save replay adds explicit confirmation and 300 observation ticks. It
+error. A second fresh-save replay adds explicit confirmation and 300 observation
+ticks. It
 completes 7,324 ticks and reaches the title screen without the network error;
 artifacts are `build/qa-case3-null-complete.{route,log,png}`. This confirms the
 No path with the diagnostic adapter. Those diagnostic runs did not establish
@@ -223,45 +222,44 @@ dips, are the remaining investigation's target.
 The module hash is
 `a1467fcb4a07f8ed763b43c74fda41c9ce44566539cc21f51e1bbcaae296b696`.
 A debug runtime replay with a fresh isolated save root delivers all 1,326
-recorded key edges over 160 seconds without uncaught callbacks. It does not
-reproduce the severe window. Screen captures show the fixed timestamps reach
-a main-menu confirmation instead of the intended speed option; this is not a
-successful reproduction of the setting change. The run's logs, captures and
-guest profiles are `build/qa-case4-full-*`, with input events at
-`build/qa-case4-events.json`. A separate manual probe reaches the speed option.
-The first manual navigation leaves the system menu open: the first CLR removes
-its selection, and another CLR returns to play. Shorter holds alone do not
-change that behavior. Subsequent navigation verifies each screen and uses two
-ticks held, two released, then 30 observation ticks. Menu-only timing results
-do not establish gameplay behavior after selecting medium.
+recorded key edges over 160 seconds without uncaught callbacks and does not
+reproduce the severe window. Its captures show that the fixed timestamps reach a
+main-menu confirmation instead of the speed option, so it did not reproduce the
+setting change either. Logs, captures and guest profiles are
+`build/qa-case4-full-*`, with input events at `build/qa-case4-events.json`.
 
-The manual probe subsequently returns to the visible combat tutorial after
-selecting high. The small selected glyph was initially misread as medium;
-inspection of its pixel strokes identifies it as high. A 300-tick real-time
-measurement completes in 7.685 seconds,
-with 7.339 seconds of guest time, 6.663 seconds busy, and a 57.684 ms maximum
-tick. It retires 796,673,754 instructions. This is not the reported severe
-slowdown or a medium-setting acceptance. Captures are
-`build/qa-case4-combat-high-option.png` and
-`build/qa-case4-combat-high.png`. The probe is `build/qa_lgt_manual.go` and
-uses only `var/savedata/qa-20260920/medium-manual/`, copied from the preceding
-QA replay's save root. An earlier adjacent-setting measurement is not labeled
-high: its exact displayed value was not established. Subsequent navigation
-passes the tutorial and enters the first combat stage. The full menu has
-Status, Skill, Item, Record and System tabs, unlike the tutorial's system-only
-menu. First-use Item and Record explanations must be confirmed before tab
-navigation proceeds. Medium is then explicitly selected and verified in
-`build/qa-case4-battle-medium-option.png`. After confirmation and leaving the
-menu, the battlefield remains visible with its minimap, enemies and weather.
-A 300-tick measurement takes 11.914 seconds wall time and advances 11.968
-seconds guest time (approximately 1.00x), with 7.667 seconds busy, a 53.876 ms
-maximum tick, and 912,392,079 guest instructions. The resulting screen is
-`build/qa-case4-battle-medium.png`; console measurements are transcribed in
-`build/qa-case4-manual-evidence.txt`. This verifies that specific setting change
-in the first combat stage without the reported transient. It does not explain
-or resolve the severe original episode. After closing the probe, its ordinary
-save files are copied to the isolated `medium-battle-checkpoint` QA save root,
-with hashes in `build/qa-case4-battle-save-hashes.json`, for subsequent runs.
+A separate manual probe (`build/qa_lgt_manual.go`, using only
+`var/savedata/qa-20260920/medium-manual/`, copied from the preceding replay's
+save root) reaches the speed option. In the first navigation the first CLR
+removes the system menu's selection and another CLR returns to play; shorter
+holds do not change that. Later navigation verifies each screen and uses two
+ticks held, two released, then 30 observation ticks. Menu-only timings do not
+establish gameplay behavior after selecting medium.
+
+- **High, combat tutorial.** The small selected glyph was first misread as
+  medium; its pixel strokes identify it as high. A 300-tick real-time
+  measurement completes in 7.685 s wall time, with 7.339 s of guest time,
+  6.663 s busy, a 57.684 ms maximum tick and 796,673,754 instructions. This is
+  neither the reported slowdown nor a medium-setting acceptance
+  (`build/qa-case4-combat-high-option.png`, `build/qa-case4-combat-high.png`).
+  An earlier adjacent-setting measurement is not labeled high, because its
+  displayed value was not established.
+- **Medium, first combat stage.** Navigation passes the tutorial; the full menu
+  has Status, Skill, Item, Record and System tabs, unlike the tutorial's
+  system-only menu, and first-use Item and Record explanations must be confirmed
+  before tab navigation proceeds. Medium is selected and verified
+  (`build/qa-case4-battle-medium-option.png`); after leaving the menu the
+  battlefield stays visible with its minimap, enemies and weather. A 300-tick
+  measurement takes 11.914 s wall time and advances 11.968 s guest time
+  (about 1.00x), with 7.667 s busy, a 53.876 ms maximum tick and 912,392,079
+  guest instructions (`build/qa-case4-battle-medium.png`; console measurements in
+  `build/qa-case4-manual-evidence.txt`). This verifies that setting change
+  without the reported transient; it does not explain or resolve the original
+  episode.
+
+After the probe closed, its ordinary save files were copied to the isolated
+`medium-battle-checkpoint` QA save root, with hashes in
+`build/qa-case4-battle-save-hashes.json`, for later runs.
 
 The macOS CPU profile again attributes most samples to
 `runtime.pthread_cond_signal`; the previously measured profiler limitation in
@@ -300,29 +298,26 @@ so this timing boundary alone does not exclude host contention.
 Artifacts are `build/qa_lgt_web.go`, `build/qa-case4-web.log`,
 `build/qa-case4-web-comparison.json`, and the `high-selected`, `high-end`,
 `medium-selected`, and `medium-end` PNGs under `build/qa-case4-web-*`.
-The probe is stopped after observation. These results establish a second
-unsuccessful reproduction through the actual host path; they do not identify
-or fix the historical transient. The original report lacks a code revision
-and a slow-tick execution profile. The currently running user service reports
-only version `dev` and started after that report, so it cannot establish the
-historical executable either. Further diagnosis needs a reproduced slow state
-or additional evidence from that episode rather than a speculative timing change.
+The probe was stopped after observation. These results are a second
+unsuccessful reproduction through the actual host path; they neither identify
+nor fix the historical transient. The original report lacks a code revision and
+a slow-tick execution profile, and the user service then running reported only
+version `dev` and had started after that report, so it cannot establish the
+historical executable either. Further diagnosis needs a reproduced slow state or
+more evidence from that episode, not a speculative timing change.
 
 ## Validation
 
-After both SKT changes, `make test`, `make test-debug`,
-`go test -race ./internal/...`, and `go vet ./...` pass. The Node gate reports
-219 passing tests. `git diff --check` passes. No server restart, publication,
-or real-phone check is part of this run. Original archives and user saves are
-unchanged; probes use `var/savedata/qa-20260920/`.
+`make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...` and `git diff --check` passed at three points:
 
-After connecting the ARM recognizer and adding the informational response,
-`make test`, `make test-debug`, `go test -race ./internal/...`, and `go vet ./...`
-all pass again. The Node gate retains 219 passing tests. Logs are
-`build/qa-arm-{test,test-debug,race,vet}.log`. `git diff --check` passes.
+- after both SKT changes, with the Node gate at 219 passing tests;
+- after connecting the ARM recognizer and adding the informational response,
+  still with 219 Node tests (logs `build/qa-arm-{test,test-debug,race,vet}.log`);
+- after the tutorial adapter (logs `build/qa-tutorial-{test,test-debug,race,vet}.log`),
+  when the optional original-archive fingerprint test also passed with an
+  absolute `WFEATURE_SKT_TUTORIAL_ARCHIVE` path.
 
-After the tutorial adapter, all four gates pass again: `make test`,
-`make test-debug`, `go test -race ./internal/...`, and `go vet ./...`.
-Logs are `build/qa-tutorial-{test,test-debug,race,vet}.log`.
-The optional original-archive fingerprint test also passes with an absolute
-`WFEATURE_SKT_TUTORIAL_ARCHIVE` path. `git diff --check` passes.
+No server restart, publication or real-phone check was part of these runs.
+Original archives and user saves are unchanged; probes use
+`var/savedata/qa-20260920/`.

@@ -4,10 +4,9 @@ The emulator is not ported to Android or iOS. **The app is the server with a
 web view in front of it** — the same Go server a desktop runs, on loopback,
 drawing the same page a desktop browser loads.
 
-That is worth stating plainly because it is what the whole architecture was
-already arranged for. The game runs on the server and the page draws what it
-sends; when the server is on the phone, "the network" is `127.0.0.1` and every
-problem that came with reaching a server over one disappears at the same time:
+The architecture was already arranged for this: the game runs on the server and
+the page draws what it sends. With the server on the phone, "the network" is
+`127.0.0.1`, and the problems of reaching a server over a network disappear:
 
 | | Over a network | In the app |
 |---|---|---|
@@ -21,124 +20,140 @@ problem that came with reaching a server over one disappears at the same time:
 ```text
 Android                              iOS
 ┌──────────────────────────┐         ┌──────────────────────────┐
-│ MainActivity (Java)      │         │ AppDelegate (Swift)      │
+│ MainActivity (Java)      │         │ App.swift (UIKit)        │
 │   WebView ──► 127.0.0.1  │         │   WKWebView ──► 127.0.0.1│
 │   exec ──► libwfeature.so│         │   call ──► libwfeature.a │
 └──────────────────────────┘         └──────────────────────────┘
 ```
 
-**The difference is not a preference.** Android lets an app run a file out of
-its extracted library directory, so the phone runs the same binary a desktop
-does, as a child process. **iOS does not let an app start a process at all**,
-so there the Go code is compiled to a static archive, linked into the app, and
-called — which is what `internal/appserver` and `mobile/ios/lib` exist for.
-`appserver` is the server without a `main`: no flags, no signal handler, no
-exit, because those belong to whatever is embedding it.
+**The difference is imposed by the platforms.** Android lets an app run a file
+from its extracted library directory, so the phone runs the same server binary
+a desktop does, as a child process. **iOS does not let an app start a process**,
+so there the Go code is compiled to a static archive (`-buildmode=c-archive`,
+the one place cgo is used), linked into the app and called through three
+exports — `WfeatureStart`, `WfeatureStop` and `WfeatureLastError` in
+`mobile/ios/lib`. `internal/appserver` is the server without a `main`: no
+flags, no signal handler, no exit, because those belong to the embedding app.
 
-Neither app is a port of the page. The keypad, the touch handling, the audio
-synthesiser, the cheat panel and the save API are the same files a desktop
-serves, carried inside the binary.
+Neither app is a port of the page. The keypad, touch handling, audio
+synthesiser, cheat panel and save API are the same files a desktop serves,
+carried inside the binary.
+
+Both servers bind loopback only, so the phone's games and saves are not offered
+to the Wi-Fi. Both apps keep the screen on while they run.
+
+| | Android | iOS |
+|---|---|---|
+| Data root | the app's external files directory (`getExternalFilesDir`), or its private one when there is none | the app's Documents directory |
+| Server | `libwfeature.so` started with `-addr 127.0.0.1:11541`, `-games`, `-ext`, `-saves`, `-logs` under the root | `appserver.Start` with the root and port 11541 |
+| Layout under the root | `games/`, `ext/`, `savedata/ktf/` (other platforms beside it), `logs/` | the same |
+| Save export | the page calls a JavaScript bridge, which opens the system's create-document picker | the page posts a message, which opens a document picker |
+
+The phone layout has no profile segment under `savedata/`: an app is always a
+release build.
 
 Large WebView audio buffers need scheduling ahead of the render clock to keep
-short notes distinct. See [APK audio timing](history/audio.md#apk-audio-timing) for the 0.5.0 report,
-reproduced timing/envelope defects, repair and physical-device validation limits.
+short notes distinct. See [APK audio timing](history/audio.md#apk-audio-timing)
+for the 0.5.0 report, the reproduced timing and envelope defects, the repair,
+and the limits of physical-device validation.
 
 Both apps serve the page from `http://127.0.0.1:11541` on every launch. The
-port is part of the page's browser origin, so keeping it stable is what lets
-WebView storage retain volume, vibration, speed and keypad settings across a
-cold restart. If another process owns that port, the app reports a startup
-failure rather than moving to a new origin and silently appearing to lose its
-settings. Games and in-game saves remain files in the app's data directory.
-Settings left under the random ports used by older builds cannot cross the
-browser's origin boundary, so the first launch after this update starts from
-the defaults once; choices made there persist on later launches.
+port is part of the page's origin, so keeping it stable lets web view storage
+retain volume, vibration, speed and keypad settings across a cold restart.
+`mobile/origin_test.go` holds both apps to that port. If another process owns
+it, the app reports a startup failure rather than moving to a new origin and
+appearing to lose its settings. Games and in-game saves remain files in the
+app's data directory. Settings left under the random ports older builds used
+cannot cross the origin boundary, so the first launch after that change started
+from the defaults once.
 
 ## Building
 
-Neither is part of `make dist`: each needs a toolchain the desktop build does
-not, and a machine with neither should still be able to cut a release.
+Neither app is part of `make dist`: each needs a toolchain the desktop build
+does not, and a machine with neither must still be able to build the desktop
+archives.
 
 ```sh
-make mobile VERSION=0.4.2          # both, into build/dist/ beside the archives
-make mobile-android VERSION=0.4.2  # just the APK
-make mobile-ios VERSION=0.4.2      # just the IPA
-mobile/android/build.sh            # the script the target runs
-mobile/ios/build.sh
+make mobile VERSION=0.5.2          # both, into build/dist/ beside the archives
+make mobile-android VERSION=0.5.2  # just the APK: wfeature-<version>-android-arm64.apk
+make mobile-ios VERSION=0.5.2      # just the IPA: wfeature-<version>-ios-arm64.ipa
+mobile/android/build.sh            # the script the target runs (output in mobile/android/build/)
+mobile/ios/build.sh                # likewise (output in mobile/ios/build/)
 ```
 
-**A release builds both in CI.** They used to be made here and uploaded to the
-release afterwards, which is a step that gets forgotten — and did. The two
-targets are separate because the release workflow runs them on different
-machines: the Android SDK is on its Linux runner and Xcode on its macOS one,
-and no runner has both. Nothing is published unless all seven files are there.
-See [`running.md`](running.md), "The release archives".
+`make mobile` also rewrites `build/dist/SHA256SUMS`. The make targets pass the
+Makefile's `VERSION` (default: the last release); a script run directly without
+`VERSION` stamps `dev`.
+
+**A release builds both in CI**, as two jobs on two machines: the Android SDK is
+on the Linux runner and Xcode on the macOS one, and no runner has both. They
+were once built locally and uploaded afterwards, a step that was forgotten.
+Nothing is published unless all seven files are there; see
+[`running.md`](running.md#the-release-archives).
 
 **There is no Gradle and no Xcode project.** Each app is one source file and
-one linked artifact, and the platform's own tools do that in a handful of
+one linked artifact, which the platform's own tools build in a handful of
 commands; a wrapper, a daemon and a plugin graph would be several hundred
 megabytes of machinery around a hundred lines of source. The two `build.sh`
 scripts are the whole build.
 
 ### Android
 
-Needs an Android SDK (`ANDROID_HOME`) with build-tools and a platform, and a
-JDK 17 or newer (`JAVA_HOME`). Command-line tools are enough — Android Studio
-is only wanted for the emulator and logcat.
+Needs an Android SDK (`ANDROID_HOME`, default
+`/opt/homebrew/share/android-commandlinetools`) with build-tools and a
+platform, and a JDK 17 or newer (`JAVA_HOME`, default
+`/opt/homebrew/opt/openjdk@17`). Command-line tools are enough; Android Studio
+is only wanted for the emulator and logcat. `BUILD_TOOLS` and `PLATFORM` pick a
+directory other than the newest, `VERSION_CODE` overrides the version code, and
+`KEYSTORE` names another signing key. The APK targets SDK 35 with a minimum of
+26 (Android 8.0). It requests `INTERNET` and `VIBRATE`, and its network
+security configuration allows cleartext to `127.0.0.1` and `localhost` only.
 
-The server is bundled as `lib/arm64-v8a/libwfeature.so`. The name is not a
-disguise for its own sake: **since Android 10 an app may not execute a file it
-wrote into its data directory**, and the extracted library directory is the one
-place execution is allowed. arm64 only, which every phone since about 2017 is.
+The server is bundled as `lib/arm64-v8a/libwfeature.so`, stored uncompressed.
+**Since Android 10 an app may not execute a file it wrote into its data
+directory**, and the extracted library directory is the one place execution is
+allowed. The build is arm64 only, which every phone since about 2017 is.
 
 The APK is signed with a debug key at `mobile/android/debug.keystore`, made on
-first build. **It is not in the repository**, and that is the point: Android
-accepts an update only when it carries the same signature as the copy already
-installed, so whoever holds this key can build an APK that installs over
-somebody's and inherits its games and saves. Keeping it out costs nothing —
-one person cuts the releases — and keeping it in would hand that to anyone who
-cloned the repository.
+first build. **It is not in the repository**: Android accepts an update only
+when it carries the same signature as the installed copy, so whoever holds the
+key can build an APK that installs over someone's and inherits its games and
+saves. **Back it up**: a key that changes between builds makes every tester
+uninstall before the next version.
 
-The release workflow needs that same key, or every release would be signed with
-a different one and no phone could update onto it. It is the repository secret
-`ANDROID_KEYSTORE_BASE64`, which is the keystore file and nothing else — the
-passwords are the literal `android` in `build.sh`. A secret is not a
-compromise on the paragraph above: a fork's pull request is not given it, so it
-stays with whoever can push here.
+The release workflow needs the same key, or every release would be signed with
+a different one and no phone could update. It is the repository secret
+`ANDROID_KEYSTORE_BASE64`, the keystore file and nothing else (the passwords
+are the literal `android` in `build.sh`). A fork's pull request is not given the
+secret, so it stays with whoever can push here.
 
 ```sh
 base64 -i mobile/android/debug.keystore | gh secret set ANDROID_KEYSTORE_BASE64
 ```
 
-The workflow **fails** when it is missing rather than letting `build.sh` make a
-key. A build that quietly signs with a new one produces an APK that installs
-fine on a fresh phone and cannot update anybody's — the worst of the three
-outcomes, and the one that is invisible until a tester reports it.
+The workflow **fails** when the secret is missing rather than letting
+`build.sh` make a key. An APK signed with a new key installs on a fresh phone
+and cannot update anyone's, which stays invisible until a tester reports it.
 
 The `versionCode` is the repository's commit count, because Android refuses to
-install an older one over a newer and a number that never moved would make
-every build look like the same one to a tester's phone.
-
-The other half of the same rule: **back it up.** A key that changed between
-builds would refuse to update the installed app, and every tester would have to
-uninstall before the next version.
+install an older one over a newer and a fixed number would make every build
+look the same to a tester's phone.
 
 ### iOS
 
 Needs Xcode, not just the command line tools, for the iPhoneOS SDK.
 
-**The floor is iOS 14.0**, and it is set by how this gets onto a phone rather
-than by anything in the app. TrollStore installs an unsigned IPA permanently on
-14.0 through 16.6.1, and a build asking for 15.0 was giving up the bottom of
-that range for nothing: the one API here that needs something newer is guarded
-at its own version, and the phones below 15 are the old ones this emulator is
-for.
+**The floor is iOS 14.0**, set by how the app gets onto a phone. TrollStore
+installs an unsigned IPA permanently on 14.0 through 16.6.1, and a build asking
+for 15.0 gave up the bottom of that range for nothing: the one API here that
+needs something newer is guarded at its own version, and the phones below 15
+are the old ones this emulator is for.
 
-The IPA is **unsigned** (ad-hoc at most), and that is the distribution story
-rather than an omission: whoever wants it puts it on their own phone with their
-own Apple ID through AltStore, Sideloadly or the like, and those tools re-sign
-it on the way in. A signature made here would be one no phone accepts. Real
-distribution is TestFlight, which is an Apple Developer Program decision and
-not a build one.
+The IPA is **unsigned** (ad-hoc at most), which is the distribution model:
+whoever wants it installs it with their own Apple ID through AltStore,
+Sideloadly or a similar tool, which re-signs it on the way in. A signature made
+here would be one no phone accepts. Real distribution is TestFlight, an Apple
+Developer Program decision rather than a build one.
 
 The bundle carries what Xcode would have stamped on it —
 `CFBundleSupportedPlatforms`, the `DT*` build metadata, `UIRequiredDeviceCapabilities`
@@ -162,99 +177,97 @@ starts on both, loads the page and runs a game.
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
 
+The icons are resized from `web/icon-512.png` at build time.
+`mobile/ios/acceptance/` holds a simulator-only controller driver
+(`load.c`, `PadDriver.swift`) that `web/acceptance/ios-gamepad.mjs` links beside
+the unchanged `App.swift`; the app's own build compiles neither file.
+
 ## Adding a game, and removing it
 
 The page has a **＋ 게임 추가** button, which is `POST /api/games`, and a
 **게임 삭제** button beside it, which is `DELETE /api/games`; see
-[`running.md`](running.md).
+[`running.md`](running.md#adding-a-game-from-the-page-and-taking-it-back-off).
 
 On a desktop that is a convenience. On Android it is the only way in: **since
 Android 11 a file manager cannot open the directory an app keeps its files in**,
 so "put the archive in games/" names a place nobody can reach. The button is
-what makes a phone build have any games at all, and it is the reason that
-feature came before the app did.
+what gives a phone build any games, which is why that feature came before the
+app did.
 
-The same wall makes removal the page's job too. A game added by mistake, or a
-finished one, sits in a directory nothing else on the phone can open, so
-without a button the only way to clear it out is to clear the app's data —
-which takes every save with it. What the page added is what the page may
-delete: it lands in `ext/` beside `games/`, and that is the only directory the
-delete button reaches. **The server moves what an older build left loose in
-`games/` into `ext/` on its first start**: adding a game used to write there,
-and a game added before this version would otherwise be one no phone can ever
-remove. It is the same step on every host — see "The one move an upgrade makes"
-in [`running.md`](running.md) — and it moves only what sits loose, because on a
-phone that is what the page put there; a folder of archives is a library
-somebody assembled over USB deliberately. On a phone every game arrives that way, so `ext/` is the
-folder with the games in it and `games/` is the empty one beside it, which is
-worth knowing when the data directory is read over USB. The saves are not
-touched by a removal — they are keyed by what is inside the archive, so adding
-the same file again comes back to the same progress.
+The same restriction makes removal the page's job. Without a button, the only
+way to clear a game on Android is to clear the app's data, which takes every
+save with it. What the page added is what the page may delete: it lands in
+`ext/` beside `games/`, the only directory the delete button reaches. On a
+phone every game arrives that way, so `ext/` holds the games and `games/` is the
+empty folder beside it, which matters when the data directory is read over USB.
+**The server moves what an older build left loose in `games/` into `ext/` on its
+first start**, because adding a game used to write there; it is the same step
+on every host, and it moves only loose files, since a folder of archives is a
+library someone assembled over USB deliberately. A removal does not touch the
+saves: they are keyed by what is inside the archive, so adding the same file
+again comes back to the same progress.
 
 ## Game controllers
 
-The page reads controllers itself (see [`web/README.md`](../web/README.md)),
-and both web views can hand it one, each on a condition of its own:
+The page reads controllers itself (see [`web/README.md`](../web/README.md)), and
+each web view hands it one under its own condition:
 
 - **Android** delivers a controller's buttons to the activity as key events
-  first. One the activity does not consume is given a *fallback* by the system
-  — B becomes BACK, A the centre of the direction pad — and BACK walks the
-  page's history or leaves the app, which is not what a player pressing 취소 on
-  a controller means. `MainActivity.dispatchKeyEvent` hands every controller
-  button to the web view and then reports it handled, so the page still reads
-  it and no fallback is made from it. Back stays on the phone's own gesture.
-  Both keys and motion go to the *focused* view, and a phone opened by a touch
-  is in touch mode, where nothing is focused until something is touched — and
-  a controller's buttons do not end touch mode. So the web view takes focus when
-  the page is shown and again whenever a controller is used without it
-  (`takeControllers`). Before that, a run that started without a touch — a
-  game resumed straight into, say — did not see the controller until the screen
-  was touched or the direction pad moved.
+  first. One the activity does not consume gets a system *fallback* — B becomes
+  BACK, A the centre of the direction pad — and BACK walks the page's history or
+  leaves the app, which is not what a player pressing 취소 on a controller
+  means. `MainActivity.dispatchKeyEvent` hands every controller button to the
+  web view and then reports it handled, so the page still reads it and no
+  fallback is made. Back stays on the phone's own gesture. Keys and motion go to
+  the *focused* view, and a phone opened by a touch is in touch mode, where
+  nothing is focused until something is touched; a controller's buttons do not
+  end touch mode. The web view therefore takes focus when the page is shown and
+  again whenever a controller is used without it (`takeControllers`). Before
+  that, a run started without a touch did not see the controller until the
+  screen was touched or the direction pad moved.
 - **iOS** exposes controllers to a `WKWebView` only while it is the first
   responder. The app makes it so when the page loads and again after the save
-  export picker closes, since a picker that was over the web view leaves the
-  responder chain elsewhere.
+  export picker closes, since a picker over the web view leaves the responder
+  chain elsewhere.
 
 On Android, vibration reaches the phone's motor only with the `VIBRATE`
 permission. Without it the web view still answers `navigator.vibrate` with
-`true` and nothing moves, which is how the app offered a 📳 진동 switch that did
-nothing. A controller's motor goes through the input system and needs none.
+`true` and nothing moves, which is how the app once offered a 📳 진동 switch
+that did nothing. A controller's motor goes through the input system and needs
+no permission.
 
 ## What is not answered yet
 
-- **A physical controller in either app.** Android's web view does expose a
-  controller, in the standard layout, with its rumble: that is checked on an
-  emulator with a virtual controller made from a real one's HID descriptor
-  ([`testing.md`](testing.md#the-android-app-on-an-emulator)), which goes
-  through the same kernel driver and key layout a paired one does, but not
-  through a radio. There the web view lets the first press after a page load or
-  a connection go by without showing the controller; the second is the first
-  the page sees, and a page cannot change that. The iOS app's half is checked in
-  the simulator with a virtual controller
-  ([`testing.md`](testing.md#the-ios-app-on-a-simulator)). Without first
-  responder, no controller input reaches the page, and taking first responder
-  back brings it all back. WebKit's source says its own file picker and a tap
-  on the page give the role back too. A physical controller's pairing waits on
-  a phone.
-
-- **Performance on a real handset.** A desktop measurement is what there is:
-  on an M1, KTF titles take about 15% of a core and the MIDP path about 77%,
-  which is 6.6x and 1.3x of headroom. The first says every KTF and LGT title
-  should hold on any recent phone; **the second says an SKT title needs a fast
-  one**, and a mid-range phone will not hold it at speed. That ratio does not
-  change with the device — improving it means the MIDP path, not the hardware.
+- **A physical controller in either app.** Android's web view exposes a
+  controller in the standard layout, with its rumble, on an emulator with a
+  virtual controller made from a real one's HID descriptor
+  ([`testing.md`](testing.md#the-android-app-on-an-emulator)); that path goes
+  through the same kernel driver and key layout a paired controller does, but
+  not through a radio. There the web view lets the first press after a page load
+  or a connection go by without showing the controller; the second press is the
+  first the page sees, and a page cannot change that. The iOS app's half is
+  checked in the simulator with a virtual controller
+  ([`testing.md`](testing.md#the-ios-app-on-a-simulator)): without first
+  responder no controller input reaches the page, and taking first responder
+  back restores it. WebKit's source says its own file picker and a tap on the
+  page give the role back too. A physical controller's pairing awaits a phone.
+- **Performance on a real handset.** Only a desktop measurement exists: on an
+  M1, KTF titles take about 15% of a core and the MIDP path about 77%, which is
+  6.6x and 1.3x of headroom. Every KTF and LGT title should therefore hold on a
+  recent phone; **an SKT title needs a fast one**, and a mid-range phone will
+  not hold it at speed. The ratio does not change with the device — improving
+  it means the MIDP path, not the hardware.
 - **The emulator's own frames.** On a phone the server encodes lossless picture
-  updates (WebP where the web view decodes it) and the web view decodes them,
-  on the same processor. Over a network that trade
-  bought a phone that did not have to emulate; in-process it buys nothing, and
-  handing the frame over as raw pixels is the obvious next thing to measure.
+  updates (WebP where the web view decodes it) and the web view decodes them, on
+  the same processor. Over a network that trade spared a phone from emulating;
+  in-process it buys nothing, and handing the frame over as raw pixels is the
+  next thing to measure.
 - **How far each app has been played.** Both builds are verified as far as
   their contents: signed, correct architecture, the server and the page inside.
   The Android app has run KTF titles in an emulator and for users, which is how
   its audio timing defect was found
-  ([APK audio timing](history/audio.md#apk-audio-timing)); playing on iOS and
+  ([APK audio timing](history/audio.md#apk-audio-timing)); play on iOS and
   physical-phone acceptance remain unverified.
-
 
 ### Release version and build number
 

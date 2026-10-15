@@ -19,16 +19,18 @@ This consolidation adds no execution or acceptance evidence.
 - [Additional offline control routes](#cases-additional-offline-control-routes)
 - [Final SKT checkpoint acceptance](#cases-final-skt-checkpoint-acceptance)
 - [Existing empty certificate and automatic defaults](#cases-existing-empty-certificate-and-automatic-defaults)
+- [Acceptance records formerly in the reference](#cases-reference-acceptance-records)
 
 <a id="cases-authentication-case-inventory"></a>
 
 ## Case inventory and acceptance records
 
-Research date: 2026-09-11. Source revision: `6d62c35`. The initial investigation preceded
-[the common feature](../authentication.md). Later sections
-record the implementation and acceptance that followed;
-[authentication.md](../authentication.md) describes current production support. The question is which guest state transition prevents
-local play, and what evidence distinguishes it from a similar-looking screen.
+Research date: 2026-09-11. Source revision: `6d62c35`. The initial
+investigation preceded [the common feature](../authentication.md); later
+sections record the implementation and acceptance that followed, and
+[authentication.md](../authentication.md) describes current support. The
+question is which guest state transition prevents local play, and what evidence
+distinguishes it from a similar-looking screen.
 
 <a id="cases-scope-and-evidence"></a>
 
@@ -66,13 +68,14 @@ Evidence has four different strengths:
 - **Unresolved candidate:** a symptom with a named next discriminating check.
   Unknown does not mean that a generic success response is appropriate.
 
-The initial opening probes used newly built debug executables. Original archives and existing user
-save roots are preserved. Research saves are isolated under
-`var/savedata/auth-research`. The LGT diagnostic executable uses a Go build
-overlay that changes only the C dial callback result and Java `Network.connect`
-result to success. Socket operations remain refused. Production network behavior was unchanged during those opening probes. Later
-local-protocol work is recorded separately below. Parallel run durations are not performance
-measurements.
+The initial opening probes used newly built debug executables. Original
+archives and existing user save roots are preserved; research saves are isolated
+under `var/savedata/auth-research`. The LGT diagnostic executable uses a Go build
+overlay that changes only the C dial callback result and the Java
+`Network.connect` result to success; socket operations stay refused, and
+production network behavior was unchanged during those probes. Later
+local-protocol work is recorded separately below. Parallel run durations are not
+performance measurements.
 
 The shared opening probe advances 400 ticks, then takes four 200-tick steps
 separated by confirm keys; the last also presses left. Five screen captures
@@ -214,8 +217,9 @@ and scenario menu with the same keys. Provisioning for the full number and
 running with a different, short number is a negative control. The
 [decoded contract](ktf.md#implementation-the-certificate-behind-it) binds application identity
 and subscriber number. `internal/platform/ktf/provision.go` implements the
-recognized 23-byte structure and its checksum checks. It is currently a CLI
+recognized 23-byte structure and its checksum checks. It was then a CLI
 operation, not a session policy.
+Superseded: see [`ktf-certificate-23`](../authentication.md#implemented-mechanisms).
 
 **Other files named `cert.c2s` are distinct candidates.** Current archives
 `500502d493e1` and `f9fdd6476e3a` package 52 and 28 bytes respectively; both are
@@ -384,10 +388,10 @@ are truly required, identify the consumed response fields first; a successful
 dial with no bounded response can simply move the infinite wait. Missing game
 data and encrypted executables remain separate prerequisites.
 
-This inventory supports selecting the first implementation slice. It does not
-claim arbitrary authentication is solved, that static matches all execute, or
-that an opening probe proves saving and sustained gameplay. The acceptance
-requirements for the eventual feature remain in
+This inventory supported selecting the first implementation slice. It does
+not claim that arbitrary authentication is solved, that static matches all
+execute, or that an opening probe proves saving and sustained gameplay. The
+acceptance scope of the feature is in
 [authentication.md](../authentication.md#validation-scope).
 
 <a id="cases-boundaries-still-to-prove-before-enabling-an-adapter"></a>
@@ -562,13 +566,10 @@ and subscriber gate, preserving the original certificate and both ledger
 memberships. Its property string is `PHONENUMBER`, not `MIN`; both platform
 identity APIs use the same session snapshot. The local 109-module scan selects
 only this case. Mutation, relocation, truncation, executed cipher, guest file,
-identity, both-profile and Chromium/WebKit checks pass. The production run `complete-adapter58-confirmed` accepts the numeric name,
-reaches the minigame and visibly responds to numeric 2. Its ordinary progress
-records are 345 and 142 bytes. `complete-adapter58-release` loads the saved
-day-150 checkpoint through Continue without re-entering the name; all four
-checkpoint file hashes match before further play. Neither save tree contains
-the session certificate. Later minigame completion and campaign progress are
-not part of this early-checkpoint evidence.
+identity, both-profile and Chromium/WebKit checks pass. The production run
+`complete-adapter58-confirmed` accepts the numeric name, reaches the minigame
+and visibly responds to numeric 2; the restore route is in
+[the acceptance records](#cases-reference-acceptance-records).
 
 <a id="cases-additional-offline-control-routes"></a>
 
@@ -719,3 +720,127 @@ unresolved, so it is not recorded as a fully passing browser check.
 
 The required `make test`, `make test-debug`, `go test -race ./internal/...` and
 `go vet ./...` checks pass. Debug and release CLI/server binaries are rebuilt.
+
+<a id="cases-reference-acceptance-records"></a>
+
+### Acceptance records formerly in the reference (2026-09-11 to 2026-09-13)
+
+These records moved here from [authentication.md](../authentication.md), which
+keeps the mechanisms and their acceptance boundary. They were collected in the
+combined working tree described in
+[validation scope](../authentication.md#validation-scope).
+
+**Gates and browsers.** `make test`, `make test-debug`, `go test -race
+./internal/...` and `go vet ./...` passed after the certificate, subscriber,
+Java-license, SKT menu-key and LGT cached-result changes, and again after the
+synchronous repaint queue fix. Chromium and WebKit each exercised the three
+statuses then new against a real Go server, including per-game preferences,
+retained-session resume, a fresh start with the option off and an unsupported
+control; all six browser runs passed with no page errors. The LGT cached-result
+status passed the same two-browser route using an isolated copy of the ordinary
+first-run settings. Evidence is in `var/acceptance/auth/2026-09-11/complete-browser/`.
+After the 58-byte adapter and the numeric input fix, all four gates passed again,
+and Chromium and WebKit each passed the page/server route for
+`lgt-certificate-58`, retained resume, a fresh authentication-off start and an
+unsupported control, extending the earlier eight browser checks. The
+notification responder also passed the four gates.
+
+**Per-case routes** under `var/acceptance/auth/2026-09-11/cases/`:
+
+- A 52-byte KTF case with the option off stops at its authentication error. With
+  it on, new-game input reaches a field, accepts movement and attack, and writes
+  a 1,000-byte ordinary save on return to the title. A fresh release runtime
+  loads a private copy, resumes the saved stage and accepts movement. This is an
+  ordinary stage checkpoint, not an exact-position quick save.
+- Five SKT startup refusals advance to titles, menus or dialogue with the option
+  on. One classic layout completes new-game creation, skips its opening
+  cutscene, accepts field movement, opens its menu and writes an ordinary
+  105-byte RMS progress record plus settings; a fresh release runtime displays
+  that slot, confirms loading, reaches the saved stage checkpoint and accepts
+  movement. A second compiler layout deploys units, accepts tactical movement and
+  uses the game's own mid-battle save (`XFile`, three ordinary files); a fresh
+  release process loads it from the title's Game Start / Continue submenu,
+  restores the battle layout and accepts input. This is an existing game feature,
+  not the emulator quick save. A third layout leaves its town, accepts field
+  movement and writes an ordinary RMS save plus settings (537 bytes total); a
+  fresh release process loads the saved field and accepts movement. A fourth
+  layout executes a strategy training command, consumes all three available
+  officers and saves five ordinary files (5,524 bytes); a fresh release process
+  loads the campaign with zero available officers and accepts another menu
+  command. The fifth layout's training and restore are recorded in
+  [final SKT checkpoint acceptance](#cases-final-skt-checkpoint-acceptance); its
+  debug investigation drives ordinary key input, and no guest state or save
+  values are forced. This
+  completes the five observed SKT refusal cases' checkpoint save/restart routes;
+  it does not prove entire campaigns. The first soft key needed its handset menu
+  mapping when a Canvas has no MIDP commands
+  ([the input contract](skt.md#implementation-input)). A second route exposed
+  stale queued callbacks after `serviceRepaints`; the
+  [queue correction](skt.md#implementation-synchronous-repaint-queue) preserves
+  input while the Host waits, and the real route stays responsive across those
+  waits. During manual CLI investigation, a live worker and
+  its clock can continue while the Host awaits the next command; the last route
+  has timed tutorial goals, and its own pause menu keeps them from expiring
+  during inspection. Read-only guest-state diagnostics distinguish a failed
+  tutorial from lost Host input.
+- The number-dependent KTF case completes character creation, skips the
+  prologue, accepts keypad movement and writes a 320-byte ordinary save. A fresh
+  release runtime lists the saved character, loads its town and accepts movement.
+  Its in-game tabs and actions read numeric 4/6/5, while the opening menus also
+  accept the directional and fire keys. Automatic selection uses the embedded
+  full identity without changing Host defaults.
+
+**Controls.** Four local controls (three LGT, one KTF) repeat their
+refusal/decline routes with the option off and on; every captured step digest
+matches across each pair. The LGT controls keep their failing transport, and
+unknown code does not select the cached-result adapter (`complete/controls.json`).
+Four longer LGT controls reach play without a selected adapter: one restarts
+initialized settings before character creation and combat; another persists two
+explicit certificate refusals across fresh runs before opening its board game; a
+third declines information sharing and optional saved-data download, then
+completes the opening story and accepts movement and attack in town; the fourth
+writes its own first-authentication marker after a 20-second guest timeout,
+reaches town movement, and reopens the title from that marker in a fresh release
+process. Their prompts alone do not justify an automatic network intervention.
+All probes use private save roots, and the checked original archive SHA-256
+values are unchanged. Screenshots, commands and diagnostics distinguish the
+proved routes from earlier incomplete observations.
+
+**LGT cached result.** Automatic selection reproduces the word-10 path (certificate
+request cleared, optional remote-save recovery declined, title and offline mode
+menus reached) from an unmodified copy of the original private settings. With the
+production adapter, a fresh career reaches actual batting and writes 20 ordinary
+settings, roster and progress files. A fresh release runtime loads a private copy,
+offers Continue and restores the career, 1,419 cash, ten pitchers and fifteen
+batters; team management accepts input. The source copy stays byte-for-byte
+unchanged, and both backing options files keep authentication word zero.
+Commands, screenshots and the preservation report are in `complete-adapter-play`,
+`complete-adapter-restore` and `complete/lgt-restore-result.json`.
+
+**LGT 58-byte certificate.** The selected Clet starts with no backing
+certificate, accepts a numeric character name, reaches a minigame and responds to
+numeric action input. It writes ordinary 345-byte and 142-byte progress records,
+a 115-byte options file and the creation ledger. A fresh release run loads that
+new-character, day-150 checkpoint through Continue without another name prompt;
+all four checkpoint hashes match immediately after restoration, and later play
+updates the ordinary progress record normally. No `audio.adt` appears in either
+save tree. This proves that early checkpoint, not a later campaign or completed
+minigame. Evidence is under `complete-adapter58-confirmed`,
+`complete-adapter58-release` and `complete/certificate58-restore-result.json`.
+The controls that followed are in
+[additional offline control routes](#cases-additional-offline-control-routes).
+
+**Authentication-only branch.** After the input and repaint changes were
+separated, the focused platform/session/Host checks, all four required Go/Node
+gates and debug/release CLI/server builds passed. An extended Chromium run using
+that branch's release server and a copy of the existing empty-certificate save
+reached the game menu. It also verified automatic selection despite an obsolete
+false preference, the absent checkbox, retained resume, fresh start and an
+unsupported authored control without page errors. Evidence is under
+`var/acceptance/auth/2026-09-11/authentication-only-pr/`. This does not extend the
+combined-tree checkpoint evidence to the separate numeric-input or repaint fixes.
+WebKit's authentication, reconnect, restart and control assertions also passed on
+that branch, but its shortened run reported one Blob access-control error from
+`createImageBitmap`, so the final no-page-error assertion failed. The error
+remains an open frame-decoding issue, not a clean WebKit acceptance result; its
+stack and route observations are retained beside the Chromium evidence.

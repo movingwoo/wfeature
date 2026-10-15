@@ -7,7 +7,7 @@ import (
 
 // The translator gate.
 //
-// docs/armcore.md, "Why a translator is not the answer even with unlimited
+// docs/history/armcore.md, "Why a translator is not the answer even with unlimited
 // effort", closes the question on two grounds: a closure per instruction pays
 // more in indirect calls than it removes in dispatch, and a translator that
 // emits machine code is out on how this ships. Neither is a measurement of the

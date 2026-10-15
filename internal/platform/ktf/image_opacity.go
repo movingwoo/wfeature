@@ -160,7 +160,7 @@ type blitOpacity struct {
 // platform's own draw paths consult, but a guest that reads these pixels
 // directly — through MC_GrpImage's framebuffer — has only the colour, and a
 // title that keys on its art's declared transparent colour needs to find it.
-// See lgt.md, "A transparent pixel still has a colour", where the same
+// See docs/history/lgt.md, "A transparent pixel still has a colour", where the same
 // collapse put a solid box behind every sprite on a screen.
 func imagePixel565(decoded stdimage.Image, x, y int) uint16 {
 	pixel := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)

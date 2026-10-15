@@ -372,7 +372,7 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	// table by the byte it was given. UTF-8 makes that index a different number
 	// — an in-game menu died on `index 11034 for length 4700` drawing one label
 	// while the labels beside it, byte arrays out of the title's own resources,
-	// drew correctly. See "The default charset is the handset's" in skvm.md.
+	// drew correctly. See "The default charset is the handset's" in docs/history/skt.md.
 	if options.JVM.ByteDecoder == nil {
 		options.JVM.ByteDecoder = decodePlatformBytes
 	}
@@ -1175,7 +1175,7 @@ var systemProperties = map[string]string{
 // titles hash it, together with a slice of their own service id and a
 // per-title constant, and compare the digest against a key in their
 // descriptor. Nothing recovers the number that key was issued to — see
-// `docs/skvm.md`, "Five titles check their licence against the handset's
+// `docs/history/skt.md`, "Five titles check their licence against the handset's
 // number" — but a user who knows it can set it (`-number`, WFEATURE_PHONE_NUMBER),
 // and with a constant carrier code that lever only ever worked for a number
 // beginning 011. Every other number was rebuilt into a number the user does

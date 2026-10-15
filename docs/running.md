@@ -1,38 +1,39 @@
 # Running wfeature
 
-Two things run: the **native CLI**, for driving a game from a terminal, and
-the **local server**, which serves the browser client to a PWA. Both are the
-same on Ubuntu, macOS and Windows, because the only tool involved is the Go
-toolchain. Node is needed only to run the page-side tests.
+Two things run: the **native CLI**, for driving a game from a terminal, and the
+**local server**, which serves the browser client to a PWA. Both behave the
+same on Ubuntu, macOS and Windows, because the only build tool involved is the
+Go toolchain. Node is needed only to run the page-side tests.
 
 ## What is actually portable
 
-**Supporting an operating system here means running the server on it**, which
-makes portability the unit of distribution rather than a nicety: a release is
-the server binary for an OS, a folder to drop games into, and a browser. The
-client is a PWA and does not care which OS serves it.
+**Supporting an operating system means running the server on it.** A release
+is the server binary for an OS, a folder to drop games into, and a browser; the
+client is a PWA and does not depend on which OS serves it.
 
-The Go code cross-compiles and vets clean for `linux/amd64`, `linux/arm64`,
-`windows/amd64`, and — since the phone builds — `android/arm64` and
+The Go code cross-compiles and vets clean for the five release targets in the
+`Makefile`'s `DIST_PLATFORMS` (`darwin/arm64`, `darwin/amd64`, `linux/amd64`,
+`linux/arm64`, `windows/amd64`) and for the phone builds, `android/arm64` and
 `ios/arm64`. Its `syscall` use is confined to file locks behind per-OS build
-files (`save_lock_unix.go`, `save_lock_windows.go`), error classification and
-`SIGTERM`; it has no hardcoded `/tmp` and no hand-built path separators — every path goes through `filepath.Join`, and the save keys
-that cross the Host boundary are slash-separated names normalized on both
-sides. The one `exec.Command` in a shipped binary is `internal/launcher`'s,
-which opens a browser and is a desktop launcher's job by definition; the
-developer tools under `internal/tools` also run subprocesses.
+files (`internal/backend/save_lock_unix.go`, `save_lock_windows.go`, and
+`save_lock_other.go` for a system with no known lock), error classification and
+`SIGTERM`. It has no hardcoded `/tmp` and no hand-built path separators: every
+path goes through `filepath.Join`, and save keys that cross the Host boundary
+are slash-separated names normalized on both sides. The one `exec.Command` in a
+shipped binary is `internal/launcher`'s, which opens a browser; the developer
+tools under `internal/tools` also run subprocesses.
 
 A phone runs the same server rather than a port of it; what each app does with
-it, and what iOS forbids that Android allows, is [`mobile.md`](mobile.md).
+it, and what iOS forbids that Android allows, is in [`mobile.md`](mobile.md).
 
-The server is a Go program (`cmd/server`) that carries the client files inside
-the binary, so nothing about it is shell- or runtime-specific. Every setting is
-a flag, which behaves the same in PowerShell, where a `VAR=value command` prefix
-does not exist.
+The server (`cmd/server`) carries the client files inside the binary, so
+nothing about it is shell- or runtime-specific. Every setting is a flag, which
+behaves the same in PowerShell, where a `VAR=value command` prefix does not
+exist.
 
-**The `Makefile` and the `*.sh` helpers are the parts that are not portable** —
-the `Makefile` is a POSIX shell script in disguise. Windows does not need it: every target is one or two
-commands, listed below.
+**The `Makefile` and the `*.sh` helpers are not portable** — the `Makefile` is
+POSIX shell. Windows does not need them: every target is one or two commands,
+listed below.
 
 ## The local server
 
@@ -47,185 +48,165 @@ make serve-release               # release profile, in the foreground
 ./stop.sh                        # stop it again
 ```
 
-`build.sh` reports only the CLI and server binaries it builds. Temporary
-diagnostic executables in the same output directory are not additional build
-profiles and are not listed in that summary.
-
 ```powershell
 # Windows PowerShell — what `make serve` does, spelled out
 go run -tags debug .\cmd\server
 ```
 
 Then open `http://127.0.0.1:11541`, or the machine's address from a phone on
-the same network — the server binds every interface, because being reachable
+the same network. The server binds every interface, because being reachable
 from a phone is the point of running it. **It has no authentication: anything
-that can reach the port can read and write the save trees and list the games.**
-Give `-addr 127.0.0.1:11541` to keep it to the machine it runs on.
-A page opened by the machine's address over plain HTTP is not a secure context,
-so the browser gives it no game controller and registers no service worker;
-`127.0.0.1`, the phone apps and an HTTPS proxy are secure contexts.
+that can reach the port can read and write the save trees, list the games, and
+add or remove a game added from the page.** Give `-addr 127.0.0.1:11541` to keep
+it to the machine it runs on. A page opened by the machine's address over plain
+HTTP is not a secure context, so the browser gives it no game controller and
+registers no service worker; `127.0.0.1`, the phone apps and an HTTPS proxy are
+secure contexts.
 
 The game runs **on the server**, and the page draws the frames it sends; see
-[`session.md`](session.md). There is nothing to build for the browser: the
-server carries the page and runs the emulator itself.
+[`session.md`](session.md). There is nothing to build for the browser.
 
 | Flag | Default | What it names |
 |---|---|---|
 | `-addr` | `:11541` | the listening address; `unix:/path/to.sock` listens on a socket file instead, for a reverse proxy (below) |
 | `-web` | `web` | the client directory; when it is missing the binary serves its embedded copy |
-| `-games` | `var/games` | the archives, grouped by platform directory |
-| `-ext` | `var/ext` | the archives added from the page, which are the ones it may remove |
-| `-saves` | `var/savedata/<profile>/ktf` | this profile's KTF save tree |
-| `-logs` | `var/logs` | where debug reports are written |
-| `-number` | `01000000000` | the handset's subscriber number |
-| `-open` | off | open the page in a browser once the server is listening |
-| `-version` | — | print the version and build profile, then exit |
+| `-games` | `<data>/games` | the archives, grouped by platform directory |
+| `-ext` | `<data>/ext` | the archives added from the page, which are the ones it may remove |
+| `-saves` | `<data>/savedata/<profile>/ktf` | this profile's KTF save tree; the other platforms' trees are its siblings |
+| `-logs` | `<data>/logs` | where debug reports are written |
+| `-number` | `01000000000` | the handset's subscriber number: 1 to 11 digits |
+| `-open` | off | open the page in a browser once the server answers on its port |
+| `-version` | — | print `wfeature-server <version> (<profile>)` to stdout, then exit |
 
-Each flag also reads an environment variable when it is not given —
-`WFEATURE_ADDR`, `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`,
-`WFEATURE_ADDED_ROOT`, `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`,
-`WFEATURE_PHONE_NUMBER`, `WFEATURE_OPEN` (any non-empty value) — and
-`WFEATURE_HOST` with `WFEATURE_PORT` still compose an address.
+`<data>` is `var` when the working directory has a `var/` directory, otherwise
+the executable's own directory when a `games/` directory sits beside it, and
+otherwise `var` ([A release build](#a-release-build)). The startup log names
+the choice as `data=var/` or `data="beside the executable"`, together with the
+client source (`client=web` or `client=embedded`) and each root.
 
-`-number` is the odd one, because it is the only setting that changes what a
-game sees rather than where it lives. One title treats any number of five
-digits or more as a subscriber it can bill and then asks to download data its
-own archive already carries; giving it a shorter number — `-number 9999` — is
-what lets it start. Another title needs the full-length default for the
-certificate it checks, so this is a choice rather than a better answer, and
-[`network.md`](network.md) has both sides of it. The CLI reads the same
-`WFEATURE_PHONE_NUMBER`.
+Each flag reads an environment variable when it is not given — `WFEATURE_ADDR`,
+`WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`, `WFEATURE_ADDED_ROOT`,
+`WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER`,
+`WFEATURE_OPEN` (any non-empty value) — and `WFEATURE_HOST` with
+`WFEATURE_PORT` compose the default address. `WFEATURE_PORT` is also the
+default port of `status` and `stop`.
 
-Which build profile is served is **the binary that is running**, not a flag: a
+`-number` is the only setting that changes what a game sees rather than where
+it lives. One title treats any number of five digits or more as a subscriber it
+can bill and then asks to download data its own archive already carries; a
+shorter number such as `-number 9999` lets it start. Another title needs the
+full-length default for the certificate it checks, so the value is a choice
+rather than a better answer; [`network.md`](network.md) has both sides. The CLI
+reads the same `WFEATURE_PHONE_NUMBER`.
+
+The build profile served is **the binary that is running**, not a flag: a
 server built with `-tags debug` collects the full diagnostics and writes to the
-debug save tree. One process cannot serve the other profile, which is what keeps
-a debug session from moving a release session's progress.
+debug save tree. One process cannot serve the other profile, which keeps a
+debug session from moving a release session's progress. Every HTTP route the
+server answers is listed in [`web/README.md`](../web/README.md#server).
 
 ### Adding a game from the page, and taking it back off
 
 `POST /api/games?name=<file name>` writes one archive into the added root, and
-the picker has a **＋ 게임 추가** button that calls it. The name is
-percent-encoded in the query rather than carried in a header, because these
-names are Korean and a header value is Latin-1.
-
-It exists for a place with no folder to put a game in. On a desktop this is a
-convenience — one less directory to find — but on Android since 11 a file
-manager cannot open the directory an app keeps its files in, so "put the
-archive here" names a place nobody can reach.
+the picker's **＋ 게임 추가** button calls it. The name is percent-encoded in the
+query rather than carried in a header, because these names are Korean and a
+header value is Latin-1. The route exists for a device with no reachable
+folder: on Android since 11 a file manager cannot open the directory an app
+keeps its files in.
 
 The name is **refused rather than repaired**: a separator, a climb, a leading
-dot or an extension that is not `.zip` or `.jar` is answered with a sentence
-the page shows, because a name that needs repairing is a request to write
-somewhere else. The bytes are not examined — which platform an archive belongs
-to is read from its content when it is loaded — so the archive lands in the
-added root with no platform directory, which is exactly the ungrouped case the
-picker already had.
+dot or an extension other than `.zip` or `.jar` is answered with a sentence the
+page shows, because a name that needs repairing is a request to write somewhere
+else. The bytes are not examined — the platform is read from the content when
+the archive is loaded — so the archive lands in the added root with no
+platform directory. The write is atomic (a temporary file beside the target,
+then a rename), so re-uploading a corrected archive never leaves a truncated
+file. Uploads are bounded at 32 MiB; the largest archives of the era are a few
+megabytes.
 
-**There are two roots, and which one a game is in is what says whether the page
-may delete it.** The library is `var/games`, grouped by whatever directories
-its owner made; what arrives through the page lands in `var/ext`, and
-`DELETE /api/games?game=<picker path>` removes one archive from there and
-refuses everything else with a sentence the page shows. `games.json` marks the
-second kind `"added": true` and gives it an `ext/` path, and the picker heads
-those under 추가한 게임 with the **게임 삭제** button live only on them.
+**Which root a game is in decides whether the page may delete it.** The library
+is `var/games`, grouped by whatever directories its owner made; page uploads
+land in `var/ext`. `DELETE /api/games?game=<picker path>` removes one archive
+from `var/ext` and refuses everything else with a sentence the page shows.
+`games.json` marks those entries `"added": true` with an `ext/` path, and the
+picker lists them under 추가한 게임, the only entries on which **게임 삭제** is
+enabled.
 
-The split is the whole design. An archive the page wrote and one a person
-dropped into the library are the same bytes in the same shape, and there is no
-registry to tell them apart — `games.json` is a directory read, every time, and
-a list kept beside it could drift away from the disk and answer for a file that
-is no longer the one it names. Where the file is cannot drift. A directory
-inside `var/games` would have done as well, except that the library's group
-names belong to whoever made them, so reserving one would be taking a name out
-of somebody's own categories.
+The location is the record by design. An archive the page wrote and one a
+person dropped into the library are the same bytes, and `games.json` is a
+directory read every time; a registry kept beside it could drift from the disk,
+and the location of a file cannot. A reserved directory inside `var/games` would
+take a name out of the owner's own group names.
 
-A game that is playing when its archive is deleted **keeps playing**: the
-archive is read once at the start and a parked session holds the game itself,
-so the file going away costs a running game nothing.
+- A game that is playing when its archive is deleted **keeps playing**: the
+  archive is read once at the start, and a parked session holds the game
+  itself.
+- Removing a game **does not touch its saves.** A save is keyed by what is
+  inside the archive, so adding the same file again lands on the same progress.
+  The save routes work on `ext/` paths as they do on library ones.
+- **The page asks its own question before deleting.** `window.confirm` in the
+  Android app is decided by the app's `WebChromeClient` (which the file picker
+  behind ＋ 게임 추가 requires), where it can answer "no" with nothing on screen.
+  `web/confirm.js` puts the dialog in the page so the question and answer are
+  the same everywhere; the restart button uses it too.
 
-Removing a game **does not touch its saves.** A save is keyed by what is inside
-the archive rather than by where it sits, so adding the same file again lands
-on the same progress — which makes a deletion something a player can change
-their mind about, and makes deleting their progress for them a decision worth
-not taking. The save routes work on `ext/` paths exactly as they do on library
-ones.
+Deleting matters for the same reason adding does: on Android, without it the
+only way to clear a game is to clear the app's data and lose every save.
 
-**The one move an upgrade makes.** Games added before there was an added root
-are in the game root, where a removal cannot reach them, so the first start
-after the upgrade moves what sits loose there across — `AdoptLooseGames` in
-`internal/webhost/adopt.go`, called by the desktop server and by the in-process
-one, so every host takes the same step. It moves only what is directly in the
-game root: a group directory is a library somebody assembled and filed, and
-moving that would answer a question nobody asked. It never overwrites a name
-the added root already holds — two files, one name, and nothing here can tell
-whether they are the same game.
-
-It runs **once**, recorded by an empty `.adopted` file in the added root. A
-person may still drop an archive straight into the game root by hand, which the
-README has always said they may, and a sweep that ran every start would keep
-filing those somewhere the owner did not choose. An unfinished move leaves the
-marker unwritten so the next start completes it.
-
-**The page asks its own question before deleting.** Not `window.confirm`: the
-phone app is a WebView with a `WebChromeClient` of its own — the file picker
-behind ＋ 게임 추가 needs one — and what a JavaScript confirm does there is that
-client's decision, where answering "no" with nothing on screen is a button that
-does nothing. `web/confirm.js` puts the dialog in the page, so the question, the
-words and the answer are the same everywhere; the restart button asks through it
-too.
-
-Deleting matters for the same reason adding does. On a desktop an added file is
-in a folder, and a folder can be opened; on Android it is in the directory a
-file manager has not been able to open since 11, so without this the only way
-to clear a game out is to clear the app's data and lose every save with it.
-
-The write is atomic (a temporary file beside the target, then a rename), so
-re-uploading a corrected archive over a running library never leaves a
-truncated file the loader would fail on. Uploads are bounded at 32 MB, which
-is generous for an era whose largest archives are a few megabytes.
-
-**There is still no authentication.** Anything that can reach the port could
-already read and write the save trees; it can now add a game, and remove one it
-added, as well. That is
-the same trade the rest of this server makes on a home network, and the same
-reason `-addr 127.0.0.1:11541` exists.
+**The one move an upgrade makes.** Games added before the added root existed
+sit in the game root, where a removal cannot reach them. The first start after
+the upgrade moves what is directly in the game root into the added root —
+`AdoptLooseGames` in `internal/webhost/adopt.go`, called by the desktop server
+and the in-process one (`internal/appserver`), so every host takes the same
+step. It does not move group directories, which are a library someone filed,
+and never overwrites a name the added root already holds. It runs **once**,
+recorded by an empty `.adopted` file in the added root, because a person may
+still drop an archive into the game root by hand and a sweep on every start
+would refile it. An unfinished move leaves the marker unwritten so the next
+start completes it.
 
 ### Starting and stopping it in the background
 
-`make serve` holds the terminal and Ctrl-C ends it, which is the right shape for
-watching a log. Leaving one running is a different shape, and it has one trap
-worth knowing: `make serve` and `go run` compile the server into a temporary
-executable and run it as a **child**, so killing the `go run` process leaves the
-child holding the port. That is the "the port is busy and I cannot find what has
-it" case.
+`make serve` holds the terminal and Ctrl-C ends it, which suits watching a log.
+`make serve` and `go run` compile the server into a temporary executable and
+run it as a **child**, so killing the `go run` process leaves the child holding
+the port — the usual cause of a busy port with no visible owner. The scripts
+below avoid that:
 
 ```sh
-./build.sh [debug|release]                 # the Makefile's targets, one command
+./build.sh [debug|release]                 # `make debug server` or `make release server-release`
 ./start.sh [debug|release] [server args…]  # background; prints where it is
 ./status.sh [port]                         # what is running, on which port
 ./stop.sh [port]                           # stops it again
 ```
 
-**A bare command means the release profile** in the two that take one, since
-that is the build a machine is left running. `make serve` still means debug,
-because watching a log is what the debug build is for. Both profiles can run at
-once, as long as they are not asked for the same port.
+**A bare `build.sh` or `start.sh` means the release profile**, the build a
+machine is left running; `make serve` still means debug. Both profiles can run
+at once on different ports.
 
-`start.sh` does one thing: it builds the profile if it has to, starts the
-server in the background with its log under `var/run/`, and prints what the
-server then says about itself. There is no pid file — nothing needs one any
-more.
+- `build.sh` reports only the CLI and server binaries it builds; other
+  executables in the output directory are not build profiles.
+- `start.sh` builds the profile if `build/<profile>/wfeature-server` is
+  missing, starts it in the background with its log in
+  `var/run/server-<profile>.log` (truncated on each start), waits for the
+  server to log its address, and prints what `status` reports. A server that
+  exits at once has its log printed and `start.sh` exits 1. Arguments after
+  the profile go to the server; a first argument starting with `-` keeps the
+  release profile. There is no pid file.
+- `status.sh` and `stop.sh` run `wfeature-server status` and
+  `wfeature-server stop` from whichever of `build/release` and `build/debug` is
+  built, falling back to `go run ./cmd/server`. Both take a port and nothing
+  else (`-port N` or a bare number; default 11541 or `WFEATURE_PORT`): **the
+  server is asked what it is** rather than looked up in a process list, so a
+  stranger holding the port is reported and left alone, and `go run`'s
+  executable in the build cache is recognised like any other.
 
-`stop.sh` and `status.sh` are one line each, because the work is
-`wfeature-server stop` and `wfeature-server status`. Both take a port and
-nothing else: **the server is asked what it is** rather than looked up in a
-process list, so a stranger holding the port is reported and left alone, and
-`go run`'s executable-in-the-build-cache is recognised like any other.
-
-A stop asks the server to stop itself, which drains the same way Ctrl-C does:
-it finishes a save in flight and closes every game, including one whose page is
-still connected, so that what a title had written reaches the save folder
-before the process ends. Only a server that will not answer is signalled, and
-only one that ignores the signal is forced; a forced stop closes nothing.
+A stop asks the server to stop itself, which drains as Ctrl-C does: it finishes
+a save in flight and closes every game, including one whose page is still
+connected, so what a title wrote reaches the save folder before the process
+ends. Only a server that does not answer is signalled, and only one that
+ignores the signal is forced; a forced stop closes nothing. All output of
+`status` and `stop` is English.
 
 ### /api/status
 
@@ -235,57 +216,54 @@ The server answers `GET /api/status` with what it is:
 {"server":"wfeature","profile":"debug","version":"dev","pid":4242}
 ```
 
-The profile is the binary that is running, and from outside the process there is
-nothing else to read it from: two servers on two ports look alike, and the
-executable's path says nothing when it was started with `go run` or renamed into
-a release archive. `status` and `stop` use it for three things — naming the
-profile, telling this server from a stranger holding the port before anything is
-stopped, and knowing which process to signal if the polite stop below does not
-work. The version is the one stamped by `make dist`, and `dev` in every other
+The profile cannot be read from outside the process any other way: two servers
+on two ports look alike, and the executable's path says nothing when it was
+started with `go run` or renamed into a release archive. `status` and `stop`
+use the answer to name the profile, to tell this server from a stranger before
+anything is stopped, and to know which process to signal if the graceful stop
+fails. The version is the one stamped by `make dist`, and `dev` in every other
 build.
 
 ### /api/shutdown
 
 `POST /api/shutdown` stops the server the way closing its window does: it stops
-accepting, finishes what is in flight, closes the games it holds, and exits. **Only a caller on this
-machine may use it** — the server binds every interface so a phone can play, and
-a stop anyone on that network could send is a way to end somebody's game from
-the next room. A request from anywhere else is refused with 403.
+accepting, answers `{"stopping":true}` with 202, finishes what is in flight,
+closes the games it holds, and exits. **Only a caller on this machine may use
+it**, because the server binds every interface and a stop anyone on the network
+could send would end someone's game from the next room. A request from
+elsewhere is refused with 403 and logged.
 
-A reverse proxy on the same machine forwards every visitor from here — over
-the [Unix socket](#behind-a-reverse-proxy-on-a-unix-socket) or over loopback —
-so a request carrying `Forwarded`, `X-Forwarded-For` or `X-Real-IP` is refused
-as well, whatever peer handed it over. That holds only if the proxy sets one of
+A reverse proxy on the same machine forwards every visitor from here — over the
+[Unix socket](#behind-a-reverse-proxy-on-a-unix-socket) or over loopback — so a
+request carrying `Forwarded`, `X-Forwarded-For` or `X-Real-IP` is refused as
+well, whatever peer handed it over. That holds only if the proxy sets one of
 them: Caddy does by default, and the nginx block below sets it explicitly.
 
-It exists because the alternative is finding the process behind a port from
-outside, which took a different tool on every operating system (`lsof`, `ss`,
-`fuser`, `netstat`) and still could not tell this server from a stranger. With
-the route, one implementation in `internal/launcher` behaves the same
-everywhere, and Windows gets the same graceful stop as the others rather than a
-`taskkill`.
+The route replaces finding the process behind a port from outside, which took a
+different tool on every operating system (`lsof`, `ss`, `fuser`, `netstat`)
+and could not tell this server from a stranger. One implementation in
+`internal/launcher` now behaves the same everywhere, and Windows gets the same
+graceful stop rather than a `taskkill`.
 
-Windows has no equivalent of these scripts in a checkout; the PowerShell block
-above and closing the window are the procedure there. A release archive is
-different — it carries `start`, `stop` and `status` for all three systems,
-Windows included (see `packaging/README.md`).
+A checkout has no Windows equivalent of these scripts; the PowerShell block
+above and closing the window are the procedure there. A release archive carries
+`start`, `stop` and `status` for all three systems (see
+[`packaging/README.md`](../packaging/README.md)).
 
 ### Behind a reverse proxy, on a Unix socket
 
 `-addr unix:/run/wfeature/wfeature.sock` listens on a socket file instead of a
-port. It exists for one arrangement: a reverse proxy in front, terminating TLS
-and forwarding to a path, so the server itself is never on the network. The
-same string works through `WFEATURE_ADDR`.
+port, for one arrangement: a reverse proxy in front, terminating TLS and
+forwarding to a path, so the server itself is never on the network. The same
+string works through `WFEATURE_ADDR`. Nothing above the listener knows which it
+got — the page, the save API and the session WebSocket are the same either way.
 
-Nothing above the listener knows which it got — the page, the save API and the
-session WebSocket are the same either way.
-
-**The proxy has to pass the browser's `Host` through.** The WebSocket handshake
-refuses an `Origin` whose host is not the host the request arrived on, which is
-what stops any page on the internet from opening a session on someone's
-machine. A proxy that rewrites `Host` to `localhost` while the browser sends
-`Origin: https://games.example.com` fails that check, and the page then loads
-and never starts a game. nginx needs it spelled out; Caddy does it by default.
+**The proxy must pass the browser's `Host` through.** The WebSocket handshake
+refuses an `Origin` whose host is not the host the request arrived on, which
+stops any page on the internet from opening a session on someone's machine. A
+proxy that rewrites `Host` to `localhost` while the browser sends
+`Origin: https://games.example.com` fails that check, and the page loads but
+never starts a game. nginx needs it spelled out; Caddy does it by default.
 
 ```nginx
 location / {
@@ -306,7 +284,7 @@ games.example.com {
 ```
 
 **The socket is created 0660**, so the proxy reaches it through the group rather
-than by being world-writable. Run the server under a group the proxy is in —
+than by being world-writable. Run the server under a group the proxy is in,
 which is what `Group=` is for:
 
 ```ini
@@ -318,23 +296,21 @@ RuntimeDirectory=wfeature
 Restart=on-failure
 ```
 
-`RuntimeDirectory=` is worth the line: systemd makes and removes
-`/run/wfeature` for the service, so the socket lives somewhere the service owns
-rather than in `/tmp`.
+`RuntimeDirectory=` makes systemd create and remove `/run/wfeature` for the
+service, so the socket lives somewhere the service owns rather than in `/tmp`.
 
-A socket file left behind by a kill or a power cut does not block the next
-start. Binding onto one fails with "address already in use" — which reads
-exactly like a port conflict and is not one — so the server connects to it
-first and removes it only when nothing answers. **A socket a live server is
-serving is never removed**: starting a second server on it fails with `a server
-is already serving this socket`, and the first one keeps running. A clean stop
-removes the file itself.
+A socket file left by a kill or a power cut does not block the next start.
+Binding onto one fails with "address already in use", which looks like a port
+conflict, so the server connects to it first and removes it only when nothing
+answers. **A socket a live server is serving is never removed**: a second
+server fails with `a server is already serving this socket`, and a path that
+exists but is not a socket fails with `the path exists and is not a socket`. A
+clean stop removes the file.
 
-**`start.sh`, `stop.sh` and `status.sh` are written for a port.** They ask a
-port what is behind it, and neither that nor the stop route reaches a path. That is deliberate rather than missing:
-a deployment that wants a reverse proxy has a service manager already, and the
-unit above is the whole of what those scripts would have done. To ask a socket
-server what it is, the same endpoint the scripts use answers over the socket:
+**`start.sh`, `stop.sh` and `status.sh` work on a port only**; neither they nor
+the stop route reach a socket path. That is deliberate: a deployment behind a
+reverse proxy has a service manager, and the unit above is everything those
+scripts would do. To ask a socket server what it is:
 
 ```sh
 curl --unix-socket /run/wfeature/wfeature.sock http://localhost/api/status
@@ -342,9 +318,10 @@ curl --unix-socket /run/wfeature/wfeature.sock http://localhost/api/status
 
 ## A release build
 
-`make server` and `make server-release` write `build/<profile>/wfeature-server`.
-That binary is the whole deliverable: it carries the page, the scripts and the
-styles, so it only needs a `games/` directory beside it.
+`make server` and `make server-release` write `build/<profile>/wfeature-server`;
+`make debug` and `make release` write the CLI as `build/<profile>/wfeature`.
+The server binary is the whole deliverable: it carries the page, the scripts
+and the styles, and needs only a `games/` directory beside it.
 
 ```text
 wfeature-server            the binary, ~11 MB
@@ -355,32 +332,36 @@ logs/                      written when a report is taken
 ```
 
 When the working directory has no `var/`, the server reads and writes the
-directory the executable sits in, so a copy dropped anywhere with a `games/`
-folder beside it works without flags. A checkout keeps using `var/`.
+directory the executable sits in — provided a `games/` directory is beside it —
+so a copy dropped anywhere with a `games/` folder works without flags. A
+checkout keeps using `var/`.
 
 ```sh
 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o wfeature-server.exe ./cmd/server
 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o wfeature-server     ./cmd/server
 ```
 
-**Every one of those builds is profile-guided, including the two above and
+**Every build is profile-guided, including the two above and
 `go run ./cmd/server`.** `cmd/server/default.pgo` and `cmd/cli/default.pgo` are
 committed profiles of real game runs, and `go build` reads a `default.pgo`
-beside a main package without being told to — which is why it is a file rather
-than a flag: there is no build path that can miss it and no second place for it
-to be wrong. It is worth about 12% of a session's host time and changes nothing
-a guest can see. `make pgo` regenerates it; [`armcore.md`](armcore.md), "The
-host profile's next answer was a build flag", has the measurements and what the
-profile has to cover.
+beside a main package without a flag, so no build path can miss it. It was
+worth about 12% of a session's host time when measured and changes nothing a
+guest can see. `make pgo` regenerates it from local archives named by the
+Makefile's `PGO_*` variables; [`armcore.md`](armcore.md#profile-guided-build)
+describes the runs and
+[`history/armcore.md`](history/armcore.md#implementation-the-host-profiles-next-answer-was-a-build-flag-and-it-was-12)
+has the measurements.
 
 ## The release archives
 
-`make dist` writes what a user downloads: one archive per platform under
-`build/dist`, each holding the release server, its three launchers (`start`,
-`stop`, `status`), the notices and an empty `games/` tree. Building them by
-hand takes the version as an argument rather than deriving one, because a
-release number is a decision; in CI it comes from the tag, which is the same
-decision written down somewhere durable:
+`make dist` writes what a user downloads: one archive per entry of
+`DIST_PLATFORMS` under `build/dist`, each holding the release server, its three
+launchers (`start`, `stop`, `status`), the notices and an empty `games/` tree,
+then writes `SHA256SUMS` (`make checksums`). The version is stamped into the
+binary (`-X main.version`) and the archive names. It is set by hand because a
+release number is a decision; the Makefile's `VERSION ?=` default is the last
+release (currently `0.5.2`), so pass it explicitly. In CI it comes from the
+tag.
 
 ```sh
 make dist VERSION=0.5.2
@@ -393,24 +374,6 @@ wfeature-<version>-darwin-amd64.tar.gz     wfeature-<version>-linux-amd64.tar.gz
 SHA256SUMS                                 checksums for everything beside it
 ```
 
-The phone builds are the other two. `make mobile` writes an APK and an IPA into
-the same directory and rewrites `SHA256SUMS` over whatever is there, so a
-release lists seven files rather than five. They are a separate command because
-each needs a toolchain the desktop build does not — an Android SDK, and Xcode —
-and a machine with neither still has to be able to cut a release. **The release
-workflow builds all seven**, on three machines, and publishes nothing until
-every one of them is there. See [`mobile.md`](mobile.md).
-
-That is a change from how the first releases were made: the workflow built the
-five and the two were uploaded afterwards by hand, which is a step that gets
-forgotten — and did, on the release that prompted this. `make dist-check
-DISTCHECK_FLAGS=-phones` is the check that now refuses a set without them.
-
-**A tag with a suffix publishes as a pre-release.** `v0.4.0-pre` and
-`v0.5.0-rc1` are marked as such and `v0.4.0` is not. It says how ready the
-thing is; it no longer says anything about which files arrived, because every
-release now carries the same seven.
-
 ```text
 wfeature-server[.exe]      the release binary, ~12 MB, stamped with the version
 start.command / .sh / .bat the launcher
@@ -419,79 +382,83 @@ LICENSE.txt, THIRD-PARTY-NOTICES.md
 games/{ktf,lgt,skt}/       empty, plus a README naming what goes where
 ```
 
-The empty `games/` tree is what makes `dataRoot` choose the extracted folder,
-so an archive without it would write saves into whatever directory the launcher
-happened to start from. The sources for everything but the binary are in
+Windows gets a `.zip` because Explorer opens it without a tool, and its text is
+converted while staged: CRLF throughout, plus a UTF-8 BOM on the two Korean
+READMEs so an editor cannot guess CP949; the `.bat` files stay ASCII without a
+BOM, because `cmd.exe` would echo one. The `.tar.gz` archives are written with
+`COPYFILE_DISABLE=1` so macOS adds no `._` files.
+
+The empty `games/` tree is what makes `dataRoot` choose the extracted folder;
+without it the server would write saves into whatever directory the launcher
+started from. The sources for everything but the binary are in
 [`packaging/`](../packaging/README.md), which also explains why a launcher
-exists at all rather than a bare binary.
+exists rather than a bare binary.
+
+The phone builds are the other two files. `make mobile` (`mobile-android` and
+`mobile-ios`) writes `wfeature-<version>-android-arm64.apk` and
+`wfeature-<version>-ios-arm64.ipa` into the same directory and rewrites
+`SHA256SUMS` over everything there, so a release lists seven files. They are a
+separate command because each needs a toolchain the desktop build does not — an
+Android SDK, and Xcode — and a machine with neither must still be able to build
+the desktop archives. See [`mobile.md`](mobile.md).
 
 `-version` prints what a user is running (`wfeature-server 0.1.0 (release)`),
-and the startup log carries it too. A checkout reports `dev`. The version goes
-to stdout and the log to stderr, so `wfeature-server -version | …` reads the
-answer and nothing else — which is what the smoke job and anyone pasting a
-version into a report depend on.
+and the startup log carries it too; a checkout reports `dev`. The version goes
+to stdout and the log to stderr, so `wfeature-server -version | …` reads only
+the answer, which the smoke job and version reports depend on.
 
 **A pushed tag publishes them.** `.github/workflows/release.yml` runs on a tag
-matching `v*`. It waits on `checks.yml` — the same gate every push runs, which
-is `gofmt`, `vet`, both test profiles, the race detector, and a real run of the
-server on Ubuntu, Windows and macOS — and only then builds, on three machines
-at once:
+matching `v*`. It first calls `checks.yml`, the gate every push runs (see
+[What was verified, and where](#what-was-verified-and-where)), then builds on
+three machines at once:
 
 | job | machine | what it builds |
 |---|---|---|
-| `desktop` | Ubuntu | the five archives, `make dist` |
+| `desktop` | Ubuntu | the five archives, `make dist` with `CGO_ENABLED=0` |
 | `android` | Ubuntu | the APK, `make mobile-android` |
 | `ios` | macOS | the IPA, `make mobile-ios` |
 
-The split is not a preference: the Android SDK is on the Linux runner and Xcode
-is on the macOS one, and no runner has both. A fourth job gathers the seven
-files, writes `SHA256SUMS` over all of them, reads the archives back, and
-creates the GitHub release. **A failure in any of the three publishes nothing.**
-A release missing its APK is the failure this shape is for, and tagging again
-costs less than a download page that is half a release.
+The split follows the runners: the Android SDK is on the Linux runner and Xcode
+is on the macOS one, and no runner has both. A `publish` job gathers the seven
+files, runs `make checksums` over all of them, runs
+`make dist-check DISTCHECK_FLAGS=-phones`, and creates the GitHub release.
+**A failure in any of the three build jobs publishes nothing**; a release
+missing its APK is the failure this shape prevents. The first releases built
+the five archives in CI and uploaded the phone builds by hand afterwards, a step
+that was forgotten once; `-phones` is the check that now refuses a set without
+them.
 
-The per-OS run in `checks.yml` is the reason for the dependency rather than a
-copy of the test steps: four of the five archives are cross-compiled, and a
-build that succeeds is not a binary that starts.
+- **The version is the tag.** `v0.2.0` builds `0.2.0`, stamps it into
+  `-version` and names the archives after it.
+- **A tag with a suffix publishes as a pre-release** (`v0.4.0-pre`,
+  `v0.5.0-rc1`; `v0.4.0` is not). Every release carries the same seven files.
+- **The notes are that version's section of [`CHANGELOG.md`](../CHANGELOG.md)**,
+  found by the tag's number with any suffix removed, so `v0.4.0-pre` and
+  `v0.4.0` read the same section. A version with no section fails the release
+  instead of publishing empty notes.
+- **The title is `W-Feature <tag>`**, because a release page shows the title
+  above the notes and the tag alone does not say what it is a version of.
+- **The `android` job needs the signing key**, `ANDROID_KEYSTORE_BASE64`, a
+  repository secret holding `mobile/android/debug.keystore`. Without it the job
+  fails rather than letting `build.sh` make a fresh key, because a new key each
+  release is an app no phone can update onto. The `android` and `ios` jobs check
+  out the full history, because the APK's `versionCode` and the bundle build
+  number are the commit count and a shallow checkout counts one.
+- **The IPA is unsigned on purpose**: whoever installs it re-signs it with their
+  own Apple ID.
+- **Running the workflow from the Actions tab** (input `version`, default
+  `0.0.0-dev`) builds and checks everything and publishes nothing; the files are
+  kept as a run artifact named `wfeature-<version>`, which is how packaging is
+  tried before a version number is spent.
 
-The `android` job needs the signing key, which is not in the repository — it is
-`ANDROID_KEYSTORE_BASE64`, a repository secret holding
-`mobile/android/debug.keystore`. Without it the job **fails** rather than
-letting `build.sh` make a fresh key: a new key each release is an app no phone
-can update onto, only reinstall. It also checks out the full history, because
-the `versionCode` is the commit count and a shallow checkout counts one.
+The workflow adds nothing to an archive — it runs the same `make dist` and
+`make mobile` — so a release can be built and published by hand if it is ever
+unavailable.
 
-The release is titled `W-Feature <tag>`, which is the project's own name and
-the tag's — a release page shows its title above the notes, and the tag alone
-says nothing about what it is a version of.
-
-The release notes are that version's section of [`CHANGELOG.md`](../CHANGELOG.md),
-read out of the file by the tag's number. A tag whose version has no section
-fails the release instead of publishing an empty one, which is what keeps the
-file current. The workflow adds nothing to an archive — it runs the same
-`make dist` and `make mobile` — so a release can still be built and published
-by hand if it is ever unavailable.
-
-Running it from the Actions tab instead of pushing a tag builds and checks
-everything and publishes nothing: the archives are left as a run artifact,
-which is how the packaging is tried out before a version number is spent.
-
-The tag is the version. `v0.2.0` builds `0.2.0`, stamps it into the binary's
-`-version`, and names the archives after it.
-
-The archives are unsigned on both macOS and Windows, so a first run is refused
-until the user says otherwise — Gatekeeper's "unidentified developer" and
-SmartScreen's blue banner. Each `README.txt` says how to get past its own, and
-the macOS launcher clears the quarantine flag from the rest of the folder,
-which is the one thing the binary cannot do for itself.
-
-Verified by extracting the archive and running it: the macOS launcher clears a
-quarantine flag it was given, serves `/` from the embedded client, lists a game
-dropped in `games/ktf/`, and names the extracted folder as its data root. The
-other four are cross-compiled only — the `smoke` job below runs the *binary* on
-Ubuntu and Windows, which is a different thing from extracting the archive a
-user downloads, and the launchers and the quarantine step are what it does not
-cover.
+The archives are unsigned on macOS and Windows, so a first run is refused until
+the user overrides Gatekeeper's "unidentified developer" or SmartScreen's
+banner. Each `README.txt` says how, and the macOS launcher clears the quarantine
+flag from the rest of the folder, which the binary cannot do for itself.
 
 ## The native CLI
 
@@ -511,36 +478,40 @@ var/games/<platform>/          game archives
 var/ext/                       archives added from the page (the only ones it may remove)
 var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
+var/run/                       start.sh's per-profile server log
 ```
 
-One game's saves leave and return as a `.wfs` container through
+[`var/README.md`](../var/README.md) lists every directory under `var/`.
+
+The picker lists the `.zip` and `.jar` files one level under `var/games/`, and
+those directly in it, which the page groups as `기타`. A directory name is a
+label only — the platform comes from the archive's bytes — and nothing deeper
+than one level is scanned.
+
+`<owner>` is the game's PID for KTF and LGT, and for SKT its program number
+(`DD-ProgName`), or the MIDlet name for a bare JAR that has none. The browser
+reaches the same tree through the save API: `/api/saves/<owner>` is KTF (the
+form the page has always used) and `/api/saves/<platform>/<owner>` is any
+other platform. One game's saves leave and return as a `.wfs` container through
 `GET`/`POST /api/savepack?game=<picker path>`, which the page's save export and
 import use; an import writes the saves it carries over the ones on disk.
 
-A per-game save folder may be a symbolic link to a directory kept elsewhere;
-saves are read and written through it, and quick save and quick load work as
+A per-game save folder may be a symbolic link to a directory kept elsewhere.
+Saves are read and written through it, and quick save and quick load work as
 they do anywhere else. The quick save is kept beside the link, in
-`.wfeature-quicksave/owners/<folder>/`, and never in the directory the link
-leads to. Lock files also live in a reserved sibling directory beside the target,
-so opening the same saves through the link and the real path cannot start two
-competing sessions. On a save location that cannot be written, a game still
-starts and reads its saves, and the game's own save fails as a write. On a
-filesystem without file locks games run normally. In both cases the log says once per
-folder that it has no file lock, which means a second server or CLI process is
-not kept out of it.
+`.wfeature-quicksave/owners/<folder>/`, never in the directory the link leads
+to. Lock files also live in a reserved sibling directory beside the target, so
+opening the same saves through the link and the real path cannot start two
+competing sessions.
 
-The picker lists the `.zip` and `.jar` files one level under `var/games/` and
-the ones sitting in it directly, which the page groups as `기타`. The directory
-name is a label and nothing else — the platform comes from the archive's bytes
-— and nothing deeper than one level is scanned.
+On a save location that cannot be written, a game still starts and reads its
+saves, and the game's own save fails as a write. On a filesystem without file
+locks, games run normally. In both cases the log says once per folder that it
+has no file lock, which means a second server or CLI process is not kept out
+of it.
 
-`<owner>` is the game's PID for KTF and LGT and its program number
-(`DD-ProgName`) for SKT, or the MIDlet name for a bare JAR that has none. The browser reaches the same tree through the save API:
-`/api/saves/<owner>` is KTF (the form the page has always used) and
-`/api/saves/<platform>/<owner>` is any other platform.
-
-Nothing under `var/` is ever touched by a rebuild — that is why it is outside
-the source and build trees.
+Nothing under `var/` is touched by a rebuild; that is why it is outside the
+source and build trees.
 
 ## What was verified, and where
 
@@ -548,77 +519,79 @@ the source and build trees.
 |---|---|---|---|
 | `go build ./...` | CI ✔ | **run ✔** | CI ✔ |
 | `go vet ./...` | CI ✔ | **run ✔** | cross-compiled ✔ |
+| `gofmt -l cmd internal mobile`, `govulncheck ./...` | CI ✔ | — | — |
 | `make test`, `make test-debug`, `go test -race ./internal/...` | CI ✔ | **run ✔** | — |
+| Android server cross-compiles (`GOOS=android GOARCH=arm64`) | CI ✔ | — | — |
+| iOS library and Swift app compile | — | CI ✔ | — |
 | Go server serves index, `games.json`, save API | — | **run ✔** | — |
 | a real game over a session at ~19fps, 13KB frames | — | **run ✔** | — |
-| single release binary serving its embedded client | CI ✔ (smoke) | **run ✔** | CI ✔ (smoke) |
+| single release binary serving its embedded client | CI ✔ (smoke) | **run ✔**, CI ✔ (smoke) | CI ✔ (smoke) |
 | a `make dist` archive extracted and launched | cross-compiled ✔ | **run ✔** | cross-compiled ✔ |
 
-Only macOS was executed *here*: this repository is developed on one machine, and
-cross-compiling proves a build, not a run. The CI rows are the `test` job on
-Ubuntu and the `smoke` job on all three runners in `.github/workflows/checks.yml`. What the table does show is that
-nothing in the Go tree is platform-specific enough to fail to compile or to trip
-`vet`, and that the paths and process handling the server depends on were
-written for all three.
+Only macOS was executed by hand: the repository is developed on one machine,
+and cross-compiling proves a build, not a run. The CI rows are
+`.github/workflows/checks.yml`: its `test` job on Ubuntu, and its `smoke` job on
+Ubuntu, Windows and macOS runners, which also cross-compiles the Android server
+on Linux and compiles the iOS library and app on macOS. `verify.yml` calls
+`checks.yml` on every push and pull request, and `release.yml` calls it before
+it publishes, so no tag can ship a binary that was never started. What the table
+shows is that nothing in the Go tree is platform-specific enough to fail to
+compile or to trip `vet`, and that the paths and process handling the server
+depends on were written for all three.
 
-Opening the archives themselves used to be a check somebody had to remember:
+The `smoke` job builds the release server (`-X main.version=ci`), stages it
+with an empty `games/{ktf,lgt,skt}` tree as an archive does, and checks that it
+reports `wfeature-server ci (release)`, binds `127.0.0.1:11541`, answers
+`/api/status`, serves the page it carries, names `beside the executable` as its
+data root, answers `status`, and stops on `stop` by draining (`shutting down`
+in its log) rather than being killed. The last two matter most on Windows, the
+one system where a stop has no signal to fall back on. Ubuntu and Windows are
+therefore verified by execution for starting, serving, reporting and stopping —
+not for playing a game.
 
 ```sh
-make dist VERSION=0.4.2
+make dist VERSION=0.5.2
 make dist-check
 ```
 
-`dist-check` reads all five back — `internal/tools/distcheck` — and the release
-workflow runs the same command before it publishes anything. It asks what the
-0.3.0 and 0.3.1 sets were read by hand for. That every entry extracts inside
-the archive's own folder, and that none of them is a link. That each holds the
-server, its three launchers, both READMEs, the licence and the notices, and the
-empty `games/{ktf,lgt,skt}` tree, and nothing else. That the launchers and the
-binary in a Unix archive keep their executable bit and nothing else in it does.
-That the Windows text is converted and the Unix text is not: the two Korean
-READMEs there open with a UTF-8 BOM and are CRLF throughout, the three `.bat`
-launchers are CRLF and ASCII without one, and no file in a `.tar.gz` carries a
-CR. That the licence, the notices and both READMEs are the files this
-repository holds, byte for byte, rather than files with those names. That
-`SHA256SUMS` covers every archive beside it and every hash matches. And that
-the one archive built for the machine running the check unpacks a server that
-answers with the version stamped into it — cross-compiling proves a build, and
-only a run proves the stamp took.
+`make dist-check` (`internal/tools/distcheck`; flags in
+[`cli.md`](cli.md#tools-under-internaltools)) reads the archives back, and the
+release workflow runs it before publishing. It automates what the 0.3.0 and
+0.3.1 sets were read by hand for:
+
+- every entry extracts inside the archive's own folder, and none is a link;
+- each archive holds the server, its three launchers, both READMEs, the licence
+  and the notices, and the empty `games/{ktf,lgt,skt}` tree, and nothing else;
+- the launchers and the binary in a Unix archive keep their executable bit and
+  nothing else in it has one;
+- Windows text is converted and Unix text is not: the two Korean READMEs open
+  with a UTF-8 BOM and are CRLF throughout, the three `.bat` launchers are CRLF
+  and ASCII without one, and no file in a `.tar.gz` carries a CR;
+- the licence, the notices and both READMEs are byte-identical to this
+  repository's files;
+- `SHA256SUMS` covers every archive beside it and every hash matches;
+- the archive built for the machine running the check unpacks a server that
+  answers with the version stamped into it (`-run=false` skips this);
+- with `-phones`, the APK and the IPA are present and named for this version.
 
 What it does not answer is what that server then does, which is the smoke job
-below and, for a release, the same thing by hand: the 0.3.1 native archive was
-run out of its extracted folder and served the page from the client it carries
-(`client=embedded`, saves `beside the executable`), answered `/api/status` with
-the stamped version, and drained on `/api/shutdown`.
+and, for a release, the same check by hand: the 0.3.1 native archive was run
+from its extracted folder and served the page from its embedded client
+(`client=embedded`, saves `beside the executable`), answered `/api/status`
+with the stamped version, and drained on `/api/shutdown`. The macOS archive
+was verified the same way, including its launcher clearing a quarantine flag
+and listing a game dropped in `games/ktf/`; the launchers and the quarantine
+step are what the smoke job does not cover.
 
-**Talk to the server you started, and prove it before you stop it.** The
-port this is done on is one a developer's machine tends to have several
-servers on already — leftovers from earlier sessions, each answering
-`/api/status` and each willing to drain on `/api/shutdown` from any local
-caller, because that route has no authentication and should not. A check that
-starts a server, waits for `/api/status` to answer and then posts a shutdown
-will happily do all three to somebody else's process if its own failed to
-start. `/api/status` reports the PID for exactly this: compare it against the
-one that was spawned, before the request that stops it.
+**Talk to the server you started, and prove it before stopping it.** A
+development machine often has servers left over from earlier sessions, each
+answering `/api/status` and each willing to drain on `/api/shutdown` from any
+local caller, because that route has no authentication and should not. A check that starts a server, waits for
+`/api/status` and then posts a shutdown will do all three to another process if
+its own failed to start. `/api/status` reports the PID for this reason: compare
+it with the spawned process's before the request that stops it.
 
-The gap that leaves is what `.github/workflows/checks.yml` is for. Its `smoke`
-job runs on Ubuntu, Windows and macOS runners and, on each, builds the release
-server, stages it the way an archive does, and then checks the seven things a
-download has to do: report its version, bind its port, answer `/api/status`,
-serve the page it carries, name the folder beside it as its data root, say what
-it is when asked with `status`, and stop when asked with `stop` — draining
-rather than being killed. The last two are why the job matters most on Windows:
-that is the one system where a stop has no signal to fall back on, so the route
-the server answers is the whole of it there. That
-is a real run on each OS rather than a compile. `verify.yml` calls it on every
-push and pull request, and `release.yml` calls it before it publishes, so no
-tag can ship a binary this never started.
-
-Because the job runs on every push and before a release publishes, Ubuntu and
-Windows are verified by execution for what it checks — starting, serving,
-reporting and stopping — not for playing a game.
-
-To close the gap by hand instead, run this on each OS and compare:
+To repeat the checks by hand on another OS:
 
 ```sh
 go vet ./... && go test ./... && node --test web/*.test.mjs
@@ -627,14 +600,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:11541/
 curl -sS http://127.0.0.1:11541/games.json | head -c 120
 ```
 
-On Windows the first run also raises a firewall prompt, because the server
-binds every interface. Allowing it on the private network is what lets a phone
-reach the page.
+On Windows the first run raises a firewall prompt, because the server binds
+every interface. Allowing it on the private network lets a phone reach the
+page.
 
 ## A game asks to restart
 
-If an LGT title asks to press its OZ key and restart, press the emulator’s
+If an LGT title asks to press its OZ key and restart, press the emulator's
 OK/confirmation key and let the game exit before launching it again. The guest
-may save its acknowledgment only through that action; immediately restarting
-the emulator repeats the notice. Do not delete saves to dismiss it. See the
+may save its acknowledgment only through that action; restarting the emulator
+immediately repeats the notice. Do not delete saves to dismiss it. See the
 [recorded restart investigation](startup-compatibility-2026-09-19.md#lgt-restart-notice-e934256c238a).

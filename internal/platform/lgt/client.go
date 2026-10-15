@@ -392,7 +392,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	// the local titles, measured with the instruction count held fixed, and it
 	// is not free everywhere: the same change measured on KTF is 3 to 12
 	// percent *slower*, which is why it lives here rather than in the default.
-	// See docs/armcore.md.
+	// See docs/history/armcore.md.
 	core := armcore.NewCore(armcore.CoreOptions{MaxSteps: options.MaxSteps, Quantum: cletQuantum})
 	memory := core.Memory()
 

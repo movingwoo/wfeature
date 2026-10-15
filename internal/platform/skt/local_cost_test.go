@@ -24,7 +24,7 @@ import (
 // takes the pacing away for a run that only wants sample density.
 //
 // Read the result against "Do not read a macOS Go CPU profile" in
-// docs/testing.md — the allocation profile is the cheaper clue here.
+// docs/history/testing.md — the allocation profile is the cheaper clue here.
 func TestLocalSKTArchiveCost(t *testing.T) {
 	path := os.Getenv("WFEATURE_SKT_COST_ARCHIVE")
 	if path == "" {

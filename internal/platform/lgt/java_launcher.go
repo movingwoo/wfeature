@@ -16,7 +16,7 @@ import (
 // is here finds the class the name refers to and reports it, because the whole
 // difficulty of this call was that the name looked like it referred to nothing:
 // the class list the module hands over does not contain it, and reading that
-// list as the whole of the application is what hid it. See docs/lgt.md, "What
+// list as the whole of the application is what hid it. See docs/history/lgt.md, "What
 // "Game" names, and why it is not in the class list".
 
 // javaLauncherChainLimit stops a walk through a superclass chain that a

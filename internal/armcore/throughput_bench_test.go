@@ -8,7 +8,7 @@ import (
 // Interpreter throughput, measured on the three shapes that answer different
 // questions: what an instruction costs with no memory traffic, what one costs
 // with it, and what the code real games actually run costs. See the throughput
-// section of docs/armcore.md — optimising against the first two alone misleads,
+// section of docs/history/armcore.md — optimising against the first two alone misleads,
 // which is what the third is here to prevent.
 //
 // aluLoopMemory lays out a Thumb loop of `adds r0, #1` ending in a backward
@@ -270,7 +270,7 @@ func BenchmarkEngineBlitSamePage(b *testing.B) { benchmarkBlit(b, 512, 8) }
 
 // The destination is its own region, so the two accesses alternate pages —
 // which is what a real blit does, and what one cached page cannot hold. See
-// the throughput section of docs/armcore.md for the two cache shapes that were
+// the throughput section of docs/history/armcore.md for the two cache shapes that were
 // built to close the gap this reports and rejected on real games.
 func BenchmarkEngineBlitCrossPage(b *testing.B) { benchmarkBlit(b, 512, 512*1024) }
 

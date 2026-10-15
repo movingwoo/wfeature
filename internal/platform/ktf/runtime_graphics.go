@@ -555,7 +555,7 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	// and XORs the same image again — which restores the ground and leaves the
 	// glyph in the ink colour, out of a font sheet that only holds black on
 	// white. Drawn without XOR the second pass paints over the first, so every
-	// syllable comes out a solid block of the ink colour. See docs/ktf.md,
+	// syllable comes out a solid block of the ink colour. See docs/history/ktf.md,
 	// "Text a title composes by XOR".
 	xor := state.xorMode
 	memory := runtime.client.core.Memory()

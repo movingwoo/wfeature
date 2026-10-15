@@ -239,7 +239,7 @@ func cardDefinition() jvm.ClassDefinition {
 			{Name: "getWidth", Descriptor: "()I", Access: publicMethod, Body: forwardSpecial(midp.CanvasClass, "getWidth", "()I")},
 			// Not the MIDP Canvas's, which its sibling above does forward to.
 			// A Canvas on this vendor reports sixteen rows fewer than the
-			// display (`skvm.md`, "A Canvas here is sixteen rows shorter than
+			// display (`docs/history/skt.md`, "A Canvas here is sixteen rows shorter than
 			// the display"), and that is a MIDP quirk every MIDlet in the
 			// corpus corrects for by hand. Nothing says a Card carries it, and
 			// the three local Jlets lay out against the display, so this
@@ -462,7 +462,7 @@ func backLightDefinition() jvm.ClassDefinition {
 		SuperName: "java/lang/Object",
 		Access:    jvm.AccessPublic | jvm.AccessFinal,
 		Methods: []jvm.MethodDefinition{
-			// There is no lamp to drive, which is the decision `skvm.md`
+			// There is no lamp to drive, which is the decision `docs/history/skt.md`
 			// records for the SKVM class of the same purpose.
 			{Name: "alwaysOn", Descriptor: "()V", Access: publicStatic, Body: doNothing},
 			{Name: "on", Descriptor: "(III)V", Access: publicStatic, Body: doNothing},

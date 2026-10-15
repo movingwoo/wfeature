@@ -24,7 +24,7 @@ import (
 // and everything after that happens inside that function. So this loop is
 // "run the frame when it is due" where the other is "run a service round",
 // and the options that only mean something to the other are refused by name
-// rather than ignored. See docs/ktf.md, "An earlier KTF package".
+// rather than ignored. See docs/history/ktf.md, "An earlier KTF package".
 type nativeRun struct {
 	// archivePath is what the package was read from, which is the second half
 	// of a cheat table's key beside the hash of the module itself.

@@ -87,7 +87,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 	// quantum of a thousand. Reporting `count` on the exhausted path threw that
 	// overshoot away: the budget the Host schedules on stopped matching what
 	// the guest had done, and on a stand-in charging thirty times the quantum
-	// it moved the guest's own pacing. See armcore.md, "The charge a quantum
+	// it moved the guest's own pacing. See docs/history/armcore.md, "The charge a quantum
 	// could not hold".
 	steps := uint32(0)
 	for ; steps < count; steps++ {
@@ -116,7 +116,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			// The switch routes the forms games actually spend their
 			// instructions in straight to their handler, instead of reaching
 			// them through executeThumbForm. That removes one Go call per guest
-			// instruction, which is worth a tenth of a step; see armcore.md for
+			// instruction, which is worth a tenth of a step; see docs/history/armcore.md for
 			// the measurements it came from.
 			//
 			// These cases route only. Every form's semantics live in its own
@@ -126,7 +126,7 @@ func (Engine) Run(context *Context, memory *Memory, end uint32, count uint32) (R
 			//
 			// They take the raw halfword rather than operands the decode cache
 			// pulled out ahead of time. That was built and measured, and it is
-			// slower both ways round; see armcore.md, "A wider decode cache
+			// slower both ways round; see docs/history/armcore.md, "A wider decode cache
 			// entry was built and lost, twice over".
 			var supervisorCall SupervisorCall
 			var err error

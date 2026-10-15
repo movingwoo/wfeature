@@ -1,25 +1,86 @@
 # Testing
 
+This file lists the checks every change must pass, the opt-in local and browser
+routes, and what each kind of evidence does and does not establish. The
+sections from [Quick save and checkpoints](#quick-save-and-checkpoints) onward
+are verification records for specific changes; their counts are dated.
+[Testing history](history/testing.md) keeps earlier investigations and the
+reasoning behind the probes; [coverage audits](history/coverage.md) keep the
+2026-09-12 API snapshot.
+
+## Contents
+
+- [Required gates](#required-gates), [continuous integration](#continuous-integration)
+  and [release archives](#release-archives)
+- [Test boundaries](#test-boundaries) and [fuzz targets](#fuzz-targets)
+- [Local acceptance](#local-acceptance)
+- [Browser and device acceptance](#browser-and-device-acceptance):
+  [grid keypad](#grid-keypad), [rapid-fire input](#rapid-fire-input),
+  [game controllers](#game-controllers), [full-screen layout](#full-screen-layout),
+  [frame delivery](#frame-delivery)
+- [Quick save and checkpoints](#quick-save-and-checkpoints)
+- [Runtime boundary regressions](#runtime-boundary-regressions)
+- [Reading old validation](#reading-old-validation): audio, release and
+  text-input records
+
 ## Required gates
 
 Run the checks relevant to a change from the repository root:
 
 ```sh
-make test
-make test-debug
+gofmt -l cmd internal mobile   # must print nothing
+make test                      # go test ./... and node --test web/*.test.mjs
+make test-debug                # go test -tags debug ./...
 go test -race ./internal/...
 go vet ./...
 ```
 
-`make test` runs Go and Node tests. The debug gate checks the same Go packages
-with detailed diagnostics enabled. Format Go changes with `gofmt`. Build both
-profiles when changing profile behavior. `make dist-check` validates release
-archives after `make dist`; it is not a substitute for runtime tests.
+`make test-debug` compiles the debug-only logging and diagnostics in, so it
+catches a change that builds or behaves correctly in one profile only. When a
+change touches profile behavior, also build both profiles
+(`make debug release server server-release`) and check each.
 
 JVM changes need authored Java class fixtures, Go regressions, and a packaged
 J2ME integration fixture when applicable. Protocol changes exercise both
 `internal/webhost` and `web/`. Use isolated saves for local archive probes.
 Do not commit real games, runtime saves, or generated corpus reports.
+
+Tests in `cmd/server`, `internal/appserver`, `internal/launcher`,
+`internal/webhost` and `internal/wsproto` bind loopback sockets. Where a sandbox
+forbids binding, those tests fail at the bind; report them as not run, keep the
+port-free handler and header tests passing, and state that a real browser check
+remains. If the sandbox blocks the default Go cache, point `GOCACHE` and
+`GOTMPDIR` at directories under `/tmp`.
+
+### Continuous integration
+
+`.github/workflows/verify.yml` calls `checks.yml` on every push and pull
+request, and `release.yml` calls the same file before it builds anything. The
+`test` job (Ubuntu, newest stable Go, Node 22) runs the `gofmt` check above,
+`go vet ./...`, `govulncheck ./...`, `make test`, `make test-debug` and
+`go test -race ./internal/...`. The `smoke` job builds the release server with
+`CGO_ENABLED=0` on Ubuntu, Windows and macOS, stages it as an archive does, and
+checks `-version`, `/api/status`, the embedded page, the data root it logs,
+`status` and `stop`. The Ubuntu runner also cross-compiles the server for
+`android/arm64`, and the macOS runner compiles the iOS library and app. No
+archive in the repository is a real game, so every local-archive probe runs by
+hand. [Running wfeature](running.md#what-was-verified-and-where) describes the
+release jobs and what each operating system is verified for.
+
+### Release archives
+
+`make dist` builds the five desktop archives into `build/dist`;
+`make mobile-android` and `make mobile-ios` add the APK and IPA where their
+toolchains exist. `make dist-check` (`go run ./internal/tools/distcheck -dir
+build/dist $(DISTCHECK_FLAGS)`) reads the archives without unpacking them: all
+five platforms are present under one version, `SHA256SUMS` matches every file
+in both directions, every entry extracts inside its own folder, the launchers
+keep their executable bit, the Windows text has CRLF line endings and a byte
+order mark on the READMEs, the licence and notices match the repository, and
+the server built for this machine, unpacked into a temporary directory, reports
+the stamped version (`-run=false` skips that step). `DISTCHECK_FLAGS=-phones`
+also requires the APK and IPA, as the release workflow does. It checks
+packaging, not runtime behavior.
 
 ## Test boundaries
 
@@ -31,94 +92,582 @@ Do not commit real games, runtime saves, or generated corpus reports.
 | Platforms | Service fixtures, Java/ARM round trips, graphics pixels, file/record failure injection, and resource lifetime. |
 | Sessions | Lifecycle, save ownership, admission, parking/resume, protocol handlers, and encoder output. |
 | Page | Node tests for controls, transport, composition, frame handling, and lifecycle. |
-| Release | Cross-platform server smoke checks, archive contents, metadata, and embedded notices. |
+| Release | Cross-platform server smoke checks, archive contents, metadata, and embedded notices (`internal/licenses` requires the three lists of bundled components to agree). |
+| Tools | The acceptance runner's records, cache and sweep staging; `distcheck`, `apiscan` and `javastub` against authored inputs; the settle and relaunch rules in `internal/ladder`. |
 
 A fixture proves its tested contract. Startup does not establish gameplay;
 a write at boot does not establish saved progress; generated audio does not
 establish audible playback. Static API references and startup import scans are
 lower bounds, not a complete inventory of executed methods.
 
-The ARM call-checkpoint tests and KTF continuation tests cover parked call
-records, including restoration in a subprocess and recapture after another wait.
-Cases cover native return cleanup, caught exceptions, and `Thread.run` delegation
-whose target field changes after entry. JVM tests and a packaged J2ME MIDlet
-check that unsupported bytecode callers are refused without changing the source
-execution. These checks do not enable checkpoints for J2ME sessions.
-Older module cases exercise compiled and native invocation, direct module waits,
-two result registers, argument-spill cleanup, exceptions and recapture after a
-second wait. Invalid remainders, missing children and overflowing stack cleanup
-are rejected before execution, and the original worker can still finish.
-They serialize the ARM address space, JVM heap, allocator and runtime metadata.
-The destination registers VM native implementations without preparing guest
-tables or recreating the fixture's ARM code. Dynamic objects and guest-memory arrays exercise
-aliasing and both directions of subsequent writes. The packaged Java heap case
-continues execution without running class initialization or MIDlet startup again.
-Graphics tests preserve transparent color keys and a shared image/framebuffer
-mask while rejecting malformed and truncated image records. Storage payload tests
-preserve database generations and shared File/stream cursors. Authored Calendar
-rules cover both sides of past and post-2038 transitions, subsequent Java calls,
-malformed-record refusal, and source independence. Platform root tests exercise
-restored Timer.cancel, event consumption, shared key ownership, and weak resource
-collection. Editor tests continue an unfinished multi-tap cycle at a new clock
-epoch, including UTF-16 limits and focused-editor/native-payload sharing. C storage
-tests continue reads/writes and handle allocation, including a cursor retained
-past truncation through another handle, and keep lazy cache state distinct.
-Metadata tests continue native dispatch, allocation, pixel-cache lookup and
-collection, and resolve saved older-module class links without rerunning entry.
-Relay tests finish a partly written request, read the remaining reply, preserve
-socket/stream ownership and close flags, and retain a runtime-only socket without
-allocating a guest identity. A continuation case carries relay state through a
-fresh process and finishes its partial frame after the worker returns.
-Control tests preserve fractional guest time at another Host epoch, deliver
-queued C text after discarding a canceled carrier, execute a pending network
-callback once, and decode/play an unloaded C clip after restoration.
-Vibrator tests reanchor active, expired and indefinite requests to a different
-Host epoch, preserve the next request number, and reject invalid records without
-changing an existing motor request.
-Audio timeline tests compare subsequent event output and repeat boundaries,
-stop saved active notes, preserve the next handle, copy nested PCM/SysEx data,
-and reject malformed records without emitting output. This does not establish
-restoration of already sounding Host voices or in-flight wave samples.
-Client tests restore the joined records without guest startup, including multiple
-parked workers, initial Timer grants, stack reuse order, retained LCD pixels,
-pacing deadlines at another clock epoch, and logical audio/vibration. A separate
-activation test advances the detached clock by ten seconds and verifies that
-the final adoption preserves wait, timer, editor and device offsets. Recapture
-before the first restored grant preserves its saved continuation. Invalid worker
-ownership, stacks, budgets, heap roots, image identity and audio catch-up bounds
-are rejected before any goroutine starts; the original source remains usable.
-Malformed component records must leave existing metadata and heap bindings untouched.
-A failed detached client is discarded. These component tests
-do not establish full-session quick save/load. Set
-`WFEATURE_CALL_CHECKPOINT_RESTORE_BINARY` to another compiled KTF test binary to
-check restoration across debug/release profiles. To inspect pending calls in a
-local KTF loading route:
+### Fuzz targets
+
+Everything that reads untrusted bytes before a game has proved to be a game has
+a fuzz target. Each target holds two rules: it may not panic, and what it
+accepts must be usable (an opener that returns no error and a nil module has
+moved the crash into its caller). Their seeds run in every `go test`; each
+target seeds one input of every shape its parser branches on, because a fuzzer
+starting from noise spends its budget discovering the container format.
+
+| Target | What it reads |
+| --- | --- |
+| `internal/platform/detect.FuzzArchiveNeverPanics` | detection before any loader: the zip directory, marker names and the class-file scan |
+| `internal/platform/ktf.FuzzOpenNeverPanics` | the KTF archive and its nested JAR |
+| `internal/platform/skt.FuzzOpenNeverPanics` | the SKT archive and its manifest |
+| `internal/platform/skt.FuzzUnpackArchiveNeverPanics` | an SKT container unpacked under small archive limits |
+| `internal/platform/lgt.FuzzOpenNeverPanics` | the LGT archive, its descriptor and its nested JAR |
+| `internal/platform/lgt.FuzzParseModuleNeverPanics` | the ELF module, whose section headers are offsets and sizes |
+| `internal/platform/lgt.FuzzParseDescriptorNeverPanics` | `app_info`, parsed before anything says it is text |
+| `internal/jvm/classfile.FuzzParseNeverPanics` | a class file |
+| `internal/sgsvm.FuzzParse` | an SGS script program |
+| `internal/platform/ktf.FuzzPackagedRecordDatabaseNeverPanics` | the two shapes a KTF archive packages a record database in |
+| `internal/platform/ktf.FuzzDatabaseNameSurvivesTheRemovalList` | property: a database name against the key it makes and the removal list it lands in |
+| `internal/platform/skt.FuzzPackagedRecordStoreNeverPanics` | one `.sb` record table against the `.db` it points into |
+| `internal/platform/skt.FuzzPackagedRecordStoresNeverPanics` | the whole scan of a container's record stores |
+| `internal/platform/skt.FuzzRecordStoreNameSurvivesTheIndex` | property: a store name against the key it makes and the index it lands in |
+| `internal/audio/smaf.FuzzBoundedSMAF` | SMAF data under small per-call budgets ([SMAF decoder bounds](#smaf-decoder-bounds)) |
+| `internal/backend.FuzzCheckpointRecord` | the checkpoint state-record decoder |
+| `internal/vp8l.FuzzEncode` | a WebP lossless round trip of a small picture |
+| `internal/vp8l.FuzzReferences` | the fast match parse against the plain one |
+
+```sh
+go test ./internal/platform/lgt -run FuzzOpen                       # the seeds only
+go test ./internal/platform/lgt -fuzz FuzzOpenNeverPanics -fuzztime 60s
+```
+
+The two property targets assert that a name a table accepts keys to a name
+under its own scope, does not address one of the lists the table keeps beside
+its entries, and comes back from that list unchanged beside another name. Why
+they exist, and the four-way archive bound every loader enforces
+(`TestAnArchiveIsBoundedFourWays`), is recorded in
+[what a hostile archive may not do](history/testing.md#implementation-what-a-hostile-archive-may-not-do).
+
+## Local acceptance
+
+`make acceptance` runs `go run ./internal/tools/acceptance $(ARGS)` over the
+ignored local corpus in `var/games/{ktf,lgt,skt}`; it runs nowhere else and is
+not part of `make test`. Each stage is an opt-in `go test` run enabled by one
+variable, read through `go test -json`, with one subtest per archive. A stage
+can also be run alone:
+
+```sh
+WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./internal/platform/skt
+```
+
+| Platform | Rung | Stage | Test | Variable |
+| --- | ---: | --- | --- | --- |
+| KTF | 1 | parse | `TestLocalKTFArchivesParse` | `WFEATURE_KTF_ACCEPTANCE` |
+| KTF | 2 | initialize | `TestLocalKTFArchivesInitialize` | `WFEATURE_KTF_EXECUTE_ACCEPTANCE` |
+| KTF | 3 | load | `TestLocalKTFArchivesLoadMainClass` | `WFEATURE_KTF_LIFECYCLE_ACCEPTANCE` |
+| KTF | 4 | construct | `TestLocalKTFArchivesConstructMainClass` | `WFEATURE_KTF_CONSTRUCT_ACCEPTANCE` |
+| KTF | 5 | start | `TestLocalKTFArchivesStartMainClass` | `WFEATURE_KTF_START_ACCEPTANCE` |
+| KTF | 6 | frame | `TestLocalKTFArchivesRenderFirstFrame` | `WFEATURE_KTF_FRAME_ACCEPTANCE` |
+| KTF | 7 | sustained | `TestLocalKTFArchivesSustainAFrame` | `WFEATURE_KTF_SUSTAINED_ACCEPTANCE` |
+| KTF | 8 | interactive | `TestLocalKTFArchivesAnswerAKey` | `WFEATURE_KTF_INTERACTIVE_ACCEPTANCE` |
+| LGT | 1 | boot | `TestLocalLGTArchivesBootAndPaint` | `WFEATURE_LGT_ACCEPTANCE` |
+| LGT | 2 | sustained | `TestLocalLGTArchivesSustainAFrame` | `WFEATURE_LGT_SUSTAINED_ACCEPTANCE` |
+| LGT | 3 | interactive | `TestLocalLGTArchivesAnswerAKey` | `WFEATURE_LGT_INTERACTIVE_ACCEPTANCE` |
+| SKT | 1 | boot | `TestLocalSKTArchivesBootAndPaint` | `WFEATURE_SKT_ACCEPTANCE` |
+| SKT | 2 | sustained | `TestLocalSKTArchivesSustainAFrame` | `WFEATURE_SKT_SUSTAINED_ACCEPTANCE` |
+| SKT | 3 | interactive | `TestLocalSKTArchivesAnswerAKey` | `WFEATURE_SKT_INTERACTIVE_ACCEPTANCE` |
+| SKT | — | sound | `TestLocalSKTArchiveSoundsDecode` | `WFEATURE_SKT_ACCEPTANCE` |
+
+The sound stage asks whether every SMAF resource decodes; it is not a rung, so
+a title whose sounds fail has not fallen down the ladder. The interactive
+judgment (settle, hold, release, compare, and *unanswerable* when the screen
+never settles) and the rules for settling again and for a second launch live in
+`internal/ladder`, shared by all three platforms.
+`WFEATURE_<platform>_SUSTAIN_TICKS` and `WFEATURE_<platform>_HOLD_TICKS` widen
+the sustained and interactive windows for an investigation.
+
+```sh
+make acceptance                                  # all three platforms, compared with the newest record
+make acceptance ARGS="-platform ktf"
+make acceptance ARGS="-cache=false"              # measure every archive again
+make acceptance ARGS="-since ''"                 # no comparison
+make acceptance ARGS="-games 'var/games/one,var/games/two' -exclude broken -out var/acceptance/sweep"
+go run ./internal/tools/acceptance -compare old.ndjson new.ndjson
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-platform` | `ktf,lgt,skt` | platforms to run, comma separated; also narrows a `-games` sweep |
+| `-out` | `var/acceptance` | directory for `<date>.md` and `<date>.ndjson` |
+| `-since` | `auto` | record file to compare with: a path, `auto` for the newest in `-out` other than today's, or empty for none |
+| `-cache` | `true` | carry an archive's row forward when its bytes and the build identity are unchanged |
+| `-games` | empty | sweep these comma-separated directories recursively instead of the three platform folders |
+| `-exclude` | empty | directories a `-games` sweep does not enter, by base name or by path relative to the swept root |
+| `-timeout` | `60m` | `go test` timeout for one stage |
+| `-compare` | `false` | run no probes; compare the two record files given as arguments and print the difference |
+
+The Markdown report lists what was in each corpus, one table per stage (with a
+carried-forward column), failures grouped by cause (`why_class`), what no
+platform claimed, and what changed since the compared run. The NDJSON file has
+one run line and one line per file in every corpus, including files no probe
+picked up; its schema is described in
+[one archive, one line](history/testing.md#implementation-one-archive-one-line).
+Both files name the games, so both stay under the ignored `var/`. When quoting a
+run, cite its date and record the corpus, archive identity, source revision,
+profile, save setup, stages attempted, outcomes and limits.
+
+- **Exit status.** 0 when every stage ran, even if archives failed; 1 when a
+  stage could not run; 2 when the run could not start or write its files.
+- **Carried rows.** A row is carried only when the file's SHA-256, the build
+  identity (the commit, plus a digest of the diff and untracked files on a
+  modified checkout), the operating system, the architecture and the Go version
+  all match. The cache reads today's earlier record when there is one, otherwise
+  the `-since` record. A carried row keeps its original `measured_run`; it is
+  not a new measurement.
+- **Sweeps.** With `-games`, `detect.Classify` decides each file's platform,
+  each group directory becomes a corpus named `<directory> (<platform>)`, and
+  files no platform claims remain reported outcomes. Nothing is excluded by
+  default. Use a separate `-out` for a one-off sweep, because the delta lines
+  runs up by corpus name.
+- **Comparisons.** Rows match by corpus name and archive, so compare the same
+  corpora and stages. A record written from another worktree, or with absolute
+  rather than relative directories, needs the path prefix stripped from its
+  corpus names before `-compare` (as in
+  [whole-corpus acceptance against 0.5.2](#whole-corpus-acceptance-against-052)).
+
+The probes behind each rung, the reasoning for the ladder, the cache and the
+sweep, and the CLI-driven investigation methods are recorded in
+[testing history](history/testing.md#implementation-driving-a-real-title-and-reading-what-it-says).
+The [CLI reference](cli.md) covers replay, frame comparison, API scans, guest
+profiles and save inspection. Historical counts belong to their recorded runs.
+
+Settling observes 64 frame samples and retains two rounds; the dated
+comparison found no outcome change from four rounds. A changing screen leaves
+an input question unanswered, which is not by itself an emulator failure. See
+[settling evidence](history/testing.md#settling-settling-and-key-response-validation).
+
+## Browser and device acceptance
+
+Go handler tests and Node client tests are ordinary gates. The runners under
+`web/acceptance/` are opt-in and drive real browsers through an external
+Playwright installation: set `PLAYWRIGHT_MODULE` to its `index.mjs`. Each takes
+`chromium` or `webkit` as its last argument (Chromium by default); run both
+engines, and pass a debug server where a route asks for the other profile.
+
+| Runner | Arguments | Section |
+| --- | --- | --- |
+| `pwa.mjs` | `BASELINE_SERVER CANDIDATE_SERVER` | [PWA release acceptance](pwa-acceptance.md) |
+| `keypad-grid.mjs` | `SERVER` | [Grid keypad](#grid-keypad) |
+| `rapid-fire.mjs`; `rapid-fire-load.mjs` (no browser) | `SERVER`; `SERVER [SECONDS_PER_PHASE]` | [Rapid-fire input](#rapid-fire-input) |
+| `gamepad.mjs` | `SERVER` | [Game controllers](#game-controllers) |
+| `android-gamepad.mjs` | `REGISTER.json` | [The Android app on an emulator](#the-android-app-on-an-emulator) |
+| `ios-gamepad.mjs` (no Playwright) | none; `IOS_RUNTIME` | [The iOS app on a simulator](#the-ios-app-on-a-simulator) |
+| `fullscreen.mjs` | `SERVER` | [Full-screen layout](#full-screen-layout) |
+| `frame-delivery.mjs` | `SERVER`; `WFEATURE_FRAME_ARCHIVE` | [Frame delivery](#frame-delivery) |
+| `checkpoint-skt.mjs` | `SERVER` | [SKT execution checkpoints](#skt-execution-checkpoints) |
+| `audio-live.mjs` | `DEBUG_SERVER`; `WFEATURE_AUDIO_ARCHIVE` | [Live audio session acceptance](#live-audio-session-acceptance) |
+| `audio-presentation.mjs`, `audio-pcm.mjs`, `audio-load.mjs` | none (request interception) | [Native audio rendering](#native-audio-rendering-acceptance), [native cost](#native-cost-of-the-largest-sound-loads) |
+| `audio-controls.mjs`, `audio-gain.mjs`, `audio-midi-state.mjs`, `audio-ownership.mjs`, `audio-resume.mjs`, `audio-timing.mjs` | `URL` of a static server for `web/` | [Native audio rendering](#native-audio-rendering-acceptance) |
+
+The runners use authored fixtures, or a local archive copied into a scratch
+library where a variable names one, with isolated save directories; they never
+change a person's library or saves. A runner that starts a server removes its temporary
+`var/ext/<run>` tree after stopping it; reports, screenshots and isolated saves
+stay under `var/acceptance/` for diagnosis. The installation's root
+`var/ext/.adopted` marker and user uploads are outside those temporary trees.
+
+Local Chromium and WebKit records also cover selected retention/takeover,
+reconnect, restart, native-text and save-confirmation routes. Automated
+composition events are not evidence of a physical phone keyboard or desktop IME
+behaving correctly. A mocked bitmap decoder does not establish decoding in a
+real browser.
+
+The WebKit Blob failure did not recur in the 2026-09-12 instrumented routes
+([WebKit observations](history/testing.md#webkit-webkit-frame-decoding-investigation))
+and recurred during the 2026-09-30 SKT retained-session reload route
+([resume investigation](skt-resume-2026-09-30.md#validation)). Its cause is
+unresolved. On recurrence, preserve the lifecycle phase, browser version, Blob
+properties, origin/navigation and server frame evidence.
+
+[PWA release acceptance](pwa-acceptance.md) defines the two-version upgrade
+check and the physical-device steps. No automated route establishes
+installation, service-worker replacement on a phone, audible audio
+activation/recovery, real touch, real-phone suspension or saved progression;
+each needs an explicit route and observation.
+
+## Grid keypad
+
+The contract is in [the web host reference](../web/README.md#grid-keypad);
+release-facing instructions are in the root README.
+
+The grid model and geometry suites cover preset topology, every legacy cell's
+migration, action policies, connected shapes, holes, conflicts, settings
+uniqueness, split/clear/undo, per-type reset, reload, corrupted records, unknown
+versions and failed writes; with the rendered browser route they replace the
+removed slider assertions. The recorded old preset table stays independent of
+the new defaults. `keypad-refinement.test.mjs` records the version-1
+seven-column schema on its own and checks paired-column migration, assigned and
+cleared shapes, occupied holes, activation policies, independent empty halves,
+split/reload, failed writes, per-type recovery and a concurrent old tab writing
+its separate storage slot. `keypad-editor.test.mjs` drives the editor's event
+handlers with DOM stubs: it reproduces the stale multiple-selection mode after
+merging, then checks immediate assignment to the merged button, conflict
+recovery and settings protection. Explicit font metrics check that single-cell
+labels fit (including two-character names), that resizing or merging restores
+the available font size, and that changing rapid-fire text refits without
+accumulating shrink. The stubs do not establish real font rendering; the
+browser route measures real range widths and no-wrap styles.
+`service-worker.test.mjs` reproduces a late legacy navigation and overlapping
+future workers; both failed before the cache repair.
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/keypad-grid.mjs build/release/wfeature-server chromium
+```
+
+The runner uses the embedded client and an authored SKT canvas archive with
+isolated runtime directories. It creates rectangle, L, T and ring buttons
+through the editor, checks the hole's separate key and the native hit targets,
+and observes the session's key messages. It covers mouse drag selection, touch
+taps, keyboard/pointer shared ownership, duplicate pressed feedback, focused
+activation, cancellation, blur, local-action exclusion, reload and full storage.
+Chromium also supplies two browser touch contacts through its automation
+protocol; these are not physical-device evidence.
+
+Geometry checks cover 240×320, 320×480, 320×568, 390×844, 390×700, 768×1024,
+844×390, 1280×900 and 1280×390 px windows plus explicit inputs for all four
+safe-area insets. They wait for resized button positions, then check full width,
+contact with the game wrapper, bottom alignment, overflow, the last cell's hit
+target and unchanged saved coordinates. At 240×320 the first and last
+start-menu controls must stay reachable by scrolling inside the game area.
+Rapid-fire mode changes are checked after the authored game starts. The route
+also loads a version-1 grid and checks paired columns and retained source
+storage. It stops its server and reloads the cached page to establish offline
+shell availability, not offline game execution; WebKit's forced-offline API is
+avoided because of the navigation failure recorded in
+[PWA acceptance](pwa-acceptance.md#recorded-result-2026-09-18).
+
+The checkpoint route uses the grid positions while keeping its Java/SGS pixel,
+input-epoch, ordinary-save and reconnect assertions. The two-version PWA route
+edits a legacy cell or coarse grid, keeps the old records, and verifies the
+migrated key and stored source after the new shell replaces the old one; it
+waits for cache retirement after navigation, because the worker's fetch
+lifetime can extend past the completed response.
+
+The browser results, including the initial Chromium update-cache failure and
+the version-34/35 to version-41 upgrades, are in the
+[2026-10-08 validation record](history/testing.md#keypad-grid-validation-2026-10-08)
+and its [final fourteen-column runs](history/testing.md#final-fourteen-column-browser-validation).
+Physical-phone and real-game play observations are still open.
+
+## Rapid-fire input
+
+[Rapid-fire behavior and measurements](rapid-fire.md) records the deterministic
+input tests, real WebSocket route, Chromium/WebKit checks, and the separate
+server CPU probe. Its authored fixture does not establish all-game input cost.
+
+## Game controllers
+
+`gamepad.test.mjs` drives the controller reader with recorded controller states
+and the page's real key holds: button and trigger thresholds, stick sectors and
+their edge margin, the direction pad and the left stick sharing one key, sliding
+between the right stick's number keys, page controls acting on the press, input
+held back by the page, a control held across a reset staying dead, unrecognised
+controllers and their resting axes, a hat switch handed over as one axis (all
+eight directions and both rests, and one first seen pressed, which is an axis
+until it rests), a lever that overshoots its range and an axis that reads
+between a hat's steps (both levers), a four-position hat (a lever, never a
+misread eight), two controllers on one key, disconnection, and the motor's
+strength and refusals. `vibrate.test.mjs` checks that a controller's motor
+takes the same requests under the same switch, and that a controller that
+cannot be reached never disables the phone's own vibration.
+
+The browser route gives the page a stand-in for `navigator.getGamepads` and the
+connection events, then checks the real page against a server: key messages on
+the socket, the lit keypad button and settings row, rebinding while a button is
+held, the settings toggle, rapid fire, focus loss, the narrow-screen modal, an
+unrecognised controller's own table, another's hat switch as four direction
+rows, disconnection, and storage across reload:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/gamepad.mjs build/release/wfeature-server chromium
+```
+
+On 2026-10-15 its sixteen checks passed in Chromium and WebKit with the release
+server and in Chromium with the debug server. It is not evidence about a
+physical controller or an operating system's mapping of one. How a browser
+hands over a controller it does not recognise was read from the browsers'
+sources, not observed: Chrome numbers a HID axis by its usage less 0x30 on
+macOS and Windows, so a hat switch (0x39) is `axes[9]`, normalised over its
+logical range with nothing pressed past the end; Firefox on macOS normalises a
+hat the same way; WebKit makes a hat four buttons.
+
+### The Android app on an emulator
+
+The app's own half (the activity, the web view's Gamepad API, the motors) is
+checked on an emulator with a virtual controller. `adb shell hid` registers a
+HID device from a real controller's report descriptor, so the kernel driver and
+Android's key layout make it the same input device a paired controller is, and
+its reports are the controller's own bytes. The script reads the page through
+the web view's DevTools socket and starts nothing with a touch:
+
+```sh
+make mobile-android && adb install -r mobile/android/build/wfeature.apk
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/android-gamepad.mjs microsoft_xboxones_register.json
+```
+
+The register command is the Xbox One S (Bluetooth) one from Android's own
+hardware input tests, `cts/tests/tests/hardware/res/raw/` in the platform
+source; it is not in this repository. `ANDROID_SERIAL` picks the device and
+`ADB` the binary.
+
+It checks that the controller reaches the page in the standard layout with no
+touch since launch; that B sends 취소 and neither walks the page's history nor
+leaves the app; every face button, shoulder, trigger, the hat's four
+directions and a diagonal, both sticks, View, Menu toggling the settings and
+Home sending nothing; that `playEffect` reaches the controller as an output
+report; and that `navigator.vibrate` reaches the phone's motor
+(`dumpsys vibrator_manager`).
+
+On 2026-10-15, on a Pixel 10 Pro image of Android 37.1 with web view 154, it
+passed with the app built from this tree and failed against the same tree
+without its two Android fixes: on the first press, because the web view had no
+focus in touch mode, and, with focus given by a DevTools click (which is input
+to the view), on the phone's motor, because the app had no `VIBRATE`
+permission. In both builds the first press after a page load or a connection
+never showed the controller to the page, so the script presses Home first.
+
+### The iOS app on a simulator
+
+The iOS app's half is checked in the simulator with Xcode alone. The script
+builds the app for the simulator the way `mobile/ios/build.sh` builds it for a
+phone, with `mobile/ios/acceptance/` linked in beside the unchanged
+`App.swift`, makes a temporary simulator device, and deletes it afterwards. The
+driver connects a hidden `GCVirtualController` and presses it with the iOS 17
+`setValue(_:forButtonElement:)` and `setPosition(_:forDirectionPadElement:)`.
+WebKit reads controllers through the same framework in the app's process, so to
+WebKit this is a GameController device like a paired one. The script reads the
+keys the page sent; `IOS_RUNTIME` picks the simulator runtime (the newest by
+default):
+
+```sh
+node web/acceptance/ios-gamepad.mjs
+IOS_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5 node web/acceptance/ios-gamepad.mjs
+```
+
+It checks three things:
+
+- after load, the web view's content view is first responder, and the page sees
+  the controller in the standard layout;
+- every face button, shoulder, trigger, the direction pad and both sticks send
+  their keys, from the first press;
+- with first responder taken away, as a view controller presented over the web
+  view leaves it, nothing reaches the page, and `becomeFirstResponder`, which
+  is what the app does, brings the controller back.
+
+On 2026-10-15 it passed on iOS 26.5. On iOS 27 an app built with the 27 SDK
+starts only with the scene life cycle; without it the script stops with that
+message, and with it the script passed there too. One manual build without
+`takeControllers` showed no controller to the page at all. A simulator does
+not cover a physical controller's pairing.
+
+## Full-screen layout
+
+`fullscreen.test.mjs` covers the stored choice: restored onto the document
+before anything draws, remembered, announced once per change, and kept for the
+page when storage throws. The browser route checks the layout at five window
+shapes (the picture's width against the largest 3:4 width that keeps the
+top-right corner clear, centring, and the corner button beside rather than on
+the picture) and every way in and out: the settings button, Escape, the corner
+button, a reload, opening the keypad editor, and a keypad cell assigned through
+the editor, on a wide and a narrow window, with keyboard keys still reaching the
+game:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/fullscreen.mjs build/release/wfeature-server chromium
+```
+
+The controller route adds R3 and the settings reached by Menu in full screen.
+Both passed on 2026-10-14 in Chromium and WebKit with the release server and in
+Chromium with the debug server.
+
+On 2026-10-15 the layout was measured through DevTools on the Android emulator
+above. In the app (portrait only, as is the iOS app), the web view reports
+insets of 52px at the top and 24px at the bottom; the picture took the full
+width and the corner button sat above its top-right corner, below the status
+bar. In the phone's Chrome, portrait placed the button above the picture the
+same way, and landscape (900×318 under the address bar) gave the picture the
+height less the 23px gesture inset with the button beside it. An iPhone's notch
+and home indicator still need a device.
+
+## Frame delivery
+
+`internal/webhost/frame_encoding_test.go` checks pixel changes, dimensions,
+scaling, explicit redraws under queue pressure and lifecycle-message ordering.
+Session tests preserve owned raw snapshots and the synchronous scaled-frame API.
+`BenchmarkFrameEncoding` compares unchanged and changing pictures at original
+scale and hq4x through the encoder goroutine; it excludes guest execution.
+Protocol 2 tests reconstruct consecutive updates pixel for pixel the way the page
+composes them (complete, masked, replacing and shifted), check the scale each
+names, the palette, a scrolling field under a fixed bar, a shift with nothing
+left to draw and the refusal to shift over a picture that is not opaque, and
+verify protocol negotiation through the WebSocket handler.
+`TestFramePatchBandwidth` and `BenchmarkFramePatchBandwidth` compare protocols 1
+and 2 over an authored moving sprite and an authored scrolling field; neither is
+real-game traffic. `audio_stream_test.go` covers the binary sound operations,
+definitions carried once, the budget, a shed message and protocol 1's unchanged
+JSON. `outbound_test.go` checks that queued messages leave in one write and that
+sound waits for its tick's picture only while one is being encoded. Static
+serving tests cover gzip, validators and 304 answers for the shell and the game
+list. `internal/wsproto` checks that each message, and each batch, is one
+transport write.
+
+`internal/filter/hqx/javascript_test.go` regenerates `web/hqx-patterns.js` from
+the Go tables and fails when they differ, and holds the digests of an authored
+picture magnified at each scale; `web/hqx.test.mjs` magnifies the same picture
+in JavaScript and must produce the same digests, and checks that redoing only
+the blocks around a change matches magnifying everything. `magnify.test.mjs`,
+`frame-stream.test.mjs` and `session.test.mjs` cover the page's side of the
+protocol with mocked canvases and sockets.
+
+`internal/vp8l` round-trips its pictures through the WebP decoder in
+`golang.org/x/image`: colour counts either side of each colour-table size,
+widths either side of the neighbourhood codes, authored pixel art with
+transparent bands, gradients, and every path the defaults avoid (the predictor
+on every picture, no colour cache). A fully transparent pixel may come back
+with another colour, which is the one difference allowed. `FuzzEncode` does the
+same for random small pictures, and the prefix, distance and Huffman helpers
+are checked against the decoder's arithmetic. An Encoder keeps tables between
+pictures, so one reused encoder, and copies of it used in turn, must write
+exactly what a fresh one writes, including when its position base wraps. The
+parse and the colour-cache trial, both written for speed, are checked against
+plain versions of themselves, the parse also by `FuzzReferences`. A browser
+decodes with its own decoder rather than the Go one, so the encoder was also
+checked by hand against `dwebp`, the WebP project's decoder, on the authored
+pictures and on all 13,268 rectangles of recorded play; see
+[the record](history/session.md#frame-bandwidth-webp-2026-09-25). The session
+tests in `internal/webhost` compose every protocol 2 case from WebP as well as
+PNG. Translucent-frame regressions compare both formats after composition,
+including complete pictures, replacing and masked updates, explicit redraws,
+and both paletted and full-colour pictures. WebP must use PNG's conversion from
+premultiplied RGBA to straight alpha, including its rounding.
+
+The opt-in browser route uses repository-authored SKT and LGT fixtures:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  node web/acceptance/frame-delivery.mjs build/release/wfeature-server chromium
+```
+
+`WFEATURE_FRAME_ARCHIVE` may name a local archive under `var/games` for an
+additional six-second original-scale probe. The runner uses isolated game and
+save directories and records results under `var/acceptance`. It exercises
+static presentation, restart, park/resume, reconnection, changed input frames,
+lossless update composition against a forced complete server picture, WIPI
+scale changes, and hq2x of partial updates against hq2x of a forced complete
+picture. A static picture that sends no new pictures is expected, but the
+runtime must keep ticking. Both engines decode lossless WebP, so the route also
+checks that the page asked for WebP pictures and drew them; every composition
+check above ran on WebP. Measured scope and results are in
+[the CPU investigation](cpu-saturation-investigation-2026-09-23.md) and the
+[bandwidth record](history/session.md#frame-bandwidth-2026-09-24).
+
+## Quick save and checkpoints
+
+A quick save captures execution state; a quick load restores it and leaves
+every ordinary save as it is ([the contract](architecture.md#quick-load-and-ordinary-saves)).
+The tests below are grouped by layer: KTF component records, client
+continuation, the shared session and its slot, the Hosts, then per-platform
+records and the save store. Each layer's tests prove that layer only; component
+tests do not establish full-session quick save/load.
+
+**KTF component records.** The ARM call-checkpoint tests and KTF continuation
+tests cover parked call records, including restoration in a subprocess and
+recapture after another wait. Cases cover native return cleanup, caught
+exceptions, and `Thread.run` delegation whose target field changes after entry.
+JVM tests and a packaged J2ME MIDlet check that unsupported bytecode callers are
+refused without changing the source execution; these checks do not enable
+checkpoints for J2ME sessions. Older module cases exercise compiled and native
+invocation, direct module waits, two result registers, argument-spill cleanup,
+exceptions and recapture after a second wait. Invalid remainders, missing
+children and overflowing stack cleanup are rejected before execution, and the
+original worker can still finish.
+
+The records serialize the ARM address space, JVM heap, allocator and runtime
+metadata. The destination registers VM native implementations without preparing
+guest tables or recreating the fixture's ARM code. Per area:
+
+- heap: dynamic objects and guest-memory arrays exercise aliasing and both
+  directions of subsequent writes; the packaged Java heap case continues without
+  running class initialization or MIDlet startup again;
+- graphics: transparent color keys and a shared image/framebuffer mask are
+  preserved, malformed and truncated image records refused;
+- storage: database generations and shared File/stream cursors are preserved;
+  C storage continues reads/writes and handle allocation, including a cursor
+  kept past truncation through another handle, and keeps lazy cache state
+  distinct;
+- Calendar: authored rules cover both sides of past and post-2038 transitions,
+  subsequent Java calls, malformed-record refusal and source independence;
+- platform roots: restored `Timer.cancel`, event consumption, shared key
+  ownership and weak resource collection;
+- editors: an unfinished multi-tap cycle continues at a new clock epoch,
+  including UTF-16 limits and focused-editor/native-payload sharing;
+- metadata: native dispatch, allocation, pixel-cache lookup and collection
+  continue, and saved older-module class links resolve without rerunning entry;
+- relay: a partly written request is finished and the remaining reply read,
+  socket/stream ownership and close flags are preserved, and a runtime-only
+  socket is kept without allocating a guest identity; a continuation case
+  carries relay state through a fresh process and finishes its partial frame
+  after the worker returns;
+- control: fractional guest time is preserved at another Host epoch, queued C
+  text is delivered after a canceled carrier is discarded, a pending network
+  callback runs once, and an unloaded C clip decodes and plays after
+  restoration;
+- vibrator: active, expired and indefinite requests are reanchored to another
+  Host epoch, the next request number is preserved, and invalid records are
+  refused without changing an existing motor request;
+- audio timeline: subsequent event output and repeat boundaries match, saved
+  active notes stop, the next handle is preserved, nested PCM/SysEx data is
+  copied, and malformed records are refused without output. This does not
+  establish restoration of already sounding Host voices or in-flight wave
+  samples.
+
+**Client continuation.** Client tests restore the joined records without guest
+startup, including multiple parked workers, initial Timer grants, stack reuse
+order, retained LCD pixels, pacing deadlines at another clock epoch, and logical
+audio/vibration. An activation test advances the detached clock by ten seconds
+and verifies that the final adoption preserves wait, timer, editor and device
+offsets. Recapture before the first restored grant preserves its saved
+continuation. Invalid worker ownership, stacks, budgets, heap roots, image
+identity and audio catch-up bounds are rejected before any goroutine starts, and
+the original source stays usable. Malformed component records leave existing
+metadata and heap bindings untouched, and a failed detached client is
+discarded. Set `WFEATURE_CALL_CHECKPOINT_RESTORE_BINARY` to another compiled KTF
+test binary to check restoration across debug/release profiles. To inspect
+pending calls in a local KTF loading route:
 
 ```sh
 WFEATURE_KTF_CALL_ARCHIVE=/absolute/path.zip go test ./internal/platform/ktf -run '^TestLocalKTFCallCheckpointInventory$' -count=1 -v
 ```
 
 The inventory uses in-memory saves and reports ARM call components and complete
-worker continuations separately. Acceptance does not establish that the session's
-heap, devices, or files can be restored.
+worker continuations separately. Passing it does not establish that the
+session's heap, devices or files can be restored.
 
 `TestLocalKTFClientCheckpoint` uses the same archive variable and a separate
 in-memory save store. It captures after 300 manual-clock rounds, restores the
 session from a bounded checkpoint envelope at another clock epoch, then
 compares 100 rounds of exact frame bytes, flushes, ARM instruction totals, guest
 time, worker counts and resulting saves against the source. Six local loading
-routes passed this comparison on 2026-10-01: SHA-256 prefixes `cc2c96d671cd`,
-`aa3fcba4598b`, `023c935aea8e`, `5d3ba49eccf7`, `ab601085dc04`, and
-`6c96c5050b2b`. Three older module routes also pass: `1d5831e42a8a`,
-`56d6865251cc`, and `98db83c3bda6`. They first refused capture with an unrepresented
-supervisor category 7; the invocation/wait remainder tests above cover its repair.
-This comparison does not establish gameplay, server-restart restoration, what a
-load does to a save written after the checkpoint, or audible continuity: the
-restored client is given a copy of the store as it was at the boundary.
-Authored older-module tests also cover its initialized client and class links
-without re-entering the module.
+routes passed on 2026-10-01: SHA-256 prefixes `cc2c96d671cd`, `aa3fcba4598b`,
+`023c935aea8e`, `5d3ba49eccf7`, `ab601085dc04` and `6c96c5050b2b`. Three older
+module routes also pass: `1d5831e42a8a`, `56d6865251cc` and `98db83c3bda6`;
+they first refused capture with an unrepresented supervisor category 7, which
+the invocation/wait remainder tests above cover. The restored client is given a
+copy of the store as it was at the boundary, so the comparison does not
+establish gameplay, server-restart restoration, what a load does to a save
+written after the checkpoint, or audible continuity. Authored older-module
+tests also cover its initialized client and class links without re-entering the
+module.
 
-KTF session-checkpoint tests restore the execution record over a store that
+**Session and slot.** KTF session-checkpoint tests restore the execution record over a store that
 changed after the capture, and make a displaced worker write during its abort.
 The later save must still be the save, and the worker's write must land only in
 the old client's isolated memory store
@@ -132,42 +681,42 @@ reserved word, and keep ordinary `.wfs` backups separate. Record tests
 exercise typed-allocation amplification, depth/value limits, invalid UTF-8,
 missing/duplicate/unknown fields, wrong scalar types and failed-decode isolation.
 
-Shared-session tests use the newly authored archive generated by
-`internal/testfixture/ktf.go`. It runs the ordinary descriptor/JAR/AOT startup
-path and increments a guest startup counter. Capture/load restores that counter
-without another startup, along with pause state, held keys and pointer, and
-key-repeat phase, and leaves a save written after the capture as it is. A
+Shared-session tests use the authored archive generated by
+`internal/testfixture/ktf.go`, which runs the ordinary descriptor/JAR/AOT
+startup path and increments a guest startup counter. Capture/load restores that
+counter without another startup, along with pause state, held keys and pointer,
+and key-repeat phase, and leaves a save written after the capture as it is. A
 child process reads the reserved slot after the source closes and restores
-through the public shared API. Set
-`WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY` to a compiled `internal/session` test
-binary to exercise this path between debug and release. Malformed shared settings
-and input are refused before changing the live session or any save.
-Slot tests verify restart persistence, archive isolation, exclusion from loose
-save export, survival across ordinary writes, and that a file under an earlier
-format's name is reported, refused and never touched. Sparse oversized files,
-symlinks and directories are refused. The state-record decoder also has a fuzz
-target, `FuzzCheckpointRecord`; a 15-second run on 2026-10-01 processed 70,281
-test inputs without a failure. This is parser evidence, not Host UI acceptance.
+through the public shared API. Set `WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY`
+to a compiled `internal/session` test binary to exercise this path between
+debug and release. Malformed shared settings and input are refused before
+changing the live session or any save. Slot tests verify restart persistence,
+archive isolation, exclusion from loose save export, survival across ordinary
+writes, and that a file under an earlier format's name is reported, refused and
+never touched. Sparse oversized files, symlinks and directories are refused.
+`FuzzCheckpointRecord` covers the state-record decoder; a 15-second run on
+2026-10-01 processed 70,281 inputs without a failure, which is parser evidence,
+not Host UI acceptance.
 
-Audio output tests retain emitted note volume and note-on settings across later
+Audio output tests keep emitted note volume and note-on settings across later
 channel changes, resume owned PCM tails at another clock epoch, exclude detached
 preparation time, preserve future note-offs, match the page's voice stealing and
 refuse malformed/oversized output state. Page audio tests stop PCM, percussion
 and melodic release tails when replacing a timeline.
 
-Host checkpoint tests cover shared-session live replacement, wrong-archive and
-damaged-slot refusal, stale-input rejection, a fresh complete frame after an
-epoch change and writer ordering. `TestCheckpointServerSubprocess` starts a real
-WebSocket server in a fresh process and restores a saved guest value without
-replaying startup, over a save written after the source server stopped, which
-must still be there. Set
+**Hosts and CLI.** Host checkpoint tests cover shared-session live replacement,
+wrong-archive and damaged-slot refusal, stale-input rejection, a fresh complete
+frame after an epoch change and writer ordering.
+`TestCheckpointServerSubprocess` starts a real WebSocket server in a fresh
+process and restores a saved guest value without replaying startup, over a save
+written after the source server stopped, which must still be there. Set
 `WFEATURE_WEB_CHECKPOINT_RESTORE_BINARY` to a compiled `internal/webhost` test
-binary to test the two build profiles together. Both directions passed for
-Java and native packages after the directory repair below. Paused-slot tests
-check that live and startup browser restoration resume through the Host lifecycle.
-Node tests
-exercise delayed bitmap decoding across reset, audio definitions, stale request
-cancellation, failed-load isolation, explicit disk restoration and button state.
+binary to test the two build profiles together; both directions passed for Java
+and native packages after the [lock repair](#checkpoint-adoption-blocker).
+Paused-slot tests check that live and startup browser restoration resume
+through the Host lifecycle. Node tests exercise delayed bitmap decoding across
+reset, audio definitions, stale request cancellation, failed-load isolation,
+explicit disk restoration and button state.
 
 CLI tests drive `run` through live JSON checkpoint commands and through a fresh
 process with `-quickload`. They check saved input, no repeated guest startup,
@@ -175,109 +724,108 @@ saves left as they were, missing-slot refusal and save-claim release. Set
 `WFEATURE_CLI_CHECKPOINT_RESTORE_BINARY` to a compiled `cmd/cli` test binary for
 `TestCheckpointCLIProcess` and `TestCheckpointNativeCLIProcess`;
 debug-to-release and release-to-debug both passed. A paused CLI restore reports
-a stalled step and can resume through `park`, without retaining a false ending.
-The authored native fixture in `internal/testfixture/ktf_native.go` runs its
-entry, factory, event handler and scheduled frames through generated ARM code.
-Its checkpoint tests compare subsequent frames, instruction counts, input,
-elapsed time and ordinary saves without rerunning startup. Device tests preserve
-a decoded image whose guest pixels changed, pending events, timers, resume
-callbacks and sound, and reopen the files the record names from the store
+a stalled step and can resume through `park`, without keeping a false ending.
+
+**Native package.** The authored fixture in `internal/testfixture/ktf_native.go`
+runs its entry, factory, event handler and scheduled frames through generated
+ARM code. Its checkpoint tests compare subsequent frames, instruction counts,
+input, elapsed time and ordinary saves without rerunning startup. Device tests
+preserve a decoded image whose guest pixels changed, pending events, timers,
+resume callbacks and sound, and reopen the files the record names from the store
 (`TestNativeCheckpointPreservesDevicesAndReopensFiles`). Detached staging
 advances by an hour before adoption to check rebasing; continued runtime
 records and saves then match the source exactly. Malformed allocator, mapping,
 pixel, callback, file and device records are refused before adoption. A store
 that refuses a pending write or cannot be read, busy execution and cancellation
 preserve the original runtime and files.
-`TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves` sends modified
-native audio records through the public shared-session load API with a valid
-envelope checksum. Repeating clips and negative playback origins must fail
-before changing the live session, input or disk saves. The original session must
-remain runnable, and a subsequent valid load must leave the saves as they are.
-The existing device round trip above covers supported one-shot audio playback.
+`TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves` sends modified native
+audio records with a valid envelope checksum through the public shared-session
+load API: repeating clips and negative playback origins must fail before
+changing the live session, input or disk saves, the original session must stay
+runnable, and a later valid load must leave the saves as they are. The device
+round trip above covers supported one-shot audio playback.
 
-The three current local archives in the older BREW-labelled group contain Java
-descriptor modules. They do not contain the native `.mod`/`.mif` package shape.
-No real native package was available in the current local corpus on 2026-10-01;
-native evidence above uses authored fixtures. The opt-in
-`TestLocalNativeCheckpointContinuation` uses the same library discovery boundary
-as the Host and skips explicitly when there is no native package.
+On 2026-10-01 the three local archives in the older BREW-labelled group were
+Java descriptor modules, not the native `.mod`/`.mif` package shape, and no real
+native package was in the local corpus, so native evidence uses authored
+fixtures. The opt-in `TestLocalNativeCheckpointContinuation` uses the Host's
+library discovery boundary and skips explicitly when there is no native
+package.
 
-A Chromium page check on 2026-10-01 used the actual picker, save/load controls,
-key input and disk-restore button for both authored archive formats. It checked
-a changed guest word returning to its saved value, then restarted the real server
-and restored the same word through the page. Fresh frames arrived after restart,
-and neither page reported a JavaScript error. The nine local digests listed above
-also pass live save/load and restoration after a real server restart from their
-loading routes, with a fresh frame and no page JavaScript errors.
-
-Two local gameplay routes, `aa3fcba4598b` (Java AOT) and `1d5831e42a8a` (older
-module), reach interactive play through CLI input before saving. A sequence of
-left/fire/right input and 168 ticks has identical per-command screen digests,
-final RGBA hashes and present counts after live restoration and in a fresh CLI
-process. The page then loads each CLI-produced slot, saves/loads during play,
-and restores again after restarting the server. These are bounded routes, not
+**Route evidence, 2026-10-01.** A Chromium page check used the picker,
+save/load controls, key input and disk-restore button for both authored archive
+formats: a changed guest word returned to its saved value, and after a real
+server restart the same word was restored through the page, with fresh frames
+and no JavaScript error. The nine local digests listed above also passed live
+save/load and restoration after a real server restart from their loading
+routes, with a fresh frame and no page JavaScript errors. Two local gameplay
+routes, `aa3fcba4598b` (Java AOT) and `1d5831e42a8a` (older module), reached
+interactive play through CLI input before saving; a sequence of left/fire/right
+input over 168 ticks gave identical per-command screen digests, final RGBA
+hashes and present counts after live restoration and in a fresh CLI process.
+The page then loaded each CLI-produced slot, saved/loaded during play, and
+restored again after a server restart. These are bounded routes, not
 completion of either game or a physical-phone/audio-listening test.
 
-The page checks, the two gameplay routes and the cost measurements in this
-section are dated 2026-10-01 and were taken when a load still put back the
-saves a slot carried. The gameplay routes and the cost measurements were not
-run again after that changed; what was run again, a browser check on authored
-storage titles among it, is recorded under
+These page checks, gameplay routes and cost measurements were taken when a load
+still put back the saves a slot carried. The gameplay routes and cost
+measurements were not run again after that changed; what was run again,
+including a browser check on authored storage titles, is under
 [Quick load and the saves](#quick-load-and-the-saves).
 
-The final ordinary/debug gates, `go test -race ./internal/...`, `go vet ./...`
-and 278 Node tests passed on 2026-10-01. `CGO_ENABLED=0 make dist` produced all
-five configured targets in an isolated output directory. File locks have runtime
-evidence on macOS; those builds establish Windows/Linux compilation only.
-The fallback for a location that cannot hold a lock (2026-10-03) has authored
-tests for a linked owner directory, an injected failure of each fallback class
-at both steps (making the reserved directory, locking the file), a read-only
-root, contention that must not fall back, and a tampered reserved path. They
-ran on macOS; `go vet` with `GOOS=windows` and `GOOS=linux` establishes that the
-platform error lists compile, not that those systems answer with them.
-Six alternating baseline/current measurements at one Go CPU, 2,000 rounds each,
-gave median instruction costs of 33.27/33.27 ns (`cc2c96d671cd`), 41.60/41.69 ns
-(`aa3fcba4598b`, +0.22%) and 419.50/426.94 ns (`1d5831e42a8a`, +1.77%). Instruction
-counts and guest times match. The module sample lasts about 60 ms and is more
-sensitive to fixed overhead; these are loading-route measurements, not browser
-FPS or a bound on all gameplay costs.
+The ordinary/debug gates, `go test -race ./internal/...`, `go vet ./...` and
+278 Node tests passed on 2026-10-01, and `CGO_ENABLED=0 make dist` produced all
+five targets in an isolated output directory. File locks have runtime evidence
+on macOS only; those builds establish Windows/Linux compilation. The fallback
+for a location that cannot hold a lock (2026-10-03) has authored tests for a
+linked owner directory, an injected failure of each fallback class at both steps
+(making the reserved directory, locking the file), a read-only root, contention
+that must not fall back, and a tampered reserved path. They ran on macOS;
+`go vet` with `GOOS=windows` and `GOOS=linux` establishes that the platform
+error lists compile, not that those systems answer with them. Six alternating
+baseline/current measurements at one Go CPU, 2,000 rounds each, gave median
+instruction costs of 33.27/33.27 ns (`cc2c96d671cd`), 41.60/41.69 ns
+(`aa3fcba4598b`, +0.22%) and 419.50/426.94 ns (`1d5831e42a8a`, +1.77%), with
+matching instruction counts and guest times. The module sample lasts about
+60 ms and is more sensitive to fixed overhead; these are loading-route
+measurements, not browser FPS or a bound on all gameplay costs.
 
 ### Checkpoint keypad controls
 
-The 2026-10-02 UI revision removed picker/settings checkpoint buttons. Quick save
-and quick load use keypad assignments; the Type1–3 defaults now include them in
-top-row columns 5 and 6, while Type4 leaves them unassigned. Node tests cover
-default row geometry, legacy preservation, reset, per-type persistence, duplicate
-assignments, editing unavailable cells, immediate requests, pending-operation
-exclusion, inline failure feedback and retry. The Node suite passes 270 tests.
+Quick save and quick load are keypad assignments; the 2026-10-02 UI revision
+removed the picker and settings checkpoint buttons. The Type1–3 defaults put
+them in top-row columns 5 and 6, and Type4 leaves them unassigned. Node tests
+cover default row geometry, legacy preservation, reset, per-type persistence,
+duplicate assignments, editing unavailable cells, immediate requests,
+pending-operation exclusion, inline failure feedback and retry (270 Node tests
+passed on 2026-10-02).
 
-Chromium at 320 px and WebKit at 390 px, both with touch enabled, exercised the
-embedded release page against the repository-authored native checkpoint fixture.
-Both checked touch and focused Space/Enter activation, restored guest memory,
-absence of handset input and modal popups, stable keypad positions, sliding past
-action cells, corrupt-slot refusal and retry, layout persistence across reload,
-and quick load after ordinary startup on a restarted server. Reset removed all
-checkpoint assignments. Neither browser reported a page JavaScript error.
-The touch route also caught and verified the repair of canceled local-button
-pointerdown suppressing WebKit's generated click. These are browser checks, not
-physical-phone or real-game acceptance for this UI revision.
+Chromium at 320 px and WebKit at 390 px, both with touch, exercised the
+embedded release page against the authored native checkpoint fixture: touch and
+focused Space/Enter activation, restored guest memory, no handset input or modal
+popup, stable keypad positions, sliding past action cells, corrupt-slot refusal
+and retry, layout persistence across reload, and quick load after ordinary
+startup on a restarted server. Reset removed all checkpoint assignments, and
+neither browser reported a page JavaScript error. The touch route also found
+and verified the repair of a canceled local-button `pointerdown` suppressing
+WebKit's generated click. These are browser checks, not physical-phone or
+real-game acceptance for this UI revision.
 
 <a id="lgt-checkpoints"></a>
 
 ### LGT checkpoints
 
-LGT quick save/load reuses the envelope, slot and Host commands above; what is
-new is the platform record and the guest-thread continuation, and those are
-what the tests below are about.
+LGT quick save/load reuses the envelope, slot and Host commands above; the
+tests below cover what is new, the platform record and the guest-thread
+continuation.
 
-**The property every continuation test asks for is the same one**: a session
-restored from a checkpoint, over the saves as they were when it was taken,
-agrees with the session it was taken from after every tick that follows — in
-the frame it presents, its flush count, its retired instructions and its guest
-clock — and in guest memory and ordinary saves at the end. A matching still
-frame at the moment of the load establishes none of that. What a load does when
-the saves have changed since is a separate property, tested in
-[Quick load and the saves](#quick-load-and-the-saves) below.
+**Every continuation test asks for one property**: a session restored from a
+checkpoint, over the saves as they were when it was taken, agrees with the
+source session after every following tick (presented frame, flush count,
+retired instructions, guest clock) and in guest memory and ordinary saves at the
+end. A matching still frame at the moment of the load establishes none of that.
+What a load does when the saves have changed since is a separate property,
+tested in [Quick load and the saves](#quick-load-and-the-saves).
 
 Authored tests in `internal/platform/lgt`:
 
@@ -286,53 +834,51 @@ Authored tests in `internal/platform/lgt`:
   client, a record that survives a round trip unchanged with every table
   populated, a live load that leaves the saves as they are and cuts the
   displaced session off from them without closing it, thirty-two malformed
-  records each refused
-  before a save is touched, capture away from a boundary, the two behaviors
-  the feature changed — timer order and the writable-open copy — and the
-  generator, whose sequence is checked against the standard library's for
-  5,000 draws over six seeds and restored at seven points in it.
+  records each refused before a save is touched, capture away from a boundary,
+  the two behaviors the feature changed (timer order and the writable-open
+  copy), and the generator, whose sequence is checked against the standard
+  library's for 5,000 draws over six seeds and restored at seven points in it.
 - `TestCheckpointAccountsForEveryRuntimeField` lists every field of the client,
   the Java runtime, a guest thread and the structures they hold, and says for
   each whether it is recorded, rebuilt, the Host's, fixed at a boundary or a
-  diagnostic. **A field added without a line there fails the test**, which is
-  the only thing that keeps "the checkpoint covers the runtime" true after the
-  next table is added.
+  diagnostic. **A field added without a line there fails the test**; nothing
+  else keeps "the checkpoint covers the runtime" true after the next table is
+  added.
 - `checkpoint_worker_test.go` gives the Clet a Java runtime and guest threads
-  whose `run` is assembled in the test, so where a thread is parked is chosen:
-  inside a sleep, behind a contended lock, in a two-level `wait`, at the end of
-  its budget, inside a static initializer and a C-library function call that
-  each outlast a slice, inside an armed try region, and before its first slice.
-  A thread beneath a class declaration thunk is refused by name and restored
-  once it has left it. Thirty-five Java records that do not add up are refused,
-  each for the reason the case names. A restored session saved again before it
-  runs writes the record it was restored from.
-- Three checks have tables of their own, because what they refuse is what a
-  panic boundary does not contain. `TestCheckpointRefusesAClassChainThatNeverEnds`
+  whose `run` is assembled in the test, so the parking point is chosen: inside
+  a sleep, behind a contended lock, in a two-level `wait`, at the end of its
+  budget, inside a static initializer and a C-library function call that each
+  outlast a slice, inside an armed try region, and before its first slice. A
+  thread beneath a class declaration thunk is refused by name and restored once
+  it has left it. Thirty-five inconsistent Java records are refused, each for
+  the reason the case names. A restored session saved again before it runs
+  writes the record it was restored from.
+- Three checks have tables of their own, because what they refuse is not
+  contained by a panic boundary. `TestCheckpointRefusesAClassChainThatNeverEnds`
   closes a superclass chain through recorded links and through the name a
   platform class's superclass is looked up under.
   `TestCheckpointRefusesAnObjectTheAllocatorDidNotHandOut` gives the
   collector's table an address, a size and a shared block the allocator never
   handed out. `TestCheckpointRefusesALayoutThatCannotBeWalked` closes a layout
   chain through its own classes and through the specification's hierarchy, and
-  states sizes no class has. Each also accepts the well-formed table next to
-  the ones it refuses.
+  states sizes no class has. Each also accepts the well-formed table beside the
+  ones it refuses.
 - `TestCheckpointSurvivesADamagedRecord` changes one or two values anywhere in
-  a valid record — a number to a boundary, a flag, a list's length, an optional
-  part — and requires the result to be refused or to run ten bounded ticks,
+  a valid record (a number to a boundary, a flag, a list's length, an optional
+  part) and requires the result to be refused or to run ten bounded ticks,
   never to panic or hang. A case that does not return is reported by its seed
-  rather than as a timeout, and every failing seed is listed, not the first.
-  It runs 250 seeded cases per variant as an ordinary gate;
+  rather than as a timeout, and every failing seed is listed. It runs 250
+  seeded cases per variant as an ordinary gate;
   `WFEATURE_LGT_CHECKPOINT_DAMAGE=100000` ran 200,000 on 2026-10-02 with no
-  failure, of which about 45% were accepted. **The same count has to be run
-  again whenever the record changes shape**, because a seed then names a
-  different change: a run after the generator's state was reworked found the
-  one case earlier runs had not, a dial marked as accepted by a local service
-  in a record that had no such service, which is now refused. It was run again
-  on 2026-10-03, after the record stopped carrying file bytes and path lists:
-  200,000 cases, no failure, 45,404 of the Clet's 100,000 and 46,003 of the
-  Java title's accepted.
-  The test changes values, not relationships, so a record in which two tables
-  disagree is beyond it; those are what the three table tests above are for.
+  failure, about 45% accepted. **Run the same count again whenever the record
+  changes shape**, because a seed then names a different change: the run after
+  the generator's state was reworked found a case earlier runs had not (a dial
+  marked as accepted by a local service in a record with no such service, now
+  refused). The 2026-10-03 run, after the record stopped carrying file bytes and
+  path lists, processed 200,000 cases with no failure; 45,404 of the Clet's
+  100,000 and 46,003 of the Java title's were accepted. The test changes values,
+  not relationships, so a record in which two tables disagree is left to the
+  three table tests above.
 - `TestCheckpointRestoresJavaThreadsInAnotherProcess` restores the Java
   fixture's parked threads in a second process and compares what they counted,
   the instruction total, the guest clock and the memory image six ticks later.
@@ -341,23 +887,24 @@ Host tests use `testfixture.LGTCheckpointArchive`, a Clet authored in ARM words
 that starts through the ordinary loader. `internal/session/checkpoint_lgt_test.go`
 covers held input, pause, speed, the continuation and refusals through the
 shared API, and a slot restored by another process. `internal/webhost` runs the
-same WebSocket subprocess route the KTF fixtures do (`TestCheckpointLGTServerSubprocess`),
-and `cmd/cli` runs live `quicksave`/`quickload` commands and a `-quickload`
-restart (`TestCheckpointLGTCLIProcess`).
+WebSocket subprocess route the KTF fixtures use
+(`TestCheckpointLGTServerSubprocess`), and `cmd/cli` runs live
+`quicksave`/`quickload` commands and a `-quickload` restart
+(`TestCheckpointLGTCLIProcess`).
 
 **Local archives.** The opt-in probe runs every archive in the two local LGT
 directories, takes a checkpoint, restores it into a second session with saves
-of its own and ticks both, sending the same keys to each:
+of its own, and ticks both with the same keys:
 
 ```sh
 WFEATURE_LGT_CHECKPOINT=1 go test -run TestLocalLGTCheckpointsContinueIdentically -v ./internal/platform/lgt
 ```
 
-`WFEATURE_LGT_CHECKPOINT_WARM` and `_ROUNDS` set the tick the checkpoint is
-taken at and how long the two are compared; `_MATCH` and `_DIR` narrow the set.
-`WFEATURE_LGT_CHECKPOINT_SWEEP=1` instead takes a checkpoint after every round
-and prepares a session from each, which is what finds a boundary that is
-refused.
+`WFEATURE_LGT_CHECKPOINT_WARM` and `WFEATURE_LGT_CHECKPOINT_ROUNDS` set the tick
+the checkpoint is taken at and how long the two are compared;
+`WFEATURE_LGT_CHECKPOINT_MATCH` and `WFEATURE_LGT_CHECKPOINT_DIR` narrow the
+set. `WFEATURE_LGT_CHECKPOINT_SWEEP=1` instead takes a checkpoint after every
+round and prepares a session from each, which finds a refused boundary.
 
 On 2026-10-02 the two directories held 130 archives: 105 Clets, 23 AOT Java
 titles, and two files no LGT loader claims. A title whose first run only
@@ -371,110 +918,144 @@ installs itself is started again over the saves that run left.
 | a checkpoint at each of 260 boundaries from tick 20 | none refused | none refused while running |
 
 The two Java archives missing from the later rows are one title packaged twice;
-the probe's keys take it to its own exit before tick 300, and after that a
+the probe's keys take it to its own exit before tick 300, after which a
 checkpoint is refused because the title has ended. No other boundary was
 refused. An earlier inventory over 300 ticks found every guest thread at every
 boundary one call deep: in `Thread.sleep` (19 titles, two of them at times
 holding a lock), `Object.wait` (3 titles without a deadline and 1 with),
-`Thread.yield` (5), or waiting for a first slice. Nothing in the library was seen parked at
+`Thread.yield` (5), or waiting for a first slice. No local title was parked at
 its budget, inside an initializer or behind a contended lock at a boundary;
-those are covered by the authored threads above and by nothing else.
+only the authored threads above cover those.
 
-**Another process.** For 128 of the 130 files, `run -ticks 500` and
-`run -ticks 300 -quicksave` followed by `run -quickload -ticks 200` in a new
-process end on the same screen digest. The other two are the files no loader
+**Another process (2026-10-02).** For 128 of the 130 files, `run -ticks 500`
+and `run -ticks 300 -quicksave` followed by `run -quickload -ticks 200` in a new
+process end on the same screen digest; the other two are the files no loader
 claims. Slots were 0.82 to 6.3 MB at tick 300, median 1.96 MB.
 
-**Gameplay.** Two archives were driven by local routes into play — `a947f46eebb2`,
-a Clet, 1,790 ticks to a field scene, and `735a579d82ac`, an AOT Java title,
-5,915 ticks to an in-game dialogue. A fixed sequence of six key taps over 170
-ticks then gives the same per-command screen digests and flush counts in an
-uninterrupted run, in a fresh process started with `-quickload`, and after a
-live `quickload` that follows other input. Thirteen and seven distinct pictures
-occur in the sequence. Both pass with a debug binary saving and a release
-binary loading, and the reverse. Slots were 3.7 MB and 10.7 MB.
+**Gameplay (2026-10-02).** Local routes drove two archives into play:
+`a947f46eebb2`, a Clet, 1,790 ticks to a field scene, and `735a579d82ac`, an
+AOT Java title, 5,915 ticks to an in-game dialogue. A fixed sequence of six key
+taps over 170 ticks then gives the same per-command screen digests and flush
+counts in an uninterrupted run, in a fresh process started with `-quickload`,
+and after a live `quickload` that follows other input; the sequences show
+thirteen and seven distinct pictures. Both pass with a debug binary saving and
+a release binary loading, and the reverse. Slots were 3.7 MB and 10.7 MB.
 
-**Browser.** Chromium and WebKit at 390 px with touch, against the release and
-the debug server, used the page's own picker and keypad: quick save and quick
-load were assigned to cells, the authored Clet's startup word returned to its
-saved value after a live load while its frame counter kept running, a slot with
-one byte changed was refused inline and loaded on retry, and the slot loaded
-after a real server restart and ordinary startup. A real Clet (`3cc7a9b4cb15`)
-and a real Java title (`a30bbe008b5e`) were then saved, loaded live and loaded
-again after a restart, each answered with fresh frames. All four pairs of
-engine and profile passed. Neither browser reported a page error from the page;
+**Browser (2026-10-02).** Chromium and WebKit at 390 px with touch, against the
+release and the debug server, used the page's own picker and keypad: quick save
+and quick load were assigned to cells, the authored Clet's startup word
+returned to its saved value after a live load while its frame counter kept
+running, a slot with one byte changed was refused inline and loaded on retry,
+and the slot loaded after a real server restart and ordinary startup. A real
+Clet (`3cc7a9b4cb15`) and a real Java title (`a30bbe008b5e`) were then saved,
+loaded live and loaded again after a restart, each answering with fresh frames.
+All four engine/profile pairs passed. Neither browser reported a page error;
 WebKit reported the game-list request that the script's own reload cut off, in
-two of three release runs, and that is counted apart. Both real titles were on a
-notice screen, so that part establishes the controls and the transport, not
+two of three release runs, counted separately. Both real titles were on a
+notice screen, so this part establishes the controls and the transport, not
 gameplay; the route runs above are the gameplay evidence.
 
-**Cost while running.** What the work adds to a tick is the order timers fire
-in and a generator that keeps its own state; everything else runs at a save or
-a load. `TestLGTLoadCostProbe` was built from `4ae66a7` and from this work and
-run over the two gameplay routes above, 2,400 and 6,400 ticks, as six
-alternating pairs on one Go CPU with nothing else running. Both binaries
-retired the same number of instructions on each route, 3,420,023,111 and
-487,333,258. The median of the six per-pair ratios, this work over `4ae66a7`,
-was 0.996 for the Clet, with pairs from 0.994 to 1.006, and 1.008 for the Java
-title, with pairs from 0.998 to 1.013. Two earlier runs on a less quiet machine
-gave 0.995 and 0.998 for the Clet and 1.005 twice for the Java title.
+**Cost while running (2026-10-02).** The work adds two things to a tick, the
+order timers fire in and a generator that keeps its own state; everything else
+runs at a save or a load. `TestLGTLoadCostProbe` was built from `4ae66a7` and
+from this work and run over the two gameplay routes above, 2,400 and 6,400
+ticks, as six alternating pairs on one Go CPU with nothing else running. Both
+binaries retired the same number of instructions on each route, 3,420,023,111
+and 487,333,258. The median of the six per-pair ratios, this work over
+`4ae66a7`, was 0.996 for the Clet (pairs 0.994 to 1.006) and 1.008 for the Java
+title (pairs 0.998 to 1.013). Two earlier runs on a less quiet machine gave
+0.995 and 0.998 for the Clet and 1.005 twice for the Java title. The Clet is
+inside the noise. The Java route was above one each time, by under one percent,
+so it was profiled: in both binaries neither the generator nor the timer
+ordering is among the functions taking half a percent of the time or more, so
+neither accounts for the difference. Code placement in a rebuilt binary
+produces an effect of that size, and this comparison cannot separate it from a
+cost; it bounds either at about one percent.
 
-The Clet is inside the noise. The Java route was above one each time, by under
-one percent, so that was looked at rather than rounded away: in a CPU profile
-of the route in both binaries, neither the generator nor the timer ordering is
-among the functions that take half a percent of the time or more. Neither can
-account for the difference. An effect of that size is what the placement of
-code in a rebuilt binary produces, and this comparison cannot separate that
-from a cost; it does bound whichever it is at about one percent.
+**Gates (2026-10-02).** `make test` (280 Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, `gofmt` and `git diff --check`
+passed, and the CLI and the server built without cgo for `linux/amd64`,
+`linux/arm64`, `darwin/amd64`, `darwin/arm64` and `windows/amd64`.
 
-**Gates.** On the final tree `make test` (including the 280 Node tests),
-`make test-debug`, `go test -race ./internal/...`, `go vet ./...`, `gofmt` and
-`git diff --check` pass, and the CLI and the server build without cgo for
-`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` and
-`windows/amd64`.
-
-**After a load stopped replacing saves.** The measurements in this section
-dated 2026-10-02 were taken when a load still put back the saves a slot
-carried. The continuation probe, the sweep, the damage count and the process
-comparison were run again on 2026-10-03 and are recorded under
+**After a load stopped replacing saves.** The 2026-10-02 measurements were
+taken when a load still put back the saves a slot carried. The continuation
+probe, the sweep, the damage count and the process comparison were run again on
+2026-10-03 and are recorded under
 [Quick load and the saves](#quick-load-and-the-saves), with a browser check on
 authored storage titles. The gameplay routes, the browser check on real titles
 and the cost comparison were not run again.
 
-These are bounded routes over one local library on macOS. They are not a
-physical phone, a listening test, or every title's every scene. Audio state is
-restored through the shared output record and was not listened to.
+These are bounded routes over one local library on macOS, not a physical phone,
+a listening test, or every scene of every title. Audio state is restored through
+the shared output record and was not listened to.
+
+### SKT execution checkpoints
+
+[The SKT checkpoint record](skt-checkpoints.md) describes the implementation and
+its supported boundaries. Focused suites are `TestThreadCheckpoint*`,
+`TestCheckpointNativeWait*`, `TestJavaCheckpoint*`, `TestJavaPlatformCheckpoint*`,
+`TestScriptCheckpoint*` and the shared `TestCheckpointSKTJava*`/
+`TestCheckpointScript*`. Authored worker fixtures verify continuation and
+monitor ownership; platform tests verify ordinary-save reconstruction and
+refused-load isolation. Subprocess tests accept
+`WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY` to exercise both debug/release
+directions with separately compiled test executables.
+
+The CLI and webhost checkpoint suites include both SKT variants. The rendered
+route `web/acceptance/checkpoint-skt.mjs` exercises keypad placement, save and
+load, restored pixels and input epochs, corrupt-slot feedback and unchanged
+ordinary save hashes in Chromium and WebKit. It also checks that the first
+restored picture follows the reset and that a later speed change survives page
+reload, including the resumed metadata, control and saved preference.
+Real-archive probes stay opt-in through `TestLocalSKTCheckpoint`
+(`WFEATURE_SKT_CHECKPOINT_ACCEPTANCE`; see the record for its other variables),
+with separate temporary saves and anonymous digest labels. No local game data is
+bundled in these tests.
+
+The [2026-10-07 review](quicksave-review-2026-10-07.md) records eight reproduced
+defects and their fixes. Regressions cover:
+
+- SKT stale or independently dirty file aliases, deletion, failed writes and
+  opens before pending writes reach disk; refusal preserves every buffer and
+  occurs before any checkpoint flush.
+- LGT File/DataBase collisions and unreadable path lists; refusal preserves
+  issued writes and the live Clet stays usable after a checkpoint read fault.
+- SKT RMS close after a later deletion, subsequent record mutations and
+  retrying failed writes on close.
+- Linked and real owner paths contending for claims and transactions in one or
+  separate processes, including process-only fallback and missing owner creation.
+- Java/SGS audio catch-up limits, late reset arrival at the writer boundary and
+  current speed on both attached and parked session resumes.
 
 ### Checkpoint adoption blocker
 
-A controlled concurrent read exposed a defect on 2026-10-01 in the
-whole-folder replacement a quick load then made. After the replacement wrote
-its intent but before its first rename, an independent reader treated the
-active transaction as an abandoned one and removed staging and intent.
-Replacement then moved the live directory to its backup and failed to install
-the missing staging. Its rollback found no intent, so the original bytes
-remained in the backup while live saves were missing. This failed three
-ordinary reproductions and a debug run using authored temporary files. HTTP
-save listing and export reached the same recovery path.
+On 2026-10-01 a controlled concurrent read exposed a defect in the whole-folder
+replacement a quick load then made. After the replacement wrote its intent but
+before its first rename, an independent reader treated the active transaction
+as abandoned and removed staging and intent. Replacement then moved the live
+directory to its backup and failed to install the missing staging; its rollback
+found no intent, so the original bytes stayed in the backup while the live saves
+were missing. Three ordinary reproductions and a debug run with authored
+temporary files failed this way, and HTTP save listing and export reached the
+same recovery path.
 
-The repair gave every directory-store operation the same filesystem lock,
-including independent objects, complete loose-tree walks, imports and slot
-access. That lock is what every store operation still takes. The replacement
-writer itself was removed once a load stopped replacing saves, and the tests
-that held it at its rename boundaries went with it.
+The repair gave every directory-store operation one filesystem lock, including
+independent objects, complete loose-tree walks, imports and slot access; every
+store operation still takes it. The replacement writer was removed once a load
+stopped replacing saves, together with the tests that held it at its rename
+boundaries.
 
 `TestSaveDirectoryAliasesShareTransaction` covers relative paths, linked parent
-directories, and case/Unicode aliases when supported by the executing filesystem.
-`TestSaveTransactionExcludesAnotherProcess` checks a child process waiting for an
-active transaction.
+directories, and case/Unicode aliases where the executing filesystem supports
+them. `TestSaveTransactionExcludesAnotherProcess` checks a child process waiting
+for an active transaction.
 `TestSaveClaimsExcludeSessionsButAllowReadsAndReleaseOnExit` checks the longer
-Host claim separately: competing sessions are refused, reads remain possible,
-and an abruptly exited child leaves no stale claim.
-`TestSaveHTTPReadsNeverSplitABatch` runs the HTTP listing and export while
-batches are written and requires each read to see both keys of one batch; a
-recovery record that cannot be read is reported as an error rather than as an
-empty save tree. Separate server instances cannot claim the same live save
-directory.
+Host claim: competing sessions are refused, reads remain possible, and an
+abruptly exited child leaves no stale claim. `TestSaveHTTPReadsNeverSplitABatch`
+runs the HTTP listing and export while batches are written and requires each
+read to see both keys of one batch; an unreadable recovery record is reported as
+an error rather than as an empty save tree. Separate server instances cannot
+claim the same live save directory.
 
 Backend test binaries cross-compiled without cgo for the five distribution
 targets when the lock was added. Those builds do not establish runtime
@@ -484,13 +1065,13 @@ file-lock behavior on Windows or Linux.
 
 Backend snapshot tests preserve empty and dotted keys, reject path conflicts,
 oversized input and symlinked files, and check independent in-memory reads and
-batches. `TestSaveRecoveryOfLeftoversFromEarlierBuilds` builds, from literal
-bytes on disk, every state the removed replacement writer could leave when its
-process stopped, and for each of them runs every store operation: a prepared
-or half-swapped replacement rolls back, a completed one keeps the live folder
-and its `previous`, a record that cannot be read refuses the operation, and
-staging or a `previous` with no record is left where it is. These tests
-exercise recovery on the executing host, not a physical power loss.
+batches. `TestSaveRecoveryOfLeftoversFromEarlierBuilds` builds from literal
+bytes on disk every state the removed replacement writer could leave when its
+process stopped, and runs every store operation on each: a prepared or
+half-swapped replacement rolls back, a completed one keeps the live folder and
+its `previous`, an unreadable record refuses the operation, and staging or a
+`previous` with no record is left in place. These tests exercise recovery on
+the executing host, not a physical power loss.
 
 <a id="quick-load-and-the-saves"></a>
 
@@ -550,10 +1131,9 @@ store, the adapter deriving its disk state again). `TestRebuildReader*` in
 `internal/backend` cover the reader a load reads through: one read per key, a
 shared budget, and a refused and remembered write.
 
-One rule has a test on each platform because it is easy to get wrong in the
-direction that loses a save. An object whose open asked for an empty file
-takes at most what it had written; an object whose open only made a file that
-was not there takes the whole file as it is.
+One rule has a test on each platform because getting it wrong loses a save. An
+object whose open asked for an empty file takes at most what it had written; an
+object whose open only created a missing file takes the whole file as it is.
 `TestCheckpointGivesAHandleThatMadeItsFileTheFileAsItIsNow` (LGT),
 `TestSessionQuickLoadGivesAFileThatMadeItsSaveTheSaveAsItIsNow` (KTF `File`)
 and the "made by its open" case of
@@ -561,12 +1141,12 @@ and the "made by its open" case of
 handle that created it, take a quick save, save more behind it, load, write the
 front again and require what was saved behind it to still be there.
 
-The rules were also removed one at a time to see that a test fails: 23 changes
-in the native package, 37 in LGT, about 38 in the descriptor runtime and 19 in
-the hosts. Every one failed a test except two. One LGT change removed a
-statement that turned out to be redundant, and the statement was deleted. One
-host change dropped the shared session's archive-identity check, which changes
-nothing observable because each platform's commit makes the same check.
+The rules were also removed one at a time to confirm that a test fails: 23
+changes in the native package, 37 in LGT, about 38 in the descriptor runtime and
+19 in the hosts. Every one failed a test except two. One LGT change removed a
+redundant statement, which was then deleted. One host change dropped the shared
+session's archive-identity check, which changes nothing observable because each
+platform's commit makes the same check.
 
 **Web host and CLI.** `internal/webhost/quickload_saves_test.go` runs a
 write-through title and a title with pending writes through the runner's own
@@ -589,12 +1169,12 @@ save made after the quick save is still the save after a live load and after a
 start in another command, and an earlier-format slot ends the command with
 status 1 and a reason that names the file.
 
-**Local archives, 2026-10-03.** The opt-in probes were run with the tree before
-the change and with this one. The continuation probes give the restored session
-a copy of the store as it was at the boundary, so what they establish is that
-storage a record no longer carries is rebuilt to the state the source had, on
-real titles; what a load does to a later save is established by the authored
-tests above and by the real-title scenario below, not by these probes.
+**Local archives, 2026-10-03.** The opt-in probes ran on the tree before the
+change and on this one. The continuation probes give the restored session a
+copy of the store as it was at the boundary, so they establish, on real titles,
+that storage a record no longer carries is rebuilt to the source's state. What
+a load does to a later save is established by the authored tests above and the
+real-title scenario below, not by these probes.
 
 | Probe | Before the change | After it |
 | --- | --- | --- |
@@ -615,22 +1195,21 @@ were refused once and passed the next time, and the run of this tree that
 shared the machine with the other measurements passed 251.
 
 Slots in the process comparison were 0.82 to 6.3 MB at tick 300, median
-1.96 MB, as before: an LGT record of a title on its opening screens holds
+1.96 MB, as before; an LGT record of a title on its opening screens holds
 little that was a file.
 
 Without a quick save the two trees behave alike. A first run of 500 ticks and a
 second run of 300 over the saves the first left, through the shared `run`
 command, give the same exit status, screen digest and save bytes in both trees
 for all 130 LGT files and for the 41 KTF files of the `ktf` directory and the
-older modules. Those KTF runs repeat exactly when the same binary is run twice,
-so the comparison has no noise floor to read through.
+older modules. Those KTF runs repeat exactly when the same binary runs twice, so
+the comparison has no noise floor.
 
-**Upgrade rehearsal, 2026-10-03.** The released 0.5.1 command-line binary was
-built from its tag and made the saves: each archive run for 500 ticks with the
-fire key pressed at seven fixed ticks, into a save root that did not exist
-before. Each tree those runs left was then copied, and the copies were read by
-0.5.1 again, by the tree before this change and by this one. No save a person
-made was read.
+**Upgrade rehearsal, 2026-10-03.** The released 0.5.1 command-line binary, built
+from its tag, made the saves: each archive ran for 500 ticks with the fire key
+pressed at seven fixed ticks, into a new save root. Each resulting tree was
+copied, and the copies were read by 0.5.1 again, by the tree before this change
+and by this one. No save a person made was read.
 
 - LGT, 130 files: 102 titles wrote saves, 26 wrote none in those ticks and 2
   are not LGT games. For all 102, a second run of 300 ticks by this tree ends
@@ -659,9 +1238,10 @@ made was read.
 - Four KTF quick saves were refused. Two were at a boundary where a clip's
   owner still awaited collection. Two were on titles that the released 0.5.1
   cannot run a second time either: they keep a save inside a directory and then
-  ask whether the directory exists, and the store answers a read of a
-  directory with an error, which ends the session. That defect is in the
-  released build and is not changed here.
+  ask whether the directory exists, and the store answered a read of a
+  directory with an error, which ended the session. That defect was in the
+  released build and was left for a separate change; it was fixed on
+  2026-10-07 ([runtime boundary regressions](#runtime-boundary-regressions)).
 
 **Records of no bytes, 2026-10-07.** `TestSaveRecordsKeepAnEmptyRecordApartFromADeletedOne`
 pins the encoded bytes of a list holding empty, deleted and filled records and
@@ -730,32 +1310,30 @@ load every title that kept its write ran six more rounds without an error.
 release and the debug server, drove the page's own picker and keypad on three
 authored storage titles and read the save folder from disk after every step.
 Quick save and quick load were stored as two keypad cells the way the editor
-stores them. On a KTF Java title and an LGT Clet: a save, quick save, a save
-that leaves the file shorter, quick load — the status line said, in the
-page's wording, that the game went back to the quick-save moment and that
-saves were not reverted, and the save folder was byte-identical across the
-load — then a key that patches the save in place, which landed in the shorter
-file; the server was stopped and started,
-the game started from the picker, and quick load again left the folder
-byte-identical. On a native package with an earlier build's slot beside its
-saves: quick load was offered, was refused in the error style with the
-sentence for an earlier format, the old file was byte-identical afterwards, a
-new quick save was written beside it and loaded. All four pairs of engine and
-profile passed. The page logged the refused load's reason, as it does for any
-refusal, and WebKit logged the socket the script's own server stop closed;
-nothing else was reported. These are authored titles: the browser check
-establishes the controls, the wording and the transport, not a real game's
-save.
+stores them. On a KTF Java title and an LGT Clet the sequence was a save, quick
+save, a save that leaves the file shorter, and quick load: the status line said,
+in the page's wording, that the game went back to the quick-save moment and
+that saves were not reverted, and the save folder was byte-identical across the
+load. A key that patches the save in place then landed in the shorter file;
+after the server was stopped and started and the game started from the picker,
+quick load again left the folder byte-identical. On a native package with an
+earlier build's slot beside its saves, quick load was offered and refused in the
+error style with the sentence for an earlier format, the old file stayed
+byte-identical, and a new quick save was written beside it and loaded. All four
+engine/profile pairs passed. The page logged the refused load's reason, as it
+does for any refusal, and WebKit logged the socket the script's own server stop
+closed; nothing else was reported. These are authored titles, so the check
+establishes the controls, the wording and the transport, not a real game's save.
 
 ### Storage fixtures and the boundary inventory
 
-The three checkpoint fixtures make no storage call, so a Host test could only
-imitate a game's save with a store write of its own. Authored storage fixtures
-now exist for every checkpoint variant. Each starts through the ordinary loader
-and acts once per key press on one save of two four-byte parts: write both,
-patch the first in place, read both back, delete, hold the save open after
-writing the first part, open it with truncation without writing, and finish
-through what was kept.
+The three checkpoint fixtures make no storage call, so a Host test using them
+could only imitate a game's save with its own store write. Authored storage
+fixtures exist for every checkpoint variant. Each starts through the ordinary
+loader and acts once per key press on one save of two four-byte parts: write
+both, patch the first in place, read both back, delete, hold the save open
+after writing the first part, open it with truncation without writing, and
+finish through what was kept.
 
 | Fixture | Variant | Surface | Where a held write waits |
 | --- | --- | --- | --- |
@@ -820,76 +1398,82 @@ in the local KTF directory: 36 ran, all of the Java/AOT variant.
 | a stale catalog entry or ledger, a pending truncation | 0 |
 
 The authored native package held nothing open or pending. No real native
-package is in the local library.
+package was in the local library on that date.
 
-## Local acceptance
+### Quick saves from 0.5.2
 
-```sh
-make acceptance
-make acceptance ARGS="-platform ktf"
-make acceptance ARGS="-games 'var/games/one,var/games/two' -out var/acceptance/sweep"
-```
+0.5.2 is the first release with quick saves, and this tree changed the records
+inside a slot (audio component version 9, JVM heap version 2, the media
+listener records) while the envelope stayed at version 2. An upgrade rehearsal
+captured slots with the 0.5.2 tree from seven of the eight real scenes the
+sound sections use (the eighth, an SKT title, cannot be quick-saved in 0.5.2
+at all, which this tree repairs) and loaded them with this tree: all seven were
+refused as damaged, `checkpoint record is missing fields`, which the page would
+have shown as that English cause instead of its sentence for an earlier build.
 
-The runner drives opt-in probes and writes dated Markdown and NDJSON under
-`var/acceptance/`. Record corpus membership, archive identity, source revision,
-profile, save setup, stages attempted, pass/skip/fail outcomes, and limits.
-A successful report-generation command can contain failing archives.
+The envelope is now version 3 and a slot is `<archive SHA-256>.v3.wfq`; a
+`.v2.wfq` or `.wfq` file is an earlier build's, as
+[the slot rules](architecture.md#leftovers-from-earlier-builds) describe.
+`TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot` runs both earlier names:
+offered, refused with `ErrCheckpointLegacy` naming the file, never touched, and
+a new quick save written beside it. `TestCheckpointRefusesAnEarlierFormatByVersion`
+refuses version 1 and version 2 envelopes for their version at every size.
+`TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason` runs every host title
+against both names: a start from the slot and a quick load both answer the
+page's sentence for an earlier build, the running game and its saves are
+unchanged, the log names the file left in place, and the new quick save beside
+it loads. The rehearsal program is the ignored `build/_rehearsal`
+(`rehearsal capture|load|store GAMES_DIR OUT_DIR PREFIX...`), built once in a
+0.5.2 worktree and once here.
 
-Cached results retain their original `measured_run`; they are not new
-measurements. Compare the same corpus and stages. Use a separate output directory
-for a one-off sweep. Content detection determines platform identity, and files
-no platform claims remain reportable outcomes rather than disappearing.
-
-The full probe commands, environment variables, report schema, route examples,
-and interpretation rules remain in [testing history](history/testing.md).
-[CLI reference](cli.md) describes replay, frame comparison, API scans, guest
-profiles, and save inspection. Historical counts belong to their recorded runs.
-
-Settling observes 64 frame samples and retains two rounds. The dated comparison
-found no outcome improvement from four rounds. A changing screen can leave an
-input question unanswered; it is not automatically an emulator failure. See
-[settling evidence](history/testing.md#settling-settling-and-key-response-validation).
+The same seven slots then went through this tree's slot store as the bytes
+0.5.2 wrote. The `store` mode puts each one where a directory store keeps
+slots, as `<archive SHA-256>.v2.wfq`, and asks for it the way a Host does. All
+seven are offered, all seven are refused with `ErrCheckpointLegacy` naming the
+file, none returns a byte, and every file is unchanged afterwards.
 
 ## Runtime boundary regressions
 
 The 2026-09-17 fixtures cover thread lifecycle, archive selection/names, UTF-16,
 JVM/ARM reentry, graphics and media ownership, storage failure recovery, and
-intermediate frame delivery. The ordinary, debug, internal race, and vet gates
-passed after those runtime changes. The implementation record retains precise
-[fixture and ABI evidence](history/testing.md#runtime-runtime-boundary-follow-up-2026-09-17).
+intermediate frame delivery; the ordinary, debug, internal race and vet gates
+passed after those changes. The
+[fixture and ABI evidence](history/testing.md#runtime-runtime-boundary-follow-up-2026-09-17)
+is in the implementation record. That change included no new real-game,
+physical-device or browser acceptance.
 
 The alternate LGT graphics context layout remains unconfirmed. The later
 [KTF investigation](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case)
 establishes tag-2 word results in the environment; other tags and wide
-environment returns remain unconfirmed. The earlier runtime-boundary change
-itself did not include new real-game, physical-device, or browser acceptance.
+environment returns remain unconfirmed.
 
-An LGT module states what each of its classes extends, and can state a chain
-that comes back to itself. `java_class_chain_test.go` plants such records in
-guest memory — a class over itself, two over each other, and a class registered
-under the root of the platform's hierarchy above a platform class — and
-requires preparation to fail with the class named, the type check to return,
-and every chain left behind to end. The layout's check by name has a table of
-shapes it accepts and refuses, each then walked. Before the 2026-10-02 fix the
-first two prepared without error and the type check did not return. One more
-test requires the specification's hierarchy table to end, which several walks
-rely on and nothing else checks.
+**LGT class chains (2026-10-02).** An LGT module states what each of its
+classes extends, and a chain can come back to itself. `java_class_chain_test.go`
+plants such records in guest memory (a class over itself, two over each other,
+and a class registered under the root of the platform's hierarchy above a
+platform class) and requires preparation to fail with the class named, the type
+check to return, and every chain left behind to end. The layout's check by name
+has a table of shapes it accepts and refuses, each then walked. Before the fix
+the first two prepared without error and the type check did not return. One
+more test requires the specification's hierarchy table to end, which several
+walks rely on and nothing else checks.
 
-A save key whose path is a directory reads as no entry (2026-10-07).
-`TestSaveReadOfADirectoryReportsMissing` asks it of the directory and memory
-stores, through the ordinary and the bounded read, before and after a save
-below it, and requires a write to it to fail without touching that save. The
-KTF `FileSystem.exists` and LGT `MC_fsIsExist` tests ask about a folder over
-three and two runs of one save directory; all three fail on the tree before
-the fix. Two local KTF titles that keep their saves in a folder ended their
-second `runktf` with `read save fs/<folder>: ... is a directory` before the
-fix and run to the end after it. The tests that used a directory as their
-unreadable entry now use a file without permissions or an injected failure.
-Two quick load tests that refused a load over a directory where the save file
-had been now require the load to take it as a save that is not there: the
-object over it is empty and the tree is unchanged.
+**A directory where a save key points (2026-10-07).** A save key whose path is
+a directory reads as no entry. `TestSaveReadOfADirectoryReportsMissing` asks it
+of the directory and memory stores, through the ordinary and the bounded read,
+before and after a save below it, and requires a write to it to fail without
+touching that save. The KTF `FileSystem.exists` and LGT `MC_fsIsExist` tests
+ask about a folder over three and two runs of one save directory; all three
+fail on the tree before the fix. Two local KTF titles that keep their saves in a
+folder ended their second `runktf` with
+`read save fs/<folder>: ... is a directory` before the fix and run to the end
+after it. Tests that used a directory as their unreadable entry now use a file
+without permissions or an injected failure. Two quick load tests that refused a
+load over a directory where the save file had been now require the load to
+treat it as a missing save: the object over it is empty and the tree is
+unchanged.
 
-Members a sustained key sweep reached (2026-10-10).
+**Members a sustained key sweep reached (2026-10-10).**
 `runtime_input_method_test.go` holds a title's own `InputMethodHandler` field to
 the edits three titles' listeners apply. The keypad types a digit only in the
 digit mode and sends clear as a deletion; letters, Hangul, releases, star, hash
@@ -915,29 +1499,29 @@ appears in the field and becomes the candidate's name on fire, six characters
 bring up the title's own message after the fifth and the rebuilt field takes the
 next commit, and a checkpoint taken with the field open and loaded into a new
 session offers the text input before any key; the second title's store-name
-field takes a commit and keeps six of eight characters. The sweep that found the
-three — every local KTF archive for 3,000 ticks at four times speed with a key
-every twelve ticks — was run again on the final change: 267 archives ran to the
-end of the script, 15 ended with an error — seven of them the title's own
-`System.exit` — and 18 were still running at the 180-second limit, where the run
-that found the three had 254, 20 and 26. The three titles run all 3,000 ticks,
-and no run stops on a method lookup; the one lookup still failing was the field
-`TextComponent.m_cPos:I` in one title, a failure [recorded
-before](ktf-qa-2026-09-21.md#comparison-and-current-gates) and published since
-(below). Every title whose
-outcome differs between runs had already flipped the same way across the earlier
-runs of this sweep, and the four that looked worse on the first rerun gave the
-same result twice each on `main` and on this change, so the differences are the
-run-to-run variation of a `-play` session and the load of eight workers on eight
-cores. Two titles ended some runs on an uncaught guest exception — a
-`StringIndexOutOfBoundsException` after typing into an LWC text box and a
-`NumberFormatException` — in the run that found the three as well; both are the
-titles' own code in `keyNotify`, and the key path ends only that call now
-(below). See [the KTF
-history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
+field takes a commit and keeps six of eight characters.
 
-The rest of the core library, a text component's fields and a key's exception
-(2026-10-10). `runtime_core_members_test.go` resolves the 45 members the KTF
+The sweep that found the three members (every local KTF archive for 3,000 ticks
+at four times speed, a key every twelve ticks) was run again on the final
+change: 267 archives ran to the end of the script, 15 ended with an error
+(seven of them the title's own `System.exit`), and 18 were still running at the
+180-second limit, against 254, 20 and 26 in the run that found the three. The
+three titles run all 3,000 ticks and no run stops on a method lookup; the one
+lookup still failing was the field `TextComponent.m_cPos:I` in one title, a
+failure [recorded before](ktf-qa-2026-09-21.md#comparison-and-current-gates)
+and published since (below). Every title whose outcome differs between runs had
+already flipped the same way across earlier runs of this sweep, and the four
+that looked worse on the first rerun gave the same result twice each on `main`
+and on this change, so the differences are the run-to-run variation of a
+`-play` session under eight workers on eight cores. Two titles ended some runs
+on an uncaught guest exception, a `StringIndexOutOfBoundsException` after typing
+into an LWC text box and a `NumberFormatException`, in the run that found the
+three as well; both come from the titles' own `keyNotify`, and the key path now
+ends only that call (below). See
+[the KTF history](history/ktf.md#implementation-three-members-a-sweep-that-held-keys-down-reached).
+
+**The rest of the core library, a text component's fields and a key's exception
+(2026-10-10).** `runtime_core_members_test.go` resolves the 45 members the KTF
 table lacked through the guest's class record and runs the ones with a value to
 give: the radix forms in both signs, `Long`'s hash of a value with a high word,
 `Math` against values the specification names exactly, `String.intern` handing
@@ -962,393 +1546,33 @@ every word past it. `TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey` sends a
 key whose `keyNotify` throws: the session goes on, the exception is counted, and
 the next key is delivered; it fails before the change.
 
-On real archives the title that stopped on `m_cPos` runs all 3,000 ticks of the
-sweep's key script, through its name entry to its menus, where it stopped at
-tick 883 before. The two exception titles each ran the script four times on the
-fixed build and reached 3,000 ticks every time. `run -ticks 500` gives the same
-digest before and after over the 282 local archives — two titles that differed
-once with eight runs at a time agree when run alone — and the 44 titles that
-extend `Thread`, `InputStream` or `Random` reach the same tick with the same
-error under the key script, the two exceptions finishing alike on three repeats
-each. See [the KTF
-history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library).
+On real archives the title that stopped on `m_cPos` at tick 883 now runs all
+3,000 ticks of the sweep's key script, through its name entry to its menus. The
+two exception titles each ran the script four times on the fixed build and
+reached 3,000 ticks every time. `run -ticks 500` gives the same digest before
+and after over the 282 local archives (two titles that differed once with eight
+runs at a time agree when run alone), and the 44 titles that extend `Thread`,
+`InputStream` or `Random` reach the same tick with the same error under the key
+script, the two exceptions finishing alike on three repeats each. See
+[the KTF history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library).
 
-Compile the authored `ReentryProbe.java` with Java 8 target settings into a
-temporary directory and copy only `ReentryProbe.class` into KTF testdata.
-Its bridge declaration is compile-time only; the test installs the ARM body.
-The SKT async JAR uses the authored MIDlet stubs and packages
-`AsyncFailureMIDlet.class` plus its two anonymous classes with `ASYNC_FAILURE.MF`.
-Do not include runtime stub classes. General fixture commands remain in
-[the fixture guide](history/testing.md#implementation-compiling-a-java-fixture).
-
-The SKT `tutorial-cache.jar` packages only the authored
-`TutorialCacheMIDlet.class`, compiled from `testdata/src/TutorialCacheMIDlet.java`
-with Java 8 target settings and the authored MIDlet stub on the compilation
-class path. Its manifest selects `TutorialCacheMIDlet` with MIDP-2.0 and
-CLDC-1.1. Do not package the stub. This fixture tests a revision-scoped cache
-adaptation, including the original bounds exception and the corrected reload.
-
-## Browser and device acceptance
-
-The checked-in browser and load acceptance runners remove their own temporary
-`var/ext/<run>` trees after stopping their server. Reports, screenshots, and
-isolated saves remain available for diagnosis. The installation's root
-`var/ext/.adopted` marker and user uploads are outside those temporary trees.
-
-Go handler tests and Node client tests are ordinary gates. Local Chromium and
-WebKit records additionally cover selected retention/takeover, reconnect,
-restart, native-text, and save-confirmation routes. Automated composition events
-are not evidence of a physical phone keyboard or desktop IME behaving correctly.
-
-The earlier WebKit Blob failure did not recur in the September 12 instrumented routes;
-its cause remains unresolved. Preserve lifecycle phase, browser version, Blob
-properties, origin/navigation, and server frame evidence on recurrence. See
-[WebKit observations](history/testing.md#webkit-webkit-frame-decoding-investigation).
-It recurred during the September 30 SKT retained-session reload route; see the
-[resume investigation](skt-resume-2026-09-30.md#validation) for the retained-state
-evidence and the browser acceptance limit.
-
-The [PWA release acceptance route](pwa-acceptance.md) defines an opt-in two-version
-Chromium/WebKit check and separate physical-device steps.
-There is no complete automated PWA acceptance claim. Installation, service-worker
-replacement, audible audio activation/recovery, touch, real-phone suspension,
-and saved progression need explicit routes and observations. A mocked bitmap
-decoder does not establish successful decoding in a real browser.
-
-## Grid keypad
-
-The grid model and geometry suites cover preset topology, every legacy cell's
-migration, action policies, connected shapes, holes, conflicts, settings
-uniqueness, split/clear/undo, per-type reset, reload, corrupted records, unknown
-versions and failed writes. The recorded old preset table remains independent
-of the new defaults. Removed slider assertions are replaced by these behavior
-checks and actual rendered-browser coverage.
-`keypad-refinement.test.mjs` independently records the version-1 seven-column
-schema and checks paired-column migration, assigned and cleared shapes, occupied
-holes, activation policies, independent empty halves, split/reload, failed writes,
-per-type recovery and a concurrent old tab writing its separate storage slot.
-`keypad-editor.test.mjs` drives the actual editor event handlers with DOM stubs.
-It reproduces the stale multiple-selection mode after merging, then checks
-immediate assignment to the selected merged button, conflict recovery and
-settings protection. These checks do not render a browser; the browser route
-also includes the merge-then-assign interaction without a manual mode change.
-Explicit font metrics additionally check that single-cell labels fit, including
-two-character names, that resizing or merging restores available font size, and
-that changing rapid-fire text refits without accumulating shrink. The browser
-route checks actual range widths and no-wrap styles across its viewport sizes;
-the metric stubs do not establish real font rendering.
-
-Run the browser route with the existing Playwright installation:
-
-```sh
-PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
-  node web/acceptance/keypad-grid.mjs build/release/wfeature-server chromium
-```
-
-Use `webkit` for the second engine and a debug server executable for the other
-profile. The runner uses the embedded client and an authored SKT canvas archive,
-with isolated runtime directories. It creates rectangle, L, T and ring buttons
-through the editor, checks the hole's separate key and the native hit targets,
-and observes actual session key messages. It covers mouse drag selection,
-touch taps, keyboard/pointer shared ownership, duplicate pressed feedback,
-focused activation, cancellation, blur, local-action exclusion, reload and full
-storage. Chromium additionally supplies two actual browser touch contacts through
-its automation protocol. These contacts are not physical-device evidence.
-
-Geometry checks cover 240 by 320, 320 by 480, 320 by 568, 390 by 844, 390 by 700,
-768 by 1024, 844 by 390, 1280 by 900 and 1280 by 390 px windows, plus explicit
-inputs for all four safe-area insets. They wait for resized button positions
-before checking full width, contact with the game wrapper, bottom alignment,
-overflow, the last cell's hit target and unchanged saved coordinates. The route
-also loads a version-1 grid and checks paired columns and retained source storage.
-The route stops its server and
-reloads the cached page to establish offline shell availability; it does not
-claim offline game execution. WebKit's forced-offline API is avoided for the
-[already recorded navigation limitation](pwa-acceptance.md).
-
-The fourteen-column route passes with the embedded release server in Chromium
-and WebKit and with the debug server in Chromium. All nine viewports and explicit
-safe-area inputs pass. The shortest screen also checks that the first and last
-start-menu controls remain reachable by scrolling inside the game area. Actual
-range widths prove the single-cell labels fit; rapid-fire mode changes are
-checked after the authored game starts.
-
-The checkpoint route uses the new grid positions while retaining Java/SGS pixel,
-input-epoch, ordinary-save and reconnect assertions. The two-version PWA route
-edits a legacy cell or coarse grid, retains the old records, and verifies the
-migrated key and stored source after the new shell replaces the old one. Release-facing
-instructions are in the root README; the technical contract is in
-[the web host reference](../web/README.md#grid-keypad).
-
-The [2026-10-08 validation record](history/testing.md#keypad-grid-validation-2026-10-08)
-separates completed browser checks from the pending physical-phone and real-game
-play observations. It retains the initial Chromium update cache failure
-and the subsequent fix. Service-worker regression tests reproduce a late legacy
-navigation and overlapping future workers; both failed before the repair and pass
-afterward. Both engines passed the version-34 and version-35 updates to the
-then-current version 41 on 2026-10-08.
-The route waits for cache retirement after navigation, because the worker's
-fetch lifetime can extend beyond the completed response.
-
-## Rapid-fire input
-
-[Rapid-fire behavior and measurements](rapid-fire.md) records the deterministic
-input tests, real WebSocket route, Chromium/WebKit checks, and the separate
-server CPU probe. Its authored fixture does not establish all-game input cost.
-
-## Game controllers
-
-`gamepad.test.mjs` drives the controller reader with pictures of a controller
-and the page's real key holds: button and trigger thresholds, stick sectors and
-their edge margin, the direction pad and the left stick sharing one key, sliding
-between the right stick's number keys, page controls acting on the press, input
-held back by the page, a control held across a reset staying dead, unrecognised
-controllers and their resting axes, a hat switch handed over as one axis (all
-eight directions and both rests, and one first seen pressed, which is an axis
-until it rests), a lever that overshoots its range and an axis that reads
-between a hat's steps (both levers), a four-position hat (a lever, never a
-misread eight), two controllers on one key, disconnection, and the motor's
-strength and refusals. `vibrate.test.mjs` checks that the motor
-takes the same requests under the same switch and can never cost the phone its
-own vibration.
-
-The browser route hands the page a stand-in for `navigator.getGamepads` and the
-connection events, then checks the real page against a server: key messages on
-the socket, the lit keypad button and settings row, rebinding while a button is
-held, the settings toggle, rapid fire, focus loss, the narrow-screen modal, an
-unrecognised controller's own table, another's hat switch as four direction
-rows, disconnection, and storage across reload:
-
-```sh
-PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
-  node web/acceptance/gamepad.mjs build/release/wfeature-server chromium
-```
-
-It passed on 2026-10-15, sixteen checks, in Chromium and WebKit with the
-release server and in Chromium with the debug server. It is not evidence about
-a physical controller or an operating system's mapping of one. How a browser
-hands over a controller it does not recognise was read from the browsers'
-sources rather than seen: Chrome numbers a HID axis by its usage less 0x30 on
-macOS and Windows, so a hat switch (0x39) is `axes[9]`, normalised over its
-logical range with nothing pressed past the end, and Firefox on macOS
-normalises a hat the same way; WebKit makes a hat four buttons.
-
-### The Android app on an emulator
-
-The app's own half — the activity, the web view's Gamepad API, the motors — is
-checked on an emulator with a virtual controller. `adb shell hid` registers a
-HID device from a real controller's report descriptor, so the kernel driver and
-Android's key layout make it the same input device a paired controller is, and
-its reports are the controller's own bytes. The script reads the page through
-the web view's DevTools socket and starts nothing with a touch:
-
-```sh
-make mobile-android && adb install -r mobile/android/build/wfeature.apk
-PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
-  node web/acceptance/android-gamepad.mjs microsoft_xboxones_register.json
-```
-
-The register command is the Xbox One S (Bluetooth) one from Android's own
-hardware input tests, `cts/tests/tests/hardware/res/raw/` in the platform
-source; it is not in this repository. `ANDROID_SERIAL` picks the device and
-`ADB` the binary.
-
-It checks that the controller reaches the page with no touch since launch, in
-the standard layout; that B sends 취소 and neither walks the page's history nor
-leaves the app; every face button, shoulder, trigger, the hat's four
-directions and a diagonal, both sticks, View, Menu toggling the settings and
-Home sending nothing; that `playEffect` reaches the controller as an output
-report; and that `navigator.vibrate` reaches the phone's motor
-(`dumpsys vibrator_manager`).
-
-On 2026-10-15, on a Pixel 10 Pro image of Android 37.1 with web view 154, it
-passed with the app built from this tree and failed against the same tree
-without its two Android fixes: on the first press, because the web view had no
-focus in touch mode, and — with focus given by a DevTools click, which is input
-to the view — on the phone's motor, because the app had no `VIBRATE`
-permission. The first press after a page load or a connection never showed the
-controller to the page, in either build; the script presses Home first for
-that reason.
-
-### The iOS app on a simulator
-
-The iOS app's half is checked in the simulator with nothing but Xcode. The
-script builds the app for the simulator the way `mobile/ios/build.sh` builds it
-for a phone, with `mobile/ios/acceptance/` linked in beside the unchanged
-`App.swift`, makes a temporary simulator device, and deletes it afterwards. The
-driver connects a hidden `GCVirtualController` and presses it with the iOS 17
-`setValue(_:forButtonElement:)` and `setPosition(_:forDirectionPadElement:)`.
-To WebKit that is a GameController device like a paired one, since WebKit reads
-controllers through the same framework in the app's process. The script reads
-the keys the page sent:
-
-```sh
-node web/acceptance/ios-gamepad.mjs
-IOS_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5 node web/acceptance/ios-gamepad.mjs
-```
-
-It checks three things:
-
-- after load, the web view's content view is first responder, and the page sees
-  the controller in the standard layout;
-- every face button, shoulder, trigger, the direction pad and both sticks send
-  their keys, from the first press;
-- with first responder taken away, as a view controller presented over the web
-  view leaves it, nothing reaches the page, and `becomeFirstResponder`, which
-  is what the app does, brings the controller back.
-
-On 2026-10-15 it passed on iOS 26.5. On iOS 27 an app built with the 27 SDK
-starts only with the scene life cycle, and the script stops with that message
-without it; with it, the script passed there too. Once, by hand, the app was
-built without its `takeControllers`: the page never saw a controller at all.
-A physical controller's pairing is the part a simulator does not have.
-
-## Full-screen layout
-
-`fullscreen.test.mjs` covers the stored choice: restored onto the document
-before anything draws, remembered, announced once per change, and kept for the
-page when storage throws. The browser route checks the layout itself at five
-window shapes — the picture's width against the largest 3:4 width that keeps
-the top-right corner clear, centring, and the corner button beside rather than
-on the picture — and every way in and out: the settings button, Escape, the
-corner button, a reload, opening the keypad editor, and a keypad cell assigned
-through the editor, on a wide and a narrow window, with keyboard keys still
-reaching the game:
-
-```sh
-PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
-  node web/acceptance/fullscreen.mjs build/release/wfeature-server chromium
-```
-
-The controller route adds R3 and the settings reached by Menu in it. Both passed
-on 2026-10-14 in Chromium and WebKit with the release server and in Chromium
-with the debug server.
-
-On 2026-10-15 the layout was put up on the Android emulator above and measured
-through DevTools. In the app (portrait only; the iOS app is too), the web view
-reports insets of 52px at the top and 24px at the bottom; the picture took the
-full width and the corner button sat above its top-right corner, below the
-status bar. In the phone's Chrome, portrait put the button above the picture
-the same way, and landscape (900×318 under the address bar) gave the picture
-the height less the 23px gesture inset with the button beside it. An iPhone's
-notch and home indicator wait on a device.
-
-## Frame delivery
-
-`internal/webhost/frame_encoding_test.go` checks pixel changes, dimensions,
-scaling, explicit redraws under queue pressure and lifecycle-message ordering.
-Session tests preserve owned raw snapshots and the synchronous scaled-frame API.
-`BenchmarkFrameEncoding` compares unchanged and changing pictures at original
-scale and hq4x through the actual encoder goroutine; it excludes guest execution.
-Protocol 2 tests reconstruct consecutive updates pixel for pixel the way the page
-composes them — complete, masked, replacing and shifted — check the scale each
-names, the palette, a scrolling field under a fixed bar, a shift with nothing
-left to draw and the refusal to shift over a picture that is not opaque, and
-verify protocol negotiation through the WebSocket handler.
-`TestFramePatchBandwidth` and `BenchmarkFramePatchBandwidth` compare protocols 1
-and 2 over an authored moving sprite and an authored scrolling field; neither is
-real-game traffic. `audio_stream_test.go` covers the binary sound operations,
-definitions carried once, the budget, a shed message and protocol 1's unchanged
-JSON. `outbound_test.go` checks that queued messages leave in one write and that
-sound waits for its tick's picture only while one is being encoded. Static
-serving tests cover gzip, validators and 304 answers for the shell and the game
-list. `internal/wsproto` checks that each message, and each batch, is one
-transport write.
-
-`internal/filter/hqx/javascript_test.go` regenerates `web/hqx-patterns.js` from
-the Go tables and fails when they differ, and holds the digests of an authored
-picture magnified at each scale; `web/hqx.test.mjs` magnifies the same picture
-in JavaScript and must produce the same digests, and checks that redoing only
-the blocks around a change matches magnifying everything. `magnify.test.mjs`,
-`frame-stream.test.mjs` and `session.test.mjs` cover the page's side of the
-protocol with mocked canvases and sockets.
-
-`internal/vp8l` round-trips its pictures through the WebP decoder in
-`golang.org/x/image`: colour counts either side of each colour-table size,
-widths either side of the neighbourhood codes, authored pixel art with
-transparent bands, gradients, and every path the defaults avoid (the predictor
-on every picture, no colour cache). A fully transparent pixel may come back
-with another colour, which is the one difference allowed. `FuzzEncode` does the
-same for random small pictures, and the prefix, distance and Huffman helpers
-are checked against the decoder's arithmetic. An Encoder keeps tables
-between pictures, so one reused encoder, and copies of it used in turn, must
-write exactly what a fresh one writes, including when its position base wraps;
-the parse and the colour-cache trial, both written for speed, are checked
-against plain versions of themselves, the parse by `FuzzReferences` as well. A browser decodes with its
-own decoder rather than the Go one, so the encoder was also checked by hand
-against `dwebp`, the WebP project's decoder, on the authored
-pictures and on all 13,268 rectangles of recorded play; see
-[the record](history/session.md#frame-bandwidth-webp-2026-09-25). The session
-tests in `internal/webhost` compose every protocol 2 case from WebP as well as
-PNG. Translucent-frame regressions compare both formats after composition,
-including complete pictures, replacing and masked updates, explicit redraws,
-and both paletted and full-colour pictures. WebP must use PNG's conversion from
-premultiplied RGBA to straight alpha, including its rounding.
-
-The opt-in browser route uses repository-authored SKT and LGT fixtures:
-
-```sh
-PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
-  node web/acceptance/frame-delivery.mjs build/release/wfeature-server chromium
-```
-
-Use `webkit` for the second engine. `WFEATURE_FRAME_ARCHIVE` may name a local
-archive under `var/games` for an additional six-second original-scale probe.
-The runner uses isolated game and save directories and records results under
-`var/acceptance`. It exercises static presentation, restart, park/resume,
-reconnection, changed input frames, lossless update composition against a forced
-complete server picture, WIPI scale changes, and hq2x of partial updates against
-hq2x of a forced complete picture. A static picture without new pictures is
-expected; the runtime must keep ticking. Both engines decode lossless WebP, so
-the route also checks that the page asked for WebP pictures and drew them, and
-every composition check above ran on WebP. Measured scope and results are in
-[the CPU investigation](cpu-saturation-investigation-2026-09-23.md) and the
-[bandwidth record](history/session.md#frame-bandwidth-2026-09-24).
+**Fixture regeneration.** Compile `internal/platform/ktf/testdata/src/ReentryProbe.java`
+with `javac -source 1.8 -target 1.8 -g:none` into a temporary directory and copy
+only `ReentryProbe.class` into `internal/platform/ktf/testdata/`; its
+`ReentryBridge` declaration is compile-time only, and the test installs the ARM
+body. The SKT `async-failure.jar` and `tutorial-cache.jar` recipes are in
+[`internal/platform/skt/testdata/README.md`](../internal/platform/skt/testdata/README.md).
+General fixture commands, including the `javastub` class path, are in
+[compiling a Java fixture](history/testing.md#implementation-compiling-a-java-fixture).
 
 ## Reading old validation
 
-[Testing history](history/testing.md) keeps detailed experiments and release
-checks. [Coverage audits](history/coverage.md) retain the 2026-09-12 source
-snapshot; their missing-method tables are historical, not a current task list.
-Current platform overviews identify supported behavior and remaining limits.
-Documentation consolidation itself is not a new runtime acceptance run.
-
-### SKT execution checkpoints
-
-[The SKT checkpoint record](skt-checkpoints.md) describes the implementation and
-its supported boundaries. Focused suites are `TestThreadCheckpoint`,
-`TestCheckpointNativeWait`, `TestJavaCheckpoint`, `TestJavaPlatformCheckpoint`,
-`TestScriptCheckpoint` and the shared `TestCheckpointSKTJava`/
-`TestCheckpointScript`. Authored worker fixtures verify continuation and monitor
-ownership; platform tests verify current ordinary-save reconstruction and
-refused-load isolation. Subprocess tests accept
-`WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY` to exercise both debug/release
-directions using separately compiled test executables.
-
-CLI and webhost checkpoint suites now include both SKT variants. The rendered
-client route is `web/acceptance/checkpoint-skt.mjs`; it builds on the existing
-Playwright acceptance setup. Chromium and WebKit exercise actual keypad
-placement/save/load, restored pixels and input epochs, corrupt-slot feedback,
-and unchanged ordinary save hashes. It also checks that the first restored
-picture follows the reset and that a later speed change survives page reload,
-including the resumed metadata, control and saved preference. Real-archive probes
-remain opt-in through `TestLocalSKTCheckpoint`, with separate temporary saves and anonymous digest
-labels. No local game data is bundled in these tests.
-
-The [2026-10-07 review](quicksave-review-2026-10-07.md) records eight reproduced
-defects and their follow-up fixes. Maintained regressions now cover:
-
-- SKT stale or independently dirty file aliases, deletion, failed writes and
-  opens before pending writes reach disk; refusal preserves every buffer and
-  occurs before any checkpoint flush.
-- LGT File/DataBase collisions and unreadable path lists; refusal preserves
-  issued writes and the live Clet remains usable after a checkpoint read fault.
-- SKT RMS close after a later deletion, actual subsequent record mutations and
-  retrying failed writes on close.
-- Linked and real owner paths contending for claims and transactions in one or
-  separate processes, including process-only fallback and missing owner creation.
-- Java/SGS audio catchup limits, late reset arrival at the writer boundary and
-  current speed on both attached and parked session resumes.
+The sections below are dated verification records for audio, release checks and
+text input; each states its own date, tree and limits. Earlier experiments and
+release checks are in [testing history](history/testing.md).
+[Coverage audits](history/coverage.md) keep the 2026-09-12 source snapshot;
+their missing-method tables are historical, not a current task list. Current
+platform overviews identify supported behavior and remaining limits.
 
 ### Independent audio ownership
 
@@ -1369,7 +1593,7 @@ SKT `audio-gain.jar` exercise their native adapters; the SKT fixture also restor
 both clip levels through a complete checkpoint. Host tests verify gain before
 reconstructed sources in both protocols, dropped mute recovery and older pages.
 
-`web/audio-gain.test.mjs` checks the actual source routes and pending automation
+`web/audio-gain.test.mjs` checks the source routes and pending automation
 after a clock reset. `web/acceptance/audio-gain.mjs` compares rendered MIDI and
 nonperiodic PCM against uninterrupted references in Chromium and WebKit,
 through zero, quarter and full gain, with sample tolerance 0.000001.
@@ -1399,7 +1623,7 @@ explicit Stop versus Pause, rewind, paused quick load, deallocate reentrancy
 and SKVM wait interruption. Platform checkpoint guards use paused guest time
 even after long pauses; KTF checks include speed changes.
 
-The web Host negotiates `sound=resume` through actual WebSocket handlers and
+The web Host negotiates `sound=resume` through the WebSocket handlers and
 tests envelope ages in JSON and binary alongside older capabilities. The page
 tests route both formats and reject truncated resume operations.
 `web/acceptance/audio-resume.mjs` renders melodic, PCM and percussion resumes
@@ -1408,7 +1632,6 @@ engines match within 0.000001, remain silent during pause and preserve a peer
 source. Melodic phase is deliberately fresh in the reference. The gain,
 ownership and coarse-clock browser checks continue to pass; see
 [pause verification](audio-ownership.md#verification).
-
 
 ### MIDP loops, progress and event delivery
 
@@ -1452,7 +1675,6 @@ authored Java loop worker also verifies that successful SKVM media replacement
 interrupts its old wait, while invalid replacement leaves the previous sound
 playing.
 
-
 ### Live channel controls
 
 `internal/backend/audio_controls_test.go` verifies current controller values
@@ -1472,9 +1694,9 @@ remain intact.
 WebKit and compares them against independent native graphs, with a maximum
 sample error below 0.000001 and explicit RMS/stereo-energy assertions. Both
 engines pass at 5.960464477539063e-8 maximum error. The resume, gain, ownership
-and twelve-note 90 ms-clock acceptance scripts pass alongside it. The latest
-`make test` (321 Node tests), `make test-debug`, race, vet and both cgo-free
-server builds pass; local logs are under `build/sound-controls/`.
+and twelve-note 90 ms-clock acceptance scripts pass alongside it. `make test`
+(321 Node tests), `make test-debug`, race, vet and both cgo-free server builds
+passed for this change; local logs are under `build/sound-controls/`.
 
 ### MIDI sustain and parameters
 
@@ -1531,8 +1753,8 @@ the typed resource error without changing active output or consuming a handle.
 length overflow and aggregate failures. Fresh small budgets bound each call;
 the target checks no partial result after a hard failure, output ceilings and
 input immutability. A 30-second two-worker run passed 1,204,551 executions.
-All four required gates and both cgo-free server profiles pass. The page did not
-change in this decoder slice; the 330 Node tests remain green.
+All four required gates and both cgo-free server profiles passed. The page did
+not change in this decoder change, and the 330 Node tests still passed.
 
 Before/after decoder binaries produced identical membership, complete event and
 PCM/SysEx hashes and metrics for 11,175 unique local sounds. The comparison exits
@@ -1560,7 +1782,7 @@ now states the sized handset form instead of the lengthless one it assumed.
 
 Run against the pre-repair `score.go` and `player.go` through a Go overlay,
 five of the six new tests and the corrected dialect case fail; the other-dialect
-test passes on both, as it should. All pass after the repair in normal, debug
+test passes on both, as expected. All pass after the repair in normal, debug
 and race modes, alongside the unchanged decoder-bound and fuzz seeds, and a
 30-second `FuzzBoundedSMAF` run passed 5,572,442 executions.
 
@@ -1606,7 +1828,7 @@ Six real archive scenes retain MIDI/PCM output, five successful checkpoint
 restores and the existing SKT WIPI Display-owner refusal, without execution or
 input errors. Logs: `build/sound-bounds/loaded-*.log`; anonymous smoke results:
 `build/sound-bounds/runtime-loaded.jsonl`. The page and session protocol did not
-change in this admission slice.
+change in this admission change.
 
 ### Checkpoint Display and audio catch-up
 
@@ -1714,7 +1936,7 @@ historical END events, and can be captured and restored again.
 
 Twenty-four malformed cases cover missing/wrong owner and recipient references,
 carrier identity, counts, progress, active flags, listener fields, executable
-callbacks and disagreement between cached types and actual guest memory.
+callbacks and disagreement between cached types and guest memory.
 Refusal leaves the source audio, queue and ordinary save intact. Review also
 reproduced two BaseClip regressions: overstrict validation rejected supported
 playback checkpoints, while understrict event validation admitted a non-Clip
@@ -1875,14 +2097,14 @@ both decoders, complete-batch refusal, source and automation times, repeated
 retired-graph cleanup, short gates, expired-percussion admission, interruption,
 malformed-first-packet recovery and quick load with recovery outstanding.
 
-For native rendered comparison, use the existing Playwright installation:
+For native rendered comparison:
 
 ```sh
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-presentation.mjs chromium
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-presentation.mjs webkit
 ```
 
-This harness serves local modules through browser request interception, without
+The harness serves local modules through browser request interception, without
 binding a server port. It renders identical notes, PCM, sustain, bend, gain,
 pan and stop/restart events in an `OfflineAudioContext`, comparing 5 ms and
 70 ms packet grouping against a 90 ms render-clock model. The expected maximum
@@ -1890,38 +2112,36 @@ sample difference is below `1e-6`; nonzero energy prevents a silent false pass.
 It models already mapped speed changes, not a native guest execution. Device
 latency and real foreground interruption still require a live browser/device.
 
-On 2026-10-09, all 359 Node tests pass. Backend and platform packages pass both
-profiles and the race detector; 133 webhost tests with no transitive socket
-binding pass in those modes too. `go vet ./...` and `CGO_ENABLED=0 make server
-server-release` pass, and binary build metadata confirms debug/release and cgo
-disabled. Full test/debug/race gates were attempted: only socket-binding tests
-fail under the sandbox, in server/appserver/launcher/webhost/wsproto. Chromium
-launch is denied too, so the rendered comparison is syntax checked but remains
-unexecuted. The full gates are not recorded as passing. Both later passed on
-2026-10-09: [gates](#hps-exclusive-framing), [native rendering](#native-audio-rendering-acceptance).
+On 2026-10-09 all 359 Node tests passed. Backend and platform packages passed
+both profiles and the race detector, as did 133 webhost tests with no
+transitive socket binding. `go vet ./...` and `CGO_ENABLED=0 make server
+server-release` passed, and binary build metadata confirmed debug/release and
+cgo disabled. In the full test/debug/race gates only the socket-binding tests
+failed under the sandbox (server, appserver, launcher, webhost, wsproto), and
+Chromium could not launch, so the rendered comparison was only syntax-checked.
+Both ran later the same day: [gates](#hps-exclusive-framing),
+[native rendering](#native-audio-rendering-acceptance). Logs are in
+`build/sound-timestamps/`, including the transitive socket-test exclusion
+expression used for the port-free webhost checks. No tracked test was skipped or
+weakened for this environment. Browser and device acceptance remains open in
+the audio audit and the local work plan.
 
-Logs live in `build/sound-timestamps/`, including the conservative transitive
-socket-test exclusion expression used for the port-free webhost checks. No
-tracked test is skipped or weakened to accommodate this environment. Browser
-and device acceptance remains open in the audio audit and local work plan.
+Eight real scenes (two KTF, one LGT Clet, two LGT Java and three SKT) also ran
+for twelve seconds with three confirm presses, at 1.5x, then 0.5x after three
+seconds and 2x after seven seconds. All emitted MIDI or PCM, restored an
+in-memory checkpoint and ran the next tick without errors or stderr. Anonymous
+results are `runtime.jsonl` and `runtime-lgt.jsonl` in that log directory; the
+probe also records output event timestamps.
 
-Eight real scenes (two KTF, one LGT Clet, two LGT Java and three SKT) also run
-for twelve seconds with three confirm presses, initially at 1.5x, then 0.5x
-after three seconds and 2x after seven seconds. All emit MIDI or PCM, restore
-an in-memory checkpoint and run the next tick without errors or stderr.
-Anonymous results are `runtime.jsonl` and `runtime-lgt.jsonl` in that log
-directory. The probe additionally records output event timestamps.
-
-One SKT scene initially showed a backward timestamp. Six diagnostic repeats
-located it exclusively after restoration: a pending note-off was due
-5.839489 ms before the saved epoch, after the reconstruction's zero timestamp.
-It is an overdue saved event, not a backward running clock. The backend retains
-that signed deadline; the page rejects the stale post-reconstruction batch and
-requests current output. A dedicated page regression verifies atomic refusal
-and successful subsequent reconstruction. The trace is in
-`runtime-skt-timing-audit.jsonl`; ordinary playback in these probes has no
-backward event timestamps. This is protocol/state evidence, not audible or
-device-render validation.
+One SKT scene first showed a backward timestamp. Six diagnostic repeats placed
+it only after restoration: a pending note-off was due 5.839489 ms before the
+saved epoch, after the reconstruction's zero timestamp. It is an overdue saved
+event, not a backward running clock. The backend keeps that signed deadline;
+the page rejects the stale post-reconstruction batch and requests current
+output, and a page regression verifies atomic refusal and successful subsequent
+reconstruction. The trace is in `runtime-skt-timing-audit.jsonl`; ordinary
+playback in these probes has no backward event timestamps. This is
+protocol/state evidence, not audible or device-render validation.
 
 ### PCM buffer reuse and mobile velocity
 
@@ -1947,7 +2167,7 @@ All scans retain the known 1,014 KTF archive-member read exclusions and exit 2;
 this does not claim those members decoded. Existing checkpoints retain their
 already decoded scores. No archive assets are copied or save data changed.
 
-`web/audio-buffer.test.mjs` exercises the actual binary decoder and page
+`web/audio-buffer.test.mjs` exercises the binary decoder and page
 dispatcher. Nine regressions cover 512 repeated immutable samples, independent
 owners/sources/gains/times, mono/stereo/rate variants, context replacement,
 definition forget/replacement, unchanged mutable/JSON callers, 256-entry and
@@ -1961,21 +2181,22 @@ The port-free allocation probe uses one authored 2,000-frame mono definition at
 All 512 source creations/starts remain, sample comparisons report no mismatches,
 and simulated completion releases every source. These are instrumented API calls
 and sample writes, not measurements of native memory or CPU. The native
-`web/acceptance/audio-presentation.mjs` comparison now checks cached coarse
-packets against uncached fine packets, including exact buffer-request counts.
-It is syntax checked but remains unexecuted under the browser-launch restriction.
-It passed on 2026-10-09; see [native rendering](#native-audio-rendering-acceptance).
+`web/acceptance/audio-presentation.mjs` comparison checks cached coarse packets
+against uncached fine packets, including exact buffer-request counts; it was
+only syntax-checked under the browser-launch restriction and passed later on
+2026-10-09 ([native rendering](#native-audio-rendering-acceptance)).
 
-Normal/debug/race SMAF, backend and platform packages pass, as do vet, 133
+Normal/debug/race SMAF, backend and platform packages passed, as did vet, 133
 port-free webhost tests in all three modes, and both cgo-free server builds.
-Full `make test`, `make test-debug` and `go test -race ./internal/...` are attempted
-again; their failures remain socket-binding denials, with no race report.
-The builds emit the same nonfatal denied module stat-cache warning, but exit
-successfully and retain the expected debug tag/release trimming and `CGO_ENABLED=0`.
-No tracked tests are disabled. Evidence, pinned diagnostic overlays, allocation
-before/after records and the independent velocity oracle are under
-`build/sound-pcm-followup/`. Native rendering, live socket acceptance and device
-listening remain open.
+Full `make test`, `make test-debug` and `go test -race ./internal/...` failed
+only on socket-binding denials, with no race report. The builds emitted the
+nonfatal denied module stat-cache warning but exited successfully with the
+expected debug tag, release trimming and `CGO_ENABLED=0`. No tracked test was
+disabled. Evidence, pinned diagnostic overlays, allocation before/after records
+and the independent velocity oracle are under `build/sound-pcm-followup/`.
+Device listening remains open; native rendering and live socket acceptance ran
+later ([native rendering](#native-audio-rendering-acceptance),
+[live sessions](#live-audio-session-acceptance)).
 
 ### PCM track control propagation
 
@@ -2030,27 +2251,30 @@ above and covered by its regression; a clean observation does not remove it.
 Archive hashes, counters and stage results remain in ignored evidence. No game
 assets are copied, and ordinary save files are not written by these probes.
 
-Required `make test`, `make test-debug` and `go test -race ./internal/...` runs
-fail only in socket-binding tests under the sandbox, with no race report.
-SMAF, backend and all platform packages pass in these runs; all 139 port-free
-webhost tests separately pass in normal/debug/race modes. `go vet ./...`,
-formatting/diff checks and both `CGO_ENABLED=0` server builds pass. Build metadata
-confirms the debug tag and release trimming. The builds retain the nonfatal
-denied module stat-cache warning. No tracked test is disabled or weakened.
+The required `make test`, `make test-debug` and `go test -race ./internal/...`
+runs failed only in socket-binding tests under the sandbox, with no race report.
+SMAF, backend and all platform packages passed in these runs, and all 139
+port-free webhost tests passed separately in normal/debug/race modes.
+`go vet ./...`, formatting/diff checks and both `CGO_ENABLED=0` server builds
+passed; build metadata confirmed the debug tag and release trimming, with the
+nonfatal denied module stat-cache warning. No tracked test was disabled or
+weakened.
 
-`web/acceptance/audio-pcm.mjs` prepares four port-free native-render comparisons:
+`web/acceptance/audio-pcm.mjs` holds four port-free native-render comparisons:
 gain/pan and mid-wave mute, overlapping groups/owners, future stop/restart and
 trimmed restoration against a full-buffer offset. Independent native graphs
 check samples within 1e-6, source starts/counts, shared-buffer reuse, silence
-windows and graph retirement. Run with `PLAYWRIGHT_MODULE` pointing to
-`playwright/index.mjs` and `node web/acceptance/audio-pcm.mjs chromium` (or
-`webkit`). The harness is syntax checked only; browser launch remains blocked.
-It passed in both engines on 2026-10-09; see [native rendering](#native-audio-rendering-acceptance).
+windows and graph retirement. Run it with `PLAYWRIGHT_MODULE` set and
+`node web/acceptance/audio-pcm.mjs chromium` (or `webkit`). It was only
+syntax-checked here and passed in both engines later on 2026-10-09
+([native rendering](#native-audio-rendering-acceptance)).
 
 Evidence and the pinned anonymous scanner are under `build/sound-pcm-controls/`,
-including `corpus-comparison.json`, `runtime-summary.json` and gate logs. Native
-WebAudio rendering, live socket acceptance and phone listening remain open;
-Node graph checks and runtime event counters do not substitute for those checks.
+including `corpus-comparison.json`, `runtime-summary.json` and gate logs. Node
+graph checks and runtime event counters do not substitute for native WebAudio
+rendering, live socket acceptance or phone listening; the first two ran later
+([native rendering](#native-audio-rendering-acceptance),
+[live sessions](#live-audio-session-acceptance)) and listening remains open.
 
 ### Receiver source pressure
 
@@ -2090,14 +2314,14 @@ connections, not native CPU/RAM or audible output. Before/after results, the
 frozen page, and an independent backend replay/retention probe remain under
 `build/sound-source-pressure/`.
 
-All 403 Node tests and `go vet ./...` pass. Required full normal/debug/race Go
-gates fail only in socket-binding tests under the sandbox, with no race report.
-The port-free webhost suites pass separately in normal/debug/race modes.
-Both `CGO_ENABLED=0` server profiles build; the known denied module stat-cache
-write is nonfatal. PWA version 51 carries the new receiver. Native browser
-rendering, live sockets and phone listening remain unexecuted in this sandbox.
-Rendering and the socket tests ran on 2026-10-09 ([native rendering](#native-audio-rendering-acceptance));
-phone listening remains.
+All 403 Node tests and `go vet ./...` passed. The full normal/debug/race Go
+gates failed only in socket-binding tests under the sandbox, with no race
+report, and the port-free webhost suites passed separately in all three modes.
+Both `CGO_ENABLED=0` server profiles built; the denied module stat-cache write
+is nonfatal. PWA version 51 carried the new receiver. Native rendering and the
+socket tests ran later on 2026-10-09
+([native rendering](#native-audio-rendering-acceptance)); phone listening
+remains open.
 
 ### PCM admission and checkpoint charges
 
@@ -2124,8 +2348,9 @@ the [fractional PCM repair](#fractional-pcm-reconstruction) below closes that ga
 excessive charges before runtime construction. It verifies typed legacy
 adoption without mutating caller data and debug-only, logarithmically throttled
 diagnostics through sink changes and logger detachment. The checkpoint codec
-required exact version-6, version-7 or version-8 shapes at this stage, including when Version
-follows its children or versions coexist in separate nested records. Null,
+required exact version-6, version-7 or version-8 shapes at this stage, including
+when Version follows its children or versions coexist in separate nested
+records. Null,
 duplicate, mixed, missing and over-budget records leave the destination unchanged.
 Version 8 preserves original charges; older records derive them from available
 tails. An older binary requires its supported checkpoint or ordinary startup.
@@ -2134,9 +2359,10 @@ An anonymous corpus pass exercises public `LoadEvents`, `Play`, `Advance`,
 `CaptureState`, live replay and restored replay for all 11,175 decoded sounds.
 Independent ordered hashes match all 10,688 PCM calls and 80,954,352 raw emitted
 bytes; independent suffix hashes and charges match all 2,912 retained tails.
-This run's recaptures use version 8. Coverage, decoded events and exclusions match the
-preceding PCM census: 1,014 known KTF member-read failures remain, and the scan
-exits 2 solely to report them. No parse, panic, admission or replay failure occurs.
+This run's recaptures use version 8. Coverage, decoded events and exclusions
+match the preceding PCM census: 1,014 known KTF member-read failures remain, and
+the scan exits 2 solely to report them. No parse, panic, admission or replay
+failure occurs.
 
 Single-pass overlap peaks at five references. A separate exact periodic analysis
 uses each score's final event time as the repetition period. For sample duration
@@ -2168,15 +2394,16 @@ frontier. The corpus comparison above provides deterministic PCM preservation.
 This scene sink lacks guest-gain support and a logger, so it does not establish
 gain rendering or the absence of PCM refusals.
 
-All backend tests pass in normal/debug/race modes, and all 403 Node tests pass.
-The required `make test`, `make test-debug` and `go test -race ./internal/...`
-gates fail only at sandbox-denied socket binding, with no race report. Port-free
-webhost suites pass separately: 137 tests in normal/race and 139 in debug, with
-three/one existing skips respectively. `go vet ./...`, formatting/diff checks,
-and both `CGO_ENABLED=0` server builds pass. Metadata confirms the debug tag,
-release trimming and identical embedded PWA 51. The module stat-cache warning
-remains nonfatal. No tracked test is disabled. Browser rendering, live sockets
-and phone listening remain unverified in this sandbox.
+All backend tests passed in normal/debug/race modes, and all 403 Node tests
+passed. The required `make test`, `make test-debug` and
+`go test -race ./internal/...` gates failed only at sandbox-denied socket
+binding, with no race report. Port-free webhost suites passed separately: 137
+tests in normal/race and 139 in debug, with three and one skips respectively.
+`go vet ./...`, formatting/diff checks and both `CGO_ENABLED=0` server builds
+passed; metadata confirmed the debug tag, release trimming and identical
+embedded PWA 51, with the nonfatal module stat-cache warning. No tracked test was
+disabled. Browser rendering, live sockets and phone listening were not verified
+in this sandbox.
 
 ### Playout lateness diagnostics
 
@@ -2186,8 +2413,7 @@ regressions cover exact histogram boundaries, accepted lateness within 5 ms,
 every event after a batch's first window refusal, distinct late/future/range
 refusals, invalid mapped times, late frontier-only re-anchoring and re-anchoring
 of a batch with events up to 200 ms late (and refusal past it or past the
-horizon). First/reset
-anchors stay separate from continuing anchors. Recovery and `stopAll` preserve
+horizon). First/reset anchors stay separate from continuing anchors. Recovery and `stopAll` preserve
 pending measurements; flushing and log clear discard them without changing
 live sources or their anchor. Disabled/default diagnostics retain no aggregate,
 and malformed, backward, resource-refused and unavailable-context inputs do
@@ -2196,8 +2422,8 @@ not become timing samples.
 The two transport cases pass authored JSON and independently encoded WFA2
 through `GameSession`, decoding, dispatch and `PageAudio`. A late packet makes
 one existing recovery request, suppresses subsequent stale batches and retains
-its diagnostic through `allOff` and reconstruction. All 427 Node tests pass;
-the production diff also passes independent review. Evidence is retained under
+its diagnostic through `allOff` and reconstruction. All 427 Node tests passed,
+and the production diff passed independent review. Evidence is retained under
 `build/sound-lateness/`. These are controlled clock and callback measurements,
 not native rendering, network transit, post-admission source allocation cost,
 physical-device distributions or listening acceptance.
@@ -2209,7 +2435,7 @@ ahead, the batch is counted as `reanchored`, a note that follows is scheduled
 from the moved anchor, and a late batch that carries an event is still refused.
 "A reset anchor after a refusal is counted apart from continuing batches" keeps
 the reset accounting the old case covered, now through a refused event batch.
-Both fail against the previous page; all 428 Node tests pass. The live sessions
+Both fail against the previous page; all 428 Node tests passed. The live sessions
 that motivated it are in [sustained load](#sustained-sound-load-in-real-titles).
 
 ### Fractional PCM reconstruction
@@ -2236,10 +2462,10 @@ destinations after refusal.
 
 Host tests reproduce the missing extension against the frozen encoder and
 compare independently authored bytes for `0x16`, JSON phase, and unchanged old
-wave operations. Actual backend/collector replay covers capability combinations,
+wave operations. Backend/collector replay covers capability combinations,
 trimmed capture/restore, dropped replay and parked reconnect in both directions.
 The page requests `phase=1`; new client tests drive `GameSession`, both decoders,
-dispatch and `PageAudio` to the source's actual start arguments. Invalid phase
+dispatch and `PageAudio` to the source's start arguments. Invalid phase
 or truncated operands cannot deliver partial audio. Recovery waits for observed
 timing support after a malformed first binary packet and requests only one reset.
 
@@ -2248,12 +2474,12 @@ sample-rate and channel handling, atomic refusal before controls/reset/allocatio
 failed-start cleanup and retiring graph cleanup. Payload reservations remain
 unchanged until source cleanup. Missing or zero phase keeps the original
 `start(when)` call; a nonzero phase adds an explicit offset without moving `when`.
-The native `web/acceptance/audio-pcm.mjs` harness now includes a fifth scenario
+The native `web/acceptance/audio-pcm.mjs` harness includes a fifth scenario
 comparing two fractional offsets with an independently authored native graph
-using the same suffix. Syntax checking passes; native rendering remains
-unexecuted under the existing sandbox restriction (it matched exactly on
-2026-10-09; see [native rendering](#native-audio-rendering-acceptance)). These checks do not claim
-to preserve an earlier renderer's hidden resampling history.
+using the same suffix; it was only syntax-checked under the sandbox and matched
+exactly on 2026-10-09 ([native rendering](#native-audio-rendering-acceptance)).
+These checks do not claim to preserve an earlier renderer's hidden resampling
+history.
 
 The complete 11,175-sound corpus also passes public backend playback, v9 capture
 and live/restored phase-aware replay. Decoded event digests, ordered raw PCM
@@ -2278,15 +2504,15 @@ without phase, gain or logger support; it checks real platform adoption and
 compatibility, not fractional rendering or admission diagnostics. Original
 evidence remains unchanged and no ordinary saves are written.
 
-All 417 Node tests pass. Backend and platform packages pass required normal,
-debug and race runs; the full Go gates still fail only on sandbox socket
-binding, with no race report. Port-free webhost suites separately pass 143
-tests in normal/race and 145 in debug, with three/one existing skips respectively.
-`go vet ./...`, formatting/diff checks and both cgo-free server builds pass.
-Metadata confirms the debug tag, release trimming and current embedded PWA 52;
-the module stat-cache warning remains nonfatal. Live sockets, native rendering
-and physical-phone listening remain unexecuted here. Sockets and rendering ran
-on 2026-10-09 (below); listening remains.
+All 417 Node tests passed. Backend and platform packages passed the required
+normal, debug and race runs; the full Go gates failed only on sandbox socket
+binding, with no race report. Port-free webhost suites passed separately, 143
+tests in normal/race and 145 in debug, with three and one skips respectively.
+`go vet ./...`, formatting/diff checks and both cgo-free server builds passed;
+metadata confirmed the debug tag, release trimming and the then-current embedded
+PWA 52, with the nonfatal module stat-cache warning. Live sockets and native
+rendering ran later on 2026-10-09 (below); physical-phone listening remains
+open.
 
 ### Native audio rendering acceptance
 
@@ -2294,7 +2520,7 @@ On 2026-10-09 every audio harness under `web/acceptance/` ran in headless
 Chromium 153 and WebKit 26.6 through Playwright 1.63; the earlier sound
 sections could not launch a browser. `audio-presentation.mjs` and
 `audio-pcm.mjs` serve the shell through request interception; the others take
-an origin, here a loopback static server for `web/`. All sixteen runs pass:
+an origin, here a loopback static server for `web/`. All sixteen runs passed:
 
 | Harness | What it renders | Chromium | WebKit |
 | --- | --- | --- | --- |
@@ -2414,13 +2640,13 @@ twelve ticks, cycling OK, 5, the four directions, 2 and 8 (KTF under
 
 Against the backend's 256 references and 32 MiB, the busiest title holds 2.7%
 of the first and 0.5% of the second; the most notes held is the 24-note voice
-limit. A run that was cut at the 180-second probe timeout prints nothing, which
-is what the distinct counts leave out. A second pass over the 71 titles that use
+limit. A run cut at the 180-second probe timeout prints nothing, which is what
+the distinct counts leave out. A second pass over the 71 titles that use
 the KTF C media block, with functions 14, 25 and 26 bound, found at most two
 waves at once. Three titles run with both builds side by side started 3 and 3,
-0 and 0, and 60 and 42 waves. That third title is what `-play` does to a count:
-eight runs of the earlier build started 27 to 90 waves and six of this one 11
-to 63, and every run's peak was a single wave.
+0 and 0, and 60 and 42 waves. The third shows the run-to-run variation `-play`
+introduces into a count: eight runs of the earlier build started 27 to 90 waves
+and six of this one 11 to 63, and every run's peak was a single wave.
 
 The two titles with the most PCM on each platform then ran for 90 seconds in
 the real page, against a debug server, with keys pressed the same way:
@@ -2443,8 +2669,8 @@ WFEATURE_AUDIO_SECONDS=90 WFEATURE_AUDIO_KEYS=mash WFEATURE_AUDIO_ARCHIVE=/path/
 No source started late and no meter read crossed full scale. At most 31 sources
 were alive against the 512 the page admits. The page's two sliders default to
 half and its master gain is fixed, so full sliders double the mix: the loudest
-peak, 0.42, would reach about 0.84, short of clipping, so this sample calls for
-no limiter. The meter sums everything the page connects to the speakers, read
+peak, 0.42, would reach about 0.84, short of clipping, so this sample does not
+call for a limiter. The meter sums everything the page connects to the speakers, read
 four times a second over overlapping windows.
 
 Every late refusal asked the server for its current output, and 80 of the 121
@@ -2464,38 +2690,6 @@ title and `InputMethodHandler.notifyKeyInput(II)Z` missing in two. Neither is a
 sound defect; both were fixed afterwards (see
 [runtime boundary regressions](#runtime-boundary-regressions)). Results and the probe's patch are
 under `build/sound-load/`.
-
-### Quick saves from 0.5.2
-
-0.5.2 is the first release with quick saves, and this tree changed the records
-inside a slot (audio component version 9, JVM heap version 2, the media
-listener records) while the envelope stayed at version 2. An upgrade rehearsal
-captured slots with the 0.5.2 tree from seven of the eight real scenes the
-sound sections use (the eighth, an SKT title, cannot be quick-saved in 0.5.2
-at all, which this tree repairs) and loaded them with this tree: all seven were
-refused as damaged, `checkpoint record is missing fields`, which the page would
-have shown as that English cause instead of its sentence for an earlier build.
-
-The envelope is now version 3 and a slot is `<archive SHA-256>.v3.wfq`; a
-`.v2.wfq` or `.wfq` file is an earlier build's, as
-[the slot rules](architecture.md#leftovers-from-earlier-builds) describe.
-`TestCheckpointSlotNeverTouchesAnEarlierBuildsSlot` runs both earlier names:
-offered, refused with `ErrCheckpointLegacy` naming the file, never touched, and
-a new quick save written beside it. `TestCheckpointRefusesAnEarlierFormatByVersion`
-refuses version 1 and version 2 envelopes for their version at every size.
-`TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason` runs every host title
-against both names: a start from the slot and a quick load both answer the
-page's sentence for an earlier build, the running game and its saves are
-unchanged, the log names the file left in place, and the new quick save beside
-it loads. The rehearsal program is the ignored `build/_rehearsal`
-(`rehearsal capture|load|store GAMES_DIR OUT_DIR PREFIX...`), built once in a
-0.5.2 worktree and once here.
-
-The same seven slots then went through this tree's slot store as the bytes
-0.5.2 wrote. The `store` mode puts each one where a directory store keeps
-slots, as `<archive SHA-256>.v2.wfq`, and asks for it the way a Host does. All
-seven are offered, all seven are refused with `ErrCheckpointLegacy` naming the
-file, none returns a byte, and every file is unchanged afterwards.
 
 ### Whole-corpus acceptance against 0.5.2
 
@@ -2692,7 +2886,7 @@ passing a key to its field, and require exactly one redraw after the commit and
 no extra character. Package tests, `-race` on the KTF, LGT, SKT, session and
 webhost packages, and `go vet` pass.
 
-A second pass the same day looked at the screens the first one could not
+A second pass the same day examined the screens the first one could not
 explain. On the eleven LGT archives that offered input where no field was
 shown, 1,500-tick runs with the same key cycle made 57 offers before the
 availability change and 9 after: two name editors, which commit; a ranking
@@ -2716,20 +2910,20 @@ unchanged, one keeps its dark leftover colour, and one shows no field on the
 screen reached. `TestXTextFieldPaintsInTheTitlesColour` paints a black bar,
 sets white and paints the field, and fails on the earlier code.
 
-The KTF field a player reported was out of reach of both sweeps for a reason of
-its own: the title's slot service answered every new slot with a name, so its
-name screen never opened. With the receipt answering "no character yet"
+The KTF field a player reported was out of reach of both sweeps because the
+title's slot service answered every new slot with a name, so its name screen
+never opened. With the receipt answering "no character yet"
 ([A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for)),
 a scripted route through `internal/session` on the wall clock reaches the
 screen in about 1,520 ticks. There the Host offers the field (limit seven),
 refuses `똠방` as outside KSC5601, commits `홍길동`, and the confirm key
 registers the name: the service reaches its last phase with nothing refused,
 the opening uses the name, and a second process over the same save lists the
-slot under it. The same route under `runktf -play` stood on the connecting
-screen in 6 of 6 runs before `-play` took the server's entry, and got through
-in 3 of 3 after. The title's own name rule refuses lowercase letters, so a
-keypad name there has to be capitals or digits; that is the title, not the
-field.
+slot under it. The same route under `runktf -play` stayed on the connecting
+screen in 6 of 6 runs before `-play` took the server's entry, and passed it in
+3 of 3 after. The title's own name rule refuses lowercase letters, so a keypad
+name there has to be capitals or digits; that rule is the title's, not the
+field's.
 
 Whether the drawn-field rule offers input anywhere it should not was measured
 the same way as the first survey: the 33 KTF archives whose packages name both

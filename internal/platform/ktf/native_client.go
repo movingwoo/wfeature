@@ -62,7 +62,7 @@ const (
 	// having written nothing if it differs — a version gate, answered before
 	// the entry is worth calling. The first archive of this package never reads
 	// the word and runs the same with it planted or zero; the two that do read
-	// it go from refusing the platform to running under it. See docs/ktf.md,
+	// it go from refusing the platform to running under it. See docs/history/ktf.md,
 	// "A later module refuses the platform before it does anything".
 	nativeInterfaceVersion = 0x10000
 
@@ -189,7 +189,7 @@ type nativeSurfaceTable struct {
 //
 // It is a version check and it is used as one: where the two generations
 // disagree about what a call means, this is what says which one is asking. See
-// docs/ktf.md, "The file interface answers the generation that asked".
+// docs/history/ktf.md, "The file interface answers the generation that asked".
 func (archive *NativeArchive) AsksForInterfaceVersion() bool {
 	if archive == nil {
 		return false

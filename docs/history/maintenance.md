@@ -1,11 +1,10 @@
 # Maintenance investigation history
 
 This file preserves implementation investigations and dated validation records.
-Statements about current behavior, missing APIs, corpus size, and planned work
-apply to their original revision; later records may supersede them.
-Start with [maintenance.md](../maintenance.md) for the maintained overview.
-This consolidation adds no execution or acceptance evidence.
-
+Statements about current behavior, missing APIs, corpus size and planned work
+apply to their original revision; later records may supersede them. Start with
+[maintenance.md](../maintenance.md) for the maintained overview. This
+consolidation adds no execution or acceptance evidence.
 
 ## Contents
 
@@ -27,19 +26,20 @@ This consolidation adds no execution or acceptance evidence.
 
 ## Implementation and validation record
 
-This review reconciles the local work plan with source at `6d62c35`. It is not
-a new game-corpus acceptance run. High means an observed execution blocker or
-a release decision that needs evidence before closure. Medium covers acceptance
-quality, incomplete user-facing validation, and bounded maintenance work. Low
-covers optional features, performance experiments, and compatibility gaps with
-no demonstrated failing caller. User checks and evidence-triggered watches are
-not implementation instructions, regardless of priority.
+This review reconciles the local work plan with source at `6d62c35`; it is not
+a new game-corpus acceptance run. High priority means an observed execution
+blocker or a release decision that needs evidence before closure; medium covers
+acceptance quality, incomplete user-facing validation and bounded maintenance;
+low covers optional features, performance experiments and compatibility gaps
+with no demonstrated failing caller. User checks and evidence-triggered watches
+are not implementation instructions at any priority.
 
-On 2026-09-11 the user removed the watch list from the local TODO. Its notes
-below remain historical evidence, not a second implementation queue. The user
-also reopened quick save/load and common authentication bypass as active
-projects; [state and authentication research](#state-quick-saves-and-offline-authentication-compatibility) supersedes the earlier deferral
-decisions for those two features. Other watch proposals are not reactivated.
+On 2026-09-11 the user removed the watch list from the local TODO; its notes
+below are historical evidence, not a second implementation queue. The user also
+reopened quick save/load and common authentication bypass as active projects,
+and [state and authentication research](#state-quick-saves-and-offline-authentication-compatibility)
+supersedes the earlier deferral decisions for those two features. Other watch
+proposals are not reactivated.
 
 <a id="implementation-work-already-present"></a>
 
@@ -93,11 +93,11 @@ text rendering work is complete. Text alignment flag `0x200` and the distinction
 between font IDs `0x8000` and `0x8001` remain evidence-triggered questions.
 
 The former local paths `var/games/test/errorFile/README.md` and
-`var/games/request/` do not exist at this review. Their absence does not prove
-that the archives were moved into the acceptance corpus. Recover current paths
-and match archive bytes before rerunning the BREW observation or deciding which
-previously requested archives to include. Do not move game files during a plan
-review. Use the generated records under `var/acceptance/` for dated membership.
+`var/games/request/` did not exist at this review, which does not prove that the
+archives were moved into the acceptance corpus. Recover current paths and match
+archive bytes before rerunning the BREW observation or deciding which previously
+requested archives to include; do not move game files during a plan review. The
+generated records under `var/acceptance/` give dated membership.
 
 `internal/ladder` now uses the full 64-sample observation horizon for both
 still and cycling screens. A regression reproduces the former 38-tick animation
@@ -114,6 +114,7 @@ is obsolete. The repository still has no browser automation dependency or CI
 browser job. Installation, service-worker replacement, audible recovery, touch,
 and save restoration need an explicit browser acceptance path. Existing Node
 tests and the recorded session checks cover only part of it.
+Superseded: see [PWA acceptance](../pwa-acceptance.md#automated-route).
 
 The same pause observations leave a concrete LGT `resumeClet` unmapped read at
 `0x1` unresolved. Ticking continues, but that does not establish correct in-game
@@ -170,6 +171,8 @@ The following are candidates, not speed claims or approved large rewrites:
   external reachability. A separate add-on first needs a decision about that
   last claim. See [running.md](../running.md), "A key, for a server something
   outside can reach".
+  Superseded: the server has no access key; see
+  [maintenance](../maintenance.md#performance-and-optional-features).
 
 <a id="implementation-documentation-and-provenance"></a>
 
@@ -228,9 +231,9 @@ not by a goal of completing every API.
 
 The following earlier decisions remain closed: partial quick saves are not
 shipped; image dimensions did not predict the missing SKT screen choice; the
-encrypted DRM payloads are recognized
-but not decrypted; subscriber-bound license failures are not emulator defects;
-the observed carrier-authentication case did not justify a replacement server.
+encrypted DRM payloads are recognized but not decrypted; subscriber-bound
+license failures are not emulator defects; the observed carrier-authentication
+case did not justify a replacement server.
 Their evidence is in [architecture.md](../architecture.md), [skvm.md](skt.md#implementation-skvm-and-the-skt-platform),
 and [lgt.md](lgt.md#implementation-the-lgt-platform). They are not pending implementation entries.
 
@@ -241,11 +244,12 @@ that are checked, and count their activations. Replay needs an actual diagnostic
 blocked by nondeterministic `-play`; recording a network response alone does not
 justify recording clocks, input, responses, and scheduler choices together.
 
-The proposed common runtime extraction is also superseded: audio, framebuffer,
-saves, and glyphs are shared already. The caller contracts for the common origin and rate of audio `Play` and
-`Advance` timestamps, borrowed buffers and callback reentrancy are now recorded
-in [shared runtime contracts](../architecture.md#services-shared-runtime-service-contracts). No additional
-layer is required for that documentation task.
+The proposed common runtime extraction is also superseded: audio,
+framebuffer, saves and glyphs are already shared. The caller contracts for the
+common origin and rate of audio `Play` and `Advance` timestamps, borrowed
+buffers and callback reentrancy are recorded in
+[shared runtime contracts](../architecture.md#services-shared-runtime-service-contracts);
+no additional layer is required for that documentation task.
 
 Unqualified local reports about phone speed, PC keypad presentation, and sound
 remain requests for reproduction details. The old device-error report likewise
@@ -270,6 +274,9 @@ remains incomplete. Further SGS implementation is paused until the user resumes 
 <a id="state-quick-saves-and-offline-authentication-compatibility"></a>
 
 ## State and authentication research (2026-09-11; quick saves later paused)
+
+Superseded for quick saves: quick save/load is implemented; see
+[architecture](../architecture.md#quick-load-and-ordinary-saves).
 
 Research date: 2026-09-11. Quick saves remain an implementation project. The
 authentication implementation now supports two KTF certificate formats, an embedded
@@ -458,9 +465,9 @@ its 45-second Host timeout before the next capture. The follow-up below establis
 playable input and save/restart separately from that batch timeout.
 
 The initial full-suite invocation also found the earlier investigation's loose
-Go overlay files under `build/`. A local nested module excludes those diagnostic
-fragments from `go test ./...`; production source and the overlay bytes are
-unchanged by that isolation. All four checks then passed.
+Go overlay files under `build/`. A local nested module excluded those diagnostic
+fragments from `go test ./...` without changing production source or the overlay
+bytes, and all four checks then passed.
 
 <a id="state-gameplay-and-save-cycle-follow-up"></a>
 
@@ -716,27 +723,23 @@ and this is not an implementation plan.
 
 ### Where a stopped game keeps its state
 
-A quick save writes a running session to bytes and starts an identical one from
-them later. It was measured across all three platforms and **deliberately not
-built**; what follows is the evidence, because the interesting half is not the
-container but where a stopped game's state actually lives.
-
-On 2026-09-11 the user reopened this as an implementation project. The feature
-is still absent; the earlier decision below is historical, and its risks remain
-applicable. [state and authentication research](#state-quick-save-and-quick-load)
-records the current source review, implementation sequence, and acceptance path.
+A quick save writes a running session to bytes and later starts an identical
+one from them. At this point it had been measured across all three platforms and
+**deliberately not built**. The evidence concerns where a stopped game's state
+lives rather than the container format. On 2026-09-11 the user reopened it as an
+implementation project; [state and authentication
+research](#state-quick-save-and-quick-load) records that source review,
+implementation sequence and acceptance path.
 
 State that lives in **data** can be written out. Guest memory is data: a page
-table of 4 KiB pages, and `Memory.CommittedRegions` already reports exactly the
-pages that have storage. An `armcore.Thread`'s `Context` — registers, CPSR,
-entry stack — is data. A JVM object graph is data. State that lives on the **Go
-call stack** cannot be written out, and that is where the answer diverges per
-platform: `frame` is a local of `vm.execute` and the invoke path recurses into
-Go, so a Java call chain's depth is Go stack depth and `execution` keeps a
-counter and a free list rather than a list of active frames.
-
-So the question for each platform is what is on the Go stack at the moment a
-guest thread comes to rest.
+table of 4 KiB pages, and `Memory.CommittedRegions` reports exactly the pages
+that have storage. An `armcore.Thread`'s `Context` — registers, CPSR, entry
+stack — is data, and so is a JVM object graph. State on the **Go call stack**
+cannot be written out, and that is where the platforms diverge: `frame` is a
+local of `vm.execute` and the invoke path recurses into Go, so a Java call
+chain's depth is Go stack depth, and `execution` keeps a counter and a free list
+rather than a list of active frames. The question for each platform is
+therefore what is on the Go stack when a guest thread comes to rest.
 
 - **LGT is the cheap case, because its Java is compiled ahead of time and its
   Java state is therefore in guest memory.** A Java worker parks inside
@@ -777,24 +780,23 @@ guest thread comes to rest.
   entry point, and every future parkable supervisor call would have to add one,
   where forgetting is a silently wrong restore rather than a failure.
 
-**The size of a snapshot was never the problem.** Committed memory is 1-3% of
-what is mapped (0.79-2.83 MB against ~92 MB across six titles), `compress/flate`
-takes another 2.2-3.7x, and the committed page set is fixed after boot — ten
-times the ticks added no pages and changed the compressed size by five bytes.
-Two things follow. Dirty-page tracking is worth nothing: filtering out the
-committed pages that are still all zero wins 0.9% or loses, because the
-compressor already handles them, so it would add cost to every guest store to
-buy nothing. And the per-page decode caches are never carried — they rebuild
-from the page bytes and are sometimes larger than the whole snapshot.
+**Snapshot size was not the problem.** Committed memory is 1–3% of what is
+mapped (0.79–2.83 MB against ~92 MB across six titles), `compress/flate` reduces
+it another 2.2–3.7x, and the committed page set is fixed after boot: ten times
+the ticks added no pages and changed the compressed size by five bytes.
+Dirty-page tracking is therefore worthless — filtering out committed pages that
+are still all zero wins 0.9% or loses, because the compressor already handles
+them, so it would add cost to every guest store for nothing — and the per-page
+decode caches are never carried, because they rebuild from the page bytes and
+are sometimes larger than the whole snapshot.
 
-Where the bytes would live is settled too, and by a fact rather than a
-preference: the page does not emulate. The server runs the game, so a snapshot
-never crosses the socket — which is as well, since the inbound message limit is
-1 MiB and a compressed snapshot has already been measured above it.
+The snapshot stays on the server, because the page does not emulate: the server
+runs the game, so a snapshot never crosses the socket. The inbound message limit
+is 1 MiB, and a compressed snapshot had already been measured above it.
 
-**Why it was not built.** Every platform can be made to work, but KTF's third of
-it leaves a permanent maintenance surface with a silent failure mode, and the
+**Why it was not built then.** Every platform could be made to work, but KTF's
+part left a permanent maintenance surface with a silent failure mode, and the
 project would not ship a quick save that works on some titles and not others.
-It is reopenable: if the execution model changes for another reason and
-recording the layer stack becomes incidental, or if the feature becomes worth
-that hazard, the measurements above are the starting point rather than the work.
+The record named two reasons to reopen it: an execution-model change that made
+recording the layer stack incidental, or the feature becoming worth that hazard;
+the measurements above were to be the starting point.

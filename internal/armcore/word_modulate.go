@@ -23,7 +23,7 @@ package armcore
 // differently would bind different numbers and still be recognised.
 //
 // What the sequence costs is generality, and that is the honest trade: this is
-// one title's blend, and the shape is written down in `docs/armcore.md` beside
+// one title's blend, and the shape is written down in `docs/history/armcore.md` beside
 // the two the corpus has that are not this.
 //
 // Everything else is the discipline the other three keep. Spans are validated

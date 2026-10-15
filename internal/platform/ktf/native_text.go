@@ -41,7 +41,7 @@ import (
 //     alignment. That is a reading of one bit from two samples, so it is
 //     written down rather than acted on: text lands at the point it was given.
 //
-// See docs/ktf.md, "The screen draws text".
+// See docs/history/ktf.md, "The screen draws text".
 const (
 	// nativeScreenFontMetrics answers a font's line height, and fills in an
 	// ascent and a descent through two pointers when they are not null. A

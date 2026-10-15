@@ -2,7 +2,8 @@
 
 Opcode `0xce` scrolls an entire indexed framebuffer. It is not a rectangle
 transform. The implementation follows analysis of the original runtime;
-this private SGS operation is not a WIPI API. No original code or assets are incorporated.
+this private SGS operation is not a WIPI API. No original code or assets are
+incorporated.
 
 ## Arguments and selected buffer
 
@@ -42,12 +43,12 @@ copies and fill the exposed side. The vertical branches at
 `0x40f018`–`0x40f0b8` move the remaining rows and fill the exposed rows.
 The copy helper at `0x44d5a0` selects forward or backward copying for overlap.
 
-There is an observable original-runtime quirk for an offset whose magnitude
-is **strictly greater** than its corresponding screen dimension. The checks
-at `0x40ef24`–`0x40ef5f` jump directly to `0x40f0c3`, which calls the ordinary
+An offset whose magnitude is **strictly greater** than its screen dimension
+triggers an observable original-runtime quirk. The checks at
+`0x40ef24`–`0x40ef5f` jump directly to `0x40f0c3`, which calls the ordinary
 white-clear helper `0x40eb80`. That helper always addresses the **drawing
-buffer**, even when `buffer == 1`. Thus an oversized blank scroll targeting
-the backup buffer clears the drawing buffer and leaves the backup unchanged.
+buffer**, even when `buffer == 1`, so an oversized blank scroll targeting the
+backup buffer clears the drawing buffer and leaves the backup unchanged.
 The jump occurs before either axis has moved. Equality does not take this
 branch and continues to affect the selected buffer.
 

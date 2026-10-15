@@ -36,7 +36,7 @@ Stored-script startup at `0x413560` reads that record into `0x527a08`, making
 `0x527a2e` its `UserID` field. Direct PC import also reads `System`/`UserID` at
 `0x409e58`–`0x409e9e`, then copies the temporary record into the same current
 record at `0x409f60`–`0x409f70`. The next field, the two-byte `ScriptVer`, starts
-at offset `0x30`. Thus the inspected record reserves ten bytes for the UserID
+at offset `0x30`, so the inspected record reserves ten bytes for the UserID
 string, including its terminator. This is a record-layout bound, not an inferred
 universal limit for an unspecified identity protocol.
 
@@ -84,8 +84,8 @@ distinct values and must not share storage or interpretation.
 ## Standalone behavior and remaining limits
 
 Standalone startup explicitly writes role **1** at `0x413a20`–`0x413a28` and
-calls `0x4154a0(0, 0, 0)`. Consequently its initial role is one and its initial
-runtime mode, including system variable 0, is two, even without a remote peer.
+calls `0x4154a0(0, 0, 0)`, so its initial role is one and its initial runtime
+mode, including system variable 0, is two, even without a remote peer.
 This concrete local startup path is evidence for those defaults; it does not
 prove that a local session has accepted a network connection.
 

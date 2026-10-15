@@ -92,8 +92,8 @@ Only the consumed code length advances the real cursor; the 12-bit lookahead
 does not. The complete color-dependent codebook has not been independently
 specified here. It must not be replaced by a guessed unary or generic RLE
 scheme. The coded branch also applies a 64-position traversal permutation
-before packing rows (`0x43ba26`); its mathematical order remains unverified.
-Thus literal and coded tiles cannot be assumed to share the same scan order.
+before packing rows (`0x43ba26`); its mathematical order remains unverified,
+so literal and coded tiles cannot be assumed to share the same scan order.
 
 Object parsing invokes the same tile reader in scan-only mode to locate the
 next object; extraction invokes it again with output enabled. The object

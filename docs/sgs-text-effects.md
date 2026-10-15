@@ -70,8 +70,8 @@ rectangle is:
 ```
 
 The underline is one pixel high at `y + H`, inclusive from `x - 1` through
-`x + W + extension - 1`. A subtle observed detail: the italic addition to
-`extension` occurs only inside the background branch. Thus transparent italic
+`x + W + extension - 1`. The italic addition to `extension` occurs only
+inside the background branch, so transparent italic
 underlining uses only the bold extension, while background-enabled italic
 underlining includes the italic extension as well. This is visible in the
 branch structure at `0x40d51c`–`0x40d5be`.
@@ -93,7 +93,8 @@ are `(x - 1, y - 1)` through `(x + W + extension, y + 24)`. Extension begins
 as the bold bit and adds four only inside the background-enabled italic branch.
 The underline runs from `x - 1` through `x + W + extension`, at `y + 24`.
 
-The horizontal loop in `0x40d830` is suspicious. The caller at `0x40d4d9`–
+The horizontal loop in `0x40d830` does not use the glyph's own extent. The
+caller at `0x40d4d9`–
 `0x40d4fd` passes `baseCellWidth * consumedBytes - 1` as its fifth argument.
 The helper's setup at `0x40d884`–`0x40d8ad` subtracts the supplied x from that
 argument before adding the displaced x back to form its horizontal endpoint.
@@ -106,8 +107,8 @@ independently authored all-ink glyph and bounded mapped memory. Arguments were
 `(3, 1, x, 20, 5, 21, glyph, 3, flags)`. At x=0 it emits 33 rectangles
 (three columns across eleven rows), at x=1 it emits 22, at x=4 it emits eleven,
 and at x>=5 it emits none. Bold changes widths from two to four; italic adds
-the established four-to-zero row shift without changing column counts. Thus
-the surprising horizontal endpoint is observable behavior, not a disassembly
+the established four-to-zero row shift without changing column counts. The
+horizontal endpoint is therefore observable behavior, not a disassembly
 mistake. The source bit cursor remains continuous across the shortened rows.
 
 Local evidence is `build/sgs_large_probe.py` and `build/sgs-large-native.log`.

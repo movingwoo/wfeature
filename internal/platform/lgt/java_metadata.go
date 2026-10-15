@@ -7,7 +7,7 @@ import (
 )
 
 // The platform API surface a Java module links against, as the load call hands
-// it over. Six tables come in and five go out; see docs/lgt.md, "The Java
+// it over. Six tables come in and five go out; see docs/history/lgt.md, "The Java
 // interface table".
 //
 // The five member tables are pairs of `char *` — a name and a descriptor —

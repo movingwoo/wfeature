@@ -312,7 +312,7 @@ func TestRoutedLoadProbe(t *testing.T) {
 	// whose frame fits inside its own period at that rate is untouched, and one
 	// whose frame overruns is slowed in proportion. So the number to gather
 	// across the corpus, before any of this moves, is the rate each scene would
-	// need. See docs/lgt.md, "What the rate has to be for a title to get the
+	// need. See docs/history/lgt.md, "What the rate has to be for a title to get the
 	// period it asks for".
 	if rounds > 0 {
 		perRound := float64(session.Client.core.Steps()-startSteps) / float64(rounds)

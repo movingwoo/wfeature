@@ -98,7 +98,7 @@ const (
 // The pair is the discriminator, and it has to be a pair: a lone `.mod` is a
 // common enough extension that claiming an archive for it would be a guess,
 // while a `.mif` beside exactly one `.mod` is this package's shape. See
-// docs/ktf.md, "An earlier KTF package".
+// docs/history/ktf.md, "An earlier KTF package".
 const (
 	ktfNativeInfoExtension   = ".mif"
 	ktfNativeModuleExtension = ".mod"

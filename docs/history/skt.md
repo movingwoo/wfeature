@@ -40,24 +40,24 @@ See the [2026-09-12 coverage audit](coverage.md#ktf-skt-ktf-and-skt-coverage-aud
 API gaps and validation. It also identifies older limitations below that are
 already implemented, including Canvas touch, curves, and Host vibration.
 
-An SKT handset game is a MIDlet JAR. There is no native code, no custom
-executable format, and no ARM: what makes it an SKT game is that its world
-contains `com.skt.m`, `com.skt.m3d` and `com.xce` on top of standard MIDP.
+An SKT handset game is a MIDlet JAR: no native code, no custom executable
+format, no ARM. What makes it SKT is that its world contains `com.skt.m`,
+`com.skt.m3d` and `com.xce` on top of standard MIDP.
 
-So `internal/platform/skt` is the whole Java runtime: class loading through
-the shared JVM, the MIDP surface a title draws and saves through, and the SKVM
-classes on top. **A few archives in the same container hold a WIPI Jlet rather
-than a MIDlet**, and that surface is a layer over this one — see "Three
-archives hold a Jlet, not a MIDlet". It used to be a thin layer over a vendor-neutral "j2me"
-package; that package had exactly one consumer, and keeping it neutral only
-hid where its contracts came from. The class surface
+`internal/platform/skt` is therefore the whole Java runtime: class loading
+through the shared JVM, the MIDP surface a title draws and saves through, and
+the SKVM classes on top. **A few archives in the same container hold a WIPI
+Jlet rather than a MIDlet**, and that surface is a layer over this one — see
+"Three archives hold a Jlet, not a MIDlet". It used to be a thin layer over a
+vendor-neutral "j2me" package; that package had exactly one consumer, and
+keeping it neutral only hid where its contracts came from. The class surface
 lives in `internal/api/skvm` and the natives in
 `internal/platform/skt/skvm*.go`, next to the framebuffer, fonts and images
 they need.
 
 **The SKVM classes come from the platform, not from the title.** A machine
-built from a title's own JAR alone must not resolve `com.skt.m` — otherwise a
-title could ship its own `MathFP` and quietly replace the one every other title
+built from a title's own JAR alone must not resolve `com.skt.m`; otherwise a
+title could ship its own `MathFP` and replace the one every other title
 measures against. `TestSKVMClassesComeFromThePlatformNotTheTitle` holds that
 line.
 
@@ -67,22 +67,21 @@ line.
 
 `MathFP` is nine-decimal fixed point: **1.0 is 1_000_000_000**. Every value a
 game passes and receives is scaled that way, which is why `PI` is
-`3_141_592_654` and why every product has to be rescaled. `parseFP` scales a
-whole number in, `toLong` truncates toward zero on the way out.
+`3_141_592_654` and why every product is rescaled. `parseFP` scales a whole
+number in; `toLong` truncates toward zero on the way out.
 
 The scale is the observable contract, so it matches the reference
-implementation exactly. Overflow
-saturates rather than wrapping: a game that overflows an intermediate should
-see a huge number, not a sign flip.
+implementation exactly. Overflow saturates rather than wrapping: a game that
+overflows an intermediate sees a huge number, not a sign flip.
 
 <a id="implementation-files"></a>
 
 ### Files
 
 `com.xce.io.XFile` reads and writes through the **same Host save boundary
-MIDP RMS uses**, under the `fs/` scope — the same one KTF's guest filesystem
-uses — so one owner directory holds everything a title persists whichever
-platform wrote it:
+MIDP RMS uses**, under the `fs/` scope that KTF's guest filesystem also uses,
+so one owner directory holds everything a title persists whichever platform
+wrote it:
 
 ```
 var/savedata/<profile>/skt/<owner>/fs/<path>
@@ -94,17 +93,16 @@ removing it, because the save boundary has no delete — the same reason RMS
 keeps a store index.
 
 `FileInputStream` and `FileOutputStream` are written in Java on top of
-`XFile`, so there is one implementation of the file semantics rather than two.
+`XFile`, so the file semantics have one implementation.
 
 <a id="implementation-graphics2d"></a>
 
 ### Graphics2D
 
-`Graphics2D` wraps a MIDP `Graphics` and adds what MIDP does not have:
-per-pixel read and write, rectangle inversion, a screen capture, and a blit
-with `SRC_COPY`/`AND`/`OR`/`XOR`. The pixel *mask* is the surface's alpha
-channel rather than a separate plane, because these surfaces carry real
-alpha.
+`Graphics2D` wraps a MIDP `Graphics` and adds what MIDP lacks: per-pixel read
+and write, rectangle inversion, a screen capture, and a blit with
+`SRC_COPY`/`AND`/`OR`/`XOR`. The pixel *mask* is the surface's alpha channel
+rather than a separate plane, because these surfaces carry real alpha.
 
 <a id="implementation-synchronous-repaint-queue"></a>
 
@@ -114,15 +112,15 @@ A worker may call `repaint` followed by `serviceRepaints` while the Host waits
 for its next input. The synchronous call paints the dirty region immediately,
 but the queued callback still exists. Previously each iteration cleared the
 only queued flag and posted another callback; the 1,025th request filled the
-1,024-event queue and killed the worker. A local authentication acceptance route
-exposed this while the CLI was waiting between commands.
+1,024-event queue and killed the worker. A local authentication acceptance
+route exposed this while the CLI was waiting between commands.
 
 The runtime now tracks dirty pixels and a posted callback separately. Repaints
-reuse the outstanding callback until the Host consumes it. Repaints requested
-inside paint remain deferred to the following Host pass. An authored Canvas JAR
-regression performs 2,048 synchronous paints without a Host drain, then delivers
-input and a later partial repaint. The earlier test failed at request 1,025;
-that regression and the existing paint/serial-dispatch tests now pass.
+reuse the outstanding callback until the Host consumes it; repaints requested
+inside paint remain deferred to the following Host pass. An authored Canvas
+JAR regression performs 2,048 synchronous paints without a Host drain, then
+delivers input and a later partial repaint. The earlier code failed at request
+1,025; that regression and the existing paint/serial-dispatch tests now pass.
 
 <a id="implementation-input"></a>
 
@@ -130,21 +128,20 @@ that regression and the existing paint/serial-dispatch tests now pass.
 
 A Canvas with no MIDP commands receives the first soft key as handset menu
 code 129, including press, repeat and release. A local SKT title switches on
-that value to open its in-game menu; swallowing the key prevented access to
-that route. Displayables with commands retain command dispatch, and Jlet Cards
-retain their WIPI mapping. This is a vendor mapping, not a MIDP-standard key.
+that value to open its in-game menu; swallowing the key blocked that route.
+Displayables with commands retain command dispatch, and Jlet Cards retain
+their WIPI mapping. This is a vendor mapping, not a MIDP-standard key.
 
 Keys reach a Canvas as `keyPressed`, `keyReleased` and `keyRepeated`, and a
-`GameCanvas` may read `getKeyStates` instead. Which of those the corpus
-actually uses is a static read rather than a guess: across the fifteen local
-archives, **fourteen override `keyReleased`**, five override `keyRepeated`, and
-**none uses `getKeyStates`**. So a release matters to nearly every title here,
-and none of them holds a set of directions the way a `GameCanvas` bitmask
-would.
+`GameCanvas` may read `getKeyStates` instead. A static read of the fifteen
+local archives settles which the corpus uses: **fourteen override
+`keyReleased`**, five override `keyRepeated`, and **none uses
+`getKeyStates`**. A release therefore matters to nearly every title, and none
+holds a set of directions the way a `GameCanvas` bitmask would.
 
-That is the shape a defect fits into, and one of the titles has it. Holding a
-direction and letting go of a *different* key that is still down — a keyboard
-does this every time two keys overlap — stops the character dead:
+One title has the defect that shape allows. Holding a direction and releasing
+a *different* key that is still down — a keyboard does this every time two
+keys overlap — stops the character:
 
 - With the release delivered, a side-scroller walking left stops the instant
   another held key comes up, and the screen does not change again: 0 pixels
@@ -152,137 +149,131 @@ does this every time two keys overlap — stops the character dead:
 - Without it, the same route walks on exactly like the control that never
   touched a second key.
 
-So this runtime sends keys through the same pad the Clet platform does
+This runtime therefore sends keys through the same pad the Clet platform does
 ([`internal/keypad`](../../internal/keypad/keypad.go), and `lgt.md` "A release
 stops a character the pad has moved on from" for how it was found): a pad key
 released while another is still held delivers nothing, the direction now under
 the thumb is announced once when the one in use comes up, and everything that
-is not the pad is delivered exactly as it happens. The pad here is the four
-MIDP navigation codes **and the digits 2, 4, 6 and 8** — the local
-side-scroller walks on both, which is what says the digits belong in it.
+is not the pad is delivered as it happens. The pad here is the four MIDP
+navigation codes **and the digits 2, 4, 6 and 8**; the local side-scroller
+walks on both, which is the evidence that the digits belong in it.
 
 A repeat is neither a press nor a release and does not move the pad; it is
-delivered to whatever the pad last reported, which is what the five titles that
-override `keyRepeated` are waiting for. **What arrives is the handset's repeat
-rather than a Host's**: a browser's repeat of a held keyboard key runs at the
-user's own keyboard setting, thirty a second where a handset sent four, so the
-Host layer drops it and makes the specification's "600:250" on the session's
-clock instead — `session.md`, "A held key repeats on the handset's clock". The
-key it names is this pad's answer (`Pad.Held`), because after a thumb rolls
-onto another direction the Host is holding a key the title was never given.
+delivered to whatever the pad last reported, which is what the five titles
+that override `keyRepeated` wait for. **What arrives is the handset's repeat,
+not the Host's**: a browser repeats a held keyboard key at the user's keyboard
+setting, thirty a second where a handset sent four, so the Host layer drops it
+and generates the specification's "600:250" on the session's clock instead —
+`session.md`, "A held key repeats on the handset's clock". The key it names is
+this pad's answer (`Pad.Held`), because after a thumb rolls onto another
+direction the Host is holding a key the title was never given.
 
-Two things this deliberately does not do. It does not withhold a release for
-any key that is not the pad: those are actions, and a title that never hears
-the release of its attack key is worse off than one that stops walking. And it
-does not invent a repeat of its own: the one it delivers is the Host's clock
-asking for it, and what a held key does between the events is the title's
-business.
+Two things are deliberately not done. A release is never withheld for a key
+that is not the pad: those are actions, and a title that never hears the
+release of its attack key is worse off than one that stops walking. And no
+repeat is invented: the one delivered is the Host's clock asking for it, and
+what a held key does between events is the title's business.
 
 <a id="implementation-the-frame-loop"></a>
 
 ### The frame loop
 
-A MIDlet has no tick of its own. It runs on the callbacks the Host makes and on
-whatever those callbacks deferred, and an SKT title defers its whole game. Four
-contracts decide whether it runs at all, and each of them fails silently when it
-is missing: the title starts, shows a Canvas, reports no error, and never paints
-a second frame.
+A MIDlet has no tick of its own. It runs on the callbacks the Host makes and
+on whatever those callbacks deferred, and an SKT title defers its whole game.
+Four contracts decide whether it runs at all, and each fails silently when
+missing: the title starts, shows a Canvas, reports no error, and never paints a
+second frame.
 
 **A Canvas is told when it arrives on the screen and when it leaves.** MIDP
 calls `showNotify` on the Canvas becoming current *before* it is painted, and
-`hideNotify` on the one that left. Neither was declared on `Canvas` here and
-neither was called, and the two archives that depended on it were dead in
-different ways for the same reason. One starts the thread that is its whole
-game inside `showNotify`: without the call it painted exactly one frame and
-then sat still for as long as anything watched, taking keys it had nothing left
-running to act on. The other keeps a paint counter that only `showNotify` sets,
-and the paint that sees that value is the one that reads its opening picture
-out of the archive; with the counter never set the load never ran and the next
-paint drew a null image. That second one shows why the symptom is so far from
-the cause: the throw is absorbed as a callback that did not happen (below), but
-the title's own `paint` ends with the `notify` its drawing thread is blocked
-on, so a throw anywhere before that leaves the thread waiting for a repaint
-nobody will ask for. One missing callback, and the title is over — with no
-error, on a screen holding a picture.
+`hideNotify` on the one that left. Neither was declared on `Canvas` or called,
+and two archives that depended on them failed in different ways. One starts
+its game thread inside `showNotify`: without the call it painted one frame and
+then sat still, taking keys with nothing running to act on them. The other
+keeps a paint counter that only `showNotify` sets, and the paint that sees that
+value reads its opening picture out of the archive; with the counter never
+set, the load never ran and the next paint drew a null image. The symptom is
+far from the cause: the throw is absorbed as a callback that did not happen
+(below), but the title's `paint` ends with the `notify` its drawing thread is
+blocked on, so a throw anywhere before that leaves the thread waiting for a
+repaint nobody requests. One missing callback ends the title with no error, on
+a screen holding a picture.
 
-The order is the contract as much as the call is: a `showNotify` delivered
-after the first paint is the same defect wearing a different face, which is
-what `TestACanvasIsToldItIsShownBeforeItPaints` and the two tests beside it
-hold. Becoming current when already current is not an arrival and is not
-announced. A throw out of either callback is absorbed the way every other
-guest callback's is.
+The order is part of the contract: a `showNotify` delivered after the first
+paint is the same defect, which `TestACanvasIsToldItIsShownBeforeItPaints` and
+the two tests beside it hold. Becoming current when already current is not an
+arrival and is not announced. A throw out of either callback is absorbed like
+every other guest callback's.
 
 **`Display.callSerially` runs one Runnable per Host pass.** MIDP says a serial
-Runnable follows the events already on the loop. The common frame loop here is a
-Runnable that repaints and hands *itself* straight back, so a Runnable posted
-directly onto the event queue re-queues itself inside the same drain: the loop
-never empties and the pass ends on the event loop's own limit rather than on a
-frame. So `callSerially` queues, and `RunPending` — the Host's per-frame pass —
-takes exactly one off. This is the same rule the WIPI path applies to a serial
-Runnable for the same reason (`docs/ktf.md`).
+Runnable follows the events already on the loop. The common frame loop here is
+a Runnable that repaints and re-queues *itself*, so a Runnable posted directly
+onto the event queue re-queues itself inside the same drain: the loop never
+empties, and the pass ends on the event loop's own limit rather than on a
+frame. `callSerially` therefore queues, and `RunPending` — the Host's
+per-frame pass — takes exactly one. The WIPI path applies the same rule to a
+serial Runnable for the same reason (`docs/ktf.md`).
 
-**The screen `Graphics` outlives the paint it arrived in.** MIDP says a Graphics
-is valid only inside `paint`. On this vendor's handsets it was not, and titles
-are written against what the handset did: a Canvas whose `paint` does nothing
-but store the Graphics in a static field, and a game thread that draws through
-it whenever it likes and pushes the result with `XDisplay.refresh`. There is one
-screen Graphics for the life of the runtime; each paint resets it to that
-repaint's clip, no translation, and the default font. Two guest threads drawing
-at once still race — that is the game's business, as it was on the handset.
+**The screen `Graphics` outlives the paint it arrived in.** MIDP says a
+Graphics is valid only inside `paint`. On this vendor's handsets it was not,
+and titles are written against the handset: a Canvas whose `paint` only stores
+the Graphics in a static field, and a game thread that draws through it at any
+time and pushes the result with `XDisplay.refresh`. There is one screen
+Graphics for the life of the runtime; each paint resets it to that repaint's
+clip, no translation, and the default font. Two guest threads drawing at once
+still race; that is the game's business, as it was on the handset.
 
-**What was not the game's business is the Host reading the same bytes.** A
-context that draws into an Image locks the Image for the length of one drawing
-call; a context that draws on the screen has no destination, so it locked
-nothing at all — and the screen is exactly what the Host copies out to present
-a frame. A real archive reports it under the race detector: a guest thread
-inside `fillRect` against the main goroutine's copy, on a binary two releases
-old as well as on this one. The buffer is allocated once and never grown, so
-the cost was a torn frame rather than anything out of bounds, which is why it
-went unseen for so long.
+**The Host reading the same bytes is not the game's business.** A context that
+draws into an Image locks the Image for one drawing call; a context that draws
+on the screen has no destination, so it locked nothing — and the screen is
+what the Host copies out to present a frame. A real archive reports it under
+the race detector: a guest thread inside `fillRect` against the main
+goroutine's copy, on a binary two releases old as well as on the current one.
+The buffer is allocated once and never grown, so the cost was a torn frame
+rather than an out-of-bounds access, which is why it went unseen.
 
 The screen context now takes the render lock for each drawing call, the same
-seam the Image lock uses. **The paint call is what had to move**: it used to run
-with that lock held for its whole length, which would be the paint deadlocking
-against its own Graphics, so it runs without it and the copy that follows takes
-it alone. A frame is therefore taken between drawing calls rather than through
-one; it is not a snapshot of a whole paint, and for the titles this is about
-there is no such thing anyway — their painting is a thread that never stops.
+seam the Image lock uses. **The paint call had to move**: it ran with that lock
+held for its whole length, which would deadlock the paint against its own
+Graphics, so it runs without it and the following copy takes the lock alone. A
+frame is therefore taken between drawing calls rather than through one; it is
+not a snapshot of a whole paint, and for these titles no such snapshot exists,
+because their painting is a thread that never stops.
 
 **Frames are not comparable run to run on this platform, so the check is the
-detector.** Two runs of the *same* binary over the fifteen local archives
-disagree on ten of them, which is more than the nine that separate the binaries
-either side of this change: guest threads interleave differently every time. A
-noise floor above the effect is what a frame diff is worth here. All fifteen run
-clean under `-race` now, where one reported a race twice out of twice before.
+race detector.** Two runs of the *same* binary over the fifteen local archives
+disagree on ten of them, more than the nine that separate the binaries on
+either side of this change, because guest threads interleave differently each
+time. All fifteen run clean under `-race` now, where one reported a race in
+two of two runs before.
 
 **`XDisplay.refresh` takes the picture at once and shows it with the pass.**
-The call is the game's own frame boundary — the guest thread saying the screen
-is complete — so the surface is copied there, on that thread, which is what
-makes the picture whole rather than half-drawn. What waits for the Host pass is
-the *present*, because a Host can show at most one frame per pass anyway: the
-CLI reads the surface at a tick boundary and the page sends one frame a tick.
+The call is the game's own frame boundary — the guest thread declaring the
+screen complete — so the surface is copied there, on that thread, which makes
+the picture whole rather than half-drawn. The *present* waits for the Host
+pass, because a Host shows at most one frame per pass: the CLI reads the
+surface at a tick boundary and the page sends one frame a tick.
 
-That matters because one title family pushes about a hundred times per pass —
-**496,029 calls in 4,000 ticks**, against another title's 3.7 per pass. Their
-loop draws as fast as the machine allows and pushes every time round. Presenting
-each call allocated a copy of the framebuffer and handed it to a surface that
-copied it again; coalescing took **a fifth of the host CPU** off those runs
-(19.4s to 15.1s of user time for 900 ticks) with the pictures unchanged, and it
-makes the guest wait for nothing.
+One title family pushes about a hundred times per pass — **496,029 calls in
+4,000 ticks**, against another title's 3.7 per pass — because its loop draws as
+fast as the machine allows and pushes every iteration. Presenting each call
+allocated a framebuffer copy and handed it to a surface that copied it again;
+coalescing took **a fifth of the host CPU** off those runs (19.4s to 15.1s of
+user time for 900 ticks) with the pictures unchanged, and the guest waits for
+nothing.
 
-A lifecycle dispatch presents a pending picture too, and that is not a detail: a
-title that draws its notice through the direct display and then calls
-`System.exit` does all of it inside `startApp`, so the only pass it ever gets is
-that one. Two local titles are exactly that, and without it they show a black
-screen instead of what they wanted to say.
+A lifecycle dispatch presents a pending picture too. A title that draws its
+notice through the direct display and then calls `System.exit` does all of it
+inside `startApp`, so that dispatch is its only pass. Two local titles do
+exactly that; without it they show a black screen instead of their notice.
 
 **`XDisplay.width`, `height` and `height2` are fields, not methods.** A game
-reads the screen size straight out of them, typically caching it in a Canvas
-constructor and repainting that rectangle forever after, so the runtime fills
-them in from the framebuffer before any guest code runs. Left at zero the game
-asks to repaint a zero-sized rectangle and paints nothing at all. `height2` is
-the drawable height on a handset that reserved rows for a soft-key bar; a Canvas
-here gets the whole framebuffer, so both heights are the framebuffer's.
+reads the screen size from them, typically caching it in a Canvas constructor
+and repainting that rectangle from then on, so the runtime fills them from the
+framebuffer before any guest code runs. Left at zero, the game repaints a
+zero-sized rectangle and paints nothing. `height2` is the drawable height on a
+handset that reserved rows for a soft-key bar; a Canvas here gets the whole
+framebuffer, so both heights are the framebuffer's.
 
 **The handset properties are answered.** `System.getProperty` answers `MIN`,
 `m.MIN`, `m.VENDER`, `m.CARRIER`, `m.COLOR`, `m.SK_VM` and
@@ -290,47 +281,46 @@ here gets the whole framebuffer, so both heights are the framebuffer's.
 "unknown": a title compares the vendor string against the single device it
 carries a workaround for, and a null there throws inside the constructor that
 would have started its game thread. The subscriber number is the one the WIPI
-platforms answer with, since the question is about the handset rather than about
-which runtime is asking, and the vendor string deliberately names no real
-manufacturer. `m.CARRIER` is not a constant among them: it is derived from the
-subscriber number, because a title reads the two together — see "The carrier
-code is part of the number, not a fact beside it".
+platforms answer with, because the question is about the handset rather than
+about the runtime asking, and the vendor string deliberately names no real
+manufacturer. `m.CARRIER` is not a constant: it is derived from the subscriber
+number, because a title reads the two together — see "The carrier code is part
+of the number, not a fact beside it".
 
 **The JVM step limit is a window, not a ceiling.** A title's own thread is the
-game — it decodes images and loads a world before it draws anything — so a fixed
-instruction budget kills every title partway through loading. This runtime grants
-another window while its MIDlet is running and refuses once it is destroyed,
-which makes destroying the MIDlet the way a runaway guest stops. See
-`docs/jvm.md`.
+game — it decodes images and loads a world before it draws anything — so a
+fixed instruction budget kills every title partway through loading. This
+runtime grants another window while its MIDlet is running and refuses once it
+is destroyed, which makes destroying the MIDlet the way a runaway guest stops.
+See `docs/jvm.md`.
 
 **`System.out` and `System.err` exist.** Shipped titles are full of leftover
 debug printing. The streams are runtime-owned CLDC classes in `internal/jvm`,
-and what a game prints goes to the logging boundary at debug level, one line per
-call. What matters is that the field resolves: a game that cannot read
-`System.out` dies in whichever method happened to contain the print.
+and what a game prints goes to the logging boundary at debug level, one line
+per call. The field must resolve: a game that cannot read `System.out` dies in
+whichever method contains the print.
 
 <a id="implementation-fifteen-titles-and-the-pass-that-made-room-for-twelve-of-them"></a>
 
 ### Fifteen titles, and the pass that made room for twelve of them
 
 The corpus went from three local titles to fifteen in one step, and the twelve
-new ones arrived as a stack of lifecycle failures: eleven of the fifteen
-refused to start at all. What they refused over was almost never a defect —
-it was surface this runtime had never been asked for, because three titles is
-not a corpus.
+new ones arrived as lifecycle failures: eleven of the fifteen refused to start.
+The cause was almost never a defect; it was surface this runtime had never been
+asked for, because three titles is not a corpus.
 
 **The pass that fixed them did not start from a run.** `runskt -diag` reports
-what a title asked for before it stopped, which means one gap per run, and a
+what a title asked for before it stopped, which yields one gap per run and a
 rebuild between each. `internal/tools/apiscan` reads the classes instead: every
 symbolic reference in every class of every archive, minus what the library
 declares and what the platform registers, is the whole list before anything
-runs — and, scanned over a corpus at once, it is ranked by how many titles want
-each entry. The first scan answered 55 entries across 12 titles; the last one
-answers 31 across 4, and 11 titles have nothing missing at all. Its `-natives`
-flag takes a `-diag` report, because a platform registers half its surface on a
-live runtime and a bare VM cannot see those registrations.
+runs, and a scan over a corpus ranks each entry by how many titles want it.
+The first scan answered 55 entries across 12 titles; the last answers 31
+across 4, and 11 titles have nothing missing. Its `-natives` flag takes a
+`-diag` report, because a platform registers half its surface on a live
+runtime and a bare VM cannot see those registrations.
 
-What that list turned into, roughly in the order it was worked:
+What that list became, roughly in the order worked:
 
 - **The class library grew the java.lang a title names rather than calls.**
   `Integer`, `Math`, `Runtime`, `Throwable` and the whole exception hierarchy
@@ -338,84 +328,81 @@ What that list turned into, roughly in the order it was worked:
   `new Integer(3)` or `catch (Throwable t)`. See `docs/jvm.md`, "The classes a
   title names".
 - **`Graphics.reset()`**, which is not MIDP's, is what nine titles call on the
-  screen Graphics they kept. It puts back the state a fresh one would have had.
+  screen Graphics they kept. It restores the state a fresh one would have.
 - **`Graphics2D.getGraphics2D(Graphics)`** is how six titles make the wrapper,
-  and **`captureLCD` is static** — three titles call it with `invokestatic`
-  before they have a wrapper at all, which is also what says it copies the
-  screen rather than any surface.
+  and **`captureLCD` is static**: three titles call it with `invokestatic`
+  before they have a wrapper, which also shows it copies the screen rather
+  than any surface.
 - **`com.xce.lcdui.Toolkit` publishes fields, not only methods.** Ten titles
   read `FONT_HEIGHT`, `graphics`, `DEFAULT_FONT` or `MAX_CHARWIDTH`, and a
-  field no class initializer filled is a zero — a title that lays out a menu on
-  a font height of zero draws every line on top of the last. The initializer
-  reads them from the font and the screen this runtime actually draws with.
+  field no class initializer filled is zero; a title that lays out a menu on a
+  font height of zero draws every line on top of the last. The initializer
+  reads them from the font and the screen this runtime draws with.
 - **`com.xce.io.ByteToCharEUC_KR`** is the vendor's decoder as a class: the
   java.io converter API of the day, `convert` filling a char array and
   answering how many characters it wrote. The counts are lengths rather than
-  end indexes, which the call site settles — one title computes `end - start`
+  end indexes, which the call site settles: one title computes `end - start`
   for the input and `chars.length - offset` for the output.
-- **`System.exit` reaches the lifecycle.** A MIDlet is supposed to leave
-  through `notifyDestroyed`, but these titles call `exit` on the way out of an
-  error dialog, and the two now land on the same teardown.
+- **`System.exit` reaches the lifecycle.** A MIDlet should leave through
+  `notifyDestroyed`, but these titles call `exit` on the way out of an error
+  dialog, and the two now share one teardown.
 - **`m.MODEL` is answered, and the subscriber number is read late.** One title
-  parses the model number before it compares it against the two handsets it
-  carries workarounds for, so a null was a hard stop. And `MIN` used to be
-  copied into a table at package load, which meant a Host that set the number
-  afterwards — `-number`, `WFEATURE_PHONE_NUMBER` — was ignored here. It is
-  read when it is asked for now, which matters because five titles authenticate
-  against it; see "Five titles check their licence against the handset's
-  number", and "The carrier code is part of the number, not a fact beside it"
-  for the second half of the same answer.
-- **An EUC-KR file name in an archive stopped an archive from opening.**
+  parses the model number before comparing it against the two handsets it
+  carries workarounds for, so a null was a hard stop. `MIN` used to be copied
+  into a table at package load, so a Host that set the number afterwards —
+  `-number`, `WFEATURE_PHONE_NUMBER` — was ignored. It is read on request now,
+  which matters because five titles authenticate against it; see "Five titles
+  check their licence against the handset's number", and "The carrier code is
+  part of the number, not a fact beside it" for the second half.
+- **An EUC-KR file name in an archive stopped it from opening.**
   `zip.Reader.Open` takes an io/fs path and refuses a name that is not valid
-  UTF-8, which is what a Korean handset's own data file has. Entries are read
-  from the entry list by their exact stored name now, and an installed file
-  answers to both spellings of its name — the bytes the archive stored and the
-  text they decode to — because which one a title asks with is its business.
+  UTF-8, which a Korean handset's data file has. Entries are now read from the
+  entry list by their exact stored name, and an installed file answers to both
+  spellings of its name — the stored bytes and the text they decode to —
+  because which one a title asks with is its business.
 
-Four of the fifteen needed something beyond the library, and those have
-sections of their own below.
+Four of the fifteen needed more than the library; those have their own
+sections below.
 
 <a id="implementation-what-the-local-titles-still-stop-at"></a>
 
 ### What the local titles still stop at
 
-The three titles this platform started with each went further than the last, so
-what is left for them is best read as a list of what has not been driven rather
-than of what is broken. The one that used to head this list — a title that
-would not leave its guardian-selection screen — is off it: the confirm key was
-fire all along, and what the script was missing has a section of its own below.
+Each of the three original titles went further than the last, so what remains
+is a list of what has not been driven rather than of what is broken. The item
+that used to head this list — a title that would not leave its
+guardian-selection screen — is closed: the confirm key was fire all along, and
+the missing script step has its own section below.
 
 - ~~**Progress saving and loading have not been driven** on any of the three.~~
-  **All three are closed end to end now**: the `RecordStore` one — see "A
-  progress save, taken in a title's own save menu" — the `XFile` one that writes
-  three numbered slots, which loads a save it was shipped with and now takes one
-  of its own ("The same title's save, found by reading upwards from the write"),
-  and the third, whose refusal turned out to be an `IOException` this platform
-  threw at it rather than a rule of its own — see "The third title's save, and
-  the message that named the wrong culprit".
-- ~~`runskt` has no diagnostic report.~~ It has one now — `runskt <zip> -diag
-  report.json` — and what it found is below.
+  **All three are closed end to end**: the `RecordStore` one — see "A progress
+  save, taken in a title's own save menu"; the `XFile` one that writes three
+  numbered slots, which loads a save it was shipped with and now takes one of
+  its own ("The same title's save, found by reading upwards from the write");
+  and the third, whose refusal was an `IOException` this platform threw rather
+  than a rule of its own — see "The third title's save, and the message that
+  named the wrong culprit".
+- ~~`runskt` has no diagnostic report.~~ It has one — `runskt <zip> -diag
+  report.json` — and its findings are below.
 
 <a id="implementation-the-screen-that-would-not-confirm-was-waiting-for-a-second-choice"></a>
 
 #### The screen that would not confirm was waiting for a second choice
 
 The title whose guardian selection nothing would confirm now reaches its
-opening cutscene. Nothing was wrong with the key mapping, and the answer is
-worth writing down because the same shape appears twice in one flow and reads
-as a dead screen both times.
+opening cutscene. The key mapping was correct; the same shape appears twice in
+one flow and reads as a dead screen both times.
 
 The screen wants **two** guardians. `bl.a(action, keyCode)` treats fire — or
-`5`, which it accepts alongside it — as a **toggle** on whichever guardian the
-cursor is over, counts what is selected, and only when the count reaches
-exactly two does it raise its confirmation prompt. A script that presses fire
-once and expects to move on presses it into a screen that has silently marked
-one guardian and is waiting for the other. Nothing on the screen changes enough
-at a contact sheet's scale to show that it did anything.
+`5`, which it accepts alongside it — as a **toggle** on the guardian under the
+cursor, counts the selection, and raises its confirmation prompt only when the
+count is exactly two. A script that presses fire once has marked one guardian
+on a screen that is waiting for the other, and at a contact sheet's scale the
+screen does not visibly change.
 
-Then the prompt itself: **its cursor starts on NO**, and fire on NO clears the
-selection and puts the screen back where it started — which is exactly what a
-script that keeps pressing fire sees, forever. Left or right moves to YES.
+**The prompt's cursor starts on NO**, and fire on NO clears the selection and
+returns the screen to its start, which is what a script that keeps pressing
+fire sees indefinitely. Left or right moves to YES.
 
 The character-selection screen one step earlier has the same prompt with the
 same starting cursor, so the flow needs the same three keys twice:
@@ -430,81 +417,77 @@ wfeature runskt <zip> -ticks 2000 \
   -key 1400:left -key 1500:fire
 ```
 
-**What settled it was the class file, not the screen.** A contact sheet of
-every key this runtime can deliver, one per hundred ticks, showed the screen
-unchanged for all of them, which says only that no single key confirms. The
-title's own bytecode says why: `javap -c` over the Canvas names the state
-handler, the debug build's instruction log says which class is running while
-the screen is up (`bl`, by a wide margin), and that class's `a(int, int)` is
-forty lines of counting. Reaching for the archive earlier would have saved the
-sweep — the classes are obfuscated to one and two letters, but the control flow
-is not.
+**The class file settled it, not the screen.** A contact sheet of every key
+this runtime can deliver, one per hundred ticks, showed the screen unchanged
+for all of them, which shows only that no single key confirms. `javap -c` over
+the Canvas names the state handler, the debug build's instruction log names
+the class running while the screen is up (`bl`, by a wide margin), and that
+class's `a(int, int)` is forty lines of counting. The classes are obfuscated to
+one and two letters, but the control flow is not; reading the archive first
+would have saved the sweep.
 
 <a id="implementation-an-skt-archive-is-a-filesystem-not-just-a-jar"></a>
 
 #### An SKT archive is a filesystem, not just a JAR
 
-An SKT container holds `<id>.jar` beside `<id>.msd`, and this read the JAR and
-threw the rest away. Two of the three local archives carry more than that:
-bare-named files sitting at the top level — one has `c`, `dnlist2`, `o` and two
-further JARs, another has `n1`, `g1`, `cf`. **They are the title's own
-filesystem.** A handset was sent one archive and unpacked it into the title's
-storage, and the game opens them by exactly the name they have there.
+An SKT container holds `<id>.jar` beside `<id>.msd`, and the loader read the
+JAR and discarded the rest. Two of the three local archives carry more:
+bare-named top-level files — one has `c`, `dnlist2`, `o` and two further JARs,
+another has `n1`, `g1`, `cf`. **They are the title's own filesystem.** A
+handset received one archive and unpacked it into the title's storage, and the
+game opens the files by exactly those names.
 
-Discarding them broke one title's settings entirely, silently, every run. Its
-`bs.j()` opens `"/c"` for reading, and `com.xce.io.XFile` for a file that is
-neither a save nor a JAR resource throws `IOException` — so the read failed, the
-title fell through to the branch that writes defaults, and **that** opens `"/c"`
-for writing with no create bit, which threw for the same reason. A settings file
-that could be neither read nor written, and nothing on screen to say so.
+Discarding them broke one title's settings silently on every run. Its `bs.j()`
+opens `"/c"` for reading, and `com.xce.io.XFile` throws `IOException` for a
+file that is neither a save nor a JAR resource, so the read failed and the
+title fell through to the branch that writes defaults; **that** opens `"/c"`
+for writing with no create bit, which threw for the same reason. The settings
+file could be neither read nor written, with nothing on screen to say so.
 
 `Open` now keeps the container's other entries as the archive's own, under
-their bare names, and `XFile` finds them through the resource fallback it
-already had. What is excluded is named rather than guessed at — the JAR, the
-`.msd`, the `.mod` and the `.wmr` are the platform's, not the title's — and a
-JAR entry of the same name still wins. The change is visible in the title's own
+their bare names, and `XFile` finds them through its existing resource
+fallback. The exclusions are named rather than guessed — the JAR, the `.msd`,
+the `.mod` and the `.wmr` belong to the platform, not the title — and a JAR
+entry of the same name still wins. The change is visible in the title's
 control flow: the run that used to reach `bs.i` (write the defaults) now
-reaches `bs.j` (read the file) instead.
+reaches `bs.j` (read the file).
 
-**Settings then save and load for real.** Changing one in that title's Config
-screen writes `fs/c` into the save tree, and the byte that changes is exactly
-the nibble the game's own bytecode edits (`0x17` to `0x37` for the first
-setting). The next run prefers the save over the packaged copy, which is what
-`initXFileName` does for every path. What has still not been driven is a
-**progress** save: one title's route reaches its opening cutscene and no save
-point, one opens files without writing during the driven route, and the third
-reaches neither. That is play, not plumbing.
+**Settings then save and load.** Changing one in that title's Config screen
+writes `fs/c` into the save tree, and the changed byte is exactly the nibble
+the game's bytecode edits (`0x17` to `0x37` for the first setting). The next
+run prefers the save over the packaged copy, as `initXFileName` does for every
+path. A **progress** save had still not been driven: one title's route reaches
+its opening cutscene and no save point, one opens files without writing during
+the driven route, and the third reaches neither. That is play, not plumbing.
 
 <a id="implementation-a-relative-resource-name-is-a-name-from-the-root-too"></a>
 
 #### A relative resource name is a name from the root too
 
-`Class.getResourceAsStream` resolves a name that does not begin with a slash
-against the package of the class it is asked through, and this did exactly
-that. One title in a package of its own asks for `tk/images/Map0.lbm` — which
-is precisely where the entry is, spelled from the root of its JAR — and the
-strict reading turned it into `tk/tk/images/Map0.lbm` and answered null. The
-title catches its own exception, keeps the null it was left with, and paints
-it a few calls later, so the session ends in `drawImage` rather than at the
-read.
+`Class.getResourceAsStream` resolves a name without a leading slash against
+the package of the class it is called through, and this runtime did exactly
+that. One title in its own package asks for `tk/images/Map0.lbm` — where the
+entry is, spelled from the root of its JAR — and the strict reading turned it
+into `tk/tk/images/Map0.lbm` and answered null. The title catches its own
+exception, keeps the null, and paints it a few calls later, so the session
+ends in `drawImage` rather than at the read.
 
-There was already a fallback here for the opposite mistake: three sibling
-titles load their tables through `Runtime.getRuntime().getClass()
-.getResourceAsStream("table.gft")`, where the strict reading asks `java/lang`
-for a file plainly at the top of the JAR, and the last element of the name was
-looked up at the root to answer them. **The name as the title wrote it is now
-tried at the root first**, and the last element after it. The strict reading
-still wins whenever it finds something, so both fallbacks only ever replace a
-null — the handset resolved from the root whether or not a name began with a
-slash, and these titles shipped against that.
+A fallback already existed for the opposite mistake — three sibling titles
+that load `table.gft` through `java/lang/Runtime` (see "Three siblings loaded
+their tables through the wrong class") — which looked the last element of the
+name up at the root. **The name as written is now tried at the root first**,
+and the last element after it. The strict reading still wins whenever
+it finds something, so both fallbacks only replace a null: the handset
+resolved from the root whether or not a name began with a slash, and these
+titles shipped against that.
 
 <a id="implementation-a-record-store-written-and-read-back-by-a-real-title"></a>
 
 #### A record store, written and read back by a real title
 
-The other save boundary is `RecordStore`, and until now nothing but the unit
-tests had used it. A second title's settings go through it rather than through
-`XFile`, and driving that screen closes the round trip:
+The other save boundary is `RecordStore`, which until then only unit tests had
+used. A second title's settings go through it rather than `XFile`, and driving
+that screen closes the round trip:
 
 ```sh
 wfeature runskt <zip> -ticks 900 -save /tmp/probe \
@@ -512,24 +495,24 @@ wfeature runskt <zip> -ticks 900 -save /tmp/probe \
     -key 500:left -key 560:left -key 620:down -key 680:left -key 700:clear
 ```
 
-That reaches the settings screen from the main menu, lowers the two settings on
-it, and leaves. The save tree then holds `rms/opdata`, three bytes long, and
-the bytes are the settings: the sound level moves with each `left` or `right`
-and the speed byte follows the other row. **The next run reads it back** — the
-screen opens on `SOUND [1]` and `SPEED SLOW` rather than on the defaults, which
-is the title's own `oploadData` running at startup.
+That reaches the settings screen from the main menu, lowers its two settings,
+and leaves. The save tree then holds `rms/opdata`, three bytes long, and the
+bytes are the settings: the sound level moves with each `left` or `right` and
+the speed byte follows the other row. **The next run reads it back**: the
+screen opens on `SOUND [1]` and `SPEED SLOW` rather than the defaults, which is
+the title's own `oploadData` running at startup.
 
-That is not the progress save the list above still wants, and it is the same
-store: the title's `saveData` writes its progress through
-`openRecordStore(name, true)` and `setRecord`/`addRecord`, which is what the
-settings path just exercised end to end. What is left is reaching a save point.
+That is not the progress save the list above wants, but it is the same store:
+the title's `saveData` writes progress through `openRecordStore(name, true)`
+and `setRecord`/`addRecord`, which the settings path exercised end to end.
+What remained was reaching a save point.
 
-**The route to one is in the title's bytecode rather than on the screen.** Its
-in-game menu — the one holding the save slots — is reached two ways, and both
-were read out of `javap -c` rather than found by pressing keys: during a battle
-the key handler's `lookupswitch` sends **`#`** to it, and on the world map it is
+**The route to one is in the bytecode rather than on the screen.** Its in-game
+menu, which holds the save slots, is reached two ways, both read out of
+`javap -c` rather than found by pressing keys: during a battle the key
+handler's `lookupswitch` sends **`#`** to it, and on the world map it is
 **item 8 of a 3×3 picture menu**, whose cursor the code lays out as
-`index = row*3 + col`. Getting to either still needs the game played there.
+`index = row*3 + col`. Reaching either still requires playing to that point.
 
 <a id="implementation-the-clr-key-had-no-name-so-no-script-could-send-it"></a>
 
@@ -537,13 +520,13 @@ the key handler's `lookupswitch` sends **`#`** to it, and on the world map it is
 
 Every screen in that title draws `BACK:CLR` in its corner, and leaving the
 settings screen is what writes them. `KeyCodeByName` had no name for that key,
-so no scripted run could ever leave that screen — the settings above could be
+so no scripted run could leave that screen: the settings above could be
 changed and never saved, and the run above could not have existed.
 
-`clear` (also `clr` and `back`) now resolves to the handset's `8`, which is the
-value the title's own key handler switches on and the one the original runtime
-carries. It is the same name the other WIPI platform's routes use, which is the
-point of that table: a script reads the same whichever vendor it drives.
+`clear` (also `clr` and `back`) now resolves to the handset's `8`, the value
+the title's key handler switches on and the one the original runtime carries.
+It is the same name the other WIPI platform's routes use, so a script reads
+the same whichever vendor it drives.
 
 <a id="implementation-a-progress-save-taken-in-a-titles-own-save-menu"></a>
 
@@ -564,81 +547,81 @@ wfeature runskt <zip> -ticks 3200 -save /tmp/probe -hold 3 \
 ```
 
 The save tree then holds `rms/slot0a`, 1306 bytes, beside the `rms/opdata` the
-settings round trip already wrote. Starting again with the same `-save` and
-choosing *continue* opens the load screen on **`1. 전략 명성 0`** where both
-slots used to read `NO SAVE DATA`, and confirming it drops straight back onto
-the world map at the city the save was taken in. The diagnostic report for that
-route names the path it went through: `openRecordStore` nine times,
-`addRecord` twice, `setRecord` once, `closeRecordStore` once.
+settings round trip wrote. Starting again with the same `-save` and choosing
+*continue* opens the load screen on **`1. 전략 명성 0`** where both slots used
+to read `NO SAVE DATA`, and confirming it returns to the world map at the city
+where the save was taken. The diagnostic report for that route names the path:
+`openRecordStore` nine times, `addRecord` twice, `setRecord` once,
+`closeRecordStore` once.
 
-**Two things made the route findable, and neither was pressing keys.**
+**Two findings made the route findable, and neither came from pressing keys.**
 
-The first is that **the menu takes a digit key directly.** The tactical menu is
-a 3x3 picture grid whose cursor the code lays out as `row*3 + col`, and its key
-handler's `lookupswitch` has a case for each of `1`..`9` that assigns the row
-and column outright — `9` is `(2,2)`, which is index 8, which is the entry that
-calls `drawGameInMenu`. So the whole grid is one keypress from anywhere in it,
-and the arrow keys never need to be counted. The menu that opens is a numbered
-list and takes its digits the same way: `2` is 게임 저장.
+**The menu takes a digit key directly.** The tactical menu is a 3x3 picture
+grid whose cursor the code lays out as `row*3 + col`, and its key handler's
+`lookupswitch` has a case for each of `1`..`9` that assigns the row and column
+outright: `9` is `(2,2)`, index 8, the entry that calls `drawGameInMenu`. The
+whole grid is one keypress from anywhere, and arrow presses never need
+counting. The menu that opens is a numbered list and takes digits the same
+way: `2` is 게임 저장.
 
-The second is that **a story-driven prologue needs both of its keys.** The
-intro art says `CLR:SKIP` and the dialogue over the map says `NEXT▶OK`, and the
-title alternates between the two for a few thousand ticks. A script that
-presses only `fire` loops in the intro forever; one that presses only `clear`
-stops at the first line of dialogue. Alternating them walks the whole prologue,
-and only after it does the tactical menu answer any key at all — which is why
-the key sweep over that screen, earlier, had found nothing but `fire`.
+**A story-driven prologue needs both of its keys.** The intro art says
+`CLR:SKIP` and the dialogue over the map says `NEXT▶OK`, and the title
+alternates between the two for a few thousand ticks. A script that presses
+only `fire` loops in the intro; one that presses only `clear` stops at the
+first line of dialogue. Alternating them walks the whole prologue, and only
+after it does the tactical menu answer any key, which is why the earlier key
+sweep over that screen found nothing but `fire`.
 
 The other two titles are obfuscated to one- and two-letter classes, where this
-one had three classes with their own names. What survives obfuscation is the
-part that mattered: the string constants name the files (`/g1`, `/g2`, `/g3`
-and `/n1`, `/n2`, `/n3` for one of them, three slots and their names), and the
-`lookupswitch` over key codes reads the same either way.
+one had three named classes. What survives obfuscation is what mattered: the
+string constants name the files (`/g1`, `/g2`, `/g3` and `/n1`, `/n2`, `/n3`
+for one of them — three slots and their names), and the `lookupswitch` over
+key codes reads the same either way.
 
 <a id="implementation-one-of-the-two-loads-a-save-it-was-shipped-with"></a>
 
 #### One of the two loads a save it was shipped with
 
-The XFile title above is `u.class` — `javap -p -c` over the inner JAR finds it
+The XFile title above is `u.class`: `javap -p -c` over the inner JAR finds it
 by the two static `String[]` its `<clinit>` builds, `{/g1,/g2,/g3}` and
-`{/n1,/n2,/n3}`, and every `com/xce/io/XFile` construction in the class indexes
-one of them. The write side is a `new XFile(a[slot], 2)`, a `write`, and a
-`close`; the read side is the same shape with mode 1.
+`{/n1,/n2,/n3}`, and every `com/xce/io/XFile` construction in the class
+indexes one of them. The write side is `new XFile(a[slot], 2)`, a `write` and
+a `close`; the read side is the same shape with mode 1.
 
 **The archive ships `g1` and `n1` beside the JAR**, 525 and 599 bytes: a save
-the handset this container came off had taken. `addInstalledFiles` mounts a
-container's files into the archive entries, and `xFileContents` falls back from
-the save store to those entries, so the title sees them as `/g1` and `/n1`
-without anything being imported. It shows: the title screen offers **이어하기**
-rather than a new game, choosing it opens a slot screen with the save's own
-level and progress on `SLOT 1`, and confirming drops into the dungeon it was
-taken in. So the **load** half of that title's round trip is closed on a save
-the platform did not write.
+taken on the handset this container came from. `addInstalledFiles` mounts a
+container's files into the archive entries, and `xFileContents` falls back
+from the save store to those entries, so the title sees them as `/g1` and
+`/n1` without an import. The title screen offers **이어하기** rather than a
+new game, choosing it opens a slot screen with the save's level and progress
+on `SLOT 1`, and confirming enters the dungeon where it was taken. The
+**load** half of that title's round trip is closed on a save the platform did
+not write.
 
 <a id="implementation-the-same-titles-save-found-by-reading-upwards-from-the-write"></a>
 
 #### The same title's save, found by reading upwards from the write
 
-A key sweep in the dungeon — both soft keys, `clear`, every digit, `*`, `#` and
-the send key — never found that title's save menu. Reading upwards from the
-write did, in one pass, and the chain is worth keeping because the next
+A key sweep in the dungeon — both soft keys, `clear`, every digit, `*`, `#`
+and the send key — never found that title's save menu. Reading upwards from
+the write found it in one pass, and the chain is kept because the next
 obfuscated title has the same shape:
 
-- `u.g(byte)` writes `/g<slot>` and `u.f(byte)` writes `/n<slot>`; the only
-  thing that calls both is `u.l()`, so `u.l()` **is** the save.
-- Three classes call `u.l()`, and only one is a screen with nothing else in it:
-  `ad`, a four-entry menu whose first entry raises a yes/no prompt and whose
-  prompt callback sets the two-frame flag that performs the write.
+- `u.g(byte)` writes `/g<slot>` and `u.f(byte)` writes `/n<slot>`; only
+  `u.l()` calls both, so `u.l()` **is** the save.
+- Three classes call `u.l()`, and only one is a screen with nothing else in
+  it: `ad`, a four-entry menu whose first entry raises a yes/no prompt and
+  whose prompt callback sets the two-frame flag that performs the write.
 - `ad` is constructed at exactly one place: case **7** of `ck.b()`, the eighth
   entry of the in-game menu.
 - `ck` is opened by `u.g()`'s case 6, and the only key that requests it is
-  `keyCode 8` — `clear` — in the field handler, **and only while `bb.s == 1`**,
-  the walking state. A sweep run in any other state sees a key that does
-  nothing, which is what a sweep in a dungeon under attack was reading.
+  `keyCode 8` — `clear` — in the field handler, **and only while
+  `bb.s == 1`**, the walking state. A sweep in any other state sees a key that
+  does nothing, which is what the sweep in a dungeon under attack read.
 
 The cursor is the base screen's and it **wraps**: `ck` is built with eight
-entries, so one `up` from the entry it opens on lands on the last one. The
-whole route is five keys once the world is up:
+entries, so one `up` from the entry it opens on lands on the last one. Once
+the world is up, the route is five keys:
 
 ```sh
 # 이어하기 → SLOT 1 → the dungeon, then clear/up/fire opens 시스템,
@@ -651,198 +634,191 @@ wfeature runskt <zip> -ticks 1800 -hold 5 -save /tmp/probe \
 
 The screen answers `저장 되었습니다.`, and the save tree holds `fs/g1` and
 `fs/n1` — 525 and 599 bytes, the shipped sizes, differing from the shipped
-bytes from the nineteenth on. Starting again against the same tree loads them:
-`이어하기`, `SLOT 1`, and the dungeon, with the diagnostic report counting 23
-`XFile.read`, 6 `initName` and 4 `close`. **Both halves of that title's round
-trip are closed, on a save this platform wrote.**
+bytes from the nineteenth byte on. Starting again against the same tree loads
+them: `이어하기`, `SLOT 1`, and the dungeon, with the diagnostic report
+counting 23 `XFile.read`, 6 `initName` and 4 `close`. **Both halves of that
+title's round trip are closed, on a save this platform wrote.**
 
-Two things about the run are worth knowing before repeating it. The shipped
-save drops the party into a room with an enemy already on it, and an unattended
-run is dead in about two seconds — the menu keys have to be pressed
-immediately, not after a look around. And a run that presses `fire` a few
-hundred ticks later than this walks the *title* screen instead, because
-`GAME OVER` has returned it there and the same key means something else.
+Two conditions apply when repeating it. The shipped save places the party in a
+room with an enemy already present, and an unattended run dies in about two
+seconds, so the menu keys must be pressed immediately. A run that presses
+`fire` a few hundred ticks later than this walks the *title* screen instead,
+because `GAME OVER` has returned it there and the same key means something
+else.
 
 <a id="implementation-the-korean-text-was-drawn-on-the-wrong-grid-and-the-latin-beside-it-was-not"></a>
 
 #### The Korean text was drawn on the wrong grid, and the Latin beside it was not
 
-Text outside the authored 5x7 table — Hangul first among them — reached for
-`glyph.Render`, the package-level entry point, which is the 16-dot face. The
-5x7 table kept answering for the characters it covers. So one line of a menu
-carried two sizes of text: a numeral seven pixels tall next to a syllable
-eleven above the baseline, in a line the platform had told the title was ten
+Text outside the authored 5x7 table — Hangul first among it — used
+`glyph.Render`, the package-level entry point, which is the 16-dot face, while
+the 5x7 table kept answering for the characters it covers. One menu line
+therefore carried two text sizes: a numeral seven pixels tall beside a
+syllable eleven above the baseline, in a line the platform had reported as ten
 pixels tall.
 
-A game reads its own layout out of the metrics the font reports, so the ones
-that matter are the ones its handset answered, and those are the small ones —
-the same conclusion KTF reached from a save slot whose label ran into its
-number. The evidence here is a local title's main menu: seven entries, each a
-small `1.` against a syllable half again its height, the descenders of one line
-touching the line under it and the whole block overflowing where the title had
-put it. On the handset face the same menu is proportioned and its lines clear
-each other.
+A game reads its layout from the metrics the font reports, so the metrics that
+matter are the ones its handset answered, which are the small ones — the same
+conclusion KTF reached from a save slot whose label ran into its number. The
+evidence here is a local title's main menu: seven entries, each a small `1.`
+against a syllable half again its height, the descenders of one line touching
+the next and the block overflowing its intended area. On the handset face the
+same menu is proportioned and its lines clear each other.
 
 `pixelFace` in `font.go` is the one place that chooses, and it answers
 `glyph.Handset()`. The 5x7 table is untouched, so the Latin shapes the
-platform tests pin down render exactly as they did.
+platform tests pin render as before.
 
-**Only one of the three local titles moved.** The other two draw their Korean
-with sprites of their own and never call `drawString` at all, which is worth
-knowing before reading a frame diff on them: those two differ run to run
-against *themselves*, in one animated corner of a splash screen, because that
-animation is on the wall clock. Diffing them across a build change says
-nothing until that is subtracted.
+**Only one of the three local titles changed.** The other two draw their
+Korean with their own sprites and never call `drawString`. They also differ run
+to run against *themselves*, in one animated corner of a splash screen,
+because that animation runs on the wall clock; a frame diff across a build
+change says nothing about them until that is subtracted.
 
 <a id="implementation-a-line-box-that-was-exactly-its-own-ink"></a>
 
 #### A line box that was exactly its own ink
 
-Choosing the face fixed the shapes and left the numbers beside them alone. The
-sizes still carried a table written by hand — MEDIUM ten rows tall with a
-baseline eight rows in, SMALL eight and seven, LARGE sixteen and fourteen — and
-those numbers were fitted to the 5x7 Latin, not to the face that draws
-everything else.
+Choosing the face fixed the shapes but not the metrics. The sizes still used a
+hand-written table — MEDIUM ten rows tall with a baseline eight rows in, SMALL
+eight and seven, LARGE sixteen and fourteen — fitted to the 5x7 Latin, not to
+the face that draws everything else.
 
 **A ten-row line holds a syllable and nothing more.** The face is eleven rows,
-and its ascent is what puts the nine rows of Korean ink one row below the top
-of that box and one above the bottom. Reporting ten takes the bottom row away:
-the ink still fits, so a test that asks whether the glyph is inside the line
-still passes, but there is no longer a row between one line and the next. A
-title that steps its menu by `Font.getHeight` — which is most of this corpus —
-then draws the next line's syllables against this one's, and a title that draws
-each entry twice for a shadow runs them together outright. A local title's main
-menu is six entries of Korean that read as three.
+and its ascent places the nine rows of Korean ink one row below the top of
+that box and one above the bottom. Reporting ten removes the bottom row: the
+ink still fits, so a test that asks whether the glyph is inside the line still
+passes, but no row separates one line from the next. A title that steps its
+menu by `Font.getHeight` — most of this corpus — draws the next line's
+syllables against this one's, and a title that draws each entry twice for a
+shadow runs them together outright. A local title's main menu showed six
+Korean entries that read as three.
 
-**The metrics are the face's now, scaled**, which is what both other WIPI
-runtimes here already did and what `newFontData` does rather than name numbers.
-MEDIUM and SMALL come back eleven and eight, LARGE twenty-two and sixteen. The
-two small sizes report the same thing because they draw the same thing: there
-is one Korean face on this platform, and the only difference the sizes ever had
-was the number they claimed. Nothing in the local corpus asks for SMALL but one
-archive, and nothing reaches LARGE at all — the one archive that names it does
-so in a branch its own constructor makes unreachable.
+**The metrics are now the face's, scaled**, as both other WIPI runtimes here
+already did and as `newFontData` computes rather than naming numbers. MEDIUM
+and SMALL report eleven and eight, LARGE twenty-two and sixteen. The two small
+sizes report the same values because they draw the same thing: there is one
+Korean face on this platform, and the sizes only ever differed in the number
+they claimed. Only one local archive asks for SMALL, and nothing reaches LARGE:
+the one archive that names it does so in a branch its own constructor makes
+unreachable.
 
-What moves on screen is one row, in one direction: text hangs from the reported
+On screen the change is one row in one direction: text hangs from the reported
 baseline, so every string sits one row lower and every line box is one row
-taller. Across the ninety-one archives at 400 ticks that is eight titles beyond
-the base-versus-base floor, all of them text-drawing, none of them changing
-state, tick count, or a line of error text; the frames that differ are blink
-phases with the text a row down. The menu that prompted it reads.
+taller. Across the ninety-one archives at 400 ticks, eight titles moved beyond
+the base-versus-base floor, all text-drawing, none changing state, tick count,
+or error text; the differing frames are blink phases with the text a row down.
+The menu that prompted the change now reads correctly.
 
 <a id="implementation-the-third-titles-save-and-the-message-that-named-the-wrong-culprit"></a>
 
 #### The third title's save, and the message that named the wrong culprit
 
-The remaining title is driven into play and saves now. The route is worth
-recording, and so is how nearly the failure was written off as the title's own
-rule.
+The remaining title is now driven into play and saves. The route is recorded,
+together with how the failure was nearly written off as the title's own rule.
 
 **The route.** Past the guardian selection (above), the opening cutscene skips
-on `*` — pressed every 150 ticks it walks the whole thing — and `fire` after it
-carries the party into the world. The in-game menu is the field's `clear` key,
-the same shape the other title has: `ar.keyPressed` dispatches on `m.e`, state
-2 is the field and state 5 is the menu `ag`, and the field handler asks for
-state 13 on `keyCode 8` while `n.h == 1`. The menu itself is a **row of icons**,
-so its cursor is left/right rather than up/down (`cb.d` takes `4`/`6` and the
-two game actions), it wraps, and the last icon is `c` — the system screen whose
-first entry is 세이브. One `left` from where the menu opens lands on it.
+on `*` — pressed every 150 ticks it walks the whole cutscene — and `fire`
+afterwards carries the party into the world. The in-game menu is the field's
+`clear` key, the same shape the other title has: `ar.keyPressed` dispatches on
+`m.e`, state 2 is the field and state 5 is the menu `ag`, and the field handler
+requests state 13 on `keyCode 8` while `n.h == 1`. The menu is a **row of
+icons**, so its cursor moves left/right rather than up/down (`cb.d` takes
+`4`/`6` and the two game actions), it wraps, and the last icon is `c`, the
+system screen whose first entry is 세이브. One `left` from where the menu opens
+lands on it.
 
-**What the title answered was `실패하였습니다. 저장 공간이 부족합니다.`, and that
-was this platform's fault.** It was read here for a while as the title's own
-refusal — the save entry does sit behind a field, `m.a.a`, which `ac(byte)`
-computes from the scene it is in — and the message was attributed to that
-guard. Two readings of the archive take the attribution apart:
+**The title answered `실패하였습니다. 저장 공간이 부족합니다.`, and that was this
+platform's fault.** It was read for a while as the title's own refusal — the
+save entry does sit behind a field, `m.a.a`, which `ac(byte)` computes from the
+current scene — and the message was attributed to that guard. Two readings of
+the archive disprove the attribution:
 
-- **The guard has its own message, and it is a different one.** `c`'s save
-  entry reads `if (m.a.a) { show strings 51 and 52 } else { proceed }`, and
-  those two strings in `sgui/gm.tdf` are `보스전에서는` / `저장할 수 없습니다.`
-  So `m.a.a` marks a **boss scene**, and it says so.
-- **The message that did appear is a catch block.** The screen that runs the
-  save is `try { m.h(); show 46 } catch (IOException) { show 47, 48 }`, with 46
-  `저장되었습니다.` and 47 and 48 the pair that was on screen. The title was not
-  refusing anything: it was reporting that the platform had thrown.
+- **The guard has its own, different message.** `c`'s save entry reads
+  `if (m.a.a) { show strings 51 and 52 } else { proceed }`, and those two
+  strings in `sgui/gm.tdf` are `보스전에서는` / `저장할 수 없습니다.` So
+  `m.a.a` marks a **boss scene**, and says so.
+- **The message that appeared is a catch block.** The screen that runs the save
+  is `try { m.h(); show 46 } catch (IOException) { show 47, 48 }`, with 46
+  `저장되었습니다.` and 47 and 48 the pair on screen. The title was reporting
+  that the platform had thrown.
 
-**And the throw was ours.** `m.h()` writes the slot by name — the three slots
-are `/k`, `/s`, `/w` and the party file is `/o` — with `new XFile(name, 2)`,
-mode `WRITE`. `initXFileName` required a create bit before it would open a file
-that did not exist yet, and `/o` ships inside the container while `/k` does not,
-so the first write of a first save threw `no such file`. **There is no create
-bit in this API**: the original runtime opens a writable file the way
-`RandomAccessFile("rw")` does, which creates it, and the constant this platform
-had called `CREATE` is `READ_DIRECTORY` there. A save is what proves it — a
-shipped title whose only way to write a slot is this call must have had it
-create the slot. Opening for writing now creates; a read-only open of a missing
-file still fails, because that is a title asking for something that is not
-there. Driven to the same menu again, the title writes `fs/k` and `fs/o` and
-answers `저장되었습니다.` — and a second run reads it back: the title screen's
-second entry, which the game itself puts the cursor on once a slot exists,
-shows the character, the level and a completion percentage, and choosing it
-returns the party to the interior the save was made in. That is the last of the
-three local SKT titles to close its progress round trip.
+**The throw came from this platform.** `m.h()` writes the slot by name — the
+three slots are `/k`, `/s`, `/w` and the party file is `/o` — with
+`new XFile(name, 2)`, mode `WRITE`. `initXFileName` required a create bit
+before opening a file that did not exist yet, and `/o` ships inside the
+container while `/k` does not, so the first write of a first save threw
+`no such file`. **This API has no create bit**: the original runtime opens a
+writable file the way `RandomAccessFile("rw")` does, which creates it, and the
+constant this platform had called `CREATE` is `READ_DIRECTORY` there. A shipped
+title whose only way to write a slot is this call proves that the call created
+the slot. Opening for writing now creates; a read-only open of a missing file
+still fails, because the title is asking for something that is not there.
+Driven to the same menu again, the title writes `fs/k` and `fs/o` and answers
+`저장되었습니다.`. A second run reads it back: the title screen's second entry,
+on which the game places the cursor once a slot exists, shows the character,
+the level and a completion percentage, and choosing it returns the party to
+the interior where the save was made. That closed the progress round trip for
+the last of the three local SKT titles.
 
-**Two things about the archive are worth keeping anyway**, because both were
-wrong in the earlier reading and both are reusable. The scene id **is** the map
-number: `ac`'s own loader asks `ce.a("/m/", m.f, 7)`, and that helper opens
-`prefix + (index / 7) + ".bd"` and takes record `index % 7` out of a five-byte
-offset table at the front — so twelve files hold **84 scenes**, and an id of 82
-is file 11, record 5. The header that "had nothing that varies like an
-identifier" was that offset table. And the scenes are named, in `m/name.tdf`: a
-count byte then length-prefixed EUC-KR strings, which reads straight through to
-82 = `게브의 체내` — inside a monster, with 11, 13 and 15 left blank. Four boss
-arenas, which is exactly what a save guard would be for.
+**Two archive facts are kept** because both were wrong in the earlier reading
+and both are reusable. The scene id **is** the map number: `ac`'s loader calls
+`ce.a("/m/", m.f, 7)`, and that helper opens `prefix + (index / 7) + ".bd"` and
+takes record `index % 7` from a five-byte offset table at the front, so twelve
+files hold **84 scenes**, and id 82 is file 11, record 5. The header that "had
+nothing that varies like an identifier" was that offset table. The scenes are
+named in `m/name.tdf`: a count byte, then length-prefixed EUC-KR strings, which
+read through to 82 = `게브의 체내` (inside a monster), with 11, 13 and 15 left
+blank. Four boss arenas, which is what a save guard would be for.
 
 <a id="implementation-the-default-charset-is-the-handsets-and-a-title-finds-out-through-its-own-font"></a>
 
 #### The default charset is the handset's, and a title finds out through its own font
 
-`String.getBytes()` answered UTF-8 here, and the byte a title gets back is not
-text to it — it is an **index**. One title draws its own menu labels by handing
-that array to its own renderer, which walks the bytes and indexes a glyph table
-with each one, and UTF-8's three bytes per syllable index somewhere the table
-does not reach: `ArrayIndexOutOfBoundsException: index 11034 for length 4700`,
-thrown inside the title's text routine while painting its in-game system menu.
-The labels beside the failing one drew correctly, and that is the tell — those
-are byte arrays out of the title's own resource file, which were EUC-KR all
-along. Only the label that came from a Java string literal went through
-`getBytes`.
+`String.getBytes()` answered UTF-8 here, and to a title the returned byte is an
+**index**, not text. One title draws its own menu labels by passing that array
+to its own renderer, which indexes a glyph table with each byte, and UTF-8's
+three bytes per syllable index past the table:
+`ArrayIndexOutOfBoundsException: index 11034 for length 4700`, thrown inside
+the title's text routine while painting its in-game system menu. The labels
+beside the failing one drew correctly, which identified the cause: those are
+byte arrays from the title's own resource file, EUC-KR all along. Only the
+label from a Java string literal went through `getBytes`.
 
-So this platform installs the same pair KTF does: `ByteDecoder` and
-`ByteEncoder` are EUC-KR, which is what these handsets' default charset was.
-The menu paints its five entries — 세이브 / 네트워크 등록 / 도움말 / 옵션 /
-종료하기 — where before it killed the run.
+This platform therefore installs the same pair KTF does: `ByteDecoder` and
+`ByteEncoder` are EUC-KR, the default charset of these handsets. The menu
+paints its five entries — 세이브 / 네트워크 등록 / 도움말 / 옵션 / 종료하기 —
+where before it killed the run.
 
-Worth knowing for the next platform surface that touches bytes: the crash was
-three thousand ticks into a scripted run and looked like a title bug. What
-named it was the stack — the exception is thrown by the *title's* code, in the
-one call that was given a `getBytes` result rather than a resource array.
+For the next platform surface that touches bytes: the crash came three
+thousand ticks into a scripted run and looked like a title bug. The stack
+identified it: the exception is thrown by the *title's* code, in the one call
+that received a `getBytes` result rather than a resource array.
 
 <a id="implementation-where-a-character-starts-is-not-the-length-of-the-chunk"></a>
 
 ##### Where a character starts is not the length of the chunk
 
-`ByteToCharConverter.convert` takes a range at a time, so a two-byte character
-can straddle two calls and the lead byte has to wait on the converter for its
-trail. Deciding *which* byte is waiting is the part that has a trap in it. The
-first rule here asked whether the last byte was in the lead range and whether
-the chunk had an odd number of bytes, and the parity is what makes that wrong:
-it stands in for "we are mid-character" only while the text is entirely
-double-byte.
+`ByteToCharConverter.convert` takes one range at a time, so a two-byte
+character can straddle two calls and the lead byte must wait in the converter
+for its trail. Deciding *which* byte is waiting has a trap. The first rule
+asked whether the last byte was in the lead range and whether the chunk had an
+odd number of bytes; the parity stands in for "mid-character" only while the
+text is entirely double-byte.
 
 A title that writes `"name:"` before a Korean word breaks it in both
 directions. `"abc"` followed by a lead byte is four bytes, so the even count
 says the chunk ends whole, the lead byte decodes alone into a replacement
 character, and its trail arrives at the head of the next chunk with nothing to
-join — two bad characters from one. The other direction is worse because it
-damages text that was never split: `"a"` followed by a whole `가` is three
-bytes, and `가`'s trail byte `0xa1` is itself inside the lead range, so the odd
-count tears the trail off a complete character.
+join — two bad characters from one. The other direction also damages text
+that was never split: `"a"` followed by a whole `가` is three bytes, and `가`'s
+trail byte `0xa1` is itself inside the lead range, so the odd count tears the
+trail off a complete character.
 
-The state is only recoverable by scanning forward from the start of the chunk:
-a byte in the lead range consumes the one after it, anything else advances by
+The state is recoverable only by scanning forward from the start of the chunk:
+a byte in the lead range consumes the byte after it, anything else advances by
 one, and the answer is whether the scan runs off the end on a lead byte.
-`danglingLeadByte` is that scan, and the two chunks above are in its table
-test.
+`danglingLeadByte` is that scan, and both chunks above are in its table test.
 
 <a id="implementation-the-diagnostic-report-and-the-three-questions-it-answered"></a>
 
@@ -850,70 +826,68 @@ test.
 
 `runskt <zip> -diag report.json` writes what a run used: the classes the VM
 loaded, the classes it was asked for and did not have, and a call count for
-every registered native. It was built the second time reading the debug build's
-instruction log by eye was the only way to find something — the first was the
-frame loop's five defects, the second a title's guardian screen, and folding
-millions of lines by class and method twice is once too many.
+every registered native. It was built after reading the debug build's
+instruction log by eye had been the only way to find something twice — first
+the frame loop's five defects, then a title's guardian screen — and folding
+millions of lines by class and method a second time was once too many.
 
 The counting is an atomic add inside each registration, so it costs a native
 call one increment and is on in both build profiles. A report from a specially
-built binary would describe that binary rather than the one anyone runs.
+built binary would describe that binary rather than the one in use.
 
-**The zeros are what the report is for.** A native that ran tells you the
-title reached it; a native that never ran is surface nothing here proves is
-needed, and that is the census the two remaining questions were waiting on.
+**The zeros are what the report is for.** A native that ran shows the title
+reached it; a native that never ran is surface nothing proves necessary, and
+that census answered the two remaining questions.
 
 **MIDP surface: 404 registered natives, 45 called.** Driven as far as the three
-local titles currently go — one into its opening cutscene, one into early play,
+local titles then went — one into its opening cutscene, one into early play,
 one to its main menu — 359 registrations were never reached, and 87 classes
-were loaded between them. The heaviest unused groups are the fixed-point maths
+were loaded between them. The largest unused groups were the fixed-point maths
 class (23), `RecordStore` (20), the high-level `List`/`ChoiceGroup`/`Item`
-widgets (51 between them), the text fields (26), `Player` (14), and the 3D
-mesh and SIS image surfaces (27).
+widgets (51 between them), the text fields (26), `Player` (14), and the 3D mesh
+and SIS image surfaces (27).
 
 **That is a floor, not a licence.** These runs stop early, and a title that
-saves at a save point reaches `RecordStore` on the first frame after it. What
-the number is good for is the opposite direction: it is a guard against
-growth. Adding to a surface where 89% of what is there has never been called
-by a real title needs a caller in hand, and the report is how to check.
+saves at a save point reaches `RecordStore` on the first frame after it. The
+number guards against growth instead: adding to a surface where 89% of what
+exists has never been called by a real title requires a caller in hand, and the
+report is how to check.
 
 **GCF: no caller has appeared.** Every `javax.microedition.io.Connector` entry
-reports zero across all three titles, so the unimplemented part of the generic
-connection framework is still waiting for the first title that asks for it.
-Nothing was added on the strength of the framework existing.
+reported zero across all three titles, so the unimplemented part of the generic
+connection framework still awaits a first caller. Nothing was added because the
+framework exists.
 
 Taken again on the much longer route that reaches a save point — a whole
-prologue, a world map, an in-game menu and a written save, against the boot-
-and-menu runs the census above was taken on — it is still zero. That is the
-answer worth having: the earlier count could be read as "these runs stop too
-early to ask", and this one cannot.
+prologue, a world map, an in-game menu and a written save, against the
+boot-and-menu runs of the census above — the count is still zero. The earlier
+count could be read as "these runs stop too early to ask"; this one cannot.
 
 <a id="implementation-the-handset-bitmap-is-this-vendors-format-after-all"></a>
 
 #### The handset bitmap is this vendor's format after all
 
-`Image.createImage` here decodes PNG, JPEG and GIF through `wipic.DecodeStandard`
-— the standard library's own readers, with one retry over a PNG whose chunk
-checksums a title rewrote (`lgt.md`, "A title recolours a picture and does not fix
-its checksum") — and the handset bitmap through `wipic.DecodeLBMP` (`ktf.md`,
-"LBMP: the handset's own bitmap"). That routing used to carry a note saying no SKT
-archive shipped one and it was here only because the decode was shared. **The
-note was true of three titles and false of the vendor**: the wider corpus
-carries about nine hundred LBMP files, and they are what the SKT titles draw
-almost everything with.
+`Image.createImage` here decodes PNG, JPEG and GIF through
+`wipic.DecodeStandard` — the standard library's readers, with one retry over a
+PNG whose chunk checksums a title rewrote (`lgt.md`, "A title recolours a
+picture and does not fix its checksum") — and the handset bitmap through
+`wipic.DecodeLBMP` (`ktf.md`, "LBMP: the handset's own bitmap"). That routing
+used to carry a note that no SKT archive shipped LBMP and that the path existed
+only because the decoder was shared. **The note was true of three titles and
+false of the vendor**: the wider corpus carries about nine hundred LBMP files,
+and the SKT titles draw almost everything with them.
 
 They also carry the half of the format the KTF files could not show — a
-one-bit transparency mask after the pixels, and bit planes for the depths below
-8 — and both were found from these titles' screens. One drew its title menu not
-at all, because a two-bit logo decoded as an unsupported depth and the title
-caught the `IOException` and drew a null image on its own thread; three
-siblings drew their world as blocks of magenta, which is what a masked sprite
-looks like with its mask ignored. `ktf.md` has the format; the arithmetic that
-identified the mask is `width * ceil(height / 8)` and it holds across every
-masked file in the corpus.
+one-bit transparency mask after the pixels, and bit planes for depths below 8
+— and both were found from these titles' screens. One title drew no title menu
+because a two-bit logo decoded as an unsupported depth, and the title caught
+the `IOException` and drew a null image on its own thread; three siblings drew
+their world as magenta blocks, which is a masked sprite with its mask ignored.
+`ktf.md` has the format; the arithmetic that identified the mask is
+`width * ceil(height / 8)`, and it holds for every masked file in the corpus.
 
-**No local archive ships a BMP for this platform** — that path is still
-missing and this is the note that says so.
+**No local archive ships a BMP for this platform**; that path is still missing,
+and this note records it.
 
 <a id="implementation-three-siblings-loaded-their-tables-through-the-wrong-class"></a>
 
@@ -922,22 +896,21 @@ missing and this is the note that says so.
 Three sibling titles stopped before their first frame with a null `Vector`,
 inside a method that reads a table the class initializer should have filled.
 The loader is `Runtime.getRuntime().getClass().getResourceAsStream("table.gft")`
-and the file is plainly at the top of the JAR — but a relative resource name
-resolves against its class's package, and that class is `java/lang/Runtime`,
-which asks for `java/lang/table.gft`. The stream came back null, the
-`DataInputStream` over it threw inside the title's own `catch (Exception)`, and
-the loader returned `true` having filled nothing. The failure then landed
-several methods later, on the read.
+and the file is at the top of the JAR, but a relative resource name resolves
+against its class's package, and that class is `java/lang/Runtime`, which asks
+for `java/lang/table.gft`. The stream came back null, the `DataInputStream`
+over it threw inside the title's own `catch (Exception)`, and the loader
+returned `true` having filled nothing. The failure surfaced several methods
+later, on the read.
 
 The handset runtime answered that name, or the titles would not have shipped.
-So a relative name its class's package does not answer is looked up again at
-the root of the archive — the strict answer still wins when it finds
-something, so this only replaces a null. All three now draw.
+A relative name that its class's package does not answer is therefore looked
+up again at the root of the archive; the strict answer still wins when it
+finds something, so this only replaces a null. All three now draw.
 
-**What this is worth remembering for**: a `catch` around a load is where a
-platform's null goes to be forgotten. The exception the title swallowed named
-the problem exactly, and the failure it eventually reported was a `Vector` in
-an unrelated class.
+**Lesson**: a `catch` around a load is where a platform's null is forgotten.
+The swallowed exception named the problem exactly, and the failure eventually
+reported was a `Vector` in an unrelated class.
 
 <a id="implementation-five-titles-check-their-licence-against-the-handsets-number"></a>
 
@@ -948,105 +921,105 @@ layouts and adapts only their final comparison in a session-owned class copy.
 The original observations below describe the diagnostic disabled path. See
 [current mechanism and validation](../authentication.md#skt-license-checks).
 
-Five titles draw "인증 되지 않은 컨텐츠 입니다" and stop. Nothing is broken: each
-ships the same `SecureUtil`, which hashes the subscriber number, a slice of the
-service ID out of `MIDlet-Jar-URL`, and a per-title constant, and compares the
-hex digest against the `MIDlet-Key` in the archive's own descriptor. The key was
-made for the handset the title was bought on, so it authenticates against a
-number this runtime does not have.
+Five titles draw "인증 되지 않은 컨텐츠 입니다" and stop. Nothing is broken:
+each ships the same `SecureUtil`, which hashes the subscriber number, a slice
+of the service ID from `MIDlet-Jar-URL`, and a per-title constant, and compares
+the hex digest against the `MIDlet-Key` in the archive's own descriptor. The
+key was issued for the handset the title was bought on, so it authenticates
+against a number this runtime does not have.
 
 **It is one library under five names.** The class is `SecureUtil` in one
-archive, `com.xce.security.SecureUtil` in another and a single obfuscated letter
-in the other three, and all five carry the same method shape, the same carrier
-table and the same notice text. Four of them run it inside `startApp` and call
+archive, `com.xce.security.SecureUtil` in another and a single obfuscated
+letter in the other three, and all five carry the same method shape, carrier
+table and notice text. Four run it inside `startApp` and call
 `System.exit(-1)` in the same pass, so a run ends one tick after its first
-frame; the fifth runs it behind a publisher logo and ends around a hundred ticks
-in. A sweep that reads only the tick count sees five different symptoms and one
+frame; the fifth runs it behind a publisher logo and ends around a hundred
+ticks in. A sweep that reads only the tick count sees five symptoms of one
 cause.
 
-**Nothing on this side fails on the way there**, and that is worth stating
-because a `catch (Exception)` around the whole check would have hidden it: a
+**Nothing on this side fails on the way**, which matters because a
+`catch (Exception)` around the whole check would have hidden a failure: a
 `-trace` of the run walks `isValid` from its first instruction to the
 `String.equals` at its end, so `getAppProperty` answered both descriptor keys,
-the substring arithmetic ran, and the digest was computed and simply did not
-match. The exception table was never entered.
+the substring arithmetic ran, and the digest was computed and did not match.
+The exception table was never entered.
 
 That makes it a setting rather than a defect: the number the emulator answers
 with is `-number` on the server and `WFEATURE_PHONE_NUMBER` for the CLI, and
-this platform reads it late enough to see one now. The KTF platform has a title
+this platform now reads it late enough to see it. The KTF platform has a title
 in the same position for the same reason — `docs/network.md`, "The subscriber
-number is the one property worth changing". **Whether any number the user has
-is the right one is theirs to know**; nothing here recovers it from the key.
+number is the one property worth changing". **Whether a number the user has is
+the right one is for the user to know**; nothing here recovers it from the key.
 
 <a id="implementation-the-carrier-code-is-part-of-the-number-not-a-fact-beside-it"></a>
 
 #### The carrier code is part of the number, not a fact beside it
 
-What the five did find is real, and it sat between the number a user sets and
-the number a title reads. `MIN` answers a line and `m.CARRIER` answers a network
-code, and this runtime answered the second from a constant table. A title never
-reads them apart: it drops the leading digits off `MIN` and puts back the prefix
-the carrier code names — `SKT` is 011, `STI` 017, `KTF` 016, `HSP` 018, `LGT`
-019, and the unified `010` is its own code, because after the numbering change a
-prefix no longer says whose network a line is on.
+The five did expose a real defect, between the number a user sets and the
+number a title reads. `MIN` answers a line and `m.CARRIER` answers a network
+code, and this runtime answered the second from a constant table. A title
+never reads them separately: it drops the leading digits of `MIN` and restores
+the prefix the carrier code names — `SKT` is 011, `STI` 017, `KTF` 016, `HSP`
+018, `LGT` 019, and the unified `010` is its own code, because after the
+numbering change a prefix no longer identifies a line's network.
 
-So a constant `SKT` beside a number of any other shape does not describe the
-wrong network — it describes **a different line**. With the default number, one
-call told a title the handset was 010-0000-0000 and the other told it
-011-0000-0000. And because the reconstructed number is exactly what the licence
-check above hashes, the documented lever only ever worked for a number beginning
-011: every other one was rebuilt into a number the user does not have, which is
-the shape a number most likely has today.
+A constant `SKT` beside a number of any other shape therefore describes **a
+different line**, not the wrong network. With the default number, one call
+told a title the handset was 010-0000-0000 and the other told it
+011-0000-0000. Because the reconstructed number is what the licence check
+above hashes, the documented lever only worked for a number beginning 011:
+every other number, including the shape most numbers have today, was rebuilt
+into one the user does not have.
 
-`m.CARRIER` is derived from the subscriber number now
-(`subscriberCarrier`), and an unrecognised prefix still answers `SKT`.
-**There is no second reader to weigh that against**: of the sixty-six classes in
-the local corpus that read `m.CARRIER`, sixty-four carry that whole prefix
-table, one carries part of it, and the last discards the answer on the next
-instruction. `TestTheCarrierCodeDescribesTheNumberItIsAnsweredBeside` does the
-reconstruction the corpus does, in a fixture, over one number per prefix.
+`m.CARRIER` is now derived from the subscriber number (`subscriberCarrier`),
+and an unrecognised prefix still answers `SKT`. **No other reader needs
+weighing**: of the sixty-six classes in the local corpus that read
+`m.CARRIER`, sixty-four carry the whole prefix table, one carries part of it,
+and the last discards the answer on the next instruction.
+`TestTheCarrierCodeDescribesTheNumberItIsAnsweredBeside` performs the corpus's
+reconstruction in a fixture, over one number per prefix.
 
-**This changed none of the five**, and it was not expected to: the default
-number is not the number any of those keys was issued to, and it is not this
-project's business to find out what was. What it changes is that a user who
-knows the number can now supply one that is not an 011.
+**This changed none of the five**, as expected: the default number is not the
+number any of those keys was issued to, and finding that number is not this
+project's business. What changed is that a user who knows the number can now
+supply one that does not begin with 011.
 
 <a id="implementation-the-four-that-were-left-and-what-each-one-actually-wanted"></a>
 
 #### The four that were left, and what each one actually wanted
 
-None of the four was short of the surface the scan had listed. Each was one
-contract read the wrong way round, and the scan's remaining entries — the two
-`java.io` interfaces, `java.util.Timer`, `TextComponentHandler` — turned out to
-be on paths none of them takes. Three of those four are answered now anyway,
-for the reason "Nothing a local title names is missing" gives; the two
-`java.io` interfaces are the one entry that never needed answering, and the
-same section says why.
+None of the four lacked surface the scan had listed. Each was one contract
+read the wrong way round, and the scan's remaining entries — the two `java.io`
+interfaces, `java.util.Timer`, `TextComponentHandler` — were on paths none of
+them takes. Three of those entries are answered now anyway, for the reason
+"Nothing a local title names is missing" gives; the two `java.io` interfaces
+are the entry that never needed answering, and the same section says why.
 
 - **Three siblings drew their world in magenta blocks**: the transparency mask
-  was being applied with its polarity inverted, so every sprite came out as its
-  own transparent colour with the artwork cut away. `ktf.md` has how the files
+  was applied with its polarity inverted, so every sprite came out as its own
+  transparent colour with the artwork cut away. `ktf.md` has how the files
   settle it. Their `XDisplay.refresh` count — 110,048 calls in 900 ticks — is
-  not related and is still worth a look one day; it is a title presenting far
-  more often than it draws.
+  unrelated and still worth examining: the title presents far more often than
+  it draws.
 - **One drew its whole opening narration in black on black**: it composes
-  Korean out of its own initial/medial/final jamo sheets, which are two-bit
-  planar LBMP, and the planar ramp was being read as light when it is ink.
-  Inverting it turned a screen of scattered consonants into the script.
-- **One stopped at a studio logo** on `XDisplay.drawImageEx`, the vendor's blit
-  with a source rectangle. Thirteen call sites in that title settle its
-  arguments; two of them are unexercised and this platform says so rather than
-  guessing (see below). It reaches its play screen now.
+  Korean from its own initial/medial/final jamo sheets, which are two-bit
+  planar LBMP, and the planar ramp was read as light when it is ink. Inverting
+  it turned a screen of scattered consonants into the script.
+- **One stopped at a studio logo** on `XDisplay.drawImageEx`, the vendor's
+  blit with a source rectangle. Thirteen call sites in that title settle its
+  arguments; two are unexercised, and this platform says so rather than
+  guessing (see below). It now reaches its play screen.
 - **One asked for artwork its own archive does not contain.** It branches on
   the screen width and loads `main_logo_240.png` on anything 240 wide or
-  wider — and this SKU ships only the 120 and 176 sets, because it was packaged
-  for a smaller handset. Nothing is wrong with the emulator except the screen
-  it offers: at `-screen 176x220` the title runs to its menu, its opening and
-  its first scene. **Both Hosts can choose one**: `runskt -screen WxH`, and the
-  page's settings panel, which remembers the choice per game and sends it with
+  wider, and this SKU ships only the 120 and 176 sets because it was packaged
+  for a smaller handset. Only the offered screen is wrong: at
+  `-screen 176x220` the title runs to its menu, its opening and its first
+  scene. **Both Hosts can choose one**: `runskt -screen WxH`, and the page's
+  settings panel, which remembers the choice per game and sends it with
   `start`. Nothing detects it — an SKT descriptor declares no screen size — so
   it is a setting rather than a rule. `docs/session.md`, "The screen is part of
-  starting a game".
+  starting a game". `PackagedScreen` later read the declaration from resource
+  names; see "The handset a title was packaged for is in its resource names".
 
 <a id="implementation-what-drawimageex-is-and-the-two-things-it-does-not-say"></a>
 
@@ -1054,82 +1027,78 @@ same section says why.
 
 `XDisplay.drawImageEx(Graphics, Image, int x, int y, Image source, int sx,
 int sy, int width, int height, int mode)` draws a rectangle of the source at a
-point on the Graphics. The thirteen local call sites fix that shape completely,
-and they also leave two arguments unexercised: **the second Image is null at
-every one of them and the mode is zero at every one of them.**
+point on the Graphics. The thirteen local call sites fix that shape completely
+and leave two arguments unexercised: **the second Image is null and the mode
+is zero at every one of them.**
 
-So a non-null second image is drawn as if it were absent, and a non-zero mode
-is ignored. Both readings of that Image — a destination to draw into instead of
-the Graphics, or a mask for the source — are plausible, and refusing the call
-would fail the one title that makes it on evidence that names neither. If a
-title turns up that passes either, this paragraph is where the guess was
-recorded.
+A non-null second image is therefore drawn as if absent, and a non-zero mode
+is ignored. Both readings of that Image — a destination to draw into instead
+of the Graphics, or a mask for the source — are plausible, and refusing the
+call would fail the one title that makes it on evidence that names neither. If
+a title passes either, this paragraph records the guess.
 
-**And the title says so when it does.** "This platform says so rather than
+**The title says so when it does.** "This platform says so rather than
 guessing" was true of this paragraph and of nothing that ran: a picture drawn
-without the mask or the destination its caller asked for looks like a drawing
-defect, and the guess was invisible from the frame. `drawImageEx` now writes
-one line naming both arguments the first time a title passes either — once a
+without the mask or destination its caller asked for looks like a drawing
+defect, and the guess was invisible in the frame. `drawImageEx` now writes one
+line naming both arguments the first time a title passes either — once per
 run, at warning level so a release build carries it too, because a call on a
-draw is a call every frame. `TestDrawImageExReportsTheArgumentsItIgnores` pins
-that it is one line and that an ordinary call is silent.
+draw path recurs every frame. `TestDrawImageExReportsTheArgumentsItIgnores`
+pins that it is one line and that an ordinary call is silent.
 
-`XDisplay.copyLCD(Graphics, Image, int x, int y, int width, int height)` is the
-neighbouring call and it copies the screen into the caller's image, which is
-what `Graphics2D.captureLCD` does into a new one.
+`XDisplay.copyLCD(Graphics, Image, int x, int y, int width, int height)` is
+the neighbouring call; it copies the screen into the caller's image, as
+`Graphics2D.captureLCD` does into a new one.
 
 `XDisplay.clear(Graphics, Image backdrop, int x, int y)` is the third, and it
 blacks out what the Graphics draws on. **One archive calls it, once**, with a
-null backdrop and a zero point, and then writes "Now Loading..." on what it
-cleared in white — so what the call leaves behind has to be dark, and the
-title's own screen clear beside it fills with `0xff000000` rather than a colour
-it chose. The Graphics' colour is not the answer: the call takes no colour, and
-the one caller sets one only afterwards, for the text.
+null backdrop and a zero point, and then writes "Now Loading..." in white on
+what it cleared, so the result must be dark, and the title's own screen clear
+beside it fills with `0xff000000` rather than a chosen colour. The Graphics'
+colour is not the answer: the call takes no colour, and the one caller sets
+one only afterwards, for the text.
 
-The backdrop and the point are unexercised, the way `drawImageEx`'s second image
-is. A picture handed to a clear is a backdrop and a point is where it goes, so a
+The backdrop and the point are unexercised, like `drawImageEx`'s second image.
+A picture handed to a clear is a backdrop and a point is its position, so a
 non-null one is drawn at `(x, y)` over the black rather than dropped, and a
-title that passes one writes one line saying so — same shape, same reason as
-above.
+title that passes one gets one log line, for the same reason as above.
 
-The clear does not consult the clip. It clears the destination, which is what a
-title calling it between two scenes means, and its one caller has just been
-drawing somewhere else on the same Graphics.
+The clear does not consult the clip. It clears the destination, which is what
+a title calling it between two scenes means, and its one caller has just been
+drawing elsewhere on the same Graphics.
 
-`captureLCD` is declared static, and the corpus is what decided that rather than
-the shape of the class around it. Five of the fifteen local titles name it, at
-eight call sites between them, and **every one of the eight is an
-`invokestatic`** — read out of each class's constant pool and its bytecode
-rather than from the source that is not available. It matches what the call
-does: it copies the screen, not the surface a wrapper was built around, so a
-title has no reason to make a wrapper first.
+`captureLCD` is declared static because the corpus decided it, not the shape
+of the surrounding class. Five of the fifteen local titles name it, at eight
+call sites, and **all eight are `invokestatic`**, read from each class's
+constant pool and bytecode because no source is available. It matches what the
+call does: it copies the screen, not the surface a wrapper was built around, so
+a title has no reason to make a wrapper first.
 
-The consequence is worth writing down because it is a hard failure rather than a
-degraded one. This VM refuses a virtual call on a static method outright —
-`resolveInstanceMethod` answers `method is static: …` — so a title that reached
-`captureLCD` with `invokevirtual` would stop there instead of falling back. No
-local title does, and the message names its own cause, so the fallback stays
-unbuilt until a caller for it turns up.
+The consequence is a hard failure, not a degraded one. This VM refuses a
+virtual call on a static method outright — `resolveInstanceMethod` answers
+`method is static: …` — so a title that reached `captureLCD` with
+`invokevirtual` would stop there instead of falling back. No local title does,
+and the message names its own cause, so the fallback stays unbuilt until a
+caller appears.
 
 <a id="implementation-nothing-a-local-title-names-is-missing"></a>
 
 ### Nothing a local title names is missing
 
-The static scan (`internal/tools/apiscan`, and "The diagnostic report" above
-for why it exists) answers one question over the whole corpus: what would a
-title link against that this runtime does not have. Run over the fifteen
-archives this platform started with, with a live natives report, it came back
-**empty for thirteen of them**, and what was left in the other two was not
-surface to build. The ninety-archive corpus reopened it — see "Ninety archives"
-below for what that pass answered and what it deliberately left alone.
+The static scan (`internal/tools/apiscan`; "The diagnostic report" above gives
+its reason) answers one question over the whole corpus: what would a title
+link against that this runtime does not have. Over the fifteen archives this
+platform started with, with a live natives report, it came back **empty for
+thirteen**, and what remained in the other two was not surface to build. The
+ninety-archive corpus reopened it; see "Ninety archives" below for what that
+pass answered and what it deliberately left alone.
 
-The entries it used to list were each on a path no local run had taken, which
-is why nothing had ever failed on one. That is exactly the state worth closing
-rather than watching: a class this runtime does not have is not a degraded
-feature, it is `class not found` at the moment the title first touches it —
-`internal/platform/skt/connector.go` argues the same thing for the connection
-framework. A title that walks to its name screen after two hours of play should
-not lose the session there.
+Each entry it used to list was on a path no local run had taken, which is why
+nothing had failed on one. That state is worth closing rather than watching: a
+class this runtime lacks is not a degraded feature but `class not found` at the
+moment the title first touches it — `internal/platform/skt/connector.go` makes
+the same argument for the connection framework. A title that reaches its name
+screen after two hours of play should not lose the session there.
 
 <a id="implementation-two-ways-a-title-takes-a-name"></a>
 
@@ -1138,94 +1107,90 @@ not lose the session there.
 This vendor has two, and a local title uses each.
 
 **`com.xce.lcdui.TextComponent` is the title's own text buffer**, handed to the
-platform's `TextComponentHandler` — a singleton a title reaches through a
-static and attaches a component to. The interface's members are what settles
-what the handler is: `insert`, `replace`, `delete`, `moveCursor`, `clear`,
-`size`, `getMaxSize`, `getCaretPosition`, and **no way to read a character
-back**. So the handset's input method never held the text. It held the
-composition and sent edits, and the title kept the text — which is why
-`replace` exists at all, and it is the one a multi-tap cycle needs when the
-same key produces the next letter in place.
+platform's `TextComponentHandler`, a singleton a title reaches through a static
+and attaches a component to. The interface's members settle what the handler
+is: `insert`, `replace`, `delete`, `moveCursor`, `clear`, `size`, `getMaxSize`,
+`getCaretPosition`, and **no way to read a character back**. The handset's
+input method never held the text; it held the composition and sent edits, and
+the title kept the text. That is why `replace` exists: a multi-tap cycle needs
+it when the same key produces the next letter in place.
 
-Two of the title's own classes implement the interface, and they agree on
-thirteen members, so the interface is not inferred from one caller. Its own
-implementations then settle each contract:
+Two of the title's own classes implement the interface and agree on thirteen
+members, so the interface is not inferred from one caller. Those
+implementations settle each contract:
 
 - `replace(c)` writes at `caret - 1`. That is the cycle.
-- `clear()` on the *component* empties the field; `clear()` on the *handler* is
-  a different thing, and the title's own `moveCursor` says which: it calls the
-  handler's `clear` right after moving the caret, where a cycle still running
-  would write the next letter over whatever the caret had moved to. So the
-  handler's `clear` ends the composition and leaves the text alone.
+- `clear()` on the *component* empties the field; `clear()` on the *handler*
+  differs, and the title's own `moveCursor` shows how: it calls the handler's
+  `clear` right after moving the caret, where a still-running cycle would write
+  the next letter over whatever the caret moved to. The handler's `clear`
+  therefore ends the composition and leaves the text alone.
 - `moveCursor(int)` takes **a raw key code**, not a direction: the title
-  switches on 142 and 145, which are the two the pad sends. It also inserts a
-  space when the caret is already at the end, which is the component's business
-  and not the platform's.
+  switches on 142 and 145, the two the pad sends. It also inserts a space when
+  the caret is already at the end, which is the component's business and not
+  the platform's.
 
-So the handler runs the shared multi-tap cycle
+The handler therefore runs the shared multi-tap cycle
 ([`internal/textinput`](../../internal/textinput/textinput.go)) against a
 component it cannot read: a new character is `insert`, the same key inside the
 commit delay is `replace`, `#` and the CLR key are `delete`, `*` changes the
-mode, and the pad's left and right are handed to `moveCursor` as the key codes
-the component expects. Whether another character fits is asked of the component
-— `size` against `getMaxSize` — because the platform cannot count text it never
-sees.
+mode, and the pad's left and right are passed to `moveCursor` as the key codes
+the component expects. Whether another character fits is asked of the
+component — `size` against `getMaxSize` — because the platform cannot count
+text it never sees.
 
 `keyPressed` answers whether the input method took the key, and a key it does
-not take reaches the game: a title routes every key through the handler first
-and its pad has to keep working while a field is on screen. Both local call
-sites discard the answer, which is what a handset's own titles could afford to
-do, so the answer costs nothing there and is still the right one to give.
+not take reaches the game: a title routes every key through the handler first,
+and its pad must keep working while a field is on screen. Both local call sites
+discard the answer, as a handset's own titles could afford to, so the answer
+costs nothing there and is still the correct one.
 
-**`getInputMode` is the one inference in this.** The five modes are a bit each,
-and which bit is which is documented nowhere available here. What settles it is
-the order a title draws them in: its switch maps 16, 1, 2, 8 and 4 onto
-indicators 0 to 4, and the order a Korean handset showed was Hangul, capitals,
-small letters, digits, symbols. So 16 is Hangul and this runtime answers 1, 2
-or 8 — capitals, small letters or digits — matching what the next key press
-will actually produce. If a title's indicator turns out wrong, this paragraph
-is the guess to revisit.
+**`getInputMode` is the one inference.** The five modes are one bit each, and
+no available document says which bit is which. The order a title draws them in
+settles it: its switch maps 16, 1, 2, 8 and 4 onto indicators 0 to 4, and a
+Korean handset showed Hangul, capitals, small letters, digits, symbols in that
+order. 16 is therefore Hangul, and this runtime answers 1, 2 or 8 — capitals,
+small letters or digits — matching what the next key press produces. If a
+title's indicator turns out wrong, this is the guess to revisit.
 
 **`XTextField` is the other way**, and there the platform holds the text, so it
-is the shared editor itself rather than a cycle over someone else's buffer —
-the same editor a MIDP `TextBox` on this platform types with. Its
-four-argument constructor is what a name screen uses: the text it starts with,
-the size it stops at, the constraints, and the Canvas it belongs to. The order
-of the three is read off the one local call site, which passes `("", 10, 0)`:
-10 is a plausible name length and not a constraint any of them names.
+is the shared editor itself rather than a cycle over another buffer — the same
+editor a MIDP `TextBox` on this platform types with. Its four-argument
+constructor is what a name screen uses: the initial text, the maximum size,
+the constraints, and the owning Canvas. The order of the three is read from
+the one local call site, which passes `("", 10, 0)`: 10 is a plausible name
+length and not a constraint any of them names.
 
-`Displayable.repaintIM` belongs to the same feature — a repaint that included
-the input method's own area, which a handset drew over the screen. There is no
-such area here, so what is left of it is the repaint the title expects to go
-with it, asked for virtually so a Canvas gets its own.
+`Displayable.repaintIM` belongs to the same feature: a repaint that included
+the input method's own area, which a handset drew over the screen. No such
+area exists here, so what remains is the repaint the title expects with it,
+requested virtually so a Canvas gets its own.
 
-**One defect was already sitting in the shared path**, and typing through the
-vendor's field is what turned it up: a MIDP `TextBox` on this platform treated
-4 and 6 as caret movement, because those digits are also the pad's left and
-right for a game. In a text field they are letters, and taking them left
-`ghi` and `mno` untypable. The pad moves the caret and only the pad now;
-`TestTextBoxTypesThroughTheKeypad` covers both halves. The other platform's lwc
-fields never had it — `isKeypadKey` there is digits, `*` and `#`, and nothing
-else.
+**One defect was already in the shared path**, and typing through the vendor's
+field exposed it: a MIDP `TextBox` on this platform treated 4 and 6 as caret
+movement, because those digits are also the pad's left and right for a game.
+In a text field they are letters, and taking them left `ghi` and `mno`
+untypable. Only the pad moves the caret now; `TestTextBoxTypesThroughTheKeypad`
+covers both halves. The other platform's lwc fields never had it: `isKeypadKey`
+there is digits, `*` and `#`, and nothing else.
 
 <a id="implementation-a-timer-runs-on-a-thread-because-the-title-keeps-drawing"></a>
 
 #### A timer runs on a thread, because the title keeps drawing
 
-`java.util.Timer` and `java.util.TimerTask` are the profile's rather than the
-configuration's — CLDC has neither — so they are declared in
-`internal/api/midp` and only a VM that installs this profile answers them. One
+`java.util.Timer` and `java.util.TimerTask` belong to the profile rather than
+the configuration — CLDC has neither — so they are declared in
+`internal/api/midp`, and only a VM that installs this profile answers them. One
 local title schedules a task at a fixed rate and keeps redrawing while it runs,
-which is the whole reason the specification puts a task on a background thread:
-invoking it on the caller would stop the frame the schedule was made from.
+which is why the specification puts a task on a background thread: running it
+on the caller would stop the frame that made the schedule.
 
 Each schedule gets a guest thread, the same kind a title's own `new Thread`
-gets — it takes the platform's scheduler if one is installed, it dies with the
-session's step budget, and it appears in a report as a thread rather than as
-something the runtime is doing behind the game's back. The two cancels are
-flags the worker reads before every run, so a cancel from any thread is seen
-without a lock, and a task already running is not interrupted, which is what
-the specification says cancel does and does not do. Fixed-rate and plain
+gets: it takes the platform's scheduler if one is installed, dies with the
+session's step budget, and appears in a report as a thread rather than as
+hidden runtime work. The two cancels are flags the worker reads before every
+run, so a cancel from any thread is seen without a lock, and a running task is
+not interrupted, as the specification defines cancel. Fixed-rate and plain
 schedules differ in what the next wait is measured from: the time the run was
 due, or the time it finished.
 
@@ -1233,160 +1198,163 @@ due, or the time it finished.
 
 #### The two entries the scan still lists, and why neither is work
 
+Superseded: see [CLDC data stream interfaces](#followup-cldc-data-stream-interfaces).
+
 **`java.io.DataInput` and `java.io.DataOutput`** are named by a title that
-writes its save through one and reads it back through the other. Neither is
-declared in this runtime and neither has to be: `invokeinterface` dispatches on
-the class of the receiver, and what the title passes is the
-`DataOutputStream` this runtime does have. The scan sees them because an
-interface method reference names its interface; the loader never does.
+writes its save through one and reads it back through the other. Neither was
+declared in this runtime, and neither had to be: `invokeinterface` dispatches
+on the receiver's class, and the title passes the `DataOutputStream` this
+runtime has. The scan sees them because an interface method reference names
+its interface; the loader never does.
 `TestInterfaceCallsLandOnTheStreamThatWasPassed` pins the mechanism with a
 fixture that writes and reads a record through the two interfaces. Nothing in
-the corpus does the one thing that would load them — a `checkcast`, an
-`instanceof`, or a class declaring `implements` — and the day one does, the
-CLDC 1.0 forms of both are what to declare, which is the pair without the
-floating-point methods.
+the corpus does what would load them — a `checkcast`, an `instanceof`, or a
+class declaring `implements` — and when one does, the CLDC 1.0 forms of both
+are what to declare: the pair without the floating-point methods.
 
 **`com.xce.jam.XBrowser.setNetworkMode` and `com.xce.net.Socket.setPPPPreserveTime`**
-are two settings a title applies before it would open a connection. It never
-reaches them here, and not by luck: the call site is behind a check on the
-`m.SK_VM` property, and this runtime answers the value that skips it. There is
-nothing behind them to configure either — `docs/network.md` has why no platform
-here reaches a network — so the pair stays unbuilt and the property that gates
-them is the thing to remember. If that property's answer ever changes, these
-two become reachable in the same session.
+are two settings a title applies before opening a connection. It never reaches
+them here, by design: the call site is behind a check on the `m.SK_VM`
+property, and this runtime answers the value that skips it. Nothing behind
+them could be configured either — `docs/network.md` explains why no platform
+here reaches a network — so the pair stays unbuilt, and the gating property is
+what to remember. If that property's answer changes, these two become reachable
+in the same session.
 
 <a id="implementation-a-heap-with-addresses-in-it"></a>
 
 ### A heap with addresses in it
 
-The cheat engine searches an address space. This runtime does not have one: a
-MIDlet's state is Go objects in a map, and the `int` a game keeps its gold in
-has no address to find, narrow down and freeze. That is why the browser removed
+The cheat engine searches an address space, and this runtime has none: a
+MIDlet's state is Go objects in a map, and the `int` holding a game's gold has
+no address to find, narrow down and freeze. That is why the browser removed
 the cheat panel on this platform and why `session.Cheat()` used to answer nil
 here.
 
-So one is made. `internal/platform/skt/heapmap.go` walks the object graph and
-gives every object, every array and every loaded class's statics a span of a
-synthetic space; `heapread.go` renders a span from the fields each time it is
-read and decodes a write back into the field it lands on. Nothing is copied and
-nothing is cached — a scan sees the game's state as it changes, and a freeze is
-a write to the object rather than to a shadow of it. The engine above is
-unchanged: it asks this the same three questions it asks the two ARM platforms.
+One is therefore synthesized. `internal/platform/skt/heapmap.go` walks the
+object graph and gives every object, every array and every loaded class's
+statics a span of a synthetic space; `heapread.go` renders a span from the
+fields on each read and decodes a write back into the field it lands on.
+Nothing is copied or cached: a scan sees the game's state as it changes, and a
+freeze writes to the object rather than to a shadow of it. The engine above is
+unchanged; it asks this space the same three questions it asks the two ARM
+platforms.
 
 **Watching writes needs a different trap, and the interpreter is it.** On the
 two ARM platforms a watch is the core noticing a store instruction against a
-real address. Here there is no instruction and no address: a field is the
-interpreter assigning into a map, and the address is one this map invented. So
-the interpreter reports its own stores — `putfield`, `putstatic` and the array
-stores hand a `jvm.StoreEvent` to the VM's store observer — and
-`internal/platform/skt/watch.go` turns one of those back into the address a
-search found, by the same identity the map is keyed on.
+real address. Here there is no instruction and no address: a field store is
+the interpreter assigning into a map, at an address this map invented. The
+interpreter therefore reports its own stores — `putfield`, `putstatic` and the
+array stores hand a `jvm.StoreEvent` to the VM's store observer — and
+`internal/platform/skt/watch.go` maps one back to the address a search found,
+by the identity the map is keyed on.
 
-Three things about it are worth keeping.
+Three properties of the watch:
 
 **It costs nothing when nobody is watching.** The observer is installed by the
 first watch and removed with the last, so a title being played rather than
 investigated pays one nil check per store: 4,000 ticks of a local title take
 2.03 seconds with the hook compiled in and 2.03 without. While a watch is
-installed a store costs a lock and a map lookup on the object's identity, and
-only a store to an object the search has actually mapped costs more.
+installed, a store costs a lock and a map lookup on the object's identity, and
+only a store to an object the search has mapped costs more.
 
 **The writer is named rather than addressed.** `pc 0x40183a2c` means something
-where the code is in the address space; here it is class files, so a hit
-carries `com/example/Game.tick+42` instead. That is `cheat.WatchHit.Site`,
-which the ARM platforms leave empty, and the console and the panel show
-whichever they were given.
+where code is in the address space; here code is class files, so a hit carries
+`com/example/Game.tick+42` instead. That is `cheat.WatchHit.Site`, which the
+ARM platforms leave empty, and the console and the panel show whichever they
+are given.
 
-**The control is offered by the platform's own answer.** `CanWatch` is asked
-now, and the answer travels in the `started` message. It had been asked by
-nobody while this platform could not watch, which is how the browser panel came
-to offer the control here and then fail its poll every interval — the hits call
-threw, the error reached the page, and the candidate refresh queued behind it
-never ran. The refresh runs first in that poll now regardless: an optional
-feature must not be able to stop the one the panel is for.
+**The control is offered by the platform's own answer.** `CanWatch` is now
+asked, and the answer travels in the `started` message. Nobody asked it while
+this platform could not watch, so the browser panel offered the control here
+and then failed its poll every interval: the hits call threw, the error reached
+the page, and the candidate refresh queued behind it never ran. The refresh
+now runs first in that poll regardless, because an optional feature must not
+stop the one the panel exists for.
 
-**The addresses are grouped by shape, not by allocation order.** Every instance
-of one class lands in that class's own arena, so the region listing names what
-a hit is *in*:
+**Addresses are grouped by shape, not by allocation order.** Every instance of
+one class lands in that class's own arena, so the region listing names what a
+hit is *in*:
 
 ```
 0x10000000-0x100003e8      1000  statics
 0x10010000-0x100143e8     17384  [B
 0x10030000-0x10030378       888  [Ljava/lang/Object;
 0x100b0000-0x100b0050        80  bd
-0x100f0000-0x100f0008         8  rpg/RPGHero2
+0x100f0000-0x100f0008         8  com/example/Game
 ```
 
-"the address is in `cj`" is something a search can act on where "somewhere in
+"The address is in `cj`" is something a search can act on, where "somewhere in
 the heap" is not, and it costs nothing: an arena is a bump allocator over 64KiB
 chunks of a 32-bit space, and a shape with three instances wastes the rest of
-one chunk of address space and no memory at all.
+one chunk of address space and no memory.
 
-Three properties make the addresses worth what a cheat needs them to be worth.
+Three properties make the addresses useful to a cheat:
 
-- **They are stable.** A span is keyed by the VM's own object identity and the
-  allocator never reuses an address, so an object keeps its span for the life of
-  the session. A value found on one screen is at the same address on the next,
-  which is the whole point of a scan. Measured on one local title, the map grew
-  from 18 spans and 16KiB at the title screen to 22 spans and 21KiB in play, and
-  every address from the first walk was still where it had been.
-- **They do not keep the game's garbage alive.** A span holds a `weak.Pointer`,
-  so mapping an object does not stop it being collected and a dead one's span is
-  dropped on the next walk. A **frozen** address holds a strong reference
-  instead — `serviceCheat` retains exactly the objects the freeze list names
-  after every Host pass — because a freeze the collector can silently switch off
-  is worse than the memory it costs. That is the same decision KTF made when it
-  passed frozen addresses to its collector as extra roots.
+- **They are stable.** A span is keyed by the VM's object identity and the
+  allocator never reuses an address, so an object keeps its span for the
+  session. A value found on one screen is at the same address on the next,
+  which is the point of a scan. Measured on one local title, the map grew from
+  18 spans and 16KiB at the title screen to 22 spans and 21KiB in play, and
+  every address from the first walk was unchanged.
+- **They do not keep the game's garbage alive.** A span holds a
+  `weak.Pointer`, so mapping an object does not prevent its collection, and a
+  dead object's span is dropped on the next walk. A **frozen** address holds a
+  strong reference instead — `serviceCheat` retains exactly the objects the
+  freeze list names after every Host pass — because a freeze the collector can
+  silently disable is worse than the memory it costs. KTF made the same
+  decision when it passed frozen addresses to its collector as extra roots.
 - **A record is laid out for a search, not for a JVM.** Every field takes four
-  bytes except a long or a double, which take eight, so an arena of one class's
-  instances is a table the four-byte default stride walks; a `short` sits sign
-  extended in its four bytes and is still found by a two-byte search. Array
-  elements take their *natural* width instead — a byte array is how a game packs
-  its map data, and spreading it over four bytes each would hide every pattern
-  in it.
+  bytes except a long or a double, which take eight, so an arena of one
+  class's instances is a table the four-byte default stride walks; a `short`
+  sits sign-extended in its four bytes and is still found by a two-byte search.
+  Array elements take their *natural* width instead: a byte array is how a game
+  packs its map data, and spreading it over four bytes each would hide every
+  pattern in it.
 
-A reference field reads as the address of what it points at, so a `dump` can be
-followed from one object into the next, and it refuses to be written: writing
-one would mean inventing an object. A write narrower than the slot it lands in
-is a read-modify-write, so a one-byte `set` changes one byte of an `int` the way
-the same write against a real address space would.
+A reference field reads as the address of its target, so a `dump` can be
+followed from one object into the next, and it refuses writes, because writing
+one would mean inventing an object. A write narrower than its slot is a
+read-modify-write, so a one-byte `set` changes one byte of an `int`, as the
+same write against a real address space would.
 
 <a id="implementation-what-the-walk-starts-from-and-what-it-therefore-cannot-find"></a>
 
 #### What the walk starts from, and what it therefore cannot find
 
-The roots are every loaded class's static reference fields, every thread object
-the VM holds, and what this runtime holds in Go: the MIDlet, the Display and the
-Displayable being shown, the runnables `callSerially` was handed, the Canvas
-mid-paint, and **every Displayable the runtime has state for** — a title keeps
-its menus and its map screen as objects it comes back to, and between visits
-nothing static points at them.
+The roots are every loaded class's static reference fields, every thread
+object the VM holds, and what this runtime holds in Go: the MIDlet, the
+Display and the Displayable being shown, the runnables `callSerially` was
+handed, the Canvas mid-paint, and **every Displayable the runtime has state
+for** — a title keeps its menus and map screen as objects it returns to, and
+between visits nothing static points at them.
 
 An object reachable only from a running method's local variable is not in that
-set. Nothing durable lives there — a game's own state is field-reachable, which
-is why it survives the method that made it — but a value that appears in a scan
+set. Nothing durable lives there — a game's state is field-reachable, which is
+why it outlives the method that made it — but a value that appears in a scan
 and then vanishes from the map is this boundary rather than a bug.
 
 **Reading a static must not initialize its class.** `VM.StaticField` runs
-`<clinit>` first because that is what a `getstatic` does, and a walk that
-touched every loaded class through it would run guest code the game never asked
-to run, from whichever goroutine was inspecting. `VM.StaticFieldValue` reads the
-map and answers "not set" instead, which is exactly right: a class that has not
-initialized has no values, and zero is what its fields hold.
+`<clinit>` first because a `getstatic` does, and a walk that touched every
+loaded class through it would run guest code the game never requested, from
+whichever goroutine was inspecting. `VM.StaticFieldValue` reads the map and
+answers "not set" instead, which is correct: an uninitialized class has no
+values, and its fields hold zero.
 
 <a id="implementation-what-it-does-not-do"></a>
 
 #### What it does not do
 
-There is **no watch**. A watch names the instruction that wrote an address, and
-finding that here would mean instrumenting every `putfield` and every array
-store in the interpreter. The engine answers `cheat.ErrWatchUnsupported` and a
-Host reads that as "no watch control on this platform" rather than as a failure;
-`Session.CanWatch()` is what the panel asks first.
+When the map was first built there was **no watch**: finding the instruction
+that wrote an address appeared to require instrumenting every `putfield` and
+array store, so the engine answered `cheat.ErrWatchUnsupported`, a Host read
+that as "no watch control on this platform" rather than a failure, and
+`Session.CanWatch()` was what the panel asked first. The interpreter store
+observer described above superseded this.
 
-There is also no object *header* in a span — no class word, no length word, no
-allocation metadata — because none of that exists here to present. A span is
-exactly the declared fields, or exactly the elements.
+A span has no object *header* — no class word, no length word, no allocation
+metadata — because none exists here to present. A span is exactly the
+declared fields, or exactly the elements.
 
 <a id="implementation-driven-end-to-end"></a>
 
@@ -1394,10 +1362,10 @@ exactly the declared fields, or exactly the elements.
 
 `wfeature runskt <game.zip> -cheat` attaches the same console the WIPI paths
 use, and `TestLocalCheatProbe` drives the browser's socket path against a local
-archive. On one local title: `regions` lists 22 spans, `scan unknown` over 5,222
-candidates narrows to one under two `scan changed` passes, `read` shows it
-counting up live, `freeze` holds it at 555 across seconds of the game writing
-over it every tick, and `unfreeze` lets the game's own value come back. The
+archive. On one local title: `regions` lists 22 spans, `scan unknown` over
+5,222 candidates narrows to one after two `scan changed` passes, `read` shows
+it counting up live, `freeze` holds it at 555 for seconds while the game
+writes over it every tick, and `unfreeze` restores the game's own value. The
 fixture-level tests are `TestHeapMap*` in `internal/platform/skt`.
 
 <a id="implementation-the-handset-a-title-was-packaged-for-is-in-its-resource-names"></a>
@@ -1414,38 +1382,37 @@ if (width <  240)                     "/title/main_logo_176.png"
 else                                  "/title/main_logo_240.png"
 ```
 
-The copy that reached this library holds only the `_176` variants, so on the
-default it asks for a `_240` image that is not there, catches its own
-`IOException`, and then draws the null it was left with — the session ends on a
-`NullPointerException` out of `Graphics.drawImage`, which reads like a fault
-here and is the archive being played on the wrong handset.
+The copy in this library holds only the `_176` variants, so on the default it
+asks for a missing `_240` image, catches its own `IOException`, and draws the
+null it was left with; the session ends on a `NullPointerException` from
+`Graphics.drawImage`, which reads like an emulator fault and is the archive
+running on the wrong handset.
 
-**The descriptor does not say which handset that is.** Every key of every local
-`.msd` was inventoried — the MIDlet's name, vendor, version, download URL, JAR
-size, install-notify URL, icons, keys, and the `DD-` block the download manager
-reads — and so was every manifest inside every local JAR, of which only seven
-have one at all and none carries more than `Manifest-Version` and `Created-By`.
-There is no screen size anywhere in an SKT descriptor.
+**The descriptor does not name that handset.** Every key of every local `.msd`
+was inventoried — the MIDlet's name, vendor, version, download URL, JAR size,
+install-notify URL, icons, keys, and the `DD-` block the download manager reads
+— and so was every manifest inside every local JAR; only seven JARs have one,
+and none carries more than `Manifest-Version` and `Created-By`. No SKT
+descriptor contains a screen size.
 
 **The resource names are the declaration, and they are read now.**
 `skt.PackagedScreen` scans every component of every non-class entry path — a
-directory as readily as the name at the end of it — for one ending in
-`_<width>`, and answers a handset when **every** width-suffixed component in the
-archive agrees on one width, at least two say it, and this project offers a
-handset for that width (128, 176, 240, 320). Anything else answers nothing.
+directory as readily as the final name — for one ending in `_<width>`, and
+answers a handset when **every** width-suffixed component in the archive
+agrees on one width, at least two state it, and this project offers a handset
+for that width (128, 176, 240, 320). Anything else answers nothing.
 
-That narrowness is the whole of the design, and it is why this is a rule here
-and a flag on the other WIPI platform. KTF's `__adf__` really does carry a
-`DisplaySize`, and thirteen local archives declare `176*220` while twelve of
-them draw across the whole 240x320 screen — so honouring the declaration there
-would shrink twelve working titles to fix one (`ktf.md`, "A band beside a title
-screen was the title's own"). Here it answers for **three** of the ninety-one
-local archives, and one of those three declares the default it would have run on
-anyway, so it decides the handset for two titles and leaves eighty-nine
-untouched — measured by reading back the size of the frame each archive is given.
-A Host that asks for a size still wins — `runskt -screen` and the browser's
-screen setting both override this — so the rule only decides what "no answer"
-means.
+That narrowness is the design, and it is why this is a rule here and a flag on
+the other WIPI platform. KTF's `__adf__` does carry a `DisplaySize`, and
+thirteen local archives declare `176*220` while twelve of them draw across the
+whole 240x320 screen, so honouring the declaration there would shrink twelve
+working titles to fix one (`ktf.md`, "A band beside a title screen was the
+title's own"). Here it answers for **three** of the ninety-one local archives,
+and one of those three declares the default it would have run on anyway, so it
+decides the handset for two titles and leaves eighty-nine untouched — measured
+by reading back the frame size each archive is given. A Host that requests a
+size still wins — `runskt -screen` and the browser's screen setting both
+override this — so the rule only decides what "no answer" means.
 
 **The second of those two declares its width as a directory.** Its whole
 artwork tree is `img_176/`, and it picks the tree from the height of an
@@ -1461,525 +1428,518 @@ display > 250  ->  /img_240/
          else  ->  /img_120/
 ```
 
-so the tree it ships is the one it picks on a display of 167 to 212 rows.
-Anything taller asks for a `/img_240/` tree that is not there. It catches the
-`IOException` — the trace on the way past is `printStackTrace`, not an uncaught
-throw — keeps its nulls, and paints on: white for its first eighty-eight ticks
-and black from there on, for as long as it is asked to run. **That is the whole
-of "the presented frame is entirely black" for this archive**, and nothing in
-this runtime is wrong in it: a 240x320 handset would find no `/img_240/` tree
+The tree it ships is the one it picks on a display of 167 to 212 rows; any
+taller display asks for a missing `/img_240/` tree. It catches the
+`IOException` — the trace on the way past is `printStackTrace`, not an
+uncaught throw — keeps its nulls, and paints on: white for its first
+eighty-eight ticks and black from then on. **That is the whole of "the
+presented frame is entirely black" for this archive**, and nothing in this
+runtime is wrong in it: a 240x320 handset would find no `/img_240/` tree
 either.
 
-**Reading the directory is only half of it; the other half is the height.** An
-archive declares a width and never a height, so the height is this project's
-answer, and `packagedScreenHandsets` is where it is given. It answered 220 rows
-for a declared 176, which is the wrong side of the ladder above — measured:
-`-screen 240x320` and `-screen 176x220` both draw an empty screen, and
-`-screen 176x196`, `176x208` and `176x212` all draw the title. It answers **208**
-now, which is a display this generation shipped and which both declaring
-archives run on: this one paints its title screen (34,373 lit of 36,608 at 300
-ticks, against 0 of 76,800 on the default), and the other draws the same title
-screen it drew at 220 — the same picture, 2,275 lit at twelve hundred ticks
-either way, twelve rows shorter — and is still laying its opening text over the
-same picture two thousand ticks in. The 220 that was there is not gone: `runskt -screen 176x220`
-and the browser's 176x220 are unchanged, and this map only decides what "no
-answer" means.
+**The directory is half of it; the height is the other half.** An archive
+declares a width and never a height, so the height is this project's answer,
+given in `packagedScreenHandsets`. It answered 220 rows for a declared 176,
+which is the wrong side of the ladder above — measured: `-screen 240x320` and
+`-screen 176x220` both draw an empty screen, and `-screen 176x196`, `176x208`
+and `176x212` all draw the title. It now answers **208**, a display this
+generation shipped and one both declaring archives run on: this one paints its
+title screen (34,373 lit of 36,608 at 300 ticks, against 0 of 76,800 on the
+default), and the other draws the same title screen it drew at 220 — the same
+picture, 2,275 lit at twelve hundred ticks either way, twelve rows shorter —
+and is still laying its opening text over the same picture two thousand ticks
+in. The 220 option remains: `runskt -screen 176x220` and the browser's 176x220
+are unchanged, and this map only decides what "no answer" means.
 
-**Reading the whole path also stops the rule being misled.** No local archive
-does this, but nothing stopped one: a package holding `img_176/logo.png`,
-`img_176/menu.png` and a pair of `_240` names was answered **240** by the
-stem-only rule, which never saw the directory that disagreed with them. It
-answers nothing now, which is what two widths in one archive has always meant
+**Reading the whole path also prevents the rule being misled.** No local
+archive does this, but nothing prevented it: a package holding
+`img_176/logo.png`, `img_176/menu.png` and a pair of `_240` names was answered
+**240** by the stem-only rule, which never saw the disagreeing directory. It
+now answers nothing, which is what two widths in one archive has always meant
 here, and that case is in `screen_test.go` beside the two real shapes.
 
-**And the probes ask the rule, because every other Host does.** The local rungs
-built their framebuffer at 240x320 whatever the archive said, so they were
-asking a question neither `runskt` nor a server session asks: both of those let
-`PackagedScreen` answer first. Both archives that declare a width were being
-measured on a handset this project would not have started them on — one of them
-found no artwork there and painted an empty screen, which the boot rung read as a
-title that will not boot. `localProbeFramebuffer` in
-[`local_ladder_test.go`](../../internal/platform/skt/local_ladder_test.go) is the
-one place that decision is made for all four rungs, and it logs the size it took
-whenever it is not the default, so a rung's report says which handset it asked
-about. Over the ninety-one local archives this moves two of them and nothing
-else: boot goes 78/1 to 79/0 and sustained, interactive and sound are unchanged,
-archive for archive.
+**The probes ask the rule, because every other Host does.** The local rungs
+built their framebuffer at 240x320 regardless of the archive, so they asked a
+question neither `runskt` nor a server session asks: both let `PackagedScreen`
+answer first. Both archives that declare a width were measured on a handset
+this project would not have started them on; one found no artwork there and
+painted an empty screen, which the boot rung read as a title that will not
+boot. `localProbeFramebuffer` in
+[`local_ladder_test.go`](../../internal/platform/skt/local_ladder_test.go) makes
+that decision for all four rungs and logs the size whenever it is not the
+default, so a rung's report states which handset it asked about. Over the
+ninety-one local archives this moves two and nothing else: boot goes 78/1 to
+79/0, and sustained, interactive and sound are unchanged, archive for archive.
 
 <a id="implementation-the-sizes-of-the-pictures-do-not-say-what-the-names-say"></a>
 
 #### The sizes of the pictures do not say what the names say
 
-The obvious next move, once the names are read, is to read the **pictures**: a
-full-screen picture is the display's width wide and the display's height less a
-status bar tall, so counting the sizes in a package should say which handset it
-was built for. It was measured across every local archive that opens — ninety-four
-of them — before any of it was built, and **the signal is not there**.
+The next candidate after reading names is reading **pictures**: a full-screen
+picture is the display's width wide and the display's height less a status bar
+tall, so counting the sizes in a package should reveal its handset. This was
+measured across every local archive that opens — ninety-four — before anything
+was built, and **the signal is not there**.
 
-**A quarter of the corpus has nothing to measure.** Twenty-three of the ninety-four
-hold no picture a decoder can size at all: their artwork lives in packed
-resources the title unpacks itself, and a scan sees opaque bytes. Of the
-pictures the rest do hold, the two hundred and sixty-seven distinct widths are
-dominated by sprites — the twenty-five most common widths are almost all under
-fifty pixels. Screen-shaped pictures are the exception, not the rule.
+**A quarter of the corpus has nothing to measure.** Twenty-three of the
+ninety-four hold no picture a decoder can size: their artwork lives in packed
+resources the title unpacks itself, which a scan sees as opaque bytes. In the
+rest, the two hundred and sixty-seven distinct widths are dominated by sprites;
+the twenty-five most common widths are almost all under fifty pixels.
+Screen-shaped pictures are the exception.
 
-**Where the hypothesis can be tested it mostly contradicts itself.** Scoring
-each archive against the handsets this project offers — a picture counts when it
-is exactly a handset wide and within a status bar of that handset's height —
-and taking the loosest form of the rule, one matching picture within forty rows,
-twenty-one archives answer. **Thirteen of the twenty-one are contradicted by the
-archive that produced them**, which holds a picture *wider* than the handset it
-just inferred; one infers a 128-wide handset while holding a 936-wide picture.
-Tightening to two pictures within twenty-four rows leaves six answers, five of
-them contradicted the same way. A wide picture is a sprite sheet or a scrolling
-backdrop, and neither is a screen.
+**Where the hypothesis can be tested, it mostly contradicts itself.** Scoring
+each archive against the handsets this project offers — a picture counts when
+it is exactly a handset wide and within a status bar of that handset's height —
+with the loosest rule, one matching picture within forty rows, twenty-one
+archives answer. **Thirteen of the twenty-one are contradicted by their own
+archive**, which holds a picture *wider* than the inferred handset; one infers
+a 128-wide handset while holding a 936-wide picture. Tightening to two pictures
+within twenty-four rows leaves six answers, five contradicted the same way. A
+wide picture is a sprite sheet or a scrolling backdrop, and neither is a
+screen.
 
-**The one archive whose answer is known answers nothing.** The title the rule in
-the section above exists for — the one that cannot start on the default — has a
-widest picture of 169 and a most common width of 120, and neither is a handset.
-Its handset is declared in its names and is *not* recoverable from its sizes, so
-the corpus offers no case where this rule is right and independent evidence
+**The one archive whose answer is known answers nothing.** The title the rule
+in the section above exists for — the one that cannot start on the default —
+has a widest picture of 169 and a most common width of 120, neither a handset.
+Its handset is declared in its names and is *not* recoverable from its sizes,
+so the corpus offers no case where this rule is right and independent evidence
 agrees.
 
-**The best rule the data supports is a wash.** That rule is the narrow one:
-infer a handset when the widest picture in the archive is exactly a handset
-width, nothing in the archive is wider, and the answer is narrower than the
-default — never wider, since nothing supports promoting a title. It moves eight
-of the seventy-nine. Run against the default at a matched twelve hundred ticks
-and judged on frames, the eight come back **two better, two worse and four
-unchanged**: one title that drew its title art torn across a black gap draws it
-whole, and one that left the framebuffer either side of a narrow splash showing
-what had been there before comes back clean; against that, one loses the bottom
-of its copyright line off the screen and one has its title screen cramped until
-the artwork is cut by the edges. Of the four unchanged, one is a licence refusal
-at either size, two lay out correctly at either, and one draws the identical
-picture either way and differs only in whether it is letterboxed.
+**The best rule the data supports is a wash.** It is the narrow one: infer a
+handset when the widest picture in the archive is exactly a handset width,
+nothing in the archive is wider, and the answer is narrower than the default —
+never wider, since nothing supports promoting a title. It moves eight of the
+seventy-nine. Run against the default at a matched twelve hundred ticks and
+judged on frames, the eight come back **two better, two worse and four
+unchanged**: one title that drew its title art torn across a black gap draws
+it whole, and one that left stale framebuffer content either side of a narrow
+splash comes back clean; against that, one loses the bottom of its copyright
+line off the screen, and one has its title screen cramped until the edges cut
+the artwork. Of the four unchanged, one is a licence refusal at either size,
+two lay out correctly at either, and one draws the identical picture either way
+and differs only in letterboxing.
 
-**And it clears the known-bad case by one pixel.** The archive that declares its
-width as an `img_176/` directory draws an empty screen on 176x220, and escapes
-this rule only because its widest picture is 177 rather than 176. Had that one
-picture been a pixel narrower the rule would have handed it a size measured as
-blank — and it would still hand it that size today, because the width was never
-the part of the answer that was wrong for it. A rule that avoids a known-bad
-outcome by one pixel is not a rule.
+**It also clears the known-bad case by one pixel.** The archive that declares
+its width as an `img_176/` directory draws an empty screen on 176x220, and
+escapes this rule only because its widest picture is 177 rather than 176. Had
+that picture been a pixel narrower, the rule would have handed it a size
+measured as blank, and would still do so today, because the width was never the
+wrong part of the answer for it. A rule that avoids a known-bad outcome by one
+pixel is not a rule.
 
-So this is **measured and not built**. The flag stays the way a Host asks for a
-size, `PackagedScreen` stays the only thing that answers without being asked,
-and the default is unchanged.
+This is therefore **measured and not built**. The flag remains the way a Host
+requests a size, `PackagedScreen` remains the only unrequested answer, and the
+default is unchanged.
 
-**One method note, because it reversed two readings.** The first pass judged
-these at three hundred ticks and called two titles broken that were merely
-mid-transition — one was on a publisher splash it leaves at around a thousand
-ticks, and another was between two screens. Both looked like layout failures and
-neither was. A screen-size comparison has to be run long enough that both sides
-have arrived somewhere, and a difference at three hundred ticks is a question
-rather than a finding.
+**Method note, because it reversed two readings.** The first pass judged these
+at three hundred ticks and called two titles broken that were mid-transition:
+one was on a publisher splash it leaves at around a thousand ticks, another was
+between two screens. Both looked like layout failures; neither was. A
+screen-size comparison must run long enough for both sides to arrive
+somewhere, and a difference at three hundred ticks is a question, not a
+finding.
 
 <a id="implementation-a-canvas-here-is-sixteen-rows-shorter-than-the-display"></a>
 
 #### A Canvas here is sixteen rows shorter than the display
 
-The question underneath is whether a Canvas on this vendor is the whole display
-or the part of it a game may draw in. It is not a question about one archive:
-**nothing in the corpus asks for full screen** — `setFullScreenMode` is called
-by none of the ninety-one — so whatever a Canvas reports is what every title
-that reads it lays out against.
+The question is whether a Canvas on this vendor is the whole display or the
+part a game may draw in. It affects every title, not one archive: **nothing in
+the corpus asks for full screen** — none of the ninety-one calls
+`setFullScreenMode` — so whatever a Canvas reports is what every title that
+reads it lays out against.
 
-**The corpus answers it in one voice. Fifty-one of the seventy-eight archives
-that hold Java compute `Canvas.getHeight() + 16`**, and what each of them does
-with the sum says what the sum is:
+**The corpus answers in one voice. Fifty-one of the seventy-eight archives that
+hold Java compute `Canvas.getHeight() + 16`**, and what each does with the sum
+says what the sum is:
 
 - one stores it in a field it named `m_RealY`;
 - one makes its back buffer `createImage(getWidth(), getHeight() + 16)` and
   blits it at the origin, so the sum is the picture the display shows;
-- one builds a string out of `getWidth()` and the sum and opens a file by that
-  name, which on the handset it shipped for has to read `240320`;
+- one builds a string from `getWidth()` and the sum and opens a file by that
+  name, which on its intended handset must read `240320`;
 - one picks its artwork from a ladder — `> 250` the 240 set, `> 166` the 176
   set, otherwise the 120 set — indexed by an offscreen image sixteen rows
   taller than the Canvas, and every rung of that ladder is a handset display.
 
-So `Canvas.getHeight()` on this vendor reports the display less sixteen rows,
-every title adds them back, and a runtime that answers the display puts all
-fifty-one titles' bottom-anchored drawing sixteen rows too low — off the end of
-the screen. That is what it did until it was reported from a phone: a dialogue
-box with its second line cut through the middle, a soft-key hint cut in half, a
+`Canvas.getHeight()` on this vendor therefore reports the display less sixteen
+rows, every title adds them back, and a runtime that answers the display puts
+all fifty-one titles' bottom-anchored drawing sixteen rows too low, off the
+screen. This runtime did so until it was reported from a phone: a dialogue box
+with its second line cut through the middle, a soft-key hint cut in half, a
 border that ran off the bottom, in three unrelated titles.
 
-`canvasReservedRows` in [`render.go`](../../internal/platform/skt/render.go) is the
-sixteen, and it is the only thing that changed. **The framebuffer is still the
-whole display and drawing is not clipped to the smaller rectangle** — one of
-those titles puts its soft-key hint at `height - 20` with a seven-row font,
-which crosses three rows into the band, and a handset that clipped there would
-have shipped it cut. The band is where the handset drew its own soft keys; this
-project draws nothing in it and lets the guest have it.
+`canvasReservedRows` in [`render.go`](../../internal/platform/skt/render.go) is
+the sixteen, and it is the only change. **The framebuffer is still the whole
+display, and drawing is not clipped to the smaller rectangle**: one of those
+titles puts its soft-key hint at `height - 20` with a seven-row font, which
+crosses three rows into the band, and a handset that clipped there would have
+shipped it cut. The band is where the handset drew its own soft keys; this
+project draws nothing there and leaves it to the guest.
 
 `XDisplay.width`, `height` and `height2` still answer the display. Of the
-archives that name `XDisplay` at all, forty-nine name `height2` and five name
+archives that name `XDisplay`, forty-nine name `height2` and five name
 `height`; `height2` is what they size a back buffer with, pass to `repaint`,
-clear with `fillRect` and hand to `XDisplay.refresh` as the rectangle to push —
+clear with `fillRect` and pass to `XDisplay.refresh` as the rectangle to push —
 all of which are the whole screen. One title does both in one class: it clears
 with `fillRect(0, 0, XDisplay.width, XDisplay.height2)` and lays its scene out
-against `getHeight() + 16`, so for that title the two are the same number and
+against `getHeight() + 16`, so for that title the two are the same number, and
 that number is the display.
 
-**What this replaces.** The reading before this was that `getHeight()`,
-`height2` and `height` were one number, resting on two archives that each clear
-their whole screen twice, once through `(XDisplay.width, XDisplay.height2)` and
-once through `(getWidth(), getHeight())`; if the pairs differed, one clear would
-leave a strip the other did not. That argument still stands for `height2`
-against `height` — it just never reached `getWidth()`/`getHeight()`, because a
-clear that stops sixteen rows short leaves a strip only where something is
-drawn, and the band is the one place a title has no reason to leave anything.
-Fifty-one archives naming the difference, one of them in a filename, outweighs
-an inference from two.
+**What this replaces.** The earlier reading was that `getHeight()`, `height2`
+and `height` were one number, based on two archives that each clear their
+whole screen twice, once through `(XDisplay.width, XDisplay.height2)` and once
+through `(getWidth(), getHeight())`; if the pairs differed, one clear would
+leave a strip the other did not. That argument still holds for `height2`
+against `height`, but never reached `getWidth()`/`getHeight()`: a clear that
+stops sixteen rows short leaves a strip only where something is drawn, and the
+band is the one place a title has no reason to draw. Fifty-one archives naming
+the difference, one of them in a filename, outweigh an inference from two.
 
 **The 176 archive needed a flag until this reading made its ladder legible.**
-It is the one that reads its artwork set from the ladder above, and the rung it
-needs is `> 166` and not `> 212`. Under the old answer `-screen 176x220` gave
-the ladder 236 and `-screen 176x196` gave it 212; under this one they give 220
-and 196. That is what turned the ladder into a ladder of displays rather than of
-displays-plus-sixteen — a 240x320 display now indexes it with 320 rather than
-336 — and it is why the handset for a declared 176 could be settled at 208
-rather than guessed at: see "The handset a title was packaged for is in its
-resource names", above. The flag still wins wherever it is given.
+It reads its artwork set from the ladder above, and the rung it needs is
+`> 166`, not `> 212`. Under the old answer `-screen 176x220` gave the ladder
+236 and `-screen 176x196` gave it 212; under this one they give 220 and 196.
+That made the ladder one of displays rather than displays-plus-sixteen — a
+240x320 display now indexes it with 320 rather than 336 — and is why the
+handset for a declared 176 could be settled at 208 rather than guessed: see
+"The handset a title was packaged for is in its resource names", above. The
+flag still wins wherever it is given.
 
-**What the whole corpus does with it.** All ninety-one archives, 300 ticks each,
-first frame captured, before and against: **sixty-one frames differ and no run
-changes outcome** — same state, same error text, and the same tick count
-everywhere but one title, which destroys itself at 126 rather than 125. Every
-differing frame is a title that reads `Canvas.getHeight()`, directly or through
-the `+ 16`, or one that differs from *itself* between two runs of the same
-binary by as much (`docs/skvm.md`, "An SKT A/B has a per-title noise floor").
-The three Jlets are byte-identical, which is what the `Card.getHeight` note in
+**Effect on the whole corpus.** All ninety-one archives, 300 ticks each, first
+frame captured, before and after: **sixty-one frames differ and no run changes
+outcome** — same state, same error text, and the same tick count everywhere but
+one title, which destroys itself at 126 rather than 125. Every differing frame
+belongs to a title that reads `Canvas.getHeight()`, directly or through the
+`+ 16`, or to one that differs from *itself* between two runs of the same
+binary by as much (see "An SKT A/B has a per-title noise floor" below). The
+three Jlets are byte-identical, which is what the `Card.getHeight` note in
 [`wipi/definitions.go`](../../internal/api/wipi/definitions.go) is for.
 
 **Three titles pay for it with a band.** A title that lays out against
 `getHeight()` and never adds the sixteen back now leaves the last sixteen rows
-unpainted, and this project draws no soft keys there, so they stay black. Two of
-the three are black there anyway — the band is invisible on a title screen that
-was already dark — and the third is a map that now stops short of the bottom
-edge. That is what the handset looked like, and it is three against the fifty
-that were losing a dialogue box.
+unpainted, and this project draws no soft keys there, so they stay black. Two
+of the three are black there anyway — the band is invisible on an already dark
+title screen — and the third is a map that now stops short of the bottom edge.
+That matches the handset, and it is three against the fifty that were losing a
+dialogue box.
 
-**The simpler answer is worth naming before anyone reopens this.** It is to fill
-all three `XDisplay` fields with the full height, forward `Displayable.getHeight`
-to the display with no reservation, and give every archive the same window — and
-it is what this platform did until the corpus was asked. It is also what a reader
-arrives at from the specification alone, which is exactly why it keeps looking
-right. The titles above are the ones that then draw sixteen rows off the bottom
-of it. **A reading that the specification supports is not evidence when the
-corpus disagrees with it.**
+**The simpler answer, recorded before anyone reopens this**, is to fill all
+three `XDisplay` fields with the full height, forward `Displayable.getHeight`
+to the display with no reservation, and give every archive the same window.
+This platform did that until the corpus was asked, and a reader arrives at it
+from the specification alone, which is why it keeps looking right. The titles
+above then draw sixteen rows off the bottom. **A reading the specification
+supports is not evidence when the corpus disagrees.**
 
 <a id="implementation-ninety-archives-and-the-pass-that-made-room-for-eleven-of-them"></a>
 
 ### Ninety archives, and the pass that made room for eleven of them
 
 The corpus went from fifteen local titles to ninety in one step, and the
-now-removed local failure report recorded what the first two rounds over it
-measured. Sixty-one archives ran their four hundred ticks with a picture on the
-first round; twenty-nine did not, and this section is what the twenty-nine
-turned out to be. Everything below was found the same way: run all of them,
-group by the line the run ended on, and take the group that names the most
-titles first.
+now-removed local failure report recorded the first two rounds over it.
+Sixty-one archives ran their four hundred ticks with a picture on the first
+round; twenty-nine did not, and this section explains the twenty-nine. Every
+finding below came the same way: run all of them, group by the line each run
+ended on, and take the group naming the most titles first.
 
-**Twelve of the twenty-nine are not this platform at all**, and what they are
-has a section of its own below.
+**Twelve of the twenty-nine are not this platform at all**; they have their own
+section below.
 
-**Five more are the subscriber-number licence** described above, one of them
-reached only after the `Calendar` gap below stopped killing the thread that
-draws it. They are a setting rather than a defect.
+**Five more are the subscriber-number licence** described above, one reached
+only after the `Calendar` gap below stopped killing the thread that draws it.
+They are a setting rather than a defect.
 
 <a id="implementation-a-handset-fact-read-straight-into-stringequals"></a>
 
 #### A handset fact read straight into String.equals
 
 Three titles stopped on a `NullPointerException` with the platform on one side
-of it: `System.getProperty` answered null for a name this runtime did not have,
-and the title used the answer without testing it. The comment on
-`systemProperties` already said why that shape is fatal here; what was missing
-was a way to find the *next* one before a title does.
+of it: `System.getProperty` answered null for a name this runtime lacked, and
+the title used the answer without testing it. The comment on
+`systemProperties` already explained why that shape is fatal here; what was
+missing was a way to find the *next* one before a title does.
 
-A static sweep answers it. Every `ldc <name>; invokestatic System.getProperty`
-in the corpus, followed forward until the answer is either dereferenced or put
-away, splits the property names into the ones a title tests and the ones it
-walks straight into. Read that way, the ninety archives name two the runtime did
-not answer and dereference: `m.EXT_SW` in two titles and `m.TYPE` in six, plus
-`m.MONDEL` in one — which is a title's own spelling of the model number rather
-than a second fact. All three are answered now, with values chosen to match
-none of the constants a title compares against: not the firmware revision one
-looks for, and neither of the two network types another switches on.
+A static sweep answers it. Following every
+`ldc <name>; invokestatic System.getProperty` in the corpus forward until the
+answer is dereferenced or stored splits the property names into those a title
+tests and those it uses directly. The ninety archives name two that the runtime
+did not answer and that are dereferenced: `m.EXT_SW` in two titles and `m.TYPE`
+in six, plus `m.MONDEL` in one, a title's own spelling of the model number
+rather than a third fact. All three are answered now, with values chosen to
+match none of the constants a title compares against: not the firmware
+revision one looks for, and neither of the two network types another switches
+on.
 
-**`m.SKT_API` is the one deliberately left null.** One title dereferences it,
-and twelve *test* it and take a different path when it is present — one of them
-skipping a colour-mode workaround. Answering it would move twelve titles that
-work today onto a branch nothing here has driven, to reach a call the thirteenth
-makes on a path no local run takes. The evidence to act on is a title that stops
-on it, not a title that names it.
+**`m.SKT_API` is deliberately left null.** One title dereferences it, and
+twelve *test* it and take a different path when it is present — one of them
+skipping a colour-mode workaround. Answering it would move twelve working
+titles onto an undriven branch, to reach a call the thirteenth makes on a path
+no local run takes. The evidence to act on is a title that stops on it, not a
+title that names it.
 
 <a id="implementation-an-exception-nothing-caught-ends-the-callback-not-the-midlet"></a>
 
 #### An exception nothing caught ends the callback, not the MIDlet
 
-Two titles stopped inside their own first `paint`, and the shape is one MIDP
-makes unavoidable: `startApp` shows a Canvas and *then* starts the thread that
-fills in what the Canvas paints with. The handset's green-threaded VM gave the
-new thread its slice before the event loop delivered the repaint, every time;
-real threads do not, so the first paint can read a field the game has not
-written yet. One title's `paint` calls a method on a null `IGraphics` for it,
-another draws a null `Image`.
+Two titles stopped inside their own first `paint`, in a shape MIDP makes
+unavoidable: `startApp` shows a Canvas and *then* starts the thread that fills
+in what the Canvas paints. The handset's green-threaded VM always gave the new
+thread its slice before the event loop delivered the repaint; real threads do
+not, so the first paint can read a field the game has not yet written. One
+title's `paint` calls a method on a null `IGraphics`; another draws a null
+`Image`.
 
-The runtime ended the session for that. It ends the callback now — the same
-contract, and the same reasoning, as the WIPI side's `absorbUncaughtCallback`
+The runtime used to end the session for that. It now ends the callback — the
+same contract and reasoning as the WIPI side's `absorbUncaughtCallback`
 (`ktf.md`): the language says an exception nothing catches ends the thread, the
 guest frame a Host built is not where the game's own `try` is, and a callback
-that threw simply did not happen. Both titles paint nothing on their first frame
-and play from the second.
+that threw did not happen. Both titles paint nothing on their first frame and
+play from the second.
 
 **Only an exception is absorbed, never a fault**, and the count reaches the
 summary as `uncaught` and `uncaught_first`, because a sweep reading only the
-state would count a title that fails every paint as one that plays. The
-MIDlet's own lifecycle calls are not absorbed: MIDP says a `startApp` that
-throws is a MIDlet that failed to start, and that is what a Host has to hear.
+state would count a title that fails every paint as playing. The MIDlet's own
+lifecycle calls are not absorbed: MIDP says a `startApp` that throws is a
+MIDlet that failed to start, and a Host must hear that.
 
 <a id="implementation-a-repaint-asked-for-from-inside-a-paint-is-the-next-frame"></a>
 
 #### A repaint asked for from inside a paint is the next frame
 
 One title's `paint` ends by calling `repaint` and `Display.callSerially` on
-itself — a frame loop written across both. The repaint was posted onto the
-drain that was running the paint, so the paint ran again inside the same Host
-pass, asked again, and added a serial Runnable each time round; the run ended on
-the serial queue's own limit with `pending serial Runnable count exceeds 256`.
+itself, a frame loop written across both. The repaint was posted onto the drain
+running the paint, so the paint ran again inside the same Host pass, requested
+again, and added a serial Runnable each time; the run ended on the serial
+queue's own limit with `pending serial Runnable count exceeds 256`.
 
-MIDP's repaint is a request the implementation services later, which is exactly
-what the `callSerially` pass already established for the other half of that
-loop. A repaint that arrives while a paint is running is now held for the next
-Host pass. It is held *pending* rather than dropped, because `serviceRepaints`
-is the call that asks for a pending paint to happen now and still has to find
-one.
+MIDP's repaint is a request the implementation services later, which the
+`callSerially` pass already established for the other half of that loop. A
+repaint arriving while a paint is running is now held for the next Host pass.
+It is held *pending* rather than dropped, because `serviceRepaints` requests a
+pending paint immediately and must still find one.
 
 <a id="implementation-a-clip-is-a-rule-about-drawing-and-reading-is-not-drawing"></a>
 
 #### A clip is a rule about drawing, and reading is not drawing
 
-One title never returned from `startApp`, and the run took its wall-clock cap
-rather than a frame. Its opening measures how its handset clips: fill a 20×20
-square white, narrow the clip to the left half, draw a line across the whole
-square, then walk `Graphics2D.getPixel` sideways from the middle until it meets
-a pixel the line did not reach. The distance is the answer.
+One title never returned from `startApp`, and the run hit its wall-clock cap
+rather than producing a frame. Its opening measures how its handset clips:
+fill a 20×20 square white, narrow the clip to the left half, draw a line across
+the whole square, then walk `Graphics2D.getPixel` sideways from the middle
+until it meets a pixel the line did not reach. The distance is the answer.
 
 `getPixel` was bounded by the clip, so every read outside it answered zero —
-the same value the black line has — and the walk never ended. A read is bounded
-by the surface now and the write is still bounded by the clip. The translation
-applies to both, because the coordinates a title hands a Graphics are the ones
-it draws in.
+the black line's value — and the walk never ended. A read is now bounded by the
+surface, and the write is still bounded by the clip. The translation applies to
+both, because a title's coordinates to a Graphics are the ones it draws in.
 
 <a id="implementation-a-relative-resource-name-and-an-object-handed-to-valueof"></a>
 
 #### A relative resource name, and an object handed to valueOf
 
-Two more titles stopped several calls away from their cause, both of them
-because a name came out wrong and the title caught its own exception over it.
-One asks for a resource by a path spelled from the root of its JAR while
-standing in a package — "A relative resource name is a name from the root too"
-above. The other builds every path it loads by appending into a `StringBuffer`
-and calling `String.valueOf(Object)` on the buffer, which named the buffer
-instead of asking it; `jvm.md`, "An object handed to valueOf is asked, not
-named", has what that was waiting for and what it costs.
+Two more titles stopped several calls from their cause, both because a name
+came out wrong and the title caught its own exception over it. One asks for a
+resource by a path spelled from the root of its JAR while standing in a
+package — "A relative resource name is a name from the root too" above. The
+other builds every path it loads by appending into a `StringBuffer` and calling
+`String.valueOf(Object)` on the buffer, which named the buffer instead of
+asking it; `jvm.md`, "An object handed to valueOf is asked, not named", has
+what that was waiting for and what it costs.
 
 <a id="implementation-three-archives-hold-a-jlet-not-a-midlet"></a>
 
 #### Three archives hold a Jlet, not a MIDlet
 
-The container is the same either way — `<id>.jar` beside `<id>.msd`, the
-descriptor naming a main class — and what differs is the class inside. Three
-local archives name one that extends `org.kwis.msp.lcdui.Jlet`: they are WIPI
-Java programs distributed through this vendor's channel, and they stopped at
+The container is the same — `<id>.jar` beside `<id>.msd`, the descriptor
+naming a main class — and only the class inside differs. Three local archives
+name one that extends `org.kwis.msp.lcdui.Jlet`: they are WIPI Java programs
+distributed through this vendor's channel, and they stopped at
 `class not found: org/kwis/msp/lcdui/Jlet` before anything ran.
 
 **The surface is a layer over MIDP rather than a second runtime.**
 `internal/api/wipi` declares each WIPI class as a subclass of its MIDP
 counterpart — `Jlet` a `MIDlet`, `Card` a `Canvas`, and `Display`, `Graphics`,
-`Image` and `Font` the classes of those names — so the display path, the paint
-scheduling, the key delivery, the pixels, the fonts and the save boundary are
-the ones already built for the other eighty-eight archives. What the WIPI
-classes add is what the standard has and MIDP does not, and what the platform
-adds is the half a class definition cannot carry.
+`Image` and `Font` the classes of those names — so the display path, paint
+scheduling, key delivery, pixels, fonts and save boundary are those already
+built for the other eighty-eight archives. The WIPI classes add what the
+standard has and MIDP lacks, and the platform adds the half a class definition
+cannot carry.
 
 The specification says each of them extends `Object`. That difference is not
 observable in this corpus — no archive casts or tests one of these against a
 MIDP type — and the alternative is a second display path with its own paint
-scheduling and its own frame. A title that does test one is the reason to
-revisit it.
+scheduling and frame. A title that does test one is the reason to revisit it.
 
 Four things had to be decided rather than inherited:
 
 - **A Jlet session stamps the WIPI class name on the objects it hands out.**
-  `invokevirtual` resolves on the class of the receiver, so a Card's own code
+  `invokevirtual` resolves on the receiver's class, so a Card's own code
   calling `Graphics.setAlpha` on an object named
-  `javax/microedition/lcdui/Graphics` would not resolve it. Which name the
+  `javax/microedition/lcdui/Graphics` would not resolve it. The name the
   screen Graphics, an Image and a Font carry is decided once, from the
-  application class, and a MIDlet session is unchanged.
-- **A method that forwards to the MIDP one it shares a name with forwards
-  specially, never virtually.** Such a method is an *override*; dispatching
-  lands back on itself. Three of them did, and the failure is a host stack
-  overflow several thousand frames deep rather than anything a title reports.
+  application class; a MIDlet session is unchanged.
+- **A method that forwards to the same-named MIDP method forwards specially,
+  never virtually.** Such a method is an *override*, so virtual dispatch lands
+  back on itself. Three of them did, and the failure is a host stack overflow
+  several thousand frames deep rather than anything a title reports.
 - **`Display.pushCard` shows the card before it returns.** MIDP's `setCurrent`
   is a request the next Host pass applies, and one title pushes its card from
-  inside `startApp` and then spins on `isShown` until the card is up — on the
+  inside `startApp` and then spins on `isShown` until the card is up, on the
   same thread that would have to leave `startApp` for the pass to happen.
-  Deferring there is a hang rather than a frame later. What is still deferred
-  is the paint.
+  Deferring there is a hang rather than a frame's delay. The paint is still
+  deferred.
 - **A Jlet is active before its `startApp` runs.** MIDP says a MIDlet becomes
-  active when `startApp` returns; the WIPI specification says the opposite in
-  as many words — a Jlet is active from the moment it is created — and the same
-  spin depends on it.
+  active when `startApp` returns; the WIPI specification says explicitly that
+  a Jlet is active from the moment it is created, and the same spin depends on
+  it.
 
 **One MIDP rule had to give way for all three.** An anchor names where a point
 sits against what is drawn, in two halves, and MIDP requires exactly one bit
 from each. A WIPI title draws its title screen with `LEFT` alone: the handset
-filled the other half in, and refusing it ended the title on its first image.
-A half a title leaves out is now its default, which is the reading the zero
-anchor already had. Naming *two* bits from one group is still refused, because
-that is a title asking for two places at once rather than leaving one unsaid.
+filled in the other half, and refusing it ended the title on its first image.
+An omitted half now takes its default, the reading the zero anchor already
+had. Naming *two* bits from one group is still refused, because that requests
+two places at once rather than leaving one unsaid.
 
-All three reach their title screen, and once they are given keys they can read
-— the section after next — all three reach play. What the three still want from
-this surface, and what is answered how, is in the package comment of
-`internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two
-things there are declared and not built, for the reasons this project applies
-everywhere: `org.kwis.msf.io` has no radio behind it (`network.md`), and
+All three reach their title screen, and once given keys they can read (the
+section after next), all three reach play. What the three still want from this
+surface, and how each is answered, is in the package comment of
+`internal/api/wipi` and in `internal/platform/skt/wipi.go`. Two things there are
+declared and not built, for the reasons this project applies everywhere:
+`org.kwis.msf.io` has no radio behind it (`network.md`), and
 `Graphics.setAlpha` keeps its blend factor and reports it back without drawing
-with it — honouring it means blending every primitive rather than only the
-images that carry their own alpha, and all three titles set it once, to the
-opaque value.
+with it — honouring it means blending every primitive rather than only images
+that carry their own alpha, and all three titles set it once, to the opaque
+value.
 
 <a id="implementation-the-key-codes-a-jlet-reads-are-not-the-ones-a-midlet-reads"></a>
 
 #### The key codes a Jlet reads are not the ones a MIDlet reads
 
-All three reached a title screen and none of them answered a key. A Card is
-handed its keys through `keyNotify(type, key)`, which this layer bridges from
-MIDP's three callbacks, and the bridge forwarded the code unchanged — this
-vendor's MIDP device codes, 141 and 142 and 145 and 146 and 148 for the pad and
-fire. No Jlet compares against those.
+All three reached a title screen and none answered a key. A Card receives keys
+through `keyNotify(type, key)`, which this layer bridges from MIDP's three
+callbacks, and the bridge forwarded the code unchanged: this vendor's MIDP
+device codes, 141, 142, 145, 146 and 148 for the pad and fire. No Jlet compares
+against those.
 
-**The specification declines to say what it should be.** `EventQueue` says only
-that an ITU key arrives as its ASCII value, that a control key arrives negative,
-that the numbers differ from handset to handset, and that a title should
-therefore ask `getGameAction` rather than compare. So the numbers had to come
-from the titles.
+**The specification declines to fix the values.** `EventQueue` says only that
+an ITU key arrives as its ASCII value, that a control key arrives negative,
+that the numbers differ between handsets, and that a title should therefore
+ask `getGameAction` rather than compare. The numbers had to come from the
+titles.
 
 **Two of the three answer, and they agree.** One keeps a key map as a resource,
 one table per handset, and its SKT table is a list of byte pairs: the ASCII
-digits, `*` and `#`, and then `1`, `2`, `5`, `6`, `8`, `90`, `92` and `99` —
-which are `EventQueue.UP`, `LEFT`, `RIGHT`, `DOWN`, `FIRE`, `SOFT1`, `SOFT3` and
-`CLEAR`. The other switches on the key it was handed over the same set, and
-calls `getGameAction` only in the branch where the code it got was negative,
-which on this handset it never is. This vendor answered the specification's
-"different on every handset" with the game keys themselves.
+digits, `*` and `#`, and then `1`, `2`, `5`, `6`, `8`, `90`, `92` and `99`,
+which are `EventQueue.UP`, `LEFT`, `RIGHT`, `DOWN`, `FIRE`, `SOFT1`, `SOFT3`
+and `CLEAR`. The other switches on the received key over the same set, and
+calls `getGameAction` only in the branch where the code is negative, which on
+this handset it never is. This vendor answered the specification's "different
+on every handset" with the game keys themselves.
 
-So a Jlet session translates once, at the point a Host key enters it
-(`wipiKeyOfDevice`), and `Display.getGameAction`, `getKeyCode` and `getKeyName`
-speak the same vocabulary — a pad code *is* its game action, so naming one
-answers itself, and the ITU keys a handset lets stand in for the pad answer the
-key they stand in for. A MIDlet in the same container is untouched and still
-reads this platform's MIDP codes.
+A Jlet session therefore translates once, where a Host key enters it
+(`wipiKeyOfDevice`), and `Display.getGameAction`, `getKeyCode` and
+`getKeyName` use the same vocabulary: a pad code *is* its game action, so
+naming one answers itself, and the ITU keys a handset lets stand in for the pad
+answer the key they stand in for. A MIDlet in the same container is untouched
+and still reads this platform's MIDP codes.
 
-**Two more things a Jlet's keys are not.** Its soft keys are keys: MIDP diverts
+**Two more properties of a Jlet's keys.** Its soft keys are keys: MIDP diverts
 SOFT1 and SOFT2 to a Displayable's commands because a MIDP Canvas has no other
-way to reach them, and a WIPI Card reads them itself — one of the three switches
-on 90 beside the pad. And a Jlet's `keyNotify` returns whether to pass the event
-down, which nothing here has a lower Card to pass it to.
+way to reach them, whereas a WIPI Card reads them itself — one of the three
+switches on 90 beside the pad. And a Jlet's `keyNotify` returns whether to pass
+the event down, but nothing here has a lower Card to pass it to.
 
-**All three reach play.** One is an isometric strategy game with its map, its
-resource counters and its build cursor; one is a vertical shooter in its first
-mission; one is a farming game in its opening scene, having gone through its
-main menu and its save-slot screen. Sound and saving are still untouched by any
-of them within the ticks these runs reach.
+**All three reach play.** One is an isometric strategy game with its map,
+resource counters and build cursor; one is a vertical shooter in its first
+mission; one is a farming game in its opening scene, having passed its main
+menu and save-slot screen. None of them reaches sound or saving within the
+ticks these runs cover.
 
-**One of them is drawn for a smaller handset than it is given.** The shooter
-lays its playfield out from the screen it is told about — the HUD sits on the
-bottom edge and the play area is centred — but its scrolling background is
-tiled at the size it was authored for, so on the 240x320 default the terrain
-covers the upper two thirds and the rest of the field is black. At `-screen
-176x220` it fills. The archive declares no width: its resource names end in
-`_0` and `_1`, which are frames and not widths, so the rule in "The handset a
-title was packaged for is in its resource names" correctly declines to read
-them. It is playable either way, which is what separates it from the archive
-that rule was written for.
+**One is drawn for a smaller handset than it is given.** The shooter lays out
+its playfield from the reported screen — the HUD sits on the bottom edge and
+the play area is centred — but tiles its scrolling background at its authored
+size, so on the 240x320 default the terrain covers the upper two thirds and
+the rest of the field is black. At `-screen 176x220` it fills. The archive
+declares no width: its resource names end in `_0` and `_1`, which are frames,
+not widths, so the rule in "The handset a title was packaged for is in its
+resource names" correctly declines them. It is playable either way, which
+separates it from the archive that rule was written for.
 
 <a id="implementation-the-class-library-again"></a>
 
 #### The class library, again
 
-Two titles stopped on a member of the standard library this runtime does not
-have — `java.util.Calendar.setTimeZone` inside a guest thread, and
+Two titles stopped on a standard library member this runtime lacked —
+`java.util.Calendar.setTimeZone` inside a guest thread, and
 `java.lang.StringBuffer.deleteCharAt` inside `startApp`. The scan lists the
-rest on paths no local run takes, and those are answered too rather than
-watched: `StringBuffer.getChars`, the static `Byte.toString(byte)`,
-`Thread.activeCount`, `PrintStream.println(byte[])` — which is this vendor's
-rather than the standard library's, and prints the handset's own text rather
-than an array's identity — and `java.lang.OutOfMemoryError`, which nothing here
+rest on paths no local run takes, and those are answered rather than watched:
+`StringBuffer.getChars`, the static `Byte.toString(byte)`,
+`Thread.activeCount`, `PrintStream.println(byte[])` — this vendor's rather
+than the standard library's, which prints the handset's own text rather than
+an array's identity — and `java.lang.OutOfMemoryError`, which nothing here
 raises and one title catches by name.
 
 **Two are named and still not built.** `Thread.join(long)` needs a wait that
-cannot be allowed to hold a Host pass, and no local title reaches it;
+must not hold a Host pass, and no local title reaches it;
 `java.lang.System.exec(String[])` is this vendor's way of launching another
-archive, which is a download this project does not do — `network.md` carries
-the same decision for the rest of the radio.
+archive, which is a download this project does not perform — `network.md`
+records the same decision for the rest of the radio.
 
 <a id="implementation-two-members-a-paint-stopped-on-reported-from-a-phone"></a>
 
 #### Two members a paint stopped on, reported from a phone
 
-Two archives ended a run inside `Canvas.paint` on a member this runtime did not
-declare — which is the worst place for a gap, because the resolution walks the
-chain to `java.lang.Object`, and the message a player sees names `Object` rather
-than the screen that would not draw:
+Two archives ended a run inside `Canvas.paint` on a member this runtime did
+not declare. That is the worst place for a gap, because resolution walks the
+chain to `java.lang.Object`, and the message a player sees names `Object`
+rather than the screen that would not draw:
 
-- `javax.microedition.lcdui.Graphics.setGrayScale(int)`, MIDP's grey by one
-  number instead of three. Three archives reach it, two of them through a
-  Graphics facade of their own that also wants `getGrayScale`, the stroke style
-  and the colour components — those three are still open, and their titles need
-  ten more members besides. This one is `setColor(v, v, v)` with the
+- `javax.microedition.lcdui.Graphics.setGrayScale(int)`, MIDP's grey as one
+  number instead of three. Three archives reach it, two through their own
+  Graphics facade that also wants `getGrayScale`, the stroke style and the
+  colour components — those three are still open, and their titles need ten
+  more members besides. This one is `setColor(v, v, v)` with the
   specification's `IllegalArgumentException` outside 0..255.
 - `com.xce.lcdui.XDisplay.clear(Graphics, Image, int, int)`, described under
   "What drawImageEx is" above.
 
-Both were found by a player rather than by the scan, which had listed them: the
-scan says what a title *would* ask for, and neither title asks until it is deep
-enough into its own start-up to paint.
+A player found both, although the scan had listed them: the scan says what a
+title *would* request, and neither title requests it until it is deep enough
+into its own start-up to paint.
 
 <a id="implementation-a-title-that-draws-in-three-dimensions-and-the-package-called-m"></a>
 
 #### A title that draws in three dimensions, and the package called `m`
 
-One archive's Canvas dies in its own class initializer on `class not found:
-m/V3`. Three classes in a package named `m` — a vector, an affine transform and
-a renderer — are this vendor's binding of the handset 3D middleware of the era:
-`.mbac` for a model, `.mtra` for a motion, a `.bmp` for the skin.
+One archive's Canvas dies in its own class initializer on
+`class not found: m/V3`. Three classes in a package named `m` — a vector, an
+affine transform and a renderer — are this vendor's binding of the handset 3D
+middleware of the era: `.mbac` for a model, `.mtra` for a motion, a `.bmp` for
+the skin.
 
 **The maths is answered and the renderer is not**, which is where
 `com.skt.m3d.Graphics3D` has stood since it was written. `V3` and `A3` are
-arithmetic a title does its own geometry with: it composes a camera, transforms
-a point, and reads three integers back out to project itself. `XO_World` is the
-half that would need a rasterizer and the two model formats, and it keeps its
-state and draws nothing.
+arithmetic a title uses for its own geometry: it composes a camera, transforms
+a point, and reads three integers back to project it. `XO_World` is the half
+that would need a rasterizer and the two model formats; it keeps its state and
+draws nothing.
 
 **The fixed point is the title's own arithmetic rather than a guess.** Its
 perspective is `4096 * sin(fov/2) / cos(fov/2)`, and it divides the product of
-a transformed coordinate and that value by 4096 — so one is 4096 here. The
-field of view it asks for is 512, which is 45 degrees on a circle of 4096, and
-that is the second half of the convention read off the same two lines. Both are
-pinned by `TestMicro3DTrigonometryIsFixedPointOverAFourThousandNinetySixCircle`,
-and the composition by the two tests beside it: a quarter turn twice is a half
-turn rather than a transform four thousand times too large, which is what a
-missing renormalization would give.
+a transformed coordinate and that value by 4096, so one is 4096 here. The
+field of view it requests is 512, which is 45 degrees on a circle of 4096, the
+second half of the convention read from the same two lines. Both are pinned by
+`TestMicro3DTrigonometryIsFixedPointOverAFourThousandNinetySixCircle`, and the
+composition by the two tests beside it: a quarter turn twice is a half turn
+rather than a transform four thousand times too large, which is what a missing
+renormalization would produce.
 
-The title reaches its title screen. What it will not do is draw its world, and
-the honest way to read that is the way `Graphics3D` is read — a rasterizer this
-project has not built, not a feature that half works.
+The title reaches its title screen but does not draw its world, which reads the
+same way `Graphics3D` does: a rasterizer this project has not built, not a
+feature that half works.
 
 <a id="implementation-twelve-archives-in-the-skt-corpus-use-another-execution-format"></a>
 
@@ -1988,100 +1948,99 @@ project has not built, not a feature that half works.
 SGS execution has since been added; see [sgs.md](../sgs.md) for the current scope.
 The investigation below records the earlier Java-only limitation.
 
-They hold a `.mod` or an `.inf` beside a `.SGS`, and the `.mod` says what they
-are in its own header: `application/x-gnex-sgs`. An `.inf` beside one carries
-the string `GVM`. That is this vendor's *other* runtime — the script platform
-that ran beside the Java one on the same carrier — and it is not a MIDlet JAR,
-so nothing here claims the archive.
+They hold a `.mod` or an `.inf` beside a `.SGS`, and the `.mod` identifies them
+in its own header: `application/x-gnex-sgs`. An `.inf` beside one carries the
+string `GVM`. That is this vendor's *other* runtime — the script platform that
+ran beside the Java one on the same carrier — and it is not a MIDlet JAR, so
+nothing here claimed the archive.
 
-**Those twelve are most of what no platform claims, but not all of it.** A sweep
-over every zip under the games tree leaves fifteen unclaimed, and the other
-three are not a platform question at all: two are the same bag of games (a zip
-whose entries are three whole archives, which `ArchiveOfArchives` already
-answers in its own words) and one is a RAR wearing a `.zip` name, which
-`ContainerError` already names. So the message "the archive is not a KTF, LGT or
-SKT game" reaches exactly the twelve script archives and nothing else.
+**Those twelve are most of what no platform claims, but not all.** A sweep over
+every zip under the games tree leaves fifteen unclaimed, and the other three
+are not a platform question: two are the same bag of games (a zip whose
+entries are three whole archives, which `ArchiveOfArchives` already reports in
+its own words) and one is a RAR with a `.zip` name, which `ContainerError`
+already names. The message "the archive is not a KTF, LGT or SKT game"
+therefore reached exactly the twelve script archives.
 
 <a id="implementation-what-building-the-script-platform-would-cost-and-what-answers-the-questions"></a>
 
 #### What building the script platform would cost, and what answers the questions
 
-The first estimate said the whole instruction set and platform surface would
-have to come out of the images, because no specification for either is
-published — and searching in English and Korean still finds none. **That premise
-was wrong, and the thing that makes it wrong ships inside the archives.**
+The first estimate assumed the whole instruction set and platform surface
+would have to be recovered from the images, because no specification for
+either is published, and searching in English and Korean still finds none.
+**That premise was wrong, and what disproves it ships inside the archives.**
 
 **Seven of the twelve carry the vendor's own PC player**, one file, byte
-identical across all seven (1,056,768 bytes, SHA-256 `755666796891c415…`). It is
-a PE32 x86 build, not packed, with its strings in the clear, and it says what it
-is: a 2x emulator for this script format, naming the format in its own file
-dialog. That is the original runtime, and this project is allowed to consult one
-for behaviour and file formats. It replaces what a specification would have
-done: where a single caller cannot settle a contract, the runtime that shipped
-with the game can.
+identical across all seven (1,056,768 bytes, SHA-256 `755666796891c415…`). It
+is an unpacked PE32 x86 build with its strings in the clear, and it identifies
+itself as a 2x emulator for this script format, naming the format in its own
+file dialog. That is the original runtime, which this project may consult for
+behaviour and file formats. It stands in for a specification: where a single
+caller cannot settle a contract, the runtime that shipped with the game can.
 
-What it already gives up to a `strings` pass is the loader's own vocabulary. It
-refuses a bad module with messages that name the header's fields —
+A `strings` pass already yields the loader's vocabulary. It refuses a bad
+module with messages naming the header's fields —
 `Open: Application Size error`, `Open: Script LCD class error`,
 `Open: Script audio type error`, `Open: Out of SSB memory error`,
-`Open: Out of SSB size error` — beside the field names themselves: `ScriptSize`,
-`ScriptType`, `ScriptID`, `ScriptCPID`. A header field's meaning is therefore a
-cross-reference away rather than a guess from twelve samples.
+`Open: Out of SSB size error` — beside the field names: `ScriptSize`,
+`ScriptType`, `ScriptID`, `ScriptCPID`. A header field's meaning is therefore
+a cross-reference away rather than a guess from twelve samples.
 
-What the containers look like, measured across all twelve:
+The containers, measured across all twelve:
 
 - **The `.mod` is a length-prefixed string table**, not a binary header: a
   32-bit count before each string, carrying the content type
-  (`application/x-gnex-sgs`), the body's extension (`SGS`), a version (`1.0.0`),
-  the carrier's download URLs, and the word `EXECUTABLE`. The `.inf` the other
-  two carry is a different, tighter shape with `GVM` and two dotted-quad
-  addresses in it.
+  (`application/x-gnex-sgs`), the body's extension (`SGS`), a version
+  (`1.0.0`), the carrier's download URLs, and the word `EXECUTABLE`. The
+  `.inf` the other two carry is a different, tighter shape with `GVM` and two
+  dotted-quad addresses.
 - **The `.SGS` header is one shape across eleven of the twelve**, and the
-  game's own title sits in it in EUC-KR at offset 10 — so the loader can name a
-  title before anything is decoded. The twelfth begins `0x20` and then zeros,
-  which is a different revision or an obfuscated one; it is the sample to look
-  at last, not first.
+  game's title sits in it in EUC-KR at offset 10, so the loader can name a
+  title before decoding anything. The twelfth begins `0x20` and then zeros,
+  a different or obfuscated revision; it is the sample to examine last.
 - The bodies weigh 125,022 to 131,022 bytes, a program budget rather than a
   truncated download, and the two `.inf` archives declare a byte count that
   matches their `.SGS` exactly.
-- The body is not ARM and not Thumb — the byte census in the first pass settles
-  that — so the ARM core does not help.
+- The body is neither ARM nor Thumb — the byte census in the first pass
+  settles that — so the ARM core does not help.
 
-**Where the interpreter is has not been found yet, and the first guess at it was
-wrong.** The two biggest switches in the binary are not it: the one at
-`0x402cae` takes a dword argument over the range 12..190 and folds it into 25
-targets through a byte index table, and the cluster of nine around `0x4124ff`
-belongs to one function that switches on a dword read from a structure. Both are
-the PC shell's own command and event handling. The interpreter dispatches on a
-byte read from a script pointer, and neither of those does.
+**The interpreter had not been located, and the first guess was wrong.** The
+two biggest switches in the binary are not it: the one at `0x402cae` takes a
+dword argument over the range 12..190 and folds it into 25 targets through a
+byte index table, and the cluster of nine around `0x4124ff` belongs to one
+function that switches on a dword read from a structure. Both are the PC
+shell's own command and event handling. The interpreter dispatches on a byte
+read from a script pointer, and neither does.
 
-The best standing candidate is a **table of 279 consecutive code pointers, 266
-of them distinct, at `0x4949d8` in `.data`** — statically initialised, far too
-large to be a vtable, and no instruction in `.text` names its address directly,
-which is what a table indexed through a base register looks like. Whether it is
-the opcode table, the platform call table, or both is unanswered.
+The best standing candidate was a **table of 279 consecutive code pointers,
+266 of them distinct, at `0x4949d8` in `.data`** — statically initialised, far
+too large to be a vtable, and with no instruction in `.text` naming its address
+directly, as expected for a table indexed through a base register. Whether it
+was the opcode table, the platform call table, or both was unanswered.
+Superseded: see [sgs.md](../sgs.md#evidence-and-current-limits).
 
-So the order of work, if this is ever picked up:
+The order of work, if this were picked up:
 
 1. **The container and the header**, from the loader's error strings backwards:
    they name the fields, and cross-referencing each string finds the code that
-   checks it. A dump tool comes out of this, the way `ktfdump` did for KTF, and
+   checks it. A dump tool comes out of this, as `ktfdump` did for KTF, and
    nothing can be read without one.
 2. **The dispatch loop**, from the loader's exit: whatever the loader hands the
    body to is the interpreter. Finding the entry is worth more than any number
-   of table censuses from the outside — the two above were both wrong.
-3. **The opcodes**, one at a time out of the handlers the loop reaches.
-4. **The platform surface** underneath them — screen, keys, sound, storage —
-   which is the same job the two WIPI platforms needed and the part this
-   project already knows how to shape.
+   of table censuses from outside; the two above were both wrong.
+3. **The opcodes**, one at a time from the handlers the loop reaches.
+4. **The platform surface** beneath them — screen, keys, sound, storage — the
+   same job the two WIPI platforms needed and the part this project already
+   knows how to shape.
 
-That is still the whole of a platform. For scale, `internal/platform/ktf` is
-about 32,000 lines beside 17,000 of tests and `lgt` about 21,000 beside 11,000,
-and neither of those had to build an instruction set. What the player changes is
-not the size of the work but its shape: **there are no dead ends in it.** The
-expensive part of the two WIPI platforms was never the typing, it was the
-stretches spent guessing a contract from one caller and telling the guesses
-apart by A/B. Here every question has something to ask.
+That is still a whole platform. For scale, `internal/platform/ktf` was about
+32,000 lines beside 17,000 of tests and `lgt` about 21,000 beside 11,000, and
+neither had to build an instruction set. The player changes the shape of the
+work rather than its size: **it has no dead ends.** The expensive part of the
+two WIPI platforms was never the typing but the stretches spent guessing a
+contract from one caller and telling the guesses apart by A/B. Here every
+question has something to ask.
 
 The original decision was to defer this runtime. The user superseded it on
 2026-09-11; the first executable SGS path and its remaining limitations are
@@ -2093,13 +2052,12 @@ documented in [sgs.md](../sgs.md).
 
 - **`XO_World` has no rasterizer**, for the reason `Graphics3D` below has none.
   See "A title that draws in three dimensions" above: the vector and transform
-  arithmetic beside it is real, and the two model formats and the drawing are
-  not.
+  arithmetic beside it is real; the two model formats and the drawing are not.
 - **`SISImage` does not decode.** The container's frame and object tables are
-  not documented anywhere available here and there is no SKT archive in this
-  repository to reverse them from, so `getFrame` and `getObject` answer null
-  and the paint methods do nothing. Answering a blank image instead would let
-  a game draw nothing while believing it drew a sprite. The reference
+  not documented anywhere available here, and no SKT archive in this repository
+  could be used to reverse them, so `getFrame` and `getObject` answer null and
+  the paint methods do nothing. Answering a blank image instead would let a
+  game draw nothing while believing it drew a sprite. The reference
   implementation is stubs for the same reason.
 - **`Graphics3D` has no rasterizer.** It keeps and reports its render state
   truthfully; `Object3D` keeps a real mesh and a real transform (the matrix a
@@ -2108,36 +2066,35 @@ documented in [sgs.md](../sgs.md).
 - **`SMS`, `Call`, `PhoneBook` have no radio.** Reads answer empty and sends
   are refused. Reporting a delivered message a game can never receive a reply
   to is worse than reporting none. `docs/network.md` carries the same decision
-  for the MIDP connection framework and for the other platforms.
+  for the MIDP connection framework and the other platforms.
 - **The input method types Latin and digits, not Hangul.** Both of this
-  vendor's text surfaces now take the keypad — see "Two ways a title takes a
-  name" — with the multi-tap editor every text field in this runtime shares.
-  What a handset also did inside that input method was compose Hangul out of
-  the jamo on the keypad, and nothing here does: a title that wants a Korean
-  name gets Latin letters and digits in the same field. It is the same gap the
-  MIDP `TextBox` and KTF's lwc text components have, because it is the same
-  editor.
+  vendor's text surfaces take the keypad — see "Two ways a title takes a name"
+  — with the multi-tap editor every text field in this runtime shares. A
+  handset's input method also composed Hangul from the jamo on the keypad, and
+  nothing here does: a title that wants a Korean name gets Latin letters and
+  digits in the same field. It is the same gap the MIDP `TextBox` and KTF's lwc
+  text components have, because it is the same editor.
 - `BackLight` and `Vibration` keep their state and report it back; there is no
   hardware to drive.
 - **A MIDlet takes no touch.** `pointerPressed` and its siblings are a `Canvas`
   surface this runtime does not offer, so a `pointer` message from a Host is
   answered with `ErrNoPointer` and dropped. The MIDP path is a keypad path.
 
-Two things that were incomplete here are not any more, and both were the same
-shape: the runtime had the mechanism and no Host called it.
+An item that was incomplete here and no longer is had a common shape: the
+runtime had the mechanism and no Host called it.
 
 - **`Runtime.Pause` and `Runtime.Resume` are driven now.** They existed with a
   full `StatePaused` transition and `notifyPaused` behind them, and nothing
-  above ever called either — so a MIDlet whose page went away was frozen
-  without being told, and came back to a clock that had moved. A server parks
-  on a dropped socket and runs the pair around it; see
+  above ever called either, so a MIDlet whose page went away was frozen without
+  being told and came back to a clock that had moved. A server parks on a
+  dropped socket and runs the pair around it; see
   [`session.md`](session.md#implementation-server-sessions), "The game is told it was parked".
 
 <a id="implementation-validation"></a>
 
 ### Validation
 
-The local corpus has an opt-in probe of its own now —
+The local corpus has its own opt-in probe —
 `WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint
 ./internal/platform/skt` — which starts all fifteen archives, ticks each for
 300 ticks and requires a frame with something lit in it. All fifteen pass.
@@ -2148,42 +2105,43 @@ The local corpus has an opt-in probe of its own now —
 #### An SKT A/B has a per-title noise floor, and it is not zero
 
 Driving all fifteen archives through the same script under two builds and
-diffing the captured frames is the regression net for a change to shared code,
-and like the KTF sweep — and unlike LGT's, whose route replays byte-identically
-— it is only readable against a floor measured first. At 300 ticks per archive,
+diffing the captured frames is the regression net for a change to shared code.
+Like the KTF sweep, and unlike LGT's, whose route replays byte-identically, it
+is only readable against a floor measured first. At 300 ticks per archive,
 **eleven of fifteen come back byte-identical and four differ**, and running the
-*same* binary twice gives those four the same differing-pixel counts it gives
-two different builds. The floor is per title, not per corpus: one title
-disagrees with itself over roughly two hundred pixels a frame while another
-sits under a hundred, so the number that matters is the one measured for *that*
-archive, taken base-versus-base, before any of it is read as a finding.
+*same* binary twice gives those four the same differing-pixel counts as two
+different builds. The floor is per title, not per corpus: one title disagrees
+with itself over roughly two hundred pixels a frame while another stays under a
+hundred, so the number that matters is the one measured base-versus-base for
+*that* archive before anything is read as a finding.
 
-What counts as evidence is what counts on KTF: a title that stops where the
-other build did not, an error text that changes, or a difference far enough
-outside that title's own base-versus-base count to be a layout rather than an
-animation phase. See "An A/B sweep of the local set is half noise" in
-[`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status) for why a differing frame count carries so little on its own.
+Evidence is what counts on KTF: a title that stops where the other build did
+not, an error text that changes, or a difference far enough outside that
+title's own base-versus-base count to be a layout rather than an animation
+phase. See "An A/B sweep of the local set is half noise" in
+[`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status) for why a
+differing frame count carries so little on its own.
 
-There is still **no SKT game archive in this repository**, so nothing here is tested
-against a real title in CI — only against a newly authored fixture
+There is still **no SKT game archive in this repository**, so CI tests nothing
+against a real title — only against a newly authored fixture
 (`internal/platform/skt/testdata/skvm.jar`) that exercises each surface and
-checks the values that come back. The fixed-point scale, the file semantics
-and the pixel operations are the parts a real game would notice first if they
-were wrong, so those are what the tests pin.
+checks the returned values. The fixed-point scale, the file semantics and the
+pixel operations are what a real game would notice first if wrong, so the
+tests pin those.
 
-The frame-loop contracts above were found the other way round — by running local
-titles with `runskt` and reading the frames — and each is pinned by a fixture
-test afterwards: `TestCallSeriallyRunsOneRunnablePerPass` and
+The frame-loop contracts above were found the other way round — by running
+local titles with `runskt` and reading the frames — and each is pinned by a
+fixture test afterwards: `TestCallSeriallyRunsOneRunnablePerPass` and
 `TestCallSeriallyLoopAdvancesOneStepPerPass` for the serial queue,
 `TestScreenGraphicsStaysUsableAfterPaint` for the Graphics that outlives its
 paint, `TestXDisplayPublishesFramebufferSize` for the screen fields, and
-`TestCanvasReportsTheDisplayLessTheReservedRows` for the sixteen a Canvas keeps
-back beside them.
+`TestCanvasReportsTheDisplayLessTheReservedRows` for the sixteen rows a Canvas
+reserves beside them.
 
-Regenerate the fixture with:
-
-`$stub_dir/classes` is the signature classpath from
-[`testing.md`](testing.md#implementation-testing); build it once per session.
+Regenerate the fixture as follows. `$stub_dir/classes` is the signature
+classpath from
+[`testing.md`](testing.md#implementation-compiling-a-java-fixture); build it
+once per session.
 
 ```sh
 fixture_dir="$(mktemp -d /tmp/wfeature-skvm-fixture.XXXXXX)"
@@ -2196,13 +2154,12 @@ cp internal/platform/skt/testdata/SKVM.MF "$fixture_dir/META-INF/MANIFEST.MF"
 cp "$fixture_dir/skvm.jar" internal/platform/skt/testdata/skvm.jar
 ```
 
-The class library itself is declared in `internal/api/skvm/definitions.go` and
+The class library is declared in `internal/api/skvm/definitions.go` and
 installed by `skvm.Define`, so changing it is a Go change with nothing to
-rebuild. The WIPI Java surface is the same shape one package over
+rebuild. The WIPI Java surface has the same shape one package over
 (`internal/api/wipi`), with `TestEachClassExtendsItsMIDPCounterpart` holding
-the chains the whole design rests on and
-`TestAnchorFillsInTheHalfATitleLeavesOut` holding the one MIDP rule it
-relaxed.
+the chains the design rests on and `TestAnchorFillsInTheHalfATitleLeavesOut`
+holding the one MIDP rule it relaxed.
 
 
 <a id="followup-skt-compatibility-follow-up-2026-09-12"></a>
@@ -2222,7 +2179,7 @@ The published CLDC contracts declare
 [`DataInput`](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataInput.md)
 and
 [`DataOutput`](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataOutput.md)
-as interfaces. They also declare that
+as interfaces, and declare that
 [`DataInputStream`](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataInputStream.md)
 implements `DataInput` and
 [`DataOutputStream`](https://mirusu400.github.io/wipi-wiki/cldc/java-api/java/io/DataOutputStream.md)
@@ -2230,9 +2187,9 @@ implements `DataOutput`. The interfaces include the floating-point methods
 added in CLDC 1.1.
 
 The runtime already had the concrete integer, string, and array stream
-operations used by the local caller. It omitted the two interface class
-definitions and the streams' interface metadata. `invokeinterface` happened
-to dispatch by receiver class, while `instanceof`, `checkcast`, and API scans
+operations the local caller uses, but omitted the two interface class
+definitions and the streams' interface metadata. `invokeinterface` happened to
+dispatch by receiver class, while `instanceof`, `checkcast`, and API scans
 could not see the relationship. The correction adds the complete CLDC 1.1
 interface declarations, marks both streams assignable, and supplies the four
 floating-point stream bodies needed to make the declarations truthful.
@@ -2244,7 +2201,7 @@ One local archive, SHA-256
 contains 111 `invokeinterface` instructions across five classes. They call
 `readFully`, `readBoolean`, `readByte`, `readShort`, `readInt`,
 `writeBoolean`, `writeByte`, `writeShort`, and `writeInt`. Two input-driven
-debug traces now establish both sides of that link surface:
+debug traces establish both sides of that link surface:
 
 | Route | Actual caller evidence |
 | --- | --- |
@@ -2252,15 +2209,14 @@ debug traces now establish both sides of that link surface:
 | Options write | With each key held for 12 ticks, `CLEAR` at tick 60, `DOWN` at tick 120, and `FIRE` at tick 180 opened Options. `FIRE` at tick 400 opened the selected value, `RIGHT` at tick 520 changed it, and `FIRE` at tick 640 applied it. The apply method ran once, called a `DataOutput`-typed array helper 10 times, and executed 50 interface calls to `writeShort`. It then called the vendor file write once and produced a 295-byte options file with SHA-256 `b6ab74a001a469246c7af5f030e94384d8c3652f0dee5b71084eed8a1fdf9847`. |
 
 Neither trace logged a warning or error, so no further stream implementation
-was warranted. The only missing-class diagnostic was guest class `i`. The
-archive contains guest classes `a` through `h`; its startup deliberately
+was warranted. The only missing-class diagnostic was guest class `i`: the
+archive contains guest classes `a` through `h`, and its startup deliberately
 tries each name through `i` with `Class.forName` and catches `Exception`, so
-that diagnostic records a handled preload miss rather than a platform API
-gap. The review artifacts remain under
-`/tmp/wfeature-skt-api-route.cs0DHI/`.
+that diagnostic records a handled preload miss rather than a platform API gap.
+The review artifacts remain under `/tmp/wfeature-skt-api-route.cs0DHI/`.
 
-Repository-authored coverage now has both layers required for this JVM change.
-The class fixture passes streams through interface-typed methods, checks
+Repository-authored coverage has both layers this JVM change requires. The
+class fixture passes streams through interface-typed methods, checks
 assignability, round-trips every primitive category, and supplies
 noncanonical NaNs from Go to verify their serialized bytes. A packaged MIDlet
 fixture is opened by the SKT archive loader and performs the interface round
@@ -2276,19 +2232,19 @@ painted a lit frame.
 
 Every archive executed a storage API during this window: six used MIDP RMS and
 nine used the vendor file API. Five archives made actual record or file writes
-and produced 12 files in their isolated save roots. The other calls were
+and produced 12 files in their isolated save roots; the other calls were
 existence checks, opens, closes, or reads. A file created during boot may hold
 defaults, settings, or authentication state, so these writes do not prove that
 play progress was saved. The probe sent no menu or gameplay input and did not
 perform a second launch over the files it created.
 
-A separate restart probe then used archive SHA-256
+A separate restart probe used archive SHA-256
 `0ed66634d3dce7eeb05ec9ca95488f507574a1c8b62f3446018cecbd5c4d2415`.
 The first 300-tick process started with an empty save root and added one RMS
 record. The encoded store was 481 bytes: an eight-byte record header followed
-by a 473-byte payload whose SHA-256 was
+by a 473-byte payload with SHA-256
 `8f7b7c4436343c7a942dddbfd1d2be15668d20112d918e5d5426ef6515224d0a`.
-A second process started a fresh runtime over that same root. Its diagnostics
+A second process started a fresh runtime over the same root. Its diagnostics
 recorded one `getNumRecords` and one `getRecord(1)`, with no `addRecord` or
 `setRecord`; the save checksums remained unchanged.
 
@@ -2296,21 +2252,21 @@ The caller and trace establish that the bytes were consumed rather than merely
 found. Static disassembly of the caller's `d.ad()` shows that a zero record
 count builds a default string and calls `addRecord` at bytecode PC 167. The
 fresh trace took the conditional at PC 34 to PC 37 and reached PC 167. The
-restart trace took PC 34 to PC 174, called `getRecord` at PC 180, constructed a
-String from the returned byte array at PC 183, and then parsed delimiters and
+restart trace took PC 34 to PC 174, called `getRecord` at PC 180, constructed
+a String from the returned byte array at PC 183, and then parsed delimiters and
 assigned the resulting values to guest fields from PC 218 onward. This proves
 write, fresh-runtime reload, and guest consumption through RMS. Both runs
-produced the same opening frame digest, so the record is initial/default state;
-it does not prove restoration of user-visible gameplay progress.
+produced the same opening frame digest, so the record is initial/default
+state; it does not prove restoration of user-visible gameplay progress.
 
 An input-driven route over the same archive closes that progression gap. It
 advanced from a fresh start through the introduction to a stable map screen,
 using `FIRE` every four ticks from tick 30 through tick 1186. Later repeated
 presses only reopened a nearby interaction, so the map checkpoint, rather than
-the number of input events, is the progression evidence. The route then
-opened the title's own menu with `CLR`, selected its sixth entry with five
-`DOWN` presses and `FIRE`, then selected slot 1 and confirmed the write with
-the `1` key. The save result and the independent reload are:
+the number of input events, is the progression evidence. The route then opened
+the title's own menu with `CLR`, selected its sixth entry with five `DOWN`
+presses and `FIRE`, then selected slot 1 and confirmed the write with the `1`
+key. The save result and the independent reload:
 
 | Stage | Evidence |
 | --- | --- |
@@ -2320,13 +2276,13 @@ the `1` key. The save result and the independent reload are:
 | Restored checkpoint | The reloaded map PNG was byte-for-byte identical to the pre-save checkpoint. Both files have SHA-256 `75c83c7911ea0f8342cbf8e9f41329ecb4f79ff9dbcee122dd0482e8e6ed9e36`. |
 
 The raw route screenshots, diagnostics, save data, and checksum files remain
-under `/tmp/wfeature-skt-progress-route.2v12cT/` for this review. This result
+under `/tmp/wfeature-skt-progress-route.2v12cT/` for this review. The result
 proves visible story progress, a title-initiated save, a new process consuming
 that save, and restoration to the saved map rather than the fresh-start story.
 
 All 15 archives requested a vendor audio clip. Thirteen proceeded through
 `open` and `play` or `loop`, and all thirteen produced MIDI messages at the
-Host audio sink. Four also produced a WAV recording with sampled audio. The
+Host audio sink; four also produced a WAV recording with sampled audio. The
 remaining two requested a clip but did not open or play one within 300 ticks.
 These results are playback-path evidence through the runtime timeline and
 sink. The separate decoder sweep only proves that packaged sound resources can
@@ -2337,34 +2293,34 @@ browser or physical phone.
 
 ### Jlet coverage
 
-No class in the current 15-archive set extends
+No class in the 15-archive set of this date extends
 `org/kwis/msp/lcdui/Jlet`; their application paths are MIDlets. The repository
 fixtures cover the Jlet lifecycle, cards, vendor files, and event queue as
 separate contracts, but this corpus cannot supply a real Jlet save or gameplay
-route. The Jlet part of the acceptance item needs a Jlet archive placed in the
-local library before it can be measured. Its first run should use a fresh
-isolated save and the same write, restart, restore, and audio checks above.
+route. The Jlet part of the acceptance item needs a Jlet archive in the local
+library before it can be measured; its first run should use a fresh isolated
+save and the same write, restart, restore, and audio checks above.
 
 <a id="followup-landscape-evidence"></a>
 
 ### Landscape evidence
 
-The current descriptors contain no display width, height, or orientation key.
-The resource-name rule selects one archive in this set as `176x208`; it selects
-none as `320x240`. Static bytecode in all 15 archives references screen width
-or height. During the 300-tick probes, 12 called the width getter and 10 called
-the height getter. Those calls show that titles can adapt to the dimensions a
-Host supplies, but they do not identify a landscape package: this set has no
-paired `320` by `240` branch, orientation string, or consistent resource-name
+The descriptors contain no display width, height, or orientation key. The
+resource-name rule selects one archive in this set as `176x208` and none as
+`320x240`. Static bytecode in all 15 archives references screen width or
+height; during the 300-tick probes, 12 called the width getter and 10 the
+height getter. Those calls show that titles can adapt to the dimensions a Host
+supplies, but they do not identify a landscape package: this set has no paired
+`320` by `240` branch, orientation string, or consistent resource-name
 declaration.
 
-The CLI can already be given `-screen 320x240`, so the next investigation does
-not require a new framebuffer shape. It requires one of the packages reported
-to support landscape. Once available, record its hash, inspect its descriptor,
-resources, and the bytecode branch that consumes screen dimensions, then run
-the same package at `240x320` and `320x240` with isolated saves. Automatic
-selection is warranted only if the package carries a stable declaration that
-distinguishes it from portrait packages.
+The CLI already accepts `-screen 320x240`, so the next investigation needs no
+new framebuffer shape. It needs one of the packages reported to support
+landscape. Once available, record its hash, inspect its descriptor, resources,
+and the bytecode branch that consumes screen dimensions, then run the same
+package at `240x320` and `320x240` with isolated saves. Automatic selection is
+warranted only if the package carries a stable declaration that distinguishes
+it from portrait packages.
 
 <a id="followup-native-keyboard-and-ime-boundary"></a>
 
@@ -2384,18 +2340,18 @@ target, and reports a Form item-state callback. A dedicated text-state lock
 serializes these operations with background guest setters and screen paint.
 
 A title-owned `com.xce.lcdui.TextComponent` exposes editing operations and a
-size, but no operation that reads its characters. The Host cannot form an
+size, but no operation that reads its characters, so the Host cannot form an
 honest initial-value snapshot or compare a pending composition with the
 current value. That target remains unavailable through native IME input until
-caller evidence supplies a safe readable value or the interface contract is
-extended by an observed vendor method.
+caller evidence supplies a safe readable value or an observed vendor method
+extends the interface contract.
 
-The packaged TextBox acceptance fixture now passes the complete WebSocket path
-in automated Chromium and WebKit runs: open, Korean commit, reopen, stale
-target rejection, UTF-16 length rejection, and value retention across a
-pause/resume cycle. A person still needs to enter Korean with an actual phone
-keyboard and a desktop IME to verify operating-system composition behavior,
-focus, and the absence of unwanted browser zoom or layout movement.
+The packaged TextBox acceptance fixture passes the complete WebSocket path in
+automated Chromium and WebKit runs: open, Korean commit, reopen, stale target
+rejection, UTF-16 length rejection, and value retention across a pause/resume
+cycle. A person still needs to enter Korean with an actual phone keyboard and a
+desktop IME to verify operating-system composition, focus, and the absence of
+unwanted browser zoom or layout movement.
 
 <a id="followup-remaining-acceptance"></a>
 
@@ -2403,7 +2359,7 @@ focus, and the absence of unwanted browser zoom or layout movement.
 
 The automated gameplay save and fresh-runtime restore route is complete. Four
 requirements still depend on human observation or on archives absent from the
-current corpus:
+corpus of this date:
 
 1. Listen through the browser and a phone. Decoder output, MIDI messages, and
    sampled-audio buffers prove the software path but cannot establish what a
@@ -2411,8 +2367,8 @@ current corpus:
 2. Enter Korean with an actual phone keyboard and a desktop IME, checking
    operating-system composition, focus, and page layout behavior.
 3. Add a real Jlet archive to the local library and repeat the save, restart,
-   restore, audio, and input route. The current corpus contains no Jlet
-   application path.
+   restore, audio, and input route. The corpus contains no Jlet application
+   path.
 4. Supply a package reported to support landscape and compare it at `240x320`
-   and `320x240`. The current corpus has no stable landscape declaration from
-   which automatic selection can be derived.
+   and `320x240`. The corpus has no stable landscape declaration from which
+   automatic selection can be derived.

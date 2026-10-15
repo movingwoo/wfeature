@@ -48,7 +48,7 @@ import (
 //
 // All-the-same-digest is itself a result: it says the screen is not waiting
 // for a key. So is a screen that leaves on its own — it says the question was
-// asked too early. See `docs/ktf.md`, "Five titles the interactive rung
+// asked too early. See `docs/history/ktf.md`, "Five titles the interactive rung
 // failed", for what this was written to read and what it read.
 //
 //	WFEATURE_KTF_STOPPED_PROBE=1 \
