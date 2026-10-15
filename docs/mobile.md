@@ -147,6 +147,17 @@ first one is not cosmetic: **a re-signing service reads it to decide the IPA is
 an iOS app at all**, so an unsigned build without it can be refused before
 anything looks at the signature. The build stamps the SDK it actually used.
 
+**The window comes from a scene** (`PlaySceneDelegate`, with one scene declared
+under `UIApplicationSceneManifest`). An app built with the iOS 27 SDK that makes
+its window in the app delegate does not launch on iOS 27 at all: UIKit stops it
+before anything is drawn with "UIScene life cycle is required for apps built
+with this SDK". Releases up to 0.5.2 were built by the release runner's Xcode
+with the 26.5 SDK and launch on iOS 27 only because UIKit still excuses an older
+SDK; a local build with Xcode 27, or a runner that moves to it, stopped at
+launch. Checked on 2026-10-15 in the iOS 27 and 26.5 simulators with a 27 SDK
+build: without the scene the app stops at launch on iOS 27, and with it the app
+starts on both, loads the page and runs a game.
+
 `UIFileSharingEnabled` puts the games and saves in the Files app, so an archive
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
