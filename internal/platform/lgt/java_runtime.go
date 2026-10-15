@@ -11,7 +11,7 @@ import (
 // The object model an AOT title runs on: class objects, vtables and instances.
 //
 // The shapes are the module's, not this platform's, and every one of them was
-// read out of a call site (docs/lgt.md, "The three thunks every class carries"
+// read out of a call site (docs/history/lgt.md, "The three thunks every class carries"
 // and the sections after it):
 //
 //	object + 0x00   its class's vtable

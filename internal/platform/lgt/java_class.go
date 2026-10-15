@@ -324,7 +324,7 @@ func (client *Client) isJavaClassHandle(address uint32) bool {
 // walking the module's own sections for records. **The class list is not
 // enough**: it holds the classes the module resolves at run time, and the
 // launcher class — the one the platform is asked to construct — is exactly the
-// one the module never resolves for itself. See docs/lgt.md, "What "Game"
+// one the module never resolves for itself. See docs/history/lgt.md, "What "Game"
 // names, and why it is not in the class list".
 //
 // A name is matched in the internal form, with `/` between the package parts,

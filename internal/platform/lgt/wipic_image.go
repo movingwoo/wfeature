@@ -117,7 +117,7 @@ func (client *Client) createImage(thread *armcore.Thread) error {
 // runs its own blitter over the words, skipping the colour its own art
 // declares transparent. Collapse that colour to black and the key never
 // matches, so the blitter paints the sprite's whole rectangle: a character on
-// a solid box instead of a character. See lgt.md, "A transparent pixel still
+// a solid box instead of a character. See docs/history/lgt.md, "A transparent pixel still
 // has a colour".
 func (client *Client) framebufferFromImage(decoded stdimage.Image) (*framebuffer, error) {
 	bounds := decoded.Bounds()

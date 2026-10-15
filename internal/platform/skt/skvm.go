@@ -725,8 +725,8 @@ func (runtime *Runtime) setBackLightColor(_ *jvm.VM, arguments []jvm.Value) (jvm
 // and every sibling API on this handset follows it. The one call in the local
 // fixture is `start(10, 5)`, which fits that reading only awkwardly: five
 // milliseconds is below what a person feels. So this is the defensible reading
-// and not a confirmed one, and `docs/session.md` records that a real title has
-// to settle it. Reading them wrong costs a buzz of the wrong length; not
+// and not a confirmed one, and `docs/history/session.md` ("Where it reaches,
+// and where it does not") records that a real title has to settle it. Reading them wrong costs a buzz of the wrong length; not
 // reading them at all costs every buzz, which is where this started.
 func (runtime *Runtime) vibrationStart(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	level, err := intArgument(arguments, 0)
@@ -1539,7 +1539,7 @@ func (runtime *Runtime) reportClearImage(backdrop *jvm.Object) {
 // there is drawn as if it were absent and a mode is ignored, because the only
 // alternative on no evidence is to refuse a draw a title is making — and the
 // title that makes it is the one this was written for. What either means is
-// the note in docs/skvm.md rather than a guess in this body.
+// the note in docs/history/skt.md rather than a guess in this body.
 //
 // A title that passes either says so in the log, once per run and in both
 // build profiles. Until one did, "this platform says so rather than guessing"

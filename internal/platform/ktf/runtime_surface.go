@@ -11,7 +11,7 @@ import "sort"
 // an empty method table, so the omission surfaces as "method … was not found
 // from class …" at the first call, which can be an hour into a save. See
 // "A class left out of that table still resolves, and answers nothing" in
-// `docs/ktf.md`, and `internal/tools/apiscan`, which reads the names out of a
+// `docs/history/ktf.md`, and `internal/tools/apiscan`, which reads the names out of a
 // client image and reports the difference.
 func RuntimeJavaClassNames() []string {
 	names := make([]string, 0, len(runtimeJavaClasses))

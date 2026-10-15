@@ -1,203 +1,252 @@
 # Server sessions
 
 The server executes games through `internal/session`; the browser sends input
-and displays frames and audio. `internal/webhost` owns HTTP/WebSocket transport
-and the encoder. Both server and CLI call the same platform composition.
-[Session history](history/session.md) retains protocol rationale, previous
-measurements, and investigations.
+and displays frames and audio. `internal/webhost` owns the HTTP and WebSocket
+transport and the encoder. Both the server and the CLI call the same platform
+composition. [Session history](history/session.md) keeps the protocol's
+rationale, earlier measurements and investigations. The server's other HTTP
+routes (`/api/saves`, `/api/savepack`, `/api/games`, `/api/status`,
+`/api/shutdown`, `/api/debug-log`) are described in [running](running.md) and
+[architecture](architecture.md#debug-run-logs).
 
 ## Transport
 
-The page opens `/api/session?protocol=2`. Text messages carry JSON commands and
-results in both directions. In protocol 2, binary messages carry pictures and
-sound: a picture at the guest's own size, as an update to the one the page
-holds, which the page magnifies; and sound as compact binary that carries each
-sample once. Without that exact query value the server speaks protocol 1:
-complete PNGs magnified on the server, and sound as JSON. Older pages remain
-compatible, and the current page also reads protocol 1 from an older server
-that ignores the query.
+The page opens a WebSocket at `/api/session`. Text messages carry JSON commands
+and results in both directions. The query string negotiates everything else; the
+current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1`, and adds
+`pictures=webp` when its browser decodes lossless WebP:
 
-A protocol 2 page whose browser decodes lossless WebP adds `pictures=webp`, and
-its pictures come as lossless WebP instead of PNG. The page finds out once, by
-decoding a two-pixel picture with transparency before its first connection;
-every browser that can hold a session should, and one that cannot, or that
-answers late, keeps PNG. A server that does not know the value sends PNG, which
-the page reads as well.
+| Query | Effect | Requires |
+| --- | --- | --- |
+| `protocol=2` | Pictures are binary updates at the guest's own size, magnified by the page, and sound is binary with each sample carried once. Any other value, or none, is protocol 1: complete PNGs magnified on the server, and sound as JSON. | — |
+| `pictures=webp` | Protocol 2 pictures are lossless WebP instead of PNG. | `protocol=2` |
+| `sound=owned` | Independent clip ownership ([below](#protocol-2-sound)). | — |
+| `sound=resume` | Ownership plus note envelope ages. | — |
+| `timing=1` | Presentation timestamps and a clock frontier. | `sound=resume` |
+| `pcm=1` | Independent PCM channels. | `sound=owned` or `sound=resume` |
+| `phase=1` | Fractional PCM resume positions. | `sound=owned` or `sound=resume` |
 
-| Page message | Purpose |
-| --- | --- |
-| `start` | Start an archive with supported session options. |
-| `resume` | Find the browser token's retained game; explicit takeover transfers control. |
-| `park` / `stop` | Retain a game without control, or end it. |
-| `key` / `pointer` | Deliver supported input in guest coordinates. |
-| `speed` / `scale` | Change execution rate or presentation scaling. |
-| `text` | Open, commit, or cancel a supported native text edit. |
-| `quickSave` / `quickLoad` | Save the running game's execution state (KTF, LGT or SKT) to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
-| `audioResume` | Ask, within the current epoch, for an `allOff` followed by the reconstructed current audio output. |
-| `cheat` / `report` | Operate diagnostics or write a session report. |
-| `ping` | Check connection liveness independently of guest execution. |
+An unknown value is answered with the older behavior rather than refused, so
+older pages remain compatible, and the current page also reads protocol 1 from
+an older server that ignores the query. The page tests WebP once before its
+first connection by decoding a two-pixel picture with transparency; a browser
+that cannot, or that has not answered within two seconds, keeps PNG. A server
+that does not know `pictures=webp` sends PNG, which the page reads as well.
 
-Server JSON includes readiness, start descriptions, command results, audio,
-and diagnostics. Native text editing uses edit identifiers and stale-target
-checks; see [native text input](native-text-input.md). Detailed payloads and
-compatibility behavior remain in [the transport record](history/session.md).
+Every page message is a JSON object with a `kind`. Unknown fields are refused,
+a message is at most 1 MiB, and `id` (when nonzero) is echoed by the answer so
+the page can match it to its request:
+
+| Page message | Fields | Purpose |
+| --- | --- | --- |
+| `start` | `game`, `token`, `quick_load`, `value` (initial scale 1–4), `width`, `height` (32–1024), `confirmation` | Start an archive from its `games.json` path. A screen size the page does not send is the platform default. |
+| `resume` | `token`, `takeover` | Find the browser token's retained game; `takeover: true` transfers control from another connected page. |
+| `park` / `stop` | — | Retain the game without control, or end it. |
+| `key` | `action` (`press`, `release`), `code` | One key event with the MIDP-style code the keypad sends. A `repeat` from an older page is dropped; the session makes the handset's repeat itself. |
+| `pointer` | `action` (`press`, `drag`, `release`), `x`, `y` | One touch in the guest's own screen coordinates; the page removes its own magnification and letterboxing first. |
+| `speed` / `scale` | `value` | Change the execution rate or the presentation scale. |
+| `text` | `action` (`open`, `commit`, `cancel`), `edit`, `text` | Native text editing; see [native text input](native-text-input.md). |
+| `quickSave` / `quickLoad` | — | Save the running game's execution state to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
+| `audioResume` | — | Ask, within the current epoch, for an `allOff` followed by the reconstructed current audio output. |
+| `cheat` | `op`, `command`, `type`, `filter`, `operand`, `address`, `all`, `table` | One cheat panel operation or console line. |
+| `report` | `label` | Write the session's diagnostics report. |
+| `ping` | — | Check connection liveness; answered from the reader without waiting for guest execution. |
+
+| Server message | Carries | Meaning |
+| --- | --- | --- |
+| `ready` | `profile` | The connection takes a game; the server's build profile decides whether the page shows its debug half. |
+| `started` | `started` | The game is up, or a `resume` found it. |
+| `restored` | `started`, `epoch` | A quick load replaced the running game ([checkpoints](#ktf-checkpoints)). |
+| `resumed` | `resumed`, `occupied`, `message` | No retained game under the token, or `occupied: true` when another page controls it. |
+| `detached` | — | Control moved to another page; presentation stops until the user takes it back. |
+| `result` | `message`, `cheat`, `textInput`, `confirmation` | An answer to a request; a `confirmation` asks the page to confirm a start that would end a retained game. |
+| `error` | `message`, `exited` | A request failed. `exited: true` marks a game that ended itself rather than failed. |
+| `exited` | `message` | The running game ended; the message is its reason. |
+| `audio` | `audio` | Protocol 1 sound: a batch of sink calls in the order the guest made them. |
+| `vibrate` | `vibrate` (`level` 0–100, `ms`) | One vibration request. `ms` zero with a level above zero runs until the next request; level zero stops. |
+| `stats` | `stats` | Every two seconds: `fps`, `skipped`, `tick_ms`, `frame_bytes`, `tick_rate`, `speed` (guest over real time), `shed` and `bytes_per_second`. |
+
+The `started` description carries `platform`, `game`, `aid`, `pid`, `name`,
+`save_owner`, `main_class`, `authentication`, the screen the game actually got
+(`width`, `height`), the browser `token`, `can_watch`, `can_touch`,
+`can_checkpoint`, `has_checkpoint`, `restored` and `speed`. Native text editing
+uses edit identifiers and stale-target checks. Detailed payloads and their
+compatibility history are in [the transport record](history/session.md).
+
+Up to 64 page commands queue while the emulator is inside a tick; past that the
+newest is dropped. Up to 64 finished text messages and one picture wait for the
+socket, and audio, statistics and vibration are dropped rather than waited for
+when the connection is behind (`shed`). A write that does not finish within ten
+seconds ends the connection. Each pass of the session loop starts guest rounds
+for up to 32 ms (`tickBudget`) before it reads input again; a round already
+running is not cut short.
 
 ## Retention and control
 
 The server retains up to four active and parked games together. A game can
-outlive its controlling socket without an elapsed-time eviction limit.
-Returning with the same browser token resumes it; moving control from another
-connected page requires explicit takeover. The old page does not automatically
-reclaim control.
+outlive its controlling socket with no elapsed-time eviction. Returning with the
+same browser token resumes it; moving control from another connected page
+requires explicit takeover, which the server completes within ten seconds or
+refuses. The old page receives `detached` and does not reclaim control
+automatically.
 
-Capacity and shared-save replacement use explicit confirmation. Active games
-cannot be evicted to make room. The four-game limit is not a resident-memory
-budget or a limit on every socket and archive-inspection request.
+A start that would exceed the four-game limit, or that would replace a parked
+game holding the same saves, is answered with a `confirmation`; the page repeats
+the start with it to end the oldest parked game (or that game) and begin. A start
+whose saves a game attached to another page is using is refused. Active games
+cannot be evicted to make room. The four-game limit is not a
+resident-memory budget or a limit on sockets or archive-inspection requests.
 
-Parking releases held input, detaches presentation, and drives the platform's
-pause boundary. Resuming reattaches presentation and drives resume. These
-callbacks do not establish that all guest threads and clocks freeze.
+Parking releases held input, detaches presentation and drives the platform's
+pause boundary. Resuming reattaches presentation and drives resume, then sends
+the picture the game had. These callbacks do not establish that all guest
+threads and clocks freeze.
 
 Stopping the server ends every game it holds. A parked game is closed where it
 waits. A game whose page is still attached is asked to close: its runner
-finishes the round it is in and closes the session on its own goroutine, the
-way a page's `stop` does, and the server waits for that before it exits. The
-HTTP server's own shutdown does not reach a session socket, so without this a
-connected game would end with the process, and whatever its title had written
-and not yet handed to the save store — a file it left open, keys a native
-package keeps until a frame ends — would be lost. The wait shares the
-shutdown's ten-second deadline; a runner that has not let go by then is named
-in the log. Once a stop has begun, nothing starts, resumes or parks. Ordinary
-saves and quick save slots survive; a later page can go back to the slot's
-moment after starting the game.
+finishes the round it is in and closes the session on its own goroutine, as a
+page's `stop` does, and the server waits for that before it exits. The HTTP
+server's shutdown does not reach a session socket, so without this a connected
+game would end with the process, and what its title had written and not yet
+handed to the save store (a file it left open, keys a native package keeps until
+a frame ends) would be lost. The wait shares the shutdown's ten-second deadline;
+a runner that has not let go by then is named in the log. Once a stop has begun,
+nothing starts, resumes or parks. Ordinary saves and quick save slots survive,
+and a later page can return to the slot's moment after starting the game.
 
 <a id="ktf-checkpoints"></a>
 
 ## Checkpoints
 
 The shared session supports KTF Java/AOT, older descriptor modules and native
-packages, LGT Clets and AOT Java titles, and SKT Java/MIDP/WIPI and GNEX/GVM
-SGS titles ([SKT checkpoints](skt-checkpoints.md)). Each reports
-`can_checkpoint: true` when the game has a save directory. The `started` description reports `can_checkpoint`, `has_checkpoint`,
-`restored` and `speed`. A `start` request with `quick_load: true` constructs from
-the archive's slot without running guest startup. The ordinary `resume` command
-still means reconnecting to a retained in-memory session.
+packages, LGT Clets and AOT Java titles, and SKT Java/MIDP/WIPI and GNEX/GVM SGS
+titles ([SKT checkpoints](skt-checkpoints.md)). Each reports
+`can_checkpoint: true` when the game has a save directory. A `start` with
+`quick_load: true` constructs from the archive's slot without running guest
+startup. The ordinary `resume` command still means reconnecting to a retained
+in-memory session. The envelope, the slot and the records are in
+[architecture](architecture.md#where-a-stopped-game-keeps-its-state).
 
-The page offers quick save/load as keypad assignments, included in top-row columns
-5 and 6 of the Type1–3 defaults and optional in Type4. Clicking an assigned key
-sends its request immediately and displays brief inline feedback without a
-confirmation or result popup. All copies are disabled while a request is pending;
-editing a cell never sends a request.
-The picker offers ordinary startup only. To restore after a server restart,
-start the game and press its assigned quick-load key. Explicit startup restoration
-remains available to protocol and CLI callers.
+The page offers quick save and quick load as keypad assignments, placed in
+top-row columns 5 and 6 of the Type1–3 defaults and optional in Type4. Pressing
+an assigned key sends its request immediately and shows brief inline feedback
+without a confirmation or result popup. Every copy of the key is disabled while a
+request is pending, and editing a cell never sends a request. The picker offers
+ordinary startup only: to restore after a server restart, start the game and
+press its quick-load key. Explicit startup restoration remains available to
+protocol and CLI callers.
 
 A checkpoint is execution state only, and the game's own saves come first:
 neither command replaces, reverts or removes an ordinary save. See
 [Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
 
-`quickSave` runs between complete rounds. It first stores any write the game
-has issued and the host still holds (an open file's buffer on LGT or SKT, a
-written name not yet stored in a native KTF package), then captures, then writes one
-slot per exact archive. The slot holds no save.
+`quickSave` runs between complete rounds. It first stores any write the game has
+issued and the Host still holds (an open file's buffer on LGT or SKT, a written
+name not yet stored in a native KTF package), then captures, then writes one slot
+per exact archive. The slot holds no save.
 
-`quickLoad` reads the archive and the slot, validates the record into a
-detached runtime that has no access to the saves, fills what that runtime has
-open from the saves as they are with reads only, stores the running game's
-issued writes as `quickSave` does, and then replaces the running game. The
-restored game reads the saves on disk and writes on top of them. With nothing
-pending a load writes nothing.
+`quickLoad` reads the archive and the slot, validates the record into a detached
+runtime that has no access to the saves, fills what that runtime has open from
+the saves as they are with reads only, stores the running game's issued writes
+as `quickSave` does, and then replaces the running game. The restored game reads
+the saves on disk and writes on top of them. With nothing pending, a load writes
+nothing.
 
 Either command is refused, with the running game left running and no save
 reverted or removed, when the archive or the slot is invalid, the runtime is in
-a state a record cannot describe, the store refuses the game's pending writes,
-or a save the load needs cannot be read. Three refusals reach the page as a
-sentence in its own language, with the cause in the server log: a slot written
-in an earlier format (which is left in place), pending writes that could not be
+a state a record cannot describe, the store refuses the game's pending writes, or
+a save the load needs cannot be read. Three refusals reach the page as a sentence
+in its own language, with the cause in the server log: a slot written in an
+earlier format (which is left in place), pending writes that could not be
 stored, and saves that could not be read. "Could not be stored" covers a store
-that refused the write and, on LGT and SKT, a buffer the host declined to store
-because its file had changed behind it; "could not be read" covers a read that failed
-and saves larger than a load reads. Every other refusal is passed through as
-the error's own text.
+that refused the write and, on LGT and SKT, a buffer the Host declined to store
+because its file had changed behind it; "could not be read" covers a failed read
+and saves larger than a load reads. Every other refusal passes through as the
+error's own text.
 
 A `start` with `quick_load: true` reads and checks the slot before the game the
-connection is running is stopped, so a start that is certain to be refused — no
-slot, an earlier format, a damaged slot, another archive's — leaves that game
-running. `has_checkpoint` is true for an earlier-format slot as well, so that
-the load is offered and its refusal can say why.
+connection is running is stopped, so a start that is certain to be refused (no
+slot, an earlier format, a damaged slot, another archive's) leaves that game
+running. `has_checkpoint` is true for an earlier-format slot as well, so the
+load is offered and its refusal can say why.
 
 Slots are outside ordinary `.wfs` exports, and a `.wfs` import is unchanged: it
 writes the saves it carries over the ones on disk.
 
 A successful load sends `restored` with a new connection `epoch` and a `started`
-description before new output. Mutating input, text, cheat, speed, scale and
-checkpoint requests carry that epoch; omitted means zero. Requests from a prior
-epoch are refused. Both output queues and the frame encoder discard work from
-the prior epoch, and the page closes its old decoder and clears sound, vibration,
-input, text and cheat state before the fresh complete frame. Binary messages keep
-their existing format; the ordered reset and queue ownership establish the boundary.
-The Host releases saved physical input and resumes a paused slot through the
-normal lifecycle. A CLI caller retains saved input and pause until it changes them.
+description before new output. Mutating input, text, cheat, speed, scale,
+checkpoint and `audioResume` requests carry that epoch (omitted means zero), and
+requests from a prior epoch are refused with "request belongs to a previous
+timeline". Both output queues and the frame encoder discard work from the prior
+epoch, the page's sound definitions start over, and the next picture is
+complete. The page cancels its
+pending cheat, text and checkpoint requests, closes its old decoder, and clears
+sound, vibration, input, text and cheat state before the fresh complete frame.
+Binary messages keep their format; the ordered reset and queue ownership mark the
+boundary. The Host releases saved physical input and resumes a paused slot
+through the normal lifecycle. A CLI caller keeps saved input and pause until it
+changes them.
 
 On LGT a key is queued and delivered by the next tick, so the release the Host
 sends for a restored hold reaches the title one tick after the load rather than
 inside it. That platform has no repeat event and no pointer, and its pad rule is
-the platform's own, so a checkpoint carries the Host's held keys and the pad's
+the platform's own, so its checkpoint carries the Host's held keys and the pad's
 state and nothing else of the three.
 
 Loaded notes resume with their original programs, current channel controllers
-and saved envelope ages on capable pages. Pitch sensitivity and RPN/NRPN selection
-are restored before notes; pedal-held released keys receive note-off immediately
-after resuming under sustain. PCM tails resume with their remaining samples. Paused clips stay
-silent until explicitly resumed. Oscillator phase, release tails and physical
-output latency and short controller smoothing transitions are not serialized. This is not a claim of
-sample-exact audio continuity. Runtime state compatibility requires the same
-archive and a compatible checkpoint schema; debug and release share the schema.
+and saved envelope ages on capable pages. Pitch sensitivity and RPN/NRPN
+selection are restored before notes; pedal-held released keys receive note-off
+immediately after resuming under sustain. PCM tails resume with their remaining
+samples. Paused clips stay silent until explicitly resumed. Oscillator phase,
+release tails, physical output latency and short controller smoothing
+transitions are not serialized, so this is not sample-exact audio continuity.
+Runtime state compatibility requires the same archive and a compatible
+checkpoint schema; debug and release share the schema.
 
 ## Presentation and audio
 
 Ordinary ticks use `Session.FrameUpdate`, which transfers owned, unscaled pixels
-and a presentation scale. Encoding runs on the encoder goroutine behind a
-bounded one-frame queue, and so does protocol 1's server-side hqx; a discarded
-picture therefore costs no encoding work on the emulator goroutine. The
-synchronous `Session.Frame` API still returns already-scaled pixels for other
-Hosts; MIDP surfaces remain at their native size and are never magnified. The
-page decodes pictures and draws them — in protocol 2 it also magnifies them — and
-does not execute guest instructions. Speed and scaling are distinct settings.
+and a presentation scale. Encoding, and protocol 1's server-side hqx, run on the
+encoder goroutine behind a one-frame queue, so a discarded picture costs no
+encoding work on the emulator goroutine. The synchronous `Session.Frame` API
+still returns already-scaled pixels for other Hosts; MIDP surfaces stay at their
+native size and are never magnified. The page decodes pictures and draws them,
+magnifying them in protocol 2, and executes no guest instructions. Speed and
+scaling are separate settings.
 
 The encoder compares consecutive raw pictures, dimensions and scale before
-scaling or encoding. An unchanged picture needs no new picture or network message;
-guest callbacks, timers and drawing still execute. A static screen may therefore
-report zero delivered frames per second while guest ticks continue normally.
-Start, resume and display-setting changes force presentation even when pixels
-match. That request survives a full queue until accepted, and its queued lifecycle
-answer is written before the forced picture.
+scaling or encoding. An unchanged picture needs no new picture or network
+message, while guest callbacks, timers and drawing still execute, so a static
+screen can report zero delivered frames per second while guest ticks continue.
+Start, resume and display-setting changes force presentation even when the pixels
+match. That request survives a full queue until it is accepted, and its queued
+lifecycle answer is written before the forced picture.
 
 KTF additionally offers explicit LCD flushes through `backend.FrameSink` and
 `session.Options.FrameUpdates`, including while startup or a long callback holds
 the execution lock. Each `FrameUpdate` owns its pixels. Sampling occurs at most
-once per 1/60 wall-clock second, skips unchanged samples, and never waits for
-the consumer. Hosts without a sink keep the pull-only path. No timer invents a
-flush that guest code did not request.
+once per 1/60 wall-clock second, skips unchanged samples, and never waits for the
+consumer. Hosts without a sink keep the pull-only path. No timer invents a flush
+that guest code did not request.
 
-Parking detaches the sink before its queue closes; resume installs the new
-queue before guest execution resumes. Intermediate frames use the same negotiated
+Parking detaches the sink before its queue closes; resume installs the new queue
+before guest execution resumes. Intermediate frames use the same negotiated
 picture format. [The CPU investigation](cpu-saturation-investigation-2026-09-23.md)
 records component benchmarks, authored-fixture Chromium/WebKit checks and a
-bounded local KTF browser run. These do not establish all-game performance or
+bounded local KTF browser run; these do not establish all-game performance or
 physical-phone acceptance.
 
 Audio uses shared backend timelines. The page's synthesizer consumes audio
-messages, subject to browser audio activation. Borrowed PCM/SysEx slices must
+messages, subject to browser audio activation. Borrowed PCM and SysEx slices must
 be copied before asynchronous use. See [audio](audio.md) and
 [shared service contracts](architecture.md#shared-runtime-services).
 
 ### Protocol 2 pictures
 
 The encoder compares each picture, at the guest's own size, with the one the
-page holds once the previous message is accepted by the writer queue. All
-encoding is lossless at the game's frame rate. Every picture message starts
-with a sixteen-byte big-endian header:
+page holds once the previous message has been accepted by the writer queue. All
+encoding is lossless at the game's frame rate. Every picture message starts with
+a sixteen-byte big-endian header:
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -213,43 +262,43 @@ with a sixteen-byte big-endian header:
 
 - **Complete** replaces the held picture and its size. The first picture, an
   explicit redraw, and a change of size or scale are complete.
-- **Masked** draws its rectangle over the held picture. A pixel equal to the
-  one held is written transparent and keeps it; every other pixel in it is
-  opaque. It is every other update. Runs of identical transparent pixels are
-  what compresses, so a change spread across the screen costs little more
-  than the pixels that changed.
-- **Replace** replaces its rectangle, transparency included. It is used only
-  when a changed pixel is not opaque, which a masked update cannot express.
+- **Masked** draws its rectangle over the held picture. A pixel equal to the one
+  held is written transparent and keeps it; every other pixel in the rectangle is
+  opaque. Every other update is masked. Runs of identical transparent pixels
+  compress well, so a change spread across the screen costs little more than the
+  pixels that changed.
+- **Replace** replaces its rectangle, transparency included. It is used only when
+  a changed pixel is not opaque, which a masked update cannot express.
 - **Shift.** When at least a thirty-second of the pixels changed and the held
   picture is opaque, the encoder looks for the held picture moved by up to 16
-  pixels along either axis, trying the last shift it sent first and keeping it
-  when it still predicts nearly every sampled pixel. If the prediction leaves
-  at least a fifth fewer changed pixels, a masked update names the shift: the
-  page first draws its held picture at that offset over itself, and the strip
-  it uncovers keeps what it had. Scrolling fields change almost every pixel a
-  frame and move by one or two. A shift that already produced every pixel
-  carries no picture.
-- A rectangle with at most 256 distinct values, the transparent one included,
-  is written with a palette. PNGs use zlib's default level.
-- **WebP.** `internal/vp8l` writes the rectangle as lossless WebP, written for
-  these pictures from RFC 9649 rather than taken from a library. A rectangle
-  with at most 256 colours goes through a colour table, packing up to eight
-  pixels into one where the colours are few; any other has green subtracted
-  from red and blue. Both are then backward references — copies from the left,
-  from the rows above through the format's short neighbourhood codes, and from
-  anywhere earlier through hash chains over runs of two and of six pixels —
-  chosen for the bits they save, and a colour cache sized by estimate. The
-  predictor transform is tried only for a picture still above six bits a pixel,
-  such as a photograph: the games' flat areas and repeated tiles copy far
-  better than they predict. A transparent pixel's colour is chosen to cost
-  least, because nothing on the page can show it. On recorded play this is a
-  fifth to a half fewer bytes than the PNGs, for 0.8 to 1.6 times their
-  encoding time; see
+  pixels along either axis, scoring candidates on every fourth row of the changed
+  area. It tries the last shift it sent first and keeps it when it still matches
+  seven eighths of the sampled pixels. If the best shift leaves at least a fifth
+  fewer changed pixels, a masked update names it: the page first draws its held
+  picture at that offset over itself, and the strip it uncovers keeps what it
+  had. Scrolling fields change almost every pixel a frame and move by one or two.
+  A shift that already produced every pixel carries no picture.
+- **Palette.** A PNG rectangle with at most 256 distinct values, the transparent
+  one included, is written with a palette. Protocol 2 PNGs use zlib's default
+  level; protocol 1's complete PNGs use the fastest.
+- **WebP.** `internal/vp8l` writes the rectangle as lossless WebP, implemented
+  from RFC 9649 rather than taken from a library. A rectangle with at most 256
+  colours goes through a colour table, packing up to eight pixels into one where
+  the colours are few; any other has green subtracted from red and blue. Both
+  then use backward references (copies from the left, from the rows above through
+  the format's short neighbourhood codes, and from anywhere earlier through hash
+  chains over runs of two and of six pixels) chosen for the bits they save, and a
+  colour cache sized by estimate. The predictor transform is tried only for a
+  picture still above six bits a pixel, such as a photograph, because the games'
+  flat areas and repeated tiles copy far better than they predict. A transparent
+  pixel's colour is chosen to cost least, since nothing on the page can show it.
+  On recorded play this is a fifth to a half fewer bytes than the PNGs, for 0.8
+  to 1.6 times their encoding time; see
   [the record](history/session.md#frame-bandwidth-webp-2026-09-25).
 
 Each update depends on all prior binary messages on that connection. Raw frames
-can be dropped before encoding; encoded updates must remain ordered and cannot
-be dropped independently.
+can be dropped before encoding; encoded updates stay ordered and cannot be
+dropped independently.
 
 `web/frame-stream.js` decodes messages serially and composes them on a retained
 canvas at the guest's size, reporting the scale and the changed rectangle. The
@@ -257,187 +306,205 @@ display coalesces draws of that canvas without losing updates, and
 `web/magnify.js` applies hqx at the scale the server named, redoing only the
 magnified blocks the changed rectangles can reach; see [hqx](hqx.md). Image
 dimensions are bounded at 4096 per axis. At most 32 waiting messages and 96 MiB
-of queued/in-flight data are accepted. A malformed message, a decode failure or
-excessive backlog closes the connection; existing session recovery resumes the
-retained game with a complete picture. The server has no hqx work for these
+of queued or in-flight data are accepted. A malformed message, a decode failure
+or excessive backlog closes the connection, and session recovery resumes the
+retained game with a complete picture. The server does no hqx work for these
 connections. A bare PNG from a protocol 1 server is read as a complete picture
 already magnified.
 
 ### Protocol 2 sound
 
 A sound message is binary: ASCII `WFA2` and the tick's calls in order, each an
-operation byte and its operands. `internal/webhost/audio_stream.go` lays the
-format out. A sampled sound or SysEx message travels once as a definition under
-an id and is named afterwards; ids are never reused. The definitions a page
-holds are bounded at 8 MiB, past which the server tells it to forget them and
-starts over. A sound message that is shed because the connection is behind
-leaves the page's definitions unknown, so the next one starts over the same way.
-The page skips a sound whose definition it does not hold.
+operation byte and its operands, with multibyte fields big-endian.
+`internal/webhost/audio_stream.go` lays the format out:
 
-The `sound=owned` query enables clip ownership in either sound format. JSON
-adds `sound`, `stopSound` and `soundGain`; binary adds `0x07` plus a big-endian
-32-bit sound handle, `0x08` to stop it and `0x09` plus a big-endian 16-bit gain
-from 0 to 10,000. Selection begins at zero in each message.
-Global `allOff` and content definitions retain their previous meanings. Older
-clients receive the original operations. See [audio ownership](audio-ownership.md).
+| Byte | Operation | Operands |
+| --- | --- | --- |
+| `0x01` | note on | channel, note, velocity |
+| `0x02` | note off | channel, note, velocity |
+| `0x03` | program change | channel, program |
+| `0x04` | control change | channel, control, value |
+| `0x05` | pitch bend | channel, 16-bit value |
+| `0x06` | all off | — |
+| `0x07` | select sound | 32-bit sound handle |
+| `0x08` | stop sound | — (the selected sound) |
+| `0x09` | sound gain | 16-bit gain, 10,000 is unity |
+| `0x0a` | resume note | channel, note, velocity, 32-bit age in milliseconds |
+| `0x0b` | select time | presence byte; 1 is followed by an IEEE 754 float64 time in seconds |
+| `0x0c` | clock | IEEE 754 float64 presentation time in seconds |
+| `0x10` | define | 32-bit id, 32-bit length, the bytes |
+| `0x11` | play wave | 32-bit id, channels, 32-bit sampling rate |
+| `0x12` | SysEx | 32-bit id |
+| `0x13` | forget | — (drop every definition) |
+| `0x14` | play PCM wave | 32-bit id, channels, 32-bit rate, 16-bit PCM group |
+| `0x15` | PCM control | 16-bit PCM group, control, value |
+| `0x16` | resume wave | 32-bit id, channels, 32-bit rate, 16-bit PCM group, 32-bit frame phase |
 
-Current pages request `sound=resume`, which adds envelope ages to ownership
-and gain. JSON `noteResume` carries channel, note, velocity and unsigned 32-bit
-`age` in milliseconds. Binary opcode `0x0a` carries those three bytes followed
-by the big-endian age. Earlier `sound=owned` pages receive ordinary note-on
-events on reconstruction, avoiding an unsupported opcode. Paused owners are
-omitted from every output reconstruction until the guest resumes them.
+A sampled sound or SysEx message travels once as a definition under an id and is
+named afterwards; ids are never reused. The definitions a page holds are bounded
+at 8 MiB, past which the server tells it to forget them and starts over. A sound
+message shed because the connection is behind leaves the page's definitions
+unknown, so the next one starts over the same way. The page skips a sound whose
+definition it does not hold.
 
-`pcm=1` with either ownership mode enables independent ATR PCM channels. JSON
-wave events add nonzero `pcmChannel`, and `pcmControl` carries that group plus
-`control` (7, 11 or 10) and `value` (0–127; omitted zero has the same meaning).
-Binary `0x14` carries a big-endian 32-bit wave-definition ID, one physical-channel
-byte (currently mono), big-endian 32-bit sampling rate and big-endian 16-bit PCM
-group. Binary `0x15` carries the 16-bit group followed by control and value bytes.
-The existing `0x11` wave reference keeps its original size and meaning. Definitions
-contain only sample content and can be reused across groups and owners. Zero is
-reserved for ordinary ungrouped waves; new controls require group 1–65535.
-Older pages receive ordinary waves rendered with the current PCM gain/pan at
-onset. Reconnection refreshes capability before replay, so the same parked
-session can move between old and new pages. The new page also accepts old servers.
+`sound=owned` enables clip ownership in either sound format. JSON adds `sound`,
+`stopSound` and `soundGain`; binary adds `0x07`, `0x08` and `0x09`. Selection
+begins at zero in each message. Global `allOff` and content definitions keep
+their meanings, and older clients receive the original operations. See
+[audio ownership](audio-ownership.md).
 
-`phase=1` with either ownership mode additionally enables fractional PCM resume
-positions, independently of PCM-group support or timestamp negotiation. JSON
-`playWave.framePhase` is an integer in `[0, 1000000000)`, measuring billionths
-of the first remaining sample frame; an absent field means zero. Binary `0x16`
-carries a 32-bit definition ID, physical-channel byte, 32-bit sampling rate,
-16-bit PCM group (zero permits ungrouped waves), and 32-bit phase, all multibyte
-fields big-endian. A nonzero group still requires mono. This operation leaves
-the existing `0x11` and `0x14` sizes unchanged; zero-phase starts retain those
-operations. Definitions continue to contain only raw samples and are shared
-across offsets. The page checks phase before batch dispatch and starts the
-buffer at `phase/(1e9*rate)` seconds without changing its presentation timestamp.
-Old pages receive the same whole-frame suffix without phase metadata, and old
-servers can ignore the new query. Reconnect adopts the new page's capability.
+`sound=resume`, which current pages request, adds envelope ages to ownership and
+gain. JSON `noteResume` carries channel, note, velocity and an unsigned 32-bit
+`age` in milliseconds; binary uses `0x0a`. Earlier `sound=owned` pages receive
+ordinary note-on events on reconstruction instead of an unsupported opcode.
+Paused owners are omitted from every output reconstruction until the guest
+resumes them.
 
-`timing=1`, negotiated separately with `sound=resume`, preserves presentation
-seconds without removing compatibility with older servers. JSON adds optional
-`at` (zero is meaningful) and a final `{kind:"clock", at:...}` frontier. A silent
-tick sends that frontier alone at most every 100 ms after the last sound
-message (`clockOnlyInterval`), and skips it while the send queue is full. Binary `0x0b` selects time: presence byte zero
-clears selection, or one precedes a big-endian IEEE 754 float64. Binary `0x0c`
-is a frontier float64 independent of selection. Time selection resets for each
-message and after `allOff`. Finite signed event times allow overdue restored
-deadlines; the frontier is nonnegative. Invalid/truncated operands reject the
-batch. Earlier clients receive neither timestamps nor clock operations.
+`pcm=1` enables independent ATR PCM channels. JSON wave events add a nonzero
+`pcmChannel`, and `pcmControl` carries that group plus `control` (7, 11 or 10)
+and `value` (0–127; omitted zero has the same meaning). Binary uses `0x14`, whose
+physical-channel byte is currently mono, and `0x15`; the existing `0x11` keeps
+its size and meaning. Definitions contain only sample content and can be reused
+across groups and owners. Group zero is reserved for ordinary ungrouped waves,
+and new controls require group 1–65535. Older pages receive ordinary waves
+rendered with the current PCM gain and pan at onset. Reconnection refreshes the
+capability before replay, so one parked session can move between old and new
+pages, and the new page also accepts old servers.
+
+`phase=1` enables fractional PCM resume positions, independently of PCM groups
+or timestamps. JSON `playWave.framePhase` is an integer in `[0, 1000000000)`,
+billionths of the first remaining sample frame; absent means zero. Binary uses
+`0x16`, whose group may be zero for an ungrouped wave; a nonzero group still
+requires mono. `0x11` and `0x14` keep their sizes, and zero-phase starts still use
+them. Definitions stay raw samples shared across offsets. The page checks the
+phase before batch dispatch and starts the buffer at `phase/(1e9*rate)` seconds
+without changing its presentation timestamp. Old pages receive the same
+whole-frame suffix without phase metadata, old servers ignore the query, and a
+reconnect adopts the new page's capability.
+
+`timing=1`, negotiated with `sound=resume`, preserves presentation seconds
+without breaking older servers. JSON adds an optional `at` (zero is meaningful)
+and a final `{kind:"clock", at:...}` frontier. A silent tick sends the frontier
+alone at most every 100 ms after the last sound message (`clockOnlyInterval`),
+and skips it while the send queue is full. Binary `0x0b` selects time and `0x0c`
+is a frontier independent of selection. Time selection resets for each message
+and after `allOff`. Finite signed event times allow overdue restored deadlines;
+the frontier is nonnegative. Invalid or truncated operands reject the batch.
+Earlier clients receive neither timestamps nor clock operations.
 
 If a timed batch cannot fit the page's bounded scheduling window, or decoding
-lost an operation, the page sends the epoch-bound `audioResume` command once
-and ignores pending batches until `allOff` plus reconstructed output arrives.
-The server clears cached definitions before replaying; guest execution never
-waits for playback or socket capacity. A malformed first packet defers this
-request until a valid clock confirms that the server supports timing. A new
-quick-load epoch clears recovery state before acknowledging the load.
+lost an operation, the page sends the epoch-bound `audioResume` command once and
+ignores pending batches until `allOff` and the reconstructed output arrive. The
+server clears cached definitions before replaying; guest execution never waits
+for playback or socket capacity. A malformed first packet defers this request
+until a valid clock confirms that the server supports timing. A new quick-load
+epoch clears recovery state before acknowledging the load.
 
-A dropped audio batch or collector overflow requests current-output
+A dropped audio batch or a collector overflow requests current-output
 reconstruction on the next tick with queue capacity, even without fresh events.
-The reset and reconstructed notes/remaining PCM travel together; the guest never
-waits for the socket. Reconnect and quick load also reconstruct owned output; a
-reconnect does so after the resumed game's first tick, because a parked game's
-guest clock kept time and a rebuild sent before a tick would anchor the page
-at the pre-park clock, get the next batch refused as early and cut every voice
-a second time.
-Normal collection is bounded to 4,096 operations and full reconstruction to
-65,536, including pitch sensitivity, both parameter selectors and at most three
-controls for each of 2,048 PCM groups. PCM controls precede remaining wave tails.
-The page atomically preflights PCM metadata and the group bound before applying
-any events, including an untimed batch or a reset reconstruction. Owned pages
-receive all channel controls before notes. For legacy pages with flattened
-channels, the Host requests each note's owner controls immediately before its
-note-on instead. Debug logs separate audio drops, collector overflow and reconstruction.
-The page's [playout timing aggregate](audio.md#playout-lateness-diagnostics)
-records batch-admission deadline lateness separately, using existing session
-statistics/report actions to flush it. It adds no wire fields or messages.
+The reset and the reconstructed notes and remaining PCM travel together, and the
+guest never waits for the socket. Reconnect and quick load also reconstruct owned
+output. A reconnect does so after the resumed game's first tick: a parked game's
+guest clock kept time, and a rebuild sent before a tick would anchor the page at
+the pre-park clock, get the next batch refused as early and cut every voice a
+second time. Normal collection is bounded to 4,096 operations and full
+reconstruction to 65,536, including pitch sensitivity, both parameter selectors
+and at most three controls for each of 2,048 PCM groups. PCM controls precede
+remaining wave tails. The page atomically preflights PCM metadata and the group
+bound before applying any events, including an untimed batch or a reset
+reconstruction. Owned pages receive all channel controls before notes; for
+legacy pages with flattened channels, the Host sends each note's owner controls
+immediately before its note-on. Debug logs separate audio drops, collector
+overflow and reconstruction. The page's
+[playout timing aggregate](audio.md#playout-lateness-diagnostics) records
+batch-admission deadline lateness separately and uses the existing session
+statistics and report actions to flush it; it adds no wire fields or messages.
 
 ### Writes and statistics
 
 The writer sends everything already queued in one socket write, text ahead of a
 picture, and each WebSocket frame's header and payload leave together. A tick
-hands its picture to the encoder and its sound to the queue at once, and the
+hands its picture to the encoder and its sound to the queue at once, so the
 sound arrives first; while a picture is being encoded, sound waits up to ten
-milliseconds for it so the two share a write. Statistics include
-`bytes_per_second`, everything written with its WebSocket framing, which the
-page's run log shows as `net`.
+milliseconds for it so that the two share a write. `bytes_per_second` counts
+everything written, WebSocket framing included, and the page's run log shows it
+as `net`.
 
 The page's own files and `games.json` are answered with a content validator,
-`Cache-Control: no-cache` and gzip where the browser accepts it, so an
-unchanged file costs a 304 and a changed one arrives compressed.
+`Cache-Control: no-cache`, and gzip where the browser accepts it, so an unchanged
+file costs a 304 and a changed one arrives compressed.
 
-See the [bandwidth measurements](history/session.md#frame-bandwidth-2026-09-24)
-for recorded play, alternatives measured and rejected, and limitations.
+The [bandwidth measurements](history/session.md#frame-bandwidth-2026-09-24) cover
+recorded play, the alternatives measured and rejected, and their limitations.
 
 ## Save integrity
 
 In-game saves use the common backend store. The web Host holds a filesystem
 claim for active and parked sessions and for imports. The CLI's shared `run`
-command, `runktf`, KTF save imports and provisioning take the same claim, so a
-second cooperating process cannot write through another live session. Other
-legacy platform commands do not yet take this lifetime claim.
+command, `runktf`, `importsaves` and `provision` take the same claim, so a second
+cooperating process cannot write through another live session; `runlgt` and
+`runskt` do not take it.
 
 Directory operations also take a shorter filesystem lock: a complete read,
-write, batch, slot write or recovery finishes before another begins.
-Listing and export remain available while a session owns its saves, and wait
-for an active transaction. Separate guest writes are still separate operations.
-`.wfs` export/import contains guest saves, not a CPU/JVM/session snapshot. See
+write, batch, slot write or recovery finishes before another begins. Listing and
+export remain available while a session owns its saves, and wait for an active
+transaction. Separate guest writes are still separate operations. `.wfs` export
+and import contain guest saves, not a CPU, JVM or session snapshot. See
 [RMS](rms.md) and [running](running.md).
 
 Where the save location cannot hold a file lock (a folder that cannot be
-written, a filesystem without locks), the claim and the transaction lock
-exclude callers in this process only, and the Host logs that once per
-directory. A start that the claim refuses says whether another game holds the
-saves or the folder itself could not be prepared. See
-[the lock and its fallback](architecture.md).
+written, a filesystem without locks), the claim and the transaction lock exclude
+callers in this process only, and the Host logs that once per directory. A start
+that the claim refuses says whether another game holds the saves or the folder
+itself could not be prepared. See
+[the lock and its fallback](architecture.md#save-locks-and-claims).
 
 `SaveReader` and `ReadSave` distinguish absence from I/O failure when the store
-supports them. `DirectorySaveStore` does. Three answers mean "no entry": nothing
-at the key's path, a path that runs below a saved file, and a path that is a
-directory. The last is made by keys below it (`fs/saves/slot` is a file in a
-directory `saves`), nothing can be stored under such a key, and the read answers
-what it answered before those keys were written and what the memory store
-answers. A title that keeps its saves in a folder and asks whether the folder
-exists used to end every run after the first with a read error there. Legacy
-`LoadSave` remains compatible but cannot recover errors that a legacy Host
-already hides. Record decoding rejects truncation and trailing bytes. A record
-list keeps a record of no bytes (length zero) apart from a deleted one (the
-tombstone length), and decoding returns the first as an empty record and the
-second as nil; it used to return nil for both, so a restart or a quick load read
-a title's empty records as deleted. The encoding has not changed, so saves
-written by earlier releases read with the same meaning they were written with.
-Active KTF/LGT native boundaries retain read failures and refuse later writes;
-SKT RMS/XFile report guest exceptions. Authentication views preserve the
-error-aware contract.
+supports them, and `DirectorySaveStore` does. Three answers mean "no entry":
+nothing at the key's path, a path that runs below a saved file, and a path that
+is a directory. A directory is made by keys below it (`fs/saves/slot` is a file
+in a directory `saves`), nothing can be stored under such a key, and reading it
+answers what it answered before those keys were written and what the memory
+store answers; otherwise a title that asks whether its save folder exists would
+fail every run after the first. Legacy `LoadSave` remains compatible but cannot
+recover errors that a legacy Host already hides.
+
+Record decoding rejects truncation and trailing bytes. A record list keeps a
+record of no bytes (length zero) apart from a deleted one (the tombstone length):
+decoding returns the first as an empty record and the second as nil, so a restart
+or a quick load does not read a title's empty records as deleted. The encoding is
+unchanged, so saves written by earlier releases read with the meaning they were
+written with. Active KTF and LGT native boundaries keep read failures and refuse
+later writes; SKT RMS and XFile report guest exceptions. Authentication views
+keep the error-aware contract.
 
 KTF Java and WIPI-C files and records stage state before publishing mutations.
-Content and ledger updates use optional `SaveBatchStore`. Legacy stores retain
-single-key writes and refuse multi-key operations before writing anything.
-The older native package retains its previous buffered write/flush policy.
+Content and ledger updates use the optional `SaveBatchStore`. Legacy stores keep
+single-key writes and refuse multi-key operations before writing anything. The
+older native package keeps its buffered write and flush policy.
 
 Directory batches stage replacement and recovery files under the existing save
-root, then commit under the store lock. Commit failure restores earlier entries
-and removes newly created ones. If rollback also fails, the error identifies
-retained recovery files. This is not crash-atomic across multiple renames.
-Save formats and canonical paths are unchanged across debug and release.
+root, then commit under the store lock. A commit failure restores earlier entries
+and removes newly created ones; if rollback also fails, the error names the
+retained recovery files. This is not crash-atomic across multiple renames. Save
+formats and canonical paths are the same in debug and release.
 
 ## Input, compatibility, and limits
 
 The Host owns held-key repeat timing and releases held input when control is
-lost. Pointer support is advertised per platform; KTF WIPI Java supports it,
-while the shared SKT, LGT Clet, and earlier KTF native paths do not.
-Keypad layouts and sizing remain browser preferences; supported IME composition
-stays local until a complete text commit.
+lost. Pointer support is reported per game in `can_touch`: a KTF WIPI Java title
+whose classes declare a pointer callback takes it, while SKT, LGT and the
+earlier KTF native package do not. Keypad layouts and sizing are browser
+preferences; supported IME composition stays local until a complete text commit.
 
 Recognized offline authentication is selected automatically for new sessions.
-The page has no authentication switch; an obsolete incoming switch is ignored.
-`Options.DisableAuthentication` is a local diagnostic opt-out. Selection is not
-proof of successful gameplay. See [authentication](authentication.md).
-Server access control and deployment are described in [running](running.md).
+The page has no authentication switch, and an `authentication` field from an
+older page is ignored. `Options.DisableAuthentication` is a local diagnostic
+opt-out. Selection is not proof of successful gameplay. See
+[authentication](authentication.md). Server access control and deployment are in
+[running](running.md).
 
-[Testing](testing.md) separates automated protocol/encoder tests from local
-Chromium/WebKit observations and human checks. PWA installation/update, actual
-phone suspension, audible recovery, touch, and complete save restoration still
-need the corresponding acceptance coverage.
+[Testing](testing.md) separates automated protocol and encoder tests from local
+Chromium/WebKit observations and human checks. PWA installation and update,
+actual phone suspension, audible recovery, touch, and complete save restoration
+still need the corresponding acceptance coverage.

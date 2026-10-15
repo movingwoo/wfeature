@@ -304,7 +304,7 @@ func (session *Session) tickOnce(ctx context.Context) (time.Duration, error) {
 	// set out to stand for unless the guest's own work overran it. `TickFor`
 	// charges the wall clock with this number, so reporting the intent instead
 	// of the outcome hands a title's computation back for free — see
-	// `docs/lgt.md`, "The wall has to be charged for the work, not for the
+	// `docs/history/lgt.md`, "The wall has to be charged for the work, not for the
 	// intent".
 	span := client.clock.advance(session.tickSpan())
 	if err := client.serviceTimers(ctx); err != nil {
@@ -630,7 +630,7 @@ func isPadKey(keyCode uint32) bool {
 // SendKey queues one key event for the game.
 //
 // The events are what the pad reports rather than what the keyboard did; see
-// `internal/keypad` for the rule and `docs/lgt.md` "A release stops a
+// `internal/keypad` for the rule and `docs/history/lgt.md` "A release stops a
 // character the pad has moved on from" for the screens that produced it.
 func (session *Session) SendKey(pressed bool, keyCode uint32) {
 	if session == nil || session.client == nil {

@@ -179,7 +179,7 @@ org/kwis/msp/lwc/DialogComponent doModal ()I dialog
 # dialog. Nothing draws a form, so the geometry calls have nothing to move or
 # resize and the plugin layer has no layers to order; `doModal` is not here
 # because it answers a dismissal the title acts on rather than a fixed value.
-# See runtime_kfc.go and docs/ktf.md, "A widget toolkit that is one text box".
+# See runtime_kfc.go and docs/history/ktf.md, "A widget toolkit that is one text box".
 com/ktf/kfc/GForm getPluginPosition (I)I zero
 com/ktf/kfc/GForm layout ()V noop
 com/ktf/kfc/GForm move (II)V noop

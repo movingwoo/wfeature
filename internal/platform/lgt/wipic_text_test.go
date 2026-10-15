@@ -125,7 +125,7 @@ func TestFontSlotsAnswerTheFaceThatDraws(t *testing.T) {
 // box a frame diff measured at 183 pixels wide. At the 16-dot face it is 185
 // and its final syllable was cut against the right edge; at the handset face it
 // has room to spare. See "The text face is the handset's small one" in
-// docs/lgt.md.
+// docs/history/lgt.md.
 func TestAKoreanLineFitsTheBoxItsTitleSized(t *testing.T) {
 	const line = "정보이용료가 부과 됩니다."
 	const box = 183

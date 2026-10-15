@@ -167,7 +167,7 @@ type guestClock struct {
 // running emulator writes it.
 //
 // The number is 150,000 because that is where the local corpus stops being
-// held back by it — see `docs/lgt.md`, "What the rate has to be for a title to
+// held back by it — see `docs/history/lgt.md`, "What the rate has to be for a title to
 // get the period it asks for".
 var guestInstructionsPerMillisecond uint64 = 150_000
 

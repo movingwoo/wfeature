@@ -27,7 +27,7 @@ import (
 // offset 0x1c, which is the whole of it. So the loader hands back the item
 // verbatim and what the first 0x1c bytes hold is the title's business.
 //
-// See docs/ktf.md, "An earlier KTF package".
+// See docs/history/ktf.md, "An earlier KTF package".
 const (
 	// nativeObjectLoadResource takes a file name, a number and a kind, and
 	// answers a block holding one item of that file.

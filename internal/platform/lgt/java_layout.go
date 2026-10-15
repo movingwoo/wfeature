@@ -7,7 +7,7 @@ import (
 
 // Where a member sits: a field's word inside an object, and a virtual method's
 // slot inside a vtable. The compiled code holds neither — it holds an index
-// into one of the out arrays, and this is what fills those in. See docs/lgt.md,
+// into one of the out arrays, and this is what fills those in. See docs/history/lgt.md,
 // "The slot rules, and what they say about the platform's own classes".
 //
 // The rules are two, and both are the module's own arithmetic rather than this

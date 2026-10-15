@@ -3,19 +3,17 @@
 ## Paused at user request
 
 Development of further compatibility features stopped on 2026-09-11 at the
-user's request. The user subsequently authorized a PR containing all SGS work
-completed so far. That PR is a partial-support delivery; it does not depend on
-finishing the full-compatibility requirements below. Further implementation
-remains paused. Unrelated workspace changes are excluded from the PR.
+user's request. The user then authorized a PR containing all SGS work completed
+to that point: a partial-support delivery that does not depend on the
+full-compatibility requirements below. Further implementation remains paused.
+Unrelated workspace changes were excluded from the PR.
 
 The local SIS metadata query for `0xe8` is included, with focused header,
 instruction, address-bank, malformed-input and work-limit tests. Systematic
 comparison of the native SIS metadata probe with Go remains follow-up work.
-SAF metadata and the host image branch remain explicitly unsupported.
-
-The SAF zlib object-body component is tested but remains disconnected from
-image service execution. Full file parsing, additional codecs and composition
-remain open. See [extended images](sgs-images.md), [SIS evidence](sgs-sis.md),
+SAF metadata and the host image branch remain explicitly unsupported. The SAF
+zlib object-body component is tested but disconnected from image service
+execution; full file parsing, additional codecs and composition remain open. See [extended images](sgs-images.md), [SIS evidence](sgs-sis.md),
 and [the opcode inventory](sgs-opcodes.md). Missing entries have not all been
 shown to block the twelve local titles. The corpus matrix remains incomplete,
 including user-visible save progress and audible playback checks.
@@ -25,21 +23,25 @@ including user-visible save progress and audible playback checks.
 The isolated SGS branch passed `make test` (Go and browser-client unit tests),
 `make test-debug`, `go test -race ./internal/...`, `go vet ./...`,
 `make server server-release debug release`, and `git diff --check` on
-2026-09-11. This includes the latest SIS metadata query. The standalone branch
+2026-09-11, including the latest SIS metadata query. The standalone branch
 uses the existing handset menu value directly instead of depending on an
 unrelated, uncommitted Java input change.
 
 These checks validate the delivered implementation and authored fixtures. They
 do not complete the twelve-title gameplay/save/audio matrix, add missing host
-services, or establish full SIS/SAF rendering support. Earlier corpus and browser
-observations remain historical evidence, not new runs of this PR checkout.
+services, or establish full SIS/SAF rendering support. Earlier corpus and
+browser observations remain historical evidence, not new runs of this PR
+checkout.
 
 ## Previous full-compatibility objective
 
 The following gates describe full compatibility, which remains unfinished.
-They are follow-up requirements, not blockers for the user-authorized partial
-support PR. Earlier user acceptance closes the reported defects, not the full
-service inventory.
+They are follow-up requirements, not blockers for the user-authorized
+partial-support PR. Earlier user acceptance closed the reported defects, not
+the full service inventory.
+
+None of the checkpoints recorded after the gates completes the implementation,
+corpus or full SGS goal; each lists its own validation.
 
 ## Implementation gate
 
@@ -97,8 +99,7 @@ Date (`0xb8`, `0x41c200` calling `0x40c900`) returns local year, month, day and
 Sunday-zero weekday. Time (`0xb9`) retains local hour, minute, second and
 millisecond fields. Both validate the complete result span before any write.
 Authored tests include leap day, word extremes, truncation, ties, span failures,
-stack underflow and work exhaustion. This is an implementation checkpoint, not
-completion of the corpus or full service gate.
+stack underflow and work exhaustion.
 
 The same checkpoint adds six trigonometric services (`0xa5`–`0xaa`) using
 mathematical formulas validated against all 576 relevant original table entries.
@@ -122,9 +123,8 @@ sink, verifying guest-time note onset, pause/resume, stop, replay and silence on
 session close. This establishes the service pipeline, not audible acceptance
 for the twelve real archives.
 
-Checkpoint validation passed: `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, and debug/release server and CLI
-builds. The full implementation and corpus gates above remain open.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, and debug/release server and CLI builds.
 
 ## Clipping and pixel read checkpoint
 
@@ -147,9 +147,10 @@ live in the VM instead of platform dispatch.
 
 Clipping checkpoint passed the full test/debug/race/vet checks. The subsequent
 five-argument formatter passed focused normal tests, SKT debug/race tests and
-vet, followed by debug/release CLI and server builds. The inventory currently
-contains 107 entries with dispatch paths, 13 partial contracts and 42 missing
-services; these counts are not a compatibility or corpus-pass score.
+vet, followed by debug/release CLI and server builds. At that checkpoint the
+inventory contained 107 entries with dispatch paths, 13 partial contracts and
+42 missing services; [the inventory](sgs-opcodes.md) now lists 122 I, 11 P and
+29 M rows. These counts are not a compatibility or corpus-pass score.
 
 ## Resource transfer checkpoint
 
@@ -166,9 +167,8 @@ negative offsets/counts, bank crossings, missing source bytes and exhausted
 work budgets fail without partial writes. Tests cover both directions and both
 word banks, byte order, odd offsets, empty transfers and caller-stack retention.
 
-Resource transfer checkpoint passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, both server/CLI profiles and
-`git diff --check`. Full service and corpus acceptance remain open.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, both server/CLI profiles and `git diff --check`.
 
 ## Raw color inversion checkpoint
 
@@ -187,10 +187,10 @@ white-fill quirk. [The scroll contract](sgs-scroll.md) records the evidence.
 Authored fixtures cover both buffers, displacement signs, diagonals, zero and
 full-dimension shifts, large wrapped shifts, invalid selectors and work failure.
 
-Inversion and scroll checkpoint passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, debug/release server and CLI
-builds and `git diff --check`. These authored service checks do not replace
-the still-open twelve-title main-play/save/audio acceptance routes.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, debug/release server and CLI builds and `git diff --check`.
+These authored service checks do not replace the still-open twelve-title
+main-play/save/audio acceptance routes.
 
 ## Recorded-route audio and persistence observations
 
@@ -215,8 +215,9 @@ for 06 and 09 reopen the archive using the same isolated store and observe the
 exact last-written 64-byte payload returned by a load. Both reopened sessions
 advance and close successfully. This proves persistence across those session
 boundaries, but not which visible progress/settings fields the games restored.
-No write on the other recorded routes does not establish that those titles lack
-saving. The main-play and audible acceptance gates therefore remain open.
+The absence of writes on the other recorded routes does not establish that
+those titles lack saving. The main-play and audible acceptance gates therefore
+remain open.
 
 Evidence: `build/sgs-activity-replay.log`, `build/sgs-activity-reload-6.log`,
 `build/sgs-activity-reload-9.log`; frame captures are under the ignored
@@ -241,10 +242,10 @@ Extended text investigation is recorded separately in
 [sgs-text-effects.md](sgs-text-effects.md); its unresolved large-style coordinate
 contract keeps that service gate open.
 
-Rounded-rectangle validation passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, debug/release server and CLI
-builds and `git diff --check`. The newly observed audio/save activity is
-additional corpus evidence, not completion of the full acceptance matrix.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, debug/release server and CLI builds and `git diff --check`. The
+newly observed audio/save activity is additional corpus evidence, not
+completion of the full acceptance matrix.
 
 ## Extended text and trace checkpoint
 
@@ -271,10 +272,10 @@ scalar ordering, resource errors, stack preservation, unchanged pixels/resources
 and suppression at an info-level threshold. No diagnostic interpreter or its
 packages are bundled with the Go runtime.
 
-Extended text/string/trace checkpoint passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, debug/release server and CLI
-builds and `git diff --check`. Host UI/communication services and remaining
-real-title acceptance routes still prevent full-goal completion.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, debug/release server and CLI builds and `git diff --check`.
+Host UI/communication services and remaining real-title acceptance routes
+still prevent full-goal completion.
 
 ## Device result checkpoint
 
@@ -288,10 +289,10 @@ The empty phone identifier returned by `0x52` uses the shared resource allocator
 preserving its capacity and retained-tail semantics instead of replacing the
 bank with a one-byte allocation. No real phone identity is supplied yet.
 
-This checkpoint passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, debug/release server and CLI
-builds and `git diff --check`. It does not complete the host communication
-services or the remaining real-title acceptance matrix.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, debug/release server and CLI builds and `git diff --check`. It
+does not complete the host communication services or the remaining real-title
+acceptance matrix.
 
 ## Vector and device-wrapper checkpoint
 
@@ -315,11 +316,11 @@ streams, not PNG. Their selector and metadata contracts are recorded in
 UserID and outgoing/incoming role; those findings do not complete communication
 integration.
 
-This checkpoint passed `make test`, `make test-debug`,
-`go test -race ./internal/...`, `go vet ./...`, debug/release server and CLI
-builds and `git diff --check`. Real-title acceptance and remaining services
-still prevent full-goal completion. The later partial-support PR authorization
-is recorded at the top of this document.
+Validation: `make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...`, debug/release server and CLI builds and `git diff --check`.
+Real-title acceptance and remaining services still prevent full-goal
+completion. The later partial-support PR authorization is recorded at the top
+of this document.
 
 ## Compressed image investigation checkpoint
 
@@ -336,9 +337,9 @@ decompression wrapper. Tests cover packed depths, maximum byte dimensions,
 malformed data, checksum errors, excessive output and work exhaustion.
 See [the exact integration boundary](sgs-images.md#object-compression-1-checkpoint).
 
-This is a tested decoder component, not an implemented extended-image service:
-file parsing, decoder state, frame composition and host dispatch are still open.
-No additional dependency, original decompressor code or third-party asset was
-added. Full-suite normal/debug tests, internal race tests, vet and both profile
-builds passed; the final maximum-size fixture also passed focused normal/debug
-and race runs. The full SGS goal remains open.
+This is a tested decoder component, not an implemented extended-image
+service: file parsing, decoder state, frame composition and host dispatch are
+still open. No additional dependency, original decompressor code or third-party
+asset was added. Full-suite normal/debug tests, internal race tests, vet and
+both profile builds passed; the final maximum-size fixture also passed focused
+normal/debug and race runs.

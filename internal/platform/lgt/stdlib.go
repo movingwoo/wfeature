@@ -47,7 +47,7 @@ const (
 	// newlines — and the others are fixed by their neighbours rather than
 	// guessed, because the slots on both sides of each gap are ones a title
 	// did call. See "The rest of string.h, placed by its neighbours" in
-	// docs/lgt.md.
+	// docs/history/lgt.md.
 	stdlibStrncat uint32 = 0x408
 	stdlibStrchr  uint32 = 0x40b
 	stdlibStrrchr uint32 = 0x40c
@@ -76,7 +76,7 @@ const (
 	// argument** and the same delimiter. Continuing from saved state on a null
 	// argument is `strtok` and nothing else in the list, so the slot the
 	// ordering predicted is the one that is still unaccounted for; see
-	// "strtok is one past where the list puts it" in docs/lgt.md.
+	// "strtok is one past where the list puts it" in docs/history/lgt.md.
 	stdlibStrtok uint32 = 0x413
 
 	stdlibMemcpy    uint32 = 0x414
@@ -93,7 +93,7 @@ const (
 	// that list in this table. It is named for what it was watched doing.
 	//
 	// It reads like `atexit`, and it is not: see "The slot that runs a function"
-	// in docs/lgt.md for the A/B that settled it.
+	// in docs/history/lgt.md for the A/B that settled it.
 	stdlibRunFunction uint32 = 0x424
 
 	// stdlibMalloc is `void *malloc(size_t)`, and what says so is what the

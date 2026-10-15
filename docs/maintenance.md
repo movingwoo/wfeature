@@ -1,41 +1,23 @@
 # Maintenance and unresolved decisions
 
 The ignored root `TODO.md` is the local execution queue. This page keeps durable
-constraints, evidence triggers, and unresolved decisions. It does not authorize
-implementation of every possible compatibility gap. Dated reviews and retired
-plans are preserved in [maintenance history](history/maintenance.md).
+constraints, evidence triggers and unresolved decisions; it does not authorize
+implementing every possible compatibility gap. Dated reviews and retired plans
+are in [maintenance history](history/maintenance.md).
 
-## Keypad density and available space
-
-The follow-up halves each former cell horizontally, producing a fixed 14 by 9
-board. Existing assigned buttons and custom merged shapes retain their footprint
-through paired columns. Former single empty cells become two independent empty
-cells. Version 2 is stored separately as `wfeature:keypadGridV2`; the former
-`wfeature:keypadGrid` record stays intact. Already-open version-1 tabs cannot
-overwrite refined arrangements, and failed writes leave the source available.
-
-Remove the keypad's decorative side and bottom padding. The game column shares
-its available width with the board, up to the existing 480 px cap. Fill the
-height below the game through the bottom safe-area boundary. Dynamic viewport
-height and all four safe-area insets determine the available space; rows and
-columns never change with device, OS, orientation or browser chrome. Smaller
-windows scale the same coordinates instead of dropping cells or adding rows.
-
-The 270-test Node suite, both Go test profiles, race checks, vet and both embedded
-server builds pass. Chromium and WebKit release runs and a Chromium debug run
-verify full width, bottom alignment, safe areas, rotation, short windows, label
-fitting and input. At 240 by 320 px the start menu scrolls inside the game area
-without covering the keypad. The retained proof is in
-[the final browser record](history/testing.md#final-fourteen-column-browser-validation).
+<a id="keypad-density-and-available-space"></a>
 
 ## Keypad grid acceptance
 
-The initial 7 by 9 grid, legacy migration, connected button shapes and editor
-were implemented before the refinement above. The former size, left/right share
-and top-row controls are removed. The maintained contract is in [the web host reference](../web/README.md#grid-keypad),
-and repeatable checks are in [testing](testing.md#grid-keypad). The measured
-layout and completed browser routes are recorded in
-[the validation history](history/testing.md#keypad-grid-validation-2026-10-08).
+The fourteen-by-nine grid keypad, its version-2 storage, migration from the
+seven-column layout and the available-space sizing are implemented. The
+contract is in [the web host reference](../web/README.md#grid-keypad),
+repeatable checks are in [testing](testing.md#grid-keypad), the measured layout
+and browser routes are in
+[the validation history](history/testing.md#keypad-grid-validation-2026-10-08),
+and the rendered Chromium/WebKit runs, including the version-34 and version-35
+upgrades to shell version 41 on 2026-10-08, are in
+[the final browser record](history/testing.md#final-fourteen-column-browser-validation).
 
 Acceptance is still open:
 
@@ -45,54 +27,55 @@ Acceptance is still open:
 - Observe a physical phone using L-shaped buttons, two fingers, rotation and
   reload. Automated touch contacts do not replace this observation.
 
-Both browsers passed the version-34 and version-35 updates to the then-current
-shell version 41 on 2026-10-08,
-including retained assignments, save bytes and offline shell loading. The new
-prefix protects the current cache from late legacy-worker cleanup, and cleanup
-only removes predecessors. The runner waits for asynchronous cache retirement
-after navigation; response completion alone does not establish that it is done.
-
 Layout sharing, server-side settings, additional services and external runtime
-dependencies remain outside this request.
+dependencies are outside this request.
 
 ## Execution and acceptance follow-up
 
 [PWA acceptance](pwa-acceptance.md) defines the release route across a service
 worker upgrade — saves, settings, audio activation, touch and text input — in
 Chromium and WebKit, and the physical-device table it cannot fill itself.
-Real-phone suspension, long pauses, active soundtrack recovery, and operating-system
-IME behavior require human/device observations.
+Real-phone suspension, long pauses, active soundtrack recovery and
+operating-system IME behavior need human or device observation.
 
-Three questions were left open only in dated records and have not been
-rechecked since:
+Three questions are open only in dated records and have not been rechecked:
 
-- An LGT title's page report at medium speed showed temporary drops to 0.67x
-  guest speed (4.4 fps, 57.1 ms per tick) before recovering; two attempts did
-  not reproduce it ([gameplay QA](gameplay-qa-2026-09-20.md#outstanding-investigation)).
+- An LGT title's page report at medium speed showed transient drops (0.67x
+  guest speed at 4.4 fps and 57.1 ms per tick) and a later severe window down to
+  0.06x (635.6 ms per tick) before recovering; a CLI replay and a WebSocket
+  replay did not reproduce it
+  ([gameplay QA](gameplay-qa-2026-09-20.md#outstanding-investigation)).
 - A KTF C title advances gameplay faster than expected; extra card paints were
-  excluded as the cause and its timer and update loop were not investigated
-  ([KTF QA](ktf-qa-2026-09-21.md)).
+  excluded as the cause, and its timer and update loop were not investigated
+  ([KTF QA](ktf-qa-2026-09-21.md#speed-and-text-evidence-still-open)).
 - A guest callback that blocks has no out-of-band way to export a report; the
-  one evidenced key-callback wait was fixed on its own
+  one evidenced key-callback wait was fixed separately
   ([LGT key callback hang](lgt-key-callback-hang-2026-09-23.md)).
 
-The KTF native loading stall needs a matching `.mif`/`.mod` archive. A folder
-label is not sufficient. Automatic landscape selection needs a package or handset
-contract; a successful forced-size run is not that evidence. The available dated
-SKT corpus supplies MIDlet progression evidence but no real Jlet save route.
-The LGT resume callback read at `0x1` and intermittent WebKit Blob failure remain
-reproduction questions, not fixed defects inferred from successful later ticks.
+Questions that wait for evidence rather than work:
 
-The alternative LGT 52-byte context needs field offsets and a discriminator.
-The KTF environment return slot needs address, width, initialization, and validity
-rules. Neither is a reproduced defect with a known repair. See [KTF](ktf.md),
-[LGT](lgt.md), and [runtime validation](testing.md#runtime-boundary-regressions).
+- One KTF native (BREW) archive stops on its loading screen: it blits from a
+  surface nothing writes after start-up
+  ([history](history/ktf.md#implementation-what-writes-this-for-a-title-nothing-is-unanswered-for)).
+- Automatic landscape selection needs a package or handset contract; a
+  successful forced-size run is not that evidence.
+- The available dated SKT corpus supplies MIDlet progression evidence but no
+  real Jlet save route.
+- The LGT `resumeClet` read at `0x1` and the intermittent WebKit Blob failure
+  remain reproduction questions, not defects inferred fixed from later ticks.
+- The alternative LGT 52-byte graphics context needs field offsets and a
+  discriminator. The KTF native environment return is established for tag-2
+  word results only
+  ([KTF QA](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case));
+  other tags and wide returns need address, width, initialization and validity
+  rules. Neither is a reproduced defect with a known repair. See [KTF](ktf.md),
+  [LGT](lgt.md) and [runtime validation](testing.md#runtime-boundary-regressions).
 
 ## Sound: what needs a handset or an ear
 
 The playback contracts in [audio](audio.md) and
 [audio ownership](audio-ownership.md) are implemented and tested in Go, in Node
-and in rendered Chromium/WebKit output. What is left cannot be settled there:
+and in rendered Chromium/WebKit output. The remainder cannot be settled there:
 
 - **The original APK report.** A KTF title on the Android app (probably 0.5.0;
   phone, WebView version and output route unknown) sounded different. The
@@ -111,18 +94,19 @@ and in rendered Chromium/WebKit output. What is left cannot be settled there:
   For B, keep the app's server alive and check that switching apps does not end
   or pause the session; the app and the browser keep separate settings. Record
   the mixed output with event arrivals, clock steps, sample rate, latency, tick
-  cost and drops, and tell rhythm, pitch/timbre, clipping and silence after
-  returning to the foreground apart.
+  cost and drops, and distinguish rhythm, pitch/timbre, clipping and silence
+  after returning to the foreground.
 - **Handset decisions on PCM.** Whether a stream wave stops at its gate or plays
-  out, same-channel retrigger, and a short fade for the waves that end loud
-  (25 KTF and 62 LGT decoded waves end above a quarter of full scale) are
-  listening decisions; the census is in
+  out, same-channel retrigger, and a short fade for waves that end loud (25 KTF
+  and 62 LGT decoded waves end above a quarter of full scale) are listening
+  decisions; the census is in
   [PCM contract evidence](history/audio.md#pcm-contract-evidence).
 - **Lateness tolerance.** A late batch re-anchors when it holds only the clock
-  frontier or is at most 200 ms late; a later one is refused and current
-  output is reconstructed. The 200 ms bound comes from a slowed desktop
-  browser, not a phone; tuning it needs lateness distributions from devices;
-  [the live sessions](testing.md#live-audio-session-acceptance) show the two
+  frontier or is at most 200 ms late (`MAX_REANCHOR_LATE` in `web/audio.js`);
+  a later one is refused and current output is reconstructed. The 200 ms bound
+  comes from a slowed desktop browser, not a phone; tuning it needs lateness
+  distributions from devices.
+  [The live sessions](testing.md#live-audio-session-acceptance) show the two
   cases seen so far.
 - **Silent files.** 23 files whose stream notes select waves they do not carry
   and twelve HPS files that hold only device commands need original runtime
@@ -140,50 +124,53 @@ guessed from SysEx, and the synthesis engine is not to be replaced wholesale.
 
 ## Performance and optional features
 
-Remeasure before changing ownership, scheduling, or interpreter strategy:
+Remeasure before changing ownership, scheduling or interpreter strategy:
 
 - KTF session/SVC work needs paired fixed-work measurements on an idle machine;
   the old overloaded-machine timing is not a usable speed comparison.
-- Frame copies, debug stack profiling, and boundary string reads need a current
-  allocation profile before optimization. Borrowed/owned buffer contracts remain
-  explicit in [architecture](architecture.md#shared-runtime-services).
+- Frame copies, debug stack profiling and boundary string reads need a current
+  allocation profile before optimization. Borrowed/owned buffer contracts are
+  in [architecture](architecture.md#shared-runtime-services).
 - A native-code backend needs conformance, interpreter fallback, pure-Go core
-  compatibility, and a demonstrated improvement; see [ARM execution](armcore.md).
+  compatibility and a demonstrated improvement; see [ARM execution](armcore.md).
 - Keypad JSON preset sharing and external-access add-ons need a product scope.
   Local keypad storage exists. The server has no access key or other
   authentication, so external access needs one before it is offered.
 
-Detailed historical counts, benchmark names, and rejected approaches remain in
-[the maintenance record](history/maintenance.md). They are not current measurements.
+Historical counts, benchmark names and rejected approaches are in
+[the maintenance record](history/maintenance.md); they are not current
+measurements.
 
 ## Paused work and provenance
 
-Quick save/load runs on KTF (Java/AOT, older modules and native packages), LGT
-(Clets and AOT Java) and SKT (Java and SGS) through the shared session, CLI and
-browser hosts. [Architecture](architecture.md#quick-load-and-ordinary-saves)
-defines the state and save-ownership contracts; [testing](testing.md) records
-supported variants, restart/gameplay evidence and remaining device limitations.
-Unknown runtime states are refused, and real native package validation still
-needs a matching `.mif`/`.mod` archive. Earlier snapshot attempts and the
-implementation's component costs remain in
+Quick save/load is implemented for KTF (Java/AOT, older modules and native
+packages), LGT (Clets and AOT Java) and SKT (Java and SGS) through the shared
+session, CLI and browser hosts.
+[Architecture](architecture.md#quick-load-and-ordinary-saves) defines the state
+and save-ownership contracts and [testing](testing.md) records the supported
+variants and evidence. Real native package validation still needs a matching
+`.mif`/`.mod` archive. Earlier snapshot attempts and component costs are in
 [the history](history/maintenance.md#quick-save-implementation-measurements).
-SGS feature development remains paused; existing SGS specifications and
-acceptance records are preserved.
 
-Do not import assets, fixtures, or notices with unclear provenance. The recorded
-SMAF test provenance question needs evidence before changing attribution.
-Existing bundled licenses and copyright notices remain intact. Release-facing
-Korean changelog proofreading belongs to the release review.
+SGS feature development is paused; existing SGS specifications and acceptance
+records are preserved.
+
+Do not import assets, fixtures or notices with unclear provenance. The SMAF test
+provenance question (`internal/audio/smaf/smaf_test.go` describes carried-over
+cases; the third-party notices describe the SMAF/MIDI code as project-authored)
+needs evidence before attribution changes. Existing bundled licenses and
+copyright notices stay intact. Release-facing Korean changelog proofreading
+belongs to the release review.
 
 ## Documentation ownership
 
-[The documentation index](README.md) separates maintained references from history.
-Update the owning reference when behavior changes. Add dated evidence to the
-existing subject history when a trace, measurement, or rejected design must be
-retained. Avoid a new file per task, PR, audit date, or work assignment.
+[The documentation index](README.md) separates maintained references from
+history. Update the owning reference when behavior changes. Add dated evidence to
+the existing subject history when a trace, measurement or rejected design must be
+retained; avoid a new file per task, PR, audit date or work assignment.
 
-Keep source revision, test conditions, outcome, and limitations with measurements.
-Mark superseded claims historical. Remove completed checklist prose once the
-behavior and evidence have an owner. Maintain relative links and registry evidence
-anchors when consolidating files. Local reports and game-specific artifacts stay
-outside tracked documentation.
+Keep source revision, test conditions, outcome and limitations with
+measurements. Mark superseded claims historical. Remove completed checklist prose
+once the behavior and evidence have an owner. Maintain relative links and
+registry evidence anchors when consolidating files. Local reports and
+game-specific artifacts stay outside tracked documentation.

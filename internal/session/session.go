@@ -86,7 +86,7 @@ func Inspect(archive []byte) (Summary, error) {
 	case detect.KTF:
 		// The vendor ships two generations of package, and only one of them
 		// has a descriptor. The earlier one names itself in its module
-		// information file instead. See docs/ktf.md, "An earlier KTF package".
+		// information file instead. See docs/history/ktf.md, "An earlier KTF package".
 		if ktf.IsNativeArchive(archive) {
 			opened, err := ktf.OpenNative(archive)
 			if err != nil {
@@ -440,7 +440,7 @@ func (s *Session) LGT() *lgt.Session { return s.lgt }
 // Cheat exposes the attached cheat engine. Every platform has one now. The two
 // ARM platforms give the guest a flat address space a scan can sweep; the MIDP
 // runtime has no address space at all, so it builds one over its object graph
-// and answers that (`docs/skvm.md`, "A heap with addresses in it").
+// and answers that (`docs/history/skt.md`, "A heap with addresses in it").
 //
 // A Host asks this rather than reaching through KTF(), which is what kept the
 // engine LGT already had from ever being reachable from the browser.
@@ -834,7 +834,7 @@ func ktfPointerEventType(action string) (int32, bool) {
 // Canvas's `keyRepeated` — used to be handed the browser's, which is the
 // operating system repeating a held keyboard key at whatever cadence the user
 // configured. A handset's is `KEYREPEAT`, "600:250": the first after 600ms,
-// then one every 250ms (`docs/lgt.md`, "A Host repeat is not a second press",
+// then one every 250ms (`docs/history/lgt.md`, "A Host repeat is not a second press",
 // which measured what the two cadences do to a title). Making it here also
 // gives the on-screen keypad one, which the page never sent: a thumb holding a
 // button on a touchscreen is a key held down like any other.
@@ -1393,7 +1393,7 @@ func ktfKeyEventType(action string) (int32, bool) {
 // those keydowns as repeats, and this platform has no event kind for them —
 // its Clet events are pressed and released, and it generates no
 // `MV_KEY_REPEAT_EVENT` because no title has asked for the cadence
-// (`docs/lgt.md` "Nothing repeats a held key"). Sending one on as a press is
+// (`docs/history/lgt.md` "Nothing repeats a held key"). Sending one on as a press is
 // therefore not a translation but an invention: a second press with no release
 // between is a thing no handset delivers, and titles read a press as a fresh
 // tap. Two of the local ones dash on that tap, so holding a direction dashed

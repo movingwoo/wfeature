@@ -42,7 +42,7 @@ import (
 // Two things differ from the KTF path, both because the object model does.
 //
 // An object here is two allocations — the three-word object and the block its
-// fields live in (docs/lgt.md, "The three thunks every class carries") — and
+// fields live in (docs/history/lgt.md, "The three thunks every class carries") — and
 // the guest holds the block's address as often as the object's, because that
 // is what a field access loads first. So both spans are indexed, both name the
 // same object, and freeing one frees the other.

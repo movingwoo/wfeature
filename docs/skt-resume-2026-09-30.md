@@ -8,17 +8,17 @@ below exercise the page lifecycle with WebKit; they are not physical iPhone
 or installed-PWA suspension tests.
 
 The reported app switch retained the server session. The debug log records a
-pause and park at 09:14:28.355 KST, followed by resume at 09:14:33.722: a 5.367
-second absence, with no intervening session start. The lifecycle resume invoked
-`startApp` again inside the existing JVM.
+pause and park at 09:14:28.355 KST and a resume at 09:14:33.722 — a
+5.367-second absence with no intervening session start. The lifecycle resume
+invoked `startApp` again inside the existing JVM.
 
 The reported revision's `startApp` unconditionally constructs a new Canvas,
 stores it as the current game and starts another worker. Its `pauseApp` returns
 without stopping the previous worker. A direct reproduction changed Canvas
 identity and doubled the JVM's reported thread objects from two to four.
-The old game still holds its retained Graphics and resources, while the new
-game initializes and draws. This explains the return to the opening screen and
-provides a mechanism for competing drawing after a new game is selected.
+The old game keeps its retained Graphics and resources while the new game
+initializes and draws, which explains the return to the opening screen and
+allows competing drawing after a new game is selected.
 
 The failure was also reproduced in a different local game. Two other games
 retained their Canvas and thread count under the same pause/resume sequence.
@@ -86,8 +86,7 @@ pixel comparison of the room background, and delivered confirmation and Call
 press/release pairs after returning. Both final routes had no page errors.
 
 An additional reload route in Chromium retained one session start across two
-returns and an actual page reload, with three resumes
-and no page errors. WebKit also retained one start and three resumes, but the
+returns and an actual page reload, with three resumes and no page errors. WebKit also retained one start and three resumes, but the
 reload route recorded a Blob access-control error. This is a recurrence of the
 [previously unresolved WebKit decoder observation](history/testing.md#webkit-webkit-frame-decoding-investigation),
 not evidence of lost JVM state. That run is not a clean browser acceptance pass.

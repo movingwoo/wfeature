@@ -111,7 +111,7 @@ type memoryPage struct {
 // its error anyway.
 //
 // It stays four bytes deliberately. Widening it to carry each form's registers
-// and immediate already pulled out — the change docs/armcore.md projected 1.4x
+// and immediate already pulled out — the change docs/history/armcore.md projected 1.4x
 // for — was built and measured, and it loses twice: the width alone costs 7 to
 // 9% and reading the extracted fields costs another 9 to 10% on top of that.
 // See "A wider decode cache entry was built and lost, twice over".
@@ -204,7 +204,7 @@ type Memory struct {
 	// the shape that works where two earlier attempts at a second slot did
 	// not: a hit is the same three compares it always was, `mappedPage` still
 	// inlines at every call site, and a miss pays no extra compare. See
-	// `docs/armcore.md`, "The second data slot was built, both ways, and
+	// `docs/history/armcore.md`, "The second data slot was built, both ways, and
 	// lost", for the two that were, and what replacing the search with an
 	// index changed.
 	dataIndex [dataPageWays]uint32
@@ -216,7 +216,7 @@ type Memory struct {
 	// most titles — pays nothing, and Thumb steps are the core's total minus
 	// this. It exists because "which titles are ARM" is the first question any
 	// ARM throughput change has to answer, and answering it with a throwaway
-	// patch each time is how the split in armcore.md came to be a number
+	// patch each time is how the split in docs/history/armcore.md came to be a number
 	// nobody could re-take. Written under the quantum lock.
 	armSteps uint64
 	// standInsRefused turns every recogniser off for the life of this memory.

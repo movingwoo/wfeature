@@ -4,14 +4,14 @@
 
 The two SKT reports saved at 07:42 UTC on 2026-09-23 show working key
 delivery and active sessions. Replaying their final sessions with isolated
-saves reaches both name editors. Before the correction, `Runtime.TextInput`
-returns `no supported text field is active` in both.
+saves reached both name editors, where `Runtime.TextInput` returned
+`no supported text field is active` before the correction.
 
 Both archives construct `com.xce.lcdui.XTextField` with an empty text value,
 an eight-character limit, unconstrained input, and a placeholder Canvas.
-The placeholder has an empty `paint` body. The visible game Canvas paints
-the focused field itself. The Host adapter incorrectly requires the
-constructor's Canvas to be the current display, so it rejects these editors.
+The placeholder has an empty `paint` body; the visible game Canvas paints
+the focused field itself. The Host adapter required the constructor's Canvas
+to be the current display, so it rejected these editors.
 
 The archive SHA-256 values are
 `2d66945008c1be8a749abd91d54e98c622268ab3c53e2a7c07cbe108a4d5780d` and
@@ -31,8 +31,8 @@ does not establish a visible target. Focus calls clear the evidence, and
 display transitions invalidate it. Existing field, value, constraint, focus,
 menu, and display revision checks still apply at commit.
 
-After a Host commit, the visible Canvas is queued for repaint. The vendor
-field's current `repaint` stub alone cannot present the changed name.
+After a Host commit, the visible Canvas is queued for repaint, because the
+vendor field's `repaint` stub alone cannot present the changed name.
 The game still handles OK, validates its name policy, and dismisses the editor.
 The Host adds no handset Hangul keypad automaton.
 

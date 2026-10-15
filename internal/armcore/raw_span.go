@@ -8,7 +8,7 @@ package armcore
 // thread-local test, a page lookup, a permission compare and a bounds check —
 // for a span whose every byte is already known to be reachable. That is why
 // 28.6% of a title's instructions became about 17% of its time rather than
-// disappearing (`docs/armcore.md`, "Standing in for the loops a rasteriser is
+// disappearing (`docs/history/armcore.md`, "Standing in for the loops a rasteriser is
 // made of").
 //
 // rawSpan is the way out of that: it answers the page's own bytes for as much

@@ -37,8 +37,8 @@ type clientMessage struct {
 	// MIDP-style code the keypad has always sent. A page may still send
 	// "repeat" — the operating system's repeat of a held keyboard key — and
 	// the session drops it: the repeat a title gets is the handset's, made on
-	// the session's clock. See `docs/session.md`, "A held key repeats on the
-	// handset's clock".
+	// the session's clock. See `docs/history/session.md`, "A held key repeats
+	// on the handset's clock".
 	Action string `json:"action,omitempty"`
 	Code   int32  `json:"code,omitempty"`
 

@@ -8,16 +8,20 @@ are in [LGT history](history/lgt.md).
 
 ## Packages and loading
 
-An archive contains `app_info`, a JAR, and `binary.mod`. The descriptor supplies
-AID, PID, and the main class. Descriptor-named JARs take precedence. If that
-match is absent, a single fallback is accepted; multiple candidates require
-exactly one valid module. Candidate inspection shares an expanded-byte budget
-and rejects malformed auxiliary JARs.
+An archive contains `app_info` beside a JAR whose `binary.mod` entry is the ELF
+module. The descriptor supplies AID, PID, and the main class; unknown keys are
+kept. Descriptor-named JARs take precedence. If that match is absent, a single
+fallback is accepted; multiple candidates require exactly one valid module.
+Candidate inspection shares an expanded-byte budget and rejects malformed
+auxiliary JARs. An archive is bounded to 128 MiB, one entry to 64 MiB, all
+entries together to 512 MiB, and the entry count to 8,192.
 
 Descriptor and entry names accept UTF-8 and MS949. Resource lookup recognizes
 plain, `P/`, and `P/<AID>/` names, with JAR resources ahead of outer-archive
-resources. Case-insensitive collisions are resolved deterministically; canonical
-duplicates, traversal, and invalid paths are rejected.
+resources. Files packaged beside the JAR are readable by name, and the JAR
+wins a name collision. Case-insensitive collisions are resolved
+deterministically; canonical duplicates, traversal, and invalid paths are
+rejected.
 
 A unique outer `wrapper/<AID>/` directory is also exposed at the application
 root, after canonical packaged paths. Unrelated AIDs are excluded and ambiguous
@@ -25,10 +29,14 @@ matching roots are rejected. These supplemental files keep the normal save
 override and deletion rules. See [supplemental-data QA](lgt-qa-2026-09-21.md#supplemental-directory-mounting).
 
 The module parser accepts ELF32 little-endian ARM executables. Addressed
-sections share a bounded mapping, and `SHT_NOBITS` reserves zero-filled bytes.
-Import dispatch validates the supported tables and reports unsupported calls.
-Save ownership uses PID with AID as a fallback. Colliding identifiers are not
-automatically rewritten without evidence for a different identity rule.
+sections share a bounded mapping that must end below the platform heap, and
+`SHT_NOBITS` reserves zero-filled bytes. Import dispatch validates the
+supported tables and reports unsupported calls.
+
+Saves belong to the PID, or to the AID when the PID is absent. Colliding
+identifiers are not rewritten without evidence for a different identity rule;
+`checkgames` reports a save owner claimed under more than one AID
+([CLI](cli.md#checkgames)).
 
 ## Execution and Java
 
@@ -55,26 +63,39 @@ superclass further up, fails to prepare with the class named in the error, and
 the layout refuses the same shape by name. A module can also register one of
 its own classes under a name the platform's hierarchy uses; a platform class
 that would then be linked beneath itself the first time a type check passes
-through it is left without that link instead. Every walk up a chain — a type
-check, an interface call, the search for the slot an override shares — ends at
-a class with no superclass, so a closed chain used to be a tick that never
+through it is left without that link instead. Every walk up a chain (a type
+check, an interface call, the search for the slot an override shares) ends at
+a class with no superclass; a closed chain was formerly a tick that never
 returned.
 
-The API scanner uses actual dispatch resolution, including inherited baked
-slots. A method name alone does not count as an implemented body. Startup
-imports are a lower bound: later lazy imports and virtual calls can reach
-additional unsupported methods. The Java library remains partial.
+`internal/tools/apiscan` starts each archive and reads back the imports it
+resolves, using actual dispatch resolution, including inherited baked slots.
+A method name alone does not count as an implemented body. Startup imports are
+a lower bound: later lazy imports and virtual calls can reach additional
+unsupported methods. The Java library remains partial.
 
 Vector slot 26 implements `setElementAt(Object, int)`: it replaces one reference
 without resizing or shifting the list, permits null, and throws
 `ArrayIndexOutOfBoundsException` for an invalid index. See the
 [crash investigation](lgt-qa-2026-09-20.md#vector-replacement-crash).
 
+### Key callbacks waiting on workers
+
+Key callbacks can wait for state updated by a Java worker. Eligible workers
+receive a slice at bounded compiler checkpoints inside such callbacks, except
+while the platform holds a monitor. Exception regions, jump buffers and native
+call depth belong to each worker across scheduling boundaries. The original
+instruction ceiling still bounds the callback. See the
+[gameplay hang investigation](lgt-key-callback-hang-2026-09-23.md) for the live
+server evidence, failing input replay and corrected path.
+
 ## Display and input
 
-The Java display currently holds one active card. `removeCard` removes that
-card and cancels its pending paint, returning false for a null or unrelated
-card. General multi-card stacking and notification lifecycle remain incomplete.
+The LCD is the Host's choice, 240×320 by default (`-screen WxH` in the CLI).
+The Java display holds one active card. `Card.repaint` repaints the whole
+card, whatever rectangle it names. `removeCard` removes the active card and
+cancels its pending paint, returning false for a null or unrelated card.
+General multi-card stacking and notification lifecycle remain incomplete.
 
 Graphics contexts belong to guest memory. Supported drawing honors compact
 context origins, clips, overlapping self-blits, and nested pixel callbacks.
@@ -82,32 +103,44 @@ Callback errors restore the client lock. Verified native revisions use a
 56-byte context with direct callbacks; the compatibility registry selects that
 ABI explicitly. See [rendering evidence](lgt-qa-2026-09-20.md#wide-graphics-context).
 The [later blank-screen investigation](lgt-qa-2026-09-21.md#blank-rendering-and-context-layout)
-adds another measured revision to that registry.
-Arbitrary mixed compact/direct contexts and the previously proposed alternate
-52-byte layout remain unverified.
+adds another measured revision to that registry. One further
+[wide-context revision](lgt-qa-2026-09-21.md#second-color-report-wide-context-proof)
+uses exclusive clip ends in its direct image blitter; its exact fingerprint
+selects that convention, and earlier wide contexts retain inclusive stored
+ends. Arbitrary mixed compact/direct contexts and the previously proposed
+alternate 52-byte layout remain unverified.
 
 The panel image follows the supported flush path. A revision-specific
 initialization correction removes verified 24-row strip offsets for exact
 native-module fingerprints, including direct-pixel and image-path revisions.
 The [direct-pixel investigation](lgt-qa-2026-09-21.md#direct-framebuffer-origin)
-records the restored dialogue bounds. It is not a platform-wide coordinate shift.
+records the restored dialogue bounds. It is not a platform-wide coordinate
+shift. A fingerprint-scoped
+[transparency calibration correction](lgt-qa-2026-09-21.md#transparency-calibration-origin)
+aligns one native blitter's sample write with its 24-row-adjusted read, which
+prevents a black transparency key from copying magenta backgrounds into the
+field without changing the shared framebuffer origin.
 [Compatibility rules and evidence](platform-compatibility.md) describe selection,
 mutation checks, and validation.
 
-Keys and repeats use the platform's lifecycle and clock boundaries. Native
-Clets do not expose a general pointer-event contract. Host text entry supports
-focused LWC fields and the bounded WIPI-C input-method append path; it does not
-infer arbitrary game-owned fields. Host text must be encodable in KSC5601;
-other characters are refused. See [native text input](native-text-input.md).
+Keys use the platform's lifecycle and clock boundaries. Clet events are a press
+and a release: the platform generates no `MV_KEY_REPEAT_EVENT`, and a Host key
+repeat is dropped rather than sent as a second press, because two local titles
+dash on every press (`internal/session`). Native Clets do not expose a general
+pointer-event contract. Host text entry supports focused LWC fields and the
+bounded WIPI-C input-method append path; it does not infer arbitrary
+game-owned fields. Host text must be encodable in KSC5601; other characters
+are refused. See [native text input](native-text-input.md).
 
 ## Storage, audio, and offline services
 
 File/record services use the common save boundary. Storage read errors remain
 visible at native boundaries, and a retained read failure prevents subsequent
 writes. Java File modes (1 read-only, 2 append, 3 truncate, 4 read-write)
-are translated to the C file flags before opening the shared store. In
+are translated to the C file flags before opening the shared store; in
 particular, Java mode 4 preserves existing contents. Existing save formats and
-canonical paths remain unchanged.
+canonical paths remain unchanged. Of the WIPI-C database block, only
+`MC_dbListDataBases` is served, and it answers that the program has none.
 
 `File.openDataInputStream` returns a typed stream using the existing file
 binding and primitive readers. Closing a file input stream releases its binding
@@ -124,6 +157,21 @@ services. Both observed socket-creation slots (`0x7d0` and `0x25a`) preserve tha
 policy. [Authentication](authentication.md) and [network](network.md) describe
 the selected adapters and unsupported service-dependent paths.
 
+A recognized native revision's save reader accepts a saved subscriber identity
+from another handset when automatic authentication compatibility is enabled.
+The original length and checksum checks still run, and original files and the
+configured subscriber number remain unchanged. The CLI diagnostic opt-out
+(`-no-auth`) retains the original identity check. See the
+[save-reader evidence](lgt-qa-2026-09-21.md#save-subscriber-comparison).
+
+One recognized native revision completes its two-stage certificate exchange
+through the same bounded local socket service. Requests must match the session
+identity, model and observed protocol fields. The nonempty local message lets
+the guest set and save its own certificate-present flag. Responses are deferred
+to a service boundary; no external connection or carrier credential is created.
+Unknown exchanges still fail, and the authentication diagnostic opt-out disables
+this behavior. See the [protocol evidence](lgt-qa-2026-09-21.md#certificate-message-compatibility).
+
 ## Quick save and quick load
 
 A session can be recorded between two ticks and restored later, in the same
@@ -135,29 +183,29 @@ title; restoring runs neither its entry, its initializer nor `startClet`.
 record, and [testing](testing.md#lgt-checkpoints) what was run against it.
 
 A checkpoint is execution state only. A load leaves the title's saves as they
-are, the restored title reads and writes them there, and the rule and its
+are, and the restored title reads and writes them there; the rule and its
 accepted limits are in
 [Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
-Three things about this platform's storage shape how it gets there:
+Three properties of this platform's storage shape how it gets there:
 
 - A write waits in the buffer of its open file until the title closes the
   file. Recording and restoring both store such a buffer first, with the file
   left open at its cursor, and are refused when the store refuses it. They are
   also refused, naming the file, when that file has been stored or removed
   through another handle since the buffer was filled, under any spelling of
-  its name: storing it would put the older part of the buffer over newer
-  content. The refusal lasts until the title closes that handle, which stores
-  the buffer as the title's own act. Two `DataBase` objects of one database
-  that both hold a write the store refused are refused the same way. Bytes
-  written into a stream and not flushed are not a write to the file yet and
-  stay in the stream.
+  its name, because storing it would put the older part of the buffer over
+  newer content. The refusal lasts until the title closes that handle, which
+  stores the buffer as the title's own act. Two `DataBase` objects of one
+  database that both hold a write the store refused are refused the same way.
+  Bytes written into a stream and not flushed are not yet a write to the file
+  and stay in the stream.
 - An open file, a stream opened on a file and an open `DataBase` are recorded
   by name, cursor and record size, and filled from the store when a load
   commits. A handle opened with the truncating flag takes at most what it had
   written; a handle whose open made a file that was not there takes the whole
   file, like any other. A `DataBase` object filled that way stores its
   container at close only if it changed after the load; one that a load did
-  not fill closes as it always has, by storing its container.
+  not fill closes as before, by storing its container.
 - `File.write(int)` past the end of the buffer fills the gap with zeros, as the
   array write already did. A restored cursor can stand past the end of a file
   that is shorter now, which is how the single-byte write came to be reached
@@ -170,12 +218,12 @@ it set off, and before its first slice. A thread parked beneath any other
 platform call refuses the checkpoint, naming the call, and the session carries
 on. An active cheat freeze or patch refuses it too.
 
-Two things this platform does changed with the feature and are worth knowing
-when comparing against an older build. Timers that come due in the same tick
-fire in the order they came due, then in the order of their structures, where
-they used to fire in whatever order a map was walked. And a file opened for
-writing holds its own copy of a packaged file's bytes; writing through one used
-to change what the archive answered for that file for the rest of the session.
+Two behaviors changed with the feature and matter when comparing against an
+older build. Timers that come due in the same tick fire in the order they came
+due, then in the order of their structures; they formerly fired in map
+iteration order. A file opened for writing holds its own copy of a packaged
+file's bytes; writing through one formerly changed what the archive answered
+for that file for the rest of the session.
 
 ## Validation and unresolved evidence
 
@@ -190,42 +238,3 @@ graphics context ABI, and unverified real-phone lifecycle recovery. A sampled
 in-game resume. Forced landscape rendering does not establish an automatic
 screen-selection rule. Full gameplay, audible recovery, and long-term save
 restoration require their own acceptance routes.
-
-
-A fingerprint-scoped [transparency calibration correction](lgt-qa-2026-09-21.md#transparency-calibration-origin)
-aligns one native blitter's sample write with its 24-row-adjusted read. This
-prevents a black transparency key from copying magenta backgrounds into the
-field without changing the shared framebuffer origin.
-
-
-One additional [wide-context revision](lgt-qa-2026-09-21.md#second-color-report-wide-context-proof)
-uses exclusive clip ends in its direct image blitter. Its exact fingerprint
-selects that convention; earlier wide contexts retain inclusive stored ends.
-
-
-A recognized native revision's save reader accepts a saved subscriber identity
-from another handset when automatic authentication compatibility is enabled.
-The original length and checksum checks still run, and original files and the
-configured subscriber number remain unchanged. The CLI diagnostic opt-out
-retains the original identity check. See the
-[save-reader evidence](lgt-qa-2026-09-21.md#save-subscriber-comparison).
-
-
-One recognized native revision completes its two-stage certificate exchange
-through the same bounded local socket service. Requests must match the session
-identity, model and observed protocol fields. The nonempty local message lets
-the guest set and save its own certificate-present flag. Responses are deferred
-to a service boundary; no external connection or carrier credential is created.
-Unknown exchanges still fail, and the authentication diagnostic opt-out disables
-this behavior. See the [protocol evidence](lgt-qa-2026-09-21.md#certificate-message-compatibility).
-
-
-### Key callbacks waiting on workers
-
-Key callbacks can wait for state updated by a Java worker. Eligible workers
-receive a slice at bounded compiler checkpoints inside such callbacks, except
-while the platform holds a monitor. Exception regions, jump buffers and native
-call depth belong to each worker across scheduling boundaries. The original
-instruction ceiling still bounds the callback. See the
-[gameplay hang investigation](lgt-key-callback-hang-2026-09-23.md) for the live
-server evidence, failing input replay and corrected path.

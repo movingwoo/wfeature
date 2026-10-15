@@ -16,7 +16,7 @@ import (
 // Where `native_client.go` maps a module and traps every slot so a run reports
 // what the module asked for, this is the other half: the slots whose meaning
 // has been established, answered. Everything else stays a trap, so a run still
-// stops at the first slot that matters and names it. See docs/ktf.md, "An
+// stops at the first slot that matters and names it. See docs/history/ktf.md, "An
 // earlier KTF package".
 //
 // The surface has three parts, and they are not one table:

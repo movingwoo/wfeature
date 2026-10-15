@@ -2374,7 +2374,7 @@ func (runtime *initializationRuntime) ensureJavaClass(name string) (uint32, erro
 	// one — guest virtual dispatch reads the vtable pointer out of the class
 	// and indexes it, so a zero there faults on the first `getClass()` or
 	// `equals()` a title calls on an array. See "A class left out of that
-	// table still resolves" in docs/ktf.md.
+	// table still resolves" in docs/history/ktf.md.
 	var parent uint32
 	if name != "java/lang/Object" {
 		if parent, err = runtime.ensureJavaClass("java/lang/Object"); err != nil {
@@ -2399,7 +2399,7 @@ func (runtime *initializationRuntime) ensureJavaClass(name string) (uint32, erro
 	// stored value against. Leaving it zero asks the check about a null class,
 	// which can only be answered with the permissive yes. See "Three ways a
 	// class record was not a class, and the two titles they stopped" in
-	// docs/ktf.md, "The array store check was asked about a null class".
+	// docs/history/ktf.md, "The array store check was asked about a null class".
 	elementClass, err := runtime.arrayElementClass(name)
 	if err != nil {
 		return 0, err

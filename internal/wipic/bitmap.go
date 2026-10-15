@@ -58,7 +58,7 @@ func DecodeBitmap(encoded []byte) (stdimage.Image, error) {
 	// The entry's alpha is cleared and its colour kept. Clearing the whole
 	// entry would lose the backdrop colour, and the colour is not decoration:
 	// a surface handed to a guest is RGB565 with no alpha, so the colour is
-	// the only transparency such a guest can read. See lgt.md, "A transparent
+	// the only transparency such a guest can read. See docs/history/lgt.md, "A transparent
 	// pixel still has a colour".
 	//
 	// The entry is cleared rather than the pixels rewritten: an index is

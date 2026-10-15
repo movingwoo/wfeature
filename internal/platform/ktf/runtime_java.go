@@ -1719,7 +1719,7 @@ func (runtime *initializationRuntime) topCard() *jvm.Object {
 // of the method that fills a field every one of its frames divides by, so
 // without this it threw an `ArithmeticException` twice per frame inside
 // `paint` and drew a black screen for as long as it was left running. See
-// docs/ktf.md, "The ninth round: a card that was never told it was on the
+// docs/history/ktf.md, "The ninth round: a card that was never told it was on the
 // screen".
 //
 // Which card counts as shown is this runtime's existing rule rather than a new

@@ -41,7 +41,7 @@ package armcore
 // validated whole, the values treated as constant are checked against the
 // destination, the step count is what the guest would have retired, and
 // anything the walk cannot prove is handed back to the interpreter. See
-// armcore.md, "Why a translator is not the answer even with unlimited effort",
+// docs/history/armcore.md, "Why a translator is not the answer even with unlimited effort",
 // which this does not contradict: the win here is the folding, not the dispatch.
 //
 // The pixels go out through the ordinary checked write, not through a raw span,
@@ -1523,7 +1523,7 @@ func (memory *Memory) runBlendedSpilled(context *Context, loop *spilledBlit, dra
 
 // The ninth shape: a counted halfword fill behind the same flag.
 //
-// `armcore.md`, "The seventh was built, measured, and is not kept", is about
+// `docs/history/armcore.md`, "The seventh was built, measured, and is not kept", is about
 // this loop. A recogniser for its *plain* form was built and thrown away
 // because the form almost never runs: the analyser accepted the loop 13.9
 // million times and the stand-in ran 78 thousand of them, because this fill

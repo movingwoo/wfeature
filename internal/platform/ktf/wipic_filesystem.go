@@ -13,7 +13,7 @@ import (
 // write, close and seek at 0 to 4, the file attributes at 5, remove at 6,
 // mkdir at 8, the free space at 12, `MC_fsTell` at 15 and `MC_fsIsExist` at 16
 // — and a title's own log names the call it makes here as `MC_fsOpen`. See
-// docs/ktf.md, "The two storage tables".
+// docs/history/ktf.md, "The two storage tables".
 //
 // **Two things deliberately kept the older name.** The save keys begin `db/`
 // and are a player's own files, so renaming them would orphan every save

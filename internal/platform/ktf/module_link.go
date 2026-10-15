@@ -50,7 +50,7 @@ const (
 	moduleUnresolved = 1
 	// javaDescriptorElement is where a class descriptor names the class of an
 	// array's elements. See "The array store check was asked about a null
-	// class" in docs/ktf.md for what reads it.
+	// class" in docs/history/ktf.md for what reads it.
 	javaDescriptorElement = 0x14
 )
 

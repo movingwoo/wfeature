@@ -89,12 +89,12 @@ After its input delay, the confirmation handler clears the flag, writes and
 closes the options file, then requests guest exit. Restarting the emulator
 before that handler runs leaves the flag set and repeats the notice.
 
-A fresh isolated run confirmed at ticks 50 and 150 (five-tick holds) exited at
+A fresh isolated run confirmed at ticks 50 and 150 (five-tick holds), exited at
 tick 152 and persisted the cleared flag. A new session with the same saves
-passed the notice; confirming the following startup notices reached the title.
-Debug and release both reproduced the exit at tick 152 and reached the title
-on the next run. No emulator change or save deletion is required for this case. Let the game
-exit through its own confirmation action, then launch it again.
+passed the notice, and confirming the following startup notices reached the
+title. Debug and release both reproduced the exit at tick 152 and reached the
+title on the next run. The case needs no emulator change or save deletion: the
+game exits through its own confirmation action and is then launched again.
 
 ## Validation boundary
 
@@ -105,10 +105,10 @@ contracts, cipher feedback, private certificate persistence, malformed writes
 and first-run reinitialization. Real archive checks exercise native CLI sessions;
 a fresh browser or physical-device playthrough is outside this evidence.
 
-The following checks passed: `make test`, `make test-debug`,
-`go test -race ./internal/...`, and `go vet ./...`. Both `make debug` and
-`make release` succeeded, as did `make server` and `make server-release`. Additional truncated-contract tests passed in the
-focused LGT certificate suite after those full checks.
+`make test`, `make test-debug`, `go test -race ./internal/...` and
+`go vet ./...` passed, and `make debug`, `make release`, `make server` and
+`make server-release` succeeded. Additional truncated-contract tests passed in
+the focused LGT certificate suite after those full checks.
 
 ## Follow-up: entering a campaign
 
@@ -132,6 +132,7 @@ Therefore the message alone does not establish a host transport refusal or a
 working remote service. Do not describe this path as fixed or substitute a
 successful connection result without establishing the guest's required state
 and response contract.
+Superseded: see the follow-ups below and [network](network.md#the-surface).
 
 For `e934256c238a`, New Game stopped at the unimplemented LGT graphics slot
 `0xed`. The caller passes a framebuffer, crop coordinates, dimensions and a
@@ -264,11 +265,12 @@ The first implementation returned a binary digest in the slot-name field. The
 guest treated those bytes as a bitmap-font string, so selecting the new slot
 raised `ArrayIndexOutOfBoundsException` from its paint callback. The service now
 returns a short EUC-KR display name, and its regression test checks that the
-field round-trips through the same encoding. Since 2026-10-10 the receipt
-carries no name at all: its status byte says the slot is empty, the title asks
-the player for one and registers it (command 1440) — see
-[A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for). A copied save with the corrupted
+field round-trips through the same encoding. A copied save with the corrupted
 field was repaired for reproduction only; no user save was changed.
+Superseded: since 2026-10-10 the receipt carries no name; its status byte says
+the slot is empty, and the title asks the player for one and registers it
+(command 1440) — see
+[A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for).
 
 After the property, framing and scheduler changes, `make test` (including
 219 browser-client tests), `make test-debug`, `go test -race ./internal/...`,

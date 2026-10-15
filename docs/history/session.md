@@ -1,10 +1,10 @@
 # Session investigation history
 
 This file preserves implementation investigations and dated validation records.
-Statements about current behavior, missing APIs, corpus size, and planned work
-apply to their original revision; later records may supersede them.
-Start with [session.md](../session.md) for the maintained overview.
-This consolidation adds no execution or acceptance evidence.
+Statements about current behavior, missing APIs, corpus size and planned work
+apply to their original revision and may be superseded. The maintained overview
+is [session.md](../session.md). This consolidation adds no execution or
+acceptance evidence.
 
 
 ## Contents
@@ -22,22 +22,23 @@ This consolidation adds no execution or acceptance evidence.
 - [Vibration](#implementation-vibration)
 - [What is not solved](#implementation-what-is-not-solved)
 - [Automatic offline authentication](#implementation-automatic-offline-authentication)
+- [Frame bandwidth — 2026-09-24](#frame-bandwidth-2026-09-24)
 
 <a id="implementation-server-sessions"></a>
 
 ## Implementation and validation record
 
-A phone cannot run the browser build fast enough to play. The same build and
-the same game measured about fifteen times slower on an iPhone than on the
-desktop that served it — 2.3fps against 19.2, with 86% of the phone's main
-thread inside the interpreter — and the cost is Go's WebAssembly backend rather
-than the emulator: pure register work carries no penalty at all, while an
-array index plus a branch costs 2.5x and the interpreter 6x. The interpreter's
-state is arrays, so it cannot live in wasm locals, and three rounds of tuning
-moved it by 0-4% (see [`armcore.md`](armcore.md#implementation-arm-core-implementation-status)).
+A phone could not run the browser build fast enough to play. The same build and
+game measured about fifteen times slower on an iPhone than on the desktop that
+served it (2.3fps against 19.2, with 86% of the phone's main thread inside the
+interpreter). The cost was Go's WebAssembly backend rather than the emulator:
+pure register work carried no penalty, while an array index plus a branch cost
+2.5x and the interpreter 6x. The interpreter's state is arrays, so it cannot
+live in wasm locals, and three rounds of tuning moved it by 0–4% (see
+[`armcore.md`](armcore.md#implementation-arm-core-implementation-status)).
 
-So the emulator stops running on the phone. It runs on a server that is left
-running anyway, and the phone draws what it is sent.
+The emulator therefore moved off the phone onto a server that is left running,
+and the phone draws what it is sent.
 
 | | |
 |---|---|
@@ -61,37 +62,36 @@ browser                          server
 ```
 
 - `internal/session` is the platform-agnostic driver: inspect, start, tick,
-  send a key, take a frame. It is where the differences between KTF, LGT and
-  the two MIDP platforms are absorbed, so a Host never switches on platform.
+  send a key, take a frame. It absorbs the differences between KTF, LGT and the
+  two MIDP platforms, so a Host never switches on platform.
 - `internal/webhost` owns the socket, the protocol and the encoder.
-- `internal/wsproto` is the framing (see [`architecture.md`](../architecture.md)).
+- `internal/wsproto` is the framing (see [`architecture.md`](../architecture.md#session-transport)).
 - `web/session.js` is the client: it opens the socket, draws frames with
   `createImageBitmap`, and replays audio events onto the page's synthesiser.
 
-One connection drives one session, and a session now outlives its connection
+One connection drives one session, and a session outlives its connection
 without a time limit; see "A game outlives its socket" below.
 
 <a id="implementation-what-travels"></a>
 
 ### What travels
 
-Text messages are JSON and small. Frames are binary and are the only thing
-sent at rate; a PNG already carries its own dimensions, so a frame has no
-envelope at all.
+Text messages are JSON and small. Frames are binary and are the only thing sent
+at rate; a PNG carries its own dimensions, so a frame has no envelope.
 
 | From the page | Means |
 |---|---|
 | `start` | run this archive, named by its `games.json` path, optionally on a named screen size |
-| `key` | one press or release, with the MIDP-style code the keypad has always sent. A page may still send `repeat`; it is dropped, and the section below says why |
+| `key` | one press or release, with the MIDP-style code the keypad has always sent. A page may still send `repeat`; it is dropped, for the reason in the section below |
 | `speed`, `scale` | the settings panel's two knobs. `speed` reaches every platform; see "One setting, three clocks" in [`cli.md`](../cli.md) for what each one scales |
 | `cheat` | one panel operation, or a text console line |
 | `report` | write the session's diagnostics under `logs/` |
 | `stop` | end the game without closing the connection |
-| `resume` | find the browser token's game; set `takeover: true` only to explicitly transfer control from another connected page |
+| `resume` | find the browser token's game; `takeover: true` only to transfer control explicitly from another connected page |
 | `park` | release control and retain the game without closing this socket |
 | `ping` | check connection liveness independently of guest execution |
-| `text` | open, commit, or cancel a native text edit for a supported guest field; see [native text input](../native-text-input.md) for identifiers, constraints, and support limits |
-| `pointer` | one touch — `press`, `drag` or `release` with `x` and `y` in the guest's own screen. The page undoes its own canvas geometry first; only it knows what it put between the finger and the game |
+| `text` | open, commit, or cancel a native text edit for a supported guest field; see [native text input](../native-text-input.md) for identifiers, constraints and support limits |
+| `pointer` | one touch: `press`, `drag` or `release` with `x` and `y` in the guest's own screen. The page removes its own canvas geometry first, because only it knows what it put between the finger and the game |
 
 | From the server | Means |
 |---|---|
@@ -105,10 +105,10 @@ envelope at all.
 | `detached` | control moved to another page; stop presentation and require explicit action to take it back |
 
 `ready` carries the server's build profile because the page has a developer's
-half — the run log beside the screen and the button that saves a report — and a
-release has no use for either. Which build is running is the server's answer
-rather than the page's guess: they are the same files, and the binary serving
-them is the one thing that knows.
+half (the run log beside the screen and the button that saves a report) that a
+release does not use. The binary serving the files is the one thing that knows
+which build is running, so the answer is the server's rather than the page's
+guess.
 
 <a id="implementation-one-touch-can-be-a-run-of-keys"></a>
 
@@ -116,40 +116,40 @@ them is the one thing that knows.
 
 A finger dragged across the keypad presses each key it crosses and releases the
 one it leaves, so a thumb rolled around the direction pad sends 2, 6, 8, 4 in
-turn without lifting. The page is where this lives; the server sees ordinary
-`key` messages and cannot tell a slide from four separate presses.
+turn without lifting. This lives in the page; the server sees ordinary `key`
+messages and cannot tell a slide from four separate presses.
 
-A slide does not have to begin on a key. A thumb on a handset presses whatever
-it reaches, so a finger that goes down on the screen or in the margin beside the
-pad is followed too, and the first key it crosses is pressed. That is why the
-keys are not bound one at a time — `pointerdown` is watched on the document, and
-what the finger went down on only decides whether a key is pressed straight
-away.
+A slide need not begin on a key. A handset thumb presses whatever it reaches, so
+a finger that goes down on the screen or in the margin beside the pad is
+followed too, and the first key it crosses is pressed. For that reason
+`pointerdown` is watched on the document rather than bound per key, and what the
+finger went down on only decides whether a key is pressed at once.
 
-A slide runs across the single `.keypad-pad` grid, including its bottom row.
-The band above it is outside the sliding region: Opts and its three assignable
-cells are held individually until release. Editing changes each cell's assigned
-key, while its region remains fixed. Type1 through Type3 provide shipped layouts;
-Type4 starts empty. Each type retains its own cell edits and size settings.
-The shared keypad editor changes both and resets the selected type. Non-key
-controls, text editors, logs and cheat panels retain their normal pointer behavior.
-`web/keypad.test.mjs` checks the grid and band distinction.
+A slide runs across the single `.keypad-pad` grid, including its bottom row. The
+band above it is outside the sliding region: Opts and its three assignable cells
+are held individually until release. Editing changes each cell's assigned key;
+its region stays fixed. Type1 through Type3 provide shipped layouts and Type4
+starts empty. Each type keeps its own cell edits and size settings, and the
+shared keypad editor changes both and resets the selected type. Non-key
+controls, text editors, logs and cheat panels keep their normal pointer
+behavior. `web/keypad.test.mjs` checks the grid and band distinction.
 
-Two details are what make it behave. A press that starts on a key captures the
-pointer, because otherwise the moves and the release stop arriving the moment
-the finger leaves that button — and capture then means the event no longer says
-what is under the finger, so the point is asked with `elementFromPoint` instead.
-A finger that started beside the keys needs no capture: its events belong to no
-button and the window hears them wherever it goes. And the key being left is
-released before the next is pressed, since a game reads them in the order they
-arrive and one finger never means two keys held at once.
+Two details make it behave. A press that starts on a key captures the pointer,
+because otherwise the moves and the release stop arriving once the finger leaves
+that button; with capture the event no longer says what is under the finger, so
+the point is asked with `elementFromPoint`. A finger that started beside the
+keys needs no capture: its events belong to no button and the window receives
+them wherever it goes. The key being left is released before the next is
+pressed, since a game reads them in arrival order and one finger never means two
+keys held at once.
 
 Off the keys a finger holds nothing, and sliding back on presses again. Two
-fingers reaching the same key — one sliding onto what the other holds, or onto
+fingers reaching the same key (one sliding onto what the other holds, or onto
 the second button a key is printed on, which the type-2 and type-3 layouts both
-do — are one press between them, released when the last of them leaves. That
-bookkeeping is `web/key-holds.js`, kept out of the DOM so `web/key-holds.test.mjs`
-can drive it directly; what is under the finger stays `app.js`'s question.
+have) are one press between them, released when the last leaves. That
+bookkeeping is `web/key-holds.js`, kept out of the DOM so
+`web/key-holds.test.mjs` can drive it directly; what is under the finger stays
+`app.js`'s question.
 
 <a id="implementation-key-spacing-while-changing-the-leftright-share"></a>
 
@@ -158,10 +158,10 @@ can drive it directly; what is under the finger stays `app.js`'s question.
 The keypad's left/right slider changes column and button widths together. The
 visible gap between adjacent keys stays at its 50% value for the current key
 size and viewport. At 50%, buttons still use the width cap derived from the key
-size; any space left inside those columns becomes a fixed inset on every key.
-Moving the split then adds or removes button width without widening that inset.
-Previously the columns grew while their buttons stopped at the cap, leaving
-large gaps on the wider side.
+size, and any space left inside those columns becomes a fixed inset on every
+key. Moving the split then adds or removes button width without widening that
+inset. Previously the columns grew while their buttons stopped at the cap,
+leaving large gaps on the wider side.
 
 The middle column still follows the wider side, and the top band keeps seven
 equal columns. Key heights and vertical spacing are unchanged.
@@ -170,208 +170,196 @@ equal columns. Key heights and vertical spacing are unchanged.
 
 #### The keypad carries one soft key, and it is the menu key
 
-A handset drew two labels in the bottom corners of its screen and put a key
-under each. Titles of this era used the left one for their in-game menu, and
-the page had no way to press it: the keypad's twelve keys, the pad, CLR and
-Call are all there is, and `wfeature key soft1` from the command line was the
-only way to send one (`cli.md`, "Key names"). The keypad's top row now carries
-a `Menu` button for it, in the spot the layout toggle used to hold — that
-choice moved into the settings panel, which is where a thing chosen once
-belongs.
+A handset drew two labels in the bottom corners of its screen with a key under
+each, and titles of this era used the left one for their in-game menu. The page
+had no way to press it: the keypad's twelve keys, the pad, CLR and Call were all
+it had, and `wfeature key soft1` from the command line was the only way to send
+one (`cli.md`, "Key names"). The keypad's top row now carries a `Menu` button in
+the spot the layout toggle used to hold; that choice moved into the settings
+panel, where a thing chosen once belongs.
 
-**One number serves every platform.** `MH_KEY_SOFT1` is -6 and the MIDP soft
-key a MIDlet of this era compares against is -6, so the page sends -6 and the
-WIPI paths and the MIDP one each take it unchanged; it is the only key on the
-page that needs no translating anywhere. It is also the only negative code the
-page sends, which is why the protocol test drives one.
+**One number serves every platform.** `MH_KEY_SOFT1` is -6 and the MIDP soft key
+a MIDlet of this era compares against is -6, so the page sends -6 and the WIPI
+paths and the MIDP one each take it unchanged. It is the only key on the page
+that needs no translation anywhere, and the only negative code the page sends,
+which is why the protocol test drives one.
 
-What a title does with it is the title's own business, and three answers have
-been seen:
+What a title does with it is its own business, and three answers were seen:
 
-- **An LGT Java title opens its in-game menu on it** — 계속하기, 게임방법,
-  환경설정, 메인메뉴, 게임종료, with `EZ:SELECT` in its footer. That is the run
-  that proves the button end to end, and `lgt.md` has the route to it.
-- **A KTF Java title's slot screen leaves the frame unchanged.** These titles
-  put back on CLR and confirm on fire, and draw `BACK:CLR` to say so; the key
-  is delivered and ignored, which is a title's answer rather than a gap.
+- **An LGT Java title opens its in-game menu on it** (계속하기, 게임방법,
+  환경설정, 메인메뉴, 게임종료, with `EZ:SELECT` in its footer). That run proves
+  the button end to end, and `lgt.md` has the route to it.
+- **A KTF Java title's slot screen leaves the frame unchanged.** These titles go
+  back on CLR and confirm on fire, and draw `BACK:CLR` to say so; the key is
+  delivered and ignored, which is the title's answer rather than a gap.
 - **The earlier KTF package drops it before the guest**, because nothing has
-  established what that handset numbers its soft keys — `ktf.md`, "The keys
-  with no code". The button is inert on those titles and will stay so until a
-  run names the code.
+  established what that handset numbers its soft keys (`ktf.md`, "The keys with
+  no code"). The button is inert on those titles until a run names the code.
 
 On the MIDP platform the key never reaches a `Canvas`'s `keyPressed`: it runs
 the first command, or opens the command menu when there are three or more. A
-`Canvas` MIDlet that added no commands therefore answers the button with
-nothing — see `lcdui.md`, "Commands, soft keys, and the menu".
+`Canvas` MIDlet that added no commands therefore answers the button with nothing
+(`lcdui.md`, "Commands, soft keys, and the menu").
 
 <a id="implementation-a-held-key-repeats-on-the-handsets-clock-not-the-keyboards"></a>
 
 #### A held key repeats on the handset's clock, not the keyboard's
 
-A handset repeated a key it was holding, and the specification writes the
-cadence down: `KEYREPEAT`, "600:250" — the first repeat after 600ms, then one
-every 250ms. A browser repeats a held key too, and neither the timing nor the
-meaning is the same: the operating system sends a keydown roughly thirty times
-a second, at a rate the user configured in their own settings, and it is not
-telling the page about a handset at all.
+A handset repeated a held key, and the specification writes the cadence down:
+`KEYREPEAT`, "600:250", the first repeat after 600ms and then one every 250ms. A
+browser also repeats a held key, but neither the timing nor the meaning matches:
+the operating system sends a keydown roughly thirty times a second, at a rate
+the user configured, and it says nothing about a handset.
 
 The page used to forward those as a `key` message with the action `repeat`, and
-what became of one depended on the platform underneath. Two of them have no
-repeat event — a Clet's are a press and a release, and so are the earlier KTF
-package's — and there a forwarded repeat became a second press with no release
-between, which is the fault `lgt.md` ("A Host repeat is not a second press")
-measured and closed. The other two do have the event, WIPI Java's `keyNotify`
-type 3 and a MIDP `Canvas`'s `keyRepeated`, and there the repeat was passed
-straight through: the title got the user's keyboard cadence, thirty a second,
-where a handset would have given it four.
+the result depended on the platform. Two platforms have no repeat event (a
+Clet's are a press and a release, and so are the earlier KTF package's), and
+there a forwarded repeat became a second press with no release between, the
+fault `lgt.md` ("A Host repeat is not a second press") measured and closed. The
+other two have the event (WIPI Java's `keyNotify` type 3 and a MIDP `Canvas`'s
+`keyRepeated`), and there the repeat was passed straight through: the title got
+the user's keyboard cadence, thirty a second, where a handset gave four.
 
 **So a repeat is made here rather than forwarded.** The page sends nothing for
-an operating system repeat, and this layer runs the handset's clock instead
+an operating-system repeat, and this layer runs the handset's clock instead
 ([`internal/keypad`](../../internal/keypad/repeat.go), `Session.repeatDue`):
 
 - **What repeats is what the guest believes is down**, which the pad answers
   (`Pad.Held`) rather than the Host. After a thumb rolls off one direction onto
-  another, the key the Host is holding down is not the one the title was given,
-  and repeating the Host's would name a key the game does not think is pressed.
-  A different key restarts the wait, because pressing one is what a roll is.
+  another, the key the Host holds is not the one the title was given, and
+  repeating the Host's would name a key the game does not think is pressed. A
+  different key restarts the wait, because pressing one is what a roll is.
 - **At most one repeat per tick, and the overshoot is carried.** A Host that
-  stalled — a long tick, a paused session — owes the missed ones to nobody:
-  delivering the backlog at once is exactly the burst that read as a run of
-  taps. But measuring the next interval from the tick that noticed rounds every
-  one of them up to a tick, and a tick is not free: on the WIPI Java platform,
-  whose rounds are the more expensive, a four-second hold delivered 18 repeats
-  where the handset's number is 22. Carrying the overshoot — up to one interval,
-  after which it is a stall rather than jitter — put it back at 22, and the MIDP
-  platform, whose ticks are a frame, was 14 in four seconds either way.
-- **The clock is the guest's.** The wall's interval is scaled by the speed
-  multiplier, the same as the guest's own clock and the waits between its
-  callbacks: a handset running twice as fast repeated twice as often.
+  stalled (a long tick, a paused session) owes the missed repeats to nobody:
+  delivering the backlog at once is the burst that read as a run of taps. But
+  measuring the next interval from the tick that noticed rounds every repeat up
+  to a tick, and a tick is not free: on the WIPI Java platform, whose rounds are
+  the more expensive, a four-second hold delivered 18 repeats where the
+  handset's number is 22. Carrying the overshoot (up to one interval, beyond
+  which it is a stall rather than jitter) restored 22, and the MIDP platform,
+  whose ticks are a frame, gave 14 in four seconds either way.
+- **The clock is the guest's.** The wall interval is scaled by the speed
+  multiplier, like the guest's own clock and the waits between its callbacks: a
+  handset running twice as fast repeated twice as often.
 - **The platforms with no repeat event get nothing**, as before.
 
-Two things come out of doing it here rather than in the page. The on-screen
-keypad now repeats as well — a thumb holding a button on a touchscreen is a key
-held down, and the page never sent a repeat for one — and the cadence no longer
-varies with whose keyboard is in front of the emulator.
+Doing it here rather than in the page has two effects: the on-screen keypad now
+repeats as well (a thumb holding a touchscreen button is a held key, and the
+page never sent a repeat for one), and the cadence no longer varies with the
+keyboard in front of the emulator.
 
-What the corpus says about who is waiting for it: five of the fifteen local SKT
-titles override `keyRepeated`, so there are callers there. The WIPI Java side
-cannot be asked the same question — those titles arrive compiled, with their
-method names gone (`ktf.md`, "What the corpus names, and what it never asks
-for") — so what a title does with type 3 is known only by running one.
+Five of the fifteen local SKT titles override `keyRepeated`, so there are
+callers. The WIPI Java side cannot be asked the same question, because those
+titles arrive compiled with their method names gone (`ktf.md`, "What the corpus
+names, and what it never asks for"); what a title does with type 3 is known only
+by running one.
 
 Both were run. Holding a direction on a local title of each reached the game's
 own class at the handset's cadence: type 3 into the card stack on one, and
-`keyRepeated` on the Canvas subclass of the other, with the release after it.
-What neither run settles is what a title *does* with a repeat, which is the
-title's business and differs between them.
+`keyRepeated` on the Canvas subclass of the other, followed by the release. What
+a title *does* with a repeat is its own business and differs between them.
 
 <a id="implementation-the-speed-belongs-to-the-game-not-to-the-page"></a>
 
 #### The speed belongs to the game, not to the page
 
-The multiplier was one value shared by every game, and the setting it carries
-is not a taste — it is a correction for **how much of a game's frame period was
-its own drawing on the handset**, which is a fact about that game. One local
-title issues a couple of hundred platform draw calls a frame and asks to be
-woken 10ms later; the drawing is native code here, so almost the whole period
-comes back and it needs a quarter speed to look right. The title beside it
-rasterises in its own guest code, 2.2 million instructions a frame, and needs
-none. `docs/ktf.md` has both measurements.
+The multiplier was one value shared by every game, but the setting is not a
+taste: it corrects for **how much of a game's frame period was its own drawing
+on the handset**, which is a fact about that game. One local title issues a
+couple of hundred platform draw calls a frame and asks to be woken 10ms later;
+the drawing is native code here, so almost the whole period comes back and it
+needs a quarter speed to look right. The title beside it rasterises in its own
+guest code, 2.2 million instructions a frame, and needs none. `docs/ktf.md` has
+both measurements.
 
-So a shared setting meant changing it by hand on every switch, and forgetting
-to is a game running at four times its own pace with nothing on screen to say
-why. It is stored per game now, keyed like the screen. Unlike the screen it
-applies to a running session — there is nothing to restart for — and the menu
-follows whichever game the setting is about: the one the list is showing before
-a game starts, the running one afterwards.
+A shared setting meant changing it by hand on every switch, and forgetting meant
+a game running at four times its own pace with nothing on screen to say why. It
+is now stored per game, keyed like the screen. Unlike the screen it applies to a
+running session, with nothing to restart, and the menu follows whichever game
+the setting is about: the one the list shows before a game starts, the running
+one afterwards.
 
-The key an older page used for the shared speed is still **read**, for a game
+The key an older page used for the shared speed is still **read** for a game
 that has no speed of its own, and never written again. That direction is the
-conservative one: somebody who slowed a game down before this change finds it
+conservative one: somebody who slowed a game down before the change finds it
 still slow, where ignoring the old key would silently speed it up. The first
-choice made for any game writes that game's own value, so the shared one only
-fades. `web/game-speed.js` holds the rule and its tests.
+choice made for any game writes that game's own value, so the shared one fades
+out. `web/game-speed.js` holds the rule and its tests.
 
 <a id="implementation-the-screen-is-part-of-starting-a-game"></a>
 
 #### The screen is part of starting a game
 
-A `start` may carry a `width` and a `height`, and the settings panel is where a
-page gets them. Almost every title here was drawn for 240x320 and that is the
-default, which is why the field is optional and absent from an ordinary start.
-A few were packaged for a smaller phone and **load their artwork by the screen
-they are given** — one local archive branches on the width and asks for a set
-of images its own package does not contain, so on a 240-wide screen it cannot
-run at all. `docs/skvm.md` has that title's own branch.
+A `start` may carry a `width` and a `height`, which the page takes from the
+settings panel. Almost every title here was drawn for 240x320, the default, so
+the field is optional and absent from an ordinary start. A few were packaged for
+a smaller phone and **load their artwork by the screen they are given**: one
+local archive branches on the width and asks for a set of images its own package
+does not contain, so on a 240-wide screen it cannot run at all. `docs/skvm.md`
+has that title's branch.
 
 **A start with no screen in it is not the same as a start that asked for the
-default.** On the MIDP platform the archive gets to answer first: an absent
-`width` and `height` let `skt.PackagedScreen` read the handset out of the
-archive's own resource names, so the title above starts on the phone it was
-built for without anyone knowing to change a setting. A start that carries a
-size is honoured as it always was. The page omits the field when the stored
-size is the default, so choosing 240x320 by hand reads here as "no answer" and
-that title still starts at 176x208 — which is a size it can run at. Two local
-titles answer this way, and the menu offers neither of them that size: one of
-the two cannot run on any size the menu does offer, which is why the archive
-gets to answer before the settings panel does.
+default.** On the MIDP platform the archive answers first: an absent `width` and
+`height` let `skt.PackagedScreen` read the handset from the archive's own
+resource names, so the title above starts on the phone it was built for without
+anyone changing a setting. A start that carries a size is honoured as before.
+The page omits the field when the stored size is the default, so choosing
+240x320 by hand reads here as "no answer" and that title still starts at
+176x208, a size it can run at. Two local titles answer this way, and the menu
+offers neither of them that size; one of the two cannot run on any size the menu
+does offer, which is why the archive answers before the settings panel.
 
-Two rules keep the setting honest:
+Rules that keep the setting honest:
 
 - **The size the server refuses is the size no handset had.** Anything outside
-  32..1024 in either direction is answered with an error rather than clamped:
-  it can only come from a page this server does not serve, and starting a game
-  on a screen nothing was drawn for is worse than not starting it.
+  32..1024 in either direction is answered with an error rather than clamped: it
+  can only come from a page this server does not serve, and starting a game on a
+  screen nothing was drawn for is worse than not starting it.
 - **The screen range is the server's and the page mirrors it.** A stored size
   outside 32..1024 is treated as absent by the page rather than sent on to be
-  refused, which is what the setting promised and did not do: the page checked
-  only a floor, so a value from an older page or from edited storage reached
-  the server and came back as an error instead of falling back to the default.
-- **`started` reports `can_watch`**, which says whether this platform can name
-  what wrote an address. It is the panel's answer about a control before it
-  offers it, not an error it discovers by using it; see `docs/skvm.md`, "A heap
-  with addresses in it", for the platform that answers no and what asking
-  anyway used to cost.
+  refused. Previously the page checked only a floor, so a value from an older
+  page or from edited storage reached the server and came back as an error
+  instead of falling back to the default.
+- **`started` reports `can_watch`**, whether this platform can name what wrote an
+  address. The panel learns this before offering the control rather than
+  discovering it as an error; `docs/skvm.md`, "A heap with addresses in it", has
+  the platform that answers no and what asking anyway used to cost.
 - **`started` reports the screen the platform took, not the one the page asked
-  for.** All three platforms honour the request now, but a page that laid out
-  for a size the game is not drawing would put the picture in the wrong place,
-  so the frame's own size is what the page reads back.
+  for.** All three platforms honour the request, but a page laid out for a size
+  the game is not drawing would put the picture in the wrong place, so the
+  frame's own size is what the page reads back.
 
-**A screen is one answer, and it has to reach every surface a game can ask.**
-This is the part that is easy to half-build. A WIPI title asks the platform how
-big its screen is, and it asks again — by another route — where the pixels are
-and how far apart the rows sit. On KTF that is `MC_grpGetDisplayInfo` and the
-screen framebuffer record; two local titles read the size from the first and
-then write straight into the buffer from the second. Give them a new size
-through one route and not the other and every row after the first lands at the
-wrong offset: the picture shears into diagonal bands and reads exactly like a
-decoder bug. `internal/platform/ktf`'s `Client.SetScreen` is the single place
-both answers are read from for that reason, and `screen_test.go` fails if they
-ever disagree. The Java surface — `Display.getWidth`, a `Card`'s bounds — reads
-the same answer, because a title that lays out against one size while the
-platform draws at another is the same fault wearing different clothes.
+**A screen is one answer, and it has to reach every surface a game can ask.** A
+WIPI title asks the platform how big its screen is, and asks again, by another
+route, where the pixels are and how far apart the rows sit. On KTF those are
+`MC_grpGetDisplayInfo` and the screen framebuffer record; two local titles read
+the size from the first and write straight into the buffer from the second. A
+new size given through one route and not the other puts every row after the
+first at the wrong offset, and the picture shears into diagonal bands that look
+like a decoder bug. `internal/platform/ktf`'s `Client.SetScreen` is therefore
+the single place both answers are read from, and `screen_test.go` fails if they
+disagree. The Java surface (`Display.getWidth`, a `Card`'s bounds) reads the same
+answer, because a title laying out against one size while the platform draws at
+another is the same fault.
 
-The page remembers the choice per game rather than once, because it is a
-property of the title rather than a taste, and it applies at the next start — a
-MIDlet reads its screen once, when it starts.
+The page remembers the choice per game, because it is a property of the title,
+and applies it at the next start: a MIDlet reads its screen once, when it starts.
 
-**It is not the setting that makes the picture bigger.** That one is `scale`,
-which magnifies a finished frame and is a taste; this one changes what the
-guest is told and therefore which artwork it loads and how it lays a screen
-out. The two are worth keeping apart when a report says a title "looks wrong":
-an old game whose proportions are off on a modern display wants `scale` and the
-page's own letterboxing, while a title that draws into a corner of the screen
-or asks for images it does not carry is the one this setting is for.
+**This setting does not make the picture bigger.** That is `scale`, which
+magnifies a finished frame and is a taste; this setting changes what the guest
+is told, and therefore which artwork it loads and how it lays out a screen. When
+a report says a title "looks wrong", an old game whose proportions are off on a
+modern display wants `scale` and the page's letterboxing, while a title that
+draws into a corner of the screen or asks for images it does not carry wants
+this setting.
 
 **A screen larger than the default is a handset too, and the menu offers two.**
-The carrier standardised on 240x320 for this library's generation, but the
-handsets that came after it did not stop there — 240x400 and 320x480 both
-shipped — so those are the sizes above the default, and they are handsets
-rather than round numbers for the same reason the two below it are. Every local
-title was run 400 ticks on each of them, and on the 480x800 screen of the last
-generation, which the menu does not offer: it is a phone this library was not
-written for, and a screen that large is a magnifier's job rather than this
-setting's.
+The carrier standardised on 240x320 for this library's generation, but later
+handsets shipped 240x400 and 320x480, so those are the sizes above the default,
+handsets rather than round numbers, as the two below it are. Every local title
+was run 400 ticks on each of them, and on the 480x800 screen of the last
+generation, which the menu does not offer: this library was not written for that
+phone, and a screen that large is a magnifier's job.
 
 | Screen | What the local library did |
 |---|---|
@@ -379,256 +367,246 @@ setting's.
 | 320x480 | every title ran but one, which throws from its own code |
 | 480x800 | the same one title, and no other — measured, not offered |
 
-The one that throws indexes a fixed-length row of tiles it sized for a 240-wide
-screen and walks one past the end as soon as the screen is wider — a guest
+The one that throws indexes a fixed-length row of tiles sized for a 240-wide
+screen and walks one past the end as soon as the screen is wider: a guest
 exception, not a platform fault, and the reason the setting is per game and
-reversible rather than a global taste. What the rest do with the extra room
-divides in two, and both are the game's own answer: most lay their scene out
-across whatever they are given, and some paint their 240x320 picture into the
-top-left corner and leave the rest black.
+reversible. The rest divide in two, both the game's own answer: most lay their
+scene out across whatever they are given, and some paint their 240x320 picture
+into the top-left corner and leave the rest black.
 
-**A larger screen is shown smaller, not given more of the page.** The space the
-canvas occupies is a hole of the default screen's 3:4, capped by the height the
-page has left once the keypad under it is subtracted; it is the same hole
-whatever the game is running on. A frame of another shape — the menu offers 3:5
-and 2:3 as well — is fitted into that hole by `object-fit: contain` and keeps
-its own shape, so what does not fill is bezel. The alternative, sizing the hole
-from the frame, is what the page used to do, and a 480x800 screen sized that way
-put the keypad below the fold.
+**A larger screen is shown smaller, not given more of the page.** The canvas
+occupies a hole of the default screen's 3:4, capped by the height left once the
+keypad under it is subtracted, whatever the game runs on. A frame of another
+shape (the menu offers 3:5 and 2:3 as well) is fitted into that hole by
+`object-fit: contain` and keeps its own shape, and what does not fill is bezel.
+The page used to size the hole from the frame, and a 480x800 screen sized that
+way put the keypad below the fold.
 
 <a id="implementation-the-first-row-of-the-page-has-to-clear-a-status-bar"></a>
 
 #### The first row of the page has to clear a status bar
 
-The page asks for the whole display — `viewport-fit=cover` in the viewport meta
-— so that the keypad's bottom row can clear a home indicator with
-`env(safe-area-inset-bottom)`. On an iOS home-screen app that request was being
-granted at the top as well, and nothing was reserved there: the game screen is
-the first thing in the column, so its first rows came up under the clock and the
-battery. Two screenshots from a phone show a title's artwork behind the status
-bar with no way to see it.
+The page asks for the whole display (`viewport-fit=cover` in the viewport meta)
+so that the keypad's bottom row can clear a home indicator with
+`env(safe-area-inset-bottom)`. On an iOS home-screen app the request was also
+granted at the top, and nothing was reserved there: the game screen is the first
+thing in the column, so its first rows sat under the clock and the battery. Two
+screenshots from a phone show a title's artwork behind the status bar.
 
-The same web view then reports a viewport **shorter** than the display it just
-filled — `100dvh` comes back as the display less the status bar while the page
-is laid out from the top edge of the glass — so the column's last rows hang past
-the bottom of the screen. Here that cost only the keypad's bottom padding, which
-is why it was invisible; a layout with anything else down there would have lost
-it.
+The same web view then reports a viewport **shorter** than the display it filled
+(`100dvh` is the display less the status bar while the page is laid out from the
+top edge of the glass), so the column's last rows hang past the bottom of the
+screen. Here that cost only the keypad's bottom padding, which is why it was
+invisible; a layout with anything else down there would have lost it.
 
-Two changes, and either would do on its own:
+Two changes, either of which would do alone:
 
 - `apple-mobile-web-app-status-bar-style` is `black` rather than
   `black-translucent`. An opaque bar puts the page below it and makes the
-  viewport the truth, so the canvas keeps its full size.
+  viewport accurate, so the canvas keeps its full size.
 - `--safe-top` is `env(safe-area-inset-top, 0px)`, subtracted from
-  `--usable-height` and spent as `padding-top` on `.stage-main` — the pair
-  `--keypad-chrome` already is at the other end. It is zero on every browser
-  that lays the page out below the bar already, and it is what covers the case
-  where one ignores the meta and hands the page the whole screen anyway.
+  `--usable-height` and spent as `padding-top` on `.stage-main`, matching the
+  `--keypad-chrome` pair at the other end. It is zero on every browser that
+  already lays the page out below the bar, and covers a browser that ignores the
+  meta and hands the page the whole screen anyway.
 
-Neither can be exercised by the page's own module tests: `env()` has no value
-outside a browser and the meta is read by the platform, not by the page. What
-they are checked against is a phone.
+The page's module tests cannot exercise either: `env()` has no value outside a
+browser and the meta is read by the platform. They are checked on a phone.
 
 <a id="implementation-what-a-frame-costs-on-its-way-out"></a>
 
 #### What a frame costs on its way out
 
-A presented frame is compressed on the writer's goroutine and handed there by
-the emulator's, and both halves used to allocate more than they needed to.
+A presented frame is handed from the emulator's goroutine to the writer's and
+compressed there, and both halves used to allocate more than they needed.
 
 `png.Encoder` builds a fresh compressor per call unless it is given a buffer
-pool — 1.25 MB and thirty allocations a frame, against 8 KB and none with one.
-The pool is shared across sessions: the buffers are interchangeable, and a
+pool: 1.25 MB and thirty allocations a frame, against 8 KB and none with one. The
+pool is shared across sessions, because the buffers are interchangeable and a
 household server runs few sessions at once. The bytes a page receives are
 identical either way, which `session_test.go` pins.
 
-The frame itself is no longer copied on the way to the encoder. Every platform
-here answers `session.Frame` with a picture of the caller's own rather than the
-one it is still drawing into, so the copy was a copy of a copy — a third of a
-megabyte a frame, made only to be collected. That contract is the point: a Host
-holds a frame across ticks and hands it to another goroutine, and one platform
-was answering with its live conversion buffer while the MIDP surface handed out
-the bytes its own guest threads paint into. Both now copy where they know they
-have to, which is under the lock they already hold.
+The frame is no longer copied on the way to the encoder. Every platform answers
+`session.Frame` with a picture of the caller's own rather than the one it is
+still drawing into, so the copy was a copy of a copy, a third of a megabyte a
+frame. That contract is the point: a Host holds a frame across ticks and hands
+it to another goroutine, and one platform had been answering with its live
+conversion buffer while the MIDP surface handed out the bytes its own guest
+threads paint into. Both now copy where they must, under the lock they already
+hold.
 
 <a id="implementation-a-shed-message-is-counted-twice-on-purpose"></a>
 
 #### A shed message is counted twice, on purpose
 
-Audio and statistics are droppable: when the socket is behind, they are thrown
+Audio and statistics are droppable: when the socket is behind they are thrown
 away rather than made to wait, because the emulator waiting for the link is the
-one failure the pacing exists to prevent. Two things then want to know how much
-was shed, and they want different numbers.
+failure the pacing exists to prevent. Two consumers want to know how much was
+shed, and they want different numbers.
 
 The page wants a rate. Its statistics message carries what was shed since the
 last one, so that counter is emptied every time a report is sent, and a run of
-zeros after a burst is the page saying the connection recovered.
+zeros after a burst says the connection recovered.
 
-The session report wants the run. It is a post-mortem, and reading the page's
-counter for it answered with however little had been shed since the last
-report — a session that shed thousands in its first minute and none afterwards
-said nothing had been shed at all. `shedTotal` is the counter it reads, and it
-is never emptied.
+The session report wants the whole run. Reading the page's counter for it
+answered with however little had been shed since the last report, so a session
+that shed thousands in its first minute and none afterwards reported nothing.
+`shedTotal` is the counter it reads, and it is never emptied.
 
 <a id="implementation-pacing-and-frame-skipping"></a>
 
 ### Pacing and frame skipping
 
 The emulator loop ticks with a budget and then waits for however long the guest
-asked to be left alone — a guest that asks for two milliseconds and is given
-sixteen loses the difference out of every wait it takes, and it takes one
-between every pair of frames. It waits on the command channel rather than
-sleeping, so a key does not have to wait out the game's idle time.
+asked to be left alone; a guest that asks for two milliseconds and is given
+sixteen loses the difference from every wait, and it takes one between every
+pair of frames. It waits on the command channel rather than sleeping, so a key
+does not wait out the game's idle time.
 
-**The budget is 32ms here and 8ms in the browser, and the difference matters
-for more than latency.** The browser's Host shares a thread with drawing the
-page, so a long entry is a long freeze. Nothing here shares anything. What the
-budget still buys is a bound on how long a key waits behind a busy game — but
-an entry that stops on its budget is also read by the platform as saturation,
-because in a browser that is what it means. On a server that re-enters
-immediately and for free it means only that the budget is small, and a budget
-short enough to cut ordinary entries has the session giving up frames on a
-machine with a core to spare. `HostCosts.PaintLoad` is that reading, and it is
-in the debug report: under 1 is a Host with time to spare, over 1.1 is one that
-starts dropping paints to keep the game's logic on schedule.
+**The budget is 32ms here and 8ms in the browser, and the difference matters for
+more than latency.** The browser's Host shares a thread with drawing the page, so
+a long entry is a long freeze; nothing here shares anything. The budget still
+bounds how long a key waits behind a busy game, but an entry that stops on its
+budget is also read by the platform as saturation, because in a browser that is
+what it means. On a server that re-enters immediately it means only that the
+budget is small, and a budget short enough to cut ordinary entries has the
+session giving up frames on a machine with a core to spare. `HostCosts.PaintLoad`
+is that reading, and it is in the debug report: under 1 is a Host with time to
+spare, over 1.1 is one that starts dropping paints to keep the game's logic on
+schedule.
 
-Measured on an M1 with a real title: 0.04-0.20 at every magnification, no
-paints dropped, 19fps. Driven at sixteen times speed the same session reports
-1.57 and drops paints as designed, holding the logic at 16x while the picture
-falls to 15fps.
+Measured on an M1 with a real title: 0.04–0.20 at every magnification, no paints
+dropped, 19fps. Driven at sixteen times speed, the same session reports 1.57 and
+drops paints as designed, holding the logic at 16x while the picture falls to
+15fps.
 
-**A round with no logic in it keeps its paint no matter what the load says.**
-The trade only works when there is something to trade for, and on KTF the paint
-can be the round's only work — one title runs its frame loop from its card's
-paint and advances its client thread's next wake-up inside it. Skipping starved
-that thread, which then read as work waiting and spun the emulator. See
+**A round with no logic in it keeps its paint whatever the load says.** The
+trade works only when there is something to trade for, and on KTF the paint can
+be the round's only work: one title runs its frame loop from its card's paint and
+advances its client thread's next wake-up inside it. Skipping starved that
+thread, which then read as work waiting and spun the emulator. See
 [`ktf.md`](ktf.md#implementation-what-frame-skipping-cannot-pay-for).
 
-LGT and the MIDP runtimes have no clock of their own and never report
-themselves idle. In a browser that went unnoticed, because the page ticked them
-from its frame clock; a server that believes "no wait" spins a core and runs
-the game as fast as the machine allows.
+LGT and the MIDP runtimes have no clock of their own and never report themselves
+idle. In a browser that went unnoticed, because the page ticked them from its
+frame clock; a server that believes "no wait" spins a core and runs the game as
+fast as the machine allows.
 
-**For the MIDP runtimes `session.FramePace` is the answer, and for LGT it was
-the wrong one.** Those runtimes read the wall clock directly, so a fixed wait
-between ticks only decides how promptly deferred work runs. LGT's guest clock
-is virtual: a tick moves it by the session's tick and nothing else does. So a
-fixed wait there does not set responsiveness, it sets the game's *speed* —
+**For the MIDP runtimes `session.FramePace` is the answer, and for LGT it was the
+wrong one.** Those runtimes read the wall clock directly, so a fixed wait between
+ticks only decides how promptly deferred work runs. LGT's guest clock is
+virtual: a tick moves it by the session's tick and nothing else does. A fixed
+wait there sets the game's *speed*, not its responsiveness:
 
     speed = tick / (host tick cost + fixed wait)
 
-which is right only when the tick cost happens to land on one number. Measured
-on an M1 with a real title: 1.79-2.48x through the menus, where a tick cost
-10ms. On a slower server the same title ran at 0.68x in-game, where a tick cost
-57.7ms — uniform slow motion with a rock-steady frame rate, because nothing was
-being dropped. The game was simply being told less time had passed than had.
+which is right only when the tick cost happens to land on one number. Measured on
+an M1 with a real title: 1.79–2.48x through the menus, where a tick cost 10ms. On
+a slower server the same title ran at 0.68x in-game, where a tick cost 57.7ms:
+uniform slow motion with a steady frame rate, because nothing was dropped and the
+game was told less time had passed than had.
 
 `lgt.Session.TickFor` anchors to the wall clock instead: a tick is due every
 session tick of real time, and the wait is whatever is left of it. Measured at
-1.00x steady, 20 ticks a second. The wait is zero once a tick overruns — a tick
-costing more than it represents cannot be bought back — and the debt is capped
-at one tick so a world load inside a single call is not repaid by sprinting
+1.00x steady, 20 ticks a second. The wait is zero once a tick overruns (a tick
+costing more than it represents cannot be bought back), and the debt is capped
+at one tick so that a world load inside a single call is not repaid by sprinting
 through the scene after it. `lgt.Session.Tick` still steps without pacing, which
 is what the CLI batches with.
 
-**The debug report is the only window onto a phone.** No profiler attaches
-there, so `tick cost:`, `over time:` and the per-phase `worst` lines are the
-whole picture of what a handset is actually spending, and a report from the
-phone beside one from the desktop is how a difference gets found at all.
+**The debug report is the only window onto a phone.** No profiler attaches there,
+so `tick cost:`, `over time:` and the per-phase `worst` lines are the whole
+picture of what a handset spends, and a report from the phone beside one from the
+desktop is how a difference is found.
 
-One trap makes that comparison lie: **a phase average is not divided by the
-run's rounds.** Once frame skipping is on, paint runs in only some of them, so
-dividing its total by every round reports a paint several times cheaper than it
-is — which once read as "the phone paints as fast as the desktop" when it was
-painting a third as often. Divide a phase by the rounds that ran it.
+One trap makes that comparison lie: **a phase average is not divided by the run's
+rounds.** With frame skipping on, paint runs in only some rounds, so dividing its
+total by every round reports a paint several times cheaper than it is; this once
+read as "the phone paints as fast as the desktop" when it was painting a third as
+often. Divide a phase by the rounds that ran it.
 
 A frame is pushed to the encoder only when the flush counter moves, and the
-channel holds one. When it is full the frame is dropped and counted: the game
-has already moved on, and sending a backlog of stale pictures to a phone that
-is behind makes it later still. Encoding runs on its own goroutine, so
-compression costs frames rather than guest speed.
+channel holds one. When it is full the frame is dropped and counted: the game has
+already moved on, and a backlog of stale pictures makes a phone that is behind
+later still. Encoding runs on its own goroutine, so compression costs frames
+rather than guest speed.
 
 <a id="implementation-saves"></a>
 
 ### Saves
 
-The emulator and the save tree are now on the same machine, so saves never
-cross the network: a session writes through `backend.DirectorySaveStore` into
-the same `savedata/<profile>/<platform>/<owner>/` tree the native CLI and the
-save API use. The page no longer preloads anything before starting a game.
-
-The save API remains for the CLI's `DirectorySaveStore` layout, which both
-Hosts read.
+The emulator and the save tree are on the same machine, so saves never cross the
+network: a session writes through `backend.DirectorySaveStore` into the same
+`savedata/<profile>/<platform>/<owner>/` tree the native CLI and the save API use.
+The page no longer preloads anything before starting a game. The save API remains
+for the CLI's `DirectorySaveStore` layout, which both Hosts read.
 
 <a id="implementation-one-games-saves-belong-to-one-session"></a>
 
 #### One game's saves belong to one session
 
-A save directory is named by the archive, not by the page that opened it, so
-two pages that start the same game get one directory and two emulators writing
-into it. Nothing about the store notices: each session reads the files when the
-guest asks and writes them back whole, so the second writer wins and the first
-player's progress is gone with nothing reported anywhere. It is the ordinary
-case rather than a contrived one — a phone and a desktop against one household
-server, or one browser with the game open in two tabs.
+A save directory is named by the archive, not by the page that opened it, so two
+pages that start the same game get one directory and two emulators writing into
+it. The store does not notice: each session reads the files when the guest asks
+and writes them back whole, so the second writer wins and the first player's
+progress is lost with nothing reported. This is the ordinary case: a phone and a
+desktop against one household server, or one browser with the game open in two
+tabs.
 
-So **a session claims its save directory for as long as it holds the game**,
-and a start that cannot get the claim is refused with a message naming what is
-holding it (`internal/webhost/saveclaim.go`). The claim belongs to the game
-rather than to the connection: it is taken when a game starts, released
-wherever the game is closed, and it travels with a game that is parked, because
-a parked game still owns the files it will write when its page comes back.
+So **a session claims its save directory for as long as it holds the game**, and
+a start that cannot get the claim is refused with a message naming the holder
+(`internal/webhost/saveclaim.go`). The claim belongs to the game rather than the
+connection: it is taken when a game starts, released wherever the game is closed,
+and travels with a parked game, which still owns the files it will write when
+its page comes back.
 
 A fresh start over a parked holder requires confirmation before its retained
-progress is discarded. An active holder is refused immediately. Reloading a
-page resumes by browser token, so a fresh-start grace period is unnecessary.
+progress is discarded, and an active holder is refused immediately. Reloading a
+page resumes by browser token, so no fresh-start grace period is needed.
 WebSocket starts use the atomic admission check in `startapproval.go`.
 
-**The save API takes the same claim for the length of one write.** A `PUT
-/api/saves/<owner>/<key>` into a directory a game holds is refused with 409 and
-the holder's name, because a session writes each file back whole at the guest's
-next commit and would erase the entry with nothing reported anywhere. The API
-holds the claim only while it writes, so it neither takes over a parked game —
-a player's parked game is not traded for a tool's write — nor blocks a start
-for longer than the two second grace above absorbs.
+**The save API takes the same claim for the length of one write.** A
+`PUT /api/saves/<owner>/<key>` into a directory a game holds is refused with 409
+and the holder's name, because the session writes each file back whole at the
+guest's next commit and would erase the entry with nothing reported. The API holds
+the claim only while it writes, so it neither takes over a parked game (a
+player's parked game is not traded for a tool's write) nor blocks a start for
+longer than the two-second grace period of that revision absorbed.
 
-The one road left unarbitrated is **the native CLI**, which is another process
-while this claim is in memory. Closing it means a lock on disk, which is a
-different mechanism with its own failure to get right: a lock left behind by a
-process that was killed has to be told from one a running game holds, on five
-operating systems, without a live process check that lies on any of them. The
-CLI is a development and diagnostics tool by design (`AGENTS.md`), so what is
-exposed here is a developer running one game twice against one save tree, on
-purpose. A save the CLI writes under a running session is still the session's
-to overwrite.
+The one road left unarbitrated was **the native CLI**, another process while this
+claim lived in memory. Closing it meant a lock on disk, a different mechanism
+with its own failure to get right: a lock left by a killed process has to be told
+from one a running game holds, on five operating systems, without a live-process
+check that lies on any of them. The CLI is a development and diagnostics tool by
+design (`AGENTS.md`), so the exposure was a developer running one game twice
+against one save tree on purpose. A save the CLI writes under a running session
+is still the session's to overwrite.
+
+Superseded: the claim is now also a kernel file lock that the CLI's `run`, `runktf`, `importsaves` and `provision` take; see [Save locks and claims](../architecture.md#save-locks-and-claims).
 
 Whichever writer gets there, **a save is replaced rather than overwritten**:
-`DirectorySaveStore.StoreSave` writes to a dotted temporary file beside the
-target, flushes it, and renames it into place. A save is written whole every
-time, so an interrupted overwrite would otherwise leave the front of the new
-save on the back of the old one — a file the game reads as a save, not as
-damage.
+`DirectorySaveStore.StoreSave` writes a dotted temporary file beside the target,
+flushes it and renames it into place. A save is written whole every time, so an
+interrupted overwrite would otherwise leave the front of the new save on the back
+of the old one, a file the game reads as a save rather than as damage.
 
 <a id="implementation-a-save-that-leaves-this-machine"></a>
 
 #### A save that leaves this machine
 
-The arbitration above solves one install's problem: two writers on one save
+The arbitration above solves one install's problem, two writers on one save
 directory. **Between installs nothing holds at all.** The files under
-`savedata/<profile>/<platform>/<owner>/` say nothing about what they are — not
-which game they belong to, and not whether they arrived whole — so a save
-copied to another machine can land in the wrong game's directory, and a
-transfer that stopped halfway leaves a file the game reads as a save rather
-than as damage. The owner is not even unique within one install:
-`SaveOwnerCollisions` exists on all three platforms because more than one
-distinct title can claim one owner directory.
+`savedata/<profile>/<platform>/<owner>/` say neither which game they belong to nor
+whether they arrived whole, so a save copied to another machine can land in the
+wrong game's directory, and a transfer that stopped halfway leaves a file the game
+reads as a save. The owner is not even unique within one install:
+`SaveOwnerCollisions` exists on all three platforms because more than one distinct
+title can claim one owner directory.
 
-That matters here more than on a desktop emulator, because the page cannot see
-the save tree at all. On a phone it cannot be reached by any other means
-either — Android since 11 does not let a file manager open the directory an app
-keeps its files in, the same wall that made a game have to arrive through the
-page.
+That matters more here than on a desktop emulator, because the page cannot see
+the save tree at all. On a phone nothing else can reach it either: since Android
+11 a file manager cannot open the directory an app keeps its files in, the same
+wall that made a game have to arrive through the page.
 
 So a save that leaves travels as one self-describing file, little-endian:
 
@@ -642,50 +620,47 @@ crc32     4B   IEEE, over the payload
 payload   length B
 ```
 
-The payload is the title's whole writable storage — on every platform that is
-the owner directory, a tree of files keyed the way `SaveStore` keys them — as
-a list in key order: a `uint16` key length, the key, a `uint32` data length,
-the data. It is deliberately not a zip. A zip carries timestamps and file
-modes, so exporting one untouched directory twice would produce two different
-checksums, and nobody could tell a re-export from a change.
+The payload is the title's whole writable storage (on every platform the owner
+directory, a tree of files keyed the way `SaveStore` keys them) as a list in key
+order: a `uint16` key length, the key, a `uint32` data length, the data. It is
+deliberately not a zip: a zip carries timestamps and file modes, so exporting one
+untouched directory twice would give two checksums, and a re-export could not be
+told from a change.
 
-**The two refusals are kept apart**, because the person holding the file can
-act on each and the actions are different:
+**The two refusals are kept apart**, because the person holding the file acts
+differently on each:
 
-- **The identity does not match** — the container is intact and is somebody's
-  real backup, of another game. The fix is to find the right file. Answered as
-  409, naming the first four bytes of both identities.
-- **The checksum does not match, or the container does not parse** — the file
-  itself is no longer usable and the transfer has to be made again. Answered as
-  422.
+- **The identity does not match**: the container is intact and is a real backup
+  of another game, and the fix is to find the right file. Answered as 409, naming
+  the first four bytes of both identities.
+- **The checksum does not match, or the container does not parse**: the file is
+  unusable and the transfer has to be repeated. Answered as 422.
 
-A file that is not one of these at all is a third answer (400), because the
-fix there is to pick a different file entirely rather than to look for a copy
-of this one. `internal/backend/savepack.go` holds the codec and the reasoning;
-the routes are `internal/webhost/savepack.go`.
+A file that is not a container at all is a third answer (400), because the fix is
+to pick a different file rather than another copy of this one.
+`internal/backend/savepack.go` holds the codec and the reasoning; the routes are
+in `internal/webhost/savepack.go`.
 
-Two consequences worth stating because they are chosen rather than incidental:
+Two consequences are chosen rather than incidental:
 
 - **A repacked archive is a different input**, so its own backups are refused.
-  This build cannot tell a repack that changed nothing from one that changed
-  the save format, and refusing is the answer that cannot silently ruin a save.
-- **An import replaces rather than merges.** The container is the whole of the
-  writable storage, so an entry in the tree that the container does not name
-  came from a later point in the story; leaving it beside the restored entries
-  builds a state the game never wrote. The page asks before it runs, and the
-  answer says how many entries were written and how many removed.
+  This build cannot tell a repack that changed nothing from one that changed the
+  save format, and refusing cannot silently ruin a save.
+- **An import replaces rather than merges.** The container is the whole writable
+  storage, so an entry in the tree that it does not name came from a later point
+  in the story, and leaving it beside the restored entries builds a state the game
+  never wrote. The page asks before it runs, and the answer says how many entries
+  were written and how many removed.
 
-**A dotted file name is not a temporary file.** This is the trap the feature
-had to get right and the one the save API had already got wrong. Every platform
-keeps load-bearing state under a dotted name — `rms/.index` is what says a MIDP
-record store exists at all (`docs/rms.md`), and the file layers keep
-`.removed`, `.created` and `.dirs`. `DirectorySaveStore` also leaves dotted
-files behind on its way to a rename. Skipping every dotted name loses the first
-set to catch the second, and the result is a save that restores and then
-appears to have lost everything. `backend.ReadSaveTree` skips the temporary
-*shape* instead — a leading dot and a trailing run of digits, which is what
-`os.CreateTemp` writes — and `GET /api/saves/<owner>` now goes through it too,
-having had the same defect.
+**A dotted file name is not a temporary file.** The save API had already got this
+wrong. Every platform keeps load-bearing state under a dotted name: `rms/.index`
+says a MIDP record store exists at all (`docs/rms.md`), and the file layers keep
+`.removed`, `.created` and `.dirs`. `DirectorySaveStore` also leaves dotted files
+on its way to a rename. Skipping every dotted name loses the first set to catch
+the second, and the result is a save that restores and then appears to have lost
+everything. `backend.ReadSaveTree` skips the temporary *shape* instead (a leading
+dot and a trailing run of digits, which is what `os.CreateTemp` writes), and
+`GET /api/saves/<owner>`, which had the same defect, now goes through it too.
 
 <a id="implementation-exporting-and-importing-under-a-live-session"></a>
 
@@ -693,458 +668,440 @@ having had the same defect.
 
 **An export is not arbitrated. An import is, exactly as a save API write is.**
 
-The claim exists for one defect: a session reads the save files when the guest
-asks and writes them back whole, so a second writer's entry is gone at the next
-commit with nothing reported anywhere. An export writes nothing, so that defect
-cannot reach it. Refusing one would refuse the page against its own running
-game — the sequence the two second grace above exists to prevent — and no grace
-helps here, because the game is deliberately still running. What an
-unarbitrated export can catch is a set of files spanning one commit: every
-individual file is whole, since `StoreSave` replaces by rename, so the worst
-case is one entry from before a commit beside one from after, and that is a
-save the player can export again a moment later.
+The claim exists for one defect: a session writes the save files back whole, so a
+second writer's entry is gone at the next commit with nothing reported. An export
+writes nothing, so that defect cannot reach it, and refusing one would refuse the
+page against its own running game, with no grace period able to help because the
+game is deliberately still running. An unarbitrated export can catch a set of
+files spanning one commit; every individual file is whole, since `StoreSave`
+replaces by rename, so the worst case is one entry from before a commit beside
+one from after, and the player can export again a moment later.
 
-An import writes, so it takes `holdSaveDirectory` for the length of the write
-and is refused with the holder's name — including when the holder is *parked*,
-which it does not take over. Nobody would trade a player's parked game for a
-restore that can be repeated in a moment. This is the same rule the save API's
-`PUT` follows, applied unchanged rather than as a third policy.
+An import writes, so it takes `holdSaveDirectory` for the length of the write and
+is refused with the holder's name, including when the holder is *parked*, which
+it does not take over: a player's parked game is not traded for a restore that
+can be repeated in a moment. This is the rule the save API's `PUT` follows,
+applied unchanged rather than as a third policy.
 
 <a id="implementation-cheats"></a>
 
 ### Cheats
 
-The panel's operations are defined in one place: `internal/cheat`'s panel API
-answers plain Go structs and `internal/webhost` sends them over the socket. The
-panel in the page calls one bridge whose methods are promises, because every one
-of them is a round trip.
+The panel's operations are defined once: `internal/cheat`'s panel API answers
+plain Go structs and `internal/webhost` sends them over the socket. The page's
+panel calls one bridge whose methods are promises, because each is a round trip.
 
-Cheat operations run on the emulator's own goroutine, between ticks, because
-that is the only time reading and freezing guest memory is safe.
+Cheat operations run on the emulator's own goroutine between ticks, the only
+time reading and freezing guest memory is safe.
 
-Which sessions have one is asked of the session rather than of the platform:
-`session.Cheat()` and `session.CheatConsole()` answer for every platform, and
-the page removes the toggle where the answer is nil. That indirection is what
-made the third one a two-line change — the MIDP runtime used to answer nil,
-because its state is Go objects with no addresses to sweep, and it now lays a
-synthetic address space over its object graph and answers an engine like the
-others (`docs/skvm.md`, "A heap with addresses in it"). `docs/lgt.md` has why
-the indirection was worth the line it costs.
+Whether a session has one is asked of the session rather than the platform:
+`session.Cheat()` and `session.CheatConsole()` answer for every platform, and the
+page removes the toggle where the answer is nil. That indirection made the third
+platform a two-line change: the MIDP runtime used to answer nil, because its state
+is Go objects with no addresses to sweep, and it now lays a synthetic address
+space over its object graph and answers an engine like the others (`docs/skvm.md`,
+"A heap with addresses in it"). `docs/lgt.md` has why the indirection was worth
+the line it costs.
 
-One operation differs by platform rather than by session: a **watch** needs
-store instrumentation, which only the ARM platforms have. `Session.CanWatch()`
-is what a panel asks, and the engine answers `cheat.ErrWatchUnsupported`
-elsewhere rather than doing nothing.
+One operation differs by platform rather than by session: a **watch** needs store
+instrumentation, which only the ARM platforms have. `Session.CanWatch()` is what a
+panel asks, and the engine answers `cheat.ErrWatchUnsupported` elsewhere rather
+than doing nothing.
 
-**Driven end to end, on running games rather than fixtures.** Piping timed
-commands into `runlgt -cheat` and `runktf -cheat` walks the whole vocabulary
-against a real title: `regions` labels the address space, `scan unknown` over
-669,696 candidates narrows to 190 and then to 2 under `scan changed`, `list`
-shows those two module globals counting up live, `set`/`read`/`dump` agree,
-a `freeze` survives seconds of the game writing over it, `save` and `load`
-round-trip the table, and `watch` plus `hits` names what is behind each write —
+**Driven end to end on running games, not fixtures.** Piping timed commands into
+`runlgt -cheat` and `runktf -cheat` walks the whole vocabulary against a real
+title: `regions` labels the address space, `scan unknown` over 669,696 candidates
+narrows to 190 and then to 2 under `scan changed`, `list` shows those two module
+globals counting up live, `set`/`read`/`dump` agree, a `freeze` survives seconds of
+the game writing over it, `save` and `load` round-trip the table, and `watch` plus
+`hits` names what is behind each write:
 `0x01403de0 written by pc 0x00001054, 110 time(s)` for a guest instruction, and
-`written by host, last pc …` for a store this platform made itself, which is a
-distinction the reader needs rather than a detail (`docs/armcore.md`, "Not every
-store is a guest instruction"). The
-same flow through the socket is `TestLocalCheatProbe`, which passes for all
-three platforms — on a MIDlet the regions it lists are the game's own classes.
+`written by host, last pc …` for a store the platform made itself, a distinction the reader needs (`docs/armcore.md`, "Not
+every store is a guest instruction"). The same flow through the socket is
+`TestLocalCheatProbe`, which passes for all three platforms; on a MIDlet the
+regions it lists are the game's own classes.
 
 <a id="implementation-the-webassembly-path-is-gone"></a>
 
 ### The WebAssembly path is gone
 
 The in-page engine was kept for a while behind `?wasm=1`, on the grounds that a
-desktop could still run it. Nothing needed that: the server is a local binary,
-so anything able to open the page has already started the process that emulates
-better. It was removed along with `cmd/wasm`, the loader, and the module the
-service worker had stopped caching.
+desktop could still run it. Nothing needed it: the server is a local binary, so
+anything able to open the page has already started the process that emulates
+better. It was removed with `cmd/wasm`, the loader, and the module the service
+worker had stopped caching.
 
 <a id="implementation-what-has-been-driven-and-what-has-not"></a>
 
 ### What has been driven, and what has not
 
-Every platform reaches the browser through the same session, and the server
-half of that has been exercised for all three: a socket opened against a
-running server, a title started by path, PNG frames counted as they arrive, a
-key sent by code, and audio events counted. An LGT title answers 362 frames
-over eighteen seconds, advances when it is sent key 148, and one of them sends
-twelve audio events in the same window — so the driver, the input path and the
-audio path are not KTF-only.
+Every platform reaches the browser through the same session, and the server half
+was exercised for all three: a socket opened against a running server, a title
+started by path, PNG frames counted as they arrive, a key sent by code, and audio
+events counted. An LGT title answers 362 frames over eighteen seconds and
+advances when sent key 148, and one of them sends twelve audio events in the same
+window, so the driver, the input path and the audio path are not KTF-only.
 
-**The browser half is checked by hand.** Nothing here automates a browser, so
-the canvas draw, the oscillator synthesiser actually making a sound, and how
-the PWA feels to hold are the parts a person confirms. `web/session.test.mjs`
-covers the client's protocol handling; it does not open a page. To do it by
-hand: run the server and point a browser at it.
+**The browser half is checked by hand.** Nothing here automates a browser, so the
+canvas draw, the oscillator synthesiser making a sound, and how the PWA feels to
+hold are confirmed by a person. `web/session.test.mjs` covers the client's
+protocol handling without opening a page. To check by hand, run the server and
+point a browser at it.
 
 <a id="implementation-a-game-that-ends-is-not-a-game-that-failed"></a>
 
 ### A game that ends is not a game that failed
 
 Guest code runs inside whatever Host call reached it, so a game can end inside
-one: a menu whose confirm key quits calls `MC_knlExit` from the key handler,
-and the key delivery is what finds out. `Tick` has always recognised that and
-reported it as an ending; the input path had not, so a player who quit a game
-saw **"the game failed"** printed over its last frame, and the session stayed
-up streaming that frame until the page was closed.
+one: a menu whose confirm key quits calls `MC_knlExit` from the key handler, and
+the key delivery is what finds out. `Tick` always reported that as an ending; the
+input path did not, so a player who quit saw **"the game failed"** over the last
+frame, and the session stayed up streaming that frame until the page closed.
 
 Both paths now answer the same way: the session closes and the page is told the
 game exited. `session.ErrExited` is what an input call reports it with, and
-anything else stays a failure.
+anything else remains a failure.
 
 <a id="implementation-an-ending-says-where-it-came-from"></a>
 
 #### An ending says where it came from
 
-**"The game exited" on its own is not a finding, it is the absence of one.** A
-title of this era ends itself for ordinary reasons — a quit menu, a game over, a
-first-run notice that writes a flag and asks to be launched again — and every
-one of those reached a reader as the same four words. Nothing prints a stack for
-an ending, because it is not a failure, so the reader had no address, no call,
-and no way to tell a working title from one that gave up on its opening screen.
-A manual sweep of the corpus filed nineteen titles as broken on that line alone;
-fourteen of them were the restart notice and ran on the second launch.
+**"The game exited" alone is the absence of a finding.** A title of this era ends
+itself for ordinary reasons (a quit menu, a game over, a first-run notice that
+writes a flag and asks to be launched again), and every one reached a reader as
+the same four words. Nothing prints a stack for an ending, because it is not a
+failure, so the reader had no address, no call, and no way to tell a working
+title from one that gave up on its opening screen. A manual sweep of the corpus
+filed nineteen titles as broken on that line alone; fourteen were the restart
+notice and ran on the second launch.
 
 So the platforms name the call site and the layers above keep the text:
 
 - `MC_knlExit` wraps the sentinel with the address in the link register, which
   the import stub leaves intact because it arrives with `bx lr`. The WIPI Java
-  path does the same for `Jlet.notifyDestroyed`, which is the other ending and
-  is looked into differently.
-- Every layer above matches with `errors.Is`, so the wrapping costs them
-  nothing. The one place it used to be thrown away was a re-entry check that
-  replaced a live error with the bare sentinel; it now returns what it was
-  given.
+  path does the same for `Jlet.notifyDestroyed`, the other ending, which is
+  examined differently.
+- Every layer above matches with `errors.Is`, so the wrapping costs them nothing.
+  The one place it was discarded was a re-entry check that replaced a live error
+  with the bare sentinel; it now returns what it was given.
 - `session.Progress.ExitReason` carries it out of the tick, and
-  `Session.ExitReason()` keeps it after the session is closed — which is the
-  only time a Host has to report one.
+  `Session.ExitReason()` keeps it after the session is closed, which is the only
+  time a Host has to report one.
 - The CLI prints `the game exited at tick N: …` and puts `exited` and
   `exit_reason` in its summary. The server writes `ended: the game exited: …`
   into the session report and sends the reason with the `exited` message, so it
   lands in the page's run log. The player's status line is unchanged: an address
-  is for whoever reads the log afterwards, not for whoever is holding the phone.
+  is for whoever reads the log afterwards, not for whoever holds the phone.
 
-The reason reads as the chain it came through, ending in the sentinel — the
-call the guest was inside, the supervisor call, and the address it left from.
+The reason reads as the chain it came through, ending in the sentinel: the call
+the guest was inside, the supervisor call, and the address it left from.
 
 <a id="implementation-a-start-the-server-refuses-has-to-reach-the-run-log-too"></a>
 
 #### A start the server refuses has to reach the run log too
 
-The `exited` path above covers a game that ran. A game that never started is
-the worse failure — there is no first frame, no session report, and nothing on
-the screen — and it used to be the one the log said least about. The refusal
-comes back as the `error` answer to the start request, which rejects the page's
-own promise rather than reaching the session's error handler, and the page put
-it on the status line and into `console.error` and nowhere else. Two things
-then lost the sentence:
+The `exited` path covers a game that ran. A game that never started is the worse
+failure (no first frame, no session report, nothing on the screen), and the log
+used to say least about it. The refusal comes back as the `error` answer to the
+start request, which rejects the page's own promise rather than reaching the
+session's error handler, and the page put it on the status line and into
+`console.error` only. Two things then lost the sentence:
 
-- `console.error(anError)` logged `error.stack`, on the reasoning that V8
-  begins a stack with `Name: message`. WebKit does not — its stack is frames
-  only — and the phone the sweep was run from is WebKit. One session's entire
-  record of why a title would not start was
-  `#receive@…/session.js:113:53`. The log now writes the message and then the
-  stack, and skips the message when the stack already carries it.
-- Nothing recorded an event for it at all. `reportError` now writes one, so a
-  refused start reads beside the `starting …` line that preceded it instead of
-  as an unexplained end to the log.
+- `console.error(anError)` logged `error.stack`, on the reasoning that V8 begins
+  a stack with `Name: message`. WebKit does not (its stack is frames only), and
+  the phone the sweep ran on is WebKit. One session's entire record of why a title
+  would not start was `#receive@…/session.js:113:53`. The log now writes the
+  message and then the stack, and skips the message when the stack already
+  carries it.
+- Nothing recorded an event for it. `reportError` now writes one, so a refused
+  start reads beside the `starting …` line that preceded it instead of as an
+  unexplained end to the log.
 
-What the server sends was already right: `startGame` answers `err.Error()`, so
-the text existed on the page the whole time.
+What the server sent was already right: `startGame` answers `err.Error()`, so the
+text was on the page the whole time.
 
 <a id="implementation-two-refusals-the-server-words-itself"></a>
 
 #### Two refusals the server words itself
 
-`err.Error()` is written for a log. It is the right answer for a refusal
-nobody can act on — a truncated archive, a descriptor that will not parse —
-because there is nothing to say beyond what went wrong. Two refusals are not
-like that: the file is intact, the person holding it can act, and what they
+`err.Error()` is written for a log. It is the right answer for a refusal nobody
+can act on, such as a truncated archive or a descriptor that will not parse. Two
+refusals differ: the file is intact, the person holding it can act, and what they
 should do differs. Both get a sentence of their own in `startGame`, in the
-language the rest of the page's refusals are in.
+language of the page's other refusals.
 
-- **A zip of zips** is a bag of games rather than a game. There is nothing to
-  fix and nothing to load: each entry is a whole archive, and which one to add
-  is the person's choice rather than a loader's. `detect.ArchiveOfArchives` is
-  the test and `session.ErrArchiveOfArchives` is the answer.
+- **A zip of zips** is a bag of games rather than a game. There is nothing to fix
+  and nothing to load: each entry is a whole archive, and which one to add is the
+  person's choice rather than a loader's. `detect.ArchiveOfArchives` is the test
+  and `session.ErrArchiveOfArchives` the answer.
 - **A locked package** was wrapped before it was distributed: the payload the
-  descriptor names is an OMA DRM container instead of the JAR it should be.
-  The archive around it is ordinary and readable, which is why the refusal has
-  to be worded — the loader's complaint is about bytes it could not read, and
-  reads as damage. `detect.ReasonDRMWrapped` is the finding and
-  `session.ErrDRMWrapped` is the answer.
+  descriptor names is an OMA DRM container instead of a JAR. The archive around
+  it is ordinary and readable, so the refusal has to be worded; the loader's
+  complaint is about bytes it could not read, and reads as damage.
+  `detect.ReasonDRMWrapped` is the finding and `session.ErrDRMWrapped` the answer.
 
-The sentence for the locked one has to avoid two things a person would act on
-wrongly. **It is not damage** — re-downloading gets the same file — and **it is
-not a format this does not read yet**, which would say the work is on this side.
-The key belongs to the network that issued the file, so the only remedy is a
-copy that was never locked, and that is what it says.
+The sentence for the locked package avoids two things a person would act on
+wrongly. **It is not damage** (re-downloading gets the same file), and **it is not
+a format this does not read yet**, which would put the work on this side. The key
+belongs to the network that issued the file, so the only remedy is a copy that
+was never locked, and that is what it says.
 
-Neither needs a message kind of its own: they are `error` answers to the start
-request like every other refusal, and the page shows the text it is given. What
-changed is the text. `Inspect` is where both are decided, so the CLI and the
-page refuse the same file for the same reason, and the loader's own sentence
-stays behind `ErrDRMWrapped` for a log, where it names the entry that is locked.
+Neither needs a message kind of its own: both are `error` answers to the start
+request, and the page shows the text it is given. `Inspect` decides both, so the
+CLI and the page refuse the same file for the same reason, and the loader's own
+sentence stays behind `ErrDRMWrapped` for a log, where it names the locked entry.
 
 <a id="implementation-a-start-can-be-refused-by-a-game-that-ended-not-a-game-that-broke"></a>
 
 #### A start can be refused by a game that ended, not a game that broke
 
-The previous section is about a start that failed. **A start can also be
-refused by a title that simply finished**, and the two used to be one message.
+**A start can also be refused by a title that simply finished**, and the two used
+to be one message.
 
 A title whose first run installs itself quits inside `startApp` on its *second*
 run: it reads the flag it wrote, decides there is nothing left to do, and asks
-the platform to exit before the start has returned. That is the same ending
-`Tick` reports as an ending one tick later — but arriving here there is no
-session yet, so it came back as a start failure and the player got the
-platform's own chain printed as a fault. A sweep that always begins from an
-empty save directory never reaches it: it takes two runs over one save.
+the platform to exit before the start has returned. `Tick` reports the same
+ending one tick later, but here there is no session yet, so it came back as a
+start failure and the player saw the platform's chain printed as a fault. A sweep
+that always begins from an empty save directory never reaches it: it takes two
+runs over one save.
 
 The ending travels in the error, because there is no session to hang it on:
 `session.startEndedOrFailed` wraps the platform's chain in `ErrExited`, the
-same sentinel a running game's ending carries.
+sentinel a running game's ending carries.
 
 **The page settles a request on its id, and only the `error` answer settles a
-request that produced no game** — so the mark rides on that answer rather than
-getting a message kind of its own. A `serverExited` with the request's id would
-be read as a start that worked; one without it would leave the page waiting on
-a promise nothing will resolve. So `error` carries `exited: true`, the page's
-own rejection carries `.exited`, and the game picker comes back either way —
-what changes is that the player is told the game closed itself instead of being
-shown a guest address. The reason still goes to the run log, which is where an
-ending is investigated.
+request that produced no game**, so the mark rides on that answer rather than on
+a message kind of its own. A `serverExited` with the request's id would read as a
+start that worked, and one without it would leave the page waiting on a promise
+nothing resolves. So `error` carries `exited: true`, the page's rejection carries
+`.exited`, and the game picker comes back either way; the player is told the game
+closed itself instead of being shown a guest address. The reason still goes to
+the run log, where an ending is investigated.
 
-The CLI answers the same shape: `the game exited before its first tick: …`,
-`exited` and `exit_reason` in a summary of no ticks, and exit code zero. See
+The CLI answers the same way: `the game exited before its first tick: …`, `exited`
+and `exit_reason` in a summary of no ticks, and exit code zero. See
 [`cli.md`](../cli.md).
 
 <a id="implementation-a-guest-thread-that-panics-is-a-failed-game-not-a-dead-server"></a>
 
 #### A guest thread that panics is a failed game, not a dead server
 
-Guest code also runs on goroutines of its own: each platform's guest threads,
-and the KTF session start that keeps a Host's event loop alive while it runs. A
-panic on one of those goroutines is not caught by anything — a panic in an HTTP
-handler is, which is why this was invisible from the page — and it takes the
-process down.
+Guest code also runs on goroutines of its own: each platform's guest threads, and
+the KTF session start that keeps a Host's event loop alive while it runs. A panic
+on one of those goroutines is caught by nothing (a panic in an HTTP handler is,
+which is why this was invisible from the page), and it takes the process down.
 
 The process is the wrong thing to lose. It holds the session's post-mortem
-report, its ordered boundary trace, the page's log and any other session that
-was fine, and what a panic here actually means is one archive doing something
-this emulator does not implement. **A panic is the least informative failure
-this emulator has, and that is the argument for converting it rather than for
-surviving it.** So each of those goroutines catches its own: the stack goes to
-the log at error level, and the caller gets the error it was already prepared
-to receive — the game fails and the session ends the way any failed session
-does. `backend.GuestPanic` is the shape of it; `internal/jvm` says the same
-thing in its own eight lines, because the Execution layer does not import the
-Runtime.
+report, its ordered boundary trace, the page's log and every other session that
+was fine, and a panic here means one archive doing something this emulator does
+not implement. **A panic is the least informative failure this emulator has,
+which argues for converting it rather than only surviving it.** Each of those
+goroutines catches its own: the stack goes to the log at error level, and the
+caller gets the error it was already prepared to receive, so the game fails and
+the session ends like any failed session. `backend.GuestPanic` is the shape;
+`internal/jvm` says the same in its own eight lines, because the Execution layer
+does not import the Runtime.
 
-Nothing retries and nothing continues past one: the thread that panicked is
-over. What follows the catch — clearing the thread's alive flag, releasing the
-monitors it held — runs either way, because a title waiting on `isAlive` or on
-a lock would otherwise wait for the whole session.
+Nothing retries and nothing continues past one: the thread that panicked is over.
+What follows the catch (clearing the thread's alive flag, releasing the monitors
+it held) runs either way, because a title waiting on `isAlive` or on a lock would
+otherwise wait for the whole session.
 
 <a id="implementation-the-one-goroutine-that-had-no-boundary-was-the-hosts-own"></a>
 
 #### The one goroutine that had no boundary was the Host's own
 
-The section above is about the goroutines guest code runs on *beside* the
-session loop, and it says in passing that a panic in an HTTP handler is caught
-— which is why the handler's own goroutine never got a boundary of its own.
-Being caught by `net/http` is not the same as being handled.
+A panic in an HTTP handler is caught by `net/http`, which is why the handler's own
+goroutine never had a boundary of its own; being caught is not being handled.
 
-Most guest code runs on that goroutine. `Tick` enters the guest on every
-platform, and so does a key, a touch, and each half of the pause pair. A panic
-in any of them unwound `sessionRunner.loop` and `run` and landed in
-`net/http`'s recover, which logs "http: panic serving" and closes the socket.
-The process survived; the session did not clean up. **Nothing past the tick
-loop ran.** The game was never closed, so its guest memory — a KTF arena alone
-is 64 MiB — and its worker goroutines were held for as long as the server
-lived. The frame encoder was left blocked on a channel nobody closed. And the
-save directory kept a claim released nowhere, so **that one game could not be
-started again until the server was restarted**, while every other game on the
-same server went on working. A page asking for it got "another session is
-playing this game", naming a session that had already died.
+Most guest code runs on that goroutine. `Tick` enters the guest on every platform,
+and so do a key, a touch, and each half of the pause pair. A panic in any of them
+unwound `sessionRunner.loop` and `run` and landed in `net/http`'s recover, which
+logs "http: panic serving" and closes the socket. The process survived; the
+session did not clean up, because **nothing past the tick loop ran.** The game was
+never closed, so its guest memory (a KTF arena alone is 64 MiB) and its worker
+goroutines were held for as long as the server lived. The frame encoder was left
+blocked on a channel nobody closed. And the save directory kept a claim released
+nowhere, so **that one game could not be started again until the server was
+restarted**, while every other game kept working. A page asking for it got
+"another session is playing this game", naming a session that had already died.
 
-So the boundary is in `internal/session`, which is the layer both Hosts drive a
-game through, rather than in either of them: `guard.go` converts a panic into
-the error the caller already handles, and the server's loop then ends the game
-the way it ends a failed one — post-mortem written, claim released, page told.
-The CLI gets the same conversion from the same place.
+The boundary is therefore in `internal/session`, the layer both Hosts drive a
+game through: `guard.go` converts a panic into the error the caller already
+handles, and the server's loop then ends the game as it ends a failed one
+(post-mortem written, claim released, page told). The CLI gets the same
+conversion from the same place.
 
-Two details are the reason it is not just a `recover`. The failure is
-**remembered**: a recovered panic leaves the guest halfway through whatever it
-was doing, so every later call answers with the same error instead of being let
-back into a machine that cannot answer. And `Close` is the exception to that —
-it runs *because* the session failed, since it is what lets go of the memory
-and the goroutines the panic left running, and it takes each platform out of
-the session before closing it so a second `Close` cannot enter a half-closed
-game.
+Two details make it more than a `recover`. The failure is **remembered**: a
+recovered panic leaves the guest halfway through whatever it was doing, so every
+later call answers with the same error instead of re-entering a machine that
+cannot answer. `Close` is the exception: it runs *because* the session failed,
+since it releases the memory and goroutines the panic left running, and it takes
+each platform out of the session before closing it so that a second `Close`
+cannot enter a half-closed game.
 
-What a panicking *start* leaves behind is not recovered and cannot be from
-here: a platform session is handed over only once it is built, so one that
-panicked halfway is unreachable, guest threads included. That is a bounded loss
-per refused archive, against a process that used to end.
+What a panicking *start* leaves behind is not recovered and cannot be from here:
+a platform session is handed over only once it is built, so one that panicked
+halfway is unreachable, guest threads included. That is a bounded loss per
+refused archive, against a process that used to end.
 
 <a id="implementation-a-game-outlives-its-socket"></a>
 
 ### A game outlives its socket
 
-A game is retained when its controlling page leaves. **Elapsed time does not
-close it.** The old five-minute expiry and the page's finite retry loop are
-removed. The server admits at most four games in total, including active games
-and parked games. Counting both reserves retention room before a page disappears:
-parking never silently evicts another game. A fifth start offers to close the
-oldest parked game; when all four are active it is refused. A fresh start over
-the same shared save directory also requires confirmation. Explicit stop, an
-approved fresh start, save import, and server shutdown end retained state.
-There is no snapshot on disk: restarting the server loses unsaved progress.
+A game is retained when its controlling page leaves, and **elapsed time does not
+close it.** The old five-minute expiry and the page's finite retry loop were
+removed. The server admits at most four games in total, active and parked;
+counting both reserves retention room before a page disappears, so parking never
+silently evicts another game. A fifth start offers to close the oldest parked
+game, and when all four are active it is refused. A fresh start over the same
+shared save directory also requires confirmation. Explicit stop, an approved
+fresh start, save import and server shutdown end retained state. There is no
+snapshot on disk: restarting the server loses unsaved progress.
 
 The browser keeps a random 128-bit capability in local storage under
 `wfeature.browser-token`, shared by tabs of the same origin and browser profile.
-This identifies the browser's current game, **not a user or a save owner**.
+It identifies the browser's current game, **not a user or a save owner**.
 `web/session-link.js` adopts the old tab-local `wfeature.resume-token` when no
-shared capability exists. Storage denial uses `web/storage.js`'s in-memory
-fallback; another tab or a discarded page cannot recover that fallback.
-There is no automatic identity link across browsers or devices, and no account,
-transfer code, or separate personal save directory is introduced.
+shared capability exists. When storage is denied, `web/storage.js` falls back to
+memory, which another tab or a discarded page cannot recover. There is no
+automatic identity link across browsers or devices, and no account, transfer
+code or separate personal save directory.
 
 A destructive start first answers `result` with `confirmation` and a Korean
-`message`. The page uses its existing confirmation dialog, focused on Cancel.
-Accepting repeats the start with the returned confirmation string. It is bound
-to that connection, browser token, archive path, retained instance, and parking
-time. The server rechecks ownership, capacity and the victim under one lock;
-a changed victim needs a new confirmation, and an active game cannot be evicted.
-A pending dialog claims neither saves nor game capacity. Older clients can still
-start freely when nothing would be discarded, but cannot bypass this check.
+`message`. The page uses its existing confirmation dialog, focused on Cancel, and
+accepting repeats the start with the returned confirmation string. The
+confirmation is bound to that connection, browser token, archive path, retained
+instance and parking time. The server rechecks ownership, capacity and the victim
+under one lock; a changed victim needs a new confirmation, and an active game
+cannot be evicted. A pending dialog claims neither saves nor game capacity. Older
+clients can still start freely when nothing would be discarded, but cannot bypass
+the check.
 
 A start supplies that token; older clients may omit it and receive a server-made
-one. The server reserves the token before loading, preventing simultaneous tabs
-from starting two games under one browser capability. A resume answers:
+one. The server reserves the token before loading, so simultaneous tabs cannot
+start two games under one browser capability. A resume answers:
 
 - `started` with the same game's description and picture when it is parked;
 - `resumed` with `occupied: true` when another connection controls it;
-- `resumed` without `occupied` when nothing remains, so the page shows its
-  existing picker and can start again without a reload.
+- `resumed` without `occupied` when nothing remains, so the page shows its picker
+  and can start again without a reload.
 
-A connection already closing is allowed to finish parking before resumption is
-answered, so a reload does not compete with its own old socket.
+A connection already closing finishes parking before the resumption is answered,
+so a reload does not compete with its own old socket.
 
-The occupied page offers **Continue here** (Korean in the UI). Clicking sends
+The occupied page offers **Continue here** (Korean in the UI), which sends
 `resume` with `takeover: true`. The previous runner releases held keys and touch,
 pauses the guest, and relinquishes the game between guest calls. The next runner
 adopts the game and its save claim atomically under the server mutex. The old
-page receives `detached`, silences audio and vibration, and does not automatically
-claim control again. Input and stop on that old connection cannot reach the new
+page receives `detached`, silences audio and vibration, and does not reclaim
+control automatically; input and stop on that old connection cannot reach the new
 owner's game. A handoff waiting on a long guest call times out after ten seconds;
 it can be requested again, and a cancelled queued request does not later detach
 the owner.
 
-When hidden, the page sends `park` and stops presentation immediately. The
-socket may stay open, but it no longer owns a game. Returning resumes the retained
-game; if another page has taken it, the explicit takeover choice appears. If the
-socket disappears without a final message, the server performs the same parking.
-Both paths release held input before calling the guest's pause entry point.
-Stopping uses an acknowledged `stop` and restores the existing picker, preserving
-its event wiring. Legacy unacknowledged stops receive no additional reply.
+When hidden, the page sends `park` and stops presentation immediately. The socket
+may stay open, but it no longer owns a game. Returning resumes the retained game;
+if another page has taken it, the explicit takeover choice appears. If the socket
+disappears without a final message, the server parks the game the same way. Both
+paths release held input before calling the guest's pause entry point. Stopping
+uses an acknowledged `stop` and restores the existing picker with its event
+wiring. Legacy unacknowledged stops receive no reply.
 
-Connection failures retry while visible, with delays from one to fifteen seconds
-and no attempt limit. Hidden pages do not run retries. `visibilitychange`,
-`online`, and `pageshow` trigger recovery. A playing page checks liveness every
-fifteen seconds; a `ping` must answer within ten seconds. The server answers it
-outside the guest command loop, so a slow loading or rendering call is not a
-broken network. Socket opening also has a ten-second timeout. Browser freezing
-can delay these timers; they are not a guarantee about OS scheduling.
+Connection failures retry while the page is visible, with delays from one to
+fifteen seconds and no attempt limit; hidden pages do not retry.
+`visibilitychange`, `online` and `pageshow` trigger recovery. A playing page
+checks liveness every fifteen seconds, and a `ping` must answer within ten. The
+server answers it outside the guest command loop, so a slow loading or rendering
+call is not mistaken for a broken network. Opening the socket also has a
+ten-second timeout. Browser freezing can delay these timers; they are not a
+guarantee about OS scheduling.
 
-The game's context still belongs to the game, not its connection. Parking keeps
-it alive; stopping ends it. Guest clocks retain their existing wall-clock
-semantics, including the elapsed time seen after a long absence. The Host stops
-ticking parked games and calls platform pause/resume; this does not promise that
-every guest-created thread independently obeys its pause callback.
+The game's context belongs to the game, not its connection: parking keeps it
+alive and stopping ends it. Guest clocks keep their wall-clock semantics,
+including the elapsed time seen after a long absence. The Host stops ticking
+parked games and calls platform pause and resume; this does not promise that
+every guest-created thread obeys its pause callback.
 
-**Saves are unchanged.** Formats, directories, import/export, and shared-save
+**Saves are unchanged.** Formats, directories, import and export, and shared-save
 claims remain game-scoped. Different browsers may play different games at once.
-Two live games cannot write the same save directory. A confirmed fresh start
-or an explicit save import may replace a parked holder. Neither resumes someone
-else's in-memory game.
+Two live games cannot write the same save directory. A confirmed fresh start or an
+explicit save import may replace a parked holder; neither resumes someone else's
+in-memory game.
 
 <a id="implementation-the-game-is-told-it-was-parked"></a>
 
 #### The game is told it was parked
 
-A parked game does not tick, and it now knows why. Parking calls
+A parked game does not tick, and it is told why. Parking calls
 `session.Session.Pause` on the way out and `Resume` on the way back, and each
 platform answers with the lifecycle its titles were written against: a Clet's
-`pauseClet`/`resumeClet`, a MIDlet's `pauseApp`/`startApp`, and the WIPI
-Java Jlet's. **Two of the three had the platform half implemented and nothing
-that called it** — the calls sat there with a comment saying they were the
-lifecycle a Host uses when the page is hidden, waiting for a Host that had not
-been written.
+`pauseClet`/`resumeClet`, a MIDlet's `pauseApp`/`startApp`, and the WIPI Java
+Jlet's. **Two of the three had the platform half implemented and nothing calling
+it**: the calls carried a comment saying they were the lifecycle a Host uses when
+the page is hidden, waiting for a Host that had not been written.
 
-It matters because of the clock. A parked game's clock is the wall clock and
-keeps moving, so a title comes back to time it did not spend — which is what a
-suspended handset produced too, and the handset produced it *together with*
-these calls. The jump without the notification was the gap; the jump with it is
-what the title was built for. [`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status), "The clock the game lost",
-has the measurement that says freezing the clock instead would be a divergence
-with nothing to fix.
+It matters because of the clock. A parked game's clock is the wall clock and keeps
+moving, so a title comes back to time it did not spend. A suspended handset did
+the same, *together with* these calls; the jump without the notification was the
+gap, and the jump with it is what the title was built for.
+[`ktf.md`](ktf.md#implementation-ktf-platform-implementation-status), "The clock
+the game lost", has the measurement showing that freezing the clock instead would
+be a divergence with nothing to fix.
 
 Three rules hold across the platforms:
 
 - **A title with nothing to say is not an error.** Half the local WIPI titles
   compile their pause body to a prologue and a return, and a Clet may leave the
-  entry in its table at zero. Both mean "nothing to do".
+  entry in its table at zero; both mean "nothing to do".
 - **A failed callback does not end the game.** Driving these across a
-  266-archive set killed five titles that had run perfectly well without them;
-  the failure is logged and the session carries on. See `ktf.md` for what each
-  one was.
+  266-archive set killed five titles that had run correctly without them; the
+  failure is now logged and the session carries on. `ktf.md` has what each one
+  was.
 - **A parked game refuses to tick.** `Tick` answers `ErrPaused` rather than
-  running a game it has just told to stop, which is also what makes a forgotten
-  resume loud instead of silent.
+  running a game it has just told to stop, which also makes a forgotten resume
+  loud instead of silent.
 
 <a id="implementation-vibration"></a>
 
 ### Vibration
 
-The guest asks the handset to vibrate on all three platforms, and until now
-none of those requests reached anything: KTF counted them as a diagnostic, LGT
-returned success without reading the arguments, and SKT set a flag that was
-written in two places and read nowhere. The browser has `navigator.vibrate` and
-there is an Android build, so what was missing was not the ability to vibrate
-but a boundary to carry the request across.
+The guest asks the handset to vibrate on all three platforms, and until this
+change none of those requests reached anything: KTF counted them as a
+diagnostic, LGT returned success without reading the arguments, and SKT set a
+flag that was written in two places and read nowhere. The browser has
+`navigator.vibrate` and there is an Android build, so what was missing was a
+boundary to carry the request across.
 
 **The core reports; the Host decides.** A platform runtime owns
 `backend.Vibrator`, which records what the guest asked for and nothing else. It
 does not know whether there is a motor, whether this Host can drive one, or
-whether the person wants it — and it must not, because a core that took the
-action would have to be told about every Host, and a Host that could not act
-would have no way to say so.
+whether the person wants it, and must not: a core that took the action would
+have to be told about every Host, and a Host that could not act would have no way
+to say so.
 
-`session.Session.Vibration()` answers `(backend.Vibration, bool)`, and the
-second value is the whole of how "this platform does not implement vibration"
-is said. A Host that reads false does nothing, which is also what it does for a
-guest that has not asked — both are silence on the wire, correctly, since
-neither is a reason to buzz.
+`session.Session.Vibration()` answers `(backend.Vibration, bool)`, and the second
+value is the whole of how "this platform does not implement vibration" is said. A
+Host that reads false does nothing, as it does for a guest that has not asked;
+both are correctly silent on the wire.
 
-Two rules of the guest's contract are not what a reader would guess, and both
-are places where getting it wrong loses the vibration silently:
+Two rules of the guest's contract are not what a reader would guess, and getting
+either wrong loses the vibration silently:
 
-- **`level` is a percentage from 0 to 100, not an index.** Zero is off, 100 is
-  the strongest the hardware has. It is *not* the units of the `VIBRATORLEVEL`
-  handset property, which is a count of the strength steps a handset has: a
-  title reads `"3"` there and still passes 1..100.
+- **`level` is a percentage from 0 to 100, not an index.** Zero is off and 100 is
+  the strongest the hardware has. It is *not* in the units of the `VIBRATORLEVEL`
+  handset property, which counts a handset's strength steps: a title reads `"3"`
+  there and still passes 1..100.
 - **A duration of zero with a level above zero means until stopped**, not "do
   nothing". A title asking for a continuous rumble and getting a no-op is a
   vibration that never happens.
 
-A request made while one is running replaces it and restarts the clock, which
-is also specified. The vibrator measures with the wall clock rather than the
-guest's: a vibration is felt in the room, so a game running at a quarter speed
-still asked for the milliseconds it asked for, and scaling them would make the
-speed control silently change how the handset feels.
+A request made while one is running replaces it and restarts the clock, as
+specified. The vibrator measures with the wall clock rather than the guest's: a
+vibration is felt in the room, so a game running at a quarter speed still asked
+for the milliseconds it asked for, and scaling them would make the speed control
+change how the handset feels.
 
 <a id="implementation-how-one-request-becomes-one-message"></a>
 
@@ -1153,25 +1110,23 @@ speed control silently change how the handset feels.
 The core reports a *request that stands* until the guest makes another, so the
 edge is made on the Host side. `Vibration.Request` counts the requests, and the
 session sends when that number moves. Comparing the level and duration instead
-would swallow the second of two identical buzzes, which the guest asked for
-twice on purpose.
+would swallow the second of two identical buzzes the guest asked for on purpose.
 
-The message is `{"kind":"vibrate","vibrate":{"level":0..100,"ms":N}}`. The
-level travels unchanged even though `navigator.vibrate` has no strength at all:
-what a Host does with a request is the Host's business, and an Android build has
-an amplitude to give it. A request that turns the motor *off* is sent like any
-other, because an indefinite buzz the page already started is still running
-until something says otherwise.
+The message is `{"kind":"vibrate","vibrate":{"level":0..100,"ms":N}}`. The level
+travels unchanged even though `navigator.vibrate` has no strength: what a Host
+does with a request is its own business, and an Android build has an amplitude to
+give it. A request that turns the motor *off* is sent like any other, because an
+indefinite buzz the page already started runs until something stops it.
 
-On the page (`web/vibrate.js`) the level decides only whether to vibrate,
-because scaling the duration by the strength would be an invention — a weak
-buzz is not a short one. An indefinite request becomes a five second call, since
-the API takes a length and a page that asked for an hour would leave a phone
-buzzing long after the game stopped caring. A game that ends and a socket that
-drops both stop the motor, because the guest that would have stopped it is
-gone. The setting is a checkbox in the settings panel, on by default where the
-browser has a vibrator and removed entirely where it does not: a switch that
-cannot do anything reads as a broken one.
+On the page (`web/vibrate.js`) the level decides only whether to vibrate, because
+scaling the duration by the strength would be an invention: a weak buzz is not a
+short one. An indefinite request becomes a five-second call, since the API takes
+a length and a page that asked for an hour would leave a phone buzzing long after
+the game stopped caring. A game that ends and a socket that drops both stop the
+motor, because the guest that would have stopped it is gone. The setting is a
+checkbox in the settings panel, on by default where the browser has a vibrator
+and removed entirely where it does not, since a switch that cannot do anything
+reads as broken.
 
 <a id="implementation-where-it-reaches-and-where-it-does-not"></a>
 
@@ -1183,26 +1138,27 @@ cannot do anything reads as a broken one.
 | SKT | `com.skt.m.Vibration.start/stop`, and `org.kwis.msp.media.Vibrator.on/off` in Jlet mode | yes |
 | LGT | `org.kwis.msp.media.Vibrator.on`, and WIPI C slot `0x4c1` | **no** |
 
-LGT is unfinished rather than decided: both of its entry points still answer
-without reading their arguments, so `Vibration()` reports false for it and the
-page does nothing. The earlier KTF package generation has no vibrator call in
-its native table at all, and reports false for the same reason.
+LGT was unfinished rather than decided: both of its entry points still answered
+without reading their arguments, so `Vibration()` reported false and the page did
+nothing. The earlier KTF package generation has no vibrator call in its native
+table at all, and reports false for the same reason.
+
+Superseded: LGT requests now reach the Host as well; see [session.md](../session.md#transport).
 
 Two things are recorded here rather than guessed at in code:
 
 - **`VIBRATORLEVEL` is still answered `"0"`** (`internal/wipic/properties.go`),
-  which by the specification's table means "this handset has no vibration
-  steps". That was right when nothing could vibrate and is now a title's reason
-  not to ask. Changing it is a guest-visible change across the whole corpus, so
-  it wants an A/B sweep rather than a decision taken here.
+  which by the specification's table means "this handset has no vibration steps".
+  That was right when nothing could vibrate and is now a title's reason not to
+  ask. Changing it is a guest-visible change across the whole corpus, so it needs
+  an A/B sweep rather than a decision taken here.
 - **SKT's `com.skt.m.Vibration` argument units are not settled.** The class is
   the vendor's and nothing in this repository states its contract, so the
-  arguments are read as WIPI's — level 0..100, milliseconds — because that is
-  the only documented convention within reach. The one call in the local
-  fixture is `start(10, 5)`, which fits that reading only awkwardly: five
-  milliseconds is below what a person feels. Reading them wrong costs a buzz of
-  the wrong length; not reading them at all cost every buzz, which is where
-  this started.
+  arguments are read as WIPI's (level 0..100, milliseconds), the only documented
+  convention within reach. The one call in the local fixture is `start(10, 5)`,
+  which fits that reading awkwardly: five milliseconds is below what a person
+  feels. Reading them wrong costs a buzz of the wrong length; not reading them at
+  all cost every buzz.
 
 <a id="implementation-what-is-not-solved"></a>
 
@@ -1211,98 +1167,97 @@ Two things are recorded here rather than guessed at in code:
 - **A touch reaches only one platform.** A `pointer` message carries a press,
   drag or release in the guest's own screen coordinates, and `started` says
   `can_touch` so a page knows before it sends one. The WIPI Java platform
-  dispatches it; a Clet's event kinds are keys, the earlier KTF package takes
-  one event callback with no pointer in it, and a MIDlet's `pointerPressed` is
-  a surface this runtime does not offer. Those three answer `ErrNoPointer`,
-  which the server drops rather than reporting — a thumb resting on the canvas
-  must not fill the page's error rail.
-- **`destroyApp` is not called on any platform's close.** Closing is where a
-  KTF guest thread is being unwound, which is the one moment guest code must
-  not be entered; the MIDP runtime does run its own `destroyApp`, from inside
-  the runtime rather than from here.
+  dispatches it; a Clet's event kinds are keys, the earlier KTF package takes one
+  event callback with no pointer in it, and a MIDlet's `pointerPressed` is a
+  surface this runtime does not offer. Those three answer `ErrNoPointer`, which
+  the server drops rather than reports, so a thumb resting on the canvas does not
+  fill the page's error rail.
+- **`destroyApp` is not called on any platform's close.** Closing is where a KTF
+  guest thread is being unwound, the one moment guest code must not be entered;
+  the MIDP runtime runs its own `destroyApp` from inside the runtime rather than
+  from here.
 - **Input latency is unmeasured.** It is a LAN round trip plus one frame, and
   what that feels like on a real network has not been established.
-- **Nothing bounds how many live sessions there are**, and that half of the
-  resource question is still open — see the last entry here. The other half is
-  closed: **the server now has a read timeout**, so a request that stops making
-  progress no longer holds its connection and its goroutine until the operating
-  system gives up. It was left off because setting it was believed to kill the
-  session websocket; it does not. `net/http` clears both connection deadlines
-  when a handler hijacks, so nothing set before the upgrade reaches the socket
-  after it, and `TestTheSessionSocketOutlivesTheServersReadTimeout` keeps that
-  as a test rather than as a belief — a Go release that stopped clearing the
-  deadline would end every session after ten minutes of play, and on a phone
-  that is indistinguishable from the network.
+- **Nothing bounds how many live sessions there are**; that half of the resource
+  question is still open (see the last entry). The other half is closed: **the
+  server has a read timeout**, so a request that stops making progress no longer
+  holds its connection and goroutine until the operating system gives up. It was
+  left off because setting it was believed to kill the session websocket; it does
+  not. `net/http` clears both connection deadlines when a handler hijacks, so
+  nothing set before the upgrade reaches the socket after it, and
+  `TestTheSessionSocketOutlivesTheServersReadTimeout` keeps that as a test rather
+  than a belief: a Go release that stopped clearing the deadline would end every
+  session after ten minutes of play, which on a phone is indistinguishable from
+  the network.
 - **Two tabs on two different games are two sessions**, and nothing bounds how
-  many. The same game twice is arbitrated, and so is the save API — see "One
-  game's saves belong to one session" — but a save the native CLI writes while
-  a server session is running is still nobody's to referee, because the claim
-  is in one process's memory and the CLI is another process.
-- **A parked game is not persisted, and will not be.** It lives in the
-  server's memory, so stopping the server ends every game waiting for a page
-  and the page finds its token unknown when the server comes back. Writing one
-  to disk is not a small feature that has been skipped: a KTF guest thread
-  parks *inside* a nested Go call stack — the Host is blocked in a channel
-  receive while the worker sits in `InvokeVirtual` inside a supervisor call —
-  and a Go stack cannot be written to a file. The guest's own ARM memory could
-  be, but the half of the session that is Go — the JVM object graph, open
-  files, image handles, the audio sink, and every one of those parked stacks —
-  could not, and a snapshot of only one half resumes nothing. Making it
-  possible means an execution model where a parked guest holds no Go stack at
-  all, which is a rewrite of the thing that makes a game whose main loop never
-  returns work in the first place. What a restart costs is what a handset
-  losing power costs: everything since the last time the game wrote its save.
-  The page remembers which archive it was playing, so coming back is one click
-  rather than a search.
-- **There is no authentication.** The server binds every interface so a phone
-  can reach it, and anything else on that network can reach it too.
+  many. The same game twice and the save API are arbitrated, but a native CLI
+  write under a running session is not; see "One game's saves belong to one
+  session".
+- **A parked game is not persisted, and will not be.** It lives in the server's
+  memory, so stopping the server ends every game waiting for a page, and the page
+  finds its token unknown when the server comes back. Writing one to disk is not
+  a skipped small feature: a KTF guest thread parks *inside* a nested Go call
+  stack (the Host is blocked in a channel receive while the worker sits in
+  `InvokeVirtual` inside a supervisor call), and a Go stack cannot be written to a
+  file. The guest's ARM memory could be, but the Go half of the session (the JVM
+  object graph, open files, image handles, the audio sink and every parked stack)
+  could not, and a snapshot of one half resumes nothing. Making it possible means
+  an execution model where a parked guest holds no Go stack at all, a rewrite of
+  what makes a game whose main loop never returns work in the first place. A
+  restart costs what a handset losing power costs: everything since the game last
+  wrote its save. The page remembers which archive it was playing, so coming back
+  is one click rather than a search.
+- **There is no authentication.** The server binds every interface so that a
+  phone can reach it, and anything else on that network can reach it too.
 - **The four-game count is not a memory budget.** Active and parked games share
   the limit, but their allocations vary. The count bounds admitted games, not
-  concurrent archive inspection, socket connections, or resident bytes.
+  concurrent archive inspection, socket connections or resident bytes.
 
+Superseded in part: a quick save now records parked guest threads by their remaining work and survives a restart; see [Where a stopped game keeps its state](../architecture.md#where-a-stopped-game-keeps-its-state).
 
 <a id="implementation-automatic-offline-authentication"></a>
 
 ### Automatic offline authentication
 
-New sessions automatically select recognized authentication compatibility.
-The Opts panel has no authentication control or notice. The page stores no policy
-preference and sends no authentication switch. The obsolete incoming
-`authentication` field is ignored, including false from older clients. The shared `Options.DisableAuthentication` opt-out is for
-local diagnostics and is not exposed by the browser protocol.
+New sessions automatically select recognized authentication compatibility. The
+Opts panel has no authentication control or notice, the page stores no policy
+preference and sends no authentication switch, and the obsolete incoming
+`authentication` field is ignored, including false from older clients. The shared
+`Options.DisableAuthentication` opt-out is for local diagnostics and is not
+exposed by the browser protocol.
 
 The `started` description reports `authentication` as `off`, `unsupported`,
-`ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `skt-license`,
-`lgt-cached-authentication`, `lgt-certificate-58`, `lgt-offline-notification`, or
-`lgt-offline-authentication`.
-Resume returns the existing runtime and its result. Unsupported retains ordinary
-guest behavior. Applied identifies a selected adapter, not successful gameplay.
-See [implementation and limits](../authentication.md).
+`ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`,
+`skt-license`, `lgt-cached-authentication`, `lgt-certificate-58`,
+`lgt-offline-notification` or `lgt-offline-authentication`. Resume returns the
+existing runtime and its result. Unsupported keeps ordinary guest behavior.
+Applied identifies a selected adapter, not successful gameplay. See
+[implementation and limits](../authentication.md).
 
 <a id="frame-bandwidth-2026-09-24"></a>
 
 ## Frame bandwidth — 2026-09-24
 
-The existing encoder already omitted consecutive identical pictures, but any
-changed picture still sent the entire PNG. Compressing 100 existing local startup
+The encoder already omitted consecutive identical pictures, but any changed
+picture still sent the entire PNG. Compressing 100 existing local startup
 screenshots with default PNG compression instead of BestSpeed reduced their total
 from 2,432,172 to 2,230,227 bytes (8.3%). This read-only sample is not a gameplay
-traffic measurement. It motivated comparing changed regions rather than increasing
-compression effort on every complete picture.
+traffic measurement; it motivated comparing changed regions rather than spending
+more compression effort on every complete picture.
 
 The first implemented path kept emulation and hqx on the server and sent a
 lossless PNG rectangle, after a `WFP1` header, for small changes. It added one
 retained composition canvas on the page and one retained scaled frame on the
-server. No dependencies, guest behavior, frame-rate settings, audio messages, or
+server. No dependencies, guest behavior, frame-rate settings, audio messages or
 save formats changed. The [current protocol](../session.md#presentation-and-audio)
 specifies compatibility, ordering, redraw boundaries and recovery.
 
-`TestFramePatchBandwidth` uses 60 authored 240x320 frames: a 16x16 sprite moves
-across a fixed tiled background. It includes the initial complete picture.
-Complete PNG payloads total **226,646 bytes**; negotiated updates total
-**11,732 bytes**, a **94.82% reduction**. Both runs encode the same pixels. The
-12-byte patch header is included; WebSocket/TCP/TLS overhead and JSON/audio traffic
-are excluded.
+`TestFramePatchBandwidth` uses 60 authored 240x320 frames in which a 16x16 sprite
+moves across a fixed tiled background, including the initial complete picture.
+Complete PNG payloads total **226,646 bytes**; negotiated updates total **11,732
+bytes**, a **94.82% reduction**. Both runs encode the same pixels. The 12-byte
+patch header is included; WebSocket, TCP and TLS overhead and JSON and audio
+traffic are excluded.
 
 On an Apple M1, darwin/arm64, three one-second runs of
 `BenchmarkFramePatchBandwidth` gave these medians:
@@ -1326,33 +1281,33 @@ forced complete frames and dimension changes. Handler tests cover negotiated,
 legacy and unknown-version connections. Node tests cover ordered composition,
 slow decoding, closure, invalid frames and bounded backlogs. The authored-fixture
 browser route passed in Chromium and WebKit, including patch output matching a
-forced complete PNG, restart, park/resume, new connections and WIPI scale changes.
-The ordinary, debug, internal race and vet gates passed.
+forced complete PNG, restart, park/resume, new connections and WIPI scale
+changes. The ordinary, debug, internal race and vet gates passed.
 
 These results do not promise a 94.82% reduction for a real game. Full-screen
 scrolling or widely separated changes can still require complete pictures, and
-sampled audio traffic is unchanged. Actual gameplay traffic and physical-phone
-CPU, memory and battery effects remain unmeasured in this change. Large-scene
-optimization should follow a measured route rather than reducing image quality
-or moving the emulator onto the phone by default.
+sampled audio traffic was unchanged. Actual gameplay traffic and physical-phone
+CPU, memory and battery effects were not measured in this change. Large-scene
+optimization should follow a measured route rather than reduce image quality or
+move the emulator onto the phone by default.
 
 ### Recorded play, and protocol 2
 
 The rectangle path above was never released; protocol 2 replaced it the same
 day, after the traffic of real play was measured.
 
-**Method.** Five in-game scenes were replayed from local routes — two KTF titles
-and three LGT titles — with the CLI's manual clock and isolated saves. A local
+**Method.** Five in-game scenes were replayed from local routes (two KTF titles
+and three LGT titles) with the CLI's manual clock and isolated saves. A local
 hook recorded every finished frame with its guest time and every sound batch in
-the JSON the session sent. The frames went through the encoders offline: the
+the JSON the session sent. The frames went through the encoders offline; the
 server skips an identical consecutive picture, so the recorded sequence is what
 it would encode, and rates are per second of guest time. Replaying one KTF route
-on the wall clock gave 26.1 guest seconds against 25.1, and rates within 15%.
-Recorded play is not a route through every scene, SKT titles have no local route
+on the wall clock gave 26.1 guest seconds against 25.1, with rates within 15%.
+Recorded play is not a route through every scene, SKT titles had no local route
 and were not measured, and sampling misses KTF flushes inside one tick.
 
 Kilobytes per second of pictures at the original size, WebSocket framing
-included. "Rectangle" is the path above, measured with the same frames:
+included; "Rectangle" is the path above, measured with the same frames:
 
 | Scene | Changed pictures/s | Protocol 1 | Rectangle | Protocol 2 |
 | --- | ---: | ---: | ---: | ---: |
@@ -1363,27 +1318,27 @@ included. "Rectangle" is the path above, measured with the same frames:
 | LGT, almost still screen | 0.6 | 2.9 | 1.3 | 0.6 |
 
 The four busy scenes total 1,460 KB/s in protocol 1, 1,166 with rectangles and
-355 in protocol 2: an hour of one of them was 0.9–1.9 GB, 0.4–1.45 GB and
+355 in protocol 2; an hour of one of them was 0.9–1.9 GB, 0.4–1.45 GB and
 42–766 MB respectively. The rectangle is one bounding box that falls back to a
 complete picture past half the screen, so a moving figure and a status bar far
 apart were a complete picture. At hq2x, protocol 1 sent 3.4 to 3.8 times these
-numbers (5,399 KB/s for the four) and hq3x 6.3 times; protocol 2 sends the same
-bytes at every scale.
+numbers (5,399 KB/s for the four) and at hq3x 6.3 times; protocol 2 sends the
+same bytes at every scale.
 
-Of protocol 2's parts, measured separately on the same frames: transparent
-unchanged pixels with a palette cut the LGT scenes to 6–7% of protocol 1 and the
-side-scroller to 34%; the shift took a further 18–26% off the scenes that
-scroll (the full-colour field moves one pixel a frame on 112 of 232 frames, the
-side-scroller two pixels on about a thousand of 2,895) and 3% off the others.
-The side-scroller moves a band of its screen, a few percent of the pixels: a
-search gated at an eighth of the picture changed let 59 of its frames scroll,
-and a thirty-second 1,046. Trying the last shift first took its encoding from
-1.5 to 0.9 ms a frame. Encoding cost 0.5–1.2 ms a frame on an Apple M1, and
-4.9 ms on the full-colour field, whose changes exceed a palette and whose every
-other frame is searched.
+Protocol 2's parts, measured separately on the same frames: transparent unchanged
+pixels with a palette cut the LGT scenes to 6–7% of protocol 1 and the
+side-scroller to 34%; the shift took a further 18–26% off the scenes that scroll
+(the full-colour field moves one pixel a frame on 112 of 232 frames, the
+side-scroller two pixels on about a thousand of 2,895) and 3% off the others. The
+side-scroller moves a band of its screen, a few percent of the pixels: a search
+gated at an eighth of the picture changed let 59 of its frames scroll, and a
+thirty-second 1,046. Trying the last shift first took its encoding from 1.5 to
+0.9 ms a frame. Encoding cost 0.5–1.2 ms a frame on an Apple M1, and 4.9 ms on
+the full-colour field, whose changes exceed a palette and whose every other frame
+is searched.
 
-Sound, in the same units: the JSON of protocol 1 against binary with each
-sample carried once.
+Sound, in the same units: the JSON of protocol 1 against binary with each sample
+carried once.
 
 | Scene | Protocol 1 | Protocol 2 |
 | --- | ---: | ---: |
@@ -1392,79 +1347,79 @@ sample carried once.
 | LGT, field, several moving figures | 2.13 | 0.21 |
 | LGT, almost still screen | 0.29 | 0.17 |
 
-One LGT title played four distinct sampled effects 99 times, 2.4 KB/s as
-base64; its SysEx messages repeat the same way. Note events were 40–53 bytes of
-JSON each and are three or four bytes now. The first KTF scene recorded no sound.
+One LGT title played four distinct sampled effects 99 times, 2.4 KB/s as base64,
+and its SysEx messages repeat the same way. Note events were 40–53 bytes of JSON
+each and are three or four bytes now. The first KTF scene recorded no sound.
 
 A tick's sound used to leave a millisecond or two ahead of its picture as a
-separate write, and every WebSocket frame was written as two: its header, then
-its payload. At 9–14 sound messages a second a write each, that was on the order
-of 1 KB/s of TCP and TLS headers per busy scene, before the pictures' own.
+separate write, and every WebSocket frame was written as two writes, header then
+payload. At 9–14 sound messages a second, a write each, that was on the order of
+1 KB/s of TCP and TLS headers per busy scene, before the pictures' own.
 
 **Measured and not used.**
 
 - *Lossy JPEG.* A complete JPEG at quality 75 was larger than protocol 2 in four
-  of the five scenes (190 KB/s against 38 on the moving figures) and smaller
-  only on the full-colour field, while giving up losslessness.
+  of the five scenes (190 KB/s against 38 on the moving figures) and smaller only
+  on the full-colour field, while giving up losslessness.
 - *WebP lossless* of whole pictures, encoded with `cwebp` at two effort levels,
   was measured on the full-colour field only, where it came to 58–69% of
-  protocol 1. It would need an encoder outside the standard library, and
-  masking alone reaches 5–34% on the other scenes. Protocol 2's rectangles
-  have since gone to WebP through an encoder of our own; see
+  protocol 1. It would need an encoder outside the standard library, and masking
+  alone reaches 5–34% on the other scenes. Protocol 2's rectangles later moved to
+  WebP through a project-written encoder; see
   [below](#frame-bandwidth-webp-2026-09-25).
-- *XOR against the last picture, then deflate.* It was larger than protocol 2
-  in every scene — 230 KB/s against 208 on the full-colour field, its best
-  case — and needs a decoder written in the page; a PNG uses the browser's.
-- *Tiles.* Changed 8 or 16-pixel tiles packed into one PNG came to 16–23% of
+- *XOR against the last picture, then deflate.* Larger than protocol 2 in every
+  scene (230 KB/s against 208 on the full-colour field, its best case), and it
+  needs a decoder written in the page, where a PNG uses the browser's.
+- *Tiles.* Changed 8- or 16-pixel tiles packed into one PNG came to 16–23% of
   protocol 1 on the two LGT fields, above masking.
 - *A frame-rate cap.* Only the side-scroller exceeds 15 pictures a second.
   Capping it at 15 cut three quarters of its traffic in the rectangle path and
-  would cost it the same share of its smoothness; it was not measured with
-  protocol 2 and was left as a possible setting rather than a default.
+  would cost the same share of its smoothness; it was not measured with protocol
+  2 and was left as a possible setting rather than a default.
 
 **Authored fixtures.** The commands above now compare protocols 1 and 2; the
 rectangle numbers are from the path protocol 2 replaced. The moving sprite comes
 to 11,360 bytes against 226,646 (94.99% less) and an authored scrolling field
 under a fixed bar to 6,397 against 59,598 (89.27% less). Three one-second
-benchmark runs on the M1: protocol 1 at 616 microseconds and 3,778 bytes a
-frame, protocol 2 at 205 microseconds and 138 bytes. Protocol 2 compares every
-pixel as a word rather than skipping equal rows as the rectangle did, which is
-why it is slower per frame than the rectangle's 24 microseconds.
+benchmark runs on the M1: protocol 1 at 616 microseconds and 3,778 bytes a frame,
+protocol 2 at 205 microseconds and 138 bytes. Protocol 2 compares every pixel as a
+word rather than skipping equal rows as the rectangle did, which is why it is
+slower per frame than the rectangle's 24 microseconds.
 
-**Browser.** The frame-delivery route passed in Chromium and WebKit, including
-an authored picture composed through masked, shifted and replacing updates and
-compared with the expected pixels, and hq2x redone around partial changes
-compared with hq2x of the whole picture. A local KTF archive ran six seconds at
-60 pictures a second, 214 KB/s on its animated opening, and a local LGT archive
-at 1.7 KB/s on its title. The page's JavaScript hqx costs 4.4–16 ms for a whole
-240x320 frame on the M1, depending on the scale; see [hqx](../hqx.md). Phone CPU,
-battery and actual monthly traffic remain unmeasured.
+**Browser.** The frame-delivery route passed in Chromium and WebKit, including an
+authored picture composed through masked, shifted and replacing updates and
+compared with the expected pixels, and hq2x redone around partial changes compared
+with hq2x of the whole picture. A local KTF archive ran six seconds at 60 pictures
+a second, 214 KB/s on its animated opening, and a local LGT archive at 1.7 KB/s
+on its title. The page's JavaScript hqx costs 4.4–16 ms for a whole 240x320 frame
+on the M1, depending on the scale; see [hqx](../hqx.md). Phone CPU, battery and
+actual monthly traffic remain unmeasured.
 
 <a id="frame-bandwidth-webp-2026-09-25"></a>
 
 ### Lossless WebP pictures — 2026-09-25
 
-Protocol 2's rectangles are PNG. Lossless WebP of the same rectangles, from an
-encoder written for them in `internal/vp8l`, is what a page gets now when it
-asks for it; see [the protocol](../session.md#protocol-2-pictures).
+Protocol 2's rectangles were PNG. Lossless WebP of the same rectangles, from an
+encoder written for them in `internal/vp8l`, is what a page gets when it asks for
+it; see [the protocol](../session.md#protocol-2-pictures).
 
-**Why an encoder of our own.** The standard library has none. Published pure-Go
-encoders, run on the rectangles of the recordings above, came to 75–176% of the
-PNGs — most were larger on the palette scenes, because they made little of a
-colour table — or decoded to different pixels. A machine translation of the
-WebP project's own encoder to Go reached its sizes, but at up to 236 ms a
-picture, from 2.7 MB of translated code under the WebP project's licence. The format is
-specified in RFC 9649, and `golang.org/x/image` already carries a decoder to
-test against.
+**Why a project-written encoder.** The standard library has none. Published
+pure-Go encoders, run on the rectangles of the recordings above, came to 75–176%
+of the PNGs (most were larger on the palette scenes, because they made little of
+a colour table) or decoded to different pixels. A machine translation of the WebP
+project's own encoder to Go reached its sizes, but at up to 236 ms a picture,
+from 2.7 MB of translated code under the WebP project's licence. The format is
+specified in RFC 9649, and `golang.org/x/image` already carries a decoder to test
+against.
 
-**Method.** The five scenes above were recorded again with the same routes and
-a hook that kept every changed frame with its guest time, and the frames went
+**Method.** The five scenes above were recorded again with the same routes and a
+hook that kept every changed frame with its guest time, and the frames went
 through the session's own encoder, once with PNG and once with WebP. Four scenes
 reproduced the earlier recordings to the message. The full-colour field was
-recorded on the wall clock again and came out with fewer changed pictures a
-second, 178 in 46.2 guest seconds against 232 in 26.1, so its PNG rate is lower
-than above; the ratios are what compare. Times are one Apple M1 core. Rates are
-the messages, header included, without WebSocket framing.
+recorded on the wall clock again and came out with fewer changed pictures a second,
+178 in 46.2 guest seconds against 232 in 26.1, so its PNG rate is lower than
+above; the ratios are what compare. Times are one Apple M1 core. Rates are the
+messages, header included, without WebSocket framing.
 
 | Scene | PNG, KB/s | WebP, KB/s | Encoding, ms a picture | Share of a core |
 | --- | ---: | ---: | --- | --- |
@@ -1474,26 +1429,25 @@ the messages, header included, without WebSocket framing.
 | LGT, field, several moving figures | 37.5 | 28.6 (−24%) | 1.2 → 1.6 | 1.5% → 2.0% |
 | LGT, almost still screen | 0.6 | 0.5 | 0.5 → 0.7 | under 0.1% |
 
-The four busy scenes come to 156 KB/s against 221. The slowest WebP picture
-took 8.8 ms, on the moving figures; the side-scroller's 99th percentile is
-3.2 ms against PNG's 2.3. Encoding includes the comparison with the held
-picture and the scroll search, which both formats share.
+The four busy scenes come to 156 KB/s against 221. The slowest WebP picture took
+8.8 ms, on the moving figures; the side-scroller's 99th percentile is 3.2 ms
+against PNG's 2.3. Encoding includes the comparison with the held picture and the
+scroll search, which both formats share.
 
 The first working encoder took twice these times on the palette scenes: the
-side-scroller at 2.2 ms a picture, 10.7% of a core. Its bytes were right but
-much of its time did not depend on the picture: every image, including the
-colour table's own few pixels, cleared two hash tables of 32,768 entries,
-tried eleven colour-cache sizes over separate histograms and priced 2,328
-symbols with a logarithm each. Five changes, each checked to leave every
-recorded rectangle's bytes unchanged, brought it down to 0.45–0.59 of that
-time: hash chains stamped with a running position base instead of cleared;
-a parse that skips candidates no copy could beat and a run of one colour
-without hashing each of its positions; the colour caches tried together,
-since a pixel a small cache holds every larger one holds too; prices
-computed only where counts change; and the colour table and prefix codes
-built without repeated planning. The tables an encoder keeps between
-pictures are shared with any copy of it, so the matcher counts the images
-parsed with them and makes its own when a copy has used them since.
+side-scroller at 2.2 ms a picture, 10.7% of a core. Its bytes were right, but much
+of its time did not depend on the picture: every image, including the colour
+table's own few pixels, cleared two hash tables of 32,768 entries, tried eleven
+colour-cache sizes over separate histograms and priced 2,328 symbols with a
+logarithm each. Five changes, each checked to leave every recorded rectangle's
+bytes unchanged, brought it to 0.45–0.59 of that time: hash chains stamped with a
+running position base instead of cleared; a parse that skips candidates no copy
+could beat, and a run of one colour without hashing each position; the colour
+caches tried together, since a pixel a small cache holds every larger one holds
+too; prices computed only where counts change; and the colour table and prefix
+codes built without repeated planning. The tables an encoder keeps between
+pictures are shared with any copy of it, so the matcher counts the images parsed
+with them and makes its own when a copy has used them since.
 
 Against the WebP project's `cwebp -lossless -m 4` on the same rectangles (the
 first 1,500 messages of each scene): 38.2 against 40.6 KB/s on the full-colour
@@ -1502,42 +1456,41 @@ three, where `cwebp` stays 4–5% smaller.
 
 **What decided the design**, each measured on these rectangles:
 
-- *No predictor for game pictures.* With the predictor transform the
-  full-colour field came to 68% of PNG, without it to 51%, and keeping the
-  smaller of the two for every rectangle of three scenes never chose it: the
-  games' flat areas and repeated tiles
-  are copies from the left and from above, which prediction residuals break
-  up. It is still tried on a picture over six bits a pixel.
+- *No predictor for game pictures.* With the predictor transform the full-colour
+  field came to 68% of PNG and without it to 51%, and keeping the smaller of the
+  two for every rectangle of three scenes never chose it: the games' flat areas
+  and repeated tiles are copies from the left and from above, which prediction
+  residuals break up. It is still tried on a picture over six bits a pixel.
 - *A transparent pixel's colour is free.* The page never shows it: the browser
   premultiplies it away, and a masked update's transparent pixel keeps what is
   under it. The encoder makes it one colour for the colour table and sets it to
-  its prediction when predicting, as the WebP project's encoder does unless
-  told to keep exact colours. That took the full-colour field from 78% to 71%
-  of PNG while the predictor was still in use.
-- *Copies are priced in bits.* The longest match at each position took far
-  copies of two to four pixels that cost more than writing the pixels: in one
-  240x320 palette rectangle, 10,117 of 14,935 copies were beyond the
-  neighbourhood codes. Choosing the copy that saves the most bits over its
-  literals, and none when none saves any, took 4–5% off every scene. Pricing
-  from the rectangle's channel histograms alone, rather than from a first
-  greedy parse, lands within 1% and takes a quarter to a third less time.
-- *Two hash chains.* Chains over runs of four to six pixels found repeated
-  tiles a screen back and took 1–3% off the palette scenes, but made the
-  full-colour field 5% larger without the chain over pairs; both are kept.
+  its prediction when predicting, as the WebP project's encoder does unless told
+  to keep exact colours. That took the full-colour field from 78% to 71% of PNG
+  while the predictor was still in use.
+- *Copies are priced in bits.* The longest match at each position took far copies
+  of two to four pixels that cost more than writing the pixels: in one 240x320
+  palette rectangle, 10,117 of 14,935 copies were beyond the neighbourhood codes.
+  Choosing the copy that saves the most bits over its literals, and none when none
+  saves any, took 4–5% off every scene. Pricing from the rectangle's channel
+  histograms alone, rather than from a first greedy parse, lands within 1% and
+  takes a quarter to a third less time.
+- *Two hash chains.* Chains over runs of four to six pixels found repeated tiles a
+  screen back and took 1–3% off the palette scenes, but made the full-colour field
+  5% larger without the chain over pairs; both are kept.
 
 **Measured and not used.** Spatially variant prefix codes, the format's entropy
 image, came to 4–6% less in an idealised clustering that ignored its own cost,
-and the clustering itself was the most expensive thing tried. Writing the
-masked pixels as the held picture's colours instead of transparent, keeping the
-smaller of the two, saved 0.4–4% for twice the time. Two parses priced by the
-first came to 1% less than one for about a third more time.
+and the clustering itself was the most expensive thing tried. Writing the masked
+pixels as the held picture's colours instead of transparent, keeping the smaller
+of the two, saved 0.4–4% for twice the time. Two parses priced by the first came
+to 1% less than one for about a third more time.
 
-**Verification.** Round trips through `golang.org/x/image` cover the colour
-table sizes, the neighbourhood codes, transparent bands and every path the
-defaults avoid, and `FuzzEncode` ran a million pictures. `dwebp` decoded 404
-authored pictures through each path and all 13,268 rectangles of the recordings
-to the same pixels, transparent colours aside. The frame-delivery route passed
-in Chromium and WebKit with the page asking for WebP, on the authored fixtures
-and on a local KTF and a local LGT archive. What a phone spends decoding WebP
-against PNG, and what a small server spends encoding, remain unmeasured; the
-encoder takes up to about one and a half times PNG's on the scenes that are mostly copies.
+**Verification.** Round trips through `golang.org/x/image` cover the colour table
+sizes, the neighbourhood codes, transparent bands and every path the defaults
+avoid, and `FuzzEncode` ran a million pictures. `dwebp` decoded 404 authored
+pictures through each path and all 13,268 rectangles of the recordings to the
+same pixels, transparent colours aside. The frame-delivery route passed in
+Chromium and WebKit with the page asking for WebP, on the authored fixtures and on
+a local KTF and a local LGT archive. What a phone spends decoding WebP against
+PNG, and what a small server spends encoding, remain unmeasured; the encoder takes
+up to about one and a half times PNG's time on the scenes that are mostly copies.

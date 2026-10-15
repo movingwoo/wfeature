@@ -12,7 +12,7 @@ import (
 // package this platform grew up on holds an `__adf__` beside a JAR whose
 // `client.bin<BSS-size>` entry is the executable, this one holds a module
 // information file, a raw ARM module, and the title's own resource files.
-// See docs/ktf.md, "An earlier KTF package".
+// See docs/history/ktf.md, "An earlier KTF package".
 const (
 	nativeInfoExtension   = ".mif"
 	nativeModuleExtension = ".mod"

@@ -12,7 +12,7 @@ import (
 // class library because the table it decodes with is the handset's default
 // charset, which the Host installs — the same one String's byte constructors
 // and getBytes go through. See "The default charset is the handset's" in
-// docs/skvm.md.
+// docs/history/skt.md.
 //
 // The API is the java.io converter of the day: convert fills as much of the
 // caller's char array as it can and answers how many characters it wrote.

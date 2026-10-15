@@ -1,9 +1,10 @@
 # Documentation
 
 Start with the maintained references below. `history/` preserves call traces,
-measurements, rejected approaches, and older implementation descriptions.
-Historical claims apply to their recorded revision and may be superseded.
-The ignored root `TODO.md` is the local work queue.
+measurements, rejected approaches, and older implementation descriptions;
+its claims apply to their recorded revision and may be superseded. The ignored
+root `TODO.md` is the local work queue. The root `README.md` and `CHANGELOG.md`
+are written in Korean for players; everything here is English.
 
 ## Running and developing
 
@@ -16,11 +17,23 @@ The ignored root `TODO.md` is the local work queue.
 | [PWA acceptance](pwa-acceptance.md) | The release-time browser route across a PWA upgrade, the device table, and what CI does not cover. |
 | [Maintenance](maintenance.md) | Unresolved decisions, paused work, and documentation ownership. |
 
+## Outside `docs/`
+
+| Document | Use it for |
+| --- | --- |
+| [Web host](../web/README.md) | The page: keypad, settings, game controllers, fullscreen, text input, PWA. |
+| [mobile](../mobile/README.md) | The Android and iOS shells and their build scripts. |
+| [packaging](../packaging/README.md) | What a release archive carries beside the server binary. |
+| [Runtime data](../var/README.md) | The ignored `var/` layout: games, added games, saves, logs, reports. |
+| [MIDP](../internal/api/midp/README.md), [WIPI Java](../internal/api/wipi/README.md) | How the Java class libraries are declared in Go. |
+| [JVM](../internal/jvm/testdata/README.md), [LGT](../internal/platform/lgt/testdata/README.md), [SKT](../internal/platform/skt/testdata/README.md) fixtures | What each authored test fixture exercises. |
+| [Third-party notices](../internal/licenses/THIRD-PARTY-NOTICES.md) | Every bundled component's licence, as shipped in each release. |
+
 ## Runtime references
 
 | Document | Use it for |
 | --- | --- |
-| [Architecture](architecture.md) | Host / Runtime / Execution, archive bounds, profiles, and shared service contracts. |
+| [Architecture](architecture.md) | Layers and packages, archive detection and bounds, profiles, checkpoints and save locks, and shared service contracts. |
 | [Sessions](session.md) | Browser protocol, retention, input, frames, audio, and save integrity. |
 | [JVM](jvm.md) | Java execution, class library, and semantic limits. |
 | [ARM](armcore.md) | Instruction boundary, threads, memory, profiling, and backend conformance. |

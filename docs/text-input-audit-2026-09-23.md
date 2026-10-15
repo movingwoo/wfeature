@@ -2,14 +2,13 @@
 
 ## Result and scope
 
-Reviewing SKT, KTF, LGT, the shared session, WebSocket ownership and the browser
-dialog found five defect categories, reproduced in eleven new scenarios.
-These are authored-fixture reproductions, not measurements of how frequently
-real games encounter them. Product code was not changed during this audit.
-
-All five categories were subsequently fixed. The findings below preserve the
-original evidence; the [resolution](#resolution) records the implementation and
-ordinary regression tests that now enforce it.
+A review of SKT, KTF, LGT, the shared session, WebSocket ownership and the
+browser dialog found five defect categories, reproduced in eleven new scenarios.
+These are authored-fixture reproductions, not measurements of how often real
+games encounter them, and the audit changed no product code. All five categories
+were fixed afterwards: the findings below preserve the original evidence, and
+the [resolution](#resolution) records the implementation and the regression
+tests that enforce it.
 
 The inspected worktree includes the KTF timer and clipping corrections in
 PR #192. Existing relevant Go tests passed 189 leaf cases. The browser dialog
@@ -107,8 +106,8 @@ and deletion followed by insertion, without changing C/EUC-KR field policy.
 
 ## Supported routes and deliberate limits
 
-A game is not a single text-input contract. Different screens in one game can
-use different implementations. Use these routes as the automated test units:
+One game can use different text-input implementations on different screens,
+so these routes, not games, are the automated test units:
 
 | Route | Primary contract and necessary evidence |
 | --- | --- |
@@ -151,10 +150,10 @@ Use separate outcomes:
   or API reference is only a candidate for a future manual route.
 - **Fail:** reached a supported contract and violated a stated invariant.
 
-The current red status combines missing targets, stale edits and invalid text.
-Those cases already differ internally, but that single label cannot classify
-a manual result. Preserve the underlying error and active adapter in test or
-debug evidence. This audit does not change the compact user-facing labels.
+The red status combines missing targets, stale edits and invalid text. Those
+cases differ internally, but the single label cannot classify a manual result,
+so test or debug evidence must keep the underlying error and active adapter. The
+audit did not change the compact user-facing labels.
 
 For each supported route, share a matrix of empty/normal/maximum/over-limit
 input; Korean and supplementary Unicode; newline/control policy; deletion and
@@ -185,9 +184,9 @@ go test -overlay var/diagnostics/text-input-audit-20260923/overlay.json \
   -run '^TestAudit' -count=1 -v
 ```
 
-This overlay documents the original failing state. The regression cases now live
-in the ordinary suite; use the command below against the corrected tree. There
-are no new real-game or physical-device acceptance claims in this audit.
+This overlay documents the original failing state; the regression cases are in
+the ordinary suite, run with the command under [Resolution](#resolution). The
+audit makes no new real-game or physical-device acceptance claims.
 
 ## Resolution
 

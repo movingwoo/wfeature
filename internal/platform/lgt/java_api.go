@@ -568,7 +568,7 @@ type javaBakedSlot struct {
 // are worth taking together: the site says what the answer is used as, the rule
 // says which method sits at the number. Where they agree the slot is settled;
 // where they disagree, the site wins and the disagreement is worth writing down.
-// See docs/lgt.md, "Two kinds of virtual call".
+// See docs/history/lgt.md, "Two kinds of virtual call".
 //
 // `java/lang/Runtime` declares `exit(I)`, `freeMemory()`, `totalMemory()` and
 // `gc()`, so they fall at 10, 11, 12 and 13. Slot 13 is independently known to
@@ -1237,7 +1237,7 @@ func (client *Client) javaStaticByDescriptor(
 // dispatched by name here. The rest — a class the module lists no virtual
 // methods for — are numbered by the compiler against a platform this
 // implementation does not have, and all that can be said about one is which
-// class and which slot. See docs/lgt.md, "Two kinds of virtual call".
+// class and which slot. See docs/history/lgt.md, "Two kinds of virtual call".
 func (client *Client) callJavaPlatformVirtual(
 	ctx context.Context, thread *armcore.Thread, slot uint32,
 ) (bool, error) {

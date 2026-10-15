@@ -1,64 +1,68 @@
 # Audio history
 
 This file preserves the dated sound evidence behind the October 2026 playback
-repairs: the cross-platform audit and the app timing investigation that came
-before it. Statements about current behavior, corpus size and open work apply
-to their original revision; later records may supersede them. Start with
-[audio.md](../audio.md) and [audio ownership](../audio-ownership.md) for the
-maintained contracts.
+repairs: the cross-platform audit, the app timing investigation that preceded
+it, the validation runs of each repair and the frontier cadence change.
+Statements about current behavior, corpus size and open work apply to their
+original revision; later records may supersede them. The maintained contracts
+are in [audio.md](../audio.md) and [audio ownership](../audio-ownership.md).
 
 ## Cross-platform sound audit
 
 ### Scope and conclusion
 
-The 2026-10-08 audit followed the [APK timing repair](#apk-audio-timing). KTF, LGT,
-SKT Java and SKT SGS use the shared `backend.Audio` output and the page's
-`PageAudio`. The coarse-clock scheduling and release defects therefore apply
-to any of these paths on an affected output, and the common client repair covers
-them. The original report remains KTF, probably APK 0.5.0; physical-phone
-confirmation and LGT/SKT APK listening comparisons remain outstanding.
+The 2026-10-08 audit followed the [APK timing repair](#apk-audio-timing). KTF,
+LGT, SKT Java and SKT SGS use the shared `backend.Audio` output and the page's
+`PageAudio`, so the coarse-clock scheduling and release defects applied to any
+of these paths on an affected output, and the common client repair covered
+them. The original report was KTF, probably APK 0.5.0; physical-phone
+confirmation and LGT/SKT APK listening comparisons remained outstanding.
 
-This audit added no playback changes. The findings below are present in the
-working tree after the timing repair. A successful diagnostic reproduction is
-evidence of a remaining defect, not a passing playback acceptance test.
+The audit itself changed no playback code. Its findings were present in the
+working tree after the timing repair; a successful diagnostic reproduction was
+evidence of a remaining defect, not a passing acceptance test.
 
 ### Repair status
 
-The subsequent [ownership and recovery repair](../audio-ownership.md) fixes shared
-clip stop, explicit PCM cancellation, equal-pitch/channel interference, output
-reconstruction after drops/overflow, and reconnect/quick-load ownership. It
-retains natural PCM tails. The subsequent gain repair connects known device
-and clip setters across KTF, LGT and SKT, including active MIDI/PCM attenuation
-and restoration after zero volume. SKT MIDP VolumeControl now exposes independent
-level/mute state, stable control identity and change notifications, including
-after a checkpoint. The [pause repair](../audio-ownership.md#clip-pause-and-resume)
-retains cursors, repeat mode, note envelope ages and PCM positions across the
-implemented Java/MIDP/SKVM and LGT C paths. Source mappings and the KTF C
-pause, resume and volume slots, open at this point, were later read from their
-callers; see [below](#source-mutes-and-the-ktf-c-media-slots-read-from-callers).
-Per-file decoder budgets now bound allocation and
-expansion, as described below. Sustain, RPN pitch sensitivity
-and controller reset now follow the [MIDI state contract](../audio.md#midi-sustain-pitch-range-and-reset).
-The [MIDP lifecycle repair](../audio.md#midp-playback-lifecycle)
-adds finite repeat counts, natural completion, media time, closed-player guards
-and ordered deferred callbacks, including pending events across quick load.
-Standard event names now preserve reference identity with JVM literals and
-API constants, as demonstrated by the MIDP specification. A bounded JVM string
-pool also preserves that identity through quick load; freshly constructed
-strings remain separate objects. See [event delivery](../audio.md#midp-per-player-volume-controls)
-and the [JVM contract](../jvm.md#implemented).
-Transient tone handles now close on completion/stop and keep that lifetime
-through quick load. Unsupported tone-sequence players are refused and omitted
-from filtered capability queries. The tables below
-retain the original audit observations, not current failures for the repaired
-items. KTF Java and SKT WIPI resume now retain their repeat mode; LGT C resume
-ignores the unspecified second register. The repair record separates authored and browser proof from real-phone
-listening still required.
+The tables below keep the original audit observations, not current failures.
+Later repairs, each with its maintained contract:
 
-The gain work also found and repaired LGT Java data replacement dropping its
-loaded flag without closing the old handle. A regression now clears an active
-clip, proves its previous output and handle are released, and verifies that
-the new decode retains its clip level.
+- [Ownership and recovery](../audio-ownership.md): shared clip stop, explicit
+  PCM cancellation, equal-pitch/channel interference, output reconstruction
+  after drops or overflow, and reconnect/quick-load ownership; natural PCM
+  tails kept.
+- Gain: known device and clip setters across KTF, LGT and SKT, including active
+  MIDI/PCM attenuation and restoration after zero volume. SKT MIDP
+  `VolumeControl` gained independent level/mute state, stable control identity
+  and change notifications that survive a checkpoint. The gain work also found
+  LGT Java data replacement dropping its loaded flag without closing the old
+  handle; a regression clears an active clip, proves its previous output and
+  handle are released, and checks that the new decode keeps its clip level.
+- [Pause](../audio-ownership.md#clip-pause-and-resume): cursors, repeat mode,
+  note envelope ages and PCM positions across the Java/MIDP/SKVM and LGT C
+  paths. KTF Java and SKT WIPI resume keep their repeat mode; LGT C resume
+  ignores the unspecified second register.
+- Source mappings and the KTF C pause, resume and volume slots, open at this
+  point, were later read from their callers
+  ([below](#source-mutes-and-the-ktf-c-media-slots-read-from-callers)).
+- Per-file decoder budgets bound allocation and expansion
+  ([below](#bounded-decoding)).
+- [MIDI state](../audio.md#midi-sustain-pitch-range-and-reset): sustain, RPN
+  pitch sensitivity and controller reset.
+- [MIDP lifecycle](../audio.md#midp-playback-lifecycle): finite repeat counts,
+  natural completion, media time, closed-player guards and ordered deferred
+  callbacks, including pending events across quick load. Standard event names
+  keep reference identity with JVM literals and API constants, as the MIDP
+  specification demonstrates, and a bounded JVM string pool keeps it through
+  quick load while freshly constructed strings stay separate objects
+  ([event delivery](../audio.md#midp-per-player-volume-controls),
+  [JVM contract](../jvm.md#implemented)).
+- Transient tones: handles close on completion or stop and keep that lifetime
+  through quick load; unsupported tone-sequence players are refused and omitted
+  from filtered capability queries.
+
+The repair records separate authored and browser proof from the real-phone
+listening still required.
 
 ### Reproduced playback gaps
 
@@ -75,62 +79,63 @@ the new decode retains its clip level.
 
 Code boundaries: `internal/backend/audio.go`, `audio_output.go`;
 `internal/platform/lgt/wipic_media.go`, `java_sound.go`; and
-`internal/platform/skt/media.go`, `skvm.go`, `wipi.go`.
-The shared stop emits CC120/123 for every used MIDI channel. The sink and wire
-format have no clip identity or individual PCM-stop operation. Whole-session
-page stop/reset does cancel PCM, percussion and release tails.
+`internal/platform/skt/media.go`, `skvm.go`, `wipi.go`. The shared stop emitted
+CC120/123 for every used MIDI channel, and the sink and wire format had no clip
+identity or individual PCM-stop operation. Whole-session page stop/reset did
+cancel PCM, percussion and release tails.
 
 Code inspection also found KTF Java clip volume stored without affecting output,
-KTF Java and C source mute accepted without applying it, and SKT WIPI clip volume
-registered as a no-op with a constant getter. KTF C device volume already scales
-new note velocities and PCM samples; zero releases active MIDI notes, but does
-not cancel PCM already emitted. Individual pause/resume generally restarts the
-clip. LGT Java preserves its repeat flag, while SKT WIPI resume disables repeat.
-LGT C completion callbacks and SKVM blocking-play interruption already have tests
-and must be preserved.
+KTF Java and C source mute accepted without being applied, and SKT WIPI clip
+volume registered as a no-op with a constant getter. KTF C device volume already
+scaled new note velocities and PCM samples; zero released active MIDI notes but
+did not cancel PCM already emitted. Individual pause/resume generally restarted
+the clip. LGT Java kept its repeat flag, while SKT WIPI resume disabled repeat.
+LGT C completion callbacks and SKVM blocking-play interruption already had tests
+to preserve.
 
 The contracts were checked against the WIPI specification's
 [C media API](https://mirusu400.github.io/wipi-wiki/c-api/media.md),
 [Clip API](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/media/Clip.md)
 and [MIDP Player API](https://mirusu400.github.io/wipi-wiki/midp/java-api/javax/microedition/media/Player.md).
-Vendor slot/source mappings still require observed evidence.
+Vendor slot and source mappings still required observed evidence.
 
 ### Unverified vendor source and slot mappings
 
 A follow-up search compared both published specification versions with the
-current bindings and local traces. The [1.2.1 C media contract](https://mirusu400.github.io/wipi-wiki/c-api/media.md)
-names TONE, SOUND and RECORDER mute categories without assigning numeric IDs.
-Its pause/resume functions each take only a clip pointer, notify states 4/5
-on success, and distinguish unsupported from invalid state. This establishes
-the function contract, not a carrier's dispatch-table slots.
+bindings and local traces of the time. The
+[1.2.1 C media contract](https://mirusu400.github.io/wipi-wiki/c-api/media.md)
+names TONE, SOUND and RECORDER mute categories without numeric IDs. Its
+pause/resume functions each take only a clip pointer, notify states 4/5 on
+success, and distinguish unsupported from invalid state; that is the function
+contract, not a carrier's dispatch-table slots.
 
 The [2.0 Java media API](https://mirusu400.github.io/wipi-wiki/v20/java-api/media.md)
 assigns VOICE=1, RING=2, KEYTONE=3, MESSAGE=4, ALARM=5, ALERT=6, MMEDIA=7 and
 GAME=8; MMEDIA addresses all multimedia devices. The
 [2.0 HAL media categories](https://mirusu400.github.io/wipi-wiki/v20/hal/media.md)
-run from GENERAL through GAME. Neither proves the meaning of LGT source 11,
-nor that an older carrier source 3/6 uses the Java 2.0 namespace. KTF Java's
+run from GENERAL through GAME. Neither proves the meaning of LGT source 11, nor
+that an older carrier's source 3 or 6 uses the Java 2.0 namespace. KTF Java's
 boolean `setDefaultVolume(II)Z` also differs from the standard void signature.
 
-KTF C table 10/function 17 accepts source/mute but has no audio effect; slots
-9/10 are no-ops between known play=8 and stop=11. Their position next to play
-and stop suggests pause and resume, but no SDK declaration or original-runtime
-dispatch entry names them, and slot 17 has no name at all, so neither can
-establish this carrier ABI. LGT source controls at
-`0x4cf`–`0x4d2` retain levels/mute in getters and checkpoints but do not route
-them to audio. Observed source 11 and a source-6 startup mute do not establish
+KTF C table 10, function 17 accepted source/mute without audio effect; slots 9
+and 10 were no-ops between known play=8 and stop=11. Their position suggested
+pause and resume, but no SDK declaration or original-runtime dispatch entry
+named them, and slot 17 had no name at all. LGT source controls at
+`0x4cf`–`0x4d2` kept levels and mute in getters and checkpoints without routing
+them to audio. Observed source 11 and a source-6 startup mute did not establish
 those categories' target sounds.
 
 No matching carrier ABI table was found in the published specification corpus
-or existing traces. Implementation needs matching SDK/import declarations or
-named original-runtime dispatch entries, followed by an authored caller test.
-These unresolved mappings must not become guessed global mute controls.
-The next section settles them from what titles pass instead.
+or existing traces. The conclusion was that implementation needed matching
+SDK/import declarations or named original-runtime dispatch entries, followed by
+an authored caller test, and that the unresolved mappings must not become
+guessed global mute controls. The next section settled them from what titles
+pass instead.
 
 ### Source mutes and the KTF C media slots, read from callers
 
-On 2026-10-09 a lifecycle sweep answered what the section above left open. It
-watched what titles hand each function and when, rather than numbering a list.
+On 2026-10-09 a lifecycle sweep answered what the section above left open by
+watching what titles hand each function and when.
 
 **Method.** A temporary probe counted every KTF C media call with its argument
 registers, its link register and the lifecycle phase it arrived in: inside
@@ -152,16 +157,16 @@ refills and plays it again. That is `MC_mdaPause(clip)` and `MC_mdaResume(clip)`
 **14, 25 and 26 are the two volume getters and the clip setter.** 26 arrives on
 every clip between its putData and its play in 41 titles, with a level from 0 to
 100 that is constant per title and differs between them (0 in fifteen, 60 in
-nine, 20 in five, and 34, 40, 45, 75, 90, 100 among the rest). 14 takes nothing —
-r0 holds the same platform stub address in every title, which is what a call
-without arguments leaves there — and 25 takes a clip. With the getters answering
+nine, 20 in five, and 34, 40, 45, 75, 90, 100 among the rest). 14 takes nothing
+(r0 holds the same platform stub address in every title, which is what a call
+without arguments leaves there) and 25 takes a clip. With the getters answering
 markers, seven of the eight titles that call one passed exactly that marker to
 26: 77 in the four that call 14, 66 in the three that call only 25. The eighth
 passes its own 50 either way. So 14 and 25 read a volume and 26 is handed one:
 `MC_mdaGetVolume()`, `MC_mdaClipGetVolume(clip)` and
 `MC_mdaClipSetVolume(clip, level)`, the setter sitting past the vibrator with
-its getter in front of it. The reading of 26 as a streaming clip's water mark,
-the other contract with a clip and a percentage, is out. While unnamed, both
+its getter in front of it. This rules out reading 26 as a streaming clip's water
+mark, the other contract that takes a clip and a percentage. While unnamed, both
 getters answered zero, so those titles were asking for every clip to be silent
 through a call this platform discarded.
 
@@ -176,13 +181,14 @@ source 3 at startup, one mutes source 0 and one unmutes source 3. Nineteen of
 the 23 go on to play their clips through function 8 for the rest of the run,
 and an ordered trace of two of them shows the mute is their first media call.
 Fourteen also call 18 with the same `(3)`, which is `MC_mdaGetMuteState`. On
-LGT, 46 titles set a mute at startup — 32 source 6, nine source 0, three source
-3, two with an address where the source belongs — and 33 of the 44 that name a
-source then play clips through `clipPlay`. Had any of those sources been the one their clips play
-through, those titles would have been silent on a handset; the tone a handset
-makes on a key press fits, and this platform makes none. So a source mute is
-remembered and read back and reaches no clip. LGT's source volume has one
-caller, which reads source 11 and hands the level to `MC_mdaSetVolume` itself.
+LGT, 46 titles set a mute at startup (32 source 6, nine source 0, three source
+3, two with an address where the source belongs), and 33 of the 44 that name a
+source then play clips through `clipPlay`. Had any of those sources been the one
+their clips play through, those titles would have been silent on a handset; the
+key-press tone a handset makes fits instead, and this platform makes none. So a
+source mute is remembered and read back and reaches no clip. LGT's source volume
+has one caller, which reads source 11 and hands the level to `MC_mdaSetVolume`
+itself.
 
 **The KTF Java `Volume` extensions are unused.** `getMute`, `setMute`,
 `getDefaultVolume` and `setDefaultVolume` appear in no local KTF image, nested
@@ -199,34 +205,31 @@ are refused as before. [Verification](../testing.md#ktf-c-media-slots-read-from-
 
 ### Rendered controller behavior
 
-CC7/CC11/CC10 are now live per-channel controls, including sounding release and
-percussion tails. [The repair](../audio.md#live-midi-channel-controls) separates
-channel gain/pan from note velocity/envelopes and reconstructs current controls
-before resumed notes. Seven native-reference scenarios pass in both browsers;
-maximum sample error is 5.96e-8, mute RMS is zero and restoration preserves the
-held level without another attack. Sustain, RPN pitch sensitivity and CC120/121/123
-also now work, with nine additional native-reference scenarios passing in both
-engines at maximum sample error 5.96e-8. The observations below remain the original
-audit evidence from before those repairs.
+At the audit, real OfflineAudioContext probes in Chromium and WebKit produced
+the same results:
 
-
-Real OfflineAudioContext probes in Chromium and WebKit produced the same results:
-
-- A held A4 retained late RMS about 0.05425 after CC7 became zero, identical to
-  the unchanged-volume control. CC7/11/10 update future notes only.
+- A held A4 kept late RMS about 0.05425 after CC7 became zero, identical to the
+  unchanged-volume control: CC7/11/10 updated future notes only.
 - With CC64 set to 127, note-off still released the voice; its later output was
   silent while the pedal remained down.
 - After RPN 0 requested a twelve-semitone bend range, maximum bend rendered A4
-  at about 493.876 Hz. The page still used its fixed two-semitone range.
+  at about 493.876 Hz: the page still used its fixed two-semitone range.
 
-The repair updates output/checkpoint state together. Audio version 6 records
-pitch sensitivity, both RPN/NRPN selectors and released keys retained by sustain.
-Resume restores current controls before notes; versions below 6 are refused.
+Superseded: see [live MIDI channel controls](../audio.md#live-midi-channel-controls)
+and [MIDI state](../audio.md#midi-sustain-pitch-range-and-reset). The control
+repair separated channel gain/pan from note velocity and envelopes and
+reconstructs current controls before resumed notes; seven native-reference
+scenarios passed in both browsers at maximum sample error 5.96e-8, with zero
+mute RMS and the held level restored without another attack. The sustain, RPN
+and CC120/121/123 repair added nine more scenarios at the same error, and audio
+state version 6 began recording pitch sensitivity, both RPN/NRPN selectors and
+keys held by sustain; versions below 6 are refused.
 
-At the original audit, `pcmTrackEvents` dropped parsed PCM controls and gate
-lengths. ATR volume/expression/pan now follow the contract below through decoder,
-runtime state, negotiated transport and live page groups. Bend and gate behavior
-remain unresolved. Score-attached waves still bypass melodic velocity handling.
+At the audit, `pcmTrackEvents` also dropped parsed PCM controls and gate
+lengths. ATR volume/expression/pan later followed the contract below through
+decoder, runtime state, negotiated transport and live page groups; bend and gate
+behavior stayed unresolved, and score-attached waves still bypassed melodic
+velocity handling.
 
 #### PCM contract evidence
 
@@ -279,24 +282,25 @@ those steps and change nothing audible in the rest, but whether the handset
 ends a stream that way is not known, so it is left for a listening decision.
 The scanner counts only; no sample left the machine.
 
-Current score note zero selects `waves[channel+1]` and discards missing waves.
-It now updates channel velocity memory before that dispatch, even when the wave
-is absent or unsupported. Mobile CC121 also restores the remembered default of
-64, as specified on page 43; previously both paths left later omitted-velocity
-notes at the wrong level. [Authored and corpus verification](../testing.md#pcm-buffer-reuse-and-mobile-velocity)
-covers this repair. Changing the wave mapping or its gain needs profile evidence.
+Score note zero selected `waves[channel+1]` and discarded missing waves. The
+velocity repair made it update channel velocity memory before that dispatch,
+even when the wave is absent or unsupported, and made Mobile CC121 restore the
+remembered default of 64 as page 43 specifies; before it, both paths left later
+omitted-velocity notes at the wrong level.
+[Authored and corpus verification](../testing.md#pcm-buffer-reuse-and-mobile-velocity)
+covers it. Changing the wave mapping or its gain needs profile evidence.
 
-The [PCM control implementation](../audio.md#live-pcm-track-controls) now preserves
+The [PCM control implementation](../audio.md#live-pcm-track-controls) keeps
 owner/track/channel identity and raw samples, with current controls applied to
 all sustained tails. Initial volume 127 is an explicit neutral compatibility
-policy; documented expression 127 and pan 64 remain distinct. Checkpoint v7
-retains these states and reads genuine v6 without inventing old routing.
-Normal output admits at most 2,048 groups; reconstruction fits the existing
-65,536-operation limit. [Verification](../testing.md#pcm-track-control-propagation)
-covers authored byte fixtures, full state/wire/page paths and the anonymous
-corpus. Native rendering [passes](../testing.md#native-audio-rendering-acceptance)
-in Chromium and WebKit; listening remains open. No reference code or assets
-were imported.
+policy, distinct from the documented expression 127 and pan 64. Checkpoint v7
+kept these states and read genuine v6 without inventing old routing. Normal
+output admits at most 2,048 groups; reconstruction fits the 65,536-operation
+limit. [Verification](../testing.md#pcm-track-control-propagation) covers
+authored byte fixtures, full state/wire/page paths and the anonymous corpus.
+Native rendering [passes](../testing.md#native-audio-rendering-acceptance) in
+Chromium and WebKit; listening remains open. No reference code or assets were
+imported.
 
 ### Delivery and resource limits
 
@@ -305,141 +309,104 @@ were imported.
 The published [PlayListener](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/media/PlayListener.md)
 contract declares `playUpdate(Clip, int event, int parm)` and event constants
 ERROR=-1, END_OF_DATA=1, START=2, STOP=3, PAUSE=4, RESUME=5, RECORD=6 and
-FULL_OF_DATA=7. The shared declaration formerly exposed `playDone(Clip)`
-instead; it now has the verified signature and all eight constants.
+FULL_OF_DATA=7. The shared declaration exposed `playDone(Clip)` instead until
+the repair gave it the verified signature and all eight constants.
 [Clip.setListener](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/media/Clip.md)
-replaces one listener and null removes it.
-
-SKT now delivers playback transitions through its bounded deferred Player
-queue, preserving WIPI pause/resume event identity, original recipients and
-per-pass completion. Active, paused and queued owners survive GC and complete
-checkpoints; idle owners are weakly associated and become collectible after
-delivery. Previous Player layouts remain readable. The selected policies and
-rollback boundary are documented in [audio behavior](../audio.md#java-wipi-playback-listeners).
-
-KTF now declares the same callback and constants and delivers through its
-serialized Host event service. Its checkpoint, GC and scheduler boundaries
-are described below. LGT now delivers the same callback through its existing
-between-frame media service, with explicit guest GC ownership and validated
-ARM/Thumb callback targets.
-The specification leaves callback threading, deferred-recipient replacement,
-per-loop notifications and event-specific `parm` values unclear. It separately declares
+replaces one listener and null removes it. The specification leaves callback
+threading, deferred-recipient replacement, per-loop notifications and
+event-specific `parm` values unclear. It separately declares
 `Clip.playUpdate(int,int)` and `playStart(boolean)` without explaining the
-former's boolean return, so those missing surfaces need their own contract
+former's boolean return, so those surfaces need their own contract
 verification.
+
+The repairs delivered the callback on SKT through its bounded deferred Player
+queue, on KTF through its serialized Host event service and on LGT through its
+between-frame media service with explicit guest GC ownership and validated
+ARM/Thumb callback targets. Superseded: the resulting policies, ownership and
+rollback boundaries are maintained in
+[Java WIPI playback listeners](../audio.md#java-wipi-playback-listeners). The
+subsections below keep what the audit and reviews found.
 
 ##### KTF callback implementation boundaries
 
 The KTF audit found that `Clip.setListener` was a no-op and Clip bookkeeping
-used weak owner keys. The repair keeps the listener on the Clip object graph,
-with separate strong roots for playing/paused owners and queued recipients.
-A listener retained directly in the weak-key bookkeeping would leak a
-listener-to-Clip cycle. Forced-collection tests cover active, paused, idle and
+used weak owner keys. A listener kept directly in the weak-key bookkeeping
+would leak a listener-to-Clip cycle, so the repair keeps the listener on the
+Clip object graph with separate strong roots for playing/paused owners and
+queued recipients. Forced-collection tests cover active, paused, idle and
 pending states before and after full checkpoint restoration. Natural completion
 is observed before stop, pause, restart or orphan cleanup can discard it.
 
-`ServiceEvents` now drains the media snapshot even when the generic queue is
-empty or the guest owns its event loop. Reentrant notifications wait for the
-next drain. `serviceAudio` takes the guest lock and propagates bounded-queue
-errors. `NextDeadline` includes pending notifications and the next natural
-completion, using the shared audio query without advancing playback. A long
-unrelated guest sleep therefore does not delay callbacks; pause and speed
-changes adjust those deadlines.
-Review reproduced same-round delivery when a media callback posted a generic
-event, including a full generic queue, and loss of the media prefix when a
-generic callback raised a recoverable Java exception. The service now runs
-the existing generic prefix first, preserving the captured media prefix until
-that succeeds; newly posted media remains for the next round. A saved media
-counter also must equal the saved audio counter, preventing an implicit
-completion backlog from overflowing or being lost immediately after restore.
+`ServiceEvents` drains the media snapshot even when the generic queue is empty
+or the guest owns its event loop. `serviceAudio` takes the guest lock and
+propagates bounded-queue errors. `NextDeadline` includes pending notifications
+and the next natural completion, using the shared audio query without advancing
+playback. Review reproduced same-round delivery when a media callback posted a
+generic event, including into a full generic queue, and loss of the media
+prefix when a generic callback raised a recoverable Java exception; the
+service therefore runs the generic prefix first and keeps the captured media
+prefix until that succeeds. A saved media counter must equal the saved audio
+counter, so an implicit completion backlog cannot overflow or be lost
+immediately after restore.
 
 KTF AOT metadata in the JVM omits interface lists, while guest class records
-do contain them. JVM `IsInstance` alone therefore cannot validate these
-listeners. Validation rereads the bounded guest superclass/interface graph
-without trusting saved summaries, including derived interfaces and cycles.
-The exact callback method and its executable ARM/Thumb entry are checked
-against the guest binding. Native heap payload restoration happens
-before AOT object/class bindings are installed, so typed validation belongs
-after heap restoration and before workers start.
+contain them, so JVM `IsInstance` alone cannot validate these listeners.
+Validation rereads the bounded guest superclass/interface graph without
+trusting saved summaries, including derived interfaces and cycles, and checks
+the exact callback method and its executable ARM/Thumb entry against the guest
+binding. Native heap payload restoration happens before AOT object/class
+bindings are installed, so typed validation belongs after heap restoration and
+before workers start.
 
-Existing root and Clip checkpoint structs are strict: adding optional fields
-would reject previous records. The new `ktf-media-v1` native payload uses a
-reserved named root and preserves the old shapes. The carrier is discarded
-after its owners, counters and queue are adopted. Records without the carrier
-use the audio completion count as their initial watermark. A literal old empty
+The existing root and Clip checkpoint structs are strict, so adding optional
+fields would reject previous records; the `ktf-media-v1` native payload uses a
+reserved named root instead and keeps the old shapes. A literal old empty
 interface record delivers concrete callbacks and can be saved again without
-repeating startup or old END events; its field and interface-method tables
-are deliberately not rewritten. Existing `Player(BaseClip)` overloads retain
-playback/checkpoint support, while a BaseClip cannot be substituted for a
-callback's required Clip argument. Authored regression and malformed-record
-evidence is in [testing](../testing.md#ktf-wipi-playback-listeners).
+repeating startup or old END events; its field and interface-method tables are
+deliberately not rewritten. Authored regression and malformed-record evidence
+is in [testing](../testing.md#ktf-wipi-playback-listeners).
 
 ##### LGT callback implementation boundaries
 
-LGT Java now delivers playback transitions through a separate bounded queue at
-`serviceMediaCallbacks`. The authored descriptor/JAR/AOT application in
+The authored descriptor/JAR/AOT application in
 `internal/testfixture/lgt_listener.go` boots a Jlet and executes a real ARM
-`playUpdate(receiver, Clip, event, parm)`. Its original empty-history failures
-are recorded in `build/sound-lgt-listener/lifecycle-before.log`.
+`playUpdate(receiver, Clip, event, parm)` through the queue at
+`serviceMediaCallbacks`. Its empty-history failures before the repair are in
+`build/sound-lgt-listener/lifecycle-before.log`. Recipient snapshots survive
+replacement, null removal and buffer invalidation, and pending events and
+natural completion shorten the guest-clock tick, including for zero-duration
+one-shots. Forced collection inside the first callback of a batch proves that
+later recipients survive.
 
-Successful Play, active/paused Stop, Pause, Resume and each natural pass produce
-the documented integer events with `parm` zero. Recipient snapshots survive
-replacement, null removal and buffer invalidation. Reentrant events wait for
-the next batch; an uncaught guest exception ends only its callback. LGT keeps
-its existing boolean behavior: Play while playing is refused and stopping a
-loaded idle clip succeeds without adding another STOP. C callbacks retain
-their own queue and status semantics. Pending events and natural completion
-shorten the guest-clock tick, including zero-duration one-shots.
-
-The collector now roots playing/paused Java Clips and queued owner/recipient
-pairs, follows each reachable Clip's listener edge, and releases idle Java
-media entries and sounds when the corresponding object is swept. Every pair
-in a detached callback batch is pinned until delivery finishes. Forced
-collection inside the first callback proves that later recipients survive;
-idle listener-to-Clip cycles become collectible after delivery.
-
-Listeners must be issued objects with an executable ARM/Thumb callback.
-Bounded raw-record validation supports inherited and derived interfaces and
-checks the exact named descriptor. Stripped direct one-method interfaces
-support both entry-address and receiver-vtable forms. Cached class summaries
-cannot supply an interface or callback absent from guest memory.
-
-Real-archive acceptance exposed an overstrict nominal-type check. Both
+Real-archive acceptance exposed an overstrict nominal-type check. Archives
 `735a579d82ac53bb` and `70d709c40e10541f` omit the interface table entirely
-(header `+0x14` is zero), but their actual member runs contain the exact
+(header `+0x14` is zero), but their member runs contain the exact
 `playUpdate(Lorg/kwis/msp/media/Clip;II)V` callback with an executable body.
-Their receiver vtables are unambiguous; one vtable is synthesized and the other
-is compiler supplied. A diagnostic overlay with the old unchecked setter and
-no event delivery runs through both failing scenes, confirming a new regression.
+Their receiver vtables are unambiguous; one is synthesized and the other
+compiler supplied. A diagnostic overlay with the old unchecked setter and no
+event delivery ran through both failing scenes, confirming a new regression.
 The validator now accepts that exact raw member without nominal interface
-metadata. If the callback member is stripped too, it still requires a verified
-PlayListener dispatch entry. Authored live/restore tests preserve this distinction.
-Evidence: `build/sound-lgt-listener/metadata/`, `legacy-setter/runtime.jsonl`
-and the anonymous runtime probes. The legacy-setter overlay isolates execution
-only: its deliberately disabled Java ownership causes new-format capture to
-refuse, so its checkpoint result is not a compatibility test.
-Review found that clearing a raw superclass could still inherit through a
-cached edge; that mismatch is now refused before replacing a valid listener.
-Imported PlayListener constants also previously read as zero. All eight now
-receive the published values; `constants-before.log` records that regression.
-A second review reproduced a stripped child's concrete callback being bypassed
-by a parent's named method. Delivery now follows the receiver's verified
-interface dispatch before an inherited body, and both address/slot forms
-continue correctly after a full restore. The original mismatch against an
-ordinary guest interface call is in `review/override-before.log`.
+metadata; if the callback member is stripped too, it still requires a verified
+PlayListener dispatch entry, and authored live/restore tests keep that
+distinction. Evidence: `build/sound-lgt-listener/metadata/`,
+`legacy-setter/runtime.jsonl` and the anonymous runtime probes. The
+legacy-setter overlay isolates execution only: its deliberately disabled Java
+ownership makes new-format capture refuse, so its checkpoint result is not a
+compatibility test.
 
-A version-3 media envelope preserves completion watermarks and pending event
-snapshots around the unchanged strict version-2 session/client records.
-Previously the queue vanished on restore; `checkpoint-before.log` reproduces
-pending, paused and completed-pass losses. The new reader validates all owners,
-recipients, raw records and exact audio completion counts after Java bindings
-exist and before workers start. The legacy version-2 reader infers issued Clip
-owners and takes their saved audio count without replaying historical events.
-It cannot recover a Clip already absent from an old object graph. New snapshots
-without Java media still use version 2. An older binary refuses the new envelope;
-rollback uses an older supported checkpoint or ordinary startup. No ordinary
-save data changes. Acceptance evidence is in
-[testing](../testing.md#lgt-wipi-playback-listeners).
+Reviews found three more defects. Clearing a raw superclass could still inherit
+through a cached edge; that mismatch is now refused before replacing a valid
+listener. Imported PlayListener constants read as zero; all eight now receive
+the published values (`constants-before.log`). A stripped child's concrete
+callback was bypassed by a parent's named method; delivery now follows the
+receiver's verified interface dispatch before an inherited body, and both
+address and slot forms continue after a full restore
+(`review/override-before.log` holds the original mismatch against an ordinary
+guest interface call).
+
+Before the version-3 media envelope, the queue vanished on restore;
+`checkpoint-before.log` reproduces pending, paused and completed-pass losses.
+Acceptance evidence is in [testing](../testing.md#lgt-wipi-playback-listeners).
 
 #### Guest event delivery
 
@@ -540,27 +507,25 @@ distinguishes verified position/accounting from native rendering, which
 #### KTF speed-change clock continuity
 
 The KTF Java/C client originally multiplied all time since `clockBase` by the
-latest speed. Changing speed therefore changed time that had already elapsed.
-An authored manual-clock reproduction at one second moves audio time backward
-to 500 ms when switching to 0.5x, after which pause fails with an invalid clock.
-Switching to 2x instead jumps to two seconds and immediately consumes a note
-with 100 ms remaining. The complete Host/session setter path does not rebase
-the origin. Native KTF's `SpeedClock` preserves the instant in both cases.
+latest speed, so changing speed changed time that had already elapsed. An
+authored manual-clock reproduction at one second moved audio time backward to
+500 ms when switching to 0.5x, after which pause failed with an invalid clock;
+switching to 2x instead jumped to two seconds and immediately consumed a note
+with 100 ms remaining. The complete Host/session setter path did not rebase the
+origin, while native KTF's `SpeedClock` preserved the instant in both cases.
 
-The repair must preserve the current guest instant and change only its future
-rate, including paused clips and checkpoint clock relationships. This is a
-prerequisite for trustworthy event timestamps; it is independent of the
-browser's arrival-time scheduling repair.
-
-The implemented repair rebases both active/prepared origins at one Host instant,
-with nonbackward fractional rounding and transactional range refusal. It keeps
-the existing checkpoint representation. A separate regression also showed that
-shared `ClampSpeed` accepted NaN and corrupted `SpeedClock`; NaN now selects 1.
-Two real KTF scenes each switched through 0.5x, 2x and 1x, retained MIDI/PCM,
-restored checkpoints and executed the next tick. All six measured boundary
-deltas were forward and below 9 microseconds, rather than the prior large
-jumps. Local anonymous results: `build/sound-speed/runtime.jsonl`; stderr is
-empty. This is clock/continuation evidence, not a listening comparison.
+The repair had to preserve the current guest instant and change only its future
+rate, including paused clips and checkpoint clock relationships. That was a
+prerequisite for trustworthy event timestamps and independent of the browser's
+arrival-time scheduling repair. It rebases both active and prepared origins at
+one Host instant, with nonbackward fractional rounding and transactional range
+refusal, and keeps the checkpoint representation. A separate regression showed
+that shared `ClampSpeed` accepted NaN and corrupted `SpeedClock`; NaN now
+selects 1. Two real KTF scenes each switched through 0.5x, 2x and 1x, kept
+MIDI/PCM, restored checkpoints and executed the next tick. All six measured
+boundary deltas were forward and below 9 microseconds, instead of the prior
+large jumps. Local anonymous results: `build/sound-speed/runtime.jsonl`; stderr
+was empty. This is clock and continuation evidence, not a listening comparison.
 
 ### Bounded decoding
 
@@ -601,17 +566,17 @@ reads; sound membership and counts are unchanged. The new scanner reports exit
 compressed score tracks appeared, so authored tests cover that dialect's bounds.
 This input-boundary repair does not establish the APK report's cause.
 
-The subsequent [admission repair](../audio.md#loaded-sound-resources) also caps the
-combined payload of 256 loaded sounds, using the checkpoint's 1,048,576-entry
-and 128 MiB limits and reserving possible active keys. Failed admission leaves
-handles and playing peers unchanged. Authored buffers are copied after acceptance
-to avoid retaining oversized caller allocations through small subslices.
-A separate reproduction grew 501 active-key records from 250 repeated passes
-of one key; held-key replacement and zero-velocity release now match the output.
-All required gates, both cgo-free builds and six real-scene smoke checks pass;
-the five successful restores and known Display-owner refusal are unchanged.
-Diagnostics and comparison: `build/sound-bounds/`; maintained tests are described
-in [the test guide](../testing.md#smaf-decoder-bounds).
+The subsequent [admission repair](../audio.md#loaded-sound-resources) also caps
+the combined payload of 256 loaded sounds, using the checkpoint's
+1,048,576-entry and 128 MiB limits and reserving possible active keys. Failed
+admission leaves handles and playing peers unchanged, and authored buffers are
+copied after acceptance so small subslices cannot retain oversized caller
+allocations. A separate reproduction grew 501 active-key records from 250
+repeated passes of one key; held-key replacement and zero-velocity release now
+match the output. Gates and the six-scene smoke check are in
+[repair validation runs](#repair-validation-runs). Diagnostics and comparison:
+`build/sound-bounds/`; maintained tests are described in
+[the test guide](../testing.md#smaf-decoder-bounds).
 
 ### Corpus evidence
 
@@ -700,36 +665,36 @@ the local inputs without naming games:
 | SKT | `e3276ce8557c1d26` | 0 | 5 |
 | SKT | `14a62a8521a0d434` | 160 | 1 |
 
-All advanced frames without a start/tick/input error. The two silent LGT scenes
-are inconclusive. These are host-output checks, not Android load, mixed-output
-or listening tests. No real SGS scene was exercised.
+All advanced frames without a start, tick or input error. The two silent LGT
+scenes are inconclusive. These are host-output checks, not Android load,
+mixed-output or listening tests; no real SGS scene was exercised.
 
 Focused sound/media Go checks produced 79 passing test/subtest results and two
-skipped opt-in corpus checks. The separate scan above supplied corpus coverage.
-The focused web audio/settings/session/frame suite passed 86 tests. Both browser
+skipped opt-in corpus checks; the scan above supplied corpus coverage. The
+focused web audio/settings/session/frame suite passed 86 tests. Both browser
 engines again passed the repaired twelve-note rendering check on a simulated
 90 ms clock. Nine local Go diagnostic tests, including four additional volume
-subcases, reproduced the remaining defects above. Diagnostic sources and results
-are ignored under `build/sound-audit/`; their asserted outcomes describe current
-defects and are not permanent acceptance tests.
+subcases, reproduced the remaining defects above. Their sources and results are
+ignored under `build/sound-audit/`; their asserted outcomes described defects of
+the time and are not permanent acceptance tests.
 
-Full debug/release, race, vet and Android build/install validation for the earlier
-repair is recorded in [APK audio timing](#apk-audio-timing). No new product code was
-changed here. Subsequent ownership/control repairs must cover simultaneous
-clips, stop/close, loop boundaries, reconnect and checkpoint restore at both
-ends of the host protocol.
+Full debug/release, race, vet and Android build/install validation for the
+earlier repair is recorded in [APK audio timing](#apk-audio-timing); the audit
+changed no product code. It required later ownership and control repairs to
+cover simultaneous clips, stop/close, loop boundaries, reconnect and checkpoint
+restore at both ends of the host protocol.
 
 ## APK audio timing
 
 ### Report and scope
 
-On 2026-10-08, a user reported smeared music in the Android app while PC and
+On 2026-10-08 a user reported smeared music in the Android app while PC and
 mobile-browser playback sounded normal. They confirmed the KTF variant and
 estimated the app version as 0.5.0. The phone model, Android/WebView versions,
-output device and exact comparison scene remain unknown.
+output device and exact comparison scene were not known.
 
-The APK uses the same oscillator-based synthesizer as the web page. Changing
-instrument banks does not address the timing defect reproduced below. The fix
+The APK uses the same oscillator-based synthesizer as the web page, so changing
+instrument banks would not address the timing defect reproduced below. The fix
 uses no external sound assets or synthesis code.
 
 ### Reproduced defect
@@ -758,19 +723,18 @@ old measurements gives means of 31.67 ms for 0.5.0 and 36.79 ms for the current
 baseline APK. Capture lengths and note counts differ between runs.
 
 Release handling had a second defect: it canceled future gain automation and
-read `AudioParam.value` to choose the release level. That value describes the
-render clock, which may not have reached the scheduled attack. It could cut an
-attack or use the initial gain of 1 instead of the note's intended level.
-A newly authored sequence of twelve short sine notes, captured directly from
-WebView's mixed PCM through an AudioWorklet, reached a peak of 0.649 in 0.5.0.
-The repaired output peaked at 0.109, consistent with the requested velocity,
-channel volume and stereo pan. An idle capture retained all twelve pulses.
-With a 10 ms RMS window and a 0.003 activity threshold, their measured active
-lengths were 60–70 ms after repair, compared with 40–120 ms in the 0.5.0 capture.
-These include the release tail; the JavaScript timer used to request 35 ms
-gates is itself subject to delay.
-The capture is before Android's speaker/output processing and is not a listening
-test on the reporter's phone.
+read `AudioParam.value` to choose the release level. That value follows the
+render clock, which may not have reached the scheduled attack, so a release
+could cut an attack or start from the initial gain of 1 instead of the note's
+intended level. A newly authored sequence of twelve short sine notes, captured
+directly from WebView's mixed PCM through an AudioWorklet, peaked at 0.649 in
+0.5.0 and at 0.109 after the repair, consistent with the requested velocity,
+channel volume and stereo pan. An idle capture kept all twelve pulses. With a
+10 ms RMS window and a 0.003 activity threshold, their active lengths were
+60–70 ms after the repair, against 40–120 ms in the 0.5.0 capture; these
+include the release tail, and the JavaScript timer used to request 35 ms gates
+is itself subject to delay. The capture precedes Android's speaker/output
+processing and is not a listening test on the reporter's phone.
 
 The Web Audio specification describes `currentTime` as the next render block's
 time, with scheduled operations using that timeline. See the
@@ -780,18 +744,20 @@ and [audio scheduling guidance](https://web.dev/articles/audio-scheduling).
 ### Repair
 
 `web/audio.js` preserves event arrival spacing with the monotonic page clock,
-anchored ahead of the audio render clock. Melody, percussion, pitch bends and
+anchored ahead of the audio render clock; melody, percussion, pitch bends and
 sampled effects share this mapping. It adds one reported output buffer of lead,
-with a 10 ms floor and 250 ms cap. An additional 100 ms drift allowance is
-bounded; corrections trim excess drift without jumping a release back before
-its attack. Context state changes and timeline replacement clear the anchor.
-Stopping a game or loading a checkpoint still cancels queued sources immediately.
+with a 10 ms floor and 250 ms cap, and bounds drift to a further 100 ms;
+corrections trim excess drift without moving a release before its attack.
+Context state changes and timeline replacement clear the anchor. Stopping a game
+or loading a checkpoint still cancels queued sources immediately.
 
-Melodic release reconstructs the scheduled attack/decay level and retains the
-partial ramp before fading out. It does not read a stale instantaneous gain.
+Melodic release reconstructs the scheduled attack/decay level and keeps the
+partial ramp before fading out, instead of reading a stale instantaneous gain.
 The waveform families, percussion model, volume defaults and server protocol
-are unchanged. The service-worker shell version advances so cached clients
-receive the repair.
+were unchanged. The service-worker shell version advanced so cached clients
+received the repair. The later presentation clock (`timing=1`) superseded this
+mapping for timed batches; it still schedules untimed ones
+([presentation timestamps](../audio.md#presentation-timestamps-and-recovery)).
 
 ### Validation and remaining limits
 
@@ -812,19 +778,76 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-timing
 
 The repaired release APK was also installed and exercised with the local KTF
 archive and an authored PCM capture. This establishes a device-dependent
-scheduling defect and its repair. It does not establish that every difference
-described by the original report has the same cause. Physical-phone comparison
-with the reporter's scene, matching volumes and output route, remains needed.
+scheduling defect and its repair, not that every difference in the original
+report has the same cause. A physical-phone comparison with the reporter's
+scene, matching volumes and output route, was still needed.
 
 Validation passed on 2026-10-08: `make test` (including 278 Node tests),
 `make test-debug`, `go test -race ./internal/...`, `go vet ./...`, the Chromium
 and WebKit audio-render checks above, and the Android release build/install.
 
-This change preserves spacing between arrivals, not the score timestamps lost
+The change preserves spacing between arrivals, not the score timestamps lost
 before transport. Events already collected into one server batch, network
-stalls, dropped audio batches and actual device underruns remain separate limits.
+stalls, dropped audio batches and device underruns remained separate limits.
 The scheduling lead also increases response latency, particularly on an output
-with a large buffer. Richer instrument synthesis remains separate work.
+with a large buffer. Richer instrument synthesis remained separate work.
+
+## Repair validation runs
+
+The ownership, gain, pause, lifecycle, control and listener repairs of
+2026-10-08 and 2026-10-09 each ran the same six-scene smoke check: six local
+archive scenes (two KTF, one LGT and three SKT), each for twelve seconds with
+three confirm inputs, followed where possible by a checkpoint restore. The
+ownership, MIDP lifecycle, channel-control, string-identity, MIDI,
+decoder-budget, listener and transitive-interface slices also recorded passing
+`make test`, `make test-debug`, `go test -race ./internal/...`, `go vet ./...`
+and both `CGO_ENABLED=0` server profiles. No real SGS scene or physical phone
+was exercised by these checks.
+
+| Slice | Smoke-check result | Further evidence | Logs |
+| --- | --- | --- | --- |
+| Ownership | Owned MIDI or PCM in all six, no start, tick or input error; five restored and continued | — | `build/sound-ownership/` |
+| Pause | Same five restores and one refusal, no errors (`runtime-pause-final.jsonl`) | A playback regression check, not evidence that the scenes exercised every pause call | `build/sound-ownership/` |
+| MIDP lifecycle | Five restores, same refusal, no execution or input errors (`runtime-lifecycle-final.jsonl`) | `make test` ran 313 Node tests; page and wire protocol unchanged | `build/sound-midp/` |
+| Live channel controls | — | 321 Node tests; ten browser runs (controllers, resume, gain, ownership, coarse timing) in both engines | `build/sound-controls/` |
+| String identity | MIDI/PCM output and five restores kept; refusal unchanged | 321 Node tests | `build/sound-identity/` |
+| MIDI sustain/RPN/reset | Output and five restores kept; refusal unchanged | 330 Node tests; nine MIDI scenarios per browser and the five earlier browser scripts in both engines | `build/sound-midi-state/` |
+| Decoder budgets and admission | Five restores; refusal unchanged | Unchanged corpus output and bounded fuzzing ([bounded decoding](#bounded-decoding)) | `build/sound-bounds/` |
+| WIPI Display factory | Exposed a second refusal in the same SKT scene; five restored | — | `build/sound-wipi-display/runtime.jsonl` |
+| Bounded catch-up | All six restore and execute the next tick; the formerly refused scene keeps its MIDI output; stderr empty | Establishes the sampled checkpoint route, not physical listening | `build/sound-catchup/runtime.jsonl` |
+| SKT WIPI listeners | All six keep output, restore and continue; stderr empty | 330 Node tests | `build/sound-wipi-listener/` |
+| Transitive interfaces | Six-scene continuation passes | Separate Java and derived-listener JAR regressions | `build/sound-interface/` |
+
+The refusal in the slices before the Display fix was one SKT WIPI scene whose default
+Display had no MIDP owner while the platform validator required one. It
+reproduced with the original audio implementation, so it was a pre-existing
+display-state defect rather than an ownership regression, and the scene did not
+count as a successful checkpoint acceptance. The fixture test had kept an owner
+from an initialized MIDP display and did not cover this factory path. The
+[Display fix](../audio-ownership.md#checkpoint-display-and-audio-catch-up)
+accepted the ownerless WIPI Display, after which the same scene was refused by
+the audio catch-up guard: it counted every note start and stop in the score,
+including those the cursor had consumed, and their product exceeded the work
+limit although little playback work was pending. Raising the limit would not
+have corrected that estimate; the bounded calculation of due work did.
+
+The live channel-control browser runs measured, in each engine, a maximum
+sample error of 5.960464477539063e-8 across seven controller scenarios against
+independent native graphs. Held RMS was about 0.09743595 before a controller
+mute and after recovery, zero while volume or expression was zero, and
+0.02455079 at level 32/127; pan moved the sounding signal between channels, and
+peer owners and PCM kept their reference output. These fixtures establish
+controller behavior, not physical-phone or handset-timbre acceptance. The MIDI
+sustain slice's nine scenarios passed at the same maximum error, and its
+JSON/binary reconstruction and legacy flattening tests verified parameter
+ordering, released-key ownership and the larger bounded replay
+([MIDI verification](../testing.md#midi-sustain-and-parameters)).
+
+The string-identity slice verified canonical literals, native constants,
+`String.intern()` and retained event names through heap restoration with
+authored JVM classes and the MIDP lifecycle JAR. Resource-limit, concurrent,
+malformed-restore and backing-allocation tests passed, and reverting either
+text-detachment fix made its memory-retention test fail.
 
 ## Frontier cadence
 
@@ -833,10 +856,12 @@ each driven through its own release server and page in headless Chromium for
 30 seconds of key presses, found the server's CPU unchanged and the page's up
 by 11–36%. Part of the rise was sound messages: a timed page was sent its
 frontier at every tick, so most of the messages it decoded and checked said
-only that the clock had moved. The runner now sends a frontier alone at most
-every 100 ms after the last sound message, at once after a longer gap, and not
-at all while its send queue is full. A shed frontier had asked for a whole
-reconstruction although it carried nothing to lose.
+only that the clock had moved (34 of 59 sound messages a second on the
+sound-heavy KTF title, and all 22 on the LGT title playing nothing). The runner
+now sends a frontier alone at most every 100 ms after the last sound message,
+at once after a longer gap, and not at all while its send queue is full. A shed
+frontier had asked for a whole reconstruction although it carried nothing to
+lose.
 
 | Title | Sound messages a second, 0.5.1 / before / after | Browser CPU, 0.5.1 / before / after (cores) |
 | --- | --- | --- |

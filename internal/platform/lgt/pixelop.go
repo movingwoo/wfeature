@@ -37,8 +37,8 @@ import (
 //
 // KTF's titles pass them the other way round, and that divergence is real
 // rather than a mistake on one side; see `wipic_pixelop.go` there and
-// "A pixel operation's arguments are not in the same order on both platforms"
-// in `docs/lgt.md`.
+// "A pixel operation is a function the game installs, not a colour" in
+// `docs/history/lgt.md`.
 type pixelOp struct {
 	function uint32
 	param    uint32

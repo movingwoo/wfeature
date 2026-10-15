@@ -47,7 +47,7 @@ coverage.out
 # What `make acceptance` wrote down about a run over the local corpus. Every
 # row in it is an archive's file name, which is a game's name.
 /var/acceptance/
-# What ./start.sh wrote down about the server it started: its pid and its log.
+# What ./start.sh wrote down about the server it started: its log.
 /var/run/
 # Scripted ways back to a scene. A route is written against one archive and is
 # usually named after it, so it belongs beside the archives rather than in Git.
@@ -85,5 +85,6 @@ run/
 TODO.md
 # Should be temporarily banned
 AGENTS.md
+CLAUDE.md
 
 .DS_Store
