@@ -168,9 +168,15 @@ Behaviour a title depends on:
   false. Every `StringBuffer` read and write takes the buffer's lock.
 - **One class is one `Class` object**: `getClass`, a class literal and
   `Class.forName` answer the same object, so `getClass() != o.getClass()` in an
-  `equals` and `synchronized (Foo.class)` mean what they say. The table is
-  rebuilt from the heap on restore. A platform's `NewClassObject`, which KTF
-  binds to its own class records, is separate.
+  `equals` means what it says. The table is rebuilt from the heap on restore.
+  A platform's `NewClassObject`, which KTF binds to its own class records, is
+  a separate object.
+- **Locking a `Class` object takes its class's monitor**, the one a `static
+  synchronized` method of that class takes, so `synchronized (Foo.class)` and
+  Foo's static synchronized methods exclude each other, and `Foo.class.wait`
+  and `notify` work inside either. Any `Class` object for Foo, `NewClassObject`'s
+  included, locks the same monitor, and a checkpoint records it as the class
+  monitor. A checkpoint from an earlier build that holds both is refused.
 - `Throwable` keeps an empty message: `new Exception("").getMessage()` is `""`,
   and only an exception built without one answers null.
 - Byte and data streams read and write modified UTF-8. `writeUTF` is written

@@ -28,10 +28,15 @@ import (
 //
 // So the store spells case out in the path. In each segment of a key, an
 // upper-case letter is written as '#' followed by the letter, and '#' itself
-// is written "##"; everything else is written as it is. A handset stored its
-// own record store files this way (see internal/platform/skt/rms_packaged.go).
-// A key with no upper-case letter and no '#' has exactly the path it always
-// had. Keys do not change: platforms, save packs and the save API carry keys,
+// is written "##". Any other letter outside ASCII that has case is written by
+// its number, '#' '+' and six lower-case hex digits: file systems that ignore
+// case fold such letters in more ways than upper to lower — APFS takes "ß"
+// for "ss", the ligature "ﬁ" for "fi", the Kelvin sign for "k" and "ς" for
+// "σ" — and a name kept apart only by one of them would be one file there.
+// Everything else is written as it is. A handset stored its own record store
+// files with the '#' for upper case (see internal/platform/skt/rms_packaged.go).
+// A key with no upper-case letter, no '#' and no other letter with case
+// outside ASCII has exactly the path it always had. Keys do not change: platforms, save packs and the save API carry keys,
 // and only this store turns one into a path. The owner directory a store is
 // rooted at is the Host's name for a game, not a key, and is not encoded.
 //
@@ -51,13 +56,34 @@ func saveNameEncodes(r rune) bool {
 	return unicode.IsUpper(r) && unicode.ToUpper(unicode.ToLower(r)) == r
 }
 
+// saveNameNumbered reports whether a rune is written by its number: a letter
+// outside ASCII that has case — it is upper, lower or title case, or folds to
+// another letter — and is not written with a '#' before it. What is left as
+// it is then has no case at all, or is ASCII, so no two names this encoding
+// writes are one name to a file system that ignores case.
+func saveNameNumbered(r rune) bool {
+	if r < utf8.RuneSelf || r == utf8.RuneError || saveNameEncodes(r) {
+		return false
+	}
+	return unicode.IsUpper(r) || unicode.IsLower(r) || unicode.IsTitle(r) || unicode.SimpleFold(r) != r
+}
+
+// saveNameNumberDigits is how many hex digits a numbered rune is written with.
+const saveNameNumberDigits = 6
+
+// saveNameChanges reports whether the encoding writes a rune as anything but
+// itself.
+func saveNameChanges(r rune) bool {
+	return r == '#' || saveNameEncodes(r) || saveNameNumbered(r)
+}
+
 // encodeSaveName spells out the case of one segment of a key. Bytes that are
 // not UTF-8 are kept as they are.
 func encodeSaveName(name string) string {
 	changed := false
 	for index := 0; index < len(name) && !changed; {
 		r, size := utf8.DecodeRuneInString(name[index:])
-		changed = r == '#' || saveNameEncodes(r)
+		changed = saveNameChanges(r)
 		index += size
 	}
 	if !changed {
@@ -73,6 +99,8 @@ func encodeSaveName(name string) string {
 		case saveNameEncodes(r):
 			encoded.WriteByte('#')
 			encoded.WriteString(name[index : index+size])
+		case saveNameNumbered(r):
+			fmt.Fprintf(&encoded, "#+%0*x", saveNameNumberDigits, r)
 		default:
 			encoded.WriteString(name[index : index+size])
 		}
@@ -81,15 +109,43 @@ func encodeSaveName(name string) string {
 	return encoded.String()
 }
 
+// decodeSaveNumber reads the number after "#+" at the start of a name, and
+// answers the rune and how many bytes it took, or false when it is not a
+// number encodeSaveName writes.
+func decodeSaveNumber(name string) (rune, int, bool) {
+	if len(name) < saveNameNumberDigits {
+		return 0, 0, false
+	}
+	value := rune(0)
+	for _, digit := range []byte(name[:saveNameNumberDigits]) {
+		switch {
+		case digit >= '0' && digit <= '9':
+			value = value<<4 | rune(digit-'0')
+		case digit >= 'a' && digit <= 'f':
+			value = value<<4 | rune(digit-'a'+10)
+		default:
+			return 0, 0, false
+		}
+	}
+	if !utf8.ValidRune(value) || !saveNameNumbered(value) {
+		return 0, 0, false
+	}
+	return value, saveNameNumberDigits, true
+}
+
 // decodeSaveName reverses encodeSaveName. A name it would not have written —
-// an upper-case letter with no '#' before it, or a '#' before anything but '#'
-// or such a letter — is not one of its names, and the answer says so.
+// an upper-case letter with no '#' before it, another letter with case outside
+// ASCII not written by its number, or a '#' before anything but '#', such a
+// letter or a number it writes — is not one of its names, and the answer says
+// so.
 func decodeSaveName(name string) (string, bool) {
 	if !strings.ContainsRune(name, '#') {
-		for _, r := range name {
-			if saveNameEncodes(r) {
+		for index := 0; index < len(name); {
+			r, size := utf8.DecodeRuneInString(name[index:])
+			if saveNameEncodes(r) || saveNameNumbered(r) {
 				return "", false
 			}
+			index += size
 		}
 		return name, true
 	}
@@ -108,11 +164,18 @@ func decodeSaveName(name string) (string, bool) {
 				decoded.WriteByte('#')
 			case saveNameEncodes(next):
 				decoded.WriteString(name[index+1 : index+1+nextSize])
+			case next == '+':
+				number, digits, ok := decodeSaveNumber(name[index+2:])
+				if !ok {
+					return "", false
+				}
+				decoded.WriteRune(number)
+				nextSize += digits
 			default:
 				return "", false
 			}
 			index += 1 + nextSize
-		case saveNameEncodes(r):
+		case saveNameEncodes(r), saveNameNumbered(r):
 			return "", false
 		default:
 			decoded.WriteString(name[index : index+size])
@@ -328,6 +391,9 @@ func readSaveNamesRecord(root string) (saveNamesState, []string, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if encodedSaveRecordKnown(path, info) {
+		return saveNamesEncoded, nil, nil
+	}
 	refused := fmt.Errorf("%s in save directory %s is not a record of how its names are written", saveNamesRecord, root)
 	if !info.Mode().IsRegular() || info.Size() > maxSaveNamesRecord {
 		return 0, nil, refused
@@ -352,6 +418,7 @@ func readSaveNamesRecord(root string) (saveNamesState, []string, error) {
 		if len(lines) != 2 {
 			return 0, nil, refused
 		}
+		rememberEncodedSaveRecord(path, info)
 		return state, nil, nil
 	case saveNamesMoving, saveNamesPlacing:
 		if len(lines) == 2 || len(lines)-2 > maxSnapshotSaveEntries {
@@ -609,7 +676,8 @@ func saveNameExists(path string) (bool, error) {
 }
 
 // directoryNames lists one directory's names as the disk spells them. A path
-// that is not a directory lists nothing.
+// that is not a directory lists nothing. A listing is kept for the directory
+// it was made of until the directory changes (see savedListings).
 func directoryNames(directory string) ([]string, error) {
 	file, err := os.Open(directory)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -626,7 +694,57 @@ func directoryNames(directory string) ([]string, error) {
 	if !info.IsDir() {
 		return nil, nil
 	}
-	return file.Readdirnames(-1)
+	if names, known := savedListings.lookup(directory, info); known {
+		return names, nil
+	}
+	names, err := file.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	savedListings.remember(directory, info, names)
+	return names, nil
+}
+
+// savedListings keeps the listings spelledExactly made, so a title that asks
+// for a missing key every frame, beside a name that differs from it only by
+// case, does not list the directory every frame. A listing holds while the
+// directory is the same one with the same modification time, which every
+// name added, removed or renamed in it moves. A name removed within the same
+// tick of a coarse clock is still caught, because spelledExactly looks the
+// name up first; only a name another program adds within that tick is missed,
+// and that is a name only an earlier build writes.
+var savedListings = savedListingCache{known: make(map[string]savedListing)}
+
+// maxSavedListings bounds the listings kept; past it they are all let go.
+const maxSavedListings = 256
+
+type savedListingCache struct {
+	sync.Mutex
+	known map[string]savedListing
+}
+
+type savedListing struct {
+	info  os.FileInfo
+	names []string
+}
+
+func (cache *savedListingCache) lookup(directory string, info os.FileInfo) ([]string, bool) {
+	cache.Lock()
+	defer cache.Unlock()
+	known, ok := cache.known[directory]
+	if !ok || !os.SameFile(known.info, info) || !known.info.ModTime().Equal(info.ModTime()) {
+		return nil, false
+	}
+	return known.names, true
+}
+
+func (cache *savedListingCache) remember(directory string, info os.FileInfo, names []string) {
+	cache.Lock()
+	defer cache.Unlock()
+	if len(cache.known) >= maxSavedListings {
+		clear(cache.known)
+	}
+	cache.known[directory] = savedListing{info: info, names: names}
 }
 
 // spelledExactly reports whether a directory holds a name spelled exactly so.
@@ -664,9 +782,14 @@ func exactSavePath(root string, segments []string) (string, bool, error) {
 //
 // In an encoded directory, an entry still under the name an earlier build
 // gave it — written there by an earlier build after this one converted the
-// directory, or copied in by hand — is moved to its encoded name first. A
-// write writes the encoded path whether or not the move succeeded; a read of
-// an entry that could not be moved reads it where it is.
+// directory, or copied in by hand — is moved to its encoded name first. Only
+// an earlier build writes that name, so when the encoded entry is there too,
+// the one written later is the save: an earlier entry newer than the encoded
+// one is progress made on an earlier build after this one converted the
+// directory, and it replaces the encoded entry it continued from; an older one
+// is left where it is and not read. A write writes the encoded path whether or
+// not the move succeeded; a read of an entry that could not be moved reads it
+// where it is.
 func (store *DirectorySaveStore) locateSave(name string, names saveNames, write bool) (string, bool, error) {
 	key, err := NormalizeSaveKey(name)
 	if err != nil {
@@ -684,7 +807,8 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 	// An encoded path the system cannot even look up — longer than it stores —
 	// is not there either, and an earlier name left unconverted for that
 	// reason is found below.
-	if present, _ := saveNameExists(path); present {
+	present, _ := saveNameExists(path)
+	if present && names.naming == namingPlain {
 		return path, true, nil
 	}
 	if names.naming == namingPlain {
@@ -697,13 +821,27 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 		return path, true, nil
 	}
 	earlier, found := findEarlierSave(store.root, segments)
-	if !found {
+	if !found || present && !laterSaveFile(earlier, path) {
 		return path, true, nil
 	}
-	if err := moveEarlierSave(store.root, segments, earlier); err != nil && !write {
+	if err := moveEarlierSave(store.root, segments, earlier, present); err != nil && !write {
 		return earlier, true, nil
 	}
 	return path, true, nil
+}
+
+// laterSaveFile reports whether the file at one path was written after the
+// file at another. Equal times, and a time that cannot be read, are not later.
+func laterSaveFile(path, than string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	other, err := os.Lstat(than)
+	if err != nil {
+		return false
+	}
+	return info.ModTime().After(other.ModTime())
 }
 
 // findEarlierSave looks for one key's entry under the spellings an earlier
@@ -756,8 +894,9 @@ func findEarlierSave(root string, segments []string) (string, bool) {
 // whole, which converts the names of everything below it at once. Where a
 // directory of the encoded name is already there, the entry moves into it on
 // its own, and the earlier directories that leaves empty are removed; a
-// directory that still holds anything stays. Nothing is written over.
-func moveEarlierSave(root string, segments []string, earlier string) error {
+// directory that still holds anything stays. Nothing is written over, except,
+// when replace is set, the older encoded file of the same key.
+func moveEarlierSave(root string, segments []string, earlier string, replace bool) error {
 	relative, err := filepath.Rel(root, earlier)
 	if err != nil {
 		return err
@@ -789,7 +928,14 @@ func moveEarlierSave(root string, segments []string, earlier string) error {
 		}
 		last := depth == len(segments)-1
 		if last {
-			return fmt.Errorf("save %s is already there", target)
+			if !replace || !regularSaveFile(target) {
+				return fmt.Errorf("save %s is already there", target)
+			}
+			if err := os.Rename(current, target); err != nil {
+				return err
+			}
+			syncDirectory(directory)
+			return nil
 		}
 		// The encoded directory must be the one spelled so, not another name
 		// this file system takes for it.
@@ -798,7 +944,7 @@ func moveEarlierSave(root string, segments []string, earlier string) error {
 		}
 		from := filepath.Join(append([]string{current}, spelled[depth+1:]...)...)
 		to := filepath.Join(target, filepath.FromSlash(encodeSaveKey(strings.Join(segments[depth+1:], "/"))))
-		if taken, err := saveNameExists(to); err != nil || taken {
+		if taken, err := saveNameExists(to); err != nil || taken && (!replace || !regularSaveFile(to)) {
 			return errors.Join(err, fmt.Errorf("save %s is already there", to))
 		}
 		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
@@ -817,6 +963,13 @@ func moveEarlierSave(root string, segments []string, earlier string) error {
 		return nil
 	}
 	return nil
+}
+
+// regularSaveFile reports whether a path is a file and not a directory or a
+// link, which is the only thing a move replaces.
+func regularSaveFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // saveEntryKey is the key a path below a save directory is the entry of, and
@@ -845,22 +998,37 @@ func saveEntryKey(relative string, naming saveNaming) (string, bool, error) {
 
 // saveEntryChoice keeps, for each key a walk meets, the path its entry is read
 // from. Two paths meet at one key only when an earlier build's name was left
-// beside the encoded one; the encoded path is the entry, and the other is left
-// where it is, neither read nor removed.
+// beside the encoded one. The one written later is the entry, as it is for a
+// read (locateSave), and the encoded path when that cannot be told; the other
+// is left where it is, neither read nor removed.
 type saveEntryChoice map[string]saveEntryAt
 
 type saveEntryAt struct {
 	path    string
 	encoded bool
+	entry   fs.DirEntry
 }
 
 // offer reports whether the path is now the one kept for the key.
-func (choice saveEntryChoice) offer(key, path string, encoded bool) bool {
-	if kept, seen := choice[key]; seen && (kept.encoded || !encoded) {
+func (choice saveEntryChoice) offer(key, path string, encoded bool, entry fs.DirEntry) bool {
+	if kept, seen := choice[key]; seen && !laterSaveEntry(entry, encoded, kept) {
 		return false
 	}
-	choice[key] = saveEntryAt{path: path, encoded: encoded}
+	choice[key] = saveEntryAt{path: path, encoded: encoded, entry: entry}
 	return true
+}
+
+// laterSaveEntry reports whether an entry a walk met is kept over the one kept
+// for the same key before it.
+func laterSaveEntry(entry fs.DirEntry, encoded bool, kept saveEntryAt) bool {
+	if entry != nil && kept.entry != nil {
+		info, err := entry.Info()
+		keptInfo, keptErr := kept.entry.Info()
+		if err == nil && keptErr == nil && !info.ModTime().Equal(keptInfo.ModTime()) {
+			return info.ModTime().After(keptInfo.ModTime())
+		}
+	}
+	return encoded && !kept.encoded
 }
 
 // keys answers the keys chosen, in order.
@@ -894,6 +1062,31 @@ func plainSaveDirectoryKnown(root string, info os.FileInfo) bool {
 	defer plainSaveDirectories.Unlock()
 	known := plainSaveDirectories.known[absolute]
 	return known != nil && os.SameFile(known, info) && known.ModTime().Equal(info.ModTime())
+}
+
+// The record of an encoded directory is read once and then known by its
+// identity, size and modification time, so every operation on saves costs one
+// look at it rather than a read. Every change to the record replaces the file,
+// so a changed record is never mistaken for the one that was read.
+var encodedSaveRecords = struct {
+	sync.Mutex
+	known map[string]os.FileInfo
+}{known: make(map[string]os.FileInfo)}
+
+func encodedSaveRecordKnown(path string, info os.FileInfo) bool {
+	encodedSaveRecords.Lock()
+	defer encodedSaveRecords.Unlock()
+	known := encodedSaveRecords.known[path]
+	return known != nil && os.SameFile(known, info) && known.Size() == info.Size() && known.ModTime().Equal(info.ModTime())
+}
+
+func rememberEncodedSaveRecord(path string, info os.FileInfo) {
+	encodedSaveRecords.Lock()
+	defer encodedSaveRecords.Unlock()
+	if len(encodedSaveRecords.known) >= maxSavedListings {
+		clear(encodedSaveRecords.known)
+	}
+	encodedSaveRecords.known[path] = info
 }
 
 func rememberPlainSaveDirectory(root string, info os.FileInfo) {

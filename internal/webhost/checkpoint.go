@@ -100,8 +100,13 @@ func (s *Server) quickLoadRefusal(game string) error {
 		return nil
 	}
 	identity := backend.SaveIdentity(archive)
-	s.migrateSaveOwner(archive, summary.Platform)
-	data, err := loadCheckpointSlot(s.saveDirectory(summary.Platform, summary.SaveOwner), identity)
+	// The saves an earlier build kept under another owner name are moved by
+	// the start, with the claim; until then the slot is read where it is.
+	directory := ""
+	if s.saveDirectory(summary.Platform, summary.SaveOwner) != "" {
+		directory = session.SaveDirectory(summary, s.platformSaveRoot(summary.Platform))
+	}
+	data, err := loadCheckpointSlot(directory, identity)
 	if err != nil {
 		return err
 	}

@@ -251,11 +251,11 @@ busy-waits on the clock.
 and `-patch` work on the earlier package. `-diag`, `-gdb`, `-profile`,
 `-profile-folded` and `-profile-from` are refused for it with `<flag> is not
 available for the earlier KTF package` and exit code 2, because it has no
-descriptor to inspect and no AOT methods to profile or symbolize. `-touch`,
-`-park` and a `-speed` other than 1 are refused the same way: its loop has no
-pointer and no lifecycle to park, and its session takes no speed (`-play` is
-the clock it offers). A frame that fails exits 1 after the summary, as a failed
-tick does on the other package. See
+descriptor to inspect and no AOT methods to profile or symbolize. `-touch` and
+`-park` are refused the same way: its loop has no pointer and no lifecycle to
+park. `-speed` scales its clock as it does the other package's. A frame that
+fails exits 1 after the summary, as a failed tick does on the other package.
+See
 [`history/ktf.md`](history/ktf.md#an-earlier-ktf-package-a-module-file-with-no-descriptor-and-no-jar).
 
 **Under `-play` a tick is the server's entry, not a round.** The descriptor
@@ -535,6 +535,12 @@ unpatch <name>|all                       put back what a patch replaced
 unpatch -forget <name>                   drop the record without writing
 patches                                  what is applied now
 ```
+
+A value the console takes is decimal unless it has a `0x`, `0b` or `0o`
+prefix, a leading zero included (`010` is ten), and one that is not a decimal,
+such as `ffff0000`, is hex. An address is hex when it has a leading zero, because
+addresses are written zero-padded (`08048000`, `00401000`); otherwise it reads
+as a value does.
 
 The rest of the console observes: a scan says where a value is, a watch says
 what writes it, a trace says what the guest asked the platform for. None says

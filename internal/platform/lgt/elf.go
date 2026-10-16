@@ -160,11 +160,14 @@ func ParseModule(data []byte) (*Module, error) {
 	// another are how a small file stands for tens of thousands of copies of
 	// one blob — each loaded, and each scanned by every recognition pass at
 	// every session start and checkpoint load. Empty sections overlap
-	// nothing, so one that shares an address with a neighbour is still taken.
+	// nothing, in memory or in the file, so one that shares an address or a
+	// file offset with a neighbour is still taken.
 	for index, section := range module.Sections {
 		for earlier, other := range module.Sections[:index] {
-			if section.Size > 0 && other.Size > 0 &&
-				uint64(section.Address) < uint64(other.Address)+uint64(other.Size) &&
+			if section.Size == 0 || other.Size == 0 {
+				continue
+			}
+			if uint64(section.Address) < uint64(other.Address)+uint64(other.Size) &&
 				uint64(other.Address) < uint64(section.Address)+uint64(section.Size) {
 				return nil, fmt.Errorf("LGT module section %q overlaps %q in memory", section.Name, other.Name)
 			}

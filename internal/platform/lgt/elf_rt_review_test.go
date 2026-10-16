@@ -131,3 +131,17 @@ func TestOrdinaryModuleLayoutsAreStillAccepted(t *testing.T) {
 		t.Fatalf("span = %#x..%#x", low, high)
 	}
 }
+
+// An empty section overlaps nothing, wherever its header says it starts: a
+// zero-size .data or .init_array whose offset falls inside .text's bytes, or
+// whose address falls inside its addresses, is taken.
+func TestEmptyModuleSectionsOverlapNothing(t *testing.T) {
+	sections := []elfSection{
+		{elfProgBits, elfCode, 0x1000, 52, 0x100},
+		{elfProgBits, sectionFlagAlloc, 0x1080, 52 + 0x80, 0},
+		{elfProgBits, sectionFlagAlloc, 0x2000, 52 + 0x40, 0},
+	}
+	if _, err := ParseModule(elfWithSections(0x200, sections)); err != nil {
+		t.Fatalf("a module with empty sections inside another's range was refused: %v", err)
+	}
+}

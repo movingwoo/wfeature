@@ -13,15 +13,16 @@ var jvmContractsJAR []byte
 
 // jvmContractsChecks is every bit JVMContractsMIDlet.run sets when each
 // contract holds.
-const jvmContractsChecks = int32(1)<<8 - 1
+const jvmContractsChecks = int32(1)<<9 - 1
 
 // The interpreter and core-library contracts the source review corrected,
 // reached through a MIDlet JAR the way a title reaches them: an interface's
 // array read through its implementing class, a synchronized toString inside a
 // synchronized concatenation, EOFException at the end of a data stream, strict
 // number parsing, an empty exception message, a catchable null String
-// argument, one Class object per class, and wait(0, n) as a timed wait. Two of
-// them hung for ever before, so the run has a deadline.
+// argument, one Class object per class, wait(0, n) as a timed wait, and one
+// lock for a static synchronized method and its class literal. Two of them
+// hung for ever before, so the run has a deadline.
 func TestJVMContractsHoldInAMIDletJAR(t *testing.T) {
 	archive, err := Open(jvmContractsJAR)
 	if err != nil {

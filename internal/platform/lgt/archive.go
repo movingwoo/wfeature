@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
@@ -92,7 +93,21 @@ type Archive struct {
 // discovered by a corrupted save — see SaveOwnerCollisions.
 //
 // The AID is the fallback for an archive that omits the PID.
+//
+// The name is one the Hosts accept: a repack's PID that could not be a folder
+// is mapped to one that can (backend.AcceptedSaveOwner), and EarlierSaveOwner
+// names the directory the command line kept it in before.
 func SaveOwner(descriptor Descriptor) string {
+	return backend.AcceptedSaveOwner(rawSaveOwner(descriptor))
+}
+
+// EarlierSaveOwner names the directory an earlier release kept this title's
+// saves in, when it is not the one SaveOwner names; otherwise it is "".
+func EarlierSaveOwner(descriptor Descriptor) string {
+	return backend.EarlierSaveOwner(rawSaveOwner(descriptor))
+}
+
+func rawSaveOwner(descriptor Descriptor) string {
 	if descriptor.PID != "" {
 		return descriptor.PID
 	}

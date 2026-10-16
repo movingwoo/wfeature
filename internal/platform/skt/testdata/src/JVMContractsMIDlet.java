@@ -36,6 +36,14 @@ public final class JVMContractsMIDlet extends MIDlet {
         }
     }
 
+    /** A static synchronized method that notifies through its class literal. */
+    static final class ClassLocked {
+        static synchronized boolean notifyThroughLiteral() {
+            ClassLocked.class.notifyAll();
+            return true;
+        }
+    }
+
     protected void startApp() {
     }
 
@@ -123,6 +131,13 @@ public final class JVMContractsMIDlet extends MIDlet {
             check(7, true, "");
         } catch (InterruptedException e) {
             check(7, false, "wait(0, 1): " + e);
+        }
+
+        // A static synchronized method holds the lock its class literal names.
+        try {
+            check(8, ClassLocked.notifyThroughLiteral(), "static synchronized lock");
+        } catch (IllegalMonitorStateException e) {
+            check(8, false, "static synchronized lock: " + e);
         }
         return flags;
     }

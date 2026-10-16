@@ -99,12 +99,11 @@ func TestNativeRunLogsAreBounded(t *testing.T) {
 	}
 }
 
-// TestNativeListenerRegistrationReplacesTheSourcesListener covers a module
-// registering on a source again. Only one listener per source is ever called,
-// so a second registration is the one that has to be: it replaces the first
-// rather than queuing behind it, which also keeps the list from growing with
-// every registration.
-func TestNativeListenerRegistrationReplacesTheSourcesListener(t *testing.T) {
+// TestNativeListenerRegistrationKeepsTheSourcesFirstListener covers a module
+// registering on a source again. The first registration stays the one called,
+// as it always was and as it is in a checkpoint that recorded several, and the
+// list does not grow with every registration.
+func TestNativeListenerRegistrationKeepsTheSourcesFirstListener(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	for context := uint32(1); context <= 3; context++ {
 		nativeCall(t, platform.addListener(nativeInterfaceSound), 0, 0x1000, context)
@@ -114,8 +113,8 @@ func TestNativeListenerRegistrationReplacesTheSourcesListener(t *testing.T) {
 		t.Fatalf("listeners = %d entries, want one per source", got)
 	}
 	listener, ok := platform.listenerFor(nativeInterfaceSound)
-	if !ok || listener.Context != 3 {
-		t.Fatalf("sound listener = %+v (%t), want the latest registration", listener, ok)
+	if !ok || listener.Context != 1 {
+		t.Fatalf("sound listener = %+v (%t), want the first registration", listener, ok)
 	}
 	if listener, ok := platform.listenerFor(nativeInterfaceTimed); !ok || listener.Context != 9 {
 		t.Fatalf("timed listener = %+v (%t)", listener, ok)

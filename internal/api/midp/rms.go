@@ -100,6 +100,12 @@ func recordSetInit(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, erro
 // the last step returned, zero before any step. MIDP's cursor is on a record,
 // not between two: after next answered A and then B, previous answers A, and
 // a first previous with no step before it answers the last record.
+//
+// The one exception is a kept-updated enumeration whose current record was
+// deleted. Its cursor is then between two records, and the position holds
+// -(k+1) for the gap just before the record at k, so the next step answers the
+// record that followed the deleted one and the previous step the one before
+// it. See followCursor.
 func recordSetState(machine *jvm.VM, set *jvm.Object) (ids []int32, position int32, err error) {
 	value, err := machine.Field(set, RecordSetClass, "ids", "[I")
 	if err != nil {
@@ -227,13 +233,14 @@ func recordSetNextRecordID(call *jvm.Invocation, arguments []jvm.Value) (jvm.Val
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if int(position) >= len(ids) {
+	target, ok := cursorNext(ids, position)
+	if !ok {
 		return jvm.VoidValue(), jvm.Throw(InvalidRecordIDExceptionClass, "enumeration is past the last record")
 	}
-	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(position+1)); err != nil {
+	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(int32(target+1))); err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.IntValue(ids[position]), nil
+	return jvm.IntValue(ids[target]), nil
 }
 
 func recordSetPreviousRecordID(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
@@ -248,18 +255,48 @@ func recordSetPreviousRecordID(call *jvm.Invocation, arguments []jvm.Value) (jvm
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	position = min(position, int32(len(ids)))
-	if len(ids) == 0 || position == 1 {
+	target, ok := cursorPrevious(ids, position)
+	if !ok {
 		return jvm.VoidValue(), jvm.Throw(InvalidRecordIDExceptionClass, "enumeration is at the first record")
 	}
-	target := position - 2
-	if position <= 0 {
-		target = int32(len(ids)) - 1
-	}
-	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(target+1)); err != nil {
+	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(int32(target+1))); err != nil {
 		return jvm.VoidValue(), err
 	}
 	return jvm.IntValue(ids[target]), nil
+}
+
+// cursorNext says which record a next step answers.
+func cursorNext(ids []int32, position int32) (int, bool) {
+	target := int(position)
+	if position < 0 {
+		target = cursorGap(position)
+	}
+	return target, target < len(ids)
+}
+
+// cursorPrevious says which record a previous step answers. With no step
+// taken yet it is the last one.
+func cursorPrevious(ids []int32, position int32) (int, bool) {
+	var target int
+	switch {
+	case position == 0:
+		target = len(ids) - 1
+	case position > 0:
+		target = min(int(position), len(ids)) - 2
+	default:
+		target = min(cursorGap(position), len(ids)) - 1
+	}
+	return target, target >= 0 && target < len(ids)
+}
+
+// cursorGap is the index of the record just after a between-records cursor.
+func cursorGap(position int32) int {
+	return -int(position) - 1
+}
+
+// betweenRecords is the cursor for the gap just before the record at index.
+func betweenRecords(index int) int32 {
+	return int32(-index - 1)
 }
 
 func recordSetHasElement(forward bool) jvm.ContextMethod {
@@ -276,11 +313,13 @@ func recordSetHasElement(forward bool) jvm.ContextMethod {
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		has := !destroyed && len(ids) > 0 && min(position, int32(len(ids))) != 1
+		var has bool
 		if forward {
-			has = !destroyed && int(position) < len(ids)
+			_, has = cursorNext(ids, position)
+		} else {
+			_, has = cursorPrevious(ids, position)
 		}
-		if has {
+		if has && !destroyed {
 			return jvm.IntValue(1), nil
 		}
 		return jvm.IntValue(0), nil
@@ -557,26 +596,41 @@ func recordSetChanged(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, e
 }
 
 // followCursor places a cursor in a reselection: on the record it was on, or,
-// when that record has left the selection, just before the first record that
-// followed it and is still there, so the next step answers that one.
+// when that record has left the selection, between records: just before the
+// first record that followed it and is still there, so the next step answers
+// that one, or, when none did, just after the last record before it that is
+// still there, so the previous step answers that one. A cursor already between
+// records moves the same way from the gap it was in.
 func followCursor(ids []int32, position int32, rebuilt []int32) int32 {
-	current := min(int(position), len(ids)) - 1
-	if current < 0 {
+	if position == 0 || (position > 0 && len(ids) == 0) {
 		return 0
 	}
 	at := make(map[int32]int, len(rebuilt))
 	for index, id := range rebuilt {
 		at[id] = index
 	}
-	if index, ok := at[ids[current]]; ok {
-		return int32(index + 1)
+	var ahead, behind []int32
+	if position > 0 {
+		current := min(int(position), len(ids)) - 1
+		if index, ok := at[ids[current]]; ok {
+			return int32(index + 1)
+		}
+		ahead, behind = ids[current+1:], ids[:current]
+	} else {
+		gap := min(cursorGap(position), len(ids))
+		ahead, behind = ids[gap:], ids[:gap]
 	}
-	for _, id := range ids[current+1:] {
+	for _, id := range ahead {
 		if index, ok := at[id]; ok {
-			return int32(index)
+			return betweenRecords(index)
 		}
 	}
-	return int32(len(rebuilt))
+	for index := len(behind) - 1; index >= 0; index-- {
+		if found, ok := at[behind[index]]; ok {
+			return betweenRecords(found + 1)
+		}
+	}
+	return betweenRecords(len(rebuilt))
 }
 
 func checkRecordSetAlive(machine *jvm.VM, set *jvm.Object) error {

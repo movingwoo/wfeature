@@ -514,10 +514,13 @@ than one level is scanned. A group directory may be a symbolic link to one kept
 elsewhere, and is listed like any other.
 
 `<owner>` is the game's PID for KTF and LGT, and for SKT its program number
-(`DD-ProgName`), or the MIDlet name for a bare JAR that has none. Inside it,
+(`DD-ProgName`), or the MIDlet name for a bare JAR that has none. A name that
+cannot be a folder on every system (a `:` or `?` in a repacked PID, or one over
+64 bytes) is made into one that can; see [RMS](rms.md). Inside it,
 each save is a file named by its key with the case spelled out: an upper-case
-letter is written `#` and the letter, and `#` is written `##` (`rms/#Option`,
-`fs/save##1`), so names that differ only by case are separate files on every
+letter is written `#` and the letter, `#` is written `##`, and another letter
+with case outside ASCII is written by its number (`rms/#Option`, `fs/save##1`,
+`caf#+0000e9`), so names that differ only by case are separate files on every
 system. A folder holding such names also holds `.wfeature-names#1`, which says
 so and moves with it; a folder an earlier version wrote is converted the first
 time it is used. See [save keys on disk](session.md#save-keys-on-disk). The

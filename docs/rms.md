@@ -35,22 +35,28 @@ case-insensitively, but the exact spelling wins, and among other spellings the
 first in byte order does, so a descriptor carrying two spellings of
 `DD-ProgName` names the same owner on every launch.
 
-**The owner is one both Hosts accept.** The browser Host refuses an owner over
-64 bytes, or one carrying a path or Windows-reserved character, a control
-character or an invisible direction mark, and a title it refused ran with no
-save store at all. Such an owner is mapped to one the Host accepts: a refused
-character becomes `_`, a name too long keeps its start, and the result ends in
-`~` and eight hex digits of a digest of the whole name, so `A: B`, `A? B` and a
-title really named `A_ B` keep three directories. Every owner that already
-passed is unchanged, so no existing save moves. Only the command line ever
-wrote under a refused name; `skt.MigrateSaveOwner(root, descriptor)` renames
-that directory to the mapped owner below the platform save root, together with
-the quick-save slots and set-aside generation the save store keeps for that
-name in `.wfeature-quicksave/owners/`. It does so only when the mapped
-directory does not exist yet, never merges into or replaces one that does,
-leaves a directory a session or tool has claimed for the next start, and never
-follows a raw name out of the root. A Host calls it before it claims the
-title's save directory.
+**The owner is one both Hosts accept, on every platform.** The browser Host
+refuses an owner over 64 bytes, `.`, `..`, the reserved `.wfeature-quicksave`,
+or one carrying a path or Windows-reserved character, a control character or an
+invisible direction mark (`backend.SaveOwnerRefused`), and a title it refused
+ran with no save store at all. Such an owner is mapped to one the Host accepts
+(`backend.AcceptedSaveOwner`), for an SKT program number or MIDlet name and a
+KTF or LGT PID alike: a refused character becomes `_`, a name too long keeps
+its start, and the result ends in `~` and eight hex digits of a digest of the
+whole name, so `A: B`, `A? B` and a title really named `A_ B` keep three
+directories. Every owner that already passed is unchanged, so no existing save
+moves. Only the command line ever wrote under a refused name;
+`backend.MigrateSaveOwner(root, earlier, owner)` renames that directory to the
+mapped owner below the platform save root, together with the quick-save slots
+and set-aside generation the save store keeps for that name in
+`.wfeature-quicksave/owners/`. It claims both directories for the move, so it
+leaves a directory a session or tool has claimed for the next start, and it
+does so only when the mapped directory does not exist yet, never merges into
+or replaces one that does, and never follows a raw name that is not one
+directory directly below the root (`.` and `..` included). A Host calls it,
+with the earlier owner `session.Inspect` already found, before it claims the
+title's save directory; a quick-load check, which runs before a start and
+without the claim, only reads the slot where it is.
 
 Store names come from the game, so they go through `backend.NormalizeSaveKey`
 like every other save key: a name that escapes the owner directory is rejected
@@ -214,9 +220,12 @@ the record the last step returned, and zero before any step. After
 `hasPreviousElement` is false only on the first record or an empty selection.
 `reset` and an explicit `rebuild` go back to the start. A kept-updated
 enumeration reselects on every change but keeps its place: on the record it was
-on, or, when that record left the selection, before the next one that is still
-there. Going back to the start on each notification made a loop that rewrites
-each record it visits meet the first record again after every write.
+on, or, when that record left the selection, between records, which a negative
+`position` holds. The next step then answers the next record that is still
+there and the previous step the one before the deleted record, so deleting the
+first record leaves nothing behind and deleting the last nothing ahead. Going
+back to the start on each notification made a loop that rewrites each record it
+visits meet the first record again after every write.
 
 ## What is answered with a fixed value
 

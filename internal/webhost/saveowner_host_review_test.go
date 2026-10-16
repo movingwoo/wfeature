@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,25 +55,44 @@ func repackedLGTFixture(t *testing.T, pid string) []byte {
 
 // A game whose save owner cannot name a directory used to start with no save
 // store at all: it saved, the player saw nothing wrong, and closing it lost
-// every bit of progress. The start is refused instead, in words the page
-// shows, and the server log says which owner it was.
-func TestAGameWhoseSaveOwnerIsRefusedDoesNotStartWithoutSaves(t *testing.T) {
+// every bit of progress. Every platform now maps such an owner to one that
+// can name a directory, as SKT does, so the game starts and keeps its saves
+// there; what the command line kept under the raw name moves with the start,
+// and a quick-load check before it only reads.
+func TestAGameWhoseSaveOwnerIsRefusedStartsUnderAMappedOwner(t *testing.T) {
 	root := t.TempDir()
 	gameRoot := filepath.Join(root, "games")
 	if err := os.MkdirAll(filepath.Join(gameRoot, "lgt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	const owner = "PF:0001"
-	if err := os.WriteFile(filepath.Join(gameRoot, "lgt", "colon.zip"), repackedLGTFixture(t, owner), 0o644); err != nil {
+	const raw = "PF:0001"
+	mapped := backend.AcceptedSaveOwner(raw)
+	if mapped == raw || ownerRejected(mapped) {
+		t.Fatalf("owner %q was mapped to %q", raw, mapped)
+	}
+	if err := os.WriteFile(filepath.Join(gameRoot, "lgt", "colon.zip"), repackedLGTFixture(t, raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	log := &lockedBuffer{}
+	lgtRoot := filepath.Join(root, "savedata", "lgt")
+	earlier := filepath.Join(lgtRoot, raw)
+	if runtime.GOOS != "windows" {
+		if err := backend.NewDirectorySaveStore(earlier).StoreSave("fs/save.dat", []byte("kept")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	server := newTestServer(t, Options{
 		GameRoot: gameRoot,
 		SaveRoot: filepath.Join(root, "savedata", "ktf"),
 		LogRoot:  filepath.Join(root, "logs"),
-		Logger:   backend.NewLogger(log),
 	})
+	if err := server.quickLoadRefusal("games/lgt/colon.zip"); err == nil {
+		t.Fatal("a quick load with no slot was not refused")
+	}
+	if runtime.GOOS != "windows" {
+		if _, err := os.Stat(earlier); err != nil {
+			t.Fatalf("a quick-load check moved the saves: %v", err)
+		}
+	}
 	httpServer := httptest.NewServer(server)
 	t.Cleanup(httpServer.Close)
 	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
@@ -83,21 +103,15 @@ func TestAGameWhoseSaveOwnerIsRefusedDoesNotStartWithoutSaves(t *testing.T) {
 
 	expectMessage(t, connection, serverReady)
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/lgt/colon.zip", ID: 3})
-	reply := expectMessage(t, connection, serverError)
-	if reply.ID != 3 || !strings.Contains(reply.Message, "세이브") {
-		t.Fatalf("reply = %+v, want the start refused for its saves", reply)
+	if started := expectMessage(t, connection, serverStarted); started.Started == nil || started.Started.SaveOwner != mapped {
+		t.Fatalf("started = %+v, want the owner %q", started.Started, mapped)
 	}
-	if text := log.String(); !strings.Contains(text, owner) {
-		t.Fatalf("the server log does not name the refused owner:\n%s", text)
-	}
-
-	// The same owner with nothing wrong in it starts, so what was refused
-	// above is the name and not the fixture.
-	if err := os.WriteFile(filepath.Join(gameRoot, "lgt", "plain.zip"), repackedLGTFixture(t, "PF0001"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	send(t, connection, clientMessage{Kind: clientStart, Game: "games/lgt/plain.zip", ID: 4})
-	if started := expectMessage(t, connection, serverStarted); started.Started == nil || started.Started.SaveOwner != "PF0001" {
-		t.Fatalf("started = %+v", started.Started)
+	if runtime.GOOS != "windows" {
+		if data, err := os.ReadFile(filepath.Join(lgtRoot, mapped, "fs", "save.dat")); err != nil || string(data) != "kept" {
+			t.Fatalf("saves under the mapped owner = %q, %v", data, err)
+		}
+		if _, err := os.Stat(earlier); !os.IsNotExist(err) {
+			t.Fatalf("the earlier owner directory is still there: %v", err)
+		}
 	}
 }

@@ -102,6 +102,28 @@ func TestConsoleNumbersWithALeadingZeroAreDecimal(t *testing.T) {
 		}
 	}
 
+	// An address is written in hex, often zero-padded: a leading zero there is
+	// padding, not a decimal or an octal number.
+	for _, test := range []struct {
+		text string
+		want uint32
+	}{
+		{"08048000", 0x08048000},
+		{"00401000", 0x00401000},
+		{"0x1100", 0x1100},
+		{"ffff0000", 0xffff0000},
+		{"4096", 4096},
+		{"0", 0},
+	} {
+		address, err := parseAddress([]string{test.text}, 0)
+		if err != nil || address != test.want {
+			t.Errorf("parseAddress(%q) = %#x/%v, want %#x", test.text, address, err, test.want)
+		}
+	}
+	if _, err := parseAddress([]string{"0123456789"}, 0); err == nil {
+		t.Error("an address longer than 32 bits was accepted")
+	}
+
 	memory := newTestMemory()
 	console := NewConsole(NewSession(memory))
 	if output := console.Execute("set 0x1100 010 u32"); !strings.Contains(output, "= 10 ") {
@@ -109,6 +131,12 @@ func TestConsoleNumbersWithALeadingZeroAreDecimal(t *testing.T) {
 	}
 	if value := binary.LittleEndian.Uint32(memory.data[0x100:]); value != 10 {
 		t.Fatalf("set wrote %d, want 10", value)
+	}
+	if output := console.Execute("set 00001104 7 u32"); !strings.Contains(output, "= 7 ") {
+		t.Fatalf("set at a zero-padded address output = %q", output)
+	}
+	if value := binary.LittleEndian.Uint32(memory.data[0x104:]); value != 7 {
+		t.Fatalf("set at a zero-padded address wrote %d at 0x1104, want 7", value)
 	}
 }
 

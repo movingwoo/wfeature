@@ -657,19 +657,37 @@ func (console *Console) valueTypeArg(args []string, index int) (ValueType, error
 	return valueType, nil
 }
 
+// parseAddress reads an address. An address is written in hex, and often
+// zero-padded to eight digits, so a bare number with a leading zero —
+// `08048000`, `00401000` — is hex, as it always was for one with an 8 or a 9
+// in it; anything else reads as parseNumber reads a value.
 func parseAddress(args []string, index int) (uint32, error) {
 	if index >= len(args) {
 		return 0, fmt.Errorf("missing address")
 	}
-	value, ok := parseNumber(args[index])
+	text := args[index]
+	value, ok := int64(0), false
+	if zeroPadded(text) {
+		raw, err := strconv.ParseUint(text, 16, 32)
+		value, ok = int64(raw), err == nil
+	} else {
+		value, ok = parseNumber(text)
+	}
 	if !ok || value < 0 || value > 0xffffffff {
-		return 0, fmt.Errorf("invalid address %q", args[index])
+		return 0, fmt.Errorf("invalid address %q", text)
 	}
 	return uint32(value), nil
 }
 
+// zeroPadded reports whether a number starts with a zero that is not a radix
+// prefix.
+func zeroPadded(text string) bool {
+	return len(text) > 1 && text[0] == '0' && !strings.ContainsRune("xXbBoO", rune(text[1]))
+}
+
 // parseNumber accepts decimal, 0x-prefixed hex, and negative values. A
 // leading zero is still decimal: read as octal, `set addr 010` would write 8.
+// An address is read by parseAddress, where a leading zero is hex padding.
 func parseNumber(s string) (int64, bool) {
 	base := 10
 	digits := strings.TrimLeft(s, "+-")

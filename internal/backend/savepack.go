@@ -382,7 +382,7 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 			// not a reason to fail an export of the saves that are here.
 			return nil
 		}
-		choice.offer(key, name, encoded)
+		choice.offer(key, name, encoded, entry)
 		return nil
 	})
 	if err != nil {

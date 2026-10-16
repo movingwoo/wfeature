@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
@@ -160,4 +163,82 @@ func TestAGuestThatEndedDuringStartIsAnEndingAndNotAFailure(t *testing.T) {
 	if _, ok := summary["tick_error"]; ok {
 		t.Fatal("an ending carries a tick_error")
 	}
+}
+
+// The step that ends a game runs after the run's own interrupt context has
+// fired, so a Ctrl-C has to reach it some other way: one that honours its
+// context ends at once, and one that hangs in guest code is left behind so
+// the process can exit.
+func TestEndRunAnswersAnInterrupt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("an interrupt cannot be sent to the process itself on Windows")
+	}
+	interrupt := func(t *testing.T) {
+		t.Helper()
+		self, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := self.Signal(os.Interrupt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grace := endRunGrace
+	endRunGrace = 50 * time.Millisecond
+	t.Cleanup(func() { endRunGrace = grace })
+
+	t.Run("a step that honours its context", func(t *testing.T) {
+		started := make(chan struct{})
+		var stderr bytes.Buffer
+		result := make(chan error, 1)
+		go func() {
+			result <- endRun(&stderr, func(ctx context.Context) error {
+				close(started)
+				<-ctx.Done()
+				return ctx.Err()
+			})
+		}()
+		<-started
+		interrupt(t)
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("endRun = %v, want the step's own cancellation", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("endRun did not return after an interrupt")
+		}
+	})
+	t.Run("a step that hangs", func(t *testing.T) {
+		started, hung := make(chan struct{}), make(chan struct{})
+		t.Cleanup(func() { close(hung) })
+		var stderr bytes.Buffer
+		result := make(chan error, 1)
+		go func() {
+			result <- endRun(&stderr, func(context.Context) error {
+				close(started)
+				<-hung
+				return nil
+			})
+		}()
+		<-started
+		interrupt(t)
+		select {
+		case err := <-result:
+			if !errors.Is(err, errEndInterrupted) {
+				t.Fatalf("endRun = %v, want %v", err, errEndInterrupted)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("endRun did not abandon a step that hangs")
+		}
+		if !strings.Contains(stderr.String(), "interrupted while the game was closing") {
+			t.Fatalf("stderr = %q, want the abandoned close reported", stderr.String())
+		}
+	})
+	t.Run("a step that finishes", func(t *testing.T) {
+		want := errors.New("destroy failed")
+		if err := endRun(io.Discard, func(context.Context) error { return want }); err != want {
+			t.Fatalf("endRun = %v, want %v", err, want)
+		}
+	})
 }

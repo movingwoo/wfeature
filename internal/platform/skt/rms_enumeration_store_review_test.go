@@ -119,3 +119,54 @@ func TestEnumerationPreviousFollowsTheMIDPContract(t *testing.T) {
 		t.Fatalf("previousRecordId on an empty enumeration error = %v", err)
 	}
 }
+
+// Deleting the record a kept-updated enumeration is on leaves its cursor
+// between the records around it: the previous step answers the one before
+// the deleted record, not the last record or the one before that.
+func TestKeptUpdatedEnumerationStepsBackAcrossADeletedRecord(t *testing.T) {
+	call := func(runtime *Runtime, enumeration *jvm.Object, method, descriptor string) jvm.Value {
+		return storeReviewCall(t, runtime, enumeration, method, descriptor)
+	}
+
+	// On the first record, which is then deleted: nothing is behind it.
+	runtime, store, enumeration := storeReviewEnumeration(t, 3, true)
+	call(runtime, enumeration, "nextRecordId", "()I")
+	storeReviewCall(t, runtime, store, "deleteRecord", "(I)V", jvm.IntValue(1))
+	if storeReviewBool(t, call(runtime, enumeration, "hasPreviousElement", "()Z")) {
+		t.Fatal("deleting the first record left a previous element")
+	}
+	if _, err := runtime.VM.InvokeVirtual(enumeration, "previousRecordId", "()I"); !runtime.VM.IsGuestException(err, midp.InvalidRecordIDExceptionClass) {
+		t.Fatalf("previousRecordId after deleting the first record error = %v", err)
+	}
+	if id := storeReviewInt(t, call(runtime, enumeration, "nextRecordId", "()I")); id != 2 {
+		t.Fatalf("nextRecordId after deleting the first record = %d, want 2", id)
+	}
+
+	// On the last record, which is then deleted: the one before it is next
+	// back, and nothing is ahead.
+	runtime, store, enumeration = storeReviewEnumeration(t, 3, true)
+	for range 3 {
+		call(runtime, enumeration, "nextRecordId", "()I")
+	}
+	storeReviewCall(t, runtime, store, "deleteRecord", "(I)V", jvm.IntValue(3))
+	if storeReviewBool(t, call(runtime, enumeration, "hasNextElement", "()Z")) {
+		t.Fatal("deleting the last record left a next element")
+	}
+	if id := storeReviewInt(t, call(runtime, enumeration, "previousRecordId", "()I")); id != 2 {
+		t.Fatalf("previousRecordId after deleting the last record = %d, want 2", id)
+	}
+
+	// On a middle record: each side keeps its neighbour, and a second change
+	// while between records keeps the cursor in the same gap.
+	runtime, store, enumeration = storeReviewEnumeration(t, 3, true)
+	call(runtime, enumeration, "nextRecordId", "()I")
+	call(runtime, enumeration, "nextRecordId", "()I")
+	storeReviewCall(t, runtime, store, "deleteRecord", "(I)V", jvm.IntValue(2))
+	storeReviewCall(t, runtime, store, "setRecord", "(I[BII)V", jvm.IntValue(3), jvm.ReferenceValue(jvm.NewByteArray([]byte{5})), jvm.IntValue(0), jvm.IntValue(1))
+	if id := storeReviewInt(t, call(runtime, enumeration, "previousRecordId", "()I")); id != 1 {
+		t.Fatalf("previousRecordId after deleting the middle record = %d, want 1", id)
+	}
+	if id := storeReviewInt(t, call(runtime, enumeration, "nextRecordId", "()I")); id != 3 {
+		t.Fatalf("nextRecordId after stepping back = %d, want 3", id)
+	}
+}

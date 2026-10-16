@@ -16,6 +16,7 @@ import (
 
 	"unicode/utf8"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
@@ -88,7 +89,21 @@ func (archive *Archive) GuestFiles() map[string][]byte {
 // same game reissued with modified drop rates) share a PID, which is the
 // sharing we do want. Descriptors without a PID fall back to the AID
 // rather than collapsing every such archive into one directory.
+//
+// The name is one the Hosts accept: a repack's PID that could not be a folder
+// is mapped to one that can (backend.AcceptedSaveOwner), and EarlierSaveOwner
+// names the directory the command line kept it in before.
 func SaveOwner(descriptor Descriptor) string {
+	return backend.AcceptedSaveOwner(rawSaveOwner(descriptor))
+}
+
+// EarlierSaveOwner names the directory an earlier release kept this title's
+// saves in, when it is not the one SaveOwner names; otherwise it is "".
+func EarlierSaveOwner(descriptor Descriptor) string {
+	return backend.EarlierSaveOwner(rawSaveOwner(descriptor))
+}
+
+func rawSaveOwner(descriptor Descriptor) string {
 	if descriptor.PID != "" {
 		return descriptor.PID
 	}

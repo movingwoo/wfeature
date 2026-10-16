@@ -10,22 +10,30 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 	"github.com/movingwoo/wfeature/internal/session"
 )
 
-// The SKT owner rule and this Host's are written twice, once in each package,
-// and must agree: an owner the platform answers that the Host refuses is a
-// title started with nowhere to keep its saves.
-func TestSKTSaveOwnersAreOwnersTheHostAccepts(t *testing.T) {
+// Every platform's owner is one this Host accepts: an owner the platform
+// answers that the Host refuses is a title started with nowhere to keep its
+// saves, or, since that is refused, a title that does not start at all.
+func TestSaveOwnersAreOwnersTheHostAccepts(t *testing.T) {
 	names := []string{
 		"Title: Part 2", `a*b?c"d<e>f|g`, "tab\there", "‮eman", "trailing.", " spaced ",
 		strings.Repeat("가", 30), strings.Repeat("x", 65), "..", ".", "back\\slash", "DEL\x7f",
+		".wfeature-quicksave",
 	}
 	for _, name := range names {
-		owner := skt.SaveOwner(skt.Descriptor{Name: name})
-		if owner == "" || ownerRejected(owner) {
-			t.Errorf("name %q: SKT owner %q is refused by the Host", name, owner)
+		for platform, owner := range map[string]string{
+			"skt": skt.SaveOwner(skt.Descriptor{Name: name}),
+			"ktf": ktf.SaveOwner(ktf.Descriptor{PID: name}),
+			"lgt": lgt.SaveOwner(lgt.Descriptor{PID: name}),
+		} {
+			if owner == "" || ownerRejected(owner) {
+				t.Errorf("name %q: %s owner %q is refused by the Host", name, platform, owner)
+			}
 		}
 	}
 }
@@ -52,7 +60,7 @@ func TestAStartMovesSavesKeptUnderTheEarlierOwnerName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server.migrateSaveOwner(archive, summary.Platform)
+	server.migrateSaveOwner(summary)
 
 	directory := server.saveDirectory(summary.Platform, summary.SaveOwner)
 	if directory == "" {

@@ -414,10 +414,10 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	// destroyApp is where a MIDlet writes the progress it holds, and closing a
 	// game is where the shared session calls it; a run that ended without it
 	// would drop that save. It runs after the summary, which describes the run
-	// rather than its ending, while an interrupt is still caught, and before
-	// the claim is released.
+	// rather than its ending, and before the claim is released. A Ctrl-C while
+	// it runs abandons it; see endRun.
 	defer func() {
-		if err := runtime.Destroy(true); err != nil {
+		if err := endRun(stderr, func(context.Context) error { return runtime.Destroy(true) }); err != nil {
 			logger.Debug("SKT destroy at the end of the run", "error", err)
 		}
 	}()
@@ -1114,11 +1114,9 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			"-profile":        profilePath != "",
 			"-profile-folded": profileFoldedPath != "",
 			"-profile-from":   profileFrom > 0,
-			// Its loop has no pointer and no lifecycle to park, and its
-			// session takes no speed: -play is the one clock it offers.
+			// Its loop has no pointer and no lifecycle to park.
 			"-touch": len(touchEvents) > 0,
 			"-park":  parkAt > 0,
-			"-speed": speed != 1,
 		} {
 			if unsupported {
 				fmt.Fprintf(stderr, "%s is not available for the earlier KTF package\n", name)
@@ -1133,6 +1131,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			framePath:    framePath,
 			frameDir:     frameDir,
 			play:         play,
+			speed:        speed,
 			saveRoot:     saveRoot,
 			keyEvents:    keyEvents,
 			keyHold:      keyHold,
@@ -2608,7 +2607,13 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if saveRoot == "" {
-		saveRoot = filepath.Join(platformSaveRoot("lgt"), lgt.SaveOwner(archive.Descriptor))
+		// A title whose owner an earlier build used raw has its saves moved
+		// to the name this build uses before the directory is claimed.
+		root := platformSaveRoot("lgt")
+		if err := backend.MigrateSaveOwner(root, lgt.EarlierSaveOwner(archive.Descriptor), lgt.SaveOwner(archive.Descriptor)); err != nil {
+			logger.Warn("saves kept under an earlier owner name were not moved", "error", err)
+		}
+		saveRoot = filepath.Join(root, lgt.SaveOwner(archive.Descriptor))
 	}
 	releaseSaves, err := claimSaveDirectory(saveRoot, logger)
 	if err != nil {
@@ -2655,9 +2660,10 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 	// destroy callback, and it is how the shared session ends every LGT game;
 	// a run that ended on its tick count, its route or an interrupt would
 	// otherwise drop both. An interrupt has already cancelled ctx, so the
-	// close gets a context of its own.
+	// close gets a context of its own, which a Ctrl-C while it runs cancels;
+	// see endRun.
 	defer func() {
-		if err := session.Close(context.Background()); err != nil {
+		if err := endRun(stderr, session.Close); err != nil {
 			logger.Debug("LGT close at the end of the run", "error", err)
 		}
 	}()

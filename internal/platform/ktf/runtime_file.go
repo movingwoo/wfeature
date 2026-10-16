@@ -51,8 +51,10 @@ const maxGuestFileBytes = 4 << 20
 // The batch belongs to the guest thread whose call opened it. Any other
 // platform call that thread makes before the batch closes — a title's own
 // stream under the DataOutputStream can make one, and one can park the thread
-// — stores what is held first, so nothing held outlives the guest's own call
-// into the platform or is held at a boundary a checkpoint is taken at.
+// — stores what is held first, and so does the end of the thread's slice and a
+// checkpoint capture (storeHeldGuestFiles), so nothing held outlives the
+// guest's own call into the platform or is held at a boundary another thread
+// runs at or a checkpoint is taken at.
 type guestFileBatch struct {
 	owner   *guestWorker
 	pending []heldGuestFile
@@ -115,7 +117,9 @@ func (runtime *initializationRuntime) holdGuestFileWrite(state *runtimeGuestFile
 
 // storeGuestFileBatch stores every file the batch holds writes for. After a
 // store fails, that file and every one after it is put back as it was before
-// the batch's writes, which is what a refused write leaves.
+// the batch's writes, which is what a refused write leaves. Putting a path
+// back counts as a write to it, so another File that read the refused bytes
+// reads the path again (fileState).
 func (runtime *initializationRuntime) storeGuestFileBatch(batch *guestFileBatch) {
 	for _, held := range batch.pending {
 		if batch.failure == nil {
@@ -126,14 +130,36 @@ func (runtime *initializationRuntime) storeGuestFileBatch(batch *guestFileBatch)
 		if batch.failure == nil {
 			continue
 		}
+		key := guestFileKey(held.state.name)
 		held.state.data, held.state.position = held.data, held.position
 		if held.sharedExists {
-			runtime.guestFiles[guestFileKey(held.state.name)] = held.shared
+			runtime.guestFiles[key] = held.shared
 		} else {
-			delete(runtime.guestFiles, guestFileKey(held.state.name))
+			delete(runtime.guestFiles, key)
 		}
+		if runtime.guestFileWrites == nil {
+			runtime.guestFileWrites = make(map[string]uint64)
+		}
+		runtime.guestFileWrites[key]++
+		held.state.seen = runtime.guestFileWrites[key]
 	}
 	batch.pending = batch.pending[:0]
+}
+
+// storeHeldGuestFiles stores what an open batch holds, whichever thread
+// opened it. A guest thread can stop inside a DataOutputStream call without
+// making another platform call — its own stream's AOT write running out of
+// its slice — and other threads run, and a checkpoint can be taken, while it
+// is stopped; none of them may find bytes a File holds missing from the store.
+// The batch stays open: the call goes on holding its writes when the thread
+// resumes, and reports a store that failed here when it returns.
+func (runtime *initializationRuntime) storeHeldGuestFiles() {
+	if runtime == nil {
+		return
+	}
+	if batch := runtime.fileBatch; batch != nil && len(batch.pending) > 0 {
+		runtime.storeGuestFileBatch(batch)
+	}
 }
 
 func runtimeFileClassDefinition() runtimeJavaClass {

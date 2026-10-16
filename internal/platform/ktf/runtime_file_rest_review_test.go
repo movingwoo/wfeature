@@ -179,3 +179,81 @@ func TestHeldFileWritesAreStoredBeforeTheThreadsNextCall(t *testing.T) {
 		t.Fatalf("the inner call closed the outer call's batch: %v", err)
 	}
 }
+
+// TestHeldFileWritesAreStoredWhenTheThreadStops covers a guest thread that
+// stops inside a DataOutputStream call without making another platform call:
+// its own stream's AOT write ran out of its slice. What the call holds is
+// stored before another thread runs or a checkpoint is taken, and the call
+// goes on holding what it writes after that.
+func TestHeldFileWritesAreStoredWhenTheThreadStops(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := &refusableSaveStore{saves: make(map[string][]byte)}
+	client.saveStore = store
+	worker := &guestWorker{}
+	client.activeWorker = worker
+	defer func() { client.activeWorker = nil }()
+	batch := &guestFileBatch{owner: worker}
+	runtime.fileBatch = batch
+	defer func() { runtime.fileBatch = nil }()
+	state := &runtimeGuestFile{name: "save.dat"}
+	file := &jvm.Object{ClassName: "org/kwis/msp/io/File", Native: state, Fields: make(map[string]jvm.Value)}
+	write := func(value int32) {
+		t.Helper()
+		if _, err := runtimeFileWriteByte(runtime, client.vm, []jvm.Value{jvm.ReferenceValue(file), jvm.IntValue(value)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(9)
+	if store.stores != 0 {
+		t.Fatalf("a write inside the batch made %d store writes", store.stores)
+	}
+	runtime.storeHeldGuestFiles()
+	if store.stores != 1 || !bytes.Equal(store.saves["fs/save.dat"], []byte{9}) {
+		t.Fatalf("the stopped thread's write was not stored: %d stores, %x", store.stores, store.saves["fs/save.dat"])
+	}
+	if runtime.fileBatch != batch {
+		t.Fatal("storing what a stopped call held closed its batch")
+	}
+	write(8)
+	if store.stores != 1 {
+		t.Fatal("a write after the thread resumed was not held")
+	}
+	runtime.storeGuestFileBatch(batch)
+	if !bytes.Equal(store.saves["fs/save.dat"], []byte{9, 8}) || batch.failure != nil {
+		t.Fatalf("stored %x (%v), want both writes", store.saves["fs/save.dat"], batch.failure)
+	}
+}
+
+// TestRefusedHeldWritesAreUnreadThroughEveryFile covers a second File on the
+// path a refused batch held writes for. Putting the path back counts as a
+// write, so a File that had read the refused bytes reads what the store has.
+func TestRefusedHeldWritesAreUnreadThroughEveryFile(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	store := &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": {1}}}
+	client.saveStore = store
+	runtime.setGuestFile("save.dat", []byte{1})
+	writer := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.guestFileWrites["save.dat"]}
+	reader := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.guestFileWrites["save.dat"]}
+	object := func(state *runtimeGuestFile) jvm.Value {
+		return jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/io/File", Native: state, Fields: make(map[string]jvm.Value)})
+	}
+	batch := &guestFileBatch{owner: client.activeWorker}
+	runtime.fileBatch = batch
+	defer func() { runtime.fileBatch = nil }()
+	if _, err := runtimeFileWriteByte(runtime, client.vm, []jvm.Value{object(writer), jvm.IntValue(9)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, err := runtime.fileState([]jvm.Value{object(reader)}); err != nil || !bytes.Equal(state.data, []byte{9}) {
+		t.Fatalf("reader before the store = %x (%v), want the held write", state.data, err)
+	}
+	store.refuse = errors.New("disk full")
+	runtime.storeGuestFileBatch(batch)
+	if batch.failure == nil {
+		t.Fatal("the refused store was not reported")
+	}
+	for name, file := range map[string]*runtimeGuestFile{"writer": writer, "reader": reader} {
+		if _, state, err := runtime.fileState([]jvm.Value{object(file)}); err != nil || !bytes.Equal(state.data, []byte{1}) {
+			t.Fatalf("%s after the refusal = %x (%v), want what the store has", name, state.data, err)
+		}
+	}
+}

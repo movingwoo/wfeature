@@ -628,12 +628,12 @@ func (vm *VM) step(state *execution, frame *frame, opcodePC int, opcode byte) (s
 				return stepResult{}, err
 			}
 			frame.pc, state.steps = opcodePC, state.steps-1
-			err := vm.enterMonitor(state, &object.monitor)
+			err := vm.enterMonitor(state, vm.monitorOf(object))
 			frame.pc, state.steps = opcodePC+1, state.steps+1
 			_, _ = frame.pop()
 			return stepResult{}, err
 		}
-		if err := object.monitor.exit(state.id); err != nil {
+		if err := vm.monitorOf(object).exit(state.id); err != nil {
 			return stepResult{}, guestException("java/lang/IllegalMonitorStateException", err.Error())
 		}
 		return stepResult{}, nil

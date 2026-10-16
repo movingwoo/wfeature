@@ -203,7 +203,7 @@ func readSnapshotSaves(root string, naming saveNaming) ([]SaveEntry, error) {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("save snapshot contains a nonregular file or too many files")
 		}
-		if choice.offer(key, path, encoded) && len(choice) > maxSnapshotSaveEntries {
+		if choice.offer(key, path, encoded, entry) && len(choice) > maxSnapshotSaveEntries {
 			return fmt.Errorf("save snapshot contains a nonregular file or too many files")
 		}
 		return nil

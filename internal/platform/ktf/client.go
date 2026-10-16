@@ -484,6 +484,10 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 		worker.grant <- struct{}{}
 		event := <-worker.events
 		client.forcedSlice = event.forced
+		// A worker can stop inside a DataOutputStream call without another
+		// platform call, so what that call holds is stored before anything
+		// else runs; see storeHeldGuestFiles.
+		runtime.storeHeldGuestFiles()
 		client.activeWorker = nil
 		serviced++
 		spent += client.core.Steps() - before

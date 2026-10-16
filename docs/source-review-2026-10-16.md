@@ -50,6 +50,9 @@ could cut the server's drain short, which is fixed. The case conversion of R118
 was checked on a copy of 372 real debug save folders with no difference in any
 key or byte.
 
+The review of PR #234 found 15 more defects in that work, all fixed on the same
+branch; see [Review of PR #234](#review-of-pr-234-2026-10-17).
+
 Real-game acceptance over the local corpus of 532 archives: after the first
 round every archive reached the same rung as on `dcb8c27` except three SKT
 archives whose interactive rung moved in both directions, which reruns showed to
@@ -76,6 +79,8 @@ matched; these are what did not.
   parks and exits 0. Related: R140. **Fixed:** The earlier KTF package refuses
   -touch, -park, a -speed other than 1 and -profile-from by name with exit 2, as
   the comment promised, and docs/cli.md no longer describes a silent drop.
+  `-speed` is now passed to that package's session, which takes one (P12 of
+  the PR #234 review).
 - **D2** `README.md:335`: The CLI paragraph lists four LGT authentication
   results. `internal/backend/authentication.go:15-21` also reports
   `lgt-certificate-100`, `lgt-save-subscriber` and `lgt-certificate-message`;
@@ -490,7 +495,9 @@ matched; these are what did not.
 - **Fixed:** A game whose save owner `saveDirectory` refuses is no longer
   started without a save store: the start is refused through the existing error
   path with a Korean sentence naming the owner, a Warn log names platform and
-  owner, and save export/import say the owner cannot be a folder name.
+  owner, and save export/import say the owner cannot be a folder name. KTF and
+  LGT owners are now mapped like SKT's, so no platform reaches that refusal
+  (P07 of the PR #234 review).
 
 ### R009 Handset channel overflow yields MIDI channel >=16, then index panic
 
@@ -1966,7 +1973,11 @@ matched; these are what did not.
   quick-save slots and the set-aside generation to the new owner without
   merging, and the CLI (`runskt`, quick-save claim) and the web host (start,
   save pack, quick-load check, via `session.MigrateSaveOwner`) call it before
-  claiming the directory.
+  claiming the directory. The rule, the mapping and the move now live in
+  `internal/backend/saveowner.go` for every platform, the move claims both
+  directories and never follows `.` or `..`, and the Hosts take the earlier
+  owner from `session.Inspect` without reading the archive again (P07, P08, P09
+  of the PR #234 review).
 
 ### R046 Unclamped blit loops spin for width\*height while holding renderMu
 
@@ -2226,7 +2237,8 @@ matched; these are what did not.
 - **Fixed:** A kept-updated enumeration rebuilds on each change but keeps its
   place (on its current record, or just before the next surviving one), so
   rewrite and delete loops end; an explicit rebuild/reset still goes back to the
-  start.
+  start. A cursor whose record was deleted sits between records, so stepping
+  back answers the record before the deleted one (P02 of the PR #234 review).
 
 ### R054 V3/A3 fields written under bare keys; guest getfield/putfield miss them
 
@@ -2712,7 +2724,10 @@ matched; these are what did not.
   one canonical Class object per class name, rebuilt on heap restore without a
   format change; `VM.NewClassObject` (KTF's AOT bridge, bound to KTF
   class-record addresses) and `static synchronized` locking `vm.classMonitors`
-  (part of the checkpoint ClassMonitors record) are left as they are.
+  (part of the checkpoint ClassMonitors record) are left as they are. Locking
+  any Class object now takes its class monitor, so `synchronized (Foo.class)`
+  and Foo's static synchronized methods exclude each other (P03 of the PR #234
+  review); only the separate `NewClassObject` identity is left.
 
 ### R067 Object.wait(long, int) ignores nanos, so wait(0, n) waits for ever
 
@@ -3529,8 +3544,9 @@ matched; these are what did not.
   checkpoint limit (native_state.go:16, 232-235) is only reachable with such
   re-registration.
 - **Fixed:** The native package's message, file-open and resource-note logs keep
-  their first 4096 entries, and a second listener registration on a source
-  replaces the first.
+  their first 4096 entries. A second listener registration on a source is
+  accepted and not recorded, so the first stays the one called, as before and as
+  in a checkpoint that holds several (P04 of the PR #234 review).
 
 ### R093 Notify fan-out iterates a listener slice the guest mutates in place
 
@@ -4343,7 +4359,11 @@ matched; these are what did not.
   case-insensitive host goes to the name its on-disk spelling matches. Checked
   on a copy of 372 real debug save folders (1,196 keys, 318 with an upper-case
   letter or `#`): every key read back with identical bytes and the listing was
-  unchanged.
+  unchanged. Any other letter with case outside ASCII is now written by its
+  number (`#+` and six hex digits), because APFS folds `ß` into `ss`, `ﬁ` into
+  `fi` and the Kelvin sign into `k`; of an earlier name and an encoded one for
+  the same key, the one written later is the save (P06, P10, P13 of the PR #234
+  review).
 
 ### R119 openRecordStore(create) overwrites existing records the index lacks
 
@@ -5168,7 +5188,9 @@ matched; these are what did not.
   the text console is affected (CLI -cheat or a raw console command). The panel
   passes a numeric operand.
 - **Fixed:** A console number with a leading zero is decimal (010 = 10);
-  0x/0b/0o prefixes and bare hex such as ffff0000 parse as before.
+  0x/0b/0o prefixes and bare hex such as ffff0000 parse as before. An address
+  with a leading zero is zero-padded hex (08048000), as it was before for one
+  with an 8 or a 9 in it (P15 of the PR #234 review).
 
 ### R145 runlgt/runskt/SGS runs write saves without claiming the directory
 
@@ -5481,6 +5503,89 @@ matched; these are what did not.
 - **Fixed:** A quick save or quick load failure note stays for its 8 s through
   the offline, connecting and playing transitions of a dropped connection;
   returning to the picker, a new action or the keypad editor still clears it.
+
+## Review of PR #234 (2026-10-17)
+
+`/code-review` at extra-high effort read about 9,000 changed lines of PR #234
+(the two rounds above) and reported 15 findings, numbered P01 to P15 here in
+the order it ranked them. All 15 were fixed on the same branch, each with a
+regression test. Most were first run against the code before the fix and
+failed there; P01, P08 and P09 changed the shape of the code they test, and the
+slice hook of P05 is reached only through the helper it calls, so those tests
+pin the new behavior instead.
+
+- **P01** `cmd/cli`: the end-of-run `destroyApp` (runskt) and Clet close
+  (runlgt) ran after the run's interrupt context had fired, with nothing to
+  cancel them, so a destroy that hung ignored every further Ctrl-C. **Fixed:**
+  `endRun` gives the step its own interrupt context; a Ctrl-C cancels it and,
+  if it does not return within two seconds, abandons it so the process exits.
+- **P02** `internal/api/midp/rms.go`: a kept-updated enumeration whose current
+  record was deleted could not say it was between records, so the previous step
+  wrapped to the last record or skipped one. **Fixed:** a negative `position`
+  holds the gap; deleting the first record leaves nothing behind, deleting the
+  last nothing ahead.
+- **P03** `internal/jvm`: `synchronized (Foo.class)` locked the canonical Class
+  object and `static synchronized` the class monitor, so they did not exclude
+  each other. **Fixed:** locking, waiting on and notifying a Class object use
+  its class monitor; a checkpoint from an earlier build that holds both is
+  refused. Java fixture `ClassLock`, and a ninth check in the SKT JVM contracts
+  JAR.
+- **P04** `internal/platform/ktf/native_events.go`: a second listener
+  registration on a source replaced the first, so a fresh session dispatched to
+  the newest while a restored one still dispatched to the first. **Fixed:** the
+  first registration stays the one called, as it always was; a later one is
+  accepted and not recorded, so the list still does not grow.
+- **P05** `internal/platform/ktf/runtime_file.go`: File writes held in a
+  DataOutputStream batch stayed held when the thread stopped at its slice
+  limit inside the call, where other threads and a checkpoint could see them
+  missing from the store, and a refused batch left other Files on the path with
+  the refused bytes. **Fixed:** what a batch holds is stored at the end of every
+  worker slice and before a checkpoint capture, and putting a path back counts
+  as a write so every File reads it again.
+- **P06** `internal/backend/save_names.go`: in a converted folder the encoded
+  name always won, so progress an earlier build wrote under the raw name after
+  a downgrade was shadowed for good. **Fixed:** of the two, the one written
+  later is the save; a read moves it over the encoded file and a listing or an
+  export chooses it the same way.
+- **P07** `internal/webhost/session.go`: a start was refused for any owner
+  `saveDirectory` rejects, but only SKT owners were mapped, so a repacked KTF or
+  LGT archive with `:` or `?` in its PID no longer started. **Fixed:** KTF and
+  LGT owners are mapped the same way (`backend.AcceptedSaveOwner`), and the
+  command line's raw directories move to them.
+- **P08** `internal/platform/skt/skt.go`: the owner move checked the target and
+  renamed without claiming it, so a second tab's empty directory could be
+  replaced under a live session, and a raw owner `.` made the platform root the
+  source. **Fixed:** `backend.MigrateSaveOwner` claims both directories, checks
+  the target under the claims, and never follows `.`, `..` or the reserved
+  directory.
+- **P09** `internal/webhost/checkpoint.go`: the quick-load check, documented as
+  read-only and run without the claim, moved save directories, and every check,
+  backup and start parsed the archive again. **Fixed:** `session.Inspect`
+  reports the earlier owner, the Hosts move from that without a second parse,
+  and the quick-load check reads the slot where it is (`session.SaveDirectory`).
+- **P10** `internal/backend/save_names.go`: only upper-case letters were
+  marked, but case-insensitive file systems fold more: on the APFS volume here
+  `ß` and `ss`, `ﬁ` and `fi`, the Kelvin sign and `k`, `ς` and `σ`, `ǅ` and `ǆ`
+  were each one file. **Fixed:** any other letter with case outside ASCII is
+  written by its number, `#+` and six lower-case hex digits; what is written
+  as it is is ASCII or has no case. Names a converted folder already holds in
+  the earlier form are found as earlier names and moved on first use.
+- **P11** `internal/platform/lgt/elf.go`: the new file-range overlap check did
+  not exempt empty sections, so a zero-size section whose offset fell inside
+  `.text` refused the module. **Fixed:** empty sections overlap nothing, in
+  memory or in the file.
+- **P12** `cmd/cli`: `runktf` refused `-speed` for the earlier KTF package,
+  whose session takes one. **Fixed:** the multiplier is passed through.
+- **P13** `internal/backend/save_names.go`: every operation read the names
+  record again, and telling `Save` from `save` listed the directory each time.
+  **Fixed:** the record is known by its identity, size and time once read, and
+  a listing is kept until its directory's modification time changes.
+- **P14** `internal/platform/skt/skvm_file.go`: `exists`, `filesize` and a
+  removal kept a node for every path ever named, absent ones included.
+  **Fixed:** a path that is not there is answered without being kept.
+- **P15** `internal/cheat/console.go`: a zero-padded hex address made only of
+  decimal digits parsed as decimal after R144. **Fixed:** an address with a
+  leading zero is hex; a value keeps R144's decimal reading.
 
 ## Remaining limits found while fixing
 

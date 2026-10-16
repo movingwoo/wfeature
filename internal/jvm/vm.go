@@ -647,7 +647,7 @@ func (vm *VM) invokeInstanceReceived(
 	if contextNative != nil || native != nil {
 		if synchronizedNative {
 			state.wait = &bytecodeThreadWait{kind: "native-monitor", arguments: combined}
-			if err := vm.enterMonitor(state, &receiver.monitor); err != nil {
+			if err := vm.enterMonitor(state, vm.monitorOf(receiver)); err != nil {
 				state.wait = nil
 				return VoidValue(), err
 			}
@@ -655,7 +655,7 @@ func (vm *VM) invokeInstanceReceived(
 		}
 		result, err := vm.callNative(state, nativeEntry{context: contextNative, plain: native}, combined)
 		if synchronizedNative {
-			if exitErr := receiver.monitor.exit(state.id); err == nil && exitErr != nil {
+			if exitErr := vm.monitorOf(receiver).exit(state.id); err == nil && exitErr != nil {
 				err = exitErr
 			}
 		}

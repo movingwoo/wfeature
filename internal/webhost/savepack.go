@@ -100,7 +100,7 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 		// here.
 		return identity, "", "", errors.New("이 게임 파일을 읽을 수 없어 세이브 위치를 알 수 없습니다.")
 	}
-	s.migrateSaveOwner(archive, summary.Platform)
+	s.migrateSaveOwner(summary)
 	directory = s.saveDirectory(summary.Platform, summary.SaveOwner)
 	// An owner the save tree cannot name is a different answer from a game
 	// with no saves: the game has them and this server will not start it

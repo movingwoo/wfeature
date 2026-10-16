@@ -829,3 +829,36 @@ func TestFilesAreStoredOnlyWhenTheTitleAsks(t *testing.T) {
 		t.Fatalf("the end of a session with nothing pending stored %v", written)
 	}
 }
+
+// A title that probes generated names — "slot0" to "slotN" — asks about paths
+// that are not there, and the session keeps no file for any of them; a path
+// that is there, or one a title opens for writing, is kept as before.
+func TestXFileProbesOfMissingPathsKeepNothing(t *testing.T) {
+	store := newFileRuleStore(t, map[string][]byte{"fs/slot7": {1}})
+	runtime := fileRuleRuntime(t, store, nil)
+	for index := range 100 {
+		name := "slot" + string(rune('a'+index%26)) + strings.Repeat("x", index/26)
+		if ruleExists(t, runtime, name) || ruleSize(t, runtime, name) != -1 {
+			t.Fatalf("missing path %q exists", name)
+		}
+		if !runtime.removeXFile(name) {
+			t.Fatalf("removing missing path %q failed", name)
+		}
+	}
+	if !ruleExists(t, runtime, "slot7") {
+		t.Fatal("a stored path does not exist")
+	}
+	runtime.fileMu.Lock()
+	kept := len(runtime.files)
+	runtime.fileMu.Unlock()
+	if kept != 1 {
+		t.Fatalf("the session keeps %d files after probing, want only the one that is there", kept)
+	}
+	if written := store.written(); len(written) != 0 {
+		t.Fatalf("probes wrote %v", written)
+	}
+	ruleXFile(t, runtime, "made", xFileWrite)
+	if !ruleExists(t, runtime, "made") {
+		t.Fatal("a path opened for writing does not exist")
+	}
+}

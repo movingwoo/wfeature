@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func claimArchiveSaves(archive []byte, root string, logger *slog.Logger) (string
 	if root == "" || summary.SaveOwner == "" {
 		return "", func() {}, nil
 	}
-	if err := session.MigrateSaveOwner(archive, root); err != nil {
+	if err := session.MigrateSaveOwner(summary, root); err != nil {
 		logger.Warn("saves kept under an earlier owner name were not moved", "error", err)
 	}
 	owner := summary.SaveOwner
@@ -211,6 +212,42 @@ func claimSaveDirectory(directory string, logger *slog.Logger) (func(), error) {
 	backend.WarnSaveLockFallback(logger, directory)
 	return release, nil
 }
+
+// errEndInterrupted is what endRun returns when an interrupt abandoned the
+// step that ends a game.
+var errEndInterrupted = errors.New("interrupted while the game was closing")
+
+// endRun runs the step that ends a game at the end of a run: destroyApp, or a
+// Clet's destroy entry, which is where a title writes the progress it holds.
+// Guest code can hang there, a destroyApp joining a thread the stopped tick
+// loop no longer drives, and by then the run's own interrupt context has
+// usually fired and swallows any further Ctrl-C. So the step listens for an
+// interrupt of its own: one that arrives while it runs is passed to it as a
+// cancelled context and, if the step does not return, abandons it so the
+// process can exit.
+func endRun(stderr io.Writer, step func(ctx context.Context) error) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- step(ctx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	// A step that honours the context ends on its own; give it the moment it
+	// needs before leaving it behind.
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(endRunGrace):
+	}
+	fmt.Fprintf(stderr, "%v; progress it had not saved is lost\n", errEndInterrupted)
+	return errEndInterrupted
+}
+
+// endRunGrace is how long endRun waits for an interrupted step to return.
+var endRunGrace = 2 * time.Second
 
 func sharedServeDriver(game *session.Session, play bool) *serve.Driver {
 	frame := func() ([]byte, int, int) {

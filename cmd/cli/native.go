@@ -32,10 +32,13 @@ type nativeRun struct {
 	ticks       int
 	// ticksChosen says the count came from -ticks rather than from the probe
 	// default, which is what decides whether a cheat session may run past it.
-	ticksChosen  bool
-	framePath    string
-	frameDir     string
-	play         bool
+	ticksChosen bool
+	framePath   string
+	frameDir    string
+	play        bool
+	// speed scales the title's clock the way the browser's speed control
+	// does; -speed turns -play on, so it is the wall clock it scales.
+	speed        float64
 	saveRoot     string
 	keyEvents    map[int][]int32
 	keyHold      int
@@ -55,6 +58,7 @@ type nativeRun struct {
 func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stderr io.Writer) int {
 	options := ktf.NativeSessionOptions{
 		Logger: run.logger,
+		Speed:  run.speed,
 		Width:  run.screenWidth,
 		Height: run.screenHeight,
 	}

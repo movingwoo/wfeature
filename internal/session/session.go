@@ -62,6 +62,10 @@ type Summary struct {
 	Name      string `json:"name,omitempty"`
 	SaveOwner string `json:"save_owner,omitempty"`
 	MainClass string `json:"main_class,omitempty"`
+	// EarlierSaveOwner is the directory an earlier release kept the saves in,
+	// when it is not SaveOwner; see MigrateSaveOwner. It is the Host's to act
+	// on and is not sent to a page.
+	EarlierSaveOwner string `json:"-"`
 }
 
 // Inspect reads an archive far enough to name the game and the directory its
@@ -107,6 +111,7 @@ func Inspect(archive []byte) (Summary, error) {
 		// same AID, and a save wins over packaged data, so an AID-keyed
 		// directory would let one game shadow another's shipped files.
 		summary.SaveOwner = ktf.SaveOwner(opened.Descriptor)
+		summary.EarlierSaveOwner = ktf.EarlierSaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MainClass
 	case detect.LGT:
 		opened, err := lgt.Open(archive)
@@ -116,6 +121,7 @@ func Inspect(archive []byte) (Summary, error) {
 		summary.AID = opened.Descriptor.AID
 		summary.PID = opened.Descriptor.PID
 		summary.SaveOwner = lgt.SaveOwner(opened.Descriptor)
+		summary.EarlierSaveOwner = lgt.EarlierSaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MClass
 	case detect.SKT:
 		opened, err := skt.Open(archive)
@@ -129,6 +135,7 @@ func Inspect(archive []byte) (Summary, error) {
 		}
 		summary.Name = opened.Descriptor.Name
 		summary.SaveOwner = skt.SaveOwner(opened.Descriptor)
+		summary.EarlierSaveOwner = skt.EarlierSaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MainClass
 	default:
 		// A zip of zips is refused by its own shape rather than by the

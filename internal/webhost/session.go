@@ -791,7 +791,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid screen size"})
 		return
 	}
-	r.server.migrateSaveOwner(archive, summary.Platform)
+	r.server.migrateSaveOwner(summary)
 	directory := r.server.saveDirectory(summary.Platform, summary.SaveOwner)
 	// **A game that has saves of its own is not started without a place to
 	// keep them.** An owner saveDirectory refuses would give it no store: it
@@ -1872,24 +1872,24 @@ func (s *Server) saveDirectory(platform, owner string) string {
 	if owner == "" || ownerRejected(owner) {
 		return ""
 	}
-	root := s.saveRoot
+	return filepath.Join(s.platformSaveRoot(platform), owner)
+}
+
+// platformSaveRoot is the directory a platform's owner directories are in.
+func (s *Server) platformSaveRoot(platform string) string {
 	if platform != "" && platform != "ktf" && platforms[platform] {
-		root = filepath.Join(filepath.Dir(root), platform)
+		return filepath.Join(filepath.Dir(s.saveRoot), platform)
 	}
-	return filepath.Join(root, owner)
+	return s.saveRoot
 }
 
 // migrateSaveOwner moves saves an earlier build kept under an owner name this
 // build no longer uses to the one saveDirectory now names, before anything
 // claims the directory. A failure leaves the old saves where they were and is
 // logged; the start goes on with the current owner.
-func (s *Server) migrateSaveOwner(archive []byte, platform string) {
-	if platform != "skt" {
-		return
-	}
-	root := filepath.Join(filepath.Dir(s.saveRoot), platform)
-	if err := session.MigrateSaveOwner(archive, root); err != nil {
-		s.logger.Warn("saves kept under an earlier owner name were not moved", "platform", platform, "error", err)
+func (s *Server) migrateSaveOwner(summary session.Summary) {
+	if err := session.MigrateSaveOwner(summary, s.platformSaveRoot(summary.Platform)); err != nil {
+		s.logger.Warn("saves kept under an earlier owner name were not moved", "platform", summary.Platform, "error", err)
 	}
 }
 

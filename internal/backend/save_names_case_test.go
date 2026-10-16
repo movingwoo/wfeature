@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -36,11 +37,17 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 		{"Ärger", "#Ärger"},
 		{"ΣΩ", "#Σ#Ω"},
 		{"한글", "한글"},
-		// Upper-case letters whose lower case does not lead back to them, and
-		// a title-case letter, are written as they are.
-		{"İ", "İ"},
-		{"K", "K"},
-		{"ǅ", "ǅ"},
+		// Any other letter with case outside ASCII is written by its number:
+		// upper-case letters whose lower case does not lead back to them, a
+		// title-case letter, and lower-case letters, which a file system that
+		// ignores case may take for another name ("ß" for "ss").
+		{"İ", "#+000130"},
+		{"\u212A", "#+00212a"},
+		{"ǅ", "#+0001c5"},
+		{"ß", "#+0000df"},
+		{"ς", "#+0003c2"},
+		{"café", "caf#+0000e9"},
+		{"Été", "#Ét#+0000e9"},
 		// Bytes that are not UTF-8 are kept.
 		{"\xffA", "\xff#A"},
 	} {
@@ -54,7 +61,7 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"Save", "#a", "#", "a#", "#1", "##A#", "#K", "Ä"} {
+	for _, name := range []string{"Save", "#a", "#", "a#", "#1", "##A#", "#K", "Ä", "é", "#+000061", "#+0000E9", "#+0000e", "#+", "#é"} {
 		if decoded, ok := decodeSaveName(name); ok {
 			t.Errorf("%q, which the encoding never writes, read as the name %q", name, decoded)
 		}
@@ -77,6 +84,16 @@ func TestEverySaveNameReadsBack(t *testing.T) {
 		}
 		if saveNameEncodes(r) && !strings.Contains(encoded, "#"+string(r)) {
 			t.Fatalf("%q is written %q, which leaves %q bare", name, encoded, r)
+		}
+		// Outside ASCII, nothing with case is written bare: a letter with case
+		// is there only after the '#' that marks it upper case.
+		previous := rune(0)
+		for _, written := range encoded {
+			cased := unicode.IsUpper(written) || unicode.IsLower(written) || unicode.IsTitle(written) || unicode.SimpleFold(written) != written
+			if written >= utf8.RuneSelf && cased && (previous != '#' || !saveNameEncodes(written)) {
+				t.Fatalf("%q is written %q, which leaves %q bare", name, encoded, written)
+			}
+			previous = written
 		}
 	}
 }
@@ -551,6 +568,11 @@ func TestEarlierNamesInAConvertedDirectoryReadAsTheirOwnKeys(t *testing.T) {
 		"owner/fs/Old/A=in a directory that has none",
 		"owner/fs/Old/B=beside it",
 	})
+	// The stale copy is older than the encoded entry beside it.
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(root, "rms", "Option"), past, past); err != nil {
+		t.Fatal(err)
+	}
 	saves := map[string]string{
 		"rms/Option": "settings", "rms/Late": "written by an earlier build", "fs/Data/Other": "encoded below",
 		"fs/Data/Slot": "into a directory that has its encoded twin",
@@ -750,4 +772,125 @@ func TestStoresMeetingAnEarlierFolderAtOnceConvertItOnce(t *testing.T) {
 		encodedRecord, leftoverReserved + "/lock=",
 		"owner/rms/#Option=settings", "owner/rms/###Top=scores", "owner/fs/#Data/#Slot=nested", "owner/db/plain=plain",
 	}, "after the stores met it")
+}
+
+// A file system that ignores case folds more than upper into lower: APFS takes
+// "ß" for "ss", the ligature "ﬁ" for "fi", the Kelvin sign for "k", "ς" for
+// "σ" and the title-case "ǅ" for "ǆ". Keys kept apart only by such a letter
+// are separate saves too.
+func TestNamesThatFoldTogetherAreDifferentSaves(t *testing.T) {
+	store := NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	saves := map[string]string{
+		"rms/ß": "sharp s", "rms/ss": "two s", "rms/ẞ": "capital sharp s",
+		"rms/ﬁ": "ligature", "rms/fi": "two letters",
+		"rms/Key": "kelvin", "rms/key": "k",
+		"rms/ς": "final sigma", "rms/σ": "sigma",
+		"rms/ǅ": "title case", "rms/ǆ": "lower case", "rms/Ǆ": "upper case",
+		"rms/é": "precomposed", "rms/É": "upper precomposed",
+	}
+	keys := make([]string, 0, len(saves))
+	for key := range saves {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := store.StoreSave(key, []byte(saves[key])); err != nil {
+			t.Fatalf("store %s: %v", key, err)
+		}
+	}
+	wantSaves(t, store, saves)
+	listed, err := ReadSaveTree(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, listed, saves, "the listing")
+}
+
+// A player who went back to an earlier build after this one converted a save
+// directory, played there, and came back finds the progress they made on the
+// earlier build: it is under the name the earlier build gives the key, beside
+// the older encoded entry, and the one written later is the save. A read moves
+// it over the encoded entry, and a listing before that read already chooses it.
+func TestAnEarlierNameWrittenAfterTheEncodedOneIsTheSave(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "owner")
+	store := NewDirectorySaveStore(root)
+	for key, data := range map[string]string{"rms/Save": "before the downgrade", "fs/Data/Slot": "before it too"} {
+		if err := store.StoreSave(key, []byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Hour)
+	for _, path := range []string{"rms/#Save", "fs/#Data/#Slot"} {
+		if err := os.Chtimes(filepath.Join(root, filepath.FromSlash(path)), past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leftoverBuild(t, parent, []string{
+		"owner/rms/Save=played on the earlier build",
+		"owner/fs/Data/Slot=played there as well",
+	})
+	saves := map[string]string{"rms/Save": "played on the earlier build", "fs/Data/Slot": "played there as well"}
+	listed, err := ReadSaveTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, listed, saves, "the listing")
+	snapshot, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, snapshot, saves, "the snapshot")
+	wantSaves(t, store, saves)
+	leftoverExpect(t, parent, []string{
+		encodedRecord, leftoverReserved + "/lock=",
+		"owner/rms/#Save=played on the earlier build",
+		"owner/fs/#Data/#Slot=played there as well",
+	}, "after the reads")
+}
+
+// A listing spelledExactly made is kept until its directory changes, so a
+// title that asks for a missing key every frame does not list the directory
+// every frame, and a name added or removed is seen at once.
+func TestSaveDirectoryListingsAreKeptUntilTheDirectoryChanges(t *testing.T) {
+	directory := t.TempDir()
+	write := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTime := func(when time.Time) {
+		t.Helper()
+		if err := os.Chtimes(directory, when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a")
+	first := time.Now().Add(-time.Hour)
+	setTime(first)
+	if names, err := directoryNames(directory); err != nil || !slices.Equal(names, []string{"a"}) {
+		t.Fatalf("listing = %v (%v)", names, err)
+	}
+	// Changed behind the listing's back, with the time put back: the kept
+	// listing is what answers, which is the listing being kept.
+	write("b")
+	setTime(first)
+	if names, _ := directoryNames(directory); !slices.Equal(names, []string{"a"}) {
+		t.Fatalf("listing of an unchanged directory = %v, want the kept one", names)
+	}
+	setTime(first.Add(time.Second))
+	names, err := directoryNames(directory)
+	sort.Strings(names)
+	if err != nil || !slices.Equal(names, []string{"a", "b"}) {
+		t.Fatalf("listing after the directory changed = %v (%v)", names, err)
+	}
+	// A name removed under a kept listing is not reported as spelled there.
+	if err := os.Remove(filepath.Join(directory, "b")); err != nil {
+		t.Fatal(err)
+	}
+	setTime(first.Add(time.Second))
+	if present, err := spelledExactly(directory, "b"); err != nil || present {
+		t.Fatalf("a removed name is spelled there: %t (%v)", present, err)
+	}
 }

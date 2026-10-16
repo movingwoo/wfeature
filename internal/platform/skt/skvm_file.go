@@ -164,6 +164,21 @@ func (node *xFileNode) own() {
 // first time a key is named it is read: the removal list, then the save, then
 // the archive's packaged file of the same name. The caller holds fileMu.
 func (runtime *Runtime) xFileNodeLocked(key string) (*xFileNode, error) {
+	return runtime.xFileNodeKeptLocked(key, true)
+}
+
+// xFilePeekLocked is xFileNodeLocked for a caller that only looks: a path that
+// is not there is answered without being kept, so a title that probes
+// generated names — "slot0" to "slotN", or a timestamp — does not grow the
+// session's table by a node for every name it ever asked about. A path that
+// is there is kept, as it would be by any open. The caller holds fileMu.
+func (runtime *Runtime) xFilePeekLocked(key string) (*xFileNode, error) {
+	return runtime.xFileNodeKeptLocked(key, false)
+}
+
+// xFileNodeKeptLocked reads a key's node, keeping it when keep is set or when
+// the path is there.
+func (runtime *Runtime) xFileNodeKeptLocked(key string, keep bool) (*xFileNode, error) {
 	if node := runtime.files[key]; node != nil {
 		return node, nil
 	}
@@ -187,6 +202,9 @@ func (runtime *Runtime) xFileNodeLocked(key string) (*xFileNode, error) {
 		case isPackaged:
 			node.data, node.borrowed, node.present = packaged, true, true
 		}
+	}
+	if !keep && !node.present {
+		return node, nil
 	}
 	if runtime.files == nil {
 		runtime.files = make(map[string]*xFileNode)
@@ -693,7 +711,7 @@ func (runtime *Runtime) xFileContents(name string) ([]byte, bool, error) {
 	}
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
-	node, err := runtime.xFileNodeLocked(key)
+	node, err := runtime.xFilePeekLocked(key)
 	if err != nil || !node.present {
 		return nil, false, err
 	}
@@ -712,7 +730,7 @@ func (runtime *Runtime) xFileState(name string) (bool, int, error) {
 	}
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
-	node, err := runtime.xFileNodeLocked(key)
+	node, err := runtime.xFilePeekLocked(key)
 	if err != nil {
 		return false, 0, err
 	}
@@ -788,7 +806,7 @@ func (runtime *Runtime) removeXFile(name string) bool {
 	}
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
-	node, err := runtime.xFileNodeLocked(key)
+	node, err := runtime.xFilePeekLocked(key)
 	if err != nil {
 		return false
 	}

@@ -143,22 +143,22 @@ func (vm *VM) registerMonitorBuiltins() {
 			return VoidValue(), vm.waitMonitor(state, object, vm.guestDelay(timeout))
 		})
 	}
-	vm.contextBuiltin("java/lang/Object", "notify", "()V", func(_ *VM, state *execution, arguments []Value) (Value, error) {
+	vm.contextBuiltin("java/lang/Object", "notify", "()V", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		if err := object.monitor.notify(state.id, false); err != nil {
+		if err := vm.monitorOf(object).notify(state.id, false); err != nil {
 			return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
 		}
 		return VoidValue(), nil
 	})
-	vm.contextBuiltin("java/lang/Object", "notifyAll", "()V", func(_ *VM, state *execution, arguments []Value) (Value, error) {
+	vm.contextBuiltin("java/lang/Object", "notifyAll", "()V", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		if err := object.monitor.notify(state.id, true); err != nil {
+		if err := vm.monitorOf(object).notify(state.id, true); err != nil {
 			return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
 		}
 		return VoidValue(), nil
@@ -1943,8 +1943,8 @@ func nativeStringObject(object *Object) (string, bool) {
 
 // classObject answers the java/lang/Class object for an internal class name,
 // the same object every time: the language compares classes by identity, so
-// `a.getClass() == b.getClass()` and `synchronized (Foo.class)` only mean
-// anything when there is one per class. The names come from classes this VM
+// `a.getClass() == b.getClass()` only means anything when there is one per
+// class. Locking it takes the class monitor; see monitorOf. The names come from classes this VM
 // resolved or objects it holds, so the table grows with the program and not
 // with the input.
 func (vm *VM) classObject(name string) *Object {

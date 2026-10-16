@@ -135,7 +135,6 @@ func TestRunKTFRefusesWhatTheEarlierPackageCannotHonour(t *testing.T) {
 	}{
 		{"-touch", []string{"-touch", "5:press:1,1"}},
 		{"-park", []string{"-park", "5"}},
-		{"-speed", []string{"-speed", "2"}},
 		{"-profile-from", []string{"-profile-from", "5"}},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -144,10 +143,13 @@ func TestRunKTFRefusesWhatTheEarlierPackageCannotHonour(t *testing.T) {
 			t.Errorf("%s on the earlier package = %d: %s", test.name, code, stderr.String())
 		}
 	}
-	// A multiplier of one is what the run does anyway.
-	var stdout, stderr bytes.Buffer
-	if code := runKTF(path, []string{"-save", t.TempDir(), "-ticks", "2", "-speed", "1"}, &stdout, &stderr); code != 0 {
-		t.Errorf("-speed 1 on the earlier package = %d: %s", code, stderr.String())
+	// Its session takes a speed like the other package's does, so -speed is
+	// passed on rather than refused.
+	for _, multiplier := range []string{"1", "2"} {
+		var stdout, stderr bytes.Buffer
+		if code := runKTF(path, []string{"-save", t.TempDir(), "-ticks", "2", "-speed", multiplier}, &stdout, &stderr); code != 0 {
+			t.Errorf("-speed %s on the earlier package = %d: %s", multiplier, code, stderr.String())
+		}
 	}
 }
 

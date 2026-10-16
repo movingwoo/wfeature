@@ -507,10 +507,16 @@ every host and names that differ only by case are different files. Before,
 case-insensitive file systems of macOS, iOS and Windows.
 
 In each segment of a key, an upper-case letter that is the upper case of its own
-lower case is written `#` followed by the letter, and `#` is written `##`;
-everything else, bytes that are not UTF-8 included, is written as it is.
-`rms/Option` is stored at `rms/#Option` and `fs/save#1` at `fs/save##1`; a key
-with no upper-case letter and no `#` keeps the path it always had. Keys do not
+lower case is written `#` followed by the letter, and `#` is written `##`. Any
+other letter outside ASCII that has case is written by its number, `#+` and six
+lower-case hex digits: `é` is `#+0000e9`, `ß` is `#+0000df`. A file system that
+ignores case folds such letters in more ways than upper to lower (APFS takes
+`ß` for `ss`, `ﬁ` for `fi`, the Kelvin sign for `k` and `ς` for `σ`), and what is
+written as it is has no case at all or is ASCII. Everything else, bytes that are
+not UTF-8 included, is written as it is. `rms/Option` is stored at `rms/#Option`
+and `fs/save#1` at `fs/save##1`; a key with no upper-case letter, no `#` and no
+other letter with case outside ASCII keeps the path it always had, which is
+every ASCII or Korean key without an upper-case letter. Keys do not
 change. The owner folder is the Host's name for a game, not a key, and is not
 encoded, and neither are the quick-save slots and lock files in
 `.wfeature-quicksave/`. The earlier KTF native package lowercases its file
@@ -531,13 +537,22 @@ it — a game reading its saves, a listing, an export — before anything else
 happens. Every name the encoding changes moves to a temporary name and then to
 its encoded name, and `.wfeature-names#1` lists them while it runs, so a
 conversion stopped anywhere finishes on the next operation. Nothing is removed
-and nothing is written over. A folder with no upper-case letter and no `#` in
-any name, which is most of them, is left byte for byte as it is until a key that
-needs a `#` is stored. A folder that cannot be converted, because it cannot be
+and nothing is written over. A folder with no name the encoding changes, which
+is most of them, is left byte for byte as it is until a key that needs a `#` is
+stored. A folder that cannot be converted, because it cannot be
 written or not all of it can be listed, is read as the earlier build left it,
 each name by its exact spelling, and writing to it is refused until it can be
 converted. An earlier name whose encoded name would be longer than a file
 system stores stays as it is and still reads as its own key.
+
+An earlier build can write into a converted folder too, when a player goes back
+to it: it does not know `#Save` and writes its key `Save` under that name. When
+both are there, the one written later is the save. A read moves a later earlier
+name over the encoded file it continued from, and a listing or an export
+chooses it the same way; an earlier name older than the encoded file is left
+where it is and not read. A folder's names record is read once and then known
+by its identity, and a listing made to tell `Save` from `save` is kept until
+its folder changes.
 
 On a host that ignores case, an earlier build kept one file for `Save` and
 `save`, holding whichever was written last. The file belongs to the key its
